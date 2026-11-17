@@ -263,7 +263,7 @@ impl Console {
                 let section = self.section().ok_or_else(|| ApiError::with("license-needed", "This relay has no product section."))?;
                 let token = str_of(params.get("license")).unwrap_or("");
                 let c = section.license_candidate(token, t)?;
-                if c.id != target {
+                if c.id() != target {
                     return Err(ApiError::with("stale", "Nothing was changed: the license is not the one asked for."));
                 }
                 if c.ended {

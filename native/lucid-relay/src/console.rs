@@ -8,9 +8,10 @@
 // attestation and the MDS3 snapshot in console_mds.rs; mail in console_mail.rs; sealed secrets in console_seal.rs.
 //
 // Remote Spokes relay: OFF unless `--console 1` or LUCID_RELAY_CONSOLE=1 (needs --state, refused on a LAN mailbox),
-// with `--console-sources`, `--console-trusted-fronts` (required behind a TLS front) and `--console-first-admin`
-// (required until the first admin signs in). It also keeps the relay's own recent log lines (a ring fed by the
-// logger's tap) and the spokes' log lines (POST /v1/logs). Never message contents.
+// with `--console-sources`, `--console-trusted-fronts` (required behind a TLS front), `--console-first-admin`
+// (required until the first admin signs in) and `--console-profile` (read only until then, 3.3). It also keeps the
+// relay's own recent log lines (a ring fed by the logger's tap) and the spokes' log lines (POST /v1/logs). Never
+// message contents.
 
 use crate::codec::{exact_keys, parse_json, sha256_hex, str_of, stringify};
 use crate::console_audit::{Audit, Record, RefusalEntry};
@@ -19,7 +20,7 @@ use crate::console_limits::{rate_words, Limit};
 use crate::console_mail::{MailConfig, Mailer, Mode};
 use crate::console_mds::Mds;
 use crate::console_seal::Seal;
-use crate::console_settings::Rights;
+use crate::console_settings::{Profile, ProfileAtStart, Rights};
 use crate::console_source::{allowed, parse_cidr_list, source_key, source_of, Cidr, DEFAULT_SOURCES, FRONTS_MAX, SOURCES_MAX};
 use crate::identity::is_node_id;
 use crate::log::{secret_field, Fields, Level, Logger, Tap};
@@ -108,11 +109,11 @@ pub const ATTENTION_WORDS: [(&str, &str); 47] = [
     ("quota-hits", "<n> requests were refused for limits in the last hour."),
     ("blocks-active", "<n> blocks are active on this relay."),
     ("admins-unproven", "<n> admins have not signed in since the upgrade. Ask them to try now."),
-    ("license-service-off", "This relay serves no one: the Meeting Hub license is not active."),
-    ("license-upgrade-period", "Install a Meeting Hub license by <date>, or this relay stops serving people."),
+    ("license-adding-off", "No one new can be added to Meeting Hub: the license is not active."),
+    ("license-upgrade-period", "Install a Meeting Hub license by <date>, or no one new can be added after that."),
     ("seats-unseated", "<n> people have no Meeting Hub seat."),
     ("seats-protected", "Admins alone use more seats than the license covers. Request more seats."),
-    ("profile-standard", "This console uses the Standard security profile, which allows passwords with authenticator apps. Switch to High for phishing-resistant sign-in."),
+    ("profile-standard", "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment."),
     ("two-person-off", "This console has <n> admins. Turn on Require a second admin for sensitive changes."),
     ("break-glass-missing", "There is no break-glass account. The person who runs this relay creates one with lucid-relay console break-glass."),
     ("break-glass-used", "The break-glass account <email> signed in on <time>."),
@@ -268,13 +269,64 @@ pub struct LicenseView {
     pub state: LicenseState,
 }
 
-pub struct LicenseCandidate {
+/// A license as 4.7 compares it (R6-M1): Meeting Hub keeps the last fitting one as `meet-seats.json` `lastLicense`
+/// (`{product, root, id, edition, users, relays, exp}`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LicenseRecord {
+    pub product: Product,
+    pub root: String,
     pub id: String,
-    /// A first install or a renewal: one admin.
-    pub single: bool,
+    pub edition: String,
+    pub users: i64,
+    pub relays: i64,
+    pub exp: i64,
+}
+
+impl LicenseRecord {
+    pub fn of(l: &crate::license::License) -> LicenseRecord {
+        LicenseRecord { product: l.product(), root: l.root.clone(), id: l.id.clone(), edition: l.edition.clone(), users: l.users, relays: l.relays, exp: l.exp }
+    }
+}
+
+/// 4.7 (M1, R6-M1): one admin may install a first license (no reference license) or a renewal of the reference license:
+/// valid (not in grace), the same product, root, `id` and edition, a later `exp`, and `users` and `relays` no
+/// smaller. Everything else (another `id`, an earlier `exp`, a token in grace, fewer `users` or `relays`, another
+/// edition) is a second-admin change.
+pub fn one_admin_install(reference: Option<&LicenseRecord>, offered: &LicenseRecord, offered_valid: bool) -> bool {
+    let Some(r) = reference else { return true };
+    offered_valid
+        && offered.product == r.product
+        && offered.root == r.root
+        && offered.id == r.id
+        && offered.edition == r.edition
+        && offered.exp > r.exp
+        && offered.users >= r.users
+        && offered.relays >= r.relays
+}
+
+/// What a product section reports about a token offered to `license/install` (4.7); the core decides who may
+/// install it (`one_admin_install`).
+pub struct LicenseCandidate {
+    pub offered: LicenseRecord,
+    /// In its valid period (not in grace).
+    pub valid: bool,
     /// Past its grace days: refused always.
     pub ended: bool,
+    /// The reference license (R6-M1): the current fitting license when one is in force; on Meeting Hub otherwise
+    /// `lastLicense`; on Remote Spokes otherwise none. None is a first license.
+    pub reference: Option<LicenseRecord>,
     pub view: Value,
+}
+
+impl LicenseCandidate {
+    pub fn id(&self) -> &str {
+        &self.offered.id
+    }
+
+    /// A first license or a renewal of the reference license: one admin (4.7).
+    pub fn single(&self) -> bool {
+        one_admin_install(self.reference.as_ref(), &self.offered, self.valid)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -311,13 +363,22 @@ pub trait ProductSection: Send + Sync {
     fn relay_lines(&self, _f: &Filter) -> Option<Vec<String>> {
         None
     }
-    /// The 4.7 `service` object of GET license (Meeting Hub: `{state, upgradePeriodEnds}`); null elsewhere.
-    fn service(&self, _t: i64) -> Value {
+    /// The 4.7 `adding` object of GET license (Meeting Hub, R41-1: `{state: "open" or "closed" or "upgrade-period",
+    /// upgradePeriodEnds, lastUsers}`); null elsewhere.
+    fn adding(&self, _t: i64) -> Value {
         Value::Null
     }
     /// The console changed who is an admin or active (a promotion, an unsuspension, a removal, a role change): the
     /// product applies what follows from it (Meeting Hub: protected people always hold a seat, R3-M6).
     fn people_changed(&self, _t: i64) {}
+    /// The growth gate for the console's add-people writes (2.4, 4.9, R41-1, I13): Err(`license-inactive`) when the
+    /// POST `action` with `params` (the body without `stepup`) would seat a new principal while adding is closed
+    /// (Meeting Hub: `requests.new` of `meet.invite` or of `meet.approve` approving a new principal's enrollment, and
+    /// `meet.org.set` naming a new principal, through `meet_license::may_add`). The console asks before the
+    /// product-license check, so the refusal names the real reason. Ok elsewhere.
+    fn may_add(&self, _action: &str, _params: &Value) -> Result<(), ApiError> {
+        Ok(())
+    }
 }
 
 // ── Refusals (8.3) ──────────────────────────────────────────────────────────────────────────────────────────
@@ -356,7 +417,7 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
         "seal-provider-needed" => (409, "Under the High profile, secrets need the relay's own service account on Windows or a systemd encrypted credential set up by lucid-relay console seal-setup, and this relay has neither. Nothing was saved."),
         "bad-mailbox" => (400, "That is not an email address this console can send to or from."),
         "clock-disagree" => (409, "The relay's clock and your browser differ by more than 5 minutes. Fix the relay's clock first."),
-        "license-inactive" => (403, "Your organization's Meeting Hub license is not active. Ask your admin."),
+        "license-inactive" => (403, "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin."),
         "no-seat" => (403, "Your organization has no Meeting Hub seat for you. Ask your admin."),
         "waiting" => (403, "An admin of this console must approve you before you can sign in."),
         "suspended" => (403, "Your access to this console is suspended. Ask another admin."),
@@ -659,6 +720,9 @@ pub struct ConsoleConfig {
     pub behind_front: bool,
     /// `--console-first-admin` or `console_first_admin`.
     pub first_admin: Option<String>,
+    /// `--console-profile` or `console_profile` (R41-3): None when not given (Standard, `profileFrom: "default"`). Read
+    /// only while the console is not bootstrapped (3.3 "Which profile a console starts in").
+    pub profile: Option<Profile>,
     /// The relay's host name (export file names; `reset` asks for it).
     pub host: String,
 }
@@ -704,6 +768,7 @@ pub struct SpokesFlags<'a> {
     pub sources: Option<&'a String>,
     pub trusted_fronts: Option<&'a String>,
     pub first_admin: Option<&'a String>,
+    pub profile: Option<&'a String>,
 }
 
 /// The Remote Spokes console from `--console` or LUCID_RELAY_CONSOLE (`1` on, `0` or unset off): the logger, tapped for
@@ -734,13 +799,17 @@ pub fn open(flags: SpokesFlags, env: impl Fn(&str) -> Option<String>, state: Opt
         Some(e) => Some(email_of(Some(&e)).ok_or_else(|| format!("--console-first-admin {e} is not an email address"))?),
         None => None,
     };
+    let profile = match get(flags.profile, "LUCID_RELAY_CONSOLE_PROFILE") {
+        Some(p) => Some(Profile::parse(&p).ok_or_else(|| crate::console_settings::PROFILE_FLAG_BAD.to_owned())?),
+        None => None,
+    };
     let ring = Arc::new(LineRing::default());
     let logger = Arc::new(logger.with_tap(ring.tap()));
     for f in fronts.iter().filter(|f| f.wide()) {
         let words = format!("a trusted front range of {f} lets every host in it name the client; list only the front's addresses");
         logger.security("console.fronts-wide", &Fields::new().with("range", f.to_string()).with("why", words), Level::Warn);
     }
-    let cfg = ConsoleConfig { product: Product::Spokes, state_dir: PathBuf::from(dir), origin: None, sources, trusted_fronts: fronts, behind_front: behind_tls, first_admin, host: host.to_owned() };
+    let cfg = ConsoleConfig { product: Product::Spokes, state_dir: PathBuf::from(dir), origin: None, sources, trusted_fronts: fronts, behind_front: behind_tls, first_admin, profile, host: host.to_owned() };
     let console = Console::open(cfg, logger.clone(), ring)?;
     Ok((logger, Some(console)))
 }
@@ -767,8 +836,11 @@ impl Console {
             });
         }
         let upgraded = !unreadable && book.upgraded_at == Some(t);
+        // The profile at setup (3.3, R41-3): written from the flag or field at every start while not bootstrapped, and
+        // once at the upgrade start of a book from before AC-1; ignored afterwards.
+        let at_start = if unreadable { ProfileAtStart::Ignored(false) } else { book.settings.profile_at_start(cfg.profile, book.bootstrapped && !upgraded) };
         let pending = std::mem::take(&mut book.pending_audit);
-        if !unreadable && (upgraded || !pending.is_empty()) {
+        if !unreadable && (upgraded || !pending.is_empty() || at_start == ProfileAtStart::Written(true)) {
             book.save(&file)?;
         }
         let (audit, notes) = Audit::open(&cfg.state_dir, t);
@@ -826,6 +898,10 @@ impl Console {
             (inner.book.people.len(), inner.book.origin.clone())
         };
         c.logger.ops("console.on", &Fields::new().with("people", people).with("origin", c.origin().or(origin)).with("product", c.cfg.product.as_str()), Level::Info);
+        if at_start == ProfileAtStart::Ignored(true) {
+            let flag = crate::console_settings::profile_flag(c.cfg.product);
+            c.logger.ops("console.profile-ignored", &Fields::new().with("flag", flag).with("why", crate::console_settings::profile_ignored_words(flag)), Level::Info);
+        }
         // The High setup gate (R3-M9): logged at every start while the break-glass account is not complete.
         let unreadable = c.inner.lock().unreadable;
         if !unreadable && c.break_glass_gate() {
@@ -1464,13 +1540,20 @@ impl Console {
         if post && !exempt_from_gate(spec, &body) && self.break_glass_gate() {
             return refuse(ApiError::of("break-glass-needed"), who.as_ref());
         }
+        let mut params = body.clone();
+        let stepup = params.as_object_mut().and_then(|o| o.remove("stepup"));
+        // The growth gate before the product license (4.9, R41-1): an add-people write while adding is closed answers
+        // `license-inactive`, never `license-needed` or `license-expired`.
+        if post {
+            if let Some(Err(e)) = self.section().map(|s| s.may_add(spec.action, &params)) {
+                return refuse(e, who.as_ref());
+            }
+        }
         if post && spec.need == Need::Product {
             if let Err(e) = self.need_product_license(t) {
                 return refuse(e, who.as_ref());
             }
         }
-        let mut params = body.clone();
-        let stepup = params.as_object_mut().and_then(|o| o.remove("stepup"));
         let mut step: Option<StepOk> = None;
         if spec.stepup {
             let Some(w) = &who else { return refuse(ApiError::of("signin-first"), None) };
@@ -1658,8 +1741,8 @@ impl Console {
             ("POST", "logs/export") => self.logs_export(c),
             ("GET", "license") => {
                 let v = self.license_view(t);
-                let service = self.section().map(|s| s.service(t)).unwrap_or(Value::Null);
-                Ok(Done::plain(Out::ok(json!({ "ok": true, "license": v.license, "problem": v.problem, "service": service }))))
+                let adding = self.section().map(|s| s.adding(t)).unwrap_or(Value::Null);
+                Ok(Done::plain(Out::ok(json!({ "ok": true, "license": v.license, "problem": v.problem, "adding": adding }))))
             }
             ("POST", "license/install") => self.license_install(c),
             _ => Err(ApiError::of("not-found")),
@@ -1801,7 +1884,7 @@ impl Console {
             let privileged: Vec<crate::console_auth::Person> = inner.book.people.values().filter(|p| p.active() && p.role.privileged() && !p.break_glass).cloned().collect();
             (inner.book.settings.clone(), inner.book.active_admins(), bg, inner.book.break_glass_used_at, privileged)
         };
-        if !s.high() {
+        if s.profile_standard_item() {
             out.push(item("profile-standard", "warn", json!({}), "#/admins/settings/security"));
         }
         if !s.two_person && active_admins >= 3 {
@@ -1964,25 +2047,27 @@ impl Console {
 
     // ── License ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// POST license/install {license, reason, stepup}: refused past grace; one admin for a first install or a renewal;
-    /// a second admin for anything else (4.7).
+    /// POST license/install {license, reason, stepup}: refused past grace; one admin for a first license or a renewal
+    /// of the reference license (the current fitting license, else Meeting Hub's `lastLicense`, R6-M1); a second admin
+    /// for anything else (4.7).
     fn license_install(&self, c: &Ctx) -> Result<Done, ApiError> {
         let who = c.who()?;
         let section = self.section().ok_or_else(|| ApiError::of("license-refused"))?;
         let token = str_of(c.params.get("license")).unwrap_or("").to_owned();
         let reason = crate::console_auth::reason_of(c.params.get("reason"))?;
         let cand = section.license_candidate(&token, c.t)?;
-        self.verify_stepup(who, c.body.get("stepup"), Bind { action: "license.install", target: &cand.id, params: c.params }, c.origin, c.t)?;
+        let id = cand.id().to_owned();
+        self.verify_stepup(who, c.body.get("stepup"), Bind { action: "license.install", target: &id, params: c.params }, c.origin, c.t)?;
         if cand.ended {
             return Err(ApiError::of("license-ended"));
         }
-        let detail = json!({ "license_id": cand.id, "reason": reason, "license": cand.view });
-        if cand.single {
+        let single = cand.single();
+        let detail = json!({ "license_id": id, "reason": reason, "license": cand.view });
+        if single {
             let v = section.license_install(&token, c.t)?;
-            return Ok(Done::ok(Out::ok(json!({ "ok": true, "license": v })), Some(cand.id), detail));
+            return Ok(Done::ok(Out::ok(json!({ "ok": true, "license": v })), Some(id), detail));
         }
         let params = json!({ "license": token, "reason": reason });
-        let id = cand.id.clone();
         let mut d = self.second_or_run(who, "license.install", &id, &params, c.t, || {
             let v = section.license_install(&token, c.t)?;
             Ok(json!({ "ok": true, "license": v }))

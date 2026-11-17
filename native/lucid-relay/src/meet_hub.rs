@@ -424,7 +424,7 @@ pub struct State {
     consumed_seeds: Obj,
     seed_requests: Obj,
     seeded: Obj,
-    denied: Obj,
+    pub(crate) denied: Obj,
     moved: HashMap<String, Moved>,
     room_seq: HashMap<String, i64>,
     stays: HashMap<String, Stay>,
@@ -3964,6 +3964,37 @@ impl Hub {
             .collect();
         out.sort();
         out
+    }
+
+    /// AC-1 2.4 `everSeated` at the upgrade (R6-M2): every principal with at least one device certificate that is
+    /// not revoked (one that only expired still counts), sorted.
+    pub fn holders(&self) -> Vec<String> {
+        let st = self.st.lock();
+        let mut out: Vec<String> = st
+            .directory
+            .iter()
+            .filter(|(principal, e)| {
+                e.get("devices").and_then(Value::as_object).is_some_and(|devices| {
+                    devices.iter().any(|(device, dev)| {
+                        let serial = m::serial_of(dev.get("serial"));
+                        if serial.is_empty() {
+                            // a record from before AC-1: revoked only when a denied entry names this principal and device
+                            return !st.denied.values().filter_map(Value::as_object).any(|d| pj::s(d, "principal") == **principal && pj::s(d, "device") == *device);
+                        }
+                        !st.denied.contains_key(&serial)
+                    })
+                })
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The principal of a waiting enrollment (`seed_serial`), for the growth gate of its approval.
+    pub fn enrollment_principal(&self, seed_serial: &str) -> Option<String> {
+        let st = self.st.lock();
+        st.enrollments.get(seed_serial.trim()).or_else(|| st.enrollments.get(&m::serial(seed_serial))).and_then(Value::as_object).map(|r| pj::text_of(r, "principal")).filter(|p| !p.is_empty())
     }
 
     /// AC-1 2.4 "`firstSeen` at the upgrade" (R3-M5): every principal with devices and the earliest persisted

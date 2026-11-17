@@ -11,10 +11,12 @@ use crate::console_mail::{parse_mailbox, MailConfig, Mode};
 use crate::log::{Fields, Level};
 use serde_json::{json, Value};
 
-/// The publisher's address for seat requests, compiled in from the release config (empty in dev builds, 2.4).
+/// The publisher's address for seat requests, compiled in from the release config (2.4). Until the publisher
+/// address is decided it defaults to the internal test address (R41-2); a customer release must set
+/// LUCID_LICENSE_REQUEST_TO to the approved publisher mailbox (tests/release_request_to.rs, R6-M3).
 pub const LICENSE_REQUEST_TO: &str = match option_env!("LUCID_LICENSE_REQUEST_TO") {
     Some(v) => v,
-    None => "",
+    None => "enrique.mertins@gmail.com",
 };
 pub const BANNER_MAX: usize = 2000;
 pub const AAGUIDS_MAX: usize = 50;
@@ -48,6 +50,33 @@ impl Profile {
     }
 }
 
+/// 3.1: a `--console-profile` other than standard or high refuses the start (Remote Spokes; Meeting Hub's
+/// `console_profile` has its own words in meet.rs).
+pub const PROFILE_FLAG_BAD: &str = "--console-profile must be standard or high";
+
+/// What a start did with `--console-profile` or `console_profile` (3.3, R41-3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProfileAtStart {
+    /// Not bootstrapped: written into the book; true when that changed it.
+    Written(bool),
+    /// Bootstrapped: ignored; true when it was given and differs from the profile in force (`cli.profile-ignored`).
+    Ignored(bool),
+}
+
+/// The `<flag>` of `cli.profile-ignored`: the product's name for the setting.
+pub fn profile_flag(product: crate::license::Product) -> &'static str {
+    match product {
+        crate::license::Product::Spokes => "--console-profile",
+        crate::license::Product::Meet => "console_profile",
+    }
+}
+
+/// 8.1 `cli.profile-ignored`: the start log (info) on a bootstrapped console whose flag or field differs from the
+/// profile in force.
+pub fn profile_ignored_words(flag: &str) -> String {
+    format!("The Admin Console is already set up, so {flag} is ignored. Change the security profile in Settings, Security.")
+}
+
 /// The rights a session holds (2.3), recomputed at every request.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Rights {
@@ -78,7 +107,11 @@ impl Rights {
 /// What console.json keeps under `settings`.
 #[derive(Clone, Debug)]
 pub struct Settings {
+    /// Standard unless set up as a government deployment (3.3, R41-3).
     pub profile: Profile,
+    /// Latched by a move from High to Standard in Settings, cleared by Standard to High (R41-3); the only trigger of the
+    /// standing `profile-standard` item. A profile written from the flag or field before bootstrap never sets it.
+    pub downgraded: bool,
     pub two_person: bool,
     pub require_password: bool,
     /// Standard only; High uses 15 minutes and 12 hours.
@@ -98,7 +131,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
-            profile: Profile::High,
+            profile: Profile::Standard,
+            downgraded: false,
             two_person: false,
             require_password: false,
             idle_minutes: HIGH_IDLE_MINUTES,
@@ -115,6 +149,26 @@ impl Default for Settings {
 impl Settings {
     pub fn high(&self) -> bool {
         self.profile == Profile::High
+    }
+
+    /// The standing `profile-standard` item (3.3, R41-3): only while the profile is Standard and `downgraded` is
+    /// latched, so a console that started in Standard never shows it.
+    pub fn profile_standard_item(&self) -> bool {
+        !self.high() && self.downgraded
+    }
+
+    /// The profile at start (3.3 "Which profile a console starts in", R41-3). `given` is `--console-profile` or
+    /// `console_profile` (None when not given: Standard). Not bootstrapped (or the upgrade start of a book from before
+    /// AC-1): the profile is written from it and `downgraded` cleared, never a downgrade. Bootstrapped: ignored.
+    pub fn profile_at_start(&mut self, given: Option<Profile>, bootstrapped: bool) -> ProfileAtStart {
+        if bootstrapped {
+            return ProfileAtStart::Ignored(given.is_some_and(|p| p != self.profile));
+        }
+        let profile = given.unwrap_or(Profile::Standard);
+        let changed = self.profile != profile || self.downgraded;
+        self.profile = profile;
+        self.downgraded = false;
+        ProfileAtStart::Written(changed)
     }
 
     pub fn idle_ms(&self) -> i64 {
@@ -166,6 +220,7 @@ impl Settings {
     pub fn to_value(&self) -> Value {
         json!({
             "profile": self.profile.as_str(),
+            "downgraded": self.downgraded,
             "twoPerson": if self.two_person { "on" } else { "off" },
             "signIn": { "requirePassword": self.require_password, "idleMinutes": self.idle_minutes, "maxHours": self.max_hours },
             "banner": self.banner,
@@ -182,6 +237,11 @@ impl Settings {
         let sign_in = o.get("signIn")?.as_object()?;
         let mut s = Settings {
             profile: Profile::parse(str_of(o.get("profile"))?)?,
+            // A book written before revision 4.1 has no `downgraded`: never latched.
+            downgraded: match o.get("downgraded") {
+                None => false,
+                Some(v) => v.as_bool()?,
+            },
             two_person: match str_of(o.get("twoPerson"))? {
                 "on" => true,
                 "off" => false,
@@ -283,6 +343,17 @@ impl Console {
         self.inner.lock().book.settings.high()
     }
 
+    /// `console.bootstrap` (6, R41-3): the registration that bootstraps the console, actor the first admin, with the
+    /// profile the console started in and where it came from (`"flag"`: `--console-profile` or `console_profile` was
+    /// given at this start; `"default"`: not given, Standard).
+    pub(crate) fn record_bootstrap(&self, email: &str, ip: &str, t: i64) {
+        let profile = self.inner.lock().book.settings.profile;
+        let mut r = crate::console_audit::Record::new(email, "console.bootstrap", "ok");
+        r.ip = Some(ip.to_owned());
+        r.detail = json!({ "profile": profile.as_str(), "profileFrom": if self.cfg.profile.is_some() { "flag" } else { "default" } });
+        self.record(r, t);
+    }
+
     /// Whether two-person control is on (I14).
     pub fn two_person_on(&self) -> bool {
         self.inner.lock().book.settings.two_person
@@ -356,10 +427,12 @@ impl Console {
         if profile == Profile::High {
             self.check_high_sealing()?;
             let v = self.run_profile(Profile::High, t)?;
-            return Ok(Done::ok(Out::ok(v), Some("-".into()), json!({ "from": now.as_str(), "to": "high", "reason": reason })));
+            return Ok(Done::ok(Out::ok(v), Some("-".into()), json!({ "from": now.as_str(), "to": "high", "downgraded": false, "reason": reason })));
         }
         let mut d = self.second_or_run(who, "settings.profile", "-", &p, t, || self.run_profile(Profile::Standard, t))?;
-        d.detail = json!({ "from": now.as_str(), "to": "standard", "reason": reason });
+        // `downgraded`: latched now (true), or still waiting for a second admin (false).
+        let downgraded = self.inner.lock().book.settings.downgraded;
+        d.detail = json!({ "from": now.as_str(), "to": "standard", "downgraded": downgraded, "reason": reason });
         Ok(d)
     }
 
@@ -381,6 +454,10 @@ impl Console {
         }
         {
             let mut inner = self.inner.lock();
+            // High to Standard latches `downgraded`; Standard to High clears it (R41-3).
+            if inner.book.settings.profile != profile {
+                inner.book.settings.downgraded = profile == Profile::Standard;
+            }
             inner.book.settings.profile = profile;
             if profile == Profile::High {
                 // Sessions started with a password and an authenticator app (or that never held a WebAuthn method).
@@ -623,13 +700,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_settings_round_trip_and_default_to_high_and_off() {
+    fn the_settings_round_trip_and_default_to_standard_and_off() {
         let s = Settings::default();
-        assert_eq!((s.profile, s.two_person, s.require_password), (Profile::High, false, false));
-        assert_eq!(s.password_field(), "none");
+        assert_eq!((s.profile, s.downgraded, s.two_person, s.require_password), (Profile::Standard, false, false, false));
+        assert_eq!(s.password_field(), "offered");
         assert_eq!((s.idle_ms(), s.max_ms()), (15 * MINUTE, 12 * 60 * MINUTE));
+        assert!(!s.profile_standard_item());
+        let mut h = s.clone();
+        h.profile = Profile::High;
+        assert_eq!(h.password_field(), "none");
         let mut t = s.clone();
-        t.profile = Profile::Standard;
+        t.downgraded = true;
+        assert!(t.profile_standard_item());
         t.idle_minutes = 30;
         t.max_hours = 24;
         t.banner = Some("Line one\nline two".into());
@@ -642,6 +724,39 @@ mod tests {
         let mut r = back.clone();
         r.require_password = true;
         assert_eq!(r.password_field(), "required");
+    }
+
+    #[test]
+    fn the_profile_at_start_is_written_only_before_bootstrap() {
+        let mut s = Settings::default();
+        // Not bootstrapped: no flag is Standard (unchanged), high is written, and a written profile is never a downgrade.
+        assert_eq!(s.profile_at_start(None, false), ProfileAtStart::Written(false));
+        assert_eq!(s.profile_at_start(Some(Profile::High), false), ProfileAtStart::Written(true));
+        assert_eq!((s.profile, s.downgraded), (Profile::High, false));
+        s.downgraded = true;
+        assert_eq!(s.profile_at_start(Some(Profile::Standard), false), ProfileAtStart::Written(true));
+        assert_eq!((s.profile, s.downgraded), (Profile::Standard, false));
+        // Bootstrapped: ignored; differs only when given and not the profile in force.
+        s.profile = Profile::High;
+        assert_eq!(s.profile_at_start(Some(Profile::Standard), true), ProfileAtStart::Ignored(true));
+        assert_eq!(s.profile_at_start(Some(Profile::High), true), ProfileAtStart::Ignored(false));
+        assert_eq!(s.profile_at_start(None, true), ProfileAtStart::Ignored(false));
+        assert_eq!(s.profile, Profile::High);
+        assert_eq!(profile_ignored_words(profile_flag(crate::license::Product::Meet)), "The Admin Console is already set up, so console_profile is ignored. Change the security profile in Settings, Security.");
+        // `downgraded` survives the book.
+        let d = Settings { profile: Profile::Standard, downgraded: true, ..Settings::default() };
+        assert!(Settings::from_value(&d.to_value()).unwrap().profile_standard_item());
+    }
+
+    /// R6-M3: the approved publisher mailbox (tests/release_request_to.rs compares the build's address with it) is
+    /// empty until the owner sets it, and then a mailbox the console's own parser accepts unchanged.
+    #[test]
+    fn the_approved_publisher_mailbox_is_empty_or_a_mailbox() {
+        let raw = include_str!("../release/approved-publisher-mailbox.txt");
+        let approved = raw.strip_suffix("\r\n").or_else(|| raw.strip_suffix('\n')).unwrap_or(raw);
+        if !approved.is_empty() {
+            assert_eq!(parse_mailbox(approved).as_deref(), Ok(approved), "approved-publisher-mailbox.txt: {approved:?}");
+        }
     }
 
     #[test]

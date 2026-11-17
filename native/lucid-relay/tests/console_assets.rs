@@ -433,6 +433,9 @@ fn every_page_word_is_in_the_page() {
             strings_of(v, &mut all);
         }
     }
+    // R41-1: the page shows meet.license-inactive beside its disabled add controls.
+    strings_of(&words["people"]["meet.license-inactive"], &mut all);
+    assert!(APP_JS.contains("\"aria-disabled\": \"true\""), "disabled add controls stay focusable with aria-disabled (7.4)");
     strings_of(&words["dialogs"], &mut all);
     strings_of(&words["labels"], &mut all);
     assert!(all.len() > 150);

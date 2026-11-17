@@ -474,7 +474,7 @@
    "settings.license-request-to",
    "break-glass.create",
    "two-person.off",
-   "meet.license.service",
+   "meet.license.adding",
    "meet.license.upgrade-period",
    "meet.seats.clock",
    "meet.seats.notice",
@@ -488,7 +488,8 @@
    "console.seal",
    "console.seal-lost",
    "meet.seats.hold",
-   "meet.seats.release-hold"
+   "meet.seats.release-hold",
+   "console.bootstrap"
   ],
   "entries": [
    {
@@ -685,12 +686,14 @@
     "approval": "single-admin-setting",
     "stepup": true,
     "detail": {
-     "profile": "standard",
+     "from": "high",
+     "to": "standard",
+     "downgraded": true,
      "reason": "Contractors without security keys"
     },
     "prev": "77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8",
-    "hash": "c9a29d1dda2d96bf1ea20042b3f688f6bffe40bdceecc06d0a5dc9c34f6f920d",
-    "canonical": "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"profile\":\"standard\",\"reason\":\"Contractors without security keys\"},\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}"
+    "hash": "0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c",
+    "canonical": "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"downgraded\":true,\"from\":\"high\",\"reason\":\"Contractors without security keys\",\"to\":\"standard\"},\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}"
    },
    {
     "seq": 18,
@@ -707,9 +710,9 @@
      "twoPerson": "on",
      "reason": "Three admins now"
     },
-    "prev": "c9a29d1dda2d96bf1ea20042b3f688f6bffe40bdceecc06d0a5dc9c34f6f920d",
-    "hash": "422ab0bc23e1baf53d654f1746a20ea5e8fdd73a925b974a3e92fd53d05f2a7d",
-    "canonical": "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"ip\":\"203.0.113.7\",\"prev\":\"c9a29d1dda2d96bf1ea20042b3f688f6bffe40bdceecc06d0a5dc9c34f6f920d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}"
+    "prev": "0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c",
+    "hash": "c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248",
+    "canonical": "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"ip\":\"203.0.113.7\",\"prev\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}"
    },
    {
     "seq": 19,
@@ -726,9 +729,9 @@
      "requirePassword": true,
      "reason": "Policy review"
     },
-    "prev": "422ab0bc23e1baf53d654f1746a20ea5e8fdd73a925b974a3e92fd53d05f2a7d",
-    "hash": "6c64d06fb118cd56e01f73322bd8dcd95914f4d2668613744138721c1dfa8589",
-    "canonical": "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"ip\":\"203.0.113.7\",\"prev\":\"422ab0bc23e1baf53d654f1746a20ea5e8fdd73a925b974a3e92fd53d05f2a7d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}"
+    "prev": "c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248",
+    "hash": "8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72",
+    "canonical": "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"ip\":\"203.0.113.7\",\"prev\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}"
    },
    {
     "seq": 20,
@@ -742,9 +745,9 @@
     "approval": null,
     "stepup": true,
     "detail": null,
-    "prev": "6c64d06fb118cd56e01f73322bd8dcd95914f4d2668613744138721c1dfa8589",
-    "hash": "8bc46d9d2d644fd1e717f25519e01a2ca35414cb48cc546d54b716566ca812eb",
-    "canonical": "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"6c64d06fb118cd56e01f73322bd8dcd95914f4d2668613744138721c1dfa8589\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}"
+    "prev": "8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72",
+    "hash": "d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f",
+    "canonical": "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}"
    },
    {
     "seq": 21,
@@ -763,9 +766,9 @@
      ],
      "reason": "Only the keys we bought"
     },
-    "prev": "8bc46d9d2d644fd1e717f25519e01a2ca35414cb48cc546d54b716566ca812eb",
-    "hash": "be57e2c0e16ec2ea75286bf95552d8243957e1b86c8d5cd996d901003453f0cc",
-    "canonical": "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"ip\":\"203.0.113.7\",\"prev\":\"8bc46d9d2d644fd1e717f25519e01a2ca35414cb48cc546d54b716566ca812eb\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}"
+    "prev": "d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f",
+    "hash": "cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3",
+    "canonical": "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"ip\":\"203.0.113.7\",\"prev\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}"
    },
    {
     "seq": 22,
@@ -782,9 +785,9 @@
      "no": 43,
      "sha256": "abababababababababababababababababababababababababababababababab"
     },
-    "prev": "be57e2c0e16ec2ea75286bf95552d8243957e1b86c8d5cd996d901003453f0cc",
-    "hash": "d06cd13b983f0f6554cdc0cf785b184ab05126d5ff1e0e956ad12901529cf13b",
-    "canonical": "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"ip\":\"203.0.113.7\",\"prev\":\"be57e2c0e16ec2ea75286bf95552d8243957e1b86c8d5cd996d901003453f0cc\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}"
+    "prev": "cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3",
+    "hash": "61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150",
+    "canonical": "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"ip\":\"203.0.113.7\",\"prev\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}"
    },
    {
     "seq": 23,
@@ -806,9 +809,9 @@
      "verified": true,
      "reason": "New mail server"
     },
-    "prev": "d06cd13b983f0f6554cdc0cf785b184ab05126d5ff1e0e956ad12901529cf13b",
-    "hash": "fea9cffce843a2a526985b77ae07da558228b4251b7738411a70cd4905846985",
-    "canonical": "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"ip\":\"203.0.113.7\",\"prev\":\"d06cd13b983f0f6554cdc0cf785b184ab05126d5ff1e0e956ad12901529cf13b\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}"
+    "prev": "61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150",
+    "hash": "5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed",
+    "canonical": "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"ip\":\"203.0.113.7\",\"prev\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}"
    },
    {
     "seq": 24,
@@ -822,9 +825,9 @@
     "approval": null,
     "stepup": false,
     "detail": null,
-    "prev": "fea9cffce843a2a526985b77ae07da558228b4251b7738411a70cd4905846985",
-    "hash": "d0a403f13ecf7de4eb80cebd622482a5c0e78232bb418e8a535fa152605add71",
-    "canonical": "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"fea9cffce843a2a526985b77ae07da558228b4251b7738411a70cd4905846985\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}"
+    "prev": "5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed",
+    "hash": "9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d",
+    "canonical": "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}"
    },
    {
     "seq": 25,
@@ -838,9 +841,9 @@
     "approval": null,
     "stepup": true,
     "detail": null,
-    "prev": "d0a403f13ecf7de4eb80cebd622482a5c0e78232bb418e8a535fa152605add71",
-    "hash": "6d50860db50c0808e359914db6fefcb26064041dfed82ccca6ac74e4c33dd446",
-    "canonical": "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"d0a403f13ecf7de4eb80cebd622482a5c0e78232bb418e8a535fa152605add71\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}"
+    "prev": "9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d",
+    "hash": "f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949",
+    "canonical": "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}"
    },
    {
     "seq": 26,
@@ -856,9 +859,9 @@
     "detail": {
      "replace": false
     },
-    "prev": "6d50860db50c0808e359914db6fefcb26064041dfed82ccca6ac74e4c33dd446",
-    "hash": "f9a887e92b4862af67abef6f56caf34ddaaee0345e065814e5de41f614a2474b",
-    "canonical": "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"ip\":null,\"prev\":\"6d50860db50c0808e359914db6fefcb26064041dfed82ccca6ac74e4c33dd446\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}"
+    "prev": "f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949",
+    "hash": "490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed",
+    "canonical": "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"ip\":null,\"prev\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}"
    },
    {
     "seq": 27,
@@ -872,9 +875,9 @@
     "approval": null,
     "stepup": false,
     "detail": null,
-    "prev": "f9a887e92b4862af67abef6f56caf34ddaaee0345e065814e5de41f614a2474b",
-    "hash": "40d7773eb39f48b3faa7d8e7cd52fcf69314f7c7ae3a367000680d15c5f91a5b",
-    "canonical": "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"f9a887e92b4862af67abef6f56caf34ddaaee0345e065814e5de41f614a2474b\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}"
+    "prev": "490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed",
+    "hash": "c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e",
+    "canonical": "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}"
    },
    {
     "seq": 28,
@@ -882,18 +885,19 @@
     "actor": "relay",
     "role": null,
     "ip": null,
-    "action": "meet.license.service",
+    "action": "meet.license.adding",
     "target": null,
     "result": "ok",
     "approval": null,
     "stepup": false,
     "detail": {
-     "state": "off",
-     "why": "expired"
+     "state": "closed",
+     "why": "expired",
+     "lastUsers": 20
     },
-    "prev": "40d7773eb39f48b3faa7d8e7cd52fcf69314f7c7ae3a367000680d15c5f91a5b",
-    "hash": "3d97f1f1c92aade013bedef22a27a5d5a7cfc0c7d2f66212895613aa8cea9711",
-    "canonical": "{\"action\":\"meet.license.service\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"state\":\"off\",\"why\":\"expired\"},\"ip\":null,\"prev\":\"40d7773eb39f48b3faa7d8e7cd52fcf69314f7c7ae3a367000680d15c5f91a5b\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}"
+    "prev": "c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e",
+    "hash": "969c22d8e5c50e2fe109f32a572bc674cee41ba885a9ad9407106b6fe5012fda",
+    "canonical": "{\"action\":\"meet.license.adding\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"lastUsers\":20,\"state\":\"closed\",\"why\":\"expired\"},\"ip\":null,\"prev\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}"
    },
    {
     "seq": 29,
@@ -910,9 +914,9 @@
      "ends": 1797500000000,
      "retired": "license"
     },
-    "prev": "3d97f1f1c92aade013bedef22a27a5d5a7cfc0c7d2f66212895613aa8cea9711",
-    "hash": "bd85f6709c5e637d7a796af6e885dae7eefab0893703d7da8373fc59b3f37330",
-    "canonical": "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"ip\":null,\"prev\":\"3d97f1f1c92aade013bedef22a27a5d5a7cfc0c7d2f66212895613aa8cea9711\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}"
+    "prev": "969c22d8e5c50e2fe109f32a572bc674cee41ba885a9ad9407106b6fe5012fda",
+    "hash": "17db24b0cf1a3b662dd8c9d0cb42352f7d1ed9851892413c2e81623b45a48363",
+    "canonical": "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"ip\":null,\"prev\":\"969c22d8e5c50e2fe109f32a572bc674cee41ba885a9ad9407106b6fe5012fda\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}"
    },
    {
     "seq": 30,
@@ -928,11 +932,12 @@
     "detail": {
      "state": "start",
      "seated": 21,
-     "users": 20
+     "users": 20,
+     "limit": "lastUsers"
     },
-    "prev": "bd85f6709c5e637d7a796af6e885dae7eefab0893703d7da8373fc59b3f37330",
-    "hash": "66d8a1212078ca290df08e000c9b05d33c0a539d141432e56356d0ae6eeb8a6e",
-    "canonical": "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"seated\":21,\"state\":\"start\",\"users\":20},\"ip\":null,\"prev\":\"bd85f6709c5e637d7a796af6e885dae7eefab0893703d7da8373fc59b3f37330\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}"
+    "prev": "17db24b0cf1a3b662dd8c9d0cb42352f7d1ed9851892413c2e81623b45a48363",
+    "hash": "137ed25d13fff23c43f556f75d95f78e5470d3abbff4c04e5da3ca52e1c7f602",
+    "canonical": "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"limit\":\"lastUsers\",\"seated\":21,\"state\":\"start\",\"users\":20},\"ip\":null,\"prev\":\"17db24b0cf1a3b662dd8c9d0cb42352f7d1ed9851892413c2e81623b45a48363\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}"
    },
    {
     "seq": 31,
@@ -949,9 +954,9 @@
      "day": 7,
      "mailed": 2
     },
-    "prev": "66d8a1212078ca290df08e000c9b05d33c0a539d141432e56356d0ae6eeb8a6e",
-    "hash": "2b2d31d2a5aa3390ce8bb4e1dfc32f6a51d2be2dcab90d7b317b26a6cf54798d",
-    "canonical": "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"ip\":null,\"prev\":\"66d8a1212078ca290df08e000c9b05d33c0a539d141432e56356d0ae6eeb8a6e\",\"result\":\"ok\",\"role\":null,\"seq\":31,\"stepup\":false,\"target\":null,\"ts\":1763400025000}"
+    "prev": "137ed25d13fff23c43f556f75d95f78e5470d3abbff4c04e5da3ca52e1c7f602",
+    "hash": "d7deb4acbdfd2c40dc5215422feba946a156f79f49c25577751db2999dfb2ff7",
+    "canonical": "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"ip\":null,\"prev\":\"137ed25d13fff23c43f556f75d95f78e5470d3abbff4c04e5da3ca52e1c7f602\",\"result\":\"ok\",\"role\":null,\"seq\":31,\"stepup\":false,\"target\":null,\"ts\":1763400025000}"
    },
    {
     "seq": 32,
@@ -967,9 +972,9 @@
     "detail": {
      "pick": true
     },
-    "prev": "2b2d31d2a5aa3390ce8bb4e1dfc32f6a51d2be2dcab90d7b317b26a6cf54798d",
-    "hash": "83c22b7d65ed0246da40194893975a230ea7f8f2eb9a782d76be7dd3eaae4b13",
-    "canonical": "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"ip\":\"198.51.100.9\",\"prev\":\"2b2d31d2a5aa3390ce8bb4e1dfc32f6a51d2be2dcab90d7b317b26a6cf54798d\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":32,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}"
+    "prev": "d7deb4acbdfd2c40dc5215422feba946a156f79f49c25577751db2999dfb2ff7",
+    "hash": "da055dd457878e1b70144ef125dd15e02b15ce99f4ce5c7d8586ec73827d8c9b",
+    "canonical": "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"ip\":\"198.51.100.9\",\"prev\":\"d7deb4acbdfd2c40dc5215422feba946a156f79f49c25577751db2999dfb2ff7\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":32,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}"
    },
    {
     "seq": 33,
@@ -985,9 +990,9 @@
     "detail": {
      "why": "pick"
     },
-    "prev": "83c22b7d65ed0246da40194893975a230ea7f8f2eb9a782d76be7dd3eaae4b13",
-    "hash": "c1d7a77fd4d3f9a87cb96724b577c384321eb301519c564365bd8242a71a504e",
-    "canonical": "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"ip\":null,\"prev\":\"83c22b7d65ed0246da40194893975a230ea7f8f2eb9a782d76be7dd3eaae4b13\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}"
+    "prev": "da055dd457878e1b70144ef125dd15e02b15ce99f4ce5c7d8586ec73827d8c9b",
+    "hash": "d66d96846e0917cee59d01771056884cd3c145c6edd769ce79864b44b79e0b02",
+    "canonical": "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"ip\":null,\"prev\":\"da055dd457878e1b70144ef125dd15e02b15ce99f4ce5c7d8586ec73827d8c9b\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}"
    },
    {
     "seq": 34,
@@ -1003,9 +1008,9 @@
     "detail": {
      "why": "license"
     },
-    "prev": "c1d7a77fd4d3f9a87cb96724b577c384321eb301519c564365bd8242a71a504e",
-    "hash": "3eacb3cfefbb61c498b682a9777f06693e8369336b61d34bf841b676800054e6",
-    "canonical": "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"ip\":null,\"prev\":\"c1d7a77fd4d3f9a87cb96724b577c384321eb301519c564365bd8242a71a504e\",\"result\":\"ok\",\"role\":null,\"seq\":34,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400028000}"
+    "prev": "d66d96846e0917cee59d01771056884cd3c145c6edd769ce79864b44b79e0b02",
+    "hash": "7cf92cc424cc4c0a32e68197bcc870c3fa12f01fb48c12d4616042b38ef49fab",
+    "canonical": "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"ip\":null,\"prev\":\"d66d96846e0917cee59d01771056884cd3c145c6edd769ce79864b44b79e0b02\",\"result\":\"ok\",\"role\":null,\"seq\":34,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400028000}"
    },
    {
     "seq": 35,
@@ -1022,9 +1027,9 @@
      "wanted": 25,
      "mailed": true
     },
-    "prev": "3eacb3cfefbb61c498b682a9777f06693e8369336b61d34bf841b676800054e6",
-    "hash": "f797ffca00ed3fa4578b36ccbfb4e93c8a25b2cd0cb87f287471d3ebb2ce9189",
-    "canonical": "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"ip\":\"203.0.113.7\",\"prev\":\"3eacb3cfefbb61c498b682a9777f06693e8369336b61d34bf841b676800054e6\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}"
+    "prev": "7cf92cc424cc4c0a32e68197bcc870c3fa12f01fb48c12d4616042b38ef49fab",
+    "hash": "354e0c3a1211c02f58d5f3745b66005dae8020cb98b454687ea5ce4b63f2358b",
+    "canonical": "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"ip\":\"203.0.113.7\",\"prev\":\"7cf92cc424cc4c0a32e68197bcc870c3fa12f01fb48c12d4616042b38ef49fab\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}"
    },
    {
     "seq": 36,
@@ -1042,9 +1047,9 @@
      "fromRecords": 16,
      "byOrder": 2
     },
-    "prev": "f797ffca00ed3fa4578b36ccbfb4e93c8a25b2cd0cb87f287471d3ebb2ce9189",
-    "hash": "ec0299e029154b6d6239ba33f02b15243fa95093888dc98196925c786b28ef7c",
-    "canonical": "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"ip\":null,\"prev\":\"f797ffca00ed3fa4578b36ccbfb4e93c8a25b2cd0cb87f287471d3ebb2ce9189\",\"result\":\"ok\",\"role\":null,\"seq\":36,\"stepup\":false,\"target\":null,\"ts\":1763400030000}"
+    "prev": "354e0c3a1211c02f58d5f3745b66005dae8020cb98b454687ea5ce4b63f2358b",
+    "hash": "61e929fcf04583abac0489970a44da9aaf7d16f8bd54e5a8f49f171b4ef9ddbb",
+    "canonical": "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"ip\":null,\"prev\":\"354e0c3a1211c02f58d5f3745b66005dae8020cb98b454687ea5ce4b63f2358b\",\"result\":\"ok\",\"role\":null,\"seq\":36,\"stepup\":false,\"target\":null,\"ts\":1763400030000}"
    },
    {
     "seq": 37,
@@ -1062,9 +1067,9 @@
      "after": 1794900000000,
      "heldGapMs": 259200000
     },
-    "prev": "ec0299e029154b6d6239ba33f02b15243fa95093888dc98196925c786b28ef7c",
-    "hash": "505c32b5699903fce4c0aac5d785337cde252e6f45e79b598ba952c51ad4bf6d",
-    "canonical": "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"ip\":\"203.0.113.7\",\"prev\":\"ec0299e029154b6d6239ba33f02b15243fa95093888dc98196925c786b28ef7c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":37,\"stepup\":true,\"target\":\"-\",\"ts\":1763400031000}"
+    "prev": "61e929fcf04583abac0489970a44da9aaf7d16f8bd54e5a8f49f171b4ef9ddbb",
+    "hash": "afd0fe3b6f95dafa13b3c26e51f0433ce55572f1404883753d76616bf56d581c",
+    "canonical": "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"ip\":\"203.0.113.7\",\"prev\":\"61e929fcf04583abac0489970a44da9aaf7d16f8bd54e5a8f49f171b4ef9ddbb\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":37,\"stepup\":true,\"target\":\"-\",\"ts\":1763400031000}"
    },
    {
     "seq": 38,
@@ -1081,9 +1086,9 @@
      "why": "gap",
      "byMs": 259200000
     },
-    "prev": "505c32b5699903fce4c0aac5d785337cde252e6f45e79b598ba952c51ad4bf6d",
-    "hash": "27e7b80b1e707a0b2954fd0a555bfcedfb12b49482b1cf1c0c4681249d64dc60",
-    "canonical": "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"ip\":null,\"prev\":\"505c32b5699903fce4c0aac5d785337cde252e6f45e79b598ba952c51ad4bf6d\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}"
+    "prev": "afd0fe3b6f95dafa13b3c26e51f0433ce55572f1404883753d76616bf56d581c",
+    "hash": "3487fe2aaea74f9075bae5c6cb70970d20a6535eab2ef7b29b938bfe80481900",
+    "canonical": "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"ip\":null,\"prev\":\"afd0fe3b6f95dafa13b3c26e51f0433ce55572f1404883753d76616bf56d581c\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}"
    },
    {
     "seq": 39,
@@ -1106,9 +1111,9 @@
       }
      ]
     },
-    "prev": "27e7b80b1e707a0b2954fd0a555bfcedfb12b49482b1cf1c0c4681249d64dc60",
-    "hash": "dd9c2a04894d06ba889c96309c233b229d112e8669ecf266dbd1a1f58e836f97",
-    "canonical": "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"ip\":null,\"prev\":\"27e7b80b1e707a0b2954fd0a555bfcedfb12b49482b1cf1c0c4681249d64dc60\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}"
+    "prev": "3487fe2aaea74f9075bae5c6cb70970d20a6535eab2ef7b29b938bfe80481900",
+    "hash": "8f8ee9e07894477645d8445aa3217cb69740981096867732eff741bba71e7839",
+    "canonical": "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"ip\":null,\"prev\":\"3487fe2aaea74f9075bae5c6cb70970d20a6535eab2ef7b29b938bfe80481900\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}"
    },
    {
     "seq": 40,
@@ -1122,9 +1127,9 @@
     "approval": null,
     "stepup": false,
     "detail": null,
-    "prev": "dd9c2a04894d06ba889c96309c233b229d112e8669ecf266dbd1a1f58e836f97",
-    "hash": "c965d4a51243e98ef55235d71c2ff08f2f6b11a5a1524d3acd23e52d80c84a3e",
-    "canonical": "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"dd9c2a04894d06ba889c96309c233b229d112e8669ecf266dbd1a1f58e836f97\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":null,\"ts\":1763400034000}"
+    "prev": "8f8ee9e07894477645d8445aa3217cb69740981096867732eff741bba71e7839",
+    "hash": "2d642766d1efbd4f365f4959f3668b57a3490a800d4cf37d000b3ee6120b5e2e",
+    "canonical": "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"8f8ee9e07894477645d8445aa3217cb69740981096867732eff741bba71e7839\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":null,\"ts\":1763400034000}"
    },
    {
     "seq": 41,
@@ -1140,9 +1145,9 @@
     "detail": {
      "uncertainRunningMs": 259200000
     },
-    "prev": "c965d4a51243e98ef55235d71c2ff08f2f6b11a5a1524d3acd23e52d80c84a3e",
-    "hash": "e30a209b9860c4aee9df9e47a8736af316cb3f1337d0c60526113b0f92b26495",
-    "canonical": "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"ip\":null,\"prev\":\"c965d4a51243e98ef55235d71c2ff08f2f6b11a5a1524d3acd23e52d80c84a3e\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}"
+    "prev": "2d642766d1efbd4f365f4959f3668b57a3490a800d4cf37d000b3ee6120b5e2e",
+    "hash": "d9f03e57f8fa8ce1579e6c8f320b92ff6aefbeb54dd51d2e2c212904f7df12ed",
+    "canonical": "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"ip\":null,\"prev\":\"2d642766d1efbd4f365f4959f3668b57a3490a800d4cf37d000b3ee6120b5e2e\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}"
    },
    {
     "seq": 42,
@@ -1156,9 +1161,28 @@
     "approval": null,
     "stepup": false,
     "detail": null,
-    "prev": "e30a209b9860c4aee9df9e47a8736af316cb3f1337d0c60526113b0f92b26495",
-    "hash": "f5691f7d22a81056bcca4467ea985e51f56e9dbc18c21712535ed34b568e9a57",
-    "canonical": "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"e30a209b9860c4aee9df9e47a8736af316cb3f1337d0c60526113b0f92b26495\",\"result\":\"ok\",\"role\":null,\"seq\":42,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400036000}"
+    "prev": "d9f03e57f8fa8ce1579e6c8f320b92ff6aefbeb54dd51d2e2c212904f7df12ed",
+    "hash": "2270185fee50ecad4853e78afd17cf2a1409b025e2d4f4051d370774d2298d8c",
+    "canonical": "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"d9f03e57f8fa8ce1579e6c8f320b92ff6aefbeb54dd51d2e2c212904f7df12ed\",\"result\":\"ok\",\"role\":null,\"seq\":42,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400036000}"
+   },
+   {
+    "seq": 43,
+    "ts": 1763400037000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "console.bootstrap",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "profile": "standard",
+     "profileFrom": "default"
+    },
+    "prev": "2270185fee50ecad4853e78afd17cf2a1409b025e2d4f4051d370774d2298d8c",
+    "hash": "d1595b70294e786049afae93f637abbc25ce7104b026e3526327cd8bc8f4db10",
+    "canonical": "{\"action\":\"console.bootstrap\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"profile\":\"standard\",\"profileFrom\":\"default\"},\"ip\":\"203.0.113.7\",\"prev\":\"2270185fee50ecad4853e78afd17cf2a1409b025e2d4f4051d370774d2298d8c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":43,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400037000}"
    }
   ],
   "lines": [
@@ -1172,38 +1196,39 @@
    "{\"action\":\"admins.reset-sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Lost phone\"},\"hash\":\"b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a\",\"ip\":\"203.0.113.7\",\"prev\":\"c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":14,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400008000}",
    "{\"action\":\"recover.done\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a\",\"ip\":\"198.51.100.23\",\"prev\":\"b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a\",\"result\":\"ok\",\"role\":null,\"seq\":15,\"stepup\":false,\"target\":\"vic@acme.example\",\"ts\":1763400009000}",
    "{\"action\":\"invites.resend\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"role\":\"viewer\"},\"hash\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"ip\":\"198.51.100.9\",\"prev\":\"f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":16,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763400010000}",
-   "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"profile\":\"standard\",\"reason\":\"Contractors without security keys\"},\"hash\":\"c9a29d1dda2d96bf1ea20042b3f688f6bffe40bdceecc06d0a5dc9c34f6f920d\",\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}",
-   "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"hash\":\"422ab0bc23e1baf53d654f1746a20ea5e8fdd73a925b974a3e92fd53d05f2a7d\",\"ip\":\"203.0.113.7\",\"prev\":\"c9a29d1dda2d96bf1ea20042b3f688f6bffe40bdceecc06d0a5dc9c34f6f920d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}",
-   "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"hash\":\"6c64d06fb118cd56e01f73322bd8dcd95914f4d2668613744138721c1dfa8589\",\"ip\":\"203.0.113.7\",\"prev\":\"422ab0bc23e1baf53d654f1746a20ea5e8fdd73a925b974a3e92fd53d05f2a7d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}",
-   "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"8bc46d9d2d644fd1e717f25519e01a2ca35414cb48cc546d54b716566ca812eb\",\"ip\":\"203.0.113.7\",\"prev\":\"6c64d06fb118cd56e01f73322bd8dcd95914f4d2668613744138721c1dfa8589\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}",
-   "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"hash\":\"be57e2c0e16ec2ea75286bf95552d8243957e1b86c8d5cd996d901003453f0cc\",\"ip\":\"203.0.113.7\",\"prev\":\"8bc46d9d2d644fd1e717f25519e01a2ca35414cb48cc546d54b716566ca812eb\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}",
-   "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"hash\":\"d06cd13b983f0f6554cdc0cf785b184ab05126d5ff1e0e956ad12901529cf13b\",\"ip\":\"203.0.113.7\",\"prev\":\"be57e2c0e16ec2ea75286bf95552d8243957e1b86c8d5cd996d901003453f0cc\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}",
-   "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"hash\":\"fea9cffce843a2a526985b77ae07da558228b4251b7738411a70cd4905846985\",\"ip\":\"203.0.113.7\",\"prev\":\"d06cd13b983f0f6554cdc0cf785b184ab05126d5ff1e0e956ad12901529cf13b\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}",
-   "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"d0a403f13ecf7de4eb80cebd622482a5c0e78232bb418e8a535fa152605add71\",\"ip\":\"203.0.113.7\",\"prev\":\"fea9cffce843a2a526985b77ae07da558228b4251b7738411a70cd4905846985\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}",
-   "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"6d50860db50c0808e359914db6fefcb26064041dfed82ccca6ac74e4c33dd446\",\"ip\":\"203.0.113.7\",\"prev\":\"d0a403f13ecf7de4eb80cebd622482a5c0e78232bb418e8a535fa152605add71\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}",
-   "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"hash\":\"f9a887e92b4862af67abef6f56caf34ddaaee0345e065814e5de41f614a2474b\",\"ip\":null,\"prev\":\"6d50860db50c0808e359914db6fefcb26064041dfed82ccca6ac74e4c33dd446\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}",
-   "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"hash\":\"40d7773eb39f48b3faa7d8e7cd52fcf69314f7c7ae3a367000680d15c5f91a5b\",\"ip\":null,\"prev\":\"f9a887e92b4862af67abef6f56caf34ddaaee0345e065814e5de41f614a2474b\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}",
-   "{\"action\":\"meet.license.service\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"state\":\"off\",\"why\":\"expired\"},\"hash\":\"3d97f1f1c92aade013bedef22a27a5d5a7cfc0c7d2f66212895613aa8cea9711\",\"ip\":null,\"prev\":\"40d7773eb39f48b3faa7d8e7cd52fcf69314f7c7ae3a367000680d15c5f91a5b\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}",
-   "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"hash\":\"bd85f6709c5e637d7a796af6e885dae7eefab0893703d7da8373fc59b3f37330\",\"ip\":null,\"prev\":\"3d97f1f1c92aade013bedef22a27a5d5a7cfc0c7d2f66212895613aa8cea9711\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}",
-   "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"seated\":21,\"state\":\"start\",\"users\":20},\"hash\":\"66d8a1212078ca290df08e000c9b05d33c0a539d141432e56356d0ae6eeb8a6e\",\"ip\":null,\"prev\":\"bd85f6709c5e637d7a796af6e885dae7eefab0893703d7da8373fc59b3f37330\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}",
-   "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"hash\":\"2b2d31d2a5aa3390ce8bb4e1dfc32f6a51d2be2dcab90d7b317b26a6cf54798d\",\"ip\":null,\"prev\":\"66d8a1212078ca290df08e000c9b05d33c0a539d141432e56356d0ae6eeb8a6e\",\"result\":\"ok\",\"role\":null,\"seq\":31,\"stepup\":false,\"target\":null,\"ts\":1763400025000}",
-   "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"hash\":\"83c22b7d65ed0246da40194893975a230ea7f8f2eb9a782d76be7dd3eaae4b13\",\"ip\":\"198.51.100.9\",\"prev\":\"2b2d31d2a5aa3390ce8bb4e1dfc32f6a51d2be2dcab90d7b317b26a6cf54798d\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":32,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}",
-   "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"hash\":\"c1d7a77fd4d3f9a87cb96724b577c384321eb301519c564365bd8242a71a504e\",\"ip\":null,\"prev\":\"83c22b7d65ed0246da40194893975a230ea7f8f2eb9a782d76be7dd3eaae4b13\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}",
-   "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"hash\":\"3eacb3cfefbb61c498b682a9777f06693e8369336b61d34bf841b676800054e6\",\"ip\":null,\"prev\":\"c1d7a77fd4d3f9a87cb96724b577c384321eb301519c564365bd8242a71a504e\",\"result\":\"ok\",\"role\":null,\"seq\":34,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400028000}",
-   "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"hash\":\"f797ffca00ed3fa4578b36ccbfb4e93c8a25b2cd0cb87f287471d3ebb2ce9189\",\"ip\":\"203.0.113.7\",\"prev\":\"3eacb3cfefbb61c498b682a9777f06693e8369336b61d34bf841b676800054e6\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}",
-   "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"hash\":\"ec0299e029154b6d6239ba33f02b15243fa95093888dc98196925c786b28ef7c\",\"ip\":null,\"prev\":\"f797ffca00ed3fa4578b36ccbfb4e93c8a25b2cd0cb87f287471d3ebb2ce9189\",\"result\":\"ok\",\"role\":null,\"seq\":36,\"stepup\":false,\"target\":null,\"ts\":1763400030000}",
-   "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"hash\":\"505c32b5699903fce4c0aac5d785337cde252e6f45e79b598ba952c51ad4bf6d\",\"ip\":\"203.0.113.7\",\"prev\":\"ec0299e029154b6d6239ba33f02b15243fa95093888dc98196925c786b28ef7c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":37,\"stepup\":true,\"target\":\"-\",\"ts\":1763400031000}",
-   "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"hash\":\"27e7b80b1e707a0b2954fd0a555bfcedfb12b49482b1cf1c0c4681249d64dc60\",\"ip\":null,\"prev\":\"505c32b5699903fce4c0aac5d785337cde252e6f45e79b598ba952c51ad4bf6d\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}",
-   "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"hash\":\"dd9c2a04894d06ba889c96309c233b229d112e8669ecf266dbd1a1f58e836f97\",\"ip\":null,\"prev\":\"27e7b80b1e707a0b2954fd0a555bfcedfb12b49482b1cf1c0c4681249d64dc60\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}",
-   "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"c965d4a51243e98ef55235d71c2ff08f2f6b11a5a1524d3acd23e52d80c84a3e\",\"ip\":null,\"prev\":\"dd9c2a04894d06ba889c96309c233b229d112e8669ecf266dbd1a1f58e836f97\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":null,\"ts\":1763400034000}",
-   "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"hash\":\"e30a209b9860c4aee9df9e47a8736af316cb3f1337d0c60526113b0f92b26495\",\"ip\":null,\"prev\":\"c965d4a51243e98ef55235d71c2ff08f2f6b11a5a1524d3acd23e52d80c84a3e\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}",
-   "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"f5691f7d22a81056bcca4467ea985e51f56e9dbc18c21712535ed34b568e9a57\",\"ip\":null,\"prev\":\"e30a209b9860c4aee9df9e47a8736af316cb3f1337d0c60526113b0f92b26495\",\"result\":\"ok\",\"role\":null,\"seq\":42,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400036000}"
+   "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"downgraded\":true,\"from\":\"high\",\"reason\":\"Contractors without security keys\",\"to\":\"standard\"},\"hash\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}",
+   "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"hash\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"ip\":\"203.0.113.7\",\"prev\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}",
+   "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"hash\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"ip\":\"203.0.113.7\",\"prev\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}",
+   "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"ip\":\"203.0.113.7\",\"prev\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}",
+   "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"hash\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"ip\":\"203.0.113.7\",\"prev\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}",
+   "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"hash\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"ip\":\"203.0.113.7\",\"prev\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}",
+   "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"hash\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"ip\":\"203.0.113.7\",\"prev\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}",
+   "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"ip\":\"203.0.113.7\",\"prev\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}",
+   "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"ip\":\"203.0.113.7\",\"prev\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}",
+   "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"hash\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"ip\":null,\"prev\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}",
+   "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"hash\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"ip\":null,\"prev\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}",
+   "{\"action\":\"meet.license.adding\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"lastUsers\":20,\"state\":\"closed\",\"why\":\"expired\"},\"hash\":\"969c22d8e5c50e2fe109f32a572bc674cee41ba885a9ad9407106b6fe5012fda\",\"ip\":null,\"prev\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}",
+   "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"hash\":\"17db24b0cf1a3b662dd8c9d0cb42352f7d1ed9851892413c2e81623b45a48363\",\"ip\":null,\"prev\":\"969c22d8e5c50e2fe109f32a572bc674cee41ba885a9ad9407106b6fe5012fda\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}",
+   "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"limit\":\"lastUsers\",\"seated\":21,\"state\":\"start\",\"users\":20},\"hash\":\"137ed25d13fff23c43f556f75d95f78e5470d3abbff4c04e5da3ca52e1c7f602\",\"ip\":null,\"prev\":\"17db24b0cf1a3b662dd8c9d0cb42352f7d1ed9851892413c2e81623b45a48363\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}",
+   "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"hash\":\"d7deb4acbdfd2c40dc5215422feba946a156f79f49c25577751db2999dfb2ff7\",\"ip\":null,\"prev\":\"137ed25d13fff23c43f556f75d95f78e5470d3abbff4c04e5da3ca52e1c7f602\",\"result\":\"ok\",\"role\":null,\"seq\":31,\"stepup\":false,\"target\":null,\"ts\":1763400025000}",
+   "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"hash\":\"da055dd457878e1b70144ef125dd15e02b15ce99f4ce5c7d8586ec73827d8c9b\",\"ip\":\"198.51.100.9\",\"prev\":\"d7deb4acbdfd2c40dc5215422feba946a156f79f49c25577751db2999dfb2ff7\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":32,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}",
+   "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"hash\":\"d66d96846e0917cee59d01771056884cd3c145c6edd769ce79864b44b79e0b02\",\"ip\":null,\"prev\":\"da055dd457878e1b70144ef125dd15e02b15ce99f4ce5c7d8586ec73827d8c9b\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}",
+   "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"hash\":\"7cf92cc424cc4c0a32e68197bcc870c3fa12f01fb48c12d4616042b38ef49fab\",\"ip\":null,\"prev\":\"d66d96846e0917cee59d01771056884cd3c145c6edd769ce79864b44b79e0b02\",\"result\":\"ok\",\"role\":null,\"seq\":34,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400028000}",
+   "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"hash\":\"354e0c3a1211c02f58d5f3745b66005dae8020cb98b454687ea5ce4b63f2358b\",\"ip\":\"203.0.113.7\",\"prev\":\"7cf92cc424cc4c0a32e68197bcc870c3fa12f01fb48c12d4616042b38ef49fab\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}",
+   "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"hash\":\"61e929fcf04583abac0489970a44da9aaf7d16f8bd54e5a8f49f171b4ef9ddbb\",\"ip\":null,\"prev\":\"354e0c3a1211c02f58d5f3745b66005dae8020cb98b454687ea5ce4b63f2358b\",\"result\":\"ok\",\"role\":null,\"seq\":36,\"stepup\":false,\"target\":null,\"ts\":1763400030000}",
+   "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"hash\":\"afd0fe3b6f95dafa13b3c26e51f0433ce55572f1404883753d76616bf56d581c\",\"ip\":\"203.0.113.7\",\"prev\":\"61e929fcf04583abac0489970a44da9aaf7d16f8bd54e5a8f49f171b4ef9ddbb\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":37,\"stepup\":true,\"target\":\"-\",\"ts\":1763400031000}",
+   "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"hash\":\"3487fe2aaea74f9075bae5c6cb70970d20a6535eab2ef7b29b938bfe80481900\",\"ip\":null,\"prev\":\"afd0fe3b6f95dafa13b3c26e51f0433ce55572f1404883753d76616bf56d581c\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}",
+   "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"hash\":\"8f8ee9e07894477645d8445aa3217cb69740981096867732eff741bba71e7839\",\"ip\":null,\"prev\":\"3487fe2aaea74f9075bae5c6cb70970d20a6535eab2ef7b29b938bfe80481900\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}",
+   "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"2d642766d1efbd4f365f4959f3668b57a3490a800d4cf37d000b3ee6120b5e2e\",\"ip\":null,\"prev\":\"8f8ee9e07894477645d8445aa3217cb69740981096867732eff741bba71e7839\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":null,\"ts\":1763400034000}",
+   "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"hash\":\"d9f03e57f8fa8ce1579e6c8f320b92ff6aefbeb54dd51d2e2c212904f7df12ed\",\"ip\":null,\"prev\":\"2d642766d1efbd4f365f4959f3668b57a3490a800d4cf37d000b3ee6120b5e2e\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}",
+   "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"2270185fee50ecad4853e78afd17cf2a1409b025e2d4f4051d370774d2298d8c\",\"ip\":null,\"prev\":\"d9f03e57f8fa8ce1579e6c8f320b92ff6aefbeb54dd51d2e2c212904f7df12ed\",\"result\":\"ok\",\"role\":null,\"seq\":42,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400036000}",
+   "{\"action\":\"console.bootstrap\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"profile\":\"standard\",\"profileFrom\":\"default\"},\"hash\":\"d1595b70294e786049afae93f637abbc25ce7104b026e3526327cd8bc8f4db10\",\"ip\":\"203.0.113.7\",\"prev\":\"2270185fee50ecad4853e78afd17cf2a1409b025e2d4f4051d370774d2298d8c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":43,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400037000}"
   ],
   "expect": {
    "verified": true,
    "anchored": true,
    "first": 7,
-   "through": 42,
+   "through": 43,
    "broken_at": null,
    "line": null,
    "why": null

@@ -105,7 +105,7 @@ pub const MAIL_WORDS: [(&str, &str, &str); 11] = [
     (
         "mail.upgrade-period",
         "Meeting Hub on <host> needs a license by <date>",
-        "This Meeting Hub relay was upgraded and has no license. People keep their service until <date>. After that the relay serves no one until a Meeting Hub license is installed.\n\nInstall one in the Admin Console: <console>#/meet/license",
+        "This Meeting Hub relay was upgraded and has no license. People can be added until <date>. After that no one new can be added until a Meeting Hub license is installed; people who already have a seat keep using Meeting Hub.\n\nInstall one in the Admin Console: <console>#/meet/license",
     ),
     (
         "mail.clock-uncertain",
@@ -134,8 +134,8 @@ pub const LICENSE_BODY: [&str; 3] = [
     "The license ended on <date>. Its grace days end on <date>.",
     "The license and its grace days are over.",
 ];
-/// Added after the "over" line on Meeting Hub.
-pub const LICENSE_BODY_MEET: &str = " The relay serves no one until a new license is installed.";
+/// Added after the "over" line on Meeting Hub (R41-1: the license limits growth, not service).
+pub const LICENSE_BODY_MEET: &str = " No one new can be added to Meeting Hub until a new license is installed; people who already have a seat keep using it.";
 pub const LICENSE_BODY_END: &str = "\n\nInstall a license: <console>#/<section>/license";
 const MEET_PRODUCT: &str = "Meeting Hub";
 

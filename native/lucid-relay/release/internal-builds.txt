@@ -1,0 +1,4 @@
+# Internal build targets allowed to carry the internal test seat request address (AC-1 2.4 "Issuing", R6-M3).
+# One target name per line, as release CI passes it in LUCID_RELEASE_TARGET. Customer builds never use this list.
+vm206
+vm217

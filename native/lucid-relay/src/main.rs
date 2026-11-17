@@ -9,7 +9,9 @@
 //      behind a TLS front LUCID_RELAY_PUBLIC_HOST=<host[:port]> is required: the one host the relay answers for)
 //               [--console 1]   the Admin Console at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
 //               [--console-sources <cidrs>] [--console-trusted-fronts <cidrs>] [--console-first-admin <email>]
-//                 (or LUCID_RELAY_CONSOLE_SOURCES, _TRUSTED_FRONTS, _FIRST_ADMIN; AC-1 3.1)
+//               [--console-profile standard|high]   (high only for a government deployment; read only until the
+//                 console's first admin signs in, AC-1 3.3)
+//                 (or LUCID_RELAY_CONSOLE_SOURCES, _TRUSTED_FRONTS, _FIRST_ADMIN, _PROFILE; AC-1 3.1)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
@@ -71,7 +73,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 13] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin"];
+const FLAGS: [&str; 14] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -365,6 +367,7 @@ fn main() {
         sources: flags.get("console-sources"),
         trusted_fronts: flags.get("console-trusted-fronts"),
         first_admin: flags.get("console-first-admin"),
+        profile: flags.get("console-profile"),
     };
     let console_host = c.public_host.as_deref().map(|p| server::dialed_of(p, true).hostname).unwrap_or_else(|| c.hostname.clone());
     let (logger, console) = console::open(console_flags, |k| std::env::var(k).ok(), c.state.as_deref(), c.owner.is_some(), c.behind_tls, &console_host, base).unwrap_or_else(|e| die(&e));

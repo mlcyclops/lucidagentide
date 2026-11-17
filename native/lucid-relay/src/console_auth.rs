@@ -1895,6 +1895,9 @@ impl Console {
             "kind": working.kind.as_str(), "aaguid": working.verdict.as_ref().map(|v| v.aaguid.clone()), "reset": invite.kind == InviteKind::ResetSignIn,
         });
         self.record(r, t);
+        if bootstrap {
+            self.record_bootstrap(&email, ip, t);
+        }
         // Meeting Hub: a principal's own registration from their device completes `meet.console-invite` (3.8).
         if invite.source == InviteSource::Device {
             let principal = email.clone();
@@ -3123,7 +3126,7 @@ mod tests {
 
     #[test]
     fn completeness_follows_the_profile() {
-        let mut s = Settings::default();
+        let mut s = Settings { profile: crate::console_settings::Profile::High, ..Settings::default() };
         let mut p = Person::new("h".into(), PersonRole::Viewer, PersonState::Active, CONSOLE_ANCHOR, 1);
         let never = |_: &Passkey| false;
         assert!(!complete(&p, &s, &never));

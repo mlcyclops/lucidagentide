@@ -4,7 +4,7 @@
 // section the console calls. The relay's own books stay in relay.rs; this file holds the console's rules about them.
 
 use crate::codec::{as_object, parse_json, safe_int, str_of, stringify};
-use crate::console::{ApiError, Approved, Caller, LicenseCandidate, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
+use crate::console::{ApiError, Approved, Caller, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
 use crate::license::{license_state, License, LicenseStateName};
 use crate::log::Fields;
 use crate::relay::{NodeFilter, State, Taken, BODY_BYTES};
@@ -549,17 +549,17 @@ pub fn node_filter(query: &str) -> Result<NodeFilter, ApiError> {
     Ok(f)
 }
 
-/// 4.7: a candidate one admin may install (a renewal), against the license in force.
-fn single_admin_license(now: Option<&crate::license::License>, offered: &crate::license::License, offered_valid: bool) -> bool {
-    let Some(cur) = now else { return true };
-    offered_valid
-        && offered.id == cur.id
-        && offered.root == cur.root
-        && offered.product() == cur.product()
-        && offered.edition == cur.edition
-        && offered.exp > cur.exp
-        && offered.users >= cur.users
-        && offered.relays >= cur.relays
+/// 4.7: the offered license as the core compares it. The reference license is the one in force; with none, the offered
+/// one is a first license (R6-M1: Remote Spokes keeps "no current license" as a first license).
+fn candidate_of(now: Option<&crate::license::License>, offered: &crate::license::License, dev: bool, t: i64) -> LicenseCandidate {
+    let (state, _) = license_state(offered, t.div_euclid(1000));
+    LicenseCandidate {
+        offered: LicenseRecord::of(offered),
+        valid: state == LicenseStateName::Valid,
+        ended: state == LicenseStateName::Expired,
+        reference: now.map(LicenseRecord::of),
+        view: license_object(offered, dev, None, t),
+    }
 }
 
 fn license_object(l: &crate::license::License, dev: bool, used: Option<i64>, t: i64) -> Value {
@@ -734,10 +734,7 @@ impl ProductSection for SpokesSection {
         self.with(|st| {
             let offered = st.license_offered(token, t).map_err(|r| ApiError::with("license-refused", format!("This license cannot be used here: {r}.")))?;
             st.license_target().map_err(|p| ApiError::with("license-path", format!("This relay reads its license from {p}. Replace that file and restart the relay.")))?;
-            let (state, _) = license_state(&offered.license, t.div_euclid(1000));
-            let single = single_admin_license(st.license_now(), &offered.license, state == LicenseStateName::Valid);
-            let view = license_object(&offered.license, offered.dev, None, t);
-            Ok(LicenseCandidate { id: offered.license.id.clone(), single, ended: state == LicenseStateName::Expired, view })
+            Ok(candidate_of(st.license_now(), &offered.license, offered.dev, t))
         })?
     }
 
@@ -922,16 +919,20 @@ mod tests {
     }
 
     #[test]
-    fn one_admin_installs_only_a_renewal() {
+    fn no_current_license_makes_a_first_license_and_the_one_in_force_is_the_reference() {
         let cur = crate::license::License { id: "l_1".into(), org: "acme".into(), root: "n_1".into(), edition: "standard".into(), users: 20, relays: 1, exp: 1000, grace_days: 14 };
         let renewal = crate::license::License { exp: 2000, ..cur.clone() };
-        assert!(single_admin_license(None, &renewal, true));
-        assert!(single_admin_license(Some(&cur), &renewal, true));
-        assert!(!single_admin_license(Some(&cur), &renewal, false), "a token in grace needs a second admin");
-        assert!(!single_admin_license(Some(&cur), &crate::license::License { id: "l_2".into(), ..renewal.clone() }, true));
-        assert!(!single_admin_license(Some(&cur), &crate::license::License { exp: 900, ..cur.clone() }, true));
-        assert!(!single_admin_license(Some(&cur), &crate::license::License { users: 19, ..renewal.clone() }, true));
-        assert!(!single_admin_license(Some(&cur), &crate::license::License { edition: "enterprise".into(), ..renewal.clone() }, true));
+        let smaller = crate::license::License { users: 19, ..renewal.clone() };
+        let t = 500_000;
+        // No current license: a first license, one admin, whatever it holds (R6-M1).
+        let c = candidate_of(None, &smaller, false, t);
+        assert!(c.reference.is_none() && c.single() && c.valid && !c.ended);
+        // The license in force is the reference license.
+        let c = candidate_of(Some(&cur), &renewal, false, t);
+        assert_eq!(c.reference.as_ref().map(|r| r.id.as_str()), Some("l_1"));
+        assert!(c.single());
+        assert!(!candidate_of(Some(&cur), &smaller, false, t).single());
+        assert!(!candidate_of(Some(&cur), &crate::license::License { id: "l_2".into(), ..renewal }, false, t).single());
     }
 
     #[test]

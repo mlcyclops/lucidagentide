@@ -131,8 +131,8 @@
   "bootstrap.pinned": "This console waits for its first admin, <email>.",
   "banner.grace": "The license ended on <date>. This console keeps working for <n> more days. Install a new license.",
   "banner.expired": "The license and its grace days are over. <product> pages are read-only until a new license is installed.",
-  "banner.service-off": "The Meeting Hub license is not active, so this relay serves no one. Install a license to turn service back on.",
-  "banner.upgrade-period": "This relay needs a Meeting Hub license. People keep their service until <date>; after that the relay serves no one until a license is installed.",
+  "banner.license-inactive": "The Meeting Hub license is not active, so no one new can be added. People who already have a seat keep using Meeting Hub. Install a license to add people again.",
+  "banner.upgrade-period": "This relay needs a Meeting Hub license. People can be added until <date>; after that no one new can be added until a license is installed. People who already have a seat keep using Meeting Hub.",
   "banner.seats-over": "<seated> people use Meeting Hub; the license covers <users>. On <date> the relay takes seats from <n> people. Request more seats, or pick who gives up a seat.",
   "banner.seats-over.button": "Request more seats",
   "locked.title": "<product> needs a license",
@@ -171,11 +171,11 @@
   "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
   "attention.blocks-active": "<n> blocks are active on this relay.",
   "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
-  "attention.license-service-off": "This relay serves no one: the Meeting Hub license is not active.",
-  "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or this relay stops serving people.",
+  "attention.license-adding-off": "No one new can be added to Meeting Hub: the license is not active.",
+  "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or no one new can be added after that.",
   "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
   "attention.seats-protected": "Admins alone use more seats than the license covers. Request more seats.",
-  "attention.profile-standard": "This console uses the Standard security profile, which allows passwords with authenticator apps. Switch to High for phishing-resistant sign-in.",
+  "attention.profile-standard": "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment.",
   "attention.two-person-off": "This console has <n> admins. Turn on Require a second admin for sensitive changes.",
   "attention.break-glass-missing": "There is no break-glass account. The person who runs this relay creates one with lucid-relay console break-glass.",
   "attention.break-glass-used": "The break-glass account <email> signed in on <time>.",
@@ -194,6 +194,14 @@
   "meet.viewer-rights": "Signed in with a passkey that does not come from your Meeting Hub device, so admin actions are off. Sign out, then sign in with a passkey you added from your own Meeting Hub device.",
   "high.viewer-rights": "You signed in without an approved security key, so you have viewer rights. Under this console's High profile, admins and user managers sign in with a FIPS certified hardware security key. You can add one in Your account; another admin then approves it.",
   "seats.migrated": "People who had devices before this version are ordered by the earliest record this relay kept for them; where there was none, by their ID.",
+  "seats.last-license": "No Meeting Hub license is active. Seats still follow the last license, which covered <users> people.",
+  "seats.no-license": "This relay has never had a Meeting Hub license. The <seated> people it has keep their seats, and no one new can be added until a license is installed.",
+  "seats.no-license.upgrade-period": "This relay has no Meeting Hub license yet. People can be added until <date>.",
+  "cli.profile-ignored": "The Admin Console is already set up, so <flag> is ignored. Change the security profile in Settings, Security.",
+  "cli.profile-ignored.flags": [
+   "--console-profile",
+   "console_profile"
+  ],
   "clock.title": "Relay time",
   "clock.title.body": "Relay clock: <time>. Your browser: <time>.",
   "clock.title.button": "Confirm the relay's time",
@@ -252,7 +260,7 @@
   "settings.profile": "Security profile",
   "settings.profile.button": "Change profile",
   "settings.profile.high": "High: everyone signs in with a passkey or security key, and admins and user managers with an approved hardware security key. For government and regulated use.",
-  "settings.profile.standard": "Standard: people may also sign in with a password and an authenticator app.",
+  "settings.profile.standard": "Standard: people may also sign in with a password and an authenticator app, and admins with any passkey. For commercial organizations.",
   "settings.two-person": "Require a second admin for sensitive changes",
   "settings.banner": "Sign-in banner",
   "settings.aaguids": "Approved security keys",
@@ -377,7 +385,7 @@
   "sign.requests-refused": "Only the hubs of console admins can read Admin Console requests."
  },
  "people": {
-  "meet.license-inactive": "Your organization's Meeting Hub license is not active. Ask your admin.",
+  "meet.license-inactive": "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.",
   "meet.no-seat": "Your organization has no Meeting Hub seat for you. Ask your admin."
  },
  "dialogs": {
@@ -593,8 +601,8 @@
     "Every hub needs a new license seat from the root before it is admitted again."
    ],
    "meet": {
-    "service": [
-     "This relay starts serving people again."
+    "adding": [
+     "People can be added to Meeting Hub again."
     ],
     "upgrade": [
      "The upgrade period ends now: this license lasts past <date>.",
@@ -1334,9 +1342,9 @@
   "license-inactive": {
    "status": 403,
    "words": [
-    "Your organization's Meeting Hub license is not active. Ask your admin."
+    "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin."
    ],
-   "note": "Meeting Hub main and guest ports (4.10)"
+   "note": "an add-people action while adding is closed, on the Meeting Hub main port (4.10) and in the console (4.9, 5), R41-1"
   },
   "no-seat": {
    "status": 403,
@@ -1523,7 +1531,7 @@
   },
   "mail.upgrade-period": {
    "subject": "Meeting Hub on <host> needs a license by <date>",
-   "body": "This Meeting Hub relay was upgraded and has no license. People keep their service until <date>. After that the relay serves no one until a Meeting Hub license is installed.\n\nInstall one in the Admin Console: <console>#/meet/license"
+   "body": "This Meeting Hub relay was upgraded and has no license. People can be added until <date>. After that no one new can be added until a Meeting Hub license is installed; people who already have a seat keep using Meeting Hub.\n\nInstall one in the Admin Console: <console>#/meet/license"
   },
   "mail.license": {
    "subject": "<product> license on <host>: <state words>",
@@ -1532,7 +1540,7 @@
     "The license ended on <date>. Its grace days end on <date>.",
     "The license and its grace days are over."
    ],
-   "body_meet": " The relay serves no one until a new license is installed.",
+   "body_meet": " No one new can be added to Meeting Hub until a new license is installed; people who already have a seat keep using it.",
    "body_end": "\n\nInstall a license: <console>#/<section>/license",
    "state_words": [
     "ends in <n> days",
@@ -1562,6 +1570,8 @@
   "start.meet.console-cert": "console_cert must be a certificate browsers trust for <host>, not one from the Meet CA",
   "start.meet.console-sources": "set console_sources to the networks admins use, for example the VPN's range",
   "start.meet.console-first-admin": "set console_first_admin to the relay admin who signs in first",
+  "start.console-profile": "--console-profile must be standard or high",
+  "start.meet.console-profile": "console_profile must be standard or high",
   "license.for-meet": "this license is for Meeting Hub, not Remote Spokes",
   "license.for-spokes": "this license is for Remote Spokes, not Meeting Hub",
   "license.no-root": "this relay's client_ca has no root certificate",

@@ -71,17 +71,19 @@ static FAKE_ROUTES: [RouteSpec; 3] = [
     RouteSpec { method: "POST", path: "fake/widen", role: Role::Admin, action: "fake.widen", target: "node", stepup: true, need: Need::Product, security: false, keys: &["node", "reason"], body_max: BODY_MAX },
 ];
 
-/// The product section of the tests. It keeps every default method of the trait (`may_approve`, `admin_rule`,
-/// `relay_lines`, `service`, `people_changed`).
+/// The product section of the tests. It keeps every other default method of the trait (`may_approve`, `admin_rule`,
+/// `relay_lines`, `adding`, `people_changed`); `may_add` refuses `fake.widen` and `requests.new` of `rs.seat` while
+/// `closed`, as Meeting Hub refuses its add-people writes while adding is closed (R41-1).
 struct Fake {
     lic: Mutex<LicenseState>,
+    closed: Mutex<bool>,
     ran: Mutex<Vec<String>>,
     installed: Mutex<Vec<String>>,
 }
 
 impl Fake {
     fn new() -> Fake {
-        Fake { lic: Mutex::new(LicenseState::Valid), ran: Mutex::new(Vec::new()), installed: Mutex::new(Vec::new()) }
+        Fake { lic: Mutex::new(LicenseState::Valid), closed: Mutex::new(false), ran: Mutex::new(Vec::new()), installed: Mutex::new(Vec::new()) }
     }
 }
 
@@ -112,6 +114,13 @@ impl ProductSection for Fake {
     fn security_actions(&self) -> &'static [&'static str] {
         &["fake.block"]
     }
+    fn may_add(&self, action: &str, params: &Value) -> Result<(), ApiError> {
+        let adds = action == "fake.widen" || (action == "requests.new" && str_of(params.get("kind")) == Some("rs.seat"));
+        if adds && *self.closed.lock() {
+            return Err(ApiError::of("license-inactive"));
+        }
+        Ok(())
+    }
     fn route(&self, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
         let node = str_of(call.body.get("node")).unwrap_or("").to_owned();
         match call.spec.path {
@@ -125,10 +134,13 @@ impl ProductSection for Fake {
         Ok(json!({ "ok": true }))
     }
     fn license_candidate(&self, token: &str, _t: i64) -> Result<LicenseCandidate, ApiError> {
-        // "lic:<id>:<renew|change|ended>"
+        // "lic:<id>:<renew|change|ended>" against the reference license l_ref (exp 1000, 20 users): renew is a
+        // renewal of it (same id), change and ended another id.
         let parts: Vec<&str> = token.split(':').collect();
         let [_, id, kind] = parts.as_slice() else { return Err(ApiError::with("license-refused", "This license cannot be used here: malformed.")) };
-        Ok(LicenseCandidate { id: (*id).to_owned(), single: *kind == "renew", ended: *kind == "ended", view: json!({ "id": id }) })
+        let record = |id: &str, exp: i64| LicenseRecord { product: Product::Spokes, root: "n_root".into(), id: id.into(), edition: "standard".into(), users: 20, relays: 1, exp };
+        let reference = record(if *kind == "renew" { id } else { "l_ref" }, 1000);
+        Ok(LicenseCandidate { offered: record(id, 2000), valid: *kind != "ended", ended: *kind == "ended", reference: Some(reference), view: json!({ "id": id }) })
     }
     fn license_install(&self, token: &str, _t: i64) -> Result<Value, ApiError> {
         self.installed.lock().push(token.to_owned());
@@ -149,6 +161,11 @@ struct Built {
 }
 
 fn build_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind: bool) -> Result<Built, String> {
+    open_in(dir, pin, sources, fronts, behind, None)
+}
+
+/// The console in `dir` started with `--console-profile` `profile` (None: not given).
+fn open_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind: bool, profile: Option<Profile>) -> Result<Built, String> {
     let written = Arc::new(Mutex::new(Vec::<String>::new()));
     let w = written.clone();
     let ring = Arc::new(LineRing::default());
@@ -161,6 +178,7 @@ fn build_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind
         trusted_fronts: if fronts.is_empty() { Vec::new() } else { parse_cidr_list(fronts, FRONTS_MAX).unwrap() },
         behind_front: behind,
         first_admin: pin.map(str::to_owned),
+        profile,
         host: RP.into(),
     };
     let c = Console::open(cfg, logger, ring)?;
@@ -169,25 +187,24 @@ fn build_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind
     Ok(Built { c, log: written, fake, dir })
 }
 
-/// A console under the Standard profile: the tests kept from before revision 4 run there (under High, the default,
-/// an admin with an unattested passkey holds viewer rights and every ordinary write waits for the break-glass account).
+/// A console under the Standard profile, the default (R41-3): no `--console-profile` given.
 fn build(name: &str) -> Built {
-    let b = build_in(temp_dir(name), Some(ALICE), "0.0.0.0/0,::/0", "", false).unwrap();
-    set_profile(&b.c, Profile::Standard);
-    b
+    build_in(temp_dir(name), Some(ALICE), "0.0.0.0/0,::/0", "", false).unwrap()
 }
 
-/// A console under High (the default) with the test MDS snapshot in force: the testkit's security key model is
-/// FIPS certified with hardware key protection.
+/// A console set up with `--console-profile high` (R41-3; under High an admin with an unattested passkey holds viewer
+/// rights and every ordinary write waits for the break-glass account), with the test MDS snapshot in force: the
+/// testkit's security key model is FIPS certified with hardware key protection.
 fn build_high(name: &str) -> Built {
-    let b = build_in(temp_dir(name), Some(ALICE), "0.0.0.0/0,::/0", "", false).unwrap();
+    let b = open_in(temp_dir(name), Some(ALICE), "0.0.0.0/0,::/0", "", false, Some(Profile::High)).unwrap();
     snapshot(&b.c);
     b
 }
 
-/// The same state folder opened again (the relay restarted), with the test snapshot when `high`.
+/// The same state folder opened again (the relay restarted); when `high`, with `--console-profile high` and the test
+/// snapshot.
 fn reopen(dir: &std::path::Path, high: bool) -> Built {
-    let b = build_in(dir.to_owned(), None, "0.0.0.0/0,::/0", "", false).unwrap();
+    let b = open_in(dir.to_owned(), None, "0.0.0.0/0,::/0", "", false, high.then_some(Profile::High)).unwrap();
     if high {
         snapshot(&b.c);
     }
@@ -952,6 +969,14 @@ fn the_switch_and_its_preconditions() {
     // Behind a TLS front: the trusted fronts are required.
     let with_pin = || SpokesFlags { first_admin: Some(&pin), ..SpokesFlags::default() };
     assert_eq!(open(with_pin(), env("1"), Some(d.as_str()), false, true, RP, quiet()).err().unwrap(), "the console behind a TLS front needs --console-trusted-fronts (the front's addresses)");
+    // --console-profile is standard or high (3.1, R41-3); any other value refuses the start.
+    let medium = "medium".to_string();
+    assert_eq!(open(SpokesFlags { first_admin: Some(&pin), profile: Some(&medium), ..SpokesFlags::default() }, env("1"), Some(d.as_str()), false, false, RP, quiet()).err().unwrap(), "--console-profile must be standard or high");
+    let high = "high".to_string();
+    let (_, c) = open(SpokesFlags { first_admin: Some(&pin), profile: Some(&high), ..SpokesFlags::default() }, env("1"), Some(d.as_str()), false, false, RP, quiet()).unwrap();
+    assert_eq!(c.unwrap().settings_now().profile, Profile::High);
+    let (_, c) = open(with_pin(), env("1"), Some(d.as_str()), false, false, RP, quiet()).unwrap();
+    assert_eq!(c.unwrap().settings_now().profile, Profile::Standard);
     // A range wider than /24 or /64 logs a start warning.
     let wide = "10.9.0.0/16".to_string();
     let written = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1109,9 +1134,112 @@ fn a_book_from_before_ac1_starts_bootstrapped_and_audits_the_upgrade() {
         assert_eq!(inner.book.people[ALICE].passkeys[0].anchor, HUB_SERIAL);
     }
     assert_eq!(last_entry(c, "console.upgrade")["actor"], "relay");
+    // No flag at the upgrade start: Standard (R41-3).
+    assert_eq!((c.settings_now().profile, c.settings_now().downgraded), (Profile::Standard, false));
     let mut a = a;
     assert_eq!(sign_in(c, &mut a, T0).status, 200);
     assert!(!c.inner.lock().book.people[ALICE].unproven);
+}
+
+#[test]
+fn a_book_from_before_ac1_reads_the_profile_flag_once_at_its_upgrade() {
+    let dir = temp_dir("upgrade-flag");
+    let a = Authenticator::new(5);
+    let old = json!({ "v": 1, "origin": ORIGIN, "invites": {}, "admins": {
+        ALICE: { "handle": "h", "created": 1, "lastSignIn": 2, "serial": HUB_SERIAL, "passkeys": [{ "id": b64u(&a.id), "cose": b64u(&a.cose()), "count": 0, "label": "Laptop", "created": 1, "lastUsed": 2 }] } } });
+    std::fs::write(dir.join(CONSOLE_FILE), stringify(&old)).unwrap();
+    let b = open_in(dir.clone(), None, "0.0.0.0/0", "", false, Some(Profile::High)).unwrap();
+    assert!(b.c.inner.lock().book.bootstrapped);
+    assert_eq!(b.c.settings_now().profile, Profile::High);
+    assert!(!logged(&b, "console.profile-ignored"));
+    drop(b);
+    // The next start is bootstrapped: a changed flag is ignored.
+    let b = open_in(dir, None, "0.0.0.0/0", "", false, Some(Profile::Standard)).unwrap();
+    assert_eq!(b.c.settings_now().profile, Profile::High);
+    assert!(logged(&b, "console.profile-ignored"));
+}
+
+#[test]
+fn the_profile_at_setup_is_read_only_until_bootstrap() {
+    let ignored = |b: &Built| lines_of(&b.log).iter().filter(|l| l.contains("\"event\":\"console.profile-ignored\"")).count();
+    // No flag: Standard, recorded as the default at bootstrap, and no profile-standard item (R41-3).
+    let b = build("profile-default");
+    let c = &b.c;
+    assert_eq!((c.settings_now().profile, c.settings_now().downgraded), (Profile::Standard, false));
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first(c, &mut a, T0);
+    let e = last_entry(c, "console.bootstrap");
+    assert_eq!((e["actor"].as_str(), e["detail"].clone()), (Some(ALICE), json!({ "profile": "standard", "profileFrom": "default" })));
+    assert!(!attention_kinds(c, &sid, T0 + 1).iter().any(|k| k == "profile-standard"));
+    let dir = b.dir.clone();
+    drop(b);
+    // Bootstrapped: a changed flag is ignored, the book keeps its profile, and cli.profile-ignored is logged once.
+    let b = open_in(dir.clone(), None, "0.0.0.0/0,::/0", "", false, Some(Profile::High)).unwrap();
+    assert_eq!(b.c.settings_now().profile, Profile::Standard);
+    assert_eq!(ignored(&b), 1);
+    let words = crate::console_settings::profile_ignored_words("--console-profile");
+    assert!(lines_of(&b.log).iter().any(|l| l.contains(&words)));
+    drop(b);
+    // Not logged when they agree, nor when no flag is given.
+    let b = open_in(dir.clone(), None, "0.0.0.0/0,::/0", "", false, Some(Profile::Standard)).unwrap();
+    assert_eq!(ignored(&b), 0);
+    drop(b);
+    let b = open_in(dir.clone(), None, "0.0.0.0/0,::/0", "", false, None).unwrap();
+    assert_eq!(ignored(&b), 0);
+    drop(b);
+    // reset clears bootstrap, so the flag applies again at the next start.
+    let ok = |_: &str, _: &str| -> Result<(), String> { Ok(()) };
+    run_offline(&dir, Offline::Reset { first_admin: ALICE.into(), typed_host: RP.into() }, RP, &ok).unwrap();
+    let b = open_in(dir, None, "0.0.0.0/0,::/0", "", false, Some(Profile::High)).unwrap();
+    assert_eq!(b.c.settings_now().profile, Profile::High);
+    assert_eq!(ignored(&b), 0);
+}
+
+#[test]
+fn a_high_flag_before_bootstrap_gives_high_and_a_downgrade_stays_flagged() {
+    let b = build_high("profile-flag");
+    let dir = b.dir.clone();
+    assert_eq!(b.c.settings_now().profile, Profile::High);
+    drop(b);
+    // Before bootstrap every start writes the flag: without it the console is Standard again, never a downgrade.
+    let b = open_in(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false, None).unwrap();
+    assert_eq!((b.c.settings_now().profile, b.c.settings_now().downgraded), (Profile::Standard, false));
+    drop(b);
+    let b = open_in(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false, Some(Profile::High)).unwrap();
+    let c = &b.c;
+    snapshot(c);
+    assert_eq!(c.settings_now().profile, Profile::High);
+    // The High setup gate holds ordinary writes until the break-glass account is complete.
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first_high(c, &mut a, T0);
+    assert_eq!(last_entry(c, "console.bootstrap")["detail"], json!({ "profile": "high", "profileFrom": "flag" }));
+    assert!(c.break_glass_gate());
+    let r = post_su(c, &sid, &mut a, "/console/api/settings/links", "settings.links", "-", json!({ "links": [] }), T0 + 1);
+    assert_eq!(code(&r), "break-glass-needed");
+    add_break_glass(c, &Authenticator::new(40), BG, BG_PASSWORD);
+    assert!(!attention_kinds(c, &sid, T0 + 2).iter().any(|k| k == "profile-standard"));
+    // High to Standard in Settings latches `downgraded`; the item stays after a restart.
+    let path = "/console/api/settings/profile";
+    let r = post_su(c, &sid, &mut a, path, "settings.profile", "-", json!({ "profile": "standard", "reason": "Pilot" }), T0 + 3);
+    assert_eq!(r.status, 200, "{}", text_of(&r));
+    drop(b);
+    let b = open_in(dir.clone(), None, "0.0.0.0/0,::/0", "", false, None).unwrap();
+    let c = &b.c;
+    assert!(c.settings_now().downgraded);
+    let sid = login(c, &mut a, T0 + 10);
+    assert!(attention_kinds(c, &sid, T0 + 11).iter().any(|k| k == "profile-standard"));
+    // Editing the flag cannot move it back: ignored and logged.
+    drop(b);
+    let b = reopen(&dir, true);
+    let c = &b.c;
+    assert_eq!(c.settings_now().profile, Profile::Standard);
+    assert!(logged(&b, "console.profile-ignored"));
+    // Standard to High in Settings clears it.
+    let sid = login(c, &mut a, T0 + 20);
+    let r = post_su(c, &sid, &mut a, path, "settings.profile", "-", json!({ "profile": "high", "reason": "Harden" }), T0 + 21);
+    assert_eq!(r.status, 200, "{}", text_of(&r));
+    assert!(!c.settings_now().downgraded);
+    assert!(!attention_kinds(c, &sid, T0 + 22).iter().any(|k| k == "profile-standard"));
 }
 
 #[test]
@@ -2243,6 +2371,9 @@ fn profiles_switch_with_their_rules() {
     assert_eq!(c.settings_now().profile, Profile::Standard);
     let e = last_entry(c, "settings.profile");
     assert_eq!((e["approval"].as_str(), e["detail"]["from"].as_str(), e["detail"]["to"].as_str()), (Some("single-admin-setting"), Some("high"), Some("standard")));
+    // The move latches `downgraded` (R41-3), the only trigger of profile-standard.
+    assert_eq!(e["detail"]["downgraded"], true);
+    assert!(c.settings_now().downgraded);
     assert!(attention_kinds(c, &sid, T0 + 3).iter().any(|k| k == "profile-standard"));
     // A viewer signed in with a password and an app.
     add_bare(c, PAT, PersonRole::Viewer);
@@ -2255,6 +2386,8 @@ fn profiles_switch_with_their_rules() {
     let r = post_su(c, &sid, &mut a, path, "settings.profile", "-", json!({ "profile": "high", "reason": "Harden" }), T0 + 5);
     assert_eq!(r.status, 200, "{}", text_of(&r));
     assert_eq!(last_entry(c, "settings.profile")["approval"], Value::Null);
+    assert_eq!(last_entry(c, "settings.profile")["detail"]["downgraded"], false);
+    assert!(!c.settings_now().downgraded);
     assert_eq!(send(c, get("/console/api/overview", &pat), T0 + 6).status, 401);
     assert_eq!(send(c, get("/console/api/overview", &sid), T0 + 6).status, 200);
     assert!(!attention_kinds(c, &sid, T0 + 7).iter().any(|k| k == "profile-standard"));
@@ -2757,6 +2890,8 @@ fn unreadable_or_lost_secrets_and_a_bad_metadata_file() {
     drop(b);
     // A data key that does not unwrap: seal-lost, a new decoy key, mail off, authenticator apps unusable; a bad
     // console-mds.jwt falls back with mds-old.
+    // The wrapped data key is replaced with bytes no provider unwraps, so the loss happens whichever provider this
+    // host picks (machine DPAPI on Windows, the key file elsewhere).
     let b = build("seal-lost");
     let c = &b.c;
     let mut a = Authenticator::new(5);
@@ -2769,7 +2904,10 @@ fn unreadable_or_lost_secrets_and_a_bad_metadata_file() {
     let old = c.seal_get(crate::console_auth::DECOY_SECRET).unwrap();
     let dir = b.dir.clone();
     drop(b);
-    let _ = std::fs::remove_file(dir.join(crate::console_seal::KEY_FILE));
+    let secrets = dir.join(crate::console_seal::SECRETS_FILE);
+    let mut v = crate::codec::parse_json(&std::fs::read_to_string(&secrets).unwrap()).unwrap();
+    v["dataKey"] = Value::from(crate::codec::b64u(&[9u8; 200]));
+    std::fs::write(&secrets, stringify(&v)).unwrap();
     std::fs::write(dir.join(crate::console_mds::MDS_FILE), "not a metadata blob").unwrap();
     let b = reopen(&dir, false);
     let c = &b.c;
@@ -3258,6 +3396,54 @@ fn product_writes_follow_the_license_state_and_security_actions_never_do() {
     assert_eq!(*b.fake.ran.lock(), vec![format!("fake.widen n_1 as {ALICE}")]);
 }
 
+#[test]
+fn one_admin_installs_only_a_first_license_or_a_renewal_of_the_reference_license() {
+    let reference = LicenseRecord { product: Product::Meet, root: "m_root".into(), id: "l_1".into(), edition: "standard".into(), users: 100, relays: 1, exp: 1000 };
+    let renewal = LicenseRecord { exp: 2000, ..reference.clone() };
+    // No reference license (Remote Spokes with no current license, Meeting Hub with no lastLicense): a first license.
+    assert!(one_admin_install(None, &renewal, true));
+    assert!(one_admin_install(Some(&reference), &renewal, true));
+    // A reference license that is only lastLicense (R6-M1) is compared the same way: a smaller one needs a second admin.
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { users: 1, ..renewal.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &renewal, false), "a token in grace");
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { id: "l_2".into(), ..renewal.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { exp: 900, ..reference.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { relays: 0, ..renewal.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { edition: "enterprise".into(), ..renewal.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { root: "m_other".into(), ..renewal.clone() }, true));
+    assert!(!one_admin_install(Some(&reference), &LicenseRecord { product: Product::Spokes, ..renewal }, true));
+}
+
+#[test]
+fn add_people_writes_answer_license_inactive_before_the_license_check() {
+    let b = build("addingclosed");
+    let c = &b.c;
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first(c, &mut a, T0);
+    // Adding closed and the license expired or missing: the refusal names the real reason (4.9, R41-1).
+    *b.fake.closed.lock() = true;
+    let inactive = "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.";
+    for (i, state) in [LicenseState::Expired, LicenseState::None].into_iter().enumerate() {
+        *b.fake.lic.lock() = state;
+        let t = T0 + 1 + i as i64 * 10;
+        let r = post_su(c, &sid, &mut a, "/console/api/fake/widen", "fake.widen", "n_1", json!({ "node": "n_1", "reason": "x" }), t);
+        assert_eq!((r.status, code(&r).as_str(), json_of(&r)["error"].as_str()), (403, "license-inactive", Some(inactive)));
+        let r = send(c, call("POST", "/console/api/requests/new", json!({ "kind": "rs.seat", "target": { "node": "n_1" }, "reason": "More" }), &sid), t + 1);
+        assert_eq!((r.status, code(&r).as_str()), (403, "license-inactive"));
+        // Writes that add no one keep their own answers: a security action runs, a security request is made.
+        let r = post_su(c, &sid, &mut a, "/console/api/fake/block", "fake.block", "n_1", json!({ "node": "n_1", "reason": "x" }), t + 2);
+        assert_eq!(r.status, 200, "{}", text_of(&r));
+    }
+    let r = send(c, call("POST", "/console/api/requests/new", json!({ "kind": "rs.revoke", "target": { "node": "n_2" }, "reason": "Stolen" }), &sid), T0 + 30);
+    assert_eq!(r.status, 200, "{}", text_of(&r));
+    // Adding open again: the product license check answers as before.
+    *b.fake.closed.lock() = false;
+    *b.fake.lic.lock() = LicenseState::Expired;
+    let r = post_su(c, &sid, &mut a, "/console/api/fake/widen", "fake.widen", "n_1", json!({ "node": "n_1", "reason": "x" }), T0 + 40);
+    assert_eq!((r.status, code(&r).as_str()), (402, "license-expired"));
+    assert!(b.fake.ran.lock().is_empty());
+}
+
 // ── Overview and viewers (7.3) ──────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -3275,7 +3461,9 @@ fn viewers_see_no_people_approvals_or_requests() {
     assert_eq!(kinds, vec!["spokes-silent"]);
     let ov = json_of(&send(c, get("/console/api/overview", &sid), T0 + 2));
     let kinds: Vec<&str> = ov["attention"].as_array().unwrap().iter().map(|a| a["kind"].as_str().unwrap()).collect();
-    assert!(kinds.contains(&"admins-few") && kinds.contains(&"uncounted") && kinds.contains(&"anchor-single") && kinds.contains(&"profile-standard"));
+    assert!(kinds.contains(&"admins-few") && kinds.contains(&"uncounted") && kinds.contains(&"anchor-single"));
+    // A console that started in Standard never shows profile-standard (R41-3).
+    assert!(!kinds.contains(&"profile-standard"));
     assert_eq!(ov["cards"][0]["id"], "health");
     // Viewers' sessions list only their own; search gives them no people.
     let s = json_of(&send(c, get("/console/api/sessions", &sid_v), T0 + 3));
@@ -3509,7 +3697,11 @@ fn every_revision_4_event_is_appended_with_its_keys() {
     // break-glass.create and two-person.off at the next start.
     assert_eq!(step("settings/email", "settings.email", "-", json!({ "mode": "off", "reason": "Off" }), &mut a, next()).0, 200);
     assert_eq!(step("settings/profile", "settings.profile", "-", json!({ "profile": "high", "reason": "Harden" }), &mut a, next()).0, 200);
-    has_detail(&last_entry(c, "settings.profile"), &["from", "to", "reason"]);
+    has_detail(&last_entry(c, "settings.profile"), &["from", "to", "downgraded", "reason"]);
+    // console.bootstrap (R41-3): the first admin's registration, with the profile the console started in.
+    let e = last_entry(c, "console.bootstrap");
+    assert_eq!(e["actor"], ALICE);
+    has_detail(&e, &["profile", "profileFrom"]);
     has_detail(&last_entry(c, "console.seal"), &["provider", "keyMode", "refused"]);
     let dir = b.dir.clone();
     drop(b);
@@ -3685,6 +3877,7 @@ fn every_refusal_word_matches_the_words_vector() {
     assert_eq!(page["cli.break-glass-link"], crate::console_auth::BREAK_GLASS_LINK);
     assert_eq!(page["cli.break-glass-exists"], crate::console_auth::BREAK_GLASS_EXISTS);
     assert_eq!(page["cli.two-person-off"], crate::console_auth::TWO_PERSON_OFF);
+    assert_eq!(page["cli.profile-ignored"].as_str(), Some(crate::console_settings::profile_ignored_words("<flag>").as_str()));
     assert_eq!(page["breakglass.gate"], code_words("break-glass-needed").unwrap().1);
     assert!(page["high.viewer-rights"].as_str().is_some());
     // Every attention item the relay mails has the page's words.
@@ -3704,7 +3897,7 @@ fn every_refusal_word_matches_the_words_vector() {
     // (R3-L4) The license dialog: the hub reseating line for Remote Spokes, and one group per Meeting Hub case.
     let lic = &v["dialogs"]["license"];
     assert!(lic["spokes"].as_array().is_some_and(|l| l.len() == 1 && l[0].as_str().unwrap().contains("license seat")));
-    for group in ["service", "upgrade", "seats"] {
+    for group in ["adding", "upgrade", "seats"] {
         assert!(lic["meet"][group].as_array().is_some_and(|l| !l.is_empty()), "{group}");
     }
 }

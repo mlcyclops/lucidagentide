@@ -223,6 +223,9 @@ pub struct Settings {
     pub console_key: String,
     pub console_sources: Vec<String>,
     pub console_first_admin: String,
+    /// AC-1 3.1 (R41-3): "high" for a government deployment, "standard", or "" (Standard); read only while the
+    /// console is not bootstrapped.
+    pub console_profile: String,
     pub license: String,
     pub files_power: Obj,
     pub min_client: Obj,
@@ -297,12 +300,12 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 56] = [
+const SETTINGS_FIELDS: [&str; 57] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
-    "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "license",
+    "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -351,6 +354,7 @@ impl Default for Settings {
             console_key: String::new(),
             console_sources: Vec::new(),
             console_first_admin: String::new(),
+            console_profile: String::new(),
             license: String::new(),
             files_power: Obj::new(),
             min_client: Obj::new(),
@@ -559,6 +563,10 @@ impl Settings {
         text("console_cert", &mut s.console_cert)?;
         text("console_key", &mut s.console_key)?;
         text("console_first_admin", &mut s.console_first_admin)?;
+        text("console_profile", &mut s.console_profile)?;
+        if !s.console_profile.trim().is_empty() && crate::console_settings::Profile::parse(s.console_profile.trim()).is_none() {
+            return Err("relay settings: console_profile must be standard or high".into());
+        }
         text("license", &mut s.license)?;
         if let Some(v) = raw.get("console_port") {
             s.console_port = v.clone();

@@ -91,8 +91,8 @@
     "bootstrap.pinned": "This console waits for its first admin, <email>.",
     "banner.grace": "The license ended on <date>. This console keeps working for <n> more days. Install a new license.",
     "banner.expired": "The license and its grace days are over. <product> pages are read-only until a new license is installed.",
-    "banner.service-off": "The Meeting Hub license is not active, so this relay serves no one. Install a license to turn service back on.",
-    "banner.upgrade-period": "This relay needs a Meeting Hub license. People keep their service until <date>; after that the relay serves no one until a license is installed.",
+    "banner.license-inactive": "The Meeting Hub license is not active, so no one new can be added. People who already have a seat keep using Meeting Hub. Install a license to add people again.",
+    "banner.upgrade-period": "This relay needs a Meeting Hub license. People can be added until <date>; after that no one new can be added until a license is installed. People who already have a seat keep using Meeting Hub.",
     "banner.seats-over": "<seated> people use Meeting Hub; the license covers <users>. On <date> the relay takes seats from <n> people. Request more seats, or pick who gives up a seat.",
     "banner.seats-over.button": "Request more seats",
     "locked.title": "<product> needs a license",
@@ -131,11 +131,11 @@
     "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
     "attention.blocks-active": "<n> blocks are active on this relay.",
     "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
-    "attention.license-service-off": "This relay serves no one: the Meeting Hub license is not active.",
-    "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or this relay stops serving people.",
+    "attention.license-adding-off": "No one new can be added to Meeting Hub: the license is not active.",
+    "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or no one new can be added after that.",
     "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
     "attention.seats-protected": "Admins alone use more seats than the license covers. Request more seats.",
-    "attention.profile-standard": "This console uses the Standard security profile, which allows passwords with authenticator apps. Switch to High for phishing-resistant sign-in.",
+    "attention.profile-standard": "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment.",
     "attention.two-person-off": "This console has <n> admins. Turn on Require a second admin for sensitive changes.",
     "attention.break-glass-missing": "There is no break-glass account. The person who runs this relay creates one with lucid-relay console break-glass.",
     "attention.break-glass-used": "The break-glass account <email> signed in on <time>.",
@@ -167,6 +167,11 @@
       "the credential file does not match the install record"],
     "breakglass.gate": "This console needs its break-glass account before it can be administered. The person who runs this relay creates it with lucid-relay console break-glass.",
     "seats.summary": "<seated> of <users> seats in use.",
+    "seats.last-license": "No Meeting Hub license is active. Seats still follow the last license, which covered <users> people.",
+    "seats.no-license": "This relay has never had a Meeting Hub license. The <seated> people it has keep their seats, and no one new can be added until a license is installed.",
+    "seats.no-license.upgrade": "This relay has no Meeting Hub license yet. People can be added until <date>.",
+    // 8.1 "Words the Meeting Hub relay answers people": also the words beside disabled add controls (R41-1).
+    "meet.license-inactive": "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.",
     "seats.state": ["Seated", "Picked to give up a seat", "No seat", "Always keeps a seat"],
     "seats.actions": ["Give up seat first", "Keep seat", "Request more seats"],
     "seats.request": "Request more Meeting Hub seats",
@@ -180,7 +185,7 @@
     "settings.profile": "Security profile",
     "settings.profile.button": "Change profile",
     "settings.profile.high": "High: everyone signs in with a passkey or security key, and admins and user managers with an approved hardware security key. For government and regulated use.",
-    "settings.profile.standard": "Standard: people may also sign in with a password and an authenticator app.",
+    "settings.profile.standard": "Standard: people may also sign in with a password and an authenticator app, and admins with any passkey. For commercial organizations.",
     "settings.two-person": "Require a second admin for sensitive changes",
     "settings.banner": "Sign-in banner",
     "settings.aaguids": "Approved security keys",
@@ -291,7 +296,7 @@
       body: ["Now: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>.",
         "New: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>.",
         "Every hub needs a new license seat from the root before it is admitted again."],
-      meet: ["This relay starts serving people again.",
+      meet: ["People can be added to Meeting Hub again.",
         "The upgrade period ends now: this license lasts past <date>.",
         "The upgrade period stays until <date>, because this license ends before it.",
         "<seated> people use Meeting Hub and this license covers <users>, so a 14-day seat clock starts.",
@@ -451,7 +456,9 @@
     qrLabel: "QR code for your authenticator app",
     key: "Key",
     changed: "<name>: <old> to <new>",
-    service: { on: "Serving people", off: "Serving no one", "upgrade-period": "Serving people in the upgrade period" },
+    adding: { open: "Open", closed: "Closed", "upgrade-period": "Open in the upgrade period, with no seat limit" },
+    addingLabel: "Adding people",
+    lastUsers: "Seat limit from the last license",
     wantedNeeded: "Write a number of seats above the license's <users>, at most 10,000.",
     emailNeeded: "Write an email.",
   };
@@ -478,7 +485,7 @@
     "crl-stale", "signer-unhealthy", "signer-expiring", "cert-expiring", "tls-expiring", "spokes-silent", "enrollments-waiting",
     "approvals-mine", "requests-old", "admins-few", "anchor-single", "admin-suspended", "passkey-waiting", "joiner-waiting",
     "audit-broken", "audit-rotating", "audit-dropped-unexported", "audit-not-exported", "quota-hits", "blocks-active", "admins-unproven",
-    "license-service-off", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
+    "license-adding-off", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
     "break-glass-missing", "break-glass-used", "key-unattested", "mds-old", "signin-locked", "mail-failing", "clock-uncertain",
     "clock-back", "aaguids-relaxed", "seal-key-file", "seal-lost", "seats-held", "seal-machine-scope"];
 
@@ -948,7 +955,13 @@
     const label = fillText(MSG.moreFor, { name });
     const b = el("button", { type: "button", "data-act": "menu", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": id, "aria-label": label }, MSG.more);
     const ul = el("ul", { class: "menu", role: "menu", id, "aria-label": label, hidden: true });
-    for (const it of list) ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "data-act": "run", "data-k": reg(it.run) }, it.label)));
+    for (const it of list) {
+      // A disabled item (R41-1) stays focusable with aria-disabled and carries its reason beside the label.
+      if (it.disabled) {
+        ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "aria-disabled": "true", class: "is-disabled" },
+          it.label, el("span", { class: "menu-note" }, it.disabled))));
+      } else ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "data-act": "run", "data-k": reg(it.run) }, it.label)));
+    }
     return el("div", { class: "menu-wrap" }, b, ul);
   }
   function buildAccountMenu() {
@@ -1038,14 +1051,19 @@
     return out;
   }
   // The 7.2 banners under the header on every page: the relay's (overview "banners") and the session's reduced rights.
-  const BANNER_TONE = { "banner.seats-over": "bad", "banner.service-off": "bad", "breakglass.gate": "bad", "attention.clock-uncertain": "bad" };
+  const BANNER_TONE = { "banner.seats-over": "bad", "banner.license-inactive": "bad", "breakglass.gate": "bad", "attention.clock-uncertain": "bad" };
+  // banner.license-inactive shows on Overview and every Meeting Hub page (7.2, R41-1); the others on every page.
+  const MEET_ONLY_BANNERS = ["banner.license-inactive"];
   function bannerNodes() {
     const out = [];
+    const where = parseHash().parts[0];
+    const meetPage = where === "overview" || where === "meet" || where === "license";
     const why = me() ? me().rightsWhy : null;
     if (why === "not-attested") out.push(banner("warn", MSG.sev.warn, W["high.viewer-rights"]));
     if (why === "not-device-anchored") out.push(banner("warn", MSG.sev.warn, W["meet.viewer-rights"]));
     for (const b of (S.overview && S.overview.banners) || []) {
       if (!b || b.id === "high.viewer-rights" || b.id === "meet.viewer-rights") continue;
+      if (MEET_ONLY_BANNERS.includes(b.id) && !meetPage) continue;
       const tpl = W[b.id];
       if (typeof tpl !== "string") continue;
       const tone = BANNER_TONE[b.id] || "warn";
@@ -2012,23 +2030,26 @@
         ["Ends", daySec(l.exp)], ["Grace days", l.graceDays], [W["dialog.id"], code(l.id)], ["Development license", l.dev ? MSG.yes : undefined],
       ])));
     } else kids.push(panel(null, emptyLine(fillText(W["attention.license-none"], { product: PRODUCT_NAME[product()] }))));
-    if (d.service) {
-      kids.push(panel(null, pairs([["Service", MSG.service[d.service.state] || stateWord(d.service.state)],
-        ["Upgrade period ends", d.service.upgradePeriodEnds ? when(d.service.upgradePeriodEnds) : undefined]])));
+    // Meeting Hub (R41-1): the license limits adding people, never seated people's service.
+    if (d.adding) {
+      kids.push(panel(null, pairs([[MSG.addingLabel, MSG.adding[d.adding.state] || stateWord(d.adding.state)],
+        ["Upgrade period ends", d.adding.upgradePeriodEnds ? when(d.adding.upgradePeriodEnds) : undefined],
+        [MSG.lastUsers, d.adding.lastUsers != null && !(l && (l.state === "valid" || l.state === "grace")) ? d.adding.lastUsers : undefined]])));
     }
     if (isAdmin()) {
       const { box, area } = pasteOrFile(W["license.install.field"], ".lic,.txt");
-      const install = btn(W["license.install.button"], () => installLicense(area.value, l, d.service), "primary");
+      const install = btn(W["license.install.button"], () => installLicense(area.value, l, d.adding), "primary");
       kids.push(panel(W["license.install"], box, install));
     }
     return kids;
   };
-  // The Meeting Hub lines of the license dialog (8.2, R3-L4, R3-M4): service, the upgrade period, the seat clock.
+  // The Meeting Hub lines of the license dialog (8.2, R3-L4, R3-M4, R41-1): adding reopens, the upgrade period, the
+  // seat clock. `svc` is the license answer's `adding`.
   function meetLicenseLines(p, svc, seats) {
     const M = D.license.meet;
     const lines = [];
     const graceEnd = (p.exp || 0) + (p.graceDays != null ? p.graceDays : 14) * 86400;
-    if (svc && svc.state === "off") lines.push(M[0]);
+    if (svc && svc.state === "closed") lines.push(M[0]);
     if (svc && svc.upgradePeriodEnds) {
       const ends = svc.upgradePeriodEnds / 1000;
       lines.push(fill(graceEnd >= ends ? M[1] : M[2], { date: daySec(ends) }));
@@ -2339,11 +2360,30 @@
   pages.spokes_logs = pages.logs;
   pages.meet_logs = pages.logs;
 
+  // ---- Meeting Hub growth gate (R41-1): while adding is closed, add-people controls show disabled with the words ----
+  async function meetLicense() {
+    try {
+      return await api("GET", "license");
+    } catch (e) {
+      return null;
+    }
+  }
+  const addingClosed = (lic) => !!(lic && lic.adding && lic.adding.state === "closed");
+  // A new principal has no unrevoked device on this relay (2.4).
+  const isNewPrincipal = (p) => !p || !(p.devices || []).some((d) => !d.revoked);
+  function disabledAdd(label) {
+    const id = uid("why");
+    return el("span", { class: "disabled-add" }, el("button", { type: "button", "aria-disabled": "true", class: "is-disabled", "aria-describedby": id }, label),
+      " ", el("span", { class: "note", id }, W["meet.license-inactive"]));
+  }
+
   // ---- Meeting Hub pages (7.4) ----
   const PERSON_STATES = [["online", "Online"], ["joined", "Joined"], ["waiting", "Waiting"], ["approved", "Approved"], ["invited", "Invited"], ["expired", "Expired"]];
   const lastSeenOf = (p) => Math.max(0, ...(p.devices || []).map((d) => d.lastSeenAt || 0)) || null;
   pages.meet_people = async (c) => {
-    const [d, orgs] = await Promise.all([api("GET", "meet/people?limit=500"), isAdmin() ? api("GET", "meet/organizations").catch(() => ({ organizations: [] })) : { organizations: [] }]);
+    const [d, orgs, lic] = await Promise.all([api("GET", "meet/people?limit=500"), isAdmin() ? api("GET", "meet/organizations").catch(() => ({ organizations: [] })) : { organizations: [] },
+      isAdmin() ? meetLicense() : null]);
+    const closed = isAdmin() && addingClosed(lic);
     const people = d.people || [];
     const orgList = orgs.organizations || [];
     const side = el("div", { id: "person-panel" });
@@ -2356,7 +2396,7 @@
         el("h3", { id: "person-h", tabindex: "-1" }, u(nameOf(p))),
         el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), code(p.principal)),
         el("div", { class: "page-head" },
-          canWrite() ? btn("Put in an organization", () => orgSet(p, orgList)) : null,
+          closed && isNewPrincipal(p) ? disabledAdd("Put in an organization") : canWrite() ? btn("Put in an organization", () => orgSet(p, orgList)) : null,
           canWrite() && p.org ? btn(fillText("Take out of <org>", { org: p.org.label || p.org.id }), () => orgRemove(p)) : null),
         dataTable({
           caption: "Devices", rows: devs, empty: MSG.noneYet, name: (dv) => dv.label || dv.device,
@@ -2371,7 +2411,7 @@
         })));
       $("person-h").focus();
     }
-    const invite = canWrite() ? btn("Ask an admin to invite someone", () => {
+    const invite = closed ? disabledAdd("Ask an admin to invite someone") : canWrite() ? btn("Ask an admin to invite someone", () => {
       confirmDialog({
         dlg: "request-invite", vals: {},
         fields: [{ kind: "text", key: "name", label: "Name", maxlength: "80", required: true }, { kind: "text", type: "email", key: "email", label: "Email", maxlength: "254", required: true },
@@ -2428,13 +2468,26 @@
 
   // Seats (R4-2, 7.4): admins and user managers.
   pages.meet_seats = async (c) => {
-    const [d, clockNow] = await Promise.all([api("GET", "meet/seats"), isAdmin() ? api("GET", "meet/clock").catch(() => null) : null]);
+    const [d, clockNow, lic] = await Promise.all([api("GET", "meet/seats"), isAdmin() ? api("GET", "meet/clock").catch(() => null) : null, meetLicense()]);
     const [sSeated, sPicked, sNone, sKeeps] = W["seats.state"];
     const [aGive, aKeep] = W["seats.actions"];
     const clock = d.clock;
     const over = Math.max(0, (d.seated || 0) - (d.users || 0));
     const unseatDate = clock ? dayAny(clock.unseatAt) : "";
-    const kids = [head(PAGE_LABEL.meet.seats), panel(null, el("p", null, fill(W["seats.summary"], { seated: d.seated, users: d.users })),
+    // R41-1: with no fitting license in force the limit is the last license's users (seats.last-license); a relay that
+    // never had a license shows seats.no-license (its upgrade-period form while the period runs) instead of the summary.
+    const adding = (lic && lic.adding) || {};
+    const fitting = !!(lic && lic.license && (lic.license.state === "valid" || lic.license.state === "grace"));
+    const never = !!lic && !lic.license && adding.lastUsers == null;
+    let summary;
+    if (never && adding.state === "upgrade-period") summary = [el("p", null, fill(W["seats.no-license.upgrade"], { date: dayAny(adding.upgradePeriodEnds) }))];
+    else if (never) summary = [el("p", null, fill(W["seats.no-license"], { seated: d.seated }))];
+    else {
+      const users = !fitting && adding.lastUsers != null ? adding.lastUsers : d.users;
+      summary = [el("p", null, fill(W["seats.summary"], { seated: d.seated, users })),
+        !fitting && adding.lastUsers != null ? el("p", null, fill(W["seats.last-license"], { users: adding.lastUsers })) : null];
+    }
+    const kids = [head(PAGE_LABEL.meet.seats), panel(null, ...summary,
       clock ? el("p", null, fill(W["attention.seats-over"], { used: d.seated, users: d.users, day: clock.day, n: over, date: unseatDate })) : null,
       clock ? el("p", null, W["help.seats"]) : null,
       d.held > 0 ? el("p", null, fill(W["attention.seats-held"], { n: d.held }), " ", isAdmin() ? btn(W["clock.title.button"], () => confirmTime(clockNow)) : null) : null,
@@ -2483,8 +2536,19 @@
     return kids;
   };
   pages.meet_enrollments = async () => {
-    const d = await api("GET", "meet/enrollments");
+    const [d, lic] = await Promise.all([api("GET", "meet/enrollments"), meetLicense()]);
     const rows = d.waiting || [];
+    // While adding is closed (R41-1), approving a new principal's enrollment shows disabled with the words.
+    const closed = addingClosed(lic);
+    let known = new Set();
+    if (closed) {
+      try {
+        known = new Set(((await api("GET", "meet/people?limit=500")).people || []).filter((p) => !isNewPrincipal(p)).map((p) => p.principal));
+      } catch (e) {
+        known = new Set();
+      }
+    }
+    const blocksNew = (w) => closed && !known.has(w.principal);
     const ask = (w, decision) => {
       const name = w.name || w.principal;
       newRequest(decision === "approve" ? "request-approve" : "request-refuse", { name, device: w.device, check: w.check }, name, w.id, "meet.approve",
@@ -2497,7 +2561,11 @@
       cols: [{ key: "name", label: "Person", cell: (w) => u(w.name || w.principal) }, { key: "device", label: "Device" }, { key: "kind", label: "Kind", cell: (w) => stateWord(w.kind) },
         { key: "check", label: "Check code", cell: (w) => code(w.check) }, { key: "at", label: "Asked", cell: (w) => when(w.at) },
         { key: "request", label: "Request", cell: (w) => (w.request ? code(w.request) : "") }],
-      actions: (w) => (canWrite() && !w.request ? [{ label: "Ask an admin to approve", run: () => ask(w, "approve") }, { label: "Ask an admin to refuse", run: () => ask(w, "refuse") }] : []),
+      actions: (w) => {
+        if (w.request || !isAdmin()) return [];
+        if (blocksNew(w)) return [{ label: "Ask an admin to approve", disabled: W["meet.license-inactive"] }, canWrite() ? { label: "Ask an admin to refuse", run: () => ask(w, "refuse") } : null];
+        return canWrite() ? [{ label: "Ask an admin to approve", run: () => ask(w, "approve") }, { label: "Ask an admin to refuse", run: () => ask(w, "refuse") }] : [];
+      },
     }))];
   };
   pages.meet_organizations = async () => {
