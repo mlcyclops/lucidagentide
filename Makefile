@@ -374,6 +374,11 @@ demo-P-MODEL.10: ## P-MODEL.10 (ADR-0526): omp 18.18.6 with Claude Fable 5.2 / M
 	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/omp/judgment_extension.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/packaged_boot.test.ts
 	$(BUN) run harness/scripts/demo02_prefix_hash.ts
 
+.PHONY: demo-P-OMP.1821
+demo-P-OMP.1821: ## P-OMP.1821 (ADR-0608, issue #634): omp 18.18.6 to 18.21.0 - six packages pinned together, the prompt-audit counts skills from omp's own prompt source claims (estimateSkillsTokens is gone), R-07 at 97 ids after the sovereignty review, frozen prefix still byte-stable
+	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/prompt/prompt_audit.test.ts
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
 .PHONY: demo-P-BOOTPERF.1
 demo-P-BOOTPERF.1: ## P-BOOTPERF.1 (ADR-0527): the renderer's boot burst never blocks the engine's event loop - async sessions/usage/code-activity/compaction-policy/omp probe, cached workspace bar, self-healing Reconnect button (a dead engine keeps it)
 	$(BUN) test $(TEST_IGNORES) desktop/omp_bin.test.ts desktop/renderer/turn_restore.test.ts desktop/sessions_index.test.ts desktop/sessions_ingest.test.ts harness/usage_ledger.test.ts harness/code_activity.test.ts
@@ -700,6 +705,10 @@ demo-P-CAP.1a: ## P-CAP.1a (ADR-0589): find, lookup, count and slice over a stor
 .PHONY: demo-P-CAP.1b
 demo-P-CAP.1b: ## P-CAP.1b (ADR-0590): state tracking, and a derived fact never trusted more than its sources - real omp sessions with the real scanner, gate and tools, and a real DuckDB: artifact_track returning the final state of three variables from 6,000 ordered events in one fenced call; a clean session's memory write reaching the engine labeled untrusted; a session shown a suspicious tool result refused a memory write before any request, both when it read the content and when it derived an answer through the artifact tools; and the promotion gate blocking a fact with one suspicious, quarantined or unknown source among several, with review per source
 	$(BUN) run harness/scripts/demo_pcap1b.ts
+
+.PHONY: demo-P-SCANLIVE.3
+demo-P-SCANLIVE.3: ## P-SCANLIVE.3 (ADR-0605, issue #632): one scanner sidecar per omp process - a stand-in sidecar records every spawn: the MCP gate's factory run 8 times starts one; 3 session imports and 3 subagent rebinds of both extensions through omp's own loader start one; a re-evaluated module graph finds the same client and its scan errors still match instanceof; with the shared sidecar dead every binding withholds its MCP result (fail-closed), the exit reaches stderr and one respawn serves them all
+	$(BUN) test ./harness/omp/shared_scanner.test.ts
 
 .PHONY: demo-P-BENCH.2a
 demo-P-BENCH.2a: ## P-BENCH.2a (ADR-0591): the long-context dev set - 24 generated tasks (needle, count, track, rank at 8,000, 64,000 and 512,000 characters) matching a checked-in manifest, scored through real omp sessions with the real scanner: a reader that answers only from what it is shown is right at 8,000 characters and wrong beyond, a user of the artifact tools is right at every length, the same run works behind an OpenAI-compatible endpoint (a loopback stand-in), and a model with an 8K window needs the tools even at 8,000 characters

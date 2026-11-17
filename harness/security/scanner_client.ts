@@ -93,6 +93,12 @@ export interface ScanResponse {
   scanner_version: string;
 }
 
+/** P-SCANLIVE.3 (ADR-0605): what `instanceof ScanUnavailableError` checks. omp evaluates an extension's
+ *  module graph again for every session, while the extensions share the one client the first evaluation
+ *  built (harness/omp/shared_scanner.ts), so the client that throws and the code that catches can hold
+ *  different copies of this class. A registry symbol is the same in every evaluation; the class is not. */
+const SCAN_UNAVAILABLE = Symbol.for("lucid.scanner.ScanUnavailableError");
+
 /** Thrown for ANY failure to obtain a valid scan result. The gate treats this
  *  as block/quarantine. Never swallow it into a "safe" path. */
 export class ScanUnavailableError extends Error {
@@ -102,6 +108,11 @@ export class ScanUnavailableError extends Error {
   ) {
     super(message);
     this.name = "ScanUnavailableError";
+    Object.defineProperty(this, SCAN_UNAVAILABLE, { value: true });
+  }
+
+  static [Symbol.hasInstance](value: unknown): value is ScanUnavailableError {
+    return typeof value === "object" && value !== null && Reflect.get(value, SCAN_UNAVAILABLE) === true;
   }
 }
 
