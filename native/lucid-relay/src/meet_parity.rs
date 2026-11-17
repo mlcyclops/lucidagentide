@@ -446,7 +446,7 @@ impl State {
         if !self.pa_attendance_on() {
             return;
         }
-        let Some(p) = self.peers.get(peer_id).filter(|p| !p.admission_pending && !p.who.console && !p.who.connector) else { return };
+        let Some(p) = self.peers.get(peer_id).filter(|p| !p.admission_pending && !p.who.is_console() && !p.who.connector) else { return };
         let (room, key, name, guest) = (p.room.clone(), attend_key(&p.who), p.who.name.clone(), p.who.guest);
         let org = if guest { Value::Null } else { self.org(&p.who.principal) };
         let now = ms_now();

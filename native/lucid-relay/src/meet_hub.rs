@@ -941,13 +941,28 @@ impl State {
 
     fn seen(&mut self, who: &Identity) {
         // the console server, web guests, bridge connectors and services (apps, archives, SSO) are not people
-        if who.console || who.guest || who.connector || who.is_service() {
+        if who.is_console() || who.guest || who.connector || who.is_service() {
             return;
         }
         let now = pj::now();
         let mut devices = as_obj(self.directory.get(&who.principal)).and_then(|e| as_obj(e.get("devices"))).cloned().unwrap_or_default();
         if !who.device.is_empty() {
-            devices.insert(who.device.clone(), Value::Object(obj([("label", Value::from(who.device_label.clone())), ("last_seen", f(now))])));
+            let mut d = obj([("label", Value::from(who.device_label.clone())), ("last_seen", f(now))]);
+            // AC-1 2.4 seats: when the record began, and the certificate it was last seen with
+            let old = devices.get(&who.device).and_then(Value::as_object).cloned().unwrap_or_default();
+            d.insert("added".into(), old.get("added").cloned().unwrap_or_else(|| f(now)));
+            if !who.serial.is_empty() {
+                d.insert("serial".into(), Value::from(m::serial(&who.serial)));
+                d.insert("not_before".into(), Value::from(who.not_before));
+                d.insert("not_after".into(), Value::from(who.not_after));
+            } else {
+                for k in ["serial", "not_before", "not_after"] {
+                    if let Some(v) = old.get(k) {
+                        d.insert(k.into(), v.clone());
+                    }
+                }
+            }
+            devices.insert(who.device.clone(), Value::Object(d));
         }
         let mut entry = obj([("name", Value::from(who.name.clone())), ("last_seen", f(now))]);
         if !devices.is_empty() {
@@ -1002,7 +1017,7 @@ impl State {
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
-        if who.console || who.guest || who.connector || who.is_service() {
+        if who.is_console() || who.guest || who.connector || who.is_service() {
             return;
         }
         let after = self.pstate(&who.principal);
@@ -1062,7 +1077,7 @@ impl State {
     pub fn online(&self) -> IndexMap<String, Obj> {
         let mut out: IndexMap<String, Obj> = IndexMap::new();
         let mut add = |who: &Identity, since: f64, room: &str| {
-            if who.console || who.guest || who.connector || who.is_service() {
+            if who.is_console() || who.guest || who.connector || who.is_service() {
                 return;
             }
             match out.get_mut(&who.principal) {
@@ -1260,6 +1275,11 @@ impl State {
 
     /// _session: the caller's live presence session.
     fn session(&self, id: &str, who: &Identity) -> R<()> {
+        // AC-1 (I8): the Admin Console's in-process identity (Hub::check_console_admin; never from a certificate) has
+        // no presence session; the per-principal rules that follow still apply to its principal
+        if who.is_console() {
+            return Ok(());
+        }
         match self.sessions.get(id) {
             None => Err(E::Gone("not connected (the relay ended this session); say hello again".into())),
             Some(s) if s.who.principal != who.principal => forbidden("that session belongs to someone else"),
@@ -1278,6 +1298,11 @@ impl State {
 
     fn check_admin(&self, session: &str, who: &Identity) -> R<()> {
         self.session(session, who)?;
+        // AC-1 4.9: a console user manager's in-process reader identity (check_console_reader); console_meet.rs
+        // passes it to read functions only
+        if who.kind == m::CONSOLE_READER_KIND {
+            return Ok(());
+        }
         if !self.admins.contains(&who.principal) {
             return forbidden("only the person who issues certificates can do that");
         }
@@ -1704,9 +1729,40 @@ pub struct Hub {
     state_dir: Option<PathBuf>,
     save_lock: Mutex<()>,
     stop: AtomicBool,
+    /// AC-1: the Admin Console's hooks (anchor latching, request observation) and its device blocks.
+    console_hooks: Mutex<Option<Arc<dyn ConsoleHooks>>>,
+    denied_until: Mutex<HashMap<String, f64>>,
+    /// AC-1 2.4 (R4-1, R4-2): the Meeting Hub service gate and seats, installed at start before the ports listen.
+    gate: Mutex<Option<Arc<crate::meet_license::MeetGate>>>,
+}
+
+/// What the Admin Console wants to hear from the hub (contract 3.2 latching, 3.8 observation).
+pub trait ConsoleHooks: Send + Sync {
+    /// Certificate serials the relay now holds revoked.
+    fn revoked(&self, serials: &[String]);
+    /// An outcome a `meet.*` request waits for: `kind` "meet.approve", "meet.revoke" or "meet.invite".
+    fn observed(&self, kind: &str, target: &Obj, by: &str, link: Option<&str>);
+    /// AC-1 4.9 `check_console_reader`: an active console user manager or admin (R4-8).
+    fn reader(&self, _email: &str) -> bool {
+        false
+    }
+    /// AC-1 2.4: an active console admin (protected from losing a seat, R3-M6).
+    fn console_admin(&self, _principal: &str) -> bool {
+        false
+    }
+    /// The active console admins' emails (seat and license notices, I12).
+    fn admin_emails(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// An audit entry from the relay itself (actor `relay`, I13).
+    fn audit(&self, _action: &str, _target: &str, _detail: Value) {}
+    /// A mail through the console's mailer (I12).
+    fn mail(&self, _kind: &str, _to: &str, _args: &[(&str, String)]) {}
 }
 
 type Body<'a> = Option<&'a Value>;
+/// One checked caption line: its text and its optional numbers.
+type CaptionLine = (String, Option<i64>, Option<i64>, Option<i64>);
 
 impl Hub {
     pub fn new(state_dir: Option<PathBuf>, admins: &[String], history_hours: f64, mail_days: f64, channel_days: f64, signer: Option<Arc<SignerClient>>, links: Arc<LinkStats>) -> Hub {
@@ -1773,7 +1829,7 @@ impl Hub {
             pc: pc::Pc::new(state_dir.as_deref()),
             pc_docs: pc_docs::DocsRate::default(),
         };
-        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
+        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None) };
         if hub.state_dir.is_some() {
             hub.load();
         }
@@ -2881,7 +2937,7 @@ impl Hub {
         }
         for item in lines {
             let raw = item.as_object().and_then(|o| o.get("cseq"));
-            let checked = (|| -> R<(String, Option<i64>, Option<i64>, Option<i64>)> {
+            let checked = (|| -> R<CaptionLine> {
                 let Some(o) = item.as_object() else { return bad("each line must be an object") };
                 let t = pj::s(o, "text").trim().to_string();
                 if t.is_empty() {
@@ -3804,12 +3860,209 @@ impl Hub {
             out.push(serial);
         }
         st.dirty = true;
+        drop(st);
+        // AC-1 3.2: the console latches every passkey anchored to a denied serial before it answers anything else
+        self.console_revoked(&out);
         out
     }
 
     pub fn is_denied(&self, serial: &str) -> bool {
         let s = m::serial(serial);
         !s.is_empty() && self.st.lock().denied.contains_key(&s)
+    }
+
+    // ── AC-1: the Admin Console's hooks (contract 3.2, 3.8, 4.9) ─────────────────────────────────────────────
+
+    /// check_console_admin (I8): the same rule as check_admin (the principal is in relay.json `admins`) without a
+    /// presence session or client certificate; Ok is the `console` Identity the Hub functions are called with.
+    pub fn check_console_admin(&self, principal: &str) -> R<Identity> {
+        let who = Identity::console_admin(principal);
+        if who.principal.is_empty() || !self.st.lock().admins.contains(&who.principal) {
+            return forbidden("only the person who issues certificates can do that");
+        }
+        Ok(who)
+    }
+
+    /// check_console_reader (4.9, I14): an active console user manager or admin may read through the same functions
+    /// with the `console` Identity; reads only (every write still goes through check_console_admin).
+    pub fn check_console_reader(&self, email: &str) -> R<Identity> {
+        let who = Identity::console_reader(email);
+        if who.principal.is_empty() || !self.console_hooks().is_some_and(|h| h.reader(&who.principal)) {
+            return forbidden("only an admin or user manager of this console can read this");
+        }
+        Ok(who)
+    }
+
+    pub fn console_hooks_installed(&self) -> Option<Arc<dyn ConsoleHooks>> {
+        self.console_hooks()
+    }
+
+    /// Whether `principal` is in relay.json `admins` now.
+    pub fn is_admin(&self, principal: &str) -> bool {
+        self.st.lock().admins.contains(&principal.trim().to_lowercase())
+    }
+
+    /// The certificate serials the relay knows for one principal's devices (directory and live sessions): the
+    /// anchors a Meet admin's passkey may have (3.2, decision 14).
+    pub fn device_serials(&self, principal: &str) -> HashSet<String> {
+        let principal = principal.trim().to_lowercase();
+        let st = self.st.lock();
+        let mut out: HashSet<String> = HashSet::new();
+        if let Some(devices) = st.directory.get(&principal).and_then(|e| e.get("devices")).and_then(Value::as_object) {
+            for d in devices.values() {
+                let s = m::serial_of(d.get("serial"));
+                if !s.is_empty() {
+                    out.insert(s);
+                }
+            }
+        }
+        for who in st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)) {
+            if who.principal == principal && !who.serial.is_empty() {
+                out.insert(m::serial(&who.serial));
+            }
+        }
+        out
+    }
+
+    /// Every serial in the denied set (anchor latching reads it at start and on each change).
+    pub fn denied_serials(&self) -> HashSet<String> {
+        self.st.lock().denied.keys().cloned().collect()
+    }
+
+    /// AC-1 2.4: install the service gate (once, at start, before the ports listen).
+    pub fn set_gate(&self, gate: Arc<crate::meet_license::MeetGate>) {
+        *self.gate.lock() = Some(gate);
+    }
+
+    pub fn gate(&self) -> Option<Arc<crate::meet_license::MeetGate>> {
+        self.gate.lock().clone()
+    }
+
+    /// AC-1 2.4 seats: the principals with at least one device certificate the relay knows that is neither revoked
+    /// nor expired at `now` (seconds). The device store is the directory: each device record keeps `serial`,
+    /// `not_before` and `not_after` of the certificate it was last seen with (records from before AC-1 have none and
+    /// count while no denied entry names that principal and device).
+    pub fn seat_live(&self, now: i64) -> Vec<String> {
+        let st = self.st.lock();
+        let denied_devices: HashSet<(String, String)> = st.denied.values().filter_map(Value::as_object).map(|d| (pj::s(d, "principal"), pj::s(d, "device"))).collect();
+        let mut out: Vec<String> = st
+            .directory
+            .iter()
+            .filter(|(principal, e)| {
+                e.get("devices").and_then(Value::as_object).is_some_and(|d| {
+                    d.iter().any(|(device, dev)| {
+                        let serial = m::serial_of(dev.get("serial"));
+                        if serial.is_empty() {
+                            return !denied_devices.contains(&((*principal).clone(), device.clone()));
+                        }
+                        let alive = dev.get("not_after").and_then(Value::as_i64).map(|na| na == 0 || na > now).unwrap_or(true);
+                        !st.denied.contains_key(&serial) && alive
+                    })
+                })
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// AC-1 2.4 "`firstSeen` at the upgrade" (R3-M5): every principal with devices and the earliest persisted
+    /// timestamp the relay holds for it, in milliseconds: the device record's `added` (seconds, AC-1 records), the
+    /// certificate's `not_before` (seconds) and the `ts` (seconds) of the principal's enrollments. `last_seen` is
+    /// not a creation time and is never used. None when there is no such record.
+    pub fn seat_records(&self) -> Vec<(String, Option<i64>)> {
+        let st = self.st.lock();
+        let mut out = Vec::new();
+        for (principal, e) in &st.directory {
+            let Some(devices) = e.get("devices").and_then(Value::as_object).filter(|d| !d.is_empty()) else { continue };
+            let mut first: Option<f64> = None;
+            let mut take = |v: Option<f64>| {
+                if let Some(v) = v.filter(|v| *v > 0.0) {
+                    first = Some(first.map_or(v, |f| f.min(v)));
+                }
+            };
+            for d in devices.values() {
+                take(d.get("added").and_then(Value::as_f64));
+                take(d.get("not_before").and_then(Value::as_f64));
+            }
+            for r in st.enrollments.values().filter_map(Value::as_object) {
+                if pj::s(r, "principal") == *principal {
+                    take(r.get("ts").and_then(Value::as_f64));
+                }
+            }
+            out.push((principal.clone(), first.map(|s| (s * 1000.0) as i64)));
+        }
+        out
+    }
+
+    /// AC-1 2.4: an unseated principal's sessions close (their certificates stay).
+    pub fn drop_principal(&self, principal: &str) -> i64 {
+        let wanted: HashSet<String> = {
+            let st = self.st.lock();
+            st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)).filter(|w| w.principal == principal && !w.serial.is_empty()).map(|w| m::serial(&w.serial)).collect()
+        };
+        if wanted.is_empty() {
+            return 0;
+        }
+        let n = self.st.lock().drop_matching(&wanted);
+        self.wake();
+        n
+    }
+
+    /// Install the Admin Console's hooks (once, at start).
+    pub fn set_console_hooks(&self, hooks: Arc<dyn ConsoleHooks>) {
+        *self.console_hooks.lock() = Some(hooks);
+    }
+
+    fn console_hooks(&self) -> Option<Arc<dyn ConsoleHooks>> {
+        self.console_hooks.lock().clone()
+    }
+
+    /// Serials newly revoked (the denied set, a CRL the relay holds, /v1/admin/revoke): the console latches every
+    /// passkey anchored to one (3.2). A Meet block is never one.
+    pub fn console_revoked(&self, serials: &[String]) {
+        if serials.is_empty() {
+            return;
+        }
+        if let Some(h) = self.console_hooks() {
+            h.revoked(serials);
+        }
+    }
+
+    /// An outcome the console observes for its `meet.*` requests (3.8): `kind` is the request kind, `target` what was
+    /// done, `by` the Meet admin principal, `link` the optional `console_request` the app sent.
+    pub fn console_observed(&self, kind: &str, target: &Obj, by: &str, link: Option<&str>) {
+        if let Some(h) = self.console_hooks() {
+            h.observed(kind, target, by, link);
+        }
+    }
+
+    /// AC-1 Meet blocks (4.9): the `denied_until` mirror the console's block store keeps; never the denied set.
+    pub fn set_blocks(&self, blocks: HashMap<String, f64>) {
+        *self.denied_until.lock() = blocks;
+    }
+
+    /// Whether this device is blocked now (`principal|device` until a time in seconds).
+    pub fn is_blocked(&self, who: &Identity) -> bool {
+        if who.device.is_empty() || who.is_console() {
+            return false;
+        }
+        let now = pj::now();
+        self.denied_until.lock().get(&m::key(&who.principal, &who.device)).map(|until| *until > now).unwrap_or(false)
+    }
+
+    /// End every live session and peer of one device (a block closes them; it revokes nothing).
+    pub fn drop_device(&self, principal: &str, device: &str) -> i64 {
+        let wanted: HashSet<String> = {
+            let st = self.st.lock();
+            st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)).filter(|w| w.principal == principal && w.device == device && !w.serial.is_empty()).map(|w| m::serial(&w.serial)).collect()
+        };
+        if wanted.is_empty() {
+            return 0;
+        }
+        let n = self.st.lock().drop_matching(&wanted);
+        self.wake();
+        n
     }
 
     /// drop_serials: end every peer and session whose certificate serial is listed (their push registrations go too).
@@ -3917,7 +4170,7 @@ impl Hub {
     }
 
     fn rows_by_ts(rows: &Obj, keep: impl Fn(&Obj) -> bool) -> Vec<Obj> {
-        let mut out: Vec<Obj> = rows.values().filter_map(Value::as_object).filter(|r| keep(*r)).cloned().collect();
+        let mut out: Vec<Obj> = rows.values().filter_map(Value::as_object).filter(|r| keep(r)).cloned().collect();
         out.sort_by(|a, b| pj::num(a, "ts").partial_cmp(&pj::num(b, "ts")).unwrap_or(std::cmp::Ordering::Equal));
         out
     }
@@ -4089,7 +4342,7 @@ impl Hub {
             if !cert_emails(&cert).contains(&principal) {
                 return bad("the certificate is for a different email");
             }
-            if Value::from(m::uri_value(&cert.names.uris, m::DEVICE_URI_PREFIX)) != device {
+            if m::uri_value(&cert.names.uris, m::DEVICE_URI_PREFIX) != device {
                 return bad("the certificate is not for the device that asked");
             }
             if cert.spki != load_csr(Some(&csr_pem))?.spki {
@@ -4273,7 +4526,7 @@ impl Hub {
         let (enrolls, seeds, renews) = {
             let st = self.st.lock();
             st.check_admin(session, who)?;
-            let pick = |rows: &Obj, keep: &dyn Fn(&Obj) -> bool| -> Vec<Obj> { rows.values().filter_map(Value::as_object).filter(|r| keep(*r)).cloned().collect() };
+            let pick = |rows: &Obj, keep: &dyn Fn(&Obj) -> bool| -> Vec<Obj> { rows.values().filter_map(Value::as_object).filter(|r| keep(r)).cloned().collect() };
             (pick(&st.enrollments, &|r| pj::text_of(r, "state") == "waiting"), pick(&st.seed_requests, &|_| true), pick(&st.renewals, &|r| pj::truthy(r.get("needs_admin"))))
         };
         let get = |r: &Obj, k: &str| r.get(k).cloned().unwrap_or(Value::from(""));

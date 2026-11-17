@@ -13,11 +13,13 @@ type Route = fn(&mut Ctx) -> R<Obj>;
 
 fn get_route(path: &str) -> Option<Route> {
     let route: Route = match path {
-        "/v1/console/summary" => |c: &mut Ctx| console(c, "summary"),
-        "/v1/console/links" => |c: &mut Ctx| console(c, "links"),
-        "/v1/console/logs" => |c: &mut Ctx| console(c, "logs"),
-        "/v1/console/servers" => |c: &mut Ctx| console(c, "servers"),
-        "/v1/console/directory" => |c: &mut Ctx| console(c, "directory"),
+        // AC-1 4.10: the signing side reads the Admin Console's meet.* requests
+        "/v1/admin/console/requests" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            Ok(crate::console_meet::requests_for(c.relay, &who.principal))
+        },
         "/v1/whoami" => whoami,
         "/v1/events" => events,
         "/v1/inbox" => inbox,
@@ -384,15 +386,38 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/admin/approve" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.admin_approve(&pj::s(&b, "session"), &who, &pj::s(&b, "kind"), &pj::s(&b, "id"), &pj::s(&b, "csr_sha256"), &pj::s(&b, "decision"), b.get("reason"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.hub.admin_approve(&pj::s(&b, "session"), &who, &pj::s(&b, "kind"), &pj::s(&b, "id"), &pj::s(&b, "csr_sha256"), &pj::s(&b, "decision"), b.get("reason"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("kind", Value::from(pj::s(&b, "kind"))), ("id", Value::from(pj::s(&b, "id"))), ("csr_sha256", Value::from(pj::s(&b, "csr_sha256").to_lowercase()))]);
+            c.relay.hub.console_observed("meet.approve", &target, &who.principal, link.as_deref());
+            Ok(answer)
         },
         "/v1/admin/invite" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.admin_invite(&pj::s(&b, "session"), &who, b.get("name"), b.get("email"), b.get("days"), b.get("seed_csr_pem"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.hub.admin_invite(&pj::s(&b, "session"), &who, b.get("name"), b.get("email"), b.get("days"), b.get("seed_csr_pem"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("email", Value::from(pj::s(&b, "email").trim().to_lowercase()))]);
+            c.relay.hub.console_observed("meet.invite", &target, &who.principal, link.as_deref());
+            Ok(answer)
         },
         "/v1/admin/revoke" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.admin_revoke(&pj::s(&b, "session"), &who, b.get("principal"), b.get("device"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.admin_revoke(&pj::s(&b, "session"), &who, b.get("principal"), b.get("device"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("principal", Value::from(crate::meet::principal(b.get("principal")))), ("device", Value::from(pj::s(&b, "device")))]);
+            c.relay.hub.console_observed("meet.revoke", &target, &who.principal, link.as_deref());
+            Ok(answer)
+        },
+        // AC-1 4.10: a sign-in link for the calling admin's own principal, and declining a request
+        "/v1/admin/console/invite" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::device_invite(c.relay, &who)
+        },
+        "/v1/admin/console/requests/decline" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::decline(c.relay, &who.principal, b.get("id"), b.get("reason"))
         },
         "/v1/admin/signer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -648,6 +673,16 @@ fn post_route(path: &str) -> Option<Route> {
     Some(route)
 }
 
+/// Whether the main port has this route (the gate table's test, meet_license.rs).
+#[cfg(test)]
+pub fn has_route(method: &str, path: &str) -> bool {
+    if method == "GET" {
+        get_route(path).is_some()
+    } else {
+        post_route(path).is_some()
+    }
+}
+
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
@@ -658,6 +693,13 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
     let Some(route) = route else {
         return Some((404, obj([("error", Value::from("unknown path"))])));
     };
+    // AC-1 2.4 and 4.10: the Meeting Hub service gate and the seat refusal, before the route reads anything
+    if let Some(gate) = ctx.relay.hub.gate() {
+        let who = m::identity_from_cert(ctx.der).ok();
+        if let Err(refused) = gate.serves(method, &ctx.path, who.as_ref()) {
+            return run(ctx, Ok(Err(refused)));
+        }
+    }
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(ctx)));
     run(ctx, result)
 }
@@ -690,18 +732,14 @@ fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
 
 // ── GET ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-fn console(c: &mut Ctx, what: &str) -> R<Obj> {
-    let relay = c.relay.clone();
-    relay.console.gate(&c.address)?;
-    let who = c.who(false)?;
-    relay.console.service(&who)?;
-    let q = |name: &str, default: &str| c.q(name, default);
-    match what {
-        "summary" => Ok(relay.console.summary(&relay)),
-        "links" => Ok(relay.console.links_view(&relay, &q("room", ""))),
-        "logs" => relay.console.logs(&q("since", "0"), &q("level", "info"), &q("q", "")),
-        "servers" => Ok(relay.console.servers(&relay)),
-        _ => Ok(relay.console.directory(&relay)),
+/// AC-1 4.10: the optional `console_request` of /v1/admin/approve, revoke and invite, checked after the admin check
+/// and before anything else of the route: absent, or `rq_` and 16 lower-case hex.
+fn console_request(c: &Ctx, who: &crate::meet::Identity, b: &Obj) -> R<Option<String>> {
+    c.relay.hub.check_admin(&pj::s(b, "session"), who)?;
+    match b.get("console_request") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if crate::console_meet::request_id_ok(id) => Ok(Some(id.clone())),
+        Some(_) => Err(crate::meet::E::Bad(crate::console_meet::CONSOLE_REQUEST_FIELD.into())),
     }
 }
 
@@ -936,7 +974,7 @@ fn files_send(c: &mut Ctx, file: &Obj, fh: std::fs::File, offset: u64, count: u6
     let name = pj::text_of(file, "name");
     let plain: String = name.chars().map(|ch| if (' '..'\u{7f}').contains(&ch) && ch != '"' && ch != '\\' { ch } else { '_' }).collect();
     let quoted = quote(&name);
-    let id = pj::text_of(&file, "id");
+    let id = pj::text_of(file, "id");
     let field = |k: &str| file.get(k).map(pj::py_str).unwrap_or_default();
     let headers = vec![
         ("Content-Type", "application/octet-stream".to_string()),
@@ -1213,4 +1251,24 @@ fn admin_renewed(c: &mut Ctx) -> R<Obj> {
 fn enroll(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(true)?, c.body()?);
     c.relay.hub.enroll(&who, b.get("csr_pem"), b.get("chain"), b.get("proof"), b.get("ts"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_old_console_routes_are_gone_and_the_admin_console_routes_exist() {
+        // AC-1 9.1: /v1/console/* answers the unknown-path 404 now
+        for p in ["/v1/console/summary", "/v1/console/links", "/v1/console/logs", "/v1/console/servers", "/v1/console/directory"] {
+            assert!(get_route(p).is_none() && post_route(p).is_none(), "{p}");
+        }
+        // AC-1 4.10 on the main port
+        assert!(get_route("/v1/admin/console/requests").is_some());
+        assert!(post_route("/v1/admin/console/invite").is_some());
+        assert!(post_route("/v1/admin/console/requests/decline").is_some());
+        for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
+            assert!(post_route(p).is_some(), "{p}");
+        }
+    }
 }

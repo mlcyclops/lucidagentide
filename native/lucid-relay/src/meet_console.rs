@@ -1,25 +1,18 @@
-// Phase C (ADR-0540): the Meet relay's side of the browser console (relay/meet_console.py): the /v1/console/* routes
-// for the console server's certificate from `console_sources` only, the in-memory log ring (session ids and download
-// tokens hidden), per-link performance from link reports and `state` signals, and the download server's power through
-// the Proxmox API (`files_power`).
+// Phase C (ADR-0540), AC-1: what the Meeting Hub section of the Admin Console reads from the relay: the in-memory log
+// ring (session ids and download tokens hidden), per-link performance from link reports and `state` signals, and the
+// download server's power through the Proxmox API (`files_power`); the `console_sources` networks the Admin Console
+// port answers (contract 3.1). The /v1/console/* routes and the console server's certificate are gone (9.1).
 
-use crate::meet::{bad, forbidden, log_info, log_warn, Identity, Level, Relay, Settings, R, SERVER_VERSION};
+use crate::meet::{log_info, log_warn, Level, Relay, Settings, SERVER_VERSION};
 use crate::meet_json::{self as pj, f, obj, Obj};
 use crate::meet_tls::{client_config, https_request};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::{HashSet, VecDeque};
-use std::net::IpAddr;
 use std::sync::Arc;
 
-pub const DEFAULT_SOURCES: [&str; 5] = ["192.168.0.0/16", "10.42.42.0/24", "10.99.0.0/27", "10.0.0.0/24", "192.168.3.0/24"];
-const REFUSED: &str = "The console is only available on the home network or the VPN.";
-const MOVED: &str = "The console moved to https://console.emertins.com.";
-const CONSOLE_PRINCIPAL: &str = "console@meet.emertins.com";
 const LOG_KEEP: usize = 2000;
 const LOG_LINE_MAX: usize = 400;
-const LOG_PAGE: usize = 500;
-const QUERY_MAX: usize = 100;
 const LINK_WINDOW: f64 = 300.0;
 const LINK_KEEP: f64 = 3600.0;
 const LINK_MAX: usize = 500;
@@ -33,70 +26,6 @@ const SIGNER_FIELDS: [&str; 14] = [
     "healthy", "error", "root_mode", "not_after", "days_left", "intermediate_serial", "previous_serial", "previous_not_after", "root_not_after", "root_crl_days_left", "pending_key", "ledger_seq", "ledger_head", "policy",
 ];
 const LEDGER_FIELDS: [&str; 9] = ["seq", "ts", "op", "via", "principal", "name", "device_label", "serial", "why"];
-
-// ── sources ──────────────────────────────────────────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, Debug)]
-struct Network {
-    v4: bool,
-    addr: u128,
-    prefix: u32,
-}
-
-fn bits(ip: IpAddr) -> (bool, u128) {
-    match ip {
-        IpAddr::V4(v) => (true, u32::from(v) as u128),
-        IpAddr::V6(v) => (false, u128::from(v)),
-    }
-}
-
-impl Network {
-    fn contains(&self, ip: IpAddr) -> bool {
-        let (v4, a) = bits(ip);
-        let width = if v4 { 32 } else { 128 };
-        if v4 != self.v4 {
-            return false;
-        }
-        if self.prefix == 0 {
-            return true;
-        }
-        let shift = width - self.prefix;
-        (a >> shift) == (self.addr >> shift)
-    }
-}
-
-/// parse_sources: `console_sources` as networks (host bits ignored, as ip_network(strict=False)).
-fn parse_sources(values: &[String]) -> Result<Vec<Network>, String> {
-    values
-        .iter()
-        .map(|value| {
-            let t = value.trim();
-            let (addr, prefix) = match t.split_once('/') {
-                Some((a, p)) => (a, Some(p)),
-                None => (t, None),
-            };
-            let err = || format!("console_sources: '{value}' is not an address range");
-            let ip: IpAddr = addr.parse().map_err(|_| err())?;
-            let (v4, a) = bits(ip);
-            let width = if v4 { 32 } else { 128 };
-            let prefix = match prefix {
-                Some(p) => p.parse::<u32>().ok().filter(|p| *p <= width).ok_or_else(err)?,
-                None => width,
-            };
-            Ok(Network { v4, addr: a, prefix })
-        })
-        .collect()
-}
-
-/// source_allowed: the TCP peer is inside one of the networks; an IPv4-mapped address counts as its IPv4.
-fn source_allowed(address: &str, networks: &[Network]) -> bool {
-    let Ok(ip) = address.split('%').next().unwrap_or_default().parse::<IpAddr>() else { return false };
-    let ip = match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
-        v4 => v4,
-    };
-    networks.iter().any(|n| n.contains(ip))
-}
 
 // ── the log ring ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -187,23 +116,20 @@ impl LogRing {
         }
     }
 
-    fn read(&self, since: i64, level: &str, query: &str) -> Obj {
-        let floor = match level {
-            "warning" => 30,
-            "error" => 40,
-            _ => 20,
-        };
-        let query = pj::clip(&pj::squash(query).to_lowercase(), QUERY_MAX);
+    /// The Admin Console's log view (4.6): every kept line at `floor` (a level number) or above, newest first, each a
+    /// JSON line `{ts (ms), level, cat: "relay", event, text}` (already cleaned by clean_line).
+    pub fn json_lines(&self, floor: i64) -> Vec<String> {
         let g = self.mu.lock();
-        let rows: Vec<Value> = g
-            .0
-            .iter()
-            .filter(|r| r.seq > since && r.levelno >= floor && (query.is_empty() || r.text.to_lowercase().contains(&query)))
-            .map(|r| Value::Object(obj([("seq", Value::from(r.seq)), ("ts", f(r.ts)), ("level", Value::from(r.level)), ("text", Value::from(r.text.clone()))])))
-            .collect();
-        let cut = rows.len().saturating_sub(LOG_PAGE);
-        obj([("lines", Value::Array(rows[cut..].to_vec())), ("last", Value::from(g.1)), ("kept", Value::from(g.0.len()))])
+        g.0.iter()
+            .rev()
+            .filter(|r| r.levelno >= floor)
+            .map(|r| {
+                let event = r.text.split_whitespace().next().unwrap_or_default().to_string();
+                serde_json::json!({"seq": r.seq, "ts": (r.ts * 1000.0) as i64, "level": r.level, "cat": "relay", "event": event, "text": r.text}).to_string()
+            })
+            .collect()
     }
+
 }
 
 // ── link performance ─────────────────────────────────────────────────────────────────────────────────────────
@@ -406,7 +332,7 @@ impl LinkStats {
                 ("changes_total", Value::from(row.changes_total)),
             ]));
         }
-        out.sort_by(|a, b| (pj::s(a, "room"), pj::s(a, "principal")).cmp(&(pj::s(b, "room"), pj::s(b, "principal"))));
+        out.sort_by_key(|a| (pj::s(a, "room"), pj::s(a, "principal")));
         out
     }
 }
@@ -536,8 +462,8 @@ impl FilesPower {
 
 // ── the console routes ───────────────────────────────────────────────────────────────────────────────────────
 
+/// The relay-side views of the Meeting Hub section: the log ring, link performance and the download server's power.
 pub struct Console {
-    sources: Vec<Network>,
     power: Option<FilesPower>,
     pub ring: Arc<LogRing>,
     pub links: Arc<LinkStats>,
@@ -552,27 +478,13 @@ struct Presence {
 
 impl Console {
     pub fn new(settings: &Settings, links: Arc<LinkStats>) -> Result<Console, String> {
-        let sources = parse_sources(&settings.console_sources)?;
         let power = if settings.files_power.is_empty() { None } else { Some(FilesPower::new(&settings.files_power)?) };
-        Ok(Console { sources, power, ring: Arc::new(LogRing::new()), links, started: pj::now() })
+        Ok(Console { power, ring: Arc::new(LogRing::new()), links, started: pj::now() })
     }
 
-    /// The source gate: 403 unless the TCP peer is allowed.
-    pub fn gate(&self, address: &str) -> R<()> {
-        if !source_allowed(address, &self.sources) {
-            log_info(&format!("console refused from {address}"));
-            return forbidden(REFUSED);
-        }
-        Ok(())
-    }
-
-    /// The caller gate: 403 unless the console server's certificate.
-    pub fn service(&self, who: &Identity) -> R<()> {
-        if !who.console {
-            log_info(&format!("console refused for principal={}", who.principal));
-            return forbidden(MOVED);
-        }
-        Ok(())
+    /// Whether `files_power` is set (the Servers page shows `files: null` otherwise).
+    pub fn has_power(&self) -> bool {
+        self.power.is_some()
     }
 
     fn presence(relay: &Relay) -> Presence {
@@ -580,7 +492,7 @@ impl Console {
         let online = st.online();
         let mut rooms: std::collections::BTreeMap<String, Vec<Obj>> = std::collections::BTreeMap::new();
         for p in st.peers.values() {
-            if p.who.console {
+            if p.who.is_console() {
                 continue;
             }
             rooms.entry(p.room.clone()).or_default().push(obj([("principal", Value::from(p.who.principal.clone())), ("name", Value::from(p.who.name.clone())), ("since", f(p.joined)), ("recording", Value::Bool(p.recording))]));
@@ -618,7 +530,7 @@ impl Console {
         Presence { online: people.into_iter().map(Value::Object).collect(), names, rooms }
     }
 
-    fn signer_headline(relay: &Relay) -> Obj {
+    pub(crate) fn signer_headline(relay: &Relay) -> Obj {
         let Some(signer) = &relay.hub.signer else {
             return obj([("configured", Value::Bool(false)), ("healthy", Value::Bool(false)), ("days_left", Value::Null), ("error", Value::from(""))]);
         };
@@ -632,7 +544,7 @@ impl Console {
         obj([("configured", Value::Bool(true)), ("healthy", Value::Bool(healthy)), ("days_left", snap.get("days_left").cloned().unwrap_or(Value::Null)), ("error", Value::from(error))])
     }
 
-    fn signer_detail(relay: &Relay) -> Obj {
+    pub(crate) fn signer_detail(relay: &Relay) -> Obj {
         let mut out = obj([
             ("configured", Value::Bool(relay.hub.signer.is_some())),
             ("healthy", Value::Bool(false)),
@@ -674,7 +586,7 @@ impl Console {
         out
     }
 
-    fn files(&self) -> Obj {
+    pub(crate) fn files(&self) -> Obj {
         let Some(power) = &self.power else {
             return obj([("configured", Value::Bool(false)), ("state", Value::from("unknown")), ("hint", Value::from(POWER_HINT))]);
         };
@@ -691,7 +603,7 @@ impl Console {
         if m.is_empty() { Value::Null } else { Value::Object(m) }
     }
 
-    /// GET /v1/console/summary.
+    /// The calls summary (Admin Console `GET /console/api/meet/calls`).
     pub fn summary(&self, relay: &Relay) -> Obj {
         let pres = Self::presence(relay);
         let release = Self::release(relay);
@@ -717,7 +629,7 @@ impl Console {
         ])
     }
 
-    /// GET /v1/console/links?room=.
+    /// Per-link performance, optionally for one room.
     pub fn links_view(&self, relay: &Relay, room: &str) -> Obj {
         let room = room.trim().to_lowercase();
         let pres = Self::presence(relay);
@@ -744,41 +656,11 @@ impl Console {
         obj([("window_s", Value::from(LINK_WINDOW as i64)), ("rows", Value::Array(rows)), ("rooms", Value::Array(pres.rooms))])
     }
 
-    /// GET /v1/console/directory: everyone the relay knows, never the console server itself.
-    pub fn directory(&self, relay: &Relay) -> Obj {
-        let now = pj::now();
-        let (online, known) = {
-            let st = relay.hub.st.lock();
-            (st.online(), st.directory.clone())
-        };
-        let mut people: Vec<Obj> = known
-            .iter()
-            .filter_map(|(p, e)| e.as_object().map(|e| (p, e)))
-            .filter(|(p, _)| p.as_str() != CONSOLE_PRINCIPAL)
-            .map(|(p, e)| {
-                let name = Some(pj::s(e, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| p.clone());
-                let devices = e.get("devices").and_then(Value::as_object).map(|d| d.len()).unwrap_or(0);
-                let last = if online.contains_key(p) { now } else { pj::as_num(e.get("last_seen")).unwrap_or(0.0) };
-                obj([("principal", Value::from(p.clone())), ("name", Value::from(name)), ("devices", Value::from(devices)), ("last_seen", f(last))])
-            })
-            .collect();
-        people.sort_by(|a, b| (pj::s(a, "name").to_lowercase(), pj::s(a, "principal")).cmp(&(pj::s(b, "name").to_lowercase(), pj::s(b, "principal"))));
-        obj([("people", Value::Array(people.into_iter().map(Value::Object).collect()))])
-    }
-
-    /// GET /v1/console/logs?since=&level=&q=.
-    pub fn logs(&self, since: &str, level: &str, query: &str) -> R<Obj> {
-        let since = if since.is_empty() { 0 } else { crate::meet::py_int(since).map_err(|_| crate::meet::E::Bad("since must be a line number".into()))?.max(0) };
-        let level = Some(level.trim().to_lowercase()).filter(|l| !l.is_empty()).unwrap_or_else(|| "info".into());
-        if !["info", "warning", "error"].contains(&level.as_str()) {
-            return bad("level must be info, warning or error");
-        }
-        Ok(self.ring.read(since, &level, query))
-    }
-
-    /// GET /v1/console/servers.
-    pub fn servers(&self, relay: &Relay) -> Obj {
-        obj([("signer", Value::Object(Self::signer_detail(relay))), ("files", Value::Object(self.files())), ("release", Self::release(relay))])
+    /// The Admin Console's "Start the download server": Ok(true) when the start was sent, Ok(false) when it already
+    /// runs, Err when `files_power` is not set or Proxmox refused.
+    pub fn start_files_now(&self) -> Result<bool, String> {
+        let Some(power) = &self.power else { return Err("files_power is not set on this relay".into()) };
+        power.start()
     }
 
     /// For the update-link route: true when the download server runs or was asked to start. Never fails.
@@ -807,12 +689,18 @@ mod tests {
     }
 
     #[test]
-    fn sources_match_networks() {
-        let nets = parse_sources(&["127.0.0.2/32".to_string(), "10.0.0.5/24".to_string()]).unwrap();
-        assert!(source_allowed("127.0.0.2", &nets));
-        assert!(!source_allowed("127.0.0.1", &nets));
-        assert!(source_allowed("::ffff:10.0.0.9", &nets));
-        assert_eq!(parse_sources(&["x".to_string()]).unwrap_err(), "console_sources: 'x' is not an address range");
+    fn ring_lines_for_the_admin_console_hide_secrets() {
+        let ring = LogRing::new();
+        ring.emit(1.0, Level::Info, "hello session=abc123 token=zz");
+        ring.emit(2.0, Level::Warning, "warn one");
+        let lines = ring.json_lines(Level::Warning as i64);
+        assert_eq!(lines.len(), 1);
+        let all = ring.json_lines(Level::Info as i64);
+        assert_eq!(all.len(), 2);
+        let first: Value = serde_json::from_str(&all[1]).unwrap();
+        assert_eq!(first["text"], json!("hello session=[hidden] token=[hidden]"));
+        assert_eq!(first["event"], json!("hello"));
+        assert!(!all.iter().any(|l| l.contains("abc123")));
     }
 
     #[test]

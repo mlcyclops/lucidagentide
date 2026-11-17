@@ -1328,6 +1328,13 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true)), ("key", Value::from(pj::b64(&key))), ("voip", Value::Bool(rings))]))
     }
 
+    /// AC-1 4.9 `meet/push`: registered devices `(alert, voip)` (counts only; never a token).
+    pub fn push_device_counts(&self) -> (usize, usize) {
+        let st = self.st.lock();
+        let entries = st.push_tokens.values().filter_map(Value::as_object).flat_map(|d| d.values().filter_map(Value::as_object));
+        entries.fold((0, 0), |(a, v), e| (a + 1, v + usize::from(e.get("voip").and_then(Value::as_str).map(|t| !t.is_empty()).unwrap_or(false))))
+    }
+
     /// push_unregister (`POST /v1/push/unregister {}`): this device gets no more pushes. `{ok, removed}`.
     pub fn push_unregister(&self, who: &Identity) -> R<Obj> {
         let mut st = self.st.lock();
@@ -1657,8 +1664,42 @@ pub mod apns {
         }
     }
 
+    /// AC-1 4.9 `meet/push`: pushes sent and failed (by reason) in the last 24 hours, kept in memory.
+    static OUTCOMES: std::sync::Mutex<std::collections::VecDeque<(f64, Option<String>)>> = std::sync::Mutex::new(std::collections::VecDeque::new());
+    const OUTCOMES_KEEP: usize = 100_000;
+    const DAY: f64 = 86_400.0;
+
+    /// One push's outcome: None sent, Some(reason) failed (the reason cut to 40 characters, never a token).
+    pub fn note(failed: Option<&str>) {
+        let now = crate::meet_json::now();
+        let Ok(mut q) = OUTCOMES.lock() else { return };
+        while q.front().map(|(t, _)| now - t > DAY).unwrap_or(false) || q.len() >= OUTCOMES_KEEP {
+            q.pop_front();
+        }
+        q.push_back((now, failed.map(|r| r.chars().take(40).collect())));
+    }
+
+    /// `(sent24h, failed24h by reason)`.
+    pub fn counts() -> (u64, std::collections::BTreeMap<String, u64>) {
+        let now = crate::meet_json::now();
+        let mut sent = 0;
+        let mut failed = std::collections::BTreeMap::new();
+        if let Ok(q) = OUTCOMES.lock() {
+            for (_, why) in q.iter().filter(|(t, _)| now - t <= DAY) {
+                match why {
+                    None => sent += 1,
+                    Some(r) => *failed.entry(r.clone()).or_insert(0) += 1,
+                }
+            }
+        }
+        (sent, failed)
+    }
+
     async fn deliver(ctx: Arc<Ctx>, mut conn: Conn, job: Job) {
-        let failed = |why: &str| log_warn(&format!("push failed principal={} device={} kind={} why={}", job.principal, crate::meet::kv(&job.device), job.kind, crate::meet::kv(why)));
+        let failed = |why: &str| {
+            note(Some(if why.starts_with(|c: char| c.is_ascii_digit()) { why } else { "unreachable" }));
+            log_warn(&format!("push failed principal={} device={} kind={} why={}", job.principal, crate::meet::kv(&job.device), job.kind, crate::meet::kv(why)))
+        };
         let jwt = match ctx.key.token() {
             Ok(t) => t,
             Err(e) => return failed(&e),
@@ -1680,8 +1721,11 @@ pub mod apns {
         };
         let answer = tokio::time::timeout(TIMEOUT, work).await.unwrap_or_else(|_| Err("timed out".to_string()));
         match answer.map(|(status, body)| outcome(status, &body)) {
-            Ok(Outcome::Sent) => {}
-            Ok(Outcome::Gone(why)) => (ctx.gone)(&job, &why),
+            Ok(Outcome::Sent) => note(None),
+            Ok(Outcome::Gone(why)) => {
+                note(Some(&why));
+                (ctx.gone)(&job, &why)
+            }
             Ok(Outcome::Failed(why)) => {
                 if why.contains("ExpiredProviderToken") || why.contains("InvalidProviderToken") {
                     ctx.key.forget();

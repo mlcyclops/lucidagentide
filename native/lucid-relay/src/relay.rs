@@ -8,6 +8,7 @@
 
 use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int, sha256_hex, str_of, stringify, unb64u, utf8_lossy};
 use crate::console::{Console, CONSOLE_OFF};
+use crate::console_spokes::{license_notice, observes, Block, BlockPath, Blocks, LicenseNotices, Observed, UncountedRing, BLOCKS_FILE, LICENSE_MAIL, NODE_BLOCKED, REQUESTS_REFUSED};
 use crate::der::{ecdsa_verify, CertNames};
 use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
 use crate::license::{
@@ -55,6 +56,10 @@ pub struct Options {
     pub sender_bytes: i64,
     /// The control panel (src/console.rs), when it is on: /v1/logs and /v1/console/invite go to it.
     pub console: Option<Arc<Console>>,
+    /// The --state folder: with the console on, its block list (console-blocks.json) lives there.
+    pub state_dir: Option<PathBuf>,
+    /// The file --license named, when it named a file (not armored text): where the console installs a license.
+    pub license_file: Option<PathBuf>,
 }
 
 struct Licensed {
@@ -101,6 +106,14 @@ pub fn refuse(logger: &Logger, status: u16, error: &str, event: &str, fields: &F
     let f = Fields::new().with("status", status).with("error", error).merge(fields);
     logger.security(event, &f, Level::Warn);
     json_reply(status, &json!({ "ok": false, "error": error }))
+}
+
+/// A CRL or directory refused: the status and reason `/v1/crl` and `/v1/directory` answer, and the security event.
+#[derive(Debug)]
+pub struct Taken {
+    pub status: u16,
+    pub reason: String,
+    pub event: &'static str,
 }
 
 /// The request as the relay sees it: method, path with its query, the dialed host, and the body text.
@@ -153,6 +166,14 @@ pub struct State {
     started: i64,
     /// For the control panel: each node's certificate label and user email, as last seen since the start.
     labels: HashMap<String, (String, Option<String>)>,
+    /// The console's blocks on this relay (4.8): fail closed at start, dropped at `until`.
+    blocks: Blocks,
+    /// Hubs refused with `user.uncounted` (4.8 seats view).
+    uncounted: UncountedRing,
+    /// The license notice mailed last (3.11, I12), when the console is on.
+    notices: LicenseNotices,
+    state_dir: Option<PathBuf>,
+    license_file: Option<PathBuf>,
 }
 
 fn store_name(to: &str, id: &str) -> String {
@@ -259,6 +280,13 @@ impl State {
                 logger.ops("license.v1-seats-ignored", &f, Level::Warn);
             }
         }
+        // A security list: with the console on, a block list that does not read back stops the start (section 0).
+        let blocks = match (&opts.console, &opts.state_dir) {
+            (Some(_), Some(dir)) => Blocks::open(&dir.join(BLOCKS_FILE)).inspect_err(|reason| {
+                logger.security("console.blocks-unreadable", &Fields::new().with("reason", reason), Level::Error);
+            })?,
+            _ => Blocks::memory(),
+        };
         let mut st = State {
             owner: opts.owner,
             trust,
@@ -286,6 +314,11 @@ impl State {
             console: opts.console,
             started: now,
             labels: HashMap::new(),
+            blocks,
+            uncounted: UncountedRing::default(),
+            notices: LicenseNotices::default(),
+            state_dir: opts.state_dir,
+            license_file: opts.license_file,
         };
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
             // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
@@ -324,6 +357,7 @@ impl State {
         }
         st.check_license(crate::codec::now_ms())?;
         st.tell_console_revoked();
+        st.observe_crl(now);
         Ok(st)
     }
 
@@ -404,6 +438,61 @@ impl State {
         relays_over_cap(self.licensed.as_ref().map(|l| &l.license), probe.urls().iter().collect::<HashSet<_>>().len())
     }
 
+    /// A root-signed directory from a node (`POST /v1/directory`) or the console: Ok(version), Ok(Err) refused with the
+    /// status, reason and event `/v1/directory` answers, Err when the accepted one could not be written.
+    pub fn take_directory(&mut self, token: &str, t: i64, by: &Fields) -> Result<Result<i64, Taken>, String> {
+        let ts = t.div_euclid(1000);
+        if let Some(over) = self.directory_over_cap(token, ts) {
+            return Ok(Err(Taken { status: 403, reason: over, event: "directory.over-license" }));
+        }
+        match self.directory.accept(&self.trust, token, ts) {
+            Err(reason) => Ok(Err(Taken { status: 409, reason, event: "directory.refused" })),
+            Ok(changed) => {
+                if changed {
+                    if let Some(file) = &self.directory_file {
+                        write_private(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
+                    }
+                    self.logger.ops("directory.accepted", &by.clone().with("version", self.directory.version()), Level::Info);
+                }
+                Ok(Ok(self.directory.version()))
+            }
+        }
+    }
+
+    /// A root-signed, newer CRL from a node (`POST /v1/crl`) or the console, as `take_directory` answers. A new one
+    /// frees seats, latches the console's anchors (3.2) and completes the rs.revoke requests it lists (3.8).
+    pub fn take_crl(&mut self, token: &str, t: i64, by: &Fields) -> Result<Result<i64, Taken>, String> {
+        match self.trust.accept_crl(token) {
+            Err(reason) => Ok(Err(Taken { status: 409, reason, event: "crl.refused" })),
+            Ok(changed) => {
+                if changed {
+                    if let Some(file) = &self.crl_file {
+                        write_in_place(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
+                    }
+                    self.logger.ops("crl.accepted", &by.clone().with("version", self.trust.crl_version()), Level::Info);
+                    self.free_users(t)?; // a user whose every certificate is revoked frees its seat now
+                    self.tell_console_revoked(); // and an admin a revoked hub invited is latched out
+                    self.observe_crl(t);
+                }
+                Ok(Ok(self.trust.crl_version()))
+            }
+        }
+    }
+
+    /// 3.8 rs.revoke: the held CRL lists the request's serial.
+    fn observe_crl(&self, t: i64) {
+        let Some(console) = &self.console else { return };
+        let version = self.trust.crl_version();
+        let held = Observed::Crl { version, revoked: self.trust.revoked_serials() };
+        console.observe_requests("rs.revoke", &format!("crl {version}"), t, &|target| observes("rs.revoke", target, 0, &held, None).is_some());
+    }
+
+    /// The held CRL's nextUpdate (seconds), read from its verified token, or None.
+    fn crl_next_update(&self) -> Option<i64> {
+        let token = self.trust.crl_token()?;
+        safe_int(crate::identity::peek_compact(token)?.get("nextUpdate"))
+    }
+
     fn save_seen(&mut self, t: i64) {
         self.seen_saved_at = t;
         let Some(file) = &self.seen_file else { return };
@@ -420,6 +509,15 @@ impl State {
     /// Record an authenticated node. Written at once when it is new or shows another certificate, else hourly.
     fn note_seen(&mut self, c: &NodeCert, t: i64) {
         let changed = self.seen.get(&c.node).is_none_or(|was| was.serial != c.serial || was.role != c.role);
+        // 3.8 rs.renew: a certificate for the node with a later exp than the request's serial signs in.
+        if let (Some(console), Some(was)) = (&self.console, self.seen.get(&c.node).filter(|w| w.serial != c.serial)) {
+            let seen = Observed::Certificate { node: &c.node, serial: &c.serial, exp: c.exp };
+            let by = format!("certificate {}", c.serial);
+            console.observe_requests("rs.renew", &by, t, &|target| {
+                let known = (str_of(target.get("serial")) == Some(was.serial.as_str())).then_some(was.exp);
+                observes("rs.renew", target, 0, &seen, known).is_some()
+            });
+        }
         self.seen.insert(c.node.clone(), Seen { role: c.role.clone(), at: t, serial: c.serial.clone(), exp: c.exp });
         if self.console.is_some() {
             self.labels.insert(c.node.clone(), (c.label.clone(), c.user.as_ref().map(|u| u.email.clone())));
@@ -480,7 +578,7 @@ impl State {
             .with("state", state.as_str())
             .with("daysLeft", days_left);
         if lic.dev {
-            let why = "development license: signed by LUCID_LICENSE_DEV_PUB (LUCID_LICENSE_DEV=1), not the publisher; never for production";
+            let why = "development license: signed by a development key, not the publisher; never for production";
             self.logger.security("license.development", &fields.clone().with("why", why), Level::Warn);
         }
         match state {
@@ -550,6 +648,24 @@ impl State {
             !b.is_empty()
         });
         self.forget(expired);
+        // Ended blocks leave the file; a write that fails is retried at the next sweep (get() already ignores them).
+        if let Err(e) = self.blocks.sweep(t) {
+            self.logger.ops("console.blocks-write-failed", &Fields::new().with("reason", e), Level::Warn);
+        }
+        self.license_notices(t);
+    }
+
+    /// 3.11 (I12): the Remote Spokes license notice due now, mailed once to every active console admin.
+    fn license_notices(&mut self, t: i64) {
+        let Some(console) = self.console.clone() else { return };
+        let due = self.licensed.as_ref().and_then(|l| license_notice(&l.license, t).map(|(stage, args)| (l.license.id.clone(), stage, args)));
+        if !self.notices.due(due.as_ref().map(|(id, stage, _)| (id.clone(), *stage))) {
+            return;
+        }
+        let Some((_, _, args)) = due else { return };
+        for to in console.active_admin_emails() {
+            crate::console_mail::send(LICENSE_MAIL, &to, &args);
+        }
     }
 
     /// The caller's certificate, or why it was refused: (event, reason, claimed node).
@@ -615,6 +731,15 @@ impl State {
         };
         let who = r.where_.clone().with("node", &me.node).with("role", &me.role);
         let logger = self.logger.clone();
+        // 4.8 (M9): a console block refuses the node's signed requests here, mailbox kept. Never a root-signed CRL or
+        // directory: they authenticate themselves, so a blocked root holder's hub can still publish revocations.
+        let self_authenticating = r.method == "POST" && matches!(r.pathname, "/v1/crl" | "/v1/directory");
+        if !self_authenticating {
+            if let Some(b) = self.blocks.get(&me.node, t) {
+                let f = who.clone().with("until", b.until).with("placedBy", b.placed_by.as_str());
+                return Ok(refuse(&logger, 403, NODE_BLOCKED, "node.blocked", &f));
+            }
+        }
         if me.role == "hub" {
             if let Some(reply) = self.seat(&me, r.seat, t, &who)? {
                 return Ok(reply);
@@ -656,21 +781,12 @@ impl State {
                 let parsed = body();
                 let token = parsed.as_ref().and_then(as_object).filter(|b| exact_keys(b, &["directory"], &["directory"])).and_then(|b| str_of(b.get("directory")));
                 let Some(token) = token else { return Ok(refuse(&logger, 400, "malformed", "directory.malformed", &who)) };
-                let ts = t.div_euclid(1000);
-                if let Some(over) = self.directory_over_cap(token, ts) {
-                    return Ok(refuse(&logger, 403, &over, "directory.over-license", &who.clone().with("relays", self.relay_cap())));
-                }
-                match self.directory.accept(&self.trust, token, ts) {
-                    Err(reason) => refuse(&logger, 409, &reason, "directory.refused", &who),
-                    Ok(changed) => {
-                        if changed {
-                            if let Some(file) = &self.directory_file {
-                                write_private(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
-                            }
-                            logger.ops("directory.accepted", &Fields::new().with("node", &me.node).with("version", self.directory.version()), Level::Info);
-                        }
-                        json_reply(200, &json!({ "ok": true, "version": self.directory.version() }))
+                match self.take_directory(token, t, &Fields::new().with("node", &me.node))? {
+                    Err(Taken { status, reason, event }) => {
+                        let f = if status == 403 { who.clone().with("relays", self.relay_cap()) } else { who.clone() };
+                        refuse(&logger, status, &reason, event, &f)
                     }
+                    Ok(version) => json_reply(200, &json!({ "ok": true, "version": version })),
                 }
             }
             ("/v1/crl", "GET") => json_reply(200, &json!({ "ok": true, "crl": self.trust.crl_token() })),
@@ -678,20 +794,24 @@ impl State {
                 let parsed = body();
                 let token = parsed.as_ref().and_then(as_object).filter(|b| exact_keys(b, &["crl"], &["crl"])).and_then(|b| str_of(b.get("crl")));
                 let Some(token) = token else { return Ok(refuse(&logger, 400, "malformed", "crl.malformed", &who)) };
-                match self.trust.accept_crl(token) {
-                    Err(reason) => refuse(&logger, 409, &reason, "crl.refused", &who),
-                    Ok(changed) => {
-                        if changed {
-                            if let Some(file) = &self.crl_file {
-                                write_in_place(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
-                            }
-                            logger.ops("crl.accepted", &Fields::new().with("node", &me.node).with("version", self.trust.crl_version()), Level::Info);
-                            self.free_users(t)?; // a user whose every certificate is revoked frees its seat now
-                            self.tell_console_revoked(); // and an admin a revoked hub invited is signed out
-                        }
-                        json_reply(200, &json!({ "ok": true, "version": self.trust.crl_version() }))
-                    }
+                match self.take_crl(token, t, &Fields::new().with("node", &me.node))? {
+                    Err(Taken { status, reason, event }) => refuse(&logger, status, &reason, event, &who),
+                    Ok(version) => json_reply(200, &json!({ "ok": true, "version": version })),
                 }
+            }
+            // 4.10 (I6): the waiting rs.* requests, for the hubs of active console admins, never one about the asker.
+            ("/v1/console/requests", "GET") => {
+                let Some(console) = self.console.clone() else { return Ok(refuse(&logger, 409, CONSOLE_OFF, "console.requests-refused", &who)) };
+                let email = me.user.as_ref().map(|u| u.email.as_str()).filter(|_| me.role == "hub");
+                if !email.is_some_and(|e| console.is_active_admin(e)) {
+                    return Ok(refuse(&logger, 403, REQUESTS_REFUSED, "console.requests-refused", &who));
+                }
+                let requests: Vec<Value> = console
+                    .requests_waiting("rs.", t)
+                    .into_iter()
+                    .filter(|rq| rq.get("target").and_then(|x| str_of(x.get("node"))) != Some(me.node.as_str()))
+                    .collect();
+                json_reply(200, &json!({ "ok": true, "requests": requests }))
             }
             ("/v1/presence", "GET") => {
                 // Only a hub that may recall sees which spokes are polling.
@@ -767,55 +887,6 @@ impl State {
         self.console.clone()
     }
 
-    /// What the control panel shows of the relay (read-only; never message contents): health, license, seats, nodes
-    /// seen, CRL and directory versions. Times in `...At` are milliseconds; `exp` and `since` are seconds.
-    pub fn console_status(&self, t: i64) -> Value {
-        let mut queues: Vec<(&String, usize, i64)> = self.mailboxes.iter().map(|(n, b)| (n, b.len(), b.iter().map(|m| m.bytes).sum::<i64>())).collect();
-        queues.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(b.0)));
-        let queues: Vec<Value> = queues.iter().take(100).map(|(n, m, b)| json!({ "node": n, "messages": m, "bytes": b })).collect();
-        let license = self.licensed.as_ref().map(|lic| {
-            let l = &lic.license;
-            let (state, days_left) = license_state(l, t.div_euclid(1000));
-            json!({
-                "id": l.id, "org": l.org, "edition": l.edition, "users": l.users, "used": lic.users.used(), "relays": l.relays,
-                "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": lic.dev,
-            })
-        });
-        // A seat is a user key (u_ and a hash of the email); the email shows when a hub of that user was seen.
-        let emails: HashMap<String, &str> = self.labels.values().filter_map(|(_, e)| e.as_deref()).map(|e| (crate::identity::user_id_of(e), e)).collect();
-        let seats: Vec<Value> = self
-            .licensed
-            .as_ref()
-            .map(|l| l.users.seats())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| json!({ "user": s.user, "email": emails.get(&s.user), "since": s.since, "certificates": s.certificates, "exp": s.exp }))
-            .collect();
-        let nodes: Vec<Value> = self
-            .seen
-            .iter()
-            .map(|(node, s)| {
-                let (label, email) = self.labels.get(node).cloned().unwrap_or_default();
-                json!({
-                    "node": node, "role": s.role, "label": label, "email": email, "serial": s.serial, "exp": s.exp,
-                    "lastSeenAt": s.at, "lastPollAt": self.polls.get(node), "revoked": self.trust.is_revoked(&s.serial),
-                })
-            })
-            .collect();
-        json!({
-            "relay": {
-                "version": env!("CARGO_PKG_VERSION"), "startedAt": self.started, "uptimeSeconds": (t - self.started).max(0) / 1000,
-                "mailboxes": self.mailboxes.len(), "queued": self.mailboxes.values().map(Vec::len).sum::<usize>(),
-                "heldBytes": self.held, "storeBytes": self.store_cap, "senderBytes": self.sender_cap, "queues": queues,
-            },
-            "license": license,
-            "seats": seats,
-            "nodes": nodes,
-            "crl": { "version": self.trust.crl_version() },
-            "directory": { "version": self.directory.version(), "relays": self.directory.urls() },
-        })
-    }
-
     /// Users (ADR-A077): distinct people on hub certificates take a seat; a refused one first frees the seats of users
     /// whose every certificate was revoked or expired.
     fn seat(&mut self, me: &NodeCert, seat: Option<&str>, t: i64, who: &Fields) -> Result<Option<Reply>, String> {
@@ -824,6 +895,7 @@ impl State {
         if let Some(lic) = self.licensed.as_ref() {
             if let Some(why) = seat_problem(seat, self.trust.root_key(), &self.trust.root_id, &lic.license.id, me, t.div_euclid(1000)) {
                 let f = who.clone().with("user", license_user_of(me)).with("license", &lic.license.id).with("why", why);
+                self.uncounted.push(&me.node, me.user.as_ref().map(|u| u.email.as_str()), t);
                 return Ok(Some(refuse(&self.logger, 403, UNCOUNTED_REASON, "user.uncounted", &f)));
             }
         }
@@ -844,12 +916,18 @@ impl State {
                 let error = format!("the license allows {} users{tail}", l.users);
                 Ok(Some(refuse(&self.logger, 403, &error, "user.refused", &who.clone().merge(&counts))))
             }
-            Admission::Taken => {
-                let f = Fields::new().with("node", &me.node).with("label", &me.label).merge(&counts);
-                self.logger.ops("user.taken", &f, Level::Info);
+            Admission::Taken | Admission::Held => {
+                if seat == Admission::Taken {
+                    let f = Fields::new().with("node", &me.node).with("label", &me.label).merge(&counts);
+                    self.logger.ops("user.taken", &f, Level::Info);
+                }
+                // 3.8 rs.seat: the hub is admitted with a seat (live, so after any request waiting now).
+                if let Some(console) = &self.console {
+                    let admitted = Observed::Seat { node: &me.node, at: t };
+                    console.observe_requests("rs.seat", "seat", t, &|target| observes("rs.seat", target, t - 1, &admitted, None).is_some());
+                }
                 Ok(None)
             }
-            Admission::Held => Ok(None),
         }
     }
 
@@ -911,6 +989,293 @@ impl State {
         let f = Fields::new().with("from", &me.node).with("to", &to).with("bytes", ct_len).with("depth", depth).with("mailboxes", self.mailboxes.len()).with("heldBytes", self.held);
         logger.perf("send", &f);
         json_reply(200, &json!({ "ok": true }))
+    }
+}
+
+/// A spoke with no poll for this long is `silent` (4.8).
+const SILENT_MS: i64 = 24 * 3_600_000;
+/// A certificate ending within this many seconds is `expiring` (4.8).
+const EXPIRING_SEC: i64 = 7 * 86_400;
+
+/// The 4.8 nodes filters: role (hub or spoke), state, text, and the row limit.
+#[derive(Default)]
+pub struct NodeFilter {
+    pub role: Option<String>,
+    pub state: Option<String>,
+    pub q: Option<String>,
+    pub limit: usize,
+}
+
+/// A license the console was handed (4.7): the verified license, whether it is a development one, its token.
+pub struct Offered {
+    pub license: License,
+    pub dev: bool,
+    pub token: String,
+}
+
+/// The Admin Console's Remote Spokes views of the relay (4.8, 7.3, 7.4): read-only; never message contents.
+/// Times in `...At` are milliseconds; `exp` and `since` are seconds.
+impl State {
+    /// One node's state word: revoked, blocked, expired, expiring, silent (a spoke with no poll for 24 h), or ok.
+    fn node_state(&self, node: &str, s: &Seen, t: i64) -> &'static str {
+        let now = t.div_euclid(1000);
+        if self.trust.is_revoked(&s.serial) {
+            "revoked"
+        } else if self.blocks.is_blocked(node, t) {
+            "blocked"
+        } else if s.exp <= now {
+            "expired"
+        } else if s.exp - now <= EXPIRING_SEC {
+            "expiring"
+        } else if s.role == "spoke" && t - self.polls.get(node).copied().unwrap_or(self.started) >= SILENT_MS {
+            "silent"
+        } else {
+            "ok"
+        }
+    }
+
+    /// `GET /console/api/spokes/nodes`: emails only for `people` (admins and user managers, R4-8); viewers get none,
+    /// and the text filter never reads one for them.
+    pub fn spokes_nodes(&self, f: &NodeFilter, people: bool, logs: &HashMap<String, usize>, t: i64) -> Value {
+        let q = f.q.as_deref().map(str::to_lowercase);
+        let rows: Vec<Value> = self
+            .seen
+            .iter()
+            .filter(|(_, s)| f.role.as_deref().is_none_or(|r| r == s.role))
+            .filter_map(|(node, s)| {
+                let state = self.node_state(node, s, t);
+                if f.state.as_deref().is_some_and(|w| w != state) {
+                    return None;
+                }
+                let (label, email) = self.labels.get(node).cloned().unwrap_or_default();
+                let email = email.filter(|_| people);
+                if let Some(q) = &q {
+                    let hit = [Some(node.as_str()), Some(label.as_str()), Some(s.serial.as_str()), email.as_deref()].into_iter().flatten().any(|x| x.to_lowercase().contains(q.as_str()));
+                    if !hit {
+                        return None;
+                    }
+                }
+                Some(json!({
+                    "node": node, "role": s.role, "label": label, "email": email, "serial": s.serial, "exp": s.exp,
+                    "lastSeenAt": s.at, "lastPollAt": self.polls.get(node), "revoked": self.trust.is_revoked(&s.serial),
+                    "blocked": self.blocks.get(node, t).map(Block::view), "logs": logs.get(node).copied().unwrap_or(0), "state": state,
+                }))
+            })
+            .collect();
+        let total = rows.len();
+        let nodes: Vec<Value> = rows.into_iter().take(f.limit).collect();
+        json!({ "ok": true, "nodes": nodes, "total": total })
+    }
+
+    /// `GET /console/api/spokes/seats` (user managers and admins): the license's users, and hubs refused for want of a seat in 7 days.
+    pub fn spokes_seats(&self, t: i64) -> Value {
+        // A seat is a user key (u_ and a hash of the email); the email shows when a hub of that user was seen.
+        let emails: HashMap<String, &str> = self.labels.values().filter_map(|(_, e)| e.as_deref()).map(|e| (crate::identity::user_id_of(e), e)).collect();
+        let seats: Vec<Value> = self
+            .licensed
+            .as_ref()
+            .map(|l| l.users.seats())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| json!({ "user": s.user, "email": emails.get(&s.user), "since": s.since, "certificates": s.certificates, "exp": s.exp }))
+            .collect();
+        let uncounted: Vec<Value> = self.uncounted.recent(t).into_iter().map(|u| json!({ "node": u.node, "email": u.email, "at": u.at })).collect();
+        let (users, used) = self.licensed.as_ref().map_or((0, 0), |l| (l.license.users, l.users.used()));
+        json!({ "ok": true, "users": users, "used": used, "seats": seats, "uncounted": uncounted })
+    }
+
+    /// `GET /console/api/spokes/relays`: the held directory and CRL.
+    pub fn spokes_relays(&self) -> Value {
+        json!({
+            "ok": true,
+            "directory": { "version": self.directory.version(), "relays": self.directory.urls() },
+            "crl": { "version": self.trust.crl_version(), "nextUpdate": self.crl_next_update() },
+        })
+    }
+
+    /// The node as last seen: its role and its certificate's user email (hubs), or None when never seen here.
+    pub fn node_seen(&self, node: &str) -> Option<(String, Option<String>)> {
+        let s = self.seen.get(node)?;
+        Some((s.role.clone(), self.labels.get(node).and_then(|(_, e)| e.clone())))
+    }
+
+    /// The serial of the certificate the node last signed in with.
+    pub fn node_serial(&self, node: &str) -> Option<String> {
+        self.seen.get(node).map(|s| s.serial.clone())
+    }
+
+    pub fn is_revoked(&self, serial: &str) -> bool {
+        self.trust.is_revoked(serial)
+    }
+
+    /// Whether `block` would run on one admin's word (M9); `admin_hub` is the console's judgment of the target.
+    pub fn block_decision(&self, node: &str, hours: i64, admin_hub: bool, t: i64) -> crate::console_spokes::BlockDecision {
+        self.blocks.decide(node, hours, admin_hub, t)
+    }
+
+    pub fn place_block(&mut self, node: &str, hours: i64, reason: &str, by: &str, path: BlockPath, t: i64) -> Result<Block, crate::console_spokes::BlockError> {
+        let placed = self.blocks.place(node, hours, reason, by, path, t)?;
+        let f = Fields::new().with("node", node).with("until", placed.until).with("placedBy", by).with("path", path.as_str());
+        self.logger.security("node.block", &f, Level::Warn);
+        Ok(placed)
+    }
+
+    pub fn may_lift_alone(&self, node: &str, by: &str, t: i64) -> Option<bool> {
+        self.blocks.may_lift_alone(node, by, t)
+    }
+
+    pub fn lift_block(&mut self, node: &str, by: &str, t: i64) -> Result<Block, crate::console_spokes::BlockError> {
+        let gone = self.blocks.lift(node, t)?;
+        self.logger.security("node.unblock", &Fields::new().with("node", node).with("by", by).with("placedBy", gone.placed_by.as_str()), Level::Info);
+        Ok(gone)
+    }
+
+    /// Health facts of the overview: version, up for, FIPS mode (a `fips` build runs only in FIPS mode).
+    pub fn relay_info(&self, t: i64) -> Value {
+        json!({ "host": Value::Null, "version": env!("CARGO_PKG_VERSION"), "uptimeSeconds": (t - self.started).max(0) / 1000, "fips": cfg!(feature = "fips"), "tlsNotAfter": Value::Null })
+    }
+
+    /// The 4.7 license object, or None when the relay holds no license.
+    pub fn license_view(&self, t: i64) -> Option<(Value, LicenseStateName)> {
+        let lic = self.licensed.as_ref()?;
+        let l = &lic.license;
+        let (state, days_left) = license_state(l, t.div_euclid(1000));
+        let view = json!({
+            "id": l.id, "org": l.org, "product": l.product().as_str(), "edition": l.edition, "users": l.users, "used": lic.users.used(),
+            "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": lic.dev, "graceDays": l.grace_days,
+        });
+        Some((view, state))
+    }
+
+    /// The 7.3 cards of this product: hubs, spokes (`m` silent), seats (`m` users), relays and revocation.
+    pub fn spokes_cards(&self, t: i64) -> Vec<Value> {
+        let (mut hubs, mut spokes, mut silent, mut hubs_warn) = (0, 0, 0, 0);
+        for (node, s) in &self.seen {
+            let state = self.node_state(node, s, t);
+            if s.role == "hub" {
+                hubs += 1;
+                hubs_warn += usize::from(state != "ok");
+            } else {
+                spokes += 1;
+                silent += usize::from(state == "silent");
+            }
+        }
+        let warn = |bad: bool| if bad { "warn" } else { "ok" };
+        let (users, used) = self.licensed.as_ref().map_or((0, 0), |l| (l.license.users, l.users.used()));
+        let crl_age_days = self.crl_issued().map(|iat| (t.div_euclid(1000) - iat).max(0) / 86_400);
+        vec![
+            json!({ "id": "hubs", "state": warn(hubs_warn > 0), "n": hubs, "m": hubs_warn }),
+            json!({ "id": "spokes", "state": warn(silent > 0), "n": spokes, "m": silent }),
+            json!({ "id": "seats", "state": warn(users > 0 && used * 10 >= users * 9), "n": used, "m": users }),
+            json!({ "id": "relays", "state": warn(self.crl_stale(t)), "n": self.trust.crl_version(), "m": crl_age_days }),
+        ]
+    }
+
+    /// The held CRL's `iat` (seconds), read from its verified token.
+    fn crl_issued(&self) -> Option<i64> {
+        safe_int(crate::identity::peek_compact(self.trust.crl_token()?)?.get("iat"))
+    }
+
+    /// Past the held CRL's nextUpdate.
+    fn crl_stale(&self, t: i64) -> bool {
+        self.crl_next_update().is_some_and(|n| n <= t.div_euclid(1000))
+    }
+
+    /// The 7.3 attention items of this product; viewers get only `crl-stale` and `spokes-silent`.
+    pub fn spokes_attention(&self, admin: bool, t: i64) -> Vec<Value> {
+        let mut out = Vec::new();
+        let item = |kind: &str, severity: &str, args: Value, go: &str| json!({ "kind": kind, "severity": severity, "args": args, "go": go });
+        if self.crl_stale(t) {
+            out.push(item("crl-stale", "bad", json!({}), "#/spokes/relays"));
+        }
+        let silent = self.seen.iter().filter(|(n, s)| self.node_state(n, s, t) == "silent").count();
+        if silent > 0 {
+            out.push(item("spokes-silent", "warn", json!({ "n": silent }), "#/spokes/spokes"));
+        }
+        if !admin {
+            return out;
+        }
+        if let Some(l) = self.licensed.as_ref().filter(|l| l.license.users > 0 && l.users.used() * 10 >= l.license.users * 9) {
+            out.push(item("seats-high", "warn", json!({ "used": l.users.used(), "users": l.license.users }), "#/spokes/seats"));
+        }
+        let uncounted = self.uncounted.recent(t).len();
+        if uncounted > 0 {
+            out.push(item("uncounted", "warn", json!({ "n": uncounted }), "#/spokes/seats"));
+        }
+        let expiring = self.seen.iter().filter(|(n, s)| self.node_state(n, s, t) == "expiring").count();
+        if expiring > 0 {
+            out.push(item("cert-expiring", "warn", json!({ "n": expiring }), "#/spokes/hubs"));
+        }
+        let blocks = self.blocks.active(t).count();
+        if blocks > 0 {
+            out.push(item("blocks-active", "info", json!({ "n": blocks }), "#/spokes/hubs"));
+        }
+        out
+    }
+
+    /// 4.2 search hits among hubs and spokes (admins only: nodes carry people's emails).
+    pub fn spokes_search(&self, q: &str, limit: usize) -> Vec<Value> {
+        let q = q.to_lowercase();
+        self.seen
+            .iter()
+            .filter_map(|(node, s)| {
+                let (label, email) = self.labels.get(node).cloned().unwrap_or_default();
+                let hit = [Some(node.as_str()), Some(label.as_str()), Some(s.serial.as_str()), email.as_deref()].into_iter().flatten().any(|x| x.to_lowercase().contains(&q));
+                let page = if s.role == "hub" { "hubs" } else { "spokes" };
+                hit.then(|| json!({ "kind": s.role, "id": node, "title": label, "detail": email.unwrap_or_default(), "go": format!("#/spokes/{page}?q={node}") }))
+            })
+            .take(limit)
+            .collect()
+    }
+
+    /// A license handed to the console (4.7), verified exactly as at start; Err is the verifier's words.
+    pub fn license_offered(&self, text: &str, t: i64) -> Result<Offered, String> {
+        let token = crate::license::license_token_of(text);
+        let keys = license_keys(|k| std::env::var(k).ok())?;
+        let c = verify_license(&token, &self.trust.root_id, &keys, t.div_euclid(1000))?;
+        if c.license.product() != crate::license::Product::Spokes {
+            return Err("this license is for Meeting Hub, not Remote Spokes".into());
+        }
+        Ok(Offered { license: c.license, dev: c.dev, token })
+    }
+
+    /// The license in force now, for the 4.7 one-admin test.
+    pub fn license_now(&self) -> Option<&License> {
+        self.licensed.as_ref().map(|l| &l.license)
+    }
+
+    /// Where an installed license goes (4.7): the file --license named when it is inside --state; Err names where
+    /// the relay reads its license from instead (a file outside --state, or LUCID_RELAY_LICENSE text).
+    pub fn license_target(&self) -> Result<PathBuf, String> {
+        let Some(dir) = &self.state_dir else { return Err("LUCID_RELAY_LICENSE".into()) };
+        match &self.license_file {
+            Some(f) if f.parent().is_some_and(|p| same_dir(p, dir)) => Ok(f.clone()),
+            Some(f) => Err(f.display().to_string()),
+            None => Err("LUCID_RELAY_LICENSE".into()),
+        }
+    }
+
+    /// Install a verified license: written where 4.7 says, then in force at once. People admitted first stay.
+    pub fn install_license(&mut self, offered: Offered, t: i64) -> Result<(), String> {
+        let file = self.license_target()?;
+        write_private(&file, format!("{}\n", offered.token).as_bytes()).map_err(|e| e.to_string())?;
+        let users = match self.licensed.take() {
+            Some(old) => old.users,
+            None => LicenseUsers::open(self.state_dir.as_ref().map(|d| d.join(LICENSE_USERS_FILE)).as_deref())?,
+        };
+        let f = Fields::new().with("id", &offered.license.id).with("exp", offered.license.exp).with("file", file.display().to_string());
+        self.licensed = Some(Licensed { token: offered.token, license: offered.license, dev: offered.dev, users });
+        self.logger.security("license.installed", &f, Level::Info);
+        self.license_seen = None;
+        self.check_license(t)
+    }
+}
+
+/// Whether two folder paths name the same folder (canonical when both resolve).
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
     }
 }
 
@@ -1013,6 +1378,8 @@ mod tests {
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
             console: None,
+            state_dir: None,
+            license_file: None,
         };
         State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {}))))
     }
@@ -1028,6 +1395,196 @@ mod tests {
         let where_ = Fields::new();
         let r = Request { method: "GET", pathname: "/v1/inbox", path: "/v1/inbox", authorization: &authorization, seat: None, dialed: &d, body: "", where_: &where_ };
         st.serve(&r, t, true).unwrap().status
+    }
+
+    /// A signed request by `key` and `cert` to relay.example.com: the reply.
+    #[allow(clippy::too_many_arguments)]
+    fn call(st: &mut State, key: &SigningKey, cert: &str, method: &str, path: &str, body: &str, t: i64, nonce: u32) -> Reply {
+        let nonce = format!("{nonce:032x}");
+        let line = format!("lucid-relay-auth/v2\nrelay:relay.example.com\n{method}\n{path}\n{}\n{nonce}\n{}", js_number_string(t as f64), sha256_hex(body.as_bytes()));
+        let sig: Signature = key.sign(line.as_bytes());
+        let a = json!({ "cert": cert, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) });
+        let authorization = format!("LucidNode {}", b64u(stringify(&a).as_bytes()));
+        let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+        let where_ = Fields::new();
+        let r = Request { method, pathname: path, path, authorization: &authorization, seat: None, dialed: &d, body, where_: &where_ };
+        st.serve(&r, t, true).unwrap()
+    }
+
+    fn root_id(root: &SigningKey) -> String {
+        node_id_of(&p256_spki_der(&root.verifying_key().into()))
+    }
+
+    fn crl(root: &SigningKey, version: i64, serials: &[String], next_update: Option<i64>) -> String {
+        let mut p = json!({ "v": 1, "typ": "lucid-crl", "root": root_id(root), "version": version, "serials": serials, "iat": T0 / 1000 - 60 });
+        if let Some(n) = next_update {
+            p["nextUpdate"] = json!(n);
+        }
+        compact(root, &p)
+    }
+
+    fn directory(root: &SigningKey, version: i64) -> String {
+        let now = T0 / 1000;
+        let p = json!({
+            "v": 1, "typ": "lucid-relay-directory", "root": root_id(root), "version": version,
+            "relays": [{ "url": "https://relay.example.com", "region": "eu", "priority": 1 }], "iat": now - 60, "exp": now + 86_400,
+        });
+        compact(root, &p)
+    }
+
+    /// A state whose security lines land in `lines`.
+    fn state_logged(root: &SigningKey) -> (State, Arc<parking_lot::Mutex<Vec<String>>>) {
+        let lines = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = lines.clone();
+        let opts = Options {
+            root: root.verifying_key().into(),
+            owner: None,
+            license: None,
+            crl_file: None,
+            store: None,
+            seen_file: None,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            console: None,
+            state_dir: None,
+            license_file: None,
+        };
+        let logger = Logger::capture("relay", Box::new(move |line: &str, _| sink.lock().push(line.to_owned())));
+        (State::new(opts, Arc::new(logger)).unwrap(), lines)
+    }
+
+    #[test]
+    fn a_blocked_node_is_refused_but_still_publishes_a_crl_and_a_directory() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, lines) = state_logged(&root);
+        let (spoke_key, spoke_cert, spoke) = node(&root, 2, "spoke");
+        let (hub_key, hub_cert, hub) = node(&root, 3, "hub");
+        assert_eq!(call(&mut st, &spoke_key, &spoke_cert, "GET", "/v1/inbox", "", T0, 1).status, 200);
+        st.place_block(&spoke, 2, "lost laptop", "alice@acme.example", BlockPath::Single, T0).unwrap();
+        st.place_block(&hub, 2, "check", "alice@acme.example", BlockPath::Single, T0).unwrap();
+        let r = call(&mut st, &spoke_key, &spoke_cert, "GET", "/v1/inbox", "", T0 + 1, 2);
+        assert_eq!(r.status, 403);
+        assert!(r.body.contains(NODE_BLOCKED), "{}", r.body);
+        assert!(lines.lock().iter().any(|l| l.contains("\"node.blocked\"") && l.contains(&spoke)), "a security line names the node");
+        // The mailbox stays: mail for the blocked spoke is still taken from others.
+        assert!(st.recipient_problem(&spoke, T0 + 2).is_none());
+        // The blocked hub still hands the relay a root-signed CRL and directory.
+        let body = stringify(&json!({ "crl": crl(&root, 1, &[], None) }));
+        let r = call(&mut st, &hub_key, &hub_cert, "POST", "/v1/crl", &body, T0 + 3, 3);
+        assert_eq!((r.status, r.body.contains("\"version\":1")), (200, true), "{}", r.body);
+        let body = stringify(&json!({ "directory": directory(&root, 1) }));
+        let r = call(&mut st, &hub_key, &hub_cert, "POST", "/v1/directory", &body, T0 + 4, 4);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(call(&mut st, &hub_key, &hub_cert, "GET", "/v1/inbox", "", T0 + 5, 5).status, 403);
+        // At until the block ends by itself.
+        assert_eq!(call(&mut st, &spoke_key, &spoke_cert, "GET", "/v1/inbox", "", T0 + 2 * 3_600_000, 6).status, 200);
+    }
+
+    #[test]
+    fn console_uploads_are_taken_and_refused_as_the_v1_routes() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let other = SigningKey::from_slice(&[9u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        let (hub_key, hub_cert, _) = node(&root, 3, "hub");
+        let by = Fields::new().with("console", "alice@acme.example");
+        let foreign = crl(&other, 5, &[], None);
+        let Err(Taken { status, reason, .. }) = st.take_crl(&foreign, T0, &by).unwrap() else { panic!("a foreign CRL is refused") };
+        let r = call(&mut st, &hub_key, &hub_cert, "POST", "/v1/crl", &stringify(&json!({ "crl": foreign })), T0, 1);
+        assert_eq!((r.status, r.body.contains(&reason)), (status, true));
+        assert_eq!(st.take_crl(&crl(&root, 2, &[], Some(T0 / 1000 + 600)), T0, &by).unwrap().unwrap(), 2);
+        let older = crl(&root, 1, &[], None);
+        let Err(Taken { reason, .. }) = st.take_crl(&older, T0, &by).unwrap() else { panic!("an older CRL is refused") };
+        assert_eq!(reason, "CRL version 1 is older than 2");
+        let Err(Taken { reason, .. }) = st.take_directory(&directory(&other, 1), T0, &by).unwrap() else { panic!("a foreign directory is refused") };
+        assert_eq!(reason, "relay directory is not signed by this root");
+        assert_eq!(st.take_directory(&directory(&root, 3), T0, &by).unwrap().unwrap(), 3);
+        let relays = st.spokes_relays();
+        assert_eq!((relays["crl"]["version"].as_i64(), relays["crl"]["nextUpdate"].as_i64()), (Some(2), Some(T0 / 1000 + 600)));
+        assert_eq!(relays["directory"]["version"].as_i64(), Some(3));
+        // Past nextUpdate the overview says the list is stale.
+        assert!(st.spokes_attention(false, T0 + 601_000).iter().any(|a| a["kind"] == "crl-stale"));
+    }
+
+    #[test]
+    fn nodes_view_filters_and_viewers_get_no_email() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        let (spoke_key, spoke_cert, spoke) = node(&root, 2, "spoke");
+        let (hub_key, hub_cert, hub) = node(&root, 3, "hub");
+        assert_eq!(call(&mut st, &spoke_key, &spoke_cert, "GET", "/v1/inbox", "", T0, 1).status, 200);
+        assert_eq!(call(&mut st, &hub_key, &hub_cert, "GET", "/v1/inbox", "", T0, 2).status, 200);
+        st.labels.insert(hub.clone(), ("hub 3".into(), Some("bob@acme.example".into())));
+        let logs: HashMap<String, usize> = [(spoke.clone(), 4usize)].into_iter().collect();
+        fn all(st: &State, logs: &HashMap<String, usize>, f: NodeFilter, admin: bool) -> Value {
+            let limit = if f.limit == 0 { 100 } else { f.limit };
+            st.spokes_nodes(&NodeFilter { limit, ..f }, admin, logs, T0 + 10)
+        }
+        let none = NodeFilter::default;
+        let v = all(&st, &logs, none(), true);
+        assert_eq!(v["total"], 2);
+        let row = |v: &Value, n: &str| v["nodes"].as_array().unwrap().iter().find(|x| x["node"] == n).cloned().unwrap();
+        assert_eq!(row(&v, &hub)["email"], "bob@acme.example");
+        assert_eq!(row(&v, &spoke)["logs"], 4);
+        // The test certificates last a day: within 7 days of their end.
+        assert_eq!(row(&v, &spoke)["state"], "expiring");
+        // Viewers: no email, and the text filter never matches one.
+        let v = all(&st, &logs, none(), false);
+        assert!(v["nodes"].as_array().unwrap().iter().all(|x| x["email"].is_null()));
+        assert_eq!(all(&st, &logs, NodeFilter { q: Some("bob@".into()), ..none() }, false)["total"], 0);
+        assert_eq!(all(&st, &logs, NodeFilter { q: Some("bob@".into()), ..none() }, true)["total"], 1);
+        assert_eq!(all(&st, &logs, NodeFilter { role: Some("spoke".into()), ..none() }, true)["total"], 1);
+        assert_eq!(all(&st, &logs, NodeFilter { state: Some("ok".into()), ..none() }, true)["total"], 0);
+        assert_eq!(all(&st, &logs, NodeFilter { limit: 1, ..none() }, true)["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(all(&st, &logs, NodeFilter { limit: 1, ..none() }, true)["total"], 2);
+        // A block shows on the row and in the state filter.
+        st.place_block(&spoke, 1, "r", "alice@acme.example", BlockPath::Single, T0).unwrap();
+        let v = all(&st, &logs, NodeFilter { state: Some("blocked".into()), ..none() }, true);
+        assert_eq!(v["total"], 1);
+        assert_eq!(row(&v, &spoke)["blocked"]["by"], "alice@acme.example");
+        // Revoked wins over everything.
+        let serial = format!("{:032x}", 2);
+        st.take_crl(&crl(&root, 1, &[serial], None), T0, &Fields::new()).unwrap().unwrap();
+        assert_eq!(row(&all(&st, &logs, none(), true), &spoke)["state"], "revoked");
+    }
+
+    #[test]
+    fn seats_view_shows_hubs_refused_for_want_of_a_seat() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        st.uncounted.push("n_0123456789abcdef0123456789abcdef", Some("carol@acme.example"), T0);
+        let v = st.spokes_seats(T0 + 1);
+        assert_eq!(v["uncounted"][0]["email"], "carol@acme.example");
+        assert!(st.spokes_attention(true, T0 + 1).iter().any(|a| a["kind"] == "uncounted"));
+        assert!(!st.spokes_attention(false, T0 + 1).iter().any(|a| a["kind"] == "uncounted"), "viewers see no seat items");
+        assert_eq!(st.spokes_seats(T0 + crate::console_spokes::WINDOW_MS)["uncounted"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn the_remote_spokes_service_gate_is_unchanged_503_past_grace_and_no_upgrade_period() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        let where_ = Fields::new();
+        // No license: no gate and no upgrade period (that is Meeting Hub's alone, 2.4).
+        assert!(st.license_gate(T0 + 400 * 86_400_000, &where_).unwrap().is_none());
+        let exp = T0 / 1000 + 86_400;
+        let license = crate::license::License { id: "l_1".into(), org: "acme".into(), root: root_id(&root), edition: "standard".into(), users: 5, relays: 1, exp, grace_days: 14 };
+        st.licensed = Some(Licensed { token: String::new(), license, dev: false, users: crate::license::LicenseUsers::open(None).unwrap() });
+        assert!(st.license_gate(T0, &where_).unwrap().is_none(), "valid serves");
+        assert!(st.license_gate((exp + 86_400) * 1000, &where_).unwrap().is_none(), "grace serves");
+        let r = st.license_gate((exp + 14 * 86_400) * 1000, &where_).unwrap().expect("past grace refuses");
+        assert_eq!(r.status, 503);
+    }
+
+    #[test]
+    fn console_requests_answer_409_when_the_console_is_off() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        let (hub_key, hub_cert, _) = node(&root, 3, "hub");
+        let r = call(&mut st, &hub_key, &hub_cert, "GET", "/v1/console/requests", "", T0, 1);
+        assert_eq!(r.status, 409);
+        assert!(r.body.contains(CONSOLE_OFF));
     }
 
     #[test]

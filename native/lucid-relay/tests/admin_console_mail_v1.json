@@ -1,0 +1,1665 @@
+{
+ "version": 1,
+ "contract": "AC-1 revision 4",
+ "about": "Section 3.11 \"Header safety\" (I12, R3-M8). mailbox: a strict RFC 5321 Mailbox: ASCII dot-atom local part (atext and dots, no dot first, last or doubled, 1 to 64 bytes), one @, a domain of 2 or more labels of letters, digits and hyphens (1 to 63 bytes, no hyphen first or last; xn-- A-labels are checked as LDH only), no trailing dot, at most 254 bytes; anything else is bad-mailbox. header: every configured field and subject argument; a value holding U+0000 to U+001F, U+007F to U+009F, U+2028 or U+2029 is refused (code bad-mailbox for mailbox fields, null otherwise). fold: printable ASCII header text as \"Name: text\"; while a line is over 78 characters it breaks before the last space at index 78 or less (never the space right after \"Name:\"), else before the first space after, else the line stays whole; the space starts the next line; lines joined with CRLF. encoded_words: any other text as RFC 2047 \"=?UTF-8?B?<base64 with padding>?=\" words of whole characters, greedy, each word at most 75 characters and its line at most 78 (the first line includes \"Name: \"), joined with CRLF and a space. qp: the body with \\n line breaks to quoted-printable: bytes 33 to 126 except = literal, space and tab literal except as a hard line's last byte, every other byte =XX upper-case; before a token that would make the line longer than 75, the line ends with a soft break \"=\"; lines joined with CRLF, ending with CRLF. dot_stuff: a \".\" at the start of the data or right after CRLF gets one more (a bare LF starts no line). graph_path: the Graph sendMail mailbox as one path segment, every UTF-8 byte outside RFC 3986 unreserved percent-encoded upper-case. subjects: the 8.4 subjects filled with args, as the Subject header.",
+ "mailbox": [
+  {
+   "in": "alice@acme.example",
+   "ok": true
+  },
+  {
+   "in": "Alice.Wong@Acme.Example",
+   "ok": true
+  },
+  {
+   "in": "a.b-c+d@sub.acme.example",
+   "ok": true
+  },
+  {
+   "in": "o'brien@acme.example",
+   "ok": true
+  },
+  {
+   "in": "a/b?c#d%e@acme.example",
+   "ok": true
+  },
+  {
+   "in": "console@xn--bcher-kva.example",
+   "ok": true
+  },
+  {
+   "in": "x@a.bc",
+   "ok": true
+  },
+  {
+   "in": "\"quoted\"@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice(comment)@acme.example",
+   "ok": false
+  },
+  {
+   "in": "Alice <alice@acme.example>",
+   "ok": false
+  },
+  {
+   "in": "alice@acme..example",
+   "ok": false
+  },
+  {
+   "in": ".alice@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice.@acme.example",
+   "ok": false
+  },
+  {
+   "in": "al..ice@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice@-acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice@acme-.example",
+   "ok": false
+  },
+  {
+   "in": "alice@acme.example.",
+   "ok": false
+  },
+  {
+   "in": "alice@localhost",
+   "ok": false
+  },
+  {
+   "in": "alice@b\u00fccher.example",
+   "ok": false
+  },
+  {
+   "in": "\u00e4lice@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice@[203.0.113.7]",
+   "ok": false
+  },
+  {
+   "in": "alice@acme.example\r\nBcc: evil@attacker.example",
+   "ok": false
+  },
+  {
+   "in": "alice\u0000@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice@acme.example\u2028",
+   "ok": false
+  },
+  {
+   "in": "alice@@acme.example",
+   "ok": false
+  },
+  {
+   "in": "@acme.example",
+   "ok": false
+  },
+  {
+   "in": "alice@",
+   "ok": false
+  },
+  {
+   "in": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@acme.example",
+   "ok": true
+  },
+  {
+   "in": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@acme.example",
+   "ok": false
+  },
+  {
+   "in": "x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "ok": true
+  },
+  {
+   "in": "x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "ok": false
+  },
+  {
+   "in": "x@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example",
+   "ok": false
+  }
+ ],
+ "header": [
+  {
+   "field": "from",
+   "value": "console@acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "from",
+   "value": "console@acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "to",
+   "value": "alice@acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.host",
+   "value": "smtp.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.username",
+   "value": "console@acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "smtp.password",
+   "value": "s3cret-Pass word\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.tenant",
+   "value": "0b4a8f9e-1111-4222-8333-944455556666\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.clientId",
+   "value": "7c1e2d3f-aaaa-4bbb-8ccc-dddddddddddd\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.mailbox",
+   "value": "console@acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "graph.secret",
+   "value": "abc~DEF.123\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "licenseRequestTo",
+   "value": "licenses@publisher.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": "bad-mailbox"
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.invite:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:seated",
+   "value": "21\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-over:users",
+   "value": "20\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.seats-request:license id",
+   "value": "l_0123456789abcdef\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.upgrade-period:date",
+   "value": "2026-12-17\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:product",
+   "value": "Meeting Hub\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license:state words",
+   "value": "in grace\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.clock-uncertain:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.break-glass:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.attention:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  }
+ ],
+ "fold": [
+  {
+   "name": "Subject",
+   "in": "Test email from the Lucid Admin Console",
+   "out": "Subject: Test email from the Lucid Admin Console"
+  },
+  {
+   "name": "Subject",
+   "in": "Lucid Admin Console at admin-console.meeting-hub.operations.department.agency.example.gov: something needs your attention",
+   "out": "Subject: Lucid Admin Console at\r\n admin-console.meeting-hub.operations.department.agency.example.gov: something\r\n needs your attention"
+  },
+  {
+   "name": "Subject",
+   "in": "Meeting Hub on admin-console.meeting-hub.operations.department.agency.example.gov: 1021 people, 1000 seats",
+   "out": "Subject: Meeting Hub on\r\n admin-console.meeting-hub.operations.department.agency.example.gov: 1021\r\n people, 1000 seats"
+  },
+  {
+   "name": "Subject",
+   "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx and a tail after the long word",
+   "out": "Subject: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\n and a tail after the long word"
+  },
+  {
+   "name": "Subject",
+   "in": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "out": "Subject: yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+  },
+  {
+   "name": "From",
+   "in": "Lucid Admin Console <console@acme.example>",
+   "out": "From: Lucid Admin Console <console@acme.example>"
+  }
+ ],
+ "encoded_words": [
+  {
+   "name": "Subject",
+   "in": "Caf\u00e9 au lait",
+   "out": "Subject: =?UTF-8?B?Q2Fmw6kgYXUgbGFpdA==?="
+  },
+  {
+   "name": "Subject",
+   "in": "\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f\u5f20\u4f1f",
+   "out": "Subject: =?UTF-8?B?5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf?=\r\n =?UTF-8?B?5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg?=\r\n =?UTF-8?B?5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf?=\r\n =?UTF-8?B?5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg5Lyf5byg?=\r\n =?UTF-8?B?5Lyf?="
+  },
+  {
+   "name": "Subject",
+   "in": "\ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji \ud83d\ude00 emoji ",
+   "out": "Subject: =?UTF-8?B?8J+YgCBlbW9qaSDwn5iAIGVtb2ppIPCfmIAgZW1vamkg8J+YgCBlbW9q?=\r\n =?UTF-8?B?aSDwn5iAIGVtb2ppIPCfmIAgZW1vamkg8J+YgCBlbW9qaSDwn5iAIGVtb2pp?=\r\n =?UTF-8?B?IPCfmIAgZW1vamkg8J+YgCBlbW9qaSA=?="
+  },
+  {
+   "name": "From",
+   "in": "Z\u00fcrich Admin Console <console@acme.example>",
+   "out": "From: =?UTF-8?B?WsO8cmljaCBBZG1pbiBDb25zb2xlIDxjb25zb2xlQGFjbWUuZXhhbXBsZT4=?="
+  }
+ ],
+ "qp": [
+  {
+   "in": "This is a test from the Lucid Admin Console at meet-admin.acme.example. Email works.\n\nThis message was sent by the Lucid Admin Console at meet-admin.acme.example. It never asks for your password or a code.",
+   "out": "This is a test from the Lucid Admin Console at meet-admin.acme.example. Ema=\r\nil works.\r\n\r\nThis message was sent by the Lucid Admin Console at meet-admin.acme.example=\r\n. It never asks for your password or a code.\r\n"
+  },
+  {
+   "in": "A line with = signs = and a long run of words that goes past the seventy-six character limit for sure",
+   "out": "A line with =3D signs =3D and a long run of words that goes past the sevent=\r\ny-six character limit for sure\r\n"
+  },
+  {
+   "in": "trailing space \nand trailing tab\t\nend",
+   "out": "trailing space=20\r\nand trailing tab=09\r\nend\r\n"
+  },
+  {
+   "in": "Z\u00fcrich, S\u00e3o Paulo and \u5f20\u4f1f",
+   "out": "Z=C3=BCrich, S=C3=A3o Paulo and =E5=BC=A0=E4=BC=9F\r\n"
+  },
+  {
+   "in": "line one\n.\n.leading dot",
+   "out": "line one\r\n.\r\n.leading dot\r\n"
+  },
+  {
+   "in": "==============================",
+   "out": "=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=\r\n=3D=3D=3D=3D=3D\r\n"
+  },
+  {
+   "in": "",
+   "out": "\r\n"
+  }
+ ],
+ "dot_stuff": [
+  {
+   "in": ".start\r\nmid\r\n.\r\nend\r\n",
+   "out": "..start\r\nmid\r\n..\r\nend\r\n"
+  },
+  {
+   "in": "no dots here\r\n",
+   "out": "no dots here\r\n"
+  },
+  {
+   "in": "a\n.b\r\n.c\r\n",
+   "out": "a\n.b\r\n..c\r\n"
+  },
+  {
+   "in": "line one\r\n.\r\n.leading dot\r\n",
+   "out": "line one\r\n..\r\n..leading dot\r\n"
+  }
+ ],
+ "graph_path": [
+  {
+   "mailbox": "console@acme.example",
+   "segment": "console%40acme.example",
+   "urls": {
+    "commercial": "https://graph.microsoft.com/v1.0/users/console%40acme.example/sendMail",
+    "usgov": "https://graph.microsoft.us/v1.0/users/console%40acme.example/sendMail",
+    "usgov-dod": "https://dod-graph.microsoft.us/v1.0/users/console%40acme.example/sendMail"
+   }
+  },
+  {
+   "mailbox": "a/b@acme.example",
+   "segment": "a%2Fb%40acme.example",
+   "urls": {
+    "commercial": "https://graph.microsoft.com/v1.0/users/a%2Fb%40acme.example/sendMail",
+    "usgov": "https://graph.microsoft.us/v1.0/users/a%2Fb%40acme.example/sendMail",
+    "usgov-dod": "https://dod-graph.microsoft.us/v1.0/users/a%2Fb%40acme.example/sendMail"
+   }
+  },
+  {
+   "mailbox": "x?y#z%w@acme.example",
+   "segment": "x%3Fy%23z%25w%40acme.example",
+   "urls": {
+    "commercial": "https://graph.microsoft.com/v1.0/users/x%3Fy%23z%25w%40acme.example/sendMail",
+    "usgov": "https://graph.microsoft.us/v1.0/users/x%3Fy%23z%25w%40acme.example/sendMail",
+    "usgov-dod": "https://dod-graph.microsoft.us/v1.0/users/x%3Fy%23z%25w%40acme.example/sendMail"
+   }
+  },
+  {
+   "mailbox": "o'brien+mail@acme.example",
+   "segment": "o%27brien%2Bmail%40acme.example",
+   "urls": {
+    "commercial": "https://graph.microsoft.com/v1.0/users/o%27brien%2Bmail%40acme.example/sendMail",
+    "usgov": "https://graph.microsoft.us/v1.0/users/o%27brien%2Bmail%40acme.example/sendMail",
+    "usgov-dod": "https://dod-graph.microsoft.us/v1.0/users/o%27brien%2Bmail%40acme.example/sendMail"
+   }
+  }
+ ],
+ "subjects": [
+  {
+   "id": "mail.invite",
+   "args": {
+    "host": "meet-admin.acme.example"
+   },
+   "header": "Subject: Your invite to the Lucid Admin Console at meet-admin.acme.example"
+  },
+  {
+   "id": "mail.test",
+   "args": {},
+   "header": "Subject: Test email from the Lucid Admin Console"
+  },
+  {
+   "id": "mail.seats-over",
+   "args": {
+    "host": "meet-admin.acme.example",
+    "seated": "21",
+    "users": "20"
+   },
+   "header": "Subject: Meeting Hub on meet-admin.acme.example: 21 people, 20 seats"
+  },
+  {
+   "id": "mail.seats-request",
+   "args": {
+    "license id": "l_0123456789abcdef"
+   },
+   "header": "Subject: Meeting Hub seat request, license l_0123456789abcdef"
+  },
+  {
+   "id": "mail.upgrade-period",
+   "args": {
+    "host": "meet-admin.acme.example",
+    "date": "2026-12-17"
+   },
+   "header": "Subject: Meeting Hub on meet-admin.acme.example needs a license by 2026-12-17"
+  },
+  {
+   "id": "mail.license",
+   "args": {
+    "product": "Meeting Hub",
+    "host": "meet-admin.acme.example",
+    "state words": "in grace"
+   },
+   "header": "Subject: Meeting Hub license on meet-admin.acme.example: in grace"
+  },
+  {
+   "id": "mail.clock-uncertain",
+   "args": {
+    "host": "admin-console.meeting-hub.operations.department.agency.example.gov"
+   },
+   "header": "Subject: Meeting Hub on\r\n admin-console.meeting-hub.operations.department.agency.example.gov: confirm\r\n the relay's time"
+  },
+  {
+   "id": "mail.break-glass",
+   "args": {
+    "host": "admin-console.meeting-hub.operations.department.agency.example.gov"
+   },
+   "header": "Subject: Break-glass sign-in on\r\n admin-console.meeting-hub.operations.department.agency.example.gov"
+  },
+  {
+   "id": "mail.attention",
+   "args": {
+    "host": "admin-console.meeting-hub.operations.department.agency.example.gov"
+   },
+   "header": "Subject: Lucid Admin Console at\r\n admin-console.meeting-hub.operations.department.agency.example.gov: something\r\n needs your attention"
+  }
+ ]
+}

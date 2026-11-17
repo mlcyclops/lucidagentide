@@ -1,0 +1,912 @@
+{
+  "about": "AC-1 I1 license products (contract 2.4), written by remote-spoke/scripts/license-products-vectors.ts; test keys only",
+  "now": 1800000000,
+  "devPub": "MCowBQYDK2VwAyEAKMjh4ZA4r6hWel4MydnkGb+igIiSWeiAnZFERJRQ/gw=",
+  "devPubPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKMjh4ZA4r6hWel4MydnkGb+igIiSWeiAnZFERJRQ/gw=\n-----END PUBLIC KEY-----\n",
+  "spokesRoot": "n_feff5e853705a6894fc15c01bdaa5523",
+  "spokesRootPub": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/2OGN8t2U92Xa9JZiSlQxTodcRBl\nbXgtkRajpjT7zYl2hq1qds4kTofR1aELVz4zeTTK5J8tPsIVs9tCP5dp/Q==\n-----END PUBLIC KEY-----\n",
+  "meetRootCerts": [
+    {
+      "name": "root A",
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJAATAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgW5w80Tebg7r\nP3lzTQPfJr+S495g20IExqgs4UUoyvYfFZmfOpTaZ6srrj0X6EwTcdpcw7+YV/FN\nCk/f46j/2aMjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIhAMyctX9oqTpwqpzqpeQa4e7hTwhMFY2orIeiaLtu/V5y\nAiBJFlHoB5nYCDJ/O+iMl3SgOt2aSOymP26VYJz51gxT+w==\n-----END CERTIFICATE-----\n",
+      "id": "m_76eb5ad60ebd0f7e5b1aed0f77f107af"
+    },
+    {
+      "name": "root B",
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJAAjAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQjAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBCMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwibQeRN7zIfz\nH4ugQzI9ceMo7NIyVdml3Zsv059Aobkv42k9IVCXghjwuWpIfPGSQlGB6GQ1yIqh\nTtTjxwWty6MjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIgBXUK3B7/MGKam51Ka+Ttya5lAxczq0Ae/PMZdCht5gYC\nIQCgw2fW+qc+F0bXDqXED2fKQrvf0qvhU5BXERWnHVyyyw==\n-----END CERTIFICATE-----\n",
+      "id": "m_7a28d27d457281e7e491b64578d22c89"
+    }
+  ],
+  "clientCas": [
+    {
+      "name": "zero",
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBQzCB6aADAgECAgJAAzAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBoxGDAWBgNVBAMM\nD01lZXQgSXNzdWluZyBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMKLqHG4\nC0YPW55tzuBcg00McKwZ4F2M2dz29tuoT8L895AOxBUsENDgLG5Nvv48oKmq4oAV\n+3GASFIbOoK0PpejIzAhMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEG\nMAoGCCqGSM49BAMCA0kAMEYCIQCbbUT2Kt+a5gf86wgBcGU6h6DHjcTGtExCJY81\ndtjjBQIhAPqv1oSncbOlXOQlrSZtV1XD0Syo8q0BlhkwZpSBlN68\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJABDAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqccmOf4RB1hL\nFtIkZVOfR9XBXrxANq2krzk55GoRjS4V2ZeuPvnnPi48OFD8ostVXS+H9/e1U8pc\nmYAmj4PVYKMjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIhAJDK3eDRKwy5wEYcABFaXpFmCM1s4NoW5FyG4IYzl18i\nAiAY8kxPPS4mo7dno6+9vt7Zkyj1hvCJ5UZFLTGUANJgeA==\n-----END CERTIFICATE-----\n",
+      "roots": []
+    },
+    {
+      "name": "one",
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJAATAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgW5w80Tebg7r\nP3lzTQPfJr+S495g20IExqgs4UUoyvYfFZmfOpTaZ6srrj0X6EwTcdpcw7+YV/FN\nCk/f46j/2aMjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIhAMyctX9oqTpwqpzqpeQa4e7hTwhMFY2orIeiaLtu/V5y\nAiBJFlHoB5nYCDJ/O+iMl3SgOt2aSOymP26VYJz51gxT+w==\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIBQzCB6aADAgECAgJAAzAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBoxGDAWBgNVBAMM\nD01lZXQgSXNzdWluZyBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMKLqHG4\nC0YPW55tzuBcg00McKwZ4F2M2dz29tuoT8L895AOxBUsENDgLG5Nvv48oKmq4oAV\n+3GASFIbOoK0PpejIzAhMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEG\nMAoGCCqGSM49BAMCA0kAMEYCIQCbbUT2Kt+a5gf86wgBcGU6h6DHjcTGtExCJY81\ndtjjBQIhAPqv1oSncbOlXOQlrSZtV1XD0Syo8q0BlhkwZpSBlN68\n-----END CERTIFICATE-----\n",
+      "roots": [
+        "m_76eb5ad60ebd0f7e5b1aed0f77f107af"
+      ]
+    },
+    {
+      "name": "two",
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJAATAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQTAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgW5w80Tebg7r\nP3lzTQPfJr+S495g20IExqgs4UUoyvYfFZmfOpTaZ6srrj0X6EwTcdpcw7+YV/FN\nCk/f46j/2aMjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIhAMyctX9oqTpwqpzqpeQa4e7hTwhMFY2orIeiaLtu/V5y\nAiBJFlHoB5nYCDJ/O+iMl3SgOt2aSOymP26VYJz51gxT+w==\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nMIIBPjCB5aADAgECAgJAAjAKBggqhkjOPQQDAjAWMRQwEgYDVQQDDAtNZWV0IFJv\nb3QgQjAeFw0yNjEyMTYwODAwMDBaFw0zNzAxMTIwODAwMDBaMBYxFDASBgNVBAMM\nC01lZXQgUm9vdCBCMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwibQeRN7zIfz\nH4ugQzI9ceMo7NIyVdml3Zsv059Aobkv42k9IVCXghjwuWpIfPGSQlGB6GQ1yIqh\nTtTjxwWty6MjMCEwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYI\nKoZIzj0EAwIDSAAwRQIgBXUK3B7/MGKam51Ka+Ttya5lAxczq0Ae/PMZdCht5gYC\nIQCgw2fW+qc+F0bXDqXED2fKQrvf0qvhU5BXERWnHVyyyw==\n-----END CERTIFICATE-----\n",
+      "roots": [
+        "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+        "m_7a28d27d457281e7e491b64578d22c89"
+      ]
+    }
+  ],
+  "publisherCases": [
+    {
+      "name": "spokes standard by the publisher",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1MDU2MDAsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImdyYWNlRGF5cyI6MTQsImlhdCI6MTc5OTkxMzYwMCwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIFJvYm90aWNzIiwicmVsYXlzIjoxLCJyb290Ijoibl9mZWZmNWU4NTM3MDVhNjg5NGZjMTVjMDFiZGFhNTUyMyIsInR5cCI6Imx1Y2lkLXJlbGF5LWxpY2Vuc2UiLCJ1c2VycyI6MjAsInYiOjJ9._vT3HLe66whI5-DcFY_jJmqb76gE2ae_6fZsrFqC0-mG2fTcTnxOBhMIII6U4SYUCWC_Zh4P2QPksuIV5tbJBw",
+      "product": "spokes",
+      "edition": "standard",
+      "signer": "stand-in",
+      "developmentOnly": {
+        "ok": false,
+        "reason": "license is not signed by the development key"
+      }
+    },
+    {
+      "name": "spokes enterprise by the publisher",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTgwMjUwNTYwMCwiZmVhdHVyZXMiOlsicmVsYXkiLCJzcG9rZXMiXSwiZ3JhY2VEYXlzIjoxNCwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBhMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjIsInJvb3QiOiJuX2ZlZmY1ZTg1MzcwNWE2ODk0ZmMxNWMwMWJkYWE1NTIzIiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjo1MDAsInYiOjJ9.3lzQKc72Chtq4M46i18FmIQMLNYb-SncUkQHwLGQ7UZdQ8HnMWPfz4d9OoqV_AIsjxu9Mij-Sx4N13sINKTWAg",
+      "product": "spokes",
+      "edition": "enterprise",
+      "signer": "stand-in",
+      "developmentOnly": {
+        "ok": false,
+        "reason": "license is not signed by the development key"
+      }
+    },
+    {
+      "name": "meet standard by the publisher",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MzE0NDk2MDAsImZlYXR1cmVzIjpbIm1lZXQiXSwiZ3JhY2VEYXlzIjoxNCwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBiMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjEsInJvb3QiOiJtXzc2ZWI1YWQ2MGViZDBmN2U1YjFhZWQwZjc3ZjEwN2FmIiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjoyMCwidiI6Mn0.mowGINLRLxYglJwt2rRqy0WII778r__Exu45vWVUDiaxsgrPRVbklAxOVZdmljDiqE2t4ylvqxcJHaWhMfUDBw",
+      "product": "meet",
+      "edition": "standard",
+      "signer": "stand-in",
+      "developmentOnly": {
+        "ok": false,
+        "reason": "license is not signed by the development key"
+      }
+    },
+    {
+      "name": "meet enterprise by the publisher",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTgzMTQ0OTYwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE3OTk5MTM2MDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.Aeye3dkPDxh2d2Wib4PdBD6pHCNE1Jhf-tTttPgwBy512y-FOw99jHbirNA-ZhvGqymPiUceHm9cug0TYE4XAg",
+      "product": "meet",
+      "edition": "enterprise",
+      "signer": "stand-in",
+      "developmentOnly": {
+        "ok": false,
+        "reason": "license is not signed by the development key"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "Remote Spokes",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1MDU2MDAsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImdyYWNlRGF5cyI6MTQsImlhdCI6MTc5OTkxMzYwMCwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIFJvYm90aWNzIiwicmVsYXlzIjoxLCJyb290Ijoibl9mZWZmNWU4NTM3MDVhNjg5NGZjMTVjMDFiZGFhNTUyMyIsInR5cCI6Imx1Y2lkLXJlbGF5LWxpY2Vuc2UiLCJ1c2VycyI6NSwidiI6Mn0.3Mw7L20XRc8ii43AnCPZO9muNxraig3SXTDfrTzr3nj16lNCEL99a7yUsH53oHGnBG3fffXau8VUfE-PgkBUDA",
+      "spokes": {
+        "ok": true,
+        "dev": true,
+        "product": "spokes",
+        "id": "l_00000000000000a1",
+        "root": "n_feff5e853705a6894fc15c01bdaa5523",
+        "edition": "standard",
+        "users": 5,
+        "relays": 1,
+        "exp": 1802505600,
+        "graceDays": 14,
+        "state": "valid",
+        "daysLeft": 29
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        },
+        "one": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        },
+        "two": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": true,
+          "dev": true,
+          "product": "spokes",
+          "id": "l_00000000000000a1",
+          "root": "n_feff5e853705a6894fc15c01bdaa5523",
+          "edition": "standard",
+          "users": 5,
+          "relays": 1,
+          "exp": 1802505600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 29
+        },
+        "meet": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        }
+      },
+      "beforeAc1": null
+    },
+    {
+      "name": "Remote Spokes, features in the other order",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbInNwb2tlcyIsInJlbGF5Il0sImlhdCI6MTc5OTkxMzYwMCwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzEiLCJvcmciOiJBY21lIFJvYm90aWNzIiwicmVsYXlzIjoxLCJyb290Ijoibl9mZWZmNWU4NTM3MDVhNjg5NGZjMTVjMDFiZGFhNTUyMyIsInR5cCI6Imx1Y2lkLXJlbGF5LWxpY2Vuc2UiLCJ1c2VycyI6NSwidiI6Mn0.MFix6NneVYj4bt-wk6lBvphWl9wxdhQAC1BiCstDM8eBDFOjNNgEp82ViwC9rzx5JdyiMNQt2BCxYtC46keYAQ",
+      "spokes": {
+        "ok": true,
+        "dev": true,
+        "product": "spokes",
+        "id": "l_00000000000000c1",
+        "root": "n_feff5e853705a6894fc15c01bdaa5523",
+        "edition": "standard",
+        "users": 5,
+        "relays": 1,
+        "exp": 1802592000,
+        "graceDays": 14,
+        "state": "valid",
+        "daysLeft": 30
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        },
+        "one": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        },
+        "two": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": true,
+          "dev": true,
+          "product": "spokes",
+          "id": "l_00000000000000c1",
+          "root": "n_feff5e853705a6894fc15c01bdaa5523",
+          "edition": "standard",
+          "users": 5,
+          "relays": 1,
+          "exp": 1802592000,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 30
+        },
+        "meet": {
+          "ok": false,
+          "reason": "this license is for Remote Spokes, not Meeting Hub"
+        }
+      },
+      "beforeAc1": null
+    },
+    {
+      "name": "Meeting Hub, root A",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTgzMTQ0OTYwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE3OTk5MTM2MDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.ZSTfNI4jRemxFxOmdcwWu2W2UwdpjB9puG1rAYSZd-f9TK0BRC_Psx8zAx5ZyqJEOGfFVQcV2_E5uWtd-1WEDA",
+      "spokes": {
+        "ok": false,
+        "reason": "this license is for Meeting Hub, not Remote Spokes"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this relay's client_ca has no root certificate"
+        },
+        "one": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1831449600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 364
+        },
+        "two": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1831449600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 364
+        }
+      },
+      "meetStanding": {
+        "state": "valid",
+        "graceEnd": 1832659200,
+        "users": 500
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "this license is for Meeting Hub, not Remote Spokes"
+        },
+        "meet": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1831449600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 364
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "Meeting Hub, root B",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MzE0NDk2MDAsImZlYXR1cmVzIjpbIm1lZXQiXSwiZ3JhY2VEYXlzIjoxNCwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBiMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjEsInJvb3QiOiJtXzdhMjhkMjdkNDU3MjgxZTdlNDkxYjY0NTc4ZDIyYzg5IiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjoyMCwidiI6Mn0.FXAw1w1kGzGkizR9y1drUAfymgYlbBsFsBsPoX3iw3hK3s9ZX8J3cc1eYUWVfn-3KJW-2-IROBiDmb6nH0wVBQ",
+      "spokes": {
+        "ok": false,
+        "reason": "this license is for Meeting Hub, not Remote Spokes"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this relay's client_ca has no root certificate"
+        },
+        "one": {
+          "ok": false,
+          "reason": "license is for another root (m_7a28d27d457281e7e491b64578d22c89, this relay trusts m_76eb5ad60ebd0f7e5b1aed0f77f107af)"
+        },
+        "two": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_7a28d27d457281e7e491b64578d22c89",
+          "edition": "standard",
+          "users": 20,
+          "relays": 1,
+          "exp": 1831449600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 364
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "this license is for Meeting Hub, not Remote Spokes"
+        },
+        "meet": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_7a28d27d457281e7e491b64578d22c89",
+          "edition": "standard",
+          "users": 20,
+          "relays": 1,
+          "exp": 1831449600,
+          "graceDays": 14,
+          "state": "valid",
+          "daysLeft": 364
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "Meeting Hub in grace",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTc5OTEzNjAwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE3OTgyNzIwMDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.-uY_AXjpW4WDH6GF16r6giNSMVhwbTJ2L29Kg8Pu4uUgvfas4DDkEnMYVdiSmkWwdOucXXFNCQ8ZVQCDMJ0xCw",
+      "spokes": {
+        "ok": false,
+        "reason": "this license is for Meeting Hub, not Remote Spokes"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this relay's client_ca has no root certificate"
+        },
+        "one": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1799136000,
+          "graceDays": 14,
+          "state": "grace",
+          "daysLeft": 4
+        },
+        "two": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1799136000,
+          "graceDays": 14,
+          "state": "grace",
+          "daysLeft": 4
+        }
+      },
+      "meetStanding": {
+        "state": "grace",
+        "graceEnd": 1800345600,
+        "users": 500
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "this license is for Meeting Hub, not Remote Spokes"
+        },
+        "meet": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1799136000,
+          "graceDays": 14,
+          "state": "grace",
+          "daysLeft": 4
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "Meeting Hub expired",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTc5ODI3MjAwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE3OTc0MDgwMDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.SauafHbsQSSm3kNXFyLkSVN4orvPKMiFiDBECioRgoIT4VXMT85QuMSpUDBWJr53d9ARnWYAutMO0Whf7poaCw",
+      "spokes": {
+        "ok": false,
+        "reason": "this license is for Meeting Hub, not Remote Spokes"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this relay's client_ca has no root certificate"
+        },
+        "one": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1798272000,
+          "graceDays": 14,
+          "state": "expired",
+          "daysLeft": 0
+        },
+        "two": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1798272000,
+          "graceDays": 14,
+          "state": "expired",
+          "daysLeft": 0
+        }
+      },
+      "meetStanding": {
+        "state": "expired",
+        "graceEnd": 1799481600,
+        "users": 500
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "this license is for Meeting Hub, not Remote Spokes"
+        },
+        "meet": {
+          "ok": true,
+          "dev": true,
+          "product": "meet",
+          "id": "l_00000000000000b1",
+          "root": "m_76eb5ad60ebd0f7e5b1aed0f77f107af",
+          "edition": "enterprise",
+          "users": 500,
+          "relays": 2,
+          "exp": 1798272000,
+          "graceDays": 14,
+          "state": "expired",
+          "daysLeft": 0
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "Meeting Hub issued tomorrow",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTgzMTYyMjQwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE4MDAwODY0MDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.065VVkqBkRYCgrOiURZ-3vETnGegOuXP_w1wFghmaaz38jpZkGaTdoKdr7lZoR8Uxdj3cfU2j6zk9L-QfvwKBA",
+      "spokes": {
+        "ok": false,
+        "reason": "this license is for Meeting Hub, not Remote Spokes"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "this relay's client_ca has no root certificate"
+        },
+        "one": {
+          "ok": false,
+          "reason": "license is not valid yet"
+        },
+        "two": {
+          "ok": false,
+          "reason": "license is not valid yet"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "this license is for Meeting Hub, not Remote Spokes"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not valid yet"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "Meeting Hub by another development key",
+      "token": "eyJlZGl0aW9uIjoiZW50ZXJwcmlzZSIsImV4cCI6MTgzMTQ0OTYwMCwiZmVhdHVyZXMiOlsibWVldCJdLCJncmFjZURheXMiOjE0LCJpYXQiOjE3OTk5MTM2MDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGIxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6Miwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUwMCwidiI6Mn0.5kIplMrvdLyaAVEu1A9hGM-MH-VUOx1Dr5kCcJ9pF__hiO6Ml7adVYN7ULPpZDu343YXczGe8DC8MHeJ47AfCg",
+      "spokes": {
+        "ok": false,
+        "reason": "license is not signed by the license publisher"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "one": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "two": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the development key"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the development key"
+        }
+      },
+      "beforeAc1": "license is not signed by the license publisher"
+    },
+    {
+      "name": "features meet and spokes",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbIm1lZXQiLCJzcG9rZXMiXSwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBjMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjEsInJvb3QiOiJtXzc2ZWI1YWQ2MGViZDBmN2U1YjFhZWQwZjc3ZjEwN2FmIiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjo1LCJ2IjoyfQ.JYH7-CwdteusN5kG_EkSIFZEAinllbN58ZWqNAEhQnb0p6bsmPaj_kS0Ktb1G_hdY5fyCEOmjq8Q1XqT0jc7DA",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "features meet twice",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbIm1lZXQiLCJtZWV0Il0sImlhdCI6MTc5OTkxMzYwMCwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzEiLCJvcmciOiJBY21lIFJvYm90aWNzIiwicmVsYXlzIjoxLCJyb290IjoibV83NmViNWFkNjBlYmQwZjdlNWIxYWVkMGY3N2YxMDdhZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWxpY2Vuc2UiLCJ1c2VycyI6NSwidiI6Mn0._t3M9qTtsmrwNk3y_86wLilqXyq9FdyBQIpiRxVKHzPkTbfuWtAQrComfyBA6xw1ey0NuECTgML_15MqW8CpBw",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "no features",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbXSwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBjMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjEsInJvb3QiOiJtXzc2ZWI1YWQ2MGViZDBmN2U1YjFhZWQwZjc3ZjEwN2FmIiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjo1LCJ2IjoyfQ.G99BoIiy1H27gqb6UrRpDj-c1Q5pyH3fVTlSgbBjYtPlkUrcf4gxJl1tLom-oSz_UboCtMZyyq-FAb-PyBTMDQ",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "features relay, spokes and meet",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIiwibWVldCJdLCJpYXQiOjE3OTk5MTM2MDAsImlkIjoibF8wMDAwMDAwMDAwMDAwMGMxIiwib3JnIjoiQWNtZSBSb2JvdGljcyIsInJlbGF5cyI6MSwicm9vdCI6Im1fNzZlYjVhZDYwZWJkMGY3ZTViMWFlZDBmNzdmMTA3YWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwidXNlcnMiOjUsInYiOjJ9.YpcKVEu9nwHoRlSQFcJYXKgI9SIGEJjy1TKU_E9X3O7waWY6bjCy96rV3TEpjuH7lKndJOJCN6GnzPkgvUfDBA",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: features must be relay and spokes (Remote Spokes) or meet (Meeting Hub)"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    },
+    {
+      "name": "meet with an org root",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk5OTEzNjAwLCJpZCI6ImxfMDAwMDAwMDAwMDAwMDBjMSIsIm9yZyI6IkFjbWUgUm9ib3RpY3MiLCJyZWxheXMiOjEsInJvb3QiOiJuX2ZlZmY1ZTg1MzcwNWE2ODk0ZmMxNWMwMWJkYWE1NTIzIiwidHlwIjoibHVjaWQtcmVsYXktbGljZW5zZSIsInVzZXJzIjo1LCJ2IjoyfQ.Ld48iJYYcnB5U6LhnZuw159c-YWYNEtzTmufo64HnwK6ZHVo0Sm2cUSIU65dxxh8T4d2GAzQCELuUGcQLlFUAA",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: root must be a Meet root id (m_...)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: root must be a Meet root id (m_...)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: root must be a Meet root id (m_...)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: root must be a Meet root id (m_...)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: root must be a Meet root id (m_...)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: root must be a Meet root id (m_...)"
+        }
+      },
+      "beforeAc1": "malformed license: features must be relay and spokes"
+    },
+    {
+      "name": "relay and spokes with a Meet root",
+      "token": "eyJlZGl0aW9uIjoic3RhbmRhcmQiLCJleHAiOjE4MDI1OTIwMDAsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5OTkxMzYwMCwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzEiLCJvcmciOiJBY21lIFJvYm90aWNzIiwicmVsYXlzIjoxLCJyb290IjoibV83NmViNWFkNjBlYmQwZjdlNWIxYWVkMGY3N2YxMDdhZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWxpY2Vuc2UiLCJ1c2VycyI6NSwidiI6Mn0.E0qIfM7UCXVilXz78tOuh4gybMVaaOHZC4q8WlgfQPlZ7NKTgV_PC68j-n9R1IGpkoW8wSCigTZcp66KTFAZAw",
+      "spokes": {
+        "ok": false,
+        "reason": "malformed license: root must be an org root node id (n_...)"
+      },
+      "meet": {
+        "zero": {
+          "ok": false,
+          "reason": "malformed license: root must be an org root node id (n_...)"
+        },
+        "one": {
+          "ok": false,
+          "reason": "malformed license: root must be an org root node id (n_...)"
+        },
+        "two": {
+          "ok": false,
+          "reason": "malformed license: root must be an org root node id (n_...)"
+        }
+      },
+      "meetStanding": {
+        "state": "none",
+        "graceEnd": null,
+        "users": 0
+      },
+      "production": {
+        "spokes": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "license is not signed by the license publisher"
+        }
+      },
+      "developmentOnly": {
+        "spokes": {
+          "ok": false,
+          "reason": "malformed license: root must be an org root node id (n_...)"
+        },
+        "meet": {
+          "ok": false,
+          "reason": "malformed license: root must be an org root node id (n_...)"
+        }
+      },
+      "beforeAc1": "malformed license: root must be an org root node id (n_...)"
+    }
+  ]
+}

@@ -21,6 +21,10 @@ const CRL_WARN_DAYS: i64 = 10;
 const SIGNER_CRL_WARN_DAYS: i64 = 3;
 const SIGNER_WARN_DAYS: i64 = 30;
 const RELEASES_FILE: &str = "releases.json";
+/// AC-1 4.9: every publication with the minimums it put in force (for history and the N4 rule).
+const RELEASE_HISTORY_FILE: &str = "release-history.json";
+const RELEASE_HISTORY_KEEP: usize = 50;
+pub const RELEASE_MINIMUM_TOO_NEW: &str = "A minimum version cannot be newer than a release this relay has published.";
 const PLATFORMS: [&str; 2] = ["windows", "macos"];
 const NOTES_MAX: usize = 4000;
 const INSTALLER_MAX: i64 = 4 << 30;
@@ -320,7 +324,24 @@ impl Relay {
         };
         let signer_changed = self.store_signer_crls(pj::s(&answer, "crl_pem").as_bytes(), true);
         let root_changed = self.store_root_crl(answer.get("root_crl_pem"));
+        if signer_changed || root_changed {
+            self.hub.console_revoked(&self.revoked_serials());
+        }
         signer_changed || root_changed
+    }
+
+    /// AC-1 3.2: every serial a CRL this relay holds lists (the configured `crl`, else the bundle and its root and
+    /// signer parts).
+    pub fn revoked_serials(&self) -> Vec<String> {
+        let mut files: Vec<std::path::PathBuf> = self.active_crl_path().into_iter().collect();
+        if let Some((root_part, signer_part)) = crl_parts(&self.settings) {
+            files.push(root_part);
+            files.push(signer_part);
+        }
+        let mut out: Vec<String> = files.iter().flat_map(|p| crate::meet_tls::crls_in(&read_bytes(p))).flat_map(|c| c.serials).map(|s| m::serial(&s)).filter(|s| !s.is_empty()).collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     fn active_crl_path(&self) -> Option<std::path::PathBuf> {
@@ -449,6 +470,8 @@ impl Relay {
         serials.sort();
         serials.dedup();
         let dropped = self.hub.drop_serials(&serials);
+        // AC-1 3.2 and 3.8: anchors latched and `meet.revoke` requests observed from the CRL's serials
+        self.hub.console_revoked(&serials);
         log_info(&format!("CRL pushed by {}: {} revoked, {dropped} dropped", who.principal, serials.len()));
         Ok(obj([("ok", Value::Bool(true)), ("revoked", Value::from(serials.len())), ("dropped", Value::from(dropped))]))
     }
@@ -587,14 +610,139 @@ impl Relay {
         }
     }
 
+    /// AC-1 4.9 history: every publication `{version, ios, minimum (in force after it), published (unix s)}`, oldest
+    /// first, at most RELEASE_HISTORY_KEEP.
+    pub fn release_history(&self) -> Vec<Obj> {
+        let Some(path) = m::state_file(&self.settings, RELEASE_HISTORY_FILE) else { return Vec::new() };
+        match std::fs::read(&path).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()) {
+            Some(Value::Array(a)) => a.into_iter().filter_map(|v| v.as_object().cloned()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn history_append(&self, manifest: &Obj, in_force: &Obj) {
+        let Some(path) = m::state_file(&self.settings, RELEASE_HISTORY_FILE) else { return };
+        let mut rows = self.release_history();
+        let ios = manifest.get("ios").and_then(Value::as_object).map(|i| pj::s(i, "version")).unwrap_or_default();
+        rows.push(obj([
+            ("version", Value::from(pj::s(manifest, "version"))),
+            ("ios", Value::from(ios)),
+            ("minimum", Value::Object(in_force.clone())),
+            ("published", Value::from(pj::now().floor() as i64)),
+        ]));
+        let skip = rows.len().saturating_sub(RELEASE_HISTORY_KEEP);
+        let rows: Vec<Value> = rows.into_iter().skip(skip).map(Value::Object).collect();
+        if let Err(e) = write_atomic(&path, pj::dumps_indent(&Value::Array(rows), 1).as_bytes()) {
+            log_warn(&format!("{RELEASE_HISTORY_FILE} cannot be written: {e}"));
+        }
+    }
+
+    /// The last 10 publications for the console, newest first, each with `until` (when its minimum stopped
+    /// applying: the next publication's time, null for the one in force).
+    pub fn release_history_view(&self) -> Vec<Value> {
+        let rows = self.release_history();
+        let mut out: Vec<Value> = Vec::new();
+        for (i, r) in rows.iter().enumerate() {
+            let until = rows.get(i + 1).and_then(|n| n.get("published").cloned()).unwrap_or(Value::Null);
+            out.push(Value::Object(obj([
+                ("version", r.get("version").cloned().unwrap_or(Value::Null)),
+                ("minimum", r.get("minimum").cloned().unwrap_or(Value::Null)),
+                ("published", r.get("published").cloned().unwrap_or(Value::Null)),
+                ("until", until),
+            ])));
+        }
+        out.reverse();
+        out.truncate(10);
+        out
+    }
+
+    /// H6: `minimum.hub` not above the release's own version nor the newest this relay published; `minimum.ios` not
+    /// above the release's iOS version nor the newest iOS version published.
+    pub fn release_minimum_check(&self, manifest: &Obj) -> R<()> {
+        let minimum = manifest.get("minimum").and_then(Value::as_object).cloned().unwrap_or_default();
+        let history = self.release_history();
+        let current = self.release();
+        let newest = |field: &dyn Fn(&Obj) -> String| -> Option<Vec<u128>> {
+            history.iter().chain(std::iter::once(&current)).map(field).filter(|v| !v.is_empty()).map(|v| m::version_key(&v)).max()
+        };
+        let too_new = || Err(E::Bad(RELEASE_MINIMUM_TOO_NEW.into()));
+        if let Some(hub) = minimum.get("hub").and_then(Value::as_str) {
+            let key = m::version_key(hub);
+            let own = m::version_key(&pj::s(manifest, "version"));
+            let top = newest(&|o: &Obj| pj::s(o, "version")).map(|n| n.max(own.clone())).unwrap_or(own.clone());
+            if key > own || key > top {
+                return too_new();
+            }
+        }
+        if let Some(ios) = minimum.get("ios").and_then(Value::as_str) {
+            let key = m::version_key(ios);
+            let own = manifest.get("ios").and_then(Value::as_object).map(|i| pj::s(i, "version")).filter(|v| !v.is_empty()).map(|v| m::version_key(&v));
+            let published = newest(&|o: &Obj| match o.get("ios") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Object(i)) => pj::s(i, "version"),
+                _ => String::new(),
+            });
+            let top = match (&own, published) {
+                (Some(a), Some(b)) => Some(a.clone().max(b)),
+                (Some(a), None) => Some(a.clone()),
+                (None, b) => b,
+            };
+            if own.as_ref().map(|o| key > *o).unwrap_or(false) || top.map(|t| key > t).unwrap_or(true) {
+                return too_new();
+            }
+        }
+        Ok(())
+    }
+
+    /// N4: whether one admin may publish `manifest`: for every app, the minimum in force after it equals the one in
+    /// force now, or it goes up to exactly the value a publication in the last 24 hours lowered from.
+    pub fn release_single_admin(&self, manifest: &Obj) -> bool {
+        let now_in_force = self.minimums(&self.release());
+        let next = self.minimums(manifest);
+        let history = self.release_history();
+        let cut = pj::now() as i64 - 86_400;
+        for app in m::GATED_APPS {
+            let (a, b) = (pj::s(&now_in_force, app), pj::s(&next, app));
+            if a == b {
+                continue;
+            }
+            let (ka, kb) = (if a.is_empty() { vec![0] } else { m::version_key(&a) }, if b.is_empty() { vec![0] } else { m::version_key(&b) });
+            if kb <= ka {
+                return false;
+            }
+            let lowered_from = history.windows(2).any(|w| {
+                let at = pj::as_int(w[1].get("published")).unwrap_or(0);
+                let before = w[0].get("minimum").and_then(Value::as_object).map(|o| pj::s(o, app)).unwrap_or_default();
+                let after = w[1].get("minimum").and_then(Value::as_object).map(|o| pj::s(o, app)).unwrap_or_default();
+                let lowered = (if after.is_empty() { vec![0] } else { m::version_key(&after) }) < (if before.is_empty() { vec![0] } else { m::version_key(&before) });
+                at >= cut && lowered && before == b
+            });
+            if !lowered_from {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The manifest an admin's body describes, as set_release would publish it (the console's dry run).
+    pub fn release_preview(&self, body: &Obj) -> R<Obj> {
+        let manifest = release_manifest(body)?;
+        self.release_minimum_check(&manifest)?;
+        Ok(manifest)
+    }
+
     /// POST /v1/admin/release: the latest release, which every Hub reads from /v1/version.
     pub fn set_release(&self, session: &str, who: &Identity, body: &Obj) -> R<Obj> {
         self.hub.check_admin(session, who)?;
         let Some(path) = m::state_file(&self.settings, RELEASES_FILE) else { return Err(E::Unavailable("this relay has no state folder to keep releases in".into())) };
         let manifest = release_manifest(body)?;
+        // AC-1 H6: no minimum above the release itself or above what this relay has published
+        self.release_minimum_check(&manifest)?;
+        let in_force = self.minimums(&manifest);
         {
             let _g = self.files.lock();
             write_atomic(&path, pj::dumps_indent(&Value::Object(manifest.clone()), 1).as_bytes()).map_err(|e| E::Internal(e.to_string()))?;
+            self.history_append(&manifest, &in_force);
         }
         let minimum = manifest.get("minimum").and_then(Value::as_object).cloned().unwrap_or_default();
         let mut platforms: Vec<String> = manifest.get("files").and_then(Value::as_object).map(|f| f.keys().cloned().collect()).unwrap_or_default();
@@ -650,7 +798,7 @@ impl Relay {
 
     /// outdated: `{app, current, minimum, release}` when the caller's app is older than the minimum for it.
     pub fn outdated(&self, who: &Identity, client: &Obj) -> Option<Obj> {
-        if who.seed || who.console {
+        if who.seed || who.is_console() {
             return None;
         }
         if self.settings.version_exempt.iter().any(|p| p.trim().to_lowercase() == who.principal) {

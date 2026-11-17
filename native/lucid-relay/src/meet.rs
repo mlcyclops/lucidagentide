@@ -3,7 +3,7 @@
 // json.dumps writes it, crl.pem with its root and signer parts, releases.json, link-reports.log), mutual TLS that
 // requires a client certificate from the Meet CA and checks the CRL bundle, the identity read from the client
 // certificate (CN, email SAN, device id URI, OU label), every route with the same status codes, JSON fields, error
-// strings, limits and timeouts, the signer hand-off over mutual TLS, the /v1/console/* routes and the same log lines
+// strings, limits and timeouts, the signer hand-off over mutual TLS, the Admin Console's routes and the same log lines
 // (`%(asctime)s %(levelname)s %(message)s` on stderr). One thread per connection and one lock for all state, as the
 // Python relay (ThreadingHTTPServer, Hub.cond), so a long-poll holds its connection exactly as there.
 //
@@ -214,7 +214,16 @@ pub struct Settings {
     pub signer_ca: String,
     pub files_secret_file: String,
     pub files_base: String,
+    /// AC-1 (contract 3.1): the Admin Console's own port (0 = off), the host name browsers reach it by, its publicly
+    /// trusted certificate and key, the networks it answers (required when on, no default), the relay admin who
+    /// signs in first (required until bootstrap), and the license file (2.4; "" = state_dir/license.lic).
+    pub console_port: Value,
+    pub console_public: String,
+    pub console_cert: String,
+    pub console_key: String,
     pub console_sources: Vec<String>,
+    pub console_first_admin: String,
+    pub license: String,
     pub files_power: Obj,
     pub min_client: Obj,
     pub version_exempt: Vec<String>,
@@ -288,11 +297,12 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 50] = [
+const SETTINGS_FIELDS: [&str; 56] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
+    "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "license",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -335,7 +345,13 @@ impl Default for Settings {
             signer_ca: String::new(),
             files_secret_file: String::new(),
             files_base: String::new(),
-            console_sources: crate::meet_console::DEFAULT_SOURCES.iter().map(|s| s.to_string()).collect(),
+            console_port: Value::from(0),
+            console_public: String::new(),
+            console_cert: String::new(),
+            console_key: String::new(),
+            console_sources: Vec::new(),
+            console_first_admin: String::new(),
+            license: String::new(),
             files_power: Obj::new(),
             min_client: Obj::new(),
             version_exempt: VERSION_EXEMPT.iter().map(|s| s.to_string()).collect(),
@@ -539,6 +555,14 @@ impl Settings {
         text("files_secret_file", &mut s.files_secret_file)?;
         text("files_base", &mut s.files_base)?;
         list("console_sources", &mut s.console_sources)?;
+        text("console_public", &mut s.console_public)?;
+        text("console_cert", &mut s.console_cert)?;
+        text("console_key", &mut s.console_key)?;
+        text("console_first_admin", &mut s.console_first_admin)?;
+        text("license", &mut s.license)?;
+        if let Some(v) = raw.get("console_port") {
+            s.console_port = v.clone();
+        }
         match raw.get("files_power") {
             None | Some(Value::Null) => {}
             Some(Value::Object(o)) => s.files_power = o.clone(),
@@ -598,18 +622,32 @@ pub struct Identity {
     pub device_label: String,
     pub seed: bool,
     pub seed_token: String,
-    pub console: bool,
     pub cert_pem: String,
     /// A web guest (wave 3): `guest-<16 hex>@guest.invalid`, never in the directory or presence.
     pub guest: bool,
     /// A bridge connector (SAN URI urn:lucid-meet:connector): the /v1/bridge/c/* routes only, no session; never a
     /// person.
     pub connector: bool,
-    /// Parity wave C: the certificate's kind ("person", "app", "archive", "sso", "connector", "console"), only ever
-    /// from its SAN URIs, and its org URIs (an app or archive has one).
+    /// Parity wave C: the certificate's kind ("person", "app", "archive", "sso", "connector"), only ever from its SAN
+    /// URIs, and its org URIs (an app or archive has one). AC-1: "console" is never a certificate's kind; it is the
+    /// Admin Console acting for a relay admin in process (Identity::console_admin): a principal, no device, no
+    /// serial, not a guest, not a seed.
     pub kind: String,
     pub orgs: Vec<String>,
+    /// AC-1 2.4 seats: the client certificate's validity (seconds; 0 when not from a certificate), kept on the
+    /// device record so the relay knows which devices hold a certificate that is not expired.
+    pub not_before: i64,
+    pub not_after: i64,
 }
+
+/// AC-1 (contract 4.9, L9): the kind of the in-process Identity the Admin Console passes for a relay admin.
+pub const CONSOLE_KIND: &str = "console";
+/// AC-1 4.9: the in-process identity of `check_console_reader` (reads only).
+pub const CONSOLE_READER_KIND: &str = "console-reader";
+/// AC-1 4.9: what a device blocked by the Admin Console's admins is told.
+pub const DEVICE_BLOCKED: &str = "this device is blocked on this relay by its admins";
+/// A certificate with the retired console server's SAN URI never signs in (the /v1/console/* routes are gone).
+pub const CONSOLE_RETIRED: &str = "this is the retired console's certificate; the relay no longer accepts it";
 
 /// Web guests' principals: `guest-<16 hex>@guest.invalid` only.
 pub const GUEST_DOMAIN: &str = "@guest.invalid";
@@ -618,6 +656,23 @@ impl Identity {
     /// An app, archive or SSO service: never a person of the directory or presence.
     pub fn is_service(&self) -> bool {
         matches!(self.kind.as_str(), "app" | "archive" | "sso")
+    }
+
+    /// The Admin Console acting for a relay admin (never a certificate, never a person of presence).
+    pub fn is_console(&self) -> bool {
+        self.kind == CONSOLE_KIND || self.kind == CONSOLE_READER_KIND
+    }
+
+    /// The Admin Console reading for a user manager or admin (4.9 `check_console_reader`): like `console_admin`,
+    /// passed to read functions only.
+    pub fn console_reader(email: &str) -> Identity {
+        Identity { kind: CONSOLE_READER_KIND.to_string(), ..Identity::console_admin(email) }
+    }
+
+    /// The Identity the Admin Console passes to the Hub functions for `principal` (I8): no device, serial, seed,
+    /// guest or service kind, so nothing that branches on them can take it for a device.
+    pub fn console_admin(principal: &str) -> Identity {
+        Identity { principal: principal.trim().to_lowercase(), name: principal.trim().to_lowercase(), kind: CONSOLE_KIND.to_string(), ..Default::default() }
     }
 
     /// A device id of its own (not legacy, not in-process): one session and one seat.
@@ -644,6 +699,9 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     let ou = cert.names.ous().first().map(|o| pj::clip(o.trim(), LABEL_MAX)).unwrap_or_default();
     let uris = &cert.names.uris;
     let (kind, orgs) = pc::cert_kind(uris)?;
+    if kind == CONSOLE_KIND {
+        return forbidden(CONSOLE_RETIRED);
+    }
     if kind == "sso" {
         // the SSO service has no email or device: it is named by its serial, sso routes only
         let name = if cn.is_empty() { "Lucid Meet SSO".to_string() } else { cn };
@@ -666,10 +724,11 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         principal,
         name: pj::clip(cn.trim(), 80),
         serial: cert.serial.clone(),
-        console: uris.iter().any(|u| u == CONSOLE_URI),
         connector: uris.iter().any(|u| u == CONNECTOR_URI),
         kind,
         orgs,
+        not_before: cert.not_before,
+        not_after: cert.not_after,
         ..Default::default()
     };
     let token = uri_value(uris, SEED_URI_PREFIX);
@@ -1036,6 +1095,8 @@ pub struct Relay {
     pub last_check: Mutex<f64>,
     /// Monotonic: when the signer CRL's age was last checked (PC-1).
     pub pc_last_crl_check: Mutex<f64>,
+    /// AC-1: the Admin Console when `console_port` is set (contract 3.1); None when off.
+    pub admin_console: OnceLock<Arc<crate::console::Console>>,
 }
 
 fn die(msg: &str) -> ! {
@@ -1050,6 +1111,10 @@ fn usage(err: &str) -> ! {
 
 /// `lucid-relay meet --config <relay.json> [--verbose]` (meet_relay.main and serve).
 pub fn main(argv: &[String]) -> ! {
+    // AC-1 3.2: the offline Admin Console commands, with the relay stopped
+    if argv.first().map(String::as_str) == Some("console") {
+        crate::console_meet::cli(&argv[1..]);
+    }
     let (mut config, mut verbose) = (None, false);
     let mut i = 0;
     while i < argv.len() {
@@ -1157,6 +1222,7 @@ fn serve(settings: Settings) -> ! {
         last_fetch: Mutex::new(-1e9),
         last_check: Mutex::new(-1e9),
         pc_last_crl_check: Mutex::new(-1e9),
+        admin_console: OnceLock::new(),
     });
     {
         // the service gate reads the relay's version minimums
@@ -1178,7 +1244,28 @@ fn serve(settings: Settings) -> ! {
         let _ = std::fs::create_dir_all(dir);
         let _ = LINK_REPORTS.set(Mutex::new(dir.join(LINK_REPORTS_FILE)));
     }
+    // AC-1 2.4: the service gate, the upgrade period, trusted time and seats, decided and written before anything is
+    // answered (an unreadable meet-time.json, meet-seats.json or meet-license-state.json stops the start)
+    if let Some(notice) = crate::license::dev_license_notice() {
+        log_warn(notice);
+    }
+    let license_file = if settings.license.trim().is_empty() { state_file(&settings, crate::meet_license::LICENSE_FILE) } else { Some(PathBuf::from(settings.license.trim())) };
+    let gate_cfg = crate::meet_license::GateConfig { state_dir: state_dir.clone(), license_file, client_ca: PathBuf::from(&settings.client_ca) };
+    let gate = crate::meet_license::MeetGate::open(gate_cfg, &hub, crate::meet_time::clock()).unwrap_or_else(|e| die(&e));
+    hub.set_gate(gate.clone());
+    std::thread::Builder::new()
+        .name("meet-gate".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            gate.check(true);
+            if let Err(e) = gate.time.save() {
+                log_error(&e);
+            }
+        })
+        .unwrap_or_else(|e| die(&e.to_string()));
     hub.start();
+    // AC-1 3.1: the Admin Console on its own port and host name (nothing when console_port is 0)
+    crate::console_meet::start(&relay).unwrap_or_else(|e| die(&e));
     crate::meet_guest_port::start(&settings, hub.clone(), relay.turn_secret.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
@@ -1673,6 +1760,10 @@ impl Ctx<'_> {
         let mut who = identity_from_cert(self.der)?;
         if !who.serial.is_empty() && self.relay.hub.is_denied(&who.serial) {
             return forbidden("this certificate was revoked");
+        }
+        // AC-1 4.9: a device blocked by the console's admins (never a revocation)
+        if self.relay.hub.is_blocked(&who) {
+            return forbidden(DEVICE_BLOCKED);
         }
         if who.seed && !seed_ok {
             return forbidden(FINISH_SETUP);

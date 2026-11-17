@@ -221,8 +221,13 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         let sent = json(reader.get_mut(), 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
         return Ok(sent.is_ok() && !close && !post);
     }
+    // AC-1 2.4 and 4.10: the Meeting Hub service gate (guests have no certificate, so no seat refusal applies here)
+    let refused = port.hub.gate().and_then(|g| g.serves(&head.method, &path, None).err());
     let mut req = Req { port, head: &head, query: m::parse_query(&query), reader: &mut *reader, address, body_read: false, close: false };
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path)));
+    let result = match refused {
+        Some(e) => Ok(Err(e)),
+        None => std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path))),
+    };
     let (body_read, closing) = (req.body_read, req.close);
     close |= closing;
     if m::drain_unread(reader, &head, body_read) {
@@ -242,9 +247,17 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
             extra.push(("Retry-After", retry.max(1).to_string()));
             (429, err(msg))
         }
-        Err(E::Forbidden(msg)) | Err(E::Held(msg, _)) => {
+        Err(E::Forbidden(msg)) => {
             close = true;
             (403, err(msg))
+        }
+        Err(E::Held(msg, info)) => {
+            close = true;
+            let mut o = err(msg);
+            if let Some(code) = info.get("code") {
+                o.insert("code".into(), code.clone());
+            }
+            (403, o)
         }
         Err(E::Conflict(msg)) | Err(E::ConflictInfo(msg, _)) => (409, err(msg)),
         Err(E::NotFound(msg)) => (404, err(msg)),

@@ -7,7 +7,7 @@
 use crate::codec::{parse_json, sha256_hex, str_of, stringify, unb64u};
 use crate::der::{ecdsa_verify, p256_from_spki};
 use crate::identity::{DirectoryHolder, TrustStore};
-use crate::license::{license_keys, license_state, license_token_of, seat_problem, verify_license};
+use crate::license::{license_state, LicenseKeys, license_token_of, seat_problem, verify_license};
 use crate::relay::parse_envelope;
 use serde_json::{json, Value};
 
@@ -98,12 +98,8 @@ fn licenses_get_the_same_verdicts() {
     let v = vectors();
     let trust = root(&v);
     let dev_pub = v["license"]["devPub"].as_str().unwrap().to_owned();
-    let keys = license_keys(|k| match k {
-        "LUCID_LICENSE_DEV" => Some("1".into()),
-        "LUCID_LICENSE_DEV_PUB" => Some(dev_pub.clone()),
-        _ => None,
-    })
-    .unwrap_or_else(|e| panic!("{e}"));
+    // R4-H1: only a dev-license build reads the development variables; the test holds the development key directly.
+    let keys = LicenseKeys::with_dev(&dev_pub, "devPub").unwrap_or_else(|e| panic!("{e}"));
     let first = v["license"]["cases"][0]["token"].as_str().unwrap();
     assert_eq!(license_token_of(v["license"]["armored"].as_str().unwrap()), first);
     for c in v["license"]["cases"].as_array().unwrap() {

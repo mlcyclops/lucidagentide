@@ -4,14 +4,14 @@
 // (CONN_LIMITS: one past the cap is dropped unread) and a TLS handshake has its own deadline.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
-use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
+use crate::console::{ConsoleReply, ConsoleRequest, ACTIVITY_HEADER, MARKER_HEADER};
 use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
 use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN};
+use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, USER_AGENT};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Response;
@@ -19,7 +19,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::convert::Infallible;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -28,7 +28,8 @@ use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 pub struct Relay {
-    pub state: Mutex<State>,
+    /// Shared with the console's Remote Spokes section (console_spokes.rs), which holds it weakly.
+    pub state: Arc<Mutex<State>>,
     pub logger: Arc<Logger>,
     pub hosts: HostCheck,
     pub tls: bool,
@@ -138,11 +139,6 @@ pub fn dialed_of(host_header: &str, tls: bool) -> Dialed {
 
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 
-/// The address a TLS front appended to X-Forwarded-For: the last entry (the ones before it are the caller's word).
-fn forwarded_ip(header: &str) -> Option<IpAddr> {
-    header.rsplit(',').next()?.trim().parse().ok()
-}
-
 fn to_response(r: Reply) -> Response<Full<Bytes>> {
     let mut b = Response::builder().status(r.status).header(CONTENT_TYPE, r.content_type);
     if r.content_type == "application/json" {
@@ -197,7 +193,9 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     // The body limit holds while the body streams in (RS-RELAY-02): a declared length over it is refused unread, and
     // a chunked body is read frame by frame and cut at the limit, never buffered whole.
     let declared = parts.headers.get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()).map(js_number).unwrap_or(0.0);
-    let mut over = if declared > BODY_BYTES as f64 { declared as usize } else { 0 };
+    // The console's MDS3 upload takes up to 16 MiB (AC-1 3.5); the console checks each route's own limit after this.
+    let cap = if console.is_some() && pathname == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_BYTES) } else { BODY_BYTES };
+    let mut over = if declared > cap as f64 { declared as usize } else { 0 };
     let mut text = String::new();
     if over == 0 && method != "GET" {
         let mut body = body;
@@ -221,7 +219,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {
                         size += data.len();
-                        if size > BODY_BYTES {
+                        if size > cap {
                             over = size;
                             break;
                         }
@@ -235,7 +233,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         }
     }
     if over > 0 {
-        let f = where_.clone().with("bytes", over).with("capBytes", BODY_BYTES);
+        let f = where_.clone().with("bytes", over).with("capBytes", cap);
         let mut r = refuse(&relay.logger, 413, "too large", "request.too-large", &f);
         r.close = true; // the rest of a cut body is never read: the connection goes with it
         return to_response(r);
@@ -251,10 +249,11 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         let origin = header(ORIGIN);
         let marker = parts.headers.get(MARKER_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
         let content_type = header(CONTENT_TYPE).unwrap_or_default();
-        // The sign-in limit counts per caller: behind the TLS front (its public host set), the caller is the address
-        // the front appended to X-Forwarded-For, not the front itself.
-        let forwarded = if behind_tls { parts.headers.get_all(X_FORWARDED_FOR).iter().last().and_then(|v| v.to_str().ok()).and_then(forwarded_ip) } else { None };
-        let ip = forwarded.unwrap_or_else(|| peer.ip()).to_string();
+        // AC-1 3.1 (H5): the console reads the source itself. Behind a TLS front it reads X-Forwarded-For only from a
+        // peer in --console-trusted-fronts; every header value goes over, in order.
+        let forwarded: Vec<String> = parts.headers.get_all(X_FORWARDED_FOR).iter().map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).collect();
+        let activity = parts.headers.get(ACTIVITY_HEADER).is_some_and(|v| v.as_bytes() == b"1");
+        let user_agent = header(USER_AGENT).unwrap_or_default();
         let r = ConsoleRequest {
             method: &method,
             pathname: &pathname,
@@ -262,13 +261,16 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
             cookie: &cookie,
             origin: origin.as_deref(),
             marker: marker.as_deref(),
+            activity,
             content_type: &content_type,
-            ip: &ip,
+            user_agent: &user_agent,
+            peer: peer.ip(),
+            forwarded: &forwarded,
             body: &text,
             dialed: &dialed,
             host_ok,
         };
-        return console_response(console.http(&r, t, || relay.state.lock().console_status(now_ms())));
+        return console_response(console.http(&r, t));
     }
     let authorization = header(AUTHORIZATION).unwrap_or_default();
     // F2 (ADR-A100): a hub's license seat; only a licensed relay reads it.
@@ -415,10 +417,7 @@ mod tests {
         let bare = HostCheck { names: None, port: 8080, public: None };
         assert!(bare.accepts(&dialed_of("127.0.0.1:8080", false)));
         assert!(!bare.accepts(&dialed_of("relay.example.com", false)));
-        // The caller is the address the front appended last.
-        assert_eq!(forwarded_ip("203.0.113.9, 198.51.100.4"), Some("198.51.100.4".parse().unwrap()));
-        assert_eq!(forwarded_ip(" 2001:db8::1 "), Some("2001:db8::1".parse().unwrap()));
-        assert_eq!(forwarded_ip("198.51.100.4, junk"), None);
+        // The console's source behind a front: console_source.rs (AC-1 3.1).
     }
 
     #[test]
@@ -447,9 +446,11 @@ mod tests {
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
             console: None,
+            state_dir: None,
+            license_file: None,
         };
         let state = State::new(opts, logger.clone()).unwrap();
-        Arc::new(Relay { state: Mutex::new(state), logger, hosts: HostCheck { names: None, port: 0, public: None }, tls: false })
+        Arc::new(Relay { state: Arc::new(Mutex::new(state)), logger, hosts: HostCheck { names: None, port: 0, public: None }, tls: false })
     }
 
     async fn listen(acceptor: Option<TlsAcceptor>, limits: ConnLimits) -> u16 {

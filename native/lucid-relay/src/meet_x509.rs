@@ -55,6 +55,8 @@ pub struct Names {
     pub subject: Vec<(Vec<u8>, String)>,
     pub emails: Vec<String>,
     pub uris: Vec<String>,
+    /// SAN DNS names (the Admin Console checks its certificate and the relay's against them).
+    pub dns: Vec<String>,
 }
 
 impl Names {
@@ -80,7 +82,7 @@ fn string_value(i: &Item) -> String {
             String::from_utf16_lossy(&units)
         }
         // UniversalString: UTF-32BE
-        0x1c => i.value.chunks(4).filter_map(|c| (c.len() == 4).then(|| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))).filter_map(char::from_u32).collect(),
+        0x1c => i.value.chunks(4).filter(|c| c.len() == 4).map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]])).filter_map(char::from_u32).collect(),
         _ => String::from_utf8_lossy(i.value).into_owned(),
     }
 }
@@ -103,6 +105,7 @@ fn parse_san(ext_value: &[u8], names: &mut Names) -> Option<()> {
         match gn.tag {
             0x81 => names.emails.push(text),
             0x86 => names.uris.push(text),
+            0x82 => names.dns.push(text),
             _ => {}
         }
     }

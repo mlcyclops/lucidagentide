@@ -234,6 +234,59 @@ pub fn guest_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     Ok(Arc::new(cfg))
 }
 
+/// The SAN DNS names of the first certificate in a PEM file, lower case (none when it does not read).
+pub fn cert_dns_names(path: &str) -> Vec<String> {
+    Cert::from_pem(&String::from_utf8_lossy(&read_bytes(Path::new(path)))).map(|c| c.names.dns.iter().map(|d| d.trim().to_lowercase()).collect()).unwrap_or_default()
+}
+
+/// Whether a certificate's SAN DNS names cover `host` (one leftmost wildcard label, as browsers match).
+fn dns_covers(names: &[String], host: &str) -> bool {
+    let host = host.to_lowercase();
+    names.iter().any(|n| {
+        let n = n.to_lowercase();
+        match n.strip_prefix("*.") {
+            Some(rest) => host.split_once('.').map(|(first, tail)| !first.is_empty() && tail == rest && rest.contains('.')).unwrap_or(false),
+            None => n == host,
+        }
+    })
+}
+
+/// AC-1 contract 3.1: `console_cert` must name `host` (SAN DNS) and must not come from the Meet CA: no certificate
+/// in its file is a `client_ca` certificate or issued by one, and the leaf carries no Meet SAN URI or email (a device,
+/// seed or service certificate the signer issued). Err holds the start error's words.
+pub fn check_console_cert(console_cert: &str, client_ca: &str, host: &str) -> Result<(), String> {
+    let refused = || format!("console_cert must be a certificate browsers trust for {host}, not one from the Meet CA");
+    let data = std::fs::read(console_cert).map_err(|e| format!("cannot read the certificate {console_cert}: {e}"))?;
+    let chain: Vec<Cert> = pem_blocks(&data, "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    let Some(leaf) = chain.first() else { return Err(refused()) };
+    if !dns_covers(&leaf.names.dns, host) {
+        return Err(refused());
+    }
+    if leaf.names.uris.iter().any(|u| u.starts_with("urn:lucid-meet:")) || !leaf.names.emails.is_empty() {
+        return Err(refused());
+    }
+    let ca: Vec<Cert> = pem_blocks(&read_bytes(Path::new(client_ca)), "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    let from_meet = chain.iter().any(|c| ca.iter().any(|root| c.spki == root.spki || c.issuer == root.subject || c.issued_by(root)));
+    if from_meet {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+/// AC-1 contract 3.1: the Admin Console port's server TLS: `console_cert` and `console_key`, TLS 1.2 or later,
+/// HTTP/1.1 only, and NO client certificate asked for.
+pub fn console_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
+    let provider = Arc::new(crate::server::provider());
+    let mut cfg = ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .map_err(|e| e.to_string())?
+        .with_no_client_auth()
+        .with_single_cert(load_certs(&s.console_cert, "certificate")?, load_key(&s.console_key)?)
+        .map_err(|e| format!("the console certificate and key do not fit: {e}"))?;
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(Arc::new(cfg))
+}
+
 // ── RefusalLog ───────────────────────────────────────────────────────────────────────────────────────────────
 
 struct Refusals {

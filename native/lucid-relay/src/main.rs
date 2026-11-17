@@ -7,19 +7,33 @@
 //               [--tls-cert f --tls-key f] [--state <dir>] [--sender-mib 16]
 //     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1;
 //      behind a TLS front LUCID_RELAY_PUBLIC_HOST=<host[:port]> is required: the one host the relay answers for)
-//               [--console 1]   the control panel at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
+//               [--console 1]   the Admin Console at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
+//               [--console-sources <cidrs>] [--console-trusted-fronts <cidrs>] [--console-first-admin <email>]
+//                 (or LUCID_RELAY_CONSOLE_SOURCES, _TRUSTED_FRONTS, _FIRST_ADMIN; AC-1 3.1)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
-//   lucid-relay console remove-admin <email> [--state <dir>]   with the relay stopped: a control panel admin, its
-//               passkeys and open invites leave console.json (signed in, POST /console/api/admins/remove does it live).
+//   lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] |
+//               reset --first-admin <email>   [--state <dir>]   with the relay stopped (console.lock): the Admin
+//               Console's book, offline (AC-1 3.2).
 
 mod codec;
 mod collab;
 mod collab_auth;
 mod collab_presence;
 mod console;
-mod console_page;
+mod console_approvals;
+mod console_audit;
+mod console_auth;
+mod console_limits;
+mod console_mail;
+mod console_mds;
+mod console_meet;
+mod console_password;
+mod console_seal;
+mod console_settings;
+mod console_source;
+mod console_spokes;
 mod console_webauthn;
 mod der;
 mod http_client;
@@ -28,10 +42,15 @@ mod license;
 mod log;
 mod meet;
 mod meet_console;
+mod meet_console_identity;
+mod meet_console_port;
 mod meet_guest_port;
 mod meet_hub;
 mod meet_json;
+mod meet_license;
 mod meet_ops;
+mod meet_seats;
+mod meet_time;
 mod meet_org_policy;
 mod meet_routes;
 mod meet_tls;
@@ -52,7 +71,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 10] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console"];
+const FLAGS: [&str; 13] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -112,6 +131,8 @@ struct Config {
     /// LUCID_RELAY_PUBLIC_HOST: behind a TLS front, the one host this relay answers for.
     public_host: Option<String>,
     license: Option<String>,
+    /// The license's file when --license (or LUCID_RELAY_LICENSE) names one rather than giving the armored text.
+    license_file: Option<std::path::PathBuf>,
     sender_bytes: Option<i64>,
     owner: Option<String>,
 }
@@ -120,7 +141,7 @@ struct Config {
 fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Option<String>) -> Result<Config, String> {
     let get = |flag: &str, vars: &[&str]| -> Option<String> {
         let f = flags.get(flag).filter(|v| !v.is_empty()).cloned();
-        f.or_else(|| vars.iter().find_map(|k| env(*k).filter(|v| !v.is_empty())))
+        f.or_else(|| vars.iter().find_map(|k| env(k).filter(|v| !v.is_empty())))
     };
     let root = get("root", &["LUCID_RELAY_ROOT_PUB"]).ok_or("the owner root public key is required (--root or LUCID_RELAY_ROOT_PUB, PEM or path)")?;
     let license = get("license", &["LUCID_RELAY_LICENSE"]);
@@ -184,6 +205,7 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
         state: get("state", &["LUCID_RELAY_STATE"]),
         behind_tls: behind == "1",
         public_host,
+        license_file: license.as_ref().filter(|l| !js_trim_start(l).starts_with("-----BEGIN")).map(std::path::PathBuf::from),
         license: license.map(|l| pem_or_file(&l).map(|text| license_token_of(&text))).transpose()?,
         sender_bytes: sender_text.map(|_| sender_mib as i64 * 1024 * 1024),
         owner,
@@ -206,28 +228,86 @@ fn root_key(pem: &str) -> Result<der::P256Key, String> {
     der::p256_from_spki(&der).ok_or_else(|| "root key must be ECDSA P-256".into())
 }
 
-/// `lucid-relay console remove-admin <email> [--state <dir>]` (or LUCID_RELAY_STATE), with the relay stopped: an
-/// admin, its passkeys and open invites leave console.json.
+/// `lucid-relay console <command> [--state <dir>]` (or LUCID_RELAY_STATE), with the relay stopped (console.lock):
+/// `remove-admin <email>`, `unsuspend <email>`, `approve-join <email> [--role admin]`, `reset --first-admin <email>`
+/// (which asks for the relay's host name), `break-glass --email <email> [--replace]` (prints the one-time setup link),
+/// `two-person off`, and `seal-setup [--service <name>]` (AC-1 3.11, R4-H2, R4-M2). Each but seal-setup is audited
+/// at the relay's next start (AC-1 3.2 "Offline").
 fn console_cli(args: &[String]) -> ! {
-    const USAGE: &str = "usage: lucid-relay console remove-admin <email> [--state <dir>] (or LUCID_RELAY_STATE), with the relay stopped";
+    const USAGE: &str = "usage: lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] | reset --first-admin <email> | break-glass --email <email> [--replace] | two-person off | seal-setup [--service <name>]  [--state <dir>] (or LUCID_RELAY_STATE), with the relay stopped";
     let mut state = std::env::var("LUCID_RELAY_STATE").ok();
+    let mut role = None;
+    let mut first_admin = None;
+    let mut email = None;
+    let mut service = None;
+    let mut replace = false;
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
         i += 1;
-        if let Some(v) = a.strip_prefix("--state=") {
-            state = Some(v.to_owned());
-        } else if a == "--state" {
-            state = Some(args.get(i).cloned().unwrap_or_else(|| die(USAGE)));
-            i += 1;
+        let mut value = |name: &str| -> Option<String> {
+            if let Some(v) = a.strip_prefix(&format!("--{name}=")) {
+                return Some(v.to_owned());
+            }
+            (*a == format!("--{name}")).then(|| {
+                i += 1;
+                args.get(i - 1).cloned().unwrap_or_else(|| die(USAGE))
+            })
+        };
+        if let Some(v) = value("state") {
+            state = Some(v);
+        } else if let Some(v) = value("role") {
+            role = Some(v);
+        } else if let Some(v) = value("first-admin") {
+            first_admin = Some(v);
+        } else if let Some(v) = value("email") {
+            email = Some(v);
+        } else if let Some(v) = value("service") {
+            service = Some(v);
+        } else if a == "--replace" {
+            replace = true;
         } else {
             rest.push(a.as_str());
         }
     }
-    let ["remove-admin", email] = rest.as_slice() else { die(USAGE) };
-    let dir = state.filter(|d| !d.is_empty()).unwrap_or_else(|| die("the control panel keeps its admins in the state folder: give --state or LUCID_RELAY_STATE"));
-    match console::remove_admin_offline(&Path::new(&dir).join(console::CONSOLE_FILE), email) {
+    let dir = state.filter(|d| !d.is_empty()).unwrap_or_else(|| die("the Admin Console keeps its people in the state folder: give --state or LUCID_RELAY_STATE"));
+    if rest.as_slice() == ["seal-setup"] {
+        let default = if cfg!(windows) { console_seal::WINDOWS_SERVICE } else { "lucid-relay" };
+        match console_seal::seal_setup(Path::new(&dir), service.as_deref().unwrap_or(default)) {
+            Ok(done) => {
+                println!("lucid-relay: {done}");
+                std::process::exit(0)
+            }
+            Err(e) => die(&e),
+        }
+    }
+    let admin = match role.as_deref() {
+        None | Some("viewer") => false,
+        Some("admin") => true,
+        Some(_) => die(USAGE),
+    };
+    let cmd = match rest.as_slice() {
+        ["remove-admin", email] => console_auth::Offline::RemoveAdmin((*email).to_owned()),
+        ["unsuspend", email] => console_auth::Offline::Unsuspend((*email).to_owned()),
+        ["approve-join", email] => console_auth::Offline::ApproveJoin { email: (*email).to_owned(), admin },
+        ["reset"] => {
+            let first_admin = first_admin.unwrap_or_else(|| die("reset needs --first-admin <email>: the person who signs in first"));
+            let host = console_auth::book_host(Path::new(&dir)).unwrap_or_default();
+            eprint!("lucid-relay: this clears every person, passkey, invite and approval of the Admin Console. Type the relay's host name ({}) to go on: ", if host.is_empty() { "none recorded: press Enter" } else { host.as_str() });
+            let mut typed = String::new();
+            let _ = std::io::stdin().read_line(&mut typed);
+            console_auth::Offline::Reset { first_admin, typed_host: typed.trim().to_owned() }
+        }
+        ["break-glass"] => {
+            let email = email.unwrap_or_else(|| die("break-glass needs --email <email>: the break-glass account's own address"));
+            console_auth::Offline::BreakGlass { email, replace, origin: None }
+        }
+        ["two-person", "off"] => console_auth::Offline::TwoPersonOff,
+        _ => die(USAGE),
+    };
+    let host = console_auth::book_host(Path::new(&dir)).unwrap_or_default();
+    match console_auth::run_offline(Path::new(&dir), cmd, &host, &|_, _| Ok(())) {
         Ok(done) => {
             println!("lucid-relay: {done}");
             std::process::exit(0)
@@ -267,7 +347,7 @@ fn main() {
     if args.first().map(String::as_str) == Some("meet") {
         meet::main(&args[1..]);
     }
-    // The control panel's book, offline: `console remove-admin <email>`.
+    // The Admin Console's book, offline (console.lock refuses while a relay runs).
     if args.first().map(String::as_str) == Some("console") {
         console_cli(&args[1..]);
     }
@@ -277,9 +357,22 @@ fn main() {
     if c.owner.is_none() && c.license.is_none() {
         die("the relay license is required (--license or LUCID_RELAY_LICENSE: the license file or its armored text)");
     }
-    // The control panel (src/console.rs): --console 1 or LUCID_RELAY_CONSOLE=1; when on, the logger feeds its ring.
+    // The Admin Console (src/console.rs): --console 1 or LUCID_RELAY_CONSOLE=1; when on, the logger feeds its ring and
+    // the relay holds console.lock in its state folder for its whole life.
     let base = Logger::new(if c.owner.is_some() { "lan-mailbox" } else { "relay" });
-    let (logger, console) = console::open(flags.get("console"), |k| std::env::var(k).ok(), c.state.as_deref(), c.owner.is_some(), base).unwrap_or_else(|e| die(&e));
+    let console_flags = console::SpokesFlags {
+        console: flags.get("console"),
+        sources: flags.get("console-sources"),
+        trusted_fronts: flags.get("console-trusted-fronts"),
+        first_admin: flags.get("console-first-admin"),
+    };
+    let console_host = c.public_host.as_deref().map(|p| server::dialed_of(p, true).hostname).unwrap_or_else(|| c.hostname.clone());
+    let (logger, console) = console::open(console_flags, |k| std::env::var(k).ok(), c.state.as_deref(), c.owner.is_some(), c.behind_tls, &console_host, base).unwrap_or_else(|e| die(&e));
+    let console_handle = console.clone();
+    // A `dev-license` build says so at every start (R4-H1, 8.1 `cli.dev-license`); None in every other build.
+    if let Some(notice) = license::dev_license_notice() {
+        logger.ops("relay.dev-license", &Fields::new().with("why", notice), Level::Warn);
+    }
     let root = root_key(&c.root_pem).unwrap_or_else(|e| die(&e));
     let state = c.state.as_deref().map(Path::new);
     let at = |name: &str| state.map(|d| d.join(name));
@@ -296,6 +389,8 @@ fn main() {
         store_bytes: STORE_BYTES,
         sender_bytes: c.sender_bytes.unwrap_or(SENDER_BYTES),
         console,
+        state_dir: state.map(Path::to_path_buf),
+        license_file: c.license_file.clone(),
     };
     if c.behind_tls {
         let f = Fields::new().with("why", "a platform front terminates TLS (LUCID_RELAY_BEHIND_TLS=1)").with("publicHost", c.public_host.clone());
@@ -311,7 +406,11 @@ fn main() {
         let licensed = st.licensed();
         let has_store = c.state.is_some();
         let public = c.public_host.as_deref().map(|p| server::dialed_of(p, true));
-        let relay = Arc::new(server::Relay { state: Mutex::new(st), logger: logger.clone(), hosts: HostCheck { names, port, public }, tls: c.tls.is_some() });
+        let relay = Arc::new(server::Relay { state: Arc::new(Mutex::new(st)), logger: logger.clone(), hosts: HostCheck { names, port, public }, tls: c.tls.is_some() });
+        // The console's Remote Spokes section (I9) reads the relay's state, held weakly.
+        if let Some(console) = &console_handle {
+            console.attach(console_spokes::section(Arc::downgrade(&relay.state)));
+        }
         let shown = if c.hostname.contains(':') { format!("[{}]", c.hostname) } else { c.hostname.clone() };
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);

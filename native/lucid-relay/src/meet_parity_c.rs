@@ -1789,6 +1789,20 @@ impl Hub {
         Ok(obj([("id", Value::from(id))]))
     }
 
+    /// AC-1 3.7 (M10): whether `principal` may hold these people (an org admin whose policy covers all of them), the
+    /// rule an approver of a people hold must meet as its requester did.
+    pub fn pc_may_hold_people(&self, principal: &str, people: &[String]) -> bool {
+        let mut st = self.st.lock();
+        let mine = st.pc_org_admin_of(principal);
+        !people.is_empty() && mine.iter().any(|p| people.iter().all(|x| op::covers(p, x)))
+    }
+
+    /// AC-1 4.9: how many `org_admins` the signer's policy names for an organization.
+    pub fn pc_org_admin_count(&self, org: &str) -> usize {
+        let mut st = self.st.lock();
+        st.pc_terms().org_admins.get(org).map(Vec::len).unwrap_or(0)
+    }
+
     /// `GET /v1/admin/holds` -> `{holds, on}` (relay admins: all; org admins: their org's).
     pub fn pc_holds_list(&self, session: &str, who: &Identity) -> R<Obj> {
         let mut st = self.st.lock();

@@ -1,0 +1,6 @@
+# Byte-pinned files (contract AC-1 7.1 and 3.3): their SHA-256 is checked by tests, so git must never change their
+# line endings.
+console/icon.svg -text
+console/favicon.svg -text
+data/mds3.jwt -text
+data/fido-mds-root.pem -text
