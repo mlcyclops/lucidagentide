@@ -27661,3 +27661,23 @@ Separately, P-HUB-PICK.1 (ADR-0470) renamed the grid header's add button from `+
 **Proof.** `desktop/fleet_lanes.test.ts` (a repeated id stages once, also after its item drained; a busy lane stages a stage-id prompt with its file ids, once; an idle lane declines), `desktop/renderer/queue_model.test.ts` (same draft keeps its id, any change mints a new one), `make demo-P-FLEET.STAGE1`. A dev engine booted on a scratch data root served the rebuilt `/app.js` with the new `+ Lane` tip and stage note and without the retired grid tip or the orbit "New spoke" label, and two `/api/fleet/queue` posts with one stage id to a real lane answered `queued: 1` then `queued: 1, duplicate: true`.
 
 **Invariants.** #3 untouched: staged files are still expanded and scanned at drain, and a refused attachment policy is still reported on the prompt path. #8: no new event name in `contracts.ts`; `staged` is a lane stream event like `done`. #11: the new notes reuse `.fleet-errline` via `setLaneNote`.
+
+## ADR-0610 -- P-FLEET.AUTO1: a pipe into an interpreter that has its own program is data, not "downloaded code", so Fleet full auto-mode stops asking for it (2026-11-17)
+
+**Status:** Accepted.
+
+**Context.** With Fleet full auto-mode on, a lane kept stopping for approval on ordinary commands. The field case, from a lane deploying to a DGX box: `"C:/Program Files/Git/bin/bash.exe" -lc '... | ssh box "... | tail -1 | python3 -c \"import json,sys; d=json.loads(sys.stdin.read()); ...\""'`. Auto-mode answers every ask except the #612 exec floor (`execFloor`, the catastrophic set that no standing scope crosses). The floor's pattern `\|\s*(sh|bash|...|python|node|perl|ruby)\b` ("pipes downloaded code into an interpreter") exists for `curl … | sh`, where stdin IS the program. It also matched every pipe into an interpreter that already has its program: `| python -c "parse it"`, `| python -m json.tool`, `| node script.js`. Measured over the last four days of this workstation's omp sessions (4,032 distinct commands): 73 hit the floor, and 40 of them were this pattern, every one a `| python -c` reader of a JSON or HTML answer. The other 33: 25 `rm -rf`, 4 recursive deletes on Windows (`rmdir /s`, `Remove-Item -Recurse`), and 2 matches inside heredoc bodies (`dd`, `sudo` in text written to a file or fed to Python).
+
+**Decision.** The pipe pattern gets a `benign` check (`pipesOnlyData` in `desktop/exec_policy.ts`). A match is cleared only when EVERY pipe into an interpreter in the command hands that interpreter its program another way:
+- shells: `-c` (any combined form such as `-lc`) or a script file;
+- Python: `-c`, `-m` (also attached, `-mjson.tool`) or a script file;
+- Node: `-e`, `-p`, `--eval`, `--print` or a script file;
+- Perl and Ruby: `-e` (any combined form such as `-ne`) or a script file.
+
+It stays catastrophic (fail-closed) when the interpreter is bare, takes `-` or (shells) `-s`, when the only non-flag word is the value of an option that takes one (`bash -o pipefail`, `node -r mod`), and when the code argument evaluates its input or is built at run time (`exec(`, `eval`, `source`, `$(...)`, a backtick). The arguments are read quote-aware up to the next pipeline or list operator, or the closing quote of the string the pipe sits in (`bash -lc 'curl x | sh'` stays catastrophic). The other catastrophic patterns, and the floor itself, are unchanged: recursive deletes still reach a human in auto-mode, as #612 decided.
+
+**Consequences.** Re-measured on the same 4,032 commands: the 40 pipe matches are gone, and nothing else changed. Fleet full auto-mode no longer stops for a script that reads a fetched answer. A command that feeds a pipe into an interpreter whose own code fetches or evaluates more code at run time without `exec`, `eval` or a substitution (for example `python -c "import urllib...; run(...)"`) is not caught by this pattern; it was never what the pattern could see, and the in-omp security gate still scans every tool call (invariant 4). Open PR #618 rewrites this rule as a pipeline-segment check and needs the same exception carried over.
+
+**Proof.** `desktop/exec_policy.test.ts`: the risky corpus gains the field command and eight data-pipe forms (risky, not catastrophic); the catastrophic corpus gains twelve stdin-program forms (bare interpreter, `-`, `-s`, an option value mistaken for a script, `exec(`/`eval`/`$(...)` code, `sudo`, a pipe inside `bash -lc '...'`). `make demo-P-FLEET.AUTO1`.
+
+**Invariants.** #3: every unparseable or stdin-program form keeps the floor; the change only clears forms whose program is named in an argument. #4: the in-process gate is untouched.
