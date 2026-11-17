@@ -43,6 +43,9 @@ export const PYTHON_OVERLAY = "lane-python.yml";
 export function pythonOverlayYaml(python: string): string {
   return `# Written by LUCID with this lane runtime copy (P-HOLDER.3). Held lanes' Python kernels run on the copy.\npython:\n  interpreter: ${JSON.stringify(python)}\n`;
 }
+/** How often, and how patiently, the finished copy's rename is retried while Windows holds its files (3.6 s in all). */
+const RENAME_RETRIES = 8;
+const RENAME_BACKOFF_MS = 100;
 /** How many files are copied at once. */
 const COPY_PARALLEL = 16;
 
@@ -171,7 +174,16 @@ export class LaneRuntime {
     if (python) await writeFile(join(partial, PYTHON_OVERLAY), pythonOverlayYaml(join(dest, python)));
     await writeFile(join(partial, COMPLETE), JSON.stringify({ key: this.key, from: this.resources, files: files.length, bytes, at: Date.now() }));
     await rm(dest, { recursive: true, force: true });
-    await rename(partial, dest);
+    // Windows: a scanner or the indexer briefly holds files it just saw written, and renaming their folder then fails
+    // with EPERM/EACCES/EBUSY (measured: 1 in 30 copies on this workstation). That failure sent the lane back to the
+    // install folder, the exact case the copy exists to avoid, so the rename waits it out instead.
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(partial, dest); break; } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (attempt >= RENAME_RETRIES || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw e;
+        await Bun.sleep(RENAME_BACKOFF_MS * (attempt + 1));
+      }
+    }
     this.#log(`[fleet] lane runtime ${this.key}: ${files.length} files, ${Math.round(bytes / 1048576)} MB copied in ${Math.round((Date.now() - started) / 1000)} s`);
     return dest;
   }
