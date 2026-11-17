@@ -126,6 +126,117 @@ pub struct Settings {
     pub license_request_to: Option<String>,
     /// Other consoles (2.1): label and https URL.
     pub links: Vec<(String, String)>,
+    /// AC-2a 10.1: the scrape tokens (`fleet_export::TokenRecord::to_json`, hashes and hints only).
+    pub tokens: Vec<Value>,
+    /// AC-2a 10.2: the SIEM settings in force (`fleet_syslog::SiemSettings::to_json`, no key), null when off.
+    pub siem: Value,
+    /// AC-2a 10.1: CIDRs that may call `/metrics` (None: the console's `--metrics-sources` or `--sources`).
+    pub metrics_sources: Option<String>,
+}
+
+/// One setup step's state (AC-2a 12.3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StepState {
+    Open,
+    Done,
+    Skipped,
+}
+
+impl StepState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StepState::Open => "open",
+            StepState::Done => "done",
+            StepState::Skipped => "skipped",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<StepState> {
+        match s {
+            "open" => Some(StepState::Open),
+            "done" => Some(StepState::Done),
+            "skipped" => Some(StepState::Skipped),
+            _ => None,
+        }
+    }
+}
+
+/// The steps of 12.2 kept on the server after bootstrap, in order.
+pub const SETUP_STEPS: [&str; 4] = ["signin", "email", "license", "relay"];
+
+/// `console.json` `setup` (AC-2a 12.3): `{steps: {signin, email, license, relay}, hidden}`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Setup {
+    pub steps: [StepState; 4],
+    pub hidden: bool,
+}
+
+impl Default for Setup {
+    fn default() -> Setup {
+        Setup { steps: [StepState::Open; 4], hidden: false }
+    }
+}
+
+impl Setup {
+    pub fn get(&self, step: &str) -> Option<StepState> {
+        SETUP_STEPS.iter().position(|s| *s == step).map(|i| self.steps[i])
+    }
+
+    /// Set a step; false for an unknown step.
+    pub fn set(&mut self, step: &str, state: StepState) -> bool {
+        match SETUP_STEPS.iter().position(|s| *s == step) {
+            Some(i) => {
+                self.steps[i] = state;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A step done by its own success (12.3); a skipped or open step becomes done, never the other way.
+    pub fn done(&mut self, step: &str) -> bool {
+        let before = self.get(step);
+        self.set(step, StepState::Done) && before != Some(StepState::Done)
+    }
+
+    /// The first step still open (an admin lands there after sign-in).
+    pub fn first_open(&self) -> Option<&'static str> {
+        SETUP_STEPS.iter().zip(self.steps.iter()).find(|(_, s)| **s == StepState::Open).map(|(n, _)| *n)
+    }
+
+    /// The "Finish setup" checklist shows (and `setup-unfinished` is raised) while a step is open or skipped and the
+    /// checklist is not hidden.
+    pub fn unfinished(&self) -> bool {
+        !self.hidden && self.steps.iter().any(|s| *s != StepState::Done)
+    }
+
+    pub fn steps_value(&self) -> Value {
+        let mut o = serde_json::Map::new();
+        for (n, s) in SETUP_STEPS.iter().zip(self.steps.iter()) {
+            o.insert((*n).to_owned(), Value::from(s.as_str()));
+        }
+        Value::Object(o)
+    }
+
+    pub fn to_value(&self) -> Value {
+        json!({ "steps": self.steps_value(), "hidden": self.hidden })
+    }
+
+    pub fn from_value(v: &Value) -> Option<Setup> {
+        let o = v.as_object()?;
+        if !exact_keys(o, &["steps", "hidden"], &["steps", "hidden"]) {
+            return None;
+        }
+        let steps = o.get("steps")?.as_object()?;
+        if !exact_keys(steps, &SETUP_STEPS, &SETUP_STEPS) {
+            return None;
+        }
+        let mut s = Setup { hidden: o.get("hidden")?.as_bool()?, ..Setup::default() };
+        for (i, n) in SETUP_STEPS.iter().enumerate() {
+            s.steps[i] = StepState::parse(str_of(steps.get(*n))?)?;
+        }
+        Some(s)
+    }
 }
 
 impl Default for Settings {
@@ -142,6 +253,9 @@ impl Default for Settings {
             email: MailConfig::off().to_settings(),
             license_request_to: None,
             links: Vec::new(),
+            tokens: Vec::new(),
+            siem: Value::Null,
+            metrics_sources: None,
         }
     }
 }
@@ -218,6 +332,15 @@ impl Settings {
     }
 
     pub fn to_value(&self) -> Value {
+        let mut v = self.to_value_ac1();
+        // A fleet console's exports (AC-2a 10): only when any is set, so an AC-1 book keeps its exact shape.
+        if !self.tokens.is_empty() || !self.siem.is_null() || self.metrics_sources.is_some() {
+            v["exports"] = json!({ "tokens": self.tokens, "siem": self.siem, "metricsSources": self.metrics_sources });
+        }
+        v
+    }
+
+    fn to_value_ac1(&self) -> Value {
         json!({
             "profile": self.profile.as_str(),
             "downgraded": self.downgraded,
@@ -263,6 +386,12 @@ impl Settings {
         }
         for l in o.get("links")?.as_array()? {
             s.links.push((str_of(l.get("label"))?.to_owned(), str_of(l.get("url"))?.to_owned()));
+        }
+        if let Some(x) = o.get("exports") {
+            let x = x.as_object()?;
+            s.tokens = x.get("tokens")?.as_array()?.clone();
+            s.siem = x.get("siem").cloned().unwrap_or(Value::Null);
+            s.metrics_sources = str_of(x.get("metricsSources")).map(str::to_owned);
         }
         Some(s)
     }
@@ -428,6 +557,13 @@ impl Console {
             self.check_high_sealing()?;
             let v = self.run_profile(Profile::High, t)?;
             return Ok(Done::ok(Out::ok(v), Some("-".into()), json!({ "from": now.as_str(), "to": "high", "downgraded": false, "reason": reason })));
+        }
+        // AC-2a 4.5: on a fleet console a loosening reaches relays only with two admins' assertions, so it always
+        // waits for a second admin here too (the stricter reading of AC-1 R4-3 and 4.5).
+        if self.is_fleet() {
+            let mut d = self.second_always(who, "settings.profile", "-", &p, t)?;
+            d.detail = json!({ "from": now.as_str(), "to": "standard", "downgraded": false, "reason": reason });
+            return Ok(d);
         }
         let mut d = self.second_or_run(who, "settings.profile", "-", &p, t, || self.run_profile(Profile::Standard, t))?;
         // `downgraded`: latched now (true), or still waiting for a second admin (false).
@@ -695,9 +831,239 @@ impl Console {
     }
 }
 
+// ── Exports (AC-2a 5.3, 10): scrape tokens and SIEM forwarding, fleet console only ──────────────────────────
+
+/// The sealed name of the SIEM client key (2.4).
+pub const SIEM_KEY_SECRET: &str = "siem-client-key";
+/// A scrape token's label: 1 to 64 characters after cleaning; its life 1 to 365 days.
+const TOKEN_LABEL_MAX: usize = 64;
+const TOKEN_DAYS: std::ops::RangeInclusive<i64> = 1..=365;
+
+impl Console {
+    fn exports_fleet(&self) -> Result<std::sync::Arc<crate::console_fleet::Fleet>, ApiError> {
+        self.fleet().ok_or_else(|| ApiError::of("not-found"))
+    }
+
+    fn token_records(&self) -> Vec<crate::fleet_export::TokenRecord> {
+        self.inner.lock().book.settings.tokens.iter().filter_map(crate::fleet_export::TokenRecord::from_json).collect()
+    }
+
+    /// GET settings/exports.
+    pub(crate) fn exports_view(&self) -> Result<Out, ApiError> {
+        let fleet = self.exports_fleet()?;
+        let tokens: Vec<Value> = self.token_records().iter().map(crate::fleet_export::TokenRecord::view).collect();
+        let (siem_json, sources) = {
+            let inner = self.inner.lock();
+            (inner.book.settings.siem.clone(), inner.book.settings.metrics_sources.clone())
+        };
+        let siem = match crate::fleet_syslog::SiemSettings::from_json(&siem_json) {
+            Some(s) => {
+                let mut v = s.view();
+                if let (Some(o), Some(st)) = (v.as_object_mut(), fleet.siem.status().as_object()) {
+                    for (k, x) in st {
+                        o.insert(k.clone(), x.clone());
+                    }
+                }
+                v
+            }
+            None => Value::Null,
+        };
+        let sources = sources.unwrap_or_else(|| fleet.metrics_sources_text());
+        Ok(Out::ok(json!({ "ok": true, "tokens": tokens, "siem": siem, "metricsSources": sources })))
+    }
+
+    /// POST settings/exports/token {label, relays, days, stepup}: the token only in this answer (10.1).
+    pub(crate) fn exports_token(&self, who: &Who, params: &Value, t: i64) -> Result<Done, ApiError> {
+        let fleet = self.exports_fleet()?;
+        let label: String = clean(str_of(params.get("label")).unwrap_or("")).chars().take(TOKEN_LABEL_MAX + 1).collect();
+        if label.is_empty() || label.chars().count() > TOKEN_LABEL_MAX {
+            return Err(ApiError::with("invalid", "Give the token a label of 1 to 64 characters."));
+        }
+        let days = int_of(params.get("days"), "days")?;
+        if !TOKEN_DAYS.contains(&days) {
+            return Err(ApiError::with("invalid", "A token lasts 1 to 365 days."));
+        }
+        let relays = match params.get("relays") {
+            Some(Value::String(s)) if s == "all" => crate::fleet_export::TokenRelays::All,
+            Some(Value::Array(a)) if !a.is_empty() => {
+                let known = fleet.relay_ids();
+                let mut ids = Vec::new();
+                for v in a {
+                    let id = v.as_str().filter(|id| known.iter().any(|k| k == id)).ok_or_else(|| ApiError::with("invalid", "relays names relays of this console, or all."))?;
+                    if !ids.iter().any(|x: &String| x == id) {
+                        ids.push(id.to_owned());
+                    }
+                }
+                crate::fleet_export::TokenRelays::List(ids)
+            }
+            _ => return Err(ApiError::with("invalid", "relays names relays of this console, or all.")),
+        };
+        let records = self.token_records();
+        let (token, record) = crate::fleet_export::mint_token(&label, &relays, Some(days), &who.email, t, &records)?;
+        let (hint, expires) = (record.hint.clone(), record.expires);
+        {
+            let mut inner = self.inner.lock();
+            inner.book.settings.tokens.push(record.to_json());
+            self.save_book(&mut inner)?;
+        }
+        let shown = match &relays {
+            crate::fleet_export::TokenRelays::All => json!("all"),
+            crate::fleet_export::TokenRelays::List(l) => json!(l),
+        };
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "token": token, "hint": hint, "expires": expires })), Some(label.clone()), json!({ "hint": hint, "label": label, "relays": shown, "expires": expires })))
+    }
+
+    /// POST settings/exports/token/revoke {hint}.
+    pub(crate) fn exports_token_revoke(&self, params: &Value) -> Result<Done, ApiError> {
+        self.exports_fleet()?;
+        let hint = str_of(params.get("hint")).unwrap_or("").to_owned();
+        let mut inner = self.inner.lock();
+        let before = inner.book.settings.tokens.len();
+        inner.book.settings.tokens.retain(|v| crate::fleet_export::TokenRecord::from_json(v).is_none_or(|r| r.hint != hint));
+        if inner.book.settings.tokens.len() == before {
+            return Err(ApiError::with("not-found", "There is no such token."));
+        }
+        self.save_book(&mut inner)?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true })), Some(hint.clone()), json!({ "hint": hint })))
+    }
+
+    /// The scrape token used last (10.1 `lastUsedAt`), written by the `/metrics` route.
+    pub(crate) fn token_used(&self, hint: &str, t: i64) {
+        let mut inner = self.inner.lock();
+        let mut changed = false;
+        for v in inner.book.settings.tokens.iter_mut() {
+            if let Some(mut r) = crate::fleet_export::TokenRecord::from_json(v).filter(|r| r.hint == hint) {
+                // At most one write a minute per token.
+                if r.last_used_at.is_none_or(|at| t - at >= MINUTE) {
+                    r.last_used_at = Some(t);
+                    *v = r.to_json();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            let _ = self.save_book(&mut inner);
+        }
+    }
+
+    /// POST settings/exports/siem {host, port, caPem, clientCertPem, clientKeyPem, events, includeReasons, reason,
+    /// stepup} or {off: true, reason, stepup} (10.2): a staged save verified by a test message; turning it off is a
+    /// second-admin action.
+    pub(crate) fn exports_siem(&self, who: &Who, params: &Value, t: i64) -> Result<Done, ApiError> {
+        let fleet = self.exports_fleet()?;
+        let reason = reason_of(params.get("reason"))?;
+        let high = self.profile_high();
+        if params.get("off").and_then(Value::as_bool) == Some(true) {
+            if self.inner.lock().book.settings.siem.is_null() {
+                return Err(ApiError::with("stale", "Nothing was changed: SIEM forwarding is already off."));
+            }
+            let p = json!({ "off": true, "reason": reason });
+            let mut d = self.second_or_run(who, "exports.siem", "-", &p, t, || self.run_siem_off())?;
+            d.detail = json!({ "off": true, "reason": reason, "verified": false });
+            return Ok(d);
+        }
+        let fips = cfg!(feature = "fips");
+        if high && !fips {
+            return Err(ApiError::of("fips-needed"));
+        }
+        let key = str_of(params.get("clientKeyPem")).map(str::trim).filter(|k| !k.is_empty()).map(str::to_owned);
+        if key.is_some() {
+            let compliant = self.seal.lock().as_ref().map(|s| s.compliant()).ok_or_else(|| ApiError::of("state-unreadable"))?;
+            if high && !compliant {
+                return Err(ApiError::of("seal-provider-needed"));
+            }
+        }
+        let mut body = params.clone();
+        if let Some(o) = body.as_object_mut() {
+            o.remove("reason");
+            o.remove("clientKeyPem");
+        }
+        let settings = crate::fleet_syslog::SiemSettings::from_body(&body, high, fips)?;
+        // A new key goes with the new settings; else the sealed one stays in use.
+        let key_pem = key.clone().or_else(|| self.seal_get(SIEM_KEY_SECRET).and_then(|b| String::from_utf8(b).ok()));
+        if let Err(why) = fleet.siem.stage(settings.clone(), key_pem) {
+            let shown: String = clean(&why).chars().take(300).collect();
+            return Err(ApiError::with("siem-failed", format!("The test message did not reach the SIEM: {shown}. Nothing was changed.")));
+        }
+        if let Some(k) = &key {
+            self.seal_put(SIEM_KEY_SECRET, k.as_bytes())?;
+        }
+        let saved = settings.to_json();
+        let view = settings.view();
+        {
+            let mut inner = self.inner.lock();
+            inner.book.settings.siem = saved;
+            self.save_book(&mut inner)?;
+        }
+        let detail = json!({ "host": view.get("host"), "port": view.get("port"), "events": view.get("events"), "includeReasons": view.get("includeReasons"), "verified": true, "off": false, "reason": reason });
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "verified": true })), Some("-".into()), detail))
+    }
+
+    /// SIEM forwarding off (after a second admin when two-person is on).
+    pub(crate) fn run_siem_off(&self) -> Result<Value, ApiError> {
+        let fleet = self.exports_fleet()?;
+        fleet.siem.off();
+        {
+            let mut inner = self.inner.lock();
+            inner.book.settings.siem = Value::Null;
+            self.save_book(&mut inner)?;
+        }
+        if let Some(s) = self.seal.lock().as_mut() {
+            let _ = s.remove(SIEM_KEY_SECRET);
+        }
+        Ok(json!({ "ok": true }))
+    }
+
+    /// POST settings/exports/siem/test {} (one a minute per admin).
+    pub(crate) fn exports_siem_test(&self, who: &Who, t: i64) -> Result<Done, ApiError> {
+        let fleet = self.exports_fleet()?;
+        self.limit(Limit::EmailTest, &format!("siem|{}", who.email), t)?;
+        fleet.siem.test().map_err(|why| {
+            let shown: String = clean(&why).chars().take(300).collect();
+            ApiError::with("siem-failed", format!("The test message did not reach the SIEM: {shown}. Nothing was changed."))
+        })?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true })), Some("-".into()), json!({})))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_steps_round_trip_and_the_checklist_shows_until_done_or_hidden() {
+        let mut s = Setup::default();
+        assert!(s.unfinished());
+        assert_eq!(s.first_open(), Some("signin"));
+        assert!(s.done("signin"));
+        assert!(!s.done("signin"), "done once");
+        assert!(s.set("email", StepState::Skipped));
+        assert!(!s.set("nope", StepState::Done));
+        assert_eq!(s.first_open(), Some("license"));
+        assert_eq!(Setup::from_value(&s.to_value()), Some(s.clone()));
+        assert_eq!(s.to_value()["steps"]["email"], "skipped");
+        s.set("license", StepState::Done);
+        s.set("relay", StepState::Done);
+        assert!(s.unfinished(), "a skipped step keeps the checklist");
+        s.set("email", StepState::Done);
+        assert!(!s.unfinished());
+        let mut h = Setup::default();
+        h.hidden = true;
+        assert!(!h.unfinished());
+        assert!(Setup::from_value(&json!({ "steps": { "signin": "open" }, "hidden": false })).is_none());
+    }
+
+    #[test]
+    fn exports_are_kept_only_when_set() {
+        let s = Settings::default();
+        assert!(s.to_value().get("exports").is_none(), "an AC-1 book keeps its exact shape");
+        let mut x = s.clone();
+        x.tokens.push(json!({ "hint": "abcd1234" }));
+        x.metrics_sources = Some("10.0.0.0/8".into());
+        let back = Settings::from_value(&x.to_value()).unwrap();
+        assert_eq!(back.tokens, x.tokens);
+        assert_eq!(back.metrics_sources.as_deref(), Some("10.0.0.0/8"));
+    }
 
     #[test]
     fn the_settings_round_trip_and_default_to_standard_and_off() {

@@ -1,0 +1,1536 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.2",
+ "encoding": "lp(...) writes each part as its byte length (4 bytes, big-endian) then its bytes. Inside lp: text (labels, ids such as c_, r_, en_, ap_ and sr_ ids, actions, targets, emails, roles) as UTF-8; integers (seq, generation, requestedAt) as decimal ASCII; hashes (previewHash, a previous rosterHash or policyHash, the first being 32 zero bytes) as their raw 32 bytes; credentialId, cose, attestationObject, clientDataJSON, spki and serials as raw bytes. canonical_json is AC-1 3.6's (CE-1 with null). In JSON: hashes and fingerprints are lowercase hex; keys, certificates, MACs, nonces and signatures are base64url without padding; serials are lowercase hex; times are milliseconds. Every ECDSA signature is the ASN.1 DER ECDSA-Sig-Value.",
+ "console_id": "c_0123456789abcdef",
+ "enrollment_id": "en_b40ab7b2c9d5a06d",
+ "relay_id": "r_3f0a9c2b7d5e1f48",
+ "rp_id": "console.acme.example",
+ "origin": "https://console.acme.example",
+ "console_ca_fingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+ "policy": {
+  "profile": "standard",
+  "twoPerson": "off"
+ },
+ "order": "admins first, then user managers; each group by email (UTF-8 bytes), then by credential id bytes",
+ "base": {
+  "entries": [
+   {
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "evidence": {
+     "fmt": "packed",
+     "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+     "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+    },
+    "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+   },
+   {
+    "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+    "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "evidence": {
+     "fmt": "packed",
+     "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+    },
+    "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+   },
+   {
+    "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+    "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+    "email": "bob@acme.example",
+    "role": "admin",
+    "evidence": {
+     "fmt": "packed",
+     "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+    },
+    "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+   },
+   {
+    "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+    "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+    "email": "carol@acme.example",
+    "role": "user-manager",
+    "evidence": null,
+    "evidenceSha256": null
+   }
+  ],
+  "entries_canonical": "[{\"cose\":\"pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE\",\"credentialId\":\"WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY\",\"email\":\"alice@acme.example\",\"evidenceSha256\":\"e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b\",\"role\":\"admin\"},{\"cose\":\"pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto\",\"credentialId\":\"wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g\",\"email\":\"alice@acme.example\",\"evidenceSha256\":\"db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7\",\"role\":\"admin\"},{\"cose\":\"pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs\",\"credentialId\":\"65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ\",\"email\":\"bob@acme.example\",\"evidenceSha256\":\"56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce\",\"role\":\"admin\"},{\"cose\":\"pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4\",\"credentialId\":\"FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc\",\"email\":\"carol@acme.example\",\"evidenceSha256\":null,\"role\":\"user-manager\"}]",
+  "preimage_hex": "000000186c756369642d666c6565742d626f6f7473747261702d763100000012635f3031323334353637383961626364656600000013656e5f62343061623762326339643561303664000000287b2270726f66696c65223a227374616e64617264222c2274776f506572736f6e223a226f6666227d000004885b7b22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2265766964656e6365536861323536223a2265313065303064353166323230383864613631626636346564343836316266353263623364373162623434323238363232626166353733333866373939323862222c22726f6c65223a2261646d696e227d2c7b22636f7365223a2270514543417959674153465949417a415f496c7930596f3779635838386d574a6d657045357a4567513836686b576c592d51593559545369496c67672d515073706a627564614a77355743334c624d37553562543039567853436b6e6955595a48546b5f7a746f222c2263726564656e7469616c4964223a2277517a35574b434362743332334d4b6379616341303152334b672d397035732d344854737553654b703367222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2265766964656e6365536861323536223a2264623835613165303664633564323633386563386464353331643461393330306432663565373366303533346161636534663534373865336437376537626437222c22726f6c65223a2261646d696e227d2c7b22636f7365223a2270514543417959674153465949466e4f66465a6b6937356d5650344a6d5a6b4c46775171534944342d375439566b317a7670724471664d47496c67675034574f68666f3674566d475f456e6e477178317857317231615f5047504b4f656a333976455f75374773222c2263726564656e7469616c4964223a2236354c33446f38707a415a454478704868547579766a79646153425f62626f47725844456c45385f567151222c22656d61696c223a22626f624061636d652e6578616d706c65222c2265766964656e6365536861323536223a2235366361623330643966646531333761643237666238353134646566666536373434333062326562373135633061393734616666356332343065663730366365222c22726f6c65223a2261646d696e227d2c7b22636f7365223a2270514543417959674153465949476a4c775630444c613053374235556f356b57514e30496c5554772d7262565332695455676a706e516462496c6767304b527755726a436577654f64342d765230744b4857715a544c72377446764e594a6e5a526f506d594334222c2263726564656e7469616c4964223a22466c635553705451396345657838713364713945354354646635585a5a765a504174333275473933777563222c22656d61696c223a226361726f6c4061636d652e6578616d706c65222c2265766964656e6365536861323536223a6e756c6c2c22726f6c65223a22757365722d6d616e61676572227d5d",
+  "bootstrapRosterHash": "7c84d2b59a995ca1204d7050ec92057c39d4da4eb27cd4f8e1e536dc11794532",
+  "hints": [
+   {
+    "email": "alice@acme.example",
+    "hint": "9c0370f292ba5efb"
+   },
+   {
+    "email": "alice@acme.example",
+    "hint": "78a2fe095dc1a9d6"
+   },
+   {
+    "email": "bob@acme.example",
+    "hint": "eeba6df2effe8bbf"
+   },
+   {
+    "email": "carol@acme.example",
+    "hint": "40d63935b6afe7b1"
+   }
+  ]
+ },
+ "evidence": [
+  {
+   "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+   "input_hex": "000000176c756369642d666c6565742d65766964656e63652d763100000115a363666d74667061636b65646761747453746d74a263616c672663736967584630440220143c893038971daf5e62e4f77d1ab4b5ad2837d811e59404357c81b42c8aaa52022062a96c83fe4dcc66fa827c8a0f977408542ad3aea7c2b801a58c57cf95b0d6e068617574684461746158a41778a9e35b59a1678e7cd2822ab9ecc5c49ec8122c18af454f98f1d010c86ed445000000001ac7f1b500014a00800000000000000a002058d7347828a8571698b46d0e3b649dd322be612c7c3a0bd080672e21f498b686a50102032620012158201ce56ccd67444f22bddd69db6c265234faa395c9d20527f80aa5b7f3ae18107b2258203bad3bf1b0347a1ea89aa4fe8df729c167f56062df705334f7d4f409a0fa15b1000000907b2274797065223a22776562617574686e2e637265617465222c226368616c6c656e6765223a2251314732756c6434564744456b7455704e7245793469654d52732d67504d4a584f685968435250454b6c30222c226f726967696e223a2268747470733a2f2f636f6e736f6c652e61636d652e6578616d706c65222c2263726f73734f726967696e223a66616c73657d",
+   "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+  },
+  {
+   "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+   "input_hex": "000000176c756369642d666c6565742d65766964656e63652d763100000116a363666d74667061636b65646761747453746d74a263616c6726637369675847304502206fca00f0389347f94fe09617d6fa90f659b071ce3371a2dd72802c8306032fd90221009e11cc93860057bb5006a68a4c28cdbc3f040ce1c687512a6058074861ce216f68617574684461746158a41778a9e35b59a1678e7cd2822ab9ecc5c49ec8122c18af454f98f1d010c86ed445000000001ac7f1b500014a00800000000000000a0020c10cf958a0826eddf6dcc29cc9a700d354772a0fbda79b3ee074ecb9278aa778a50102032620012158200cc0fc8972d18a3bc9c5fcf2658999ea44e7312043cea1916958f906396134a2225820f903eca636ee75a270e560b72db33b5396d3d3d5714829278946191d393fceda000000907b2274797065223a22776562617574686e2e637265617465222c226368616c6c656e6765223a226932704778644f63623542646b566f4a2d6530483457542d655441786c616861567943545056685443496b222c226f726967696e223a2268747470733a2f2f636f6e736f6c652e61636d652e6578616d706c65222c2263726f73734f726967696e223a66616c73657d",
+   "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+  },
+  {
+   "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+   "input_hex": "000000176c756369642d666c6565742d65766964656e63652d763100000116a363666d74667061636b65646761747453746d74a263616c67266373696758473045022100b26025835e3dcba3614f31fb1a16e50965a49672c08e17658ef247a158a45d8f02203cce79e5e925440b12d5e3f932ff38cb7d5c39a4fddc6d7aa3de91c114a39a0368617574684461746158a41778a9e35b59a1678e7cd2822ab9ecc5c49ec8122c18af454f98f1d010c86ed445000000001ac7f1b500014a00800000000000000a0020eb92f70e8f29cc06440f1a47853bb2be3c9d69207f6dba06ad70c4944f3f56a4a501020326200121582059ce7c56648bbe6654fe0999990b17042a4880f8fbb4fd564d73be9ac3a9f3062258203f858e85fa3ab55986fc49e71aac75c56d6bd5afcf18f28e7a3dfdbc4feeec6b000000907b2274797065223a22776562617574686e2e637265617465222c226368616c6c656e6765223a226749536f6251577041555a6a393474427555306e6c595972316b477969586b435f5a575841686b72554b55222c226f726967696e223a2268747470733a2f2f636f6e736f6c652e61636d652e6578616d706c65222c2263726f73734f726967696e223a66616c73657d",
+   "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+  }
+ ],
+ "changed": [
+  {
+   "name": "another COSE key for bob",
+   "field": "cose",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFNXT4CkPu2CEFlNFUpoIYqCRReoq3vgFjQNqlLQNZFAIlggOgKFbiCi_6GZRouoTp6N7Z5GevBjvW1iu9antP3cVwE",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "0e6640adf32d3e09925ee48dfc1e9a86a438d1bed21e673f54aedf95818eb4e2"
+  },
+  {
+   "name": "another credential id for bob",
+   "field": "credentialId",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "6qI4xf5bNEkwWsioNaQFC_gZGQqgqG2gWP-hp7d4NY8",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "f20374db3d587123"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": false,
+   "bootstrapRosterHash": "18175c13a278bd99cd22bec9d1900079bf1c3d3e50d19276eafc4d4cadbbe887"
+  },
+  {
+   "name": "carol as admin",
+   "field": "role",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "admin",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "7ed78eddb91355f71fe2e1a97f69a1b7a83f3395bf326bdaa4e669acd9f4ad25"
+  },
+  {
+   "name": "another evidence for alice",
+   "field": "evidenceSha256",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhAPCMxpCNSkwhZ9LmpRpaut4b9d-Jm3r7zzyISuthnrhuAiBD71Cew1CjbRb_fZ9MMmlveIAGW9Ljc7llDllDQOBw8WhhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIFjXNHgoqFcWmLRtDjtkndMivmEsfDoL0IBnLiH0mLaGpQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiTnE5VzFGaUJiMXluc2o3UTlpeHFiYVBMNVdFYk5NLTBnRVlWbjVYbWRONCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "59546d39c16f9b856fb05cc9e7e9e437e002837ecd84add5c14df970a32f4aad"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "c67decc6e6982b1cdcae7af45a7fdc76ba3d02788344bd2c5ac23f33ba9fe08e"
+  },
+  {
+   "name": "two-person on",
+   "field": "policy",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "on"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "a5cfe3a541df864204cd618a4afa5c1ddc55278968462ff8e339a948fb1aa7ff"
+  },
+  {
+   "name": "bob before alice",
+   "field": "order",
+   "enrollmentId": "en_b40ab7b2c9d5a06d",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "4b283c2322b4b6627822ed4d69bddf7883adb00bcab429aa17f21ca3a72364ee"
+  },
+  {
+   "name": "another enrollment id",
+   "field": "enrollmentId",
+   "enrollmentId": "en_b40ab7b2c9d5a06c",
+   "policy": {
+    "profile": "standard",
+    "twoPerson": "off"
+   },
+   "entries": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidence": {
+      "fmt": "packed",
+      "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+     },
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidence": null,
+     "evidenceSha256": null
+    }
+   ],
+   "displayed": [
+    {
+     "email": "alice@acme.example",
+     "hint": "9c0370f292ba5efb"
+    },
+    {
+     "email": "alice@acme.example",
+     "hint": "78a2fe095dc1a9d6"
+    },
+    {
+     "email": "bob@acme.example",
+     "hint": "eeba6df2effe8bbf"
+    },
+    {
+     "email": "carol@acme.example",
+     "hint": "40d63935b6afe7b1"
+    }
+   ],
+   "displayed_unchanged": true,
+   "bootstrapRosterHash": "04df9a1633e5c3d2e650cc1024560004b709588d69ecd01d49dff06520549709"
+  }
+ ],
+ "fingerprints": {
+  "label": "lucid-fleet-admin-key-v1",
+  "cases": [
+   {
+    "name": "alice key 1",
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "input_hex": "000000186c756369642d666c6565742d61646d696e2d6b65792d76310000002058d7347828a8571698b46d0e3b649dd322be612c7c3a0bd080672e21f498b6860000004da50102032620012158201ce56ccd67444f22bddd69db6c265234faa395c9d20527f80aa5b7f3ae18107b2258203bad3bf1b0347a1ea89aa4fe8df729c167f56062df705334f7d4f409a0fa15b100000012616c6963654061636d652e6578616d706c650000000561646d696e",
+    "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+   },
+   {
+    "name": "same key as user-manager",
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@acme.example",
+    "role": "user-manager",
+    "input_hex": "000000186c756369642d666c6565742d61646d696e2d6b65792d76310000002058d7347828a8571698b46d0e3b649dd322be612c7c3a0bd080672e21f498b6860000004da50102032620012158201ce56ccd67444f22bddd69db6c265234faa395c9d20527f80aa5b7f3ae18107b2258203bad3bf1b0347a1ea89aa4fe8df729c167f56062df705334f7d4f409a0fa15b100000012616c6963654061636d652e6578616d706c650000000c757365722d6d616e61676572",
+    "fingerprint": "6ae9418f612c45eab48848113e85712d3b4d46a014f8b82e69ac397c313842a5"
+   },
+   {
+    "name": "same key, another email",
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@other.example",
+    "role": "admin",
+    "input_hex": "000000186c756369642d666c6565742d61646d696e2d6b65792d76310000002058d7347828a8571698b46d0e3b649dd322be612c7c3a0bd080672e21f498b6860000004da50102032620012158201ce56ccd67444f22bddd69db6c265234faa395c9d20527f80aa5b7f3ae18107b2258203bad3bf1b0347a1ea89aa4fe8df729c167f56062df705334f7d4f409a0fa15b100000013616c696365406f746865722e6578616d706c650000000561646d696e",
+    "fingerprint": "f017a59177caaec8748c09562b38a4b8c3c97de512159e419dbd6a2012128ff4"
+   },
+   {
+    "name": "same id, another COSE key",
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "input_hex": "000000186c756369642d666c6565742d61646d696e2d6b65792d76310000002058d7347828a8571698b46d0e3b649dd322be612c7c3a0bd080672e21f498b6860000004da501020326200121582059ce7c56648bbe6654fe0999990b17042a4880f8fbb4fd564d73be9ac3a9f3062258203f858e85fa3ab55986fc49e71aac75c56d6bd5afcf18f28e7a3dfdbc4feeec6b00000012616c6963654061636d652e6578616d706c650000000561646d696e",
+    "fingerprint": "4e5d5b5ea2487fd206ed3cda12779da34ce95b585f72c2ad9d62f9dbd792db7e"
+   },
+   {
+    "name": "same COSE key, another id",
+    "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "input_hex": "000000186c756369642d666c6565742d61646d696e2d6b65792d763100000020eb92f70e8f29cc06440f1a47853bb2be3c9d69207f6dba06ad70c4944f3f56a40000004da50102032620012158201ce56ccd67444f22bddd69db6c265234faa395c9d20527f80aa5b7f3ae18107b2258203bad3bf1b0347a1ea89aa4fe8df729c167f56062df705334f7d4f409a0fa15b100000012616c6963654061636d652e6578616d706c650000000561646d696e",
+    "fingerprint": "27d36cbc2b8bc3e07d1dcf31550fdda92ed56257faa15241221f8ec431253be1"
+   }
+  ]
+ },
+ "endorsement": {
+  "label": "lucid-fleet-endorse-key-v1",
+  "base": {
+   "endorsement": {
+    "v": 1,
+    "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+    "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+    "email": "alice@acme.example",
+    "role": "admin",
+    "relayId": "r_3f0a9c2b7d5e1f48",
+    "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+    "at": 1794880800000
+   },
+   "canonical": "{\"at\":1794880800000,\"consoleCaFingerprint\":\"b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211\",\"cose\":\"pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE\",\"credentialId\":\"WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY\",\"email\":\"alice@acme.example\",\"relayId\":\"r_3f0a9c2b7d5e1f48\",\"role\":\"admin\",\"v\":1}",
+   "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d"
+  },
+  "signer": {
+   "curve": "P-256",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004a770fe521cb6d83e1702088910faaae9569fea02a988adcffae824aba94398e56a0ddc563a1cdf54eafb40fc92978b1e8a00c0a7537dd94d6799d2289a27916e",
+   "about": "the Meeting Hub device form (ECDSA P-256 SHA-256, DER); a Remote Spokes hub signs the same input with its node key's own algorithm, as its hub ops"
+  },
+  "signature_b64u": "MEUCIQDRlxZc3niLec76ZfnO9qdAfXMXTNXSc63e6VQhCiEt-gIgcck2eXR3DZzX7NTggDag8jTPSEXh73UJjggJM_4CIGs",
+  "checks": [
+   "chain",
+   "revoked",
+   "email",
+   "not-relay-admin",
+   "signature",
+   "relay",
+   "console-ca",
+   "unknown-key"
+  ],
+  "about": "chain covers the chain to the org root or client_ca and the validity dates; revoked covers the CRL, the denied set and blocks; not-relay-admin applies to Meeting Hub admin entries only; unknown-key when no first-roster entry equals the endorsement's credentialId, cose, email and role",
+  "cases": [
+   {
+    "name": "hub endorsement",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": true,
+    "why": null,
+    "code": null
+   },
+   {
+    "name": "device endorsement",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": true,
+    "why": null,
+    "code": null
+   },
+   {
+    "name": "hub certificate not from the relay's org root",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": false,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "chain",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "device certificate out of date",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": false,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "chain",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "hub in the CRL",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": true,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "revoked",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "hub blocked",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": true,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "revoked",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "device in the denied set",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": true,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "revoked",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "certificate names another email",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "bob@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "email",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "admin entry, principal not in admins",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": false,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "not-relay-admin",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "user-manager entry, principal not in admins",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "carol@acme.example",
+     "inAdmins": false,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d7631000001747b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949476a4c775630444c613053374235556f356b57514e30496c5554772d7262565332695455676a706e516462496c6767304b527755726a436577654f64342d765230744b4857715a544c72377446764e594a6e5a526f506d594334222c2263726564656e7469616c4964223a22466c635553705451396345657838713364713945354354646635585a5a765a504174333275473933777563222c22656d61696c223a226361726f6c4061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a22757365722d6d616e61676572222c2276223a317d",
+    "ok": true,
+    "why": null,
+    "code": null
+   },
+   {
+    "name": "bad signature",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": false
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "signature",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "for another relay",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_c2a7f05e19d83b64",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f63326137663035653139643833623634222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "relay",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "for another console CA generation",
+    "product": "meet",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2264353262613936313130643032656633636338373239393838383363613237333538316263356234303665653665336466326362626261663234363930353232222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "console-ca",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "another role",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "user-manager",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d7631000001747b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a22757365722d6d616e61676572222c2276223a317d",
+    "ok": false,
+    "why": "unknown-key",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "another COSE key",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949466e4f66465a6b6937356d5650344a6d5a6b4c46775171534944342d375439566b317a7670724471664d47496c67675034574f68666f3674566d475f456e6e477178317857317231615f5047504b4f656a333976455f75374773222c2263726564656e7469616c4964223a22574e63306543696f567861597447304f4f32536430794b2d595378384f6776516747637549665359746f59222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "unknown-key",
+    "code": "endorse-refused"
+   },
+   {
+    "name": "another credential id",
+    "product": "spokes",
+    "endorsement": {
+     "v": 1,
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "consoleCaFingerprint": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+     "at": 1794880800000
+    },
+    "facts": {
+     "chain": true,
+     "inDate": true,
+     "revoked": false,
+     "blocked": false,
+     "certEmail": "alice@acme.example",
+     "inAdmins": true,
+     "signature": true
+    },
+    "signing_input_hex": "0000001a6c756369642d666c6565742d656e646f7273652d6b65792d76310000016d7b226174223a313739343838303830303030302c22636f6e736f6c65436146696e6765727072696e74223a2262316666656337656134643436346138663034363132353730303665353538663965663062333732313138616137333337366464653838353637333334323131222c22636f7365223a2270514543417959674153465949427a6c624d316e52453869766431703232776d556a54366f35584a3067556e2d41716c745f4f7547424237496c67674f363037386241306568366f6d71542d6a6663707757663159474c6663464d303939543043614436466245222c2263726564656e7469616c4964223a2236354c33446f38707a415a454478704868547579766a79646153425f62626f47725844456c45385f567151222c22656d61696c223a22616c6963654061636d652e6578616d706c65222c2272656c61794964223a22725f33663061396332623764356531663438222c22726f6c65223a2261646d696e222c2276223a317d",
+    "ok": false,
+    "why": "unknown-key",
+    "code": "endorse-refused"
+   }
+  ]
+ },
+ "duplicates": {
+  "cases": [
+   {
+    "name": "no duplicates",
+    "entries": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidenceSha256": null
+     }
+    ],
+    "ok": true,
+    "code": null
+   },
+   {
+    "name": "same credential id for two emails",
+    "entries": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIDAMoBeaKsek0pZF4gOCR9KFwm6z_RBHdMCDu6E7yanvIlgg3OosSuiStIRrtJgKJo2X0ASc5hh3QK50wcBpldZfIWI",
+      "email": "dave@acme.example",
+      "role": "admin",
+      "evidenceSha256": null
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidenceSha256": null
+     }
+    ],
+    "ok": false,
+    "code": "fleet-roster-duplicate"
+   },
+   {
+    "name": "same COSE key under two credential ids",
+    "entries": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "aZzptj8cDYIpRSg2Pb2WAjvJYBq3LFM0uAnRFOluFpw",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidenceSha256": null
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidenceSha256": null
+     }
+    ],
+    "ok": false,
+    "code": "fleet-roster-duplicate"
+   },
+   {
+    "name": "same key for two roles",
+    "entries": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "user-manager",
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidenceSha256": null
+     }
+    ],
+    "ok": false,
+    "code": "fleet-roster-duplicate"
+   }
+  ],
+  "later_add": {
+   "name": "later add repeats a key already in the roster",
+   "roster": [
+    {
+     "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+    },
+    {
+     "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+     "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+     "email": "alice@acme.example",
+     "role": "admin",
+     "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+    },
+    {
+     "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+     "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+    },
+    {
+     "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+     "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+     "email": "carol@acme.example",
+     "role": "user-manager",
+     "evidenceSha256": null
+    }
+   ],
+   "adds": [
+    {
+     "credentialId": "aZzptj8cDYIpRSg2Pb2WAjvJYBq3LFM0uAnRFOluFpw",
+     "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+     "email": "bob@acme.example",
+     "role": "admin",
+     "evidenceSha256": null
+    }
+   ],
+   "ok": false,
+   "code": "fleet-roster-duplicate"
+  }
+ },
+ "completion": {
+  "about": "done when at least one admin entry is anchored; under a High policy with two-person on, two admin anchors of different emails by different hubs, devices or fingerprints",
+  "cases": [
+   {
+    "name": "no anchor",
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "anchors": [],
+    "done": false
+   },
+   {
+    "name": "only a user manager anchored",
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "anchors": [
+     {
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "via": "device",
+      "by": "hub 5c20"
+     }
+    ],
+    "done": false
+   },
+   {
+    "name": "one admin anchored",
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     }
+    ],
+    "done": true
+   },
+   {
+    "name": "one admin, Standard with two-person on",
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     }
+    ],
+    "done": true
+   },
+   {
+    "name": "one admin, High with two-person on",
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     }
+    ],
+    "done": false
+   },
+   {
+    "name": "two keys of one admin, two hubs",
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     },
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f02"
+     }
+    ],
+    "done": false
+   },
+   {
+    "name": "two admins by the same hub",
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     },
+     {
+      "email": "bob@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     }
+    ],
+    "done": false
+   },
+   {
+    "name": "two admins by two hubs",
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     },
+     {
+      "email": "bob@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 9a33"
+     }
+    ],
+    "done": true
+   },
+   {
+    "name": "one device and one admin-key fingerprint",
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "anchors": [
+     {
+      "email": "alice@acme.example",
+      "role": "admin",
+      "via": "device",
+      "by": "hub 7f01"
+     },
+     {
+      "email": "bob@acme.example",
+      "role": "admin",
+      "via": "admin-key",
+      "by": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     }
+    ],
+    "done": true
+   }
+  ]
+ },
+ "key_record": {
+  "record": {
+   "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+   "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+   "email": "alice@acme.example",
+   "role": "admin",
+   "aaguid": "1ac7f1b5-0001-4a00-8000-00000000000a",
+   "createdAt": 1794875400000,
+   "nonce": "-TH1n7RLtQ6O-KWCg4Fw-A"
+  },
+  "r": "eyJhYWd1aWQiOiIxYWM3ZjFiNS0wMDAxLTRhMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJjb3NlIjoicFFFQ0F5WWdBU0ZZSUJ6bGJNMW5SRThpdmQxcDIyd21ValQ2bzVYSjBnVW4tQXFsdF9PdUdCQjdJbGdnTzYwNzhiQTBlaDZvbXFULWpmY3B3V2YxWUdMZmNGTTA5OVQwQ2FENkZiRSIsImNyZWF0ZWRBdCI6MTc5NDg3NTQwMDAwMCwiY3JlZGVudGlhbElkIjoiV05jMGVDaW9WeGFZdEcwT08yU2QweUstWVN4OE9ndlFnR2N1SWZTWXRvWSIsImVtYWlsIjoiYWxpY2VAYWNtZS5leGFtcGxlIiwibm9uY2UiOiItVEgxbjdSTHRRNk8tS1dDZzRGdy1BIiwicm9sZSI6ImFkbWluIn0",
+  "url": "http://127.0.0.1:49731/admin-console/key-record?r=eyJhYWd1aWQiOiIxYWM3ZjFiNS0wMDAxLTRhMDAtODAwMC0wMDAwMDAwMDAwMGEiLCJjb3NlIjoicFFFQ0F5WWdBU0ZZSUJ6bGJNMW5SRThpdmQxcDIyd21ValQ2bzVYSjBnVW4tQXFsdF9PdUdCQjdJbGdnTzYwNzhiQTBlaDZvbXFULWpmY3B3V2YxWUdMZmNGTTA5OVQwQ2FENkZiRSIsImNyZWF0ZWRBdCI6MTc5NDg3NTQwMDAwMCwiY3JlZGVudGlhbElkIjoiV05jMGVDaW9WeGFZdEcwT08yU2QweUstWVN4OE9ndlFnR2N1SWZTWXRvWSIsImVtYWlsIjoiYWxpY2VAYWNtZS5leGFtcGxlIiwibm9uY2UiOiItVEgxbjdSTHRRNk8tS1dDZzRGdy1BIiwicm9sZSI6ImFkbWluIn0",
+  "nonce_minutes": 30
+ }
+}

@@ -10,6 +10,13 @@
 //
 // Revision 4 adds qr.js and two script tests run with Node.js (LUCID_TEST_NODE names another binary): qr.js against the
 // vector's QR matrices, and app.js in a small DOM double for the lock screen and the sign-in banner.
+//
+// Contract AC-2a section 16.1, slice f-ui: charts.js (9.6) and the fleet pages. charts.js and app.js have no HTML sink
+// and never touch a style; every chart has a title, a desc and a table toggle; the tone classes exist for every
+// palette; the fleet nav equals the vector's, with Upgrades and Support absent; every 13.1 and 13.2 string the page
+// shows is the vector's; the key record navigation is the one loopback URL; and, in the DOM double, the setup screens
+// render each step and resume, and Relays, People and the charts work at phone width.
+//   tests/admin_console_fleet_words_v1.json   tools/make_admin_console_fleet_vectors.py
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -24,6 +31,7 @@ const INDEX_HTML: &str = include_str!("../console/index.html");
 const THEME_JS: &str = include_str!("../console/theme.js");
 const APP_JS: &str = include_str!("../console/app.js");
 const QR_JS: &str = include_str!("../console/qr.js");
+const CHARTS_JS: &str = include_str!("../console/charts.js");
 const APP_CSS: &str = include_str!("../console/app.css");
 const MANIFEST: &str = include_str!("../console/manifest.webmanifest");
 const ICON_SVG: &[u8] = include_bytes!("../console/icon.svg");
@@ -31,6 +39,8 @@ const FAVICON_SVG: &[u8] = include_bytes!("../console/favicon.svg");
 
 /// The one URL allowed in an asset: the SVG namespace of the icon files.
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
+/// AC-2a 3.9: the one loopback URL app.js may name, the start of the key record navigation.
+const KEY_RECORD_URL: &str = "http://127.0.0.1:\" + port + \"/admin-console/key-record?r=\" + rec)";
 /// The 8.3 `bad-url` words name the scheme; the page shows them before asking the relay.
 const BAD_URL_WORDS: &str = "Links must start with https:// and name a host.";
 
@@ -40,6 +50,7 @@ fn text_assets() -> Vec<(&'static str, String)> {
         ("theme.js", THEME_JS.to_owned()),
         ("app.js", APP_JS.to_owned()),
         ("qr.js", QR_JS.to_owned()),
+        ("charts.js", CHARTS_JS.to_owned()),
         ("app.css", APP_CSS.to_owned()),
         ("manifest.webmanifest", MANIFEST.to_owned()),
         ("icon.svg", String::from_utf8_lossy(ICON_SVG).into_owned()),
@@ -117,10 +128,13 @@ fn no_outside_url() {
         for scheme in ["http://", "https://"] {
             for at in positions(&text, scheme) {
                 let rest = &text[at..];
-                // The inline SVG namespace: the icon files, and qr.js, which draws the QR code with createElementNS.
-                let namespace = (name.ends_with(".svg") || name == "qr.js") && rest.starts_with(SVG_NS);
+                // The inline SVG namespace: the icon files, qr.js (the QR code) and charts.js (AC-2a 9.6), which draw with
+                // createElementNS.
+                let namespace = (name.ends_with(".svg") || name == "qr.js" || name == "charts.js") && rest.starts_with(SVG_NS);
                 let words = name == "app.js" && text[..at + scheme.len()].ends_with("start with https://");
-                assert!(namespace || words, "{name}: an outside URL at byte {at}: {}", rest.chars().take(60).collect::<String>());
+                // AC-2a 3.9: the key record's top-level navigation to the IDE plugin's or Hub app's loopback page.
+                let loopback = name == "app.js" && rest.starts_with(KEY_RECORD_URL);
+                assert!(namespace || words || loopback, "{name}: an outside URL at byte {at}: {}", rest.chars().take(60).collect::<String>());
             }
         }
         assert!(!text.contains("@font-face") && !text.contains("//cdn"), "{name}: no web font, no CDN");
@@ -150,8 +164,9 @@ fn page_shell_scripts_and_wordmark() {
     let theme = h.find("<script src=\"/console/theme.js\"></script>").expect("theme.js, blocking");
     let app = h.find("<script src=\"/console/app.js\" defer></script>").expect("app.js with defer");
     let qr = h.find("<script src=\"/console/qr.js\" defer></script>").expect("qr.js with defer, before app.js");
+    let charts = h.find("<script src=\"/console/charts.js\" defer></script>").expect("charts.js with defer, before app.js (AC-2a 9.6)");
     let head_end = h.find("</head>").unwrap();
-    assert!(theme < head_end && app < head_end && theme < qr && qr < app);
+    assert!(theme < head_end && app < head_end && theme < qr && qr < app && charts < app);
     assert!(h.contains("<link rel=\"stylesheet\" href=\"/console/app.css\">"));
     assert!(h.contains("<link rel=\"icon\" type=\"image/svg+xml\" href=\"/console/favicon.svg\">"));
     assert!(h.contains("<link rel=\"manifest\" href=\"/console/manifest.webmanifest\">"));
@@ -466,9 +481,13 @@ fn password_and_code_fields_name_their_autocomplete() {
     for (name, text) in [("app.js", APP_JS), ("index.html", INDEX_HTML)] {
         for (n, line) in text.lines().enumerate() {
             if line.contains("type: \"password\"") || line.contains("type=\"password\"") {
+                // AC-2a 5.7: the relay's Join form takes the enrollment code in a password-type field that no password
+                // manager should keep, marked data-code="enroll" with autocomplete off.
+                let enroll_code = line.contains("autocomplete: \"off\"") && line.contains("\"data-code\": \"enroll\"");
                 let named = ["autocomplete: \"current-password\"", "autocomplete: \"new-password\"", "autocomplete=\"current-password\"", "autocomplete=\"new-password\""]
                     .iter()
-                    .any(|a| line.contains(a));
+                    .any(|a| line.contains(a))
+                    || enroll_code;
                 assert!(named, "{name}:{}: a password field without its autocomplete", n + 1);
             }
             if line.contains("one-time-code") {
@@ -531,6 +550,180 @@ fn lock_screen_leaves_no_value_and_the_banner_comes_first() {
     // 12.1: the lock screen leaves no displayed value in the DOM (a DOM snapshot after the idle limit), and the sign-in
     // screen shows the banner before the email field.
     run_harness("dom", "-");
+}
+
+// ---- AC-2a (16.1 f-ui) ----
+
+#[test]
+fn charts_and_app_have_no_html_sink_and_touch_no_style() {
+    for (name, text) in [("charts.js", CHARTS_JS), ("app.js", APP_JS)] {
+        for banned in ["innerHTML", "insertAdjacentHTML", "outerHTML", "document.write", ".style", "setAttribute(\"style\"", "setAttribute('style'"] {
+            assert!(!text.contains(banned), "{name} contains {banned}");
+        }
+    }
+    // 9.6: colors only by class, geometry only from checked numbers, labels as text nodes, nothing animates.
+    for banned in ["fill:", "stroke:", "color:", ".animate(", "requestAnimationFrame", "textContent =", "createElement(\"style\")"] {
+        assert!(!CHARTS_JS.contains(banned), "charts.js contains {banned}");
+    }
+    assert!(CHARTS_JS.contains("function geo(v) {\n    return finite(v) ?"), "every geometry attribute passes Number.isFinite");
+    assert!(CHARTS_JS.contains("const finite = (v) => typeof v === \"number\" && Number.isFinite(v);"));
+    assert!(CHARTS_JS.contains("document.createTextNode("), "labels are text nodes");
+    assert!(!CHARTS_JS.contains("fetch(") && !CHARTS_JS.contains("import "), "charts.js loads nothing");
+}
+
+/// The body of `function <name>(` in charts.js, up to the next top-level builder comment.
+fn builder_body(name: &str) -> &'static str {
+    let at = CHARTS_JS.find(&format!("  function {name}(")).unwrap_or_else(|| panic!("charts.js has no {name}"));
+    let rest = &CHARTS_JS[at..];
+    let end = rest[1..].find("\n  /**").or_else(|| rest[1..].find("\n  function setWords")).map_or(rest.len(), |e| e + 1);
+    &rest[..end]
+}
+
+#[test]
+fn every_chart_has_title_desc_and_a_table_toggle() {
+    // The frame: role img named by its title and described by its desc.
+    let frame = builder_body("frame");
+    assert!(frame.contains("role: \"img\"") && frame.contains("\"aria-labelledby\": id + \"-t \" + id + \"-d\""));
+    assert!(frame.contains("svg(\"title\", { id: id + \"-t\" }") && frame.contains("svg(\"desc\", { id: id + \"-d\" }"));
+    // The table toggle: a details element whose summary is "Show as a table", a table with a caption.
+    let table = builder_body("table");
+    assert!(table.contains("html(\"details\", \"chart-table\", html(\"summary\", null, WORDS.table)"));
+    assert!(table.contains("html(\"caption\", null, caption)") && table.contains("setAttribute(\"scope\", \"col\")"));
+    for b in ["lineChart", "barChart", "heatStrip"] {
+        let body = builder_body(b);
+        assert!(body.contains("frame(o.title, desc,"), "{b} draws inside the accessible frame");
+        assert!(body.contains("table(o.title,"), "{b} adds the table toggle");
+        assert!(body.contains("tip(") || body.contains("hit("), "{b} carries hover values in SVG title");
+    }
+    // The page passes the vector's words to charts.js and draws every chart through these builders.
+    let words = vector("admin_console_fleet_words_v1.json");
+    assert_eq!(words["page"]["charts.table"], "Show as a table");
+    assert!(APP_JS.contains("window.LucidCharts.setWords({ table: FW[\"charts.table\"], noData: FW[\"charts.no-data\"]"));
+    assert!(!APP_JS.contains("createElementNS"), "app.js draws no SVG of its own");
+}
+
+#[test]
+fn tone_classes_exist_for_every_palette() {
+    let themes = vector("admin_console_themes_v1.json");
+    let base = palette_block("lucid-dark");
+    for (tone, token) in [("ok", "--ac-ok"), ("warn", "--ac-warn"), ("danger", "--ac-danger"), ("link", "--ac-link"), ("muted", "--text-secondary")] {
+        let rule = format!(".ac-tone-{tone} {{ color: var({token}); }}");
+        assert!(APP_CSS.contains(&rule), "app.css lacks {rule}");
+        assert!(CHARTS_JS.contains(&format!("\"ac-tone-{tone}\"")), "charts.js does not use ac-tone-{tone}");
+        for t in themes.as_array().unwrap() {
+            let id = t["id"].as_str().unwrap();
+            let value = resolve(token, &palette_block(id), &base);
+            assert!(value.starts_with('#'), "{id}: {token} resolves to {value}");
+        }
+    }
+    // SVG shapes take the tone through currentColor; text in charts stays at the 12 px floor.
+    assert!(APP_CSS.contains(".chart-line { fill: none; stroke: currentColor;"));
+    assert!(APP_CSS.contains(".chart-svg text { font-size: 12px;"));
+}
+
+/// The FNAV block of app.js.
+fn fnav() -> &'static str {
+    let at = APP_JS.find("const FNAV = [").expect("FNAV in app.js");
+    &APP_JS[at..at + APP_JS[at..].find("\n  ];").unwrap()]
+}
+
+#[test]
+fn fleet_nav_equals_the_vector_without_upgrades_and_support() {
+    let words = vector("admin_console_fleet_words_v1.json");
+    let nav = words["nav"].as_array().expect("the vector's nav list");
+    let block = fnav();
+    let mut at = 0;
+    let mut shown = 0;
+    for n in nav {
+        let id = n["id"].as_str().unwrap();
+        let label = n["label"].as_str().unwrap();
+        assert_eq!(words["page"][id], label, "{id}");
+        if !n["phase"].is_null() {
+            assert!(!block.contains(&format!("\"{id}\"")), "{id} (phase {}) is in the fleet nav", n["phase"]);
+            assert!(!APP_JS.contains(&format!("\"{id}\"")), "app.js names {id}, which is not rendered in AC-2a");
+            continue;
+        }
+        shown += 1;
+        let pos = block[at..].find(&format!("{{ id: \"{id}\"")).unwrap_or_else(|| panic!("{id} missing or out of order in FNAV")) + at;
+        let line = &block[pos..pos + block[pos..].find('\n').unwrap_or(block.len() - pos)];
+        let mut p = 0;
+        for page in n["pages"].as_array().unwrap() {
+            let w = format!("\"{}\"]", page.as_str().unwrap());
+            p += line[p..].find(&w).unwrap_or_else(|| panic!("{id}: page {w} missing or out of order")) + w.len();
+        }
+        assert_eq!(line.matches("\"]").count(), n["pages"].as_array().unwrap().len(), "{id}: page count");
+        at = pos + 1;
+    }
+    assert_eq!(block.matches("{ id: \"nav.").count(), shown, "FNAV has exactly the rendered groups");
+    assert!(!APP_JS.contains("\"Upgrades\"") && !APP_JS.contains("\"Support\""));
+}
+
+#[test]
+fn every_fleet_page_and_dialog_string_comes_from_the_vector() {
+    let words = vector("admin_console_fleet_words_v1.json");
+    let nav_reserved: Vec<&str> = words["nav"].as_array().unwrap().iter().filter(|n| !n["phase"].is_null()).map(|n| n["id"].as_str().unwrap()).collect();
+    // The endorse.* words, the key-record.* loopback page words and the "endorse key" dialog are the IDE plugin's and
+    // the Hub app's (3.9), not the page's.
+    let not_page = |id: &str| id.starts_with("endorse.") || id.starts_with("key-record.") || nav_reserved.contains(&id);
+    let mut missing = Vec::new();
+    let mut n = 0;
+    for (id, s) in words["page"].as_object().expect("page words") {
+        if not_page(id) {
+            assert!(!APP_JS.contains(&format!("\"{id}\"")), "app.js shows {id}, which is not a page word");
+            continue;
+        }
+        let line = format!("\"{id}\": {}", serde_json::to_string(s).unwrap());
+        if !APP_JS.contains(&line) {
+            missing.push(line);
+        }
+        n += 1;
+    }
+    for (key, d) in words["dialogs"].as_object().expect("dialogs") {
+        if key == "endorse-key" {
+            assert!(!APP_JS.contains(&format!("\"{key}\"")), "app.js shows the apps' endorse key dialog");
+            continue;
+        }
+        let line = format!("\"{key}\": {{ title: {}, body: {}, button: {} }}", serde_json::to_string(&d["title"]).unwrap(),
+            serde_json::to_string(&d["body"]).unwrap(), serde_json::to_string(&d["button"]).unwrap());
+        if !APP_JS.contains(&line) {
+            missing.push(line);
+        }
+        n += 1;
+    }
+    // The refusals the page shows before asking (13.3) are the vector's words.
+    for code in ["fleet-scope-needs-people", "fleet-scope-required", "csv-limit"] {
+        let line = format!("\"{code}\": {}", serde_json::to_string(&words["refusals"][code]["words"]).unwrap());
+        if !APP_JS.contains(&line) {
+            missing.push(line);
+        }
+    }
+    assert!(n > 200, "{n} strings checked");
+    assert!(missing.is_empty(), "fleet words in app.js differ from the vector:\n{}", missing.join("\n"));
+    // Revision 3.2: a confirmed change the relay may not have run is shown to the admin.
+    assert!(APP_JS.contains("w.result === \"unknown\" ? FW[\"fleet.confirm-unknown\"]"));
+}
+
+#[test]
+fn key_record_navigation_is_the_one_loopback_url() {
+    // 3.9: a top-level navigation (no fetch, so connect-src stays 'self'), only with the app's own port and nonce.
+    assert_eq!(positions(APP_JS, "http://").len(), 1, "app.js names one http URL");
+    assert!(APP_JS.contains(&format!("location.assign(\"{KEY_RECORD_URL};")));
+    assert!(APP_JS.contains("const RECORD = /^([0-9]{1,5})\\.([A-Za-z0-9_-]{22})$/;"));
+    assert!(APP_JS.contains("return port >= 1 && port <= 65535 ? port : null;"));
+    assert!(APP_JS.contains("if (!port || !/^[A-Za-z0-9_-]{1,8192}$/.test(rec)) return false;"));
+    // The record value comes from #join=...&record= or #record= and leaves the address bar at once.
+    assert!(APP_JS.contains("const rec = /^#(?:join=[^&]*&)?record=/.test(h)"));
+    assert!(APP_JS.contains("if (link || rec) history.replaceState(null, \"\", location.pathname + location.search);"));
+    assert!(APP_JS.contains("FW[\"account.record-key\"]"));
+}
+
+#[test]
+fn fleet_setup_resumes_and_relays_people_and_charts_fit_a_phone() {
+    // 12.1 to 12.3 and AC-1 7.2: the setup screens render each step and resume; Relays, People and the charts at
+    // phone width.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("admin_console_fleet_words_v1.json");
+    assert!(path.exists(), "{}: copy it from Meeting Hub tests/vectors after running its generator", path.display());
+    run_harness("fleet", path.to_str().unwrap());
 }
 
 /// The script harness: qr.js against the vector, and app.js in a small DOM double built from index.html.
@@ -903,10 +1096,32 @@ const settle = async () => {
   for (let i = 0; i < 60; i++) await new Promise((r) => setImmediate(r));
 };
 
-// Loads theme.js, qr.js and app.js against a fake relay that answers `answers` ("GET me", "POST login/begin", ...).
-function boot(answers) {
+// Loads theme.js, qr.js, charts.js and app.js against a fake relay that answers `answers` ("GET me", "POST
+// login/begin", ...). opts.hash is the starting hash (setting location.hash fires hashchange, as a browser does);
+// opts.narrow makes "(max-width: 600px)" match, the phone width of AC-1 7.2. Every request is kept in `calls`.
+let loc = null;
+let calls = [];
+function boot(answers, opts) {
+  const o = opts || {};
   doc = new FDocument();
+  calls = [];
   parseHTML(read("index.html"));
+  const winL = {};
+  loc = {
+    _h: o.hash || "", pathname: "/console/", search: "", host: "relay.acme.example",
+    get hash() {
+      return this._h;
+    },
+    set hash(v) {
+      const n = String(v);
+      if (n === this._h) return;
+      this._h = n;
+      setImmediate(() => (winL.hashchange || []).forEach((f) => f()));
+    },
+    assign(u) {
+      this.assigned = String(u);
+    },
+  };
   const clock = { now: 1763300000000 };
   const timers = [];
   let tid = 0;
@@ -921,19 +1136,20 @@ function boot(answers) {
   };
   const sandbox = {
     console, document: doc, Node: FNode, Event: FEvent, URLSearchParams, URL, TextEncoder, TextDecoder, atob, btoa, __clock: clock,
-    location: { hash: "", pathname: "/console/", search: "", host: "relay.acme.example" },
+    location: loc,
     history: { replaceState() {} },
     navigator: { credentials: {}, clipboard: { writeText: async () => {} } },
     localStorage: { getItem: (k) => (storage.has(k) ? storage.get(k) : null), setItem: (k, v) => storage.set(k, String(v)) },
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    matchMedia: (q) => ({ matches: !!o.narrow && /max-width: 600px/.test(q), addEventListener() {} }),
     PublicKeyCredential: function PublicKeyCredential() {},
-    addEventListener() {},
+    addEventListener: (t, f) => (winL[t] = winL[t] || []).push(f),
     setTimeout: (f, ms) => add(f, ms, 0),
     setInterval: (f, ms) => add(f, ms, ms),
     clearTimeout: clear,
     clearInterval: clear,
     fetch: async (url, init) => {
       const route = (init.method || "GET") + " " + String(url).replace("/console/api/", "").split("?")[0];
+      calls.push({ route, url: String(url), body: init.body ? JSON.parse(init.body) : null });
       const body = answers[route] || { ok: true };
       const ok = body.ok !== false;
       return { ok, status: ok ? 200 : body.status || 400, headers: { get: () => null }, json: async () => JSON.parse(JSON.stringify(body)) };
@@ -942,7 +1158,7 @@ function boot(answers) {
   sandbox.window = sandbox;
   const ctx = vm.createContext(sandbox);
   vm.runInContext("Date.now = function () { return __clock.now; };", ctx);
-  for (const f of ["theme.js", "qr.js", "app.js"]) vm.runInContext(read(f), ctx, { filename: f });
+  for (const f of ["theme.js", "qr.js", "charts.js", "app.js"]) vm.runInContext(read(f), ctx, { filename: f });
   const advance = async (ms) => {
     clock.now += ms;
     for (const t of timers.slice().sort((a, b) => a.at - b.at)) {
@@ -1013,7 +1229,157 @@ async function main() {
   if (!find("button", "Forgot your password?")) fail("Standard shows Forgot your password?");
   console.log("dom: lock screen and sign-in banner ok");
 }
+// ---- AC-2a: the fleet console (12.1 to 12.4, 8, 9.6, 11) ----
+const view = () => doc.getElementById("view").textContent;
+const go = async (h) => {
+  loc.hash = h;
+  for (let i = 0; i < 4; i++) await settle();
+};
+function inOrder(text, list, what) {
+  let at = -1;
+  for (const w of list) {
+    const i = text.indexOf(w, at + 1);
+    if (i < 0) fail(what + ": " + w + " is missing or out of order in:\n" + text);
+    at = i;
+  }
+}
+function chartsComplete(where) {
+  const svgs = doc.querySelectorAll("figure svg.chart-svg");
+  if (!svgs.length) fail(where + ": no chart");
+  for (const s of svgs) {
+    if (s.getAttribute("role") !== "img") fail(where + ": a chart without role img");
+    const kids = s.children.map((k) => k.tagName);
+    if (!kids.includes("TITLE") || !kids.includes("DESC")) fail(where + ": a chart without title and desc");
+    const fig = s.closest("figure");
+    const sum = fig.querySelector("details.chart-table summary");
+    if (!sum || sum.textContent !== "Show as a table") fail(where + ": a chart without its table toggle");
+    if (!fig.querySelector("details.chart-table table caption")) fail(where + ": a chart table without a caption");
+  }
+  return svgs;
+}
+async function fleetMain(v) {
+  const W = v.page;
+  const t0 = 1763300000000;
+  // 1. First run (12.1, 12.2 steps 1 and 2): before bootstrap only the setup screen shows.
+  boot({
+    "GET me": { ok: false, status: 409, code: "setup-needed", error: "Finish the first step of setup first." },
+    "GET setup": { ok: true, bootstrapped: false, profileFixed: null, pinned: false, steps: null },
+  });
+  await settle();
+  inOrder(view(), [W["setup.code-title"], "Step 1 of 6", W["setup.code-field"], W["setup.gov"], W["setup.gov-yes"], W["setup.gov-no"], W["setup.gov-help"], W["setup.save"]], "setup step 1");
+  if (doc.querySelector('[aria-label="Sections"] a')) fail("the setup screen shows navigation");
+  doc.querySelector('input[type="text"]').value = "ABCDEFGH IJKLMNOP QRSTUVWX YZ234567";
+  find("button", W["setup.save"]).click();
+  await settle();
+  inOrder(view(), [W["setup.first-admin"], "Step 2 of 6", W["setup.email-field"], W["setup.back"], W["setup.save"]], "setup step 2");
+
+  // 2. A signed-in admin of a fleet console.
+  const r1 = "r_0000000000000001", r2 = "r_0000000000000002";
+  const answers = {
+    "GET me": {
+      ok: true, product: "fleet", profile: "standard", origin: "https://console.acme.example", relay: { host: "console.acme.example" }, sections: [],
+      idle: { minutes: 15, maxHours: 12 },
+      user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+        methods: { webauthn: [{ hint: "h1", label: "Key", kind: "passkey", state: "working" }], password: false, totp: false }, mustSetPassword: false, sessions: 1, mail: [] },
+    },
+    "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [], signIn: { requirePassword: false, idleMinutes: 15, maxHours: 12 }, email: { mode: "off" } },
+    "GET banner": { ok: true, banner: null },
+    "GET overview": {
+      ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 },
+      fleet: { relays: { total: 2, ok: 1, warn: 1, bad: 0, silent: 0, unconfirmed: 1 }, people: { online: 3 }, calls: { active: 1 },
+        kpis: { relaysHealthy: { n: 1, total: 2, spark: [[t0 - 3600000, 2], [t0, 1]] }, peopleOnline: { n: 3, spark: [[t0 - 3600000, 2], [t0, 3]] },
+          callsNow: { n: 1, spark: [] }, messagesToday: { n: 40, spark: [] } } },
+      attention: [{ kind: "relay-silent", severity: "bad", args: { relay: r1, minutes: 5 }, go: "#/relays/" + r1 },
+        { kind: "cert-expiring", severity: "warn", relay: r2, args: { n: 2 } }, { kind: "no-such-kind", severity: "bad", relay: r2, args: {} }],
+    },
+    "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "open", license: "skipped", relay: "open" } },
+    "GET fleet/relays": { ok: true, total: 2, relays: [
+      { id: r1, name: "Dallas east", site: "us-east", product: "spokes", state: "active", connected: true, lastContactAt: t0, version: "2.5.0", health: "ok",
+        license: { state: "valid", daysLeft: 200 }, scopes: ["read-health", "people"], readOnly: false, confirm: [] },
+      { id: r2, name: "Hub west", site: "us-west", product: "meet", state: "unconfirmed", connected: true, lastContactAt: t0, version: "2.5.0", health: "warn",
+        license: { state: "grace", daysLeft: -3, adding: { state: "closed" } }, scopes: ["read-health"], readOnly: true, confirm: ["people"] }] },
+    "GET fleet/licenses": { ok: true, relays: [{ relay: r2, product: "meet", license: { state: "grace" }, adding: { state: "closed" }, seats: { seated: 5, users: 4 } }], library: [] },
+    "GET fleet/metrics": { ok: true, range: "24h", step: 300000, series: [
+      { relay: "fleet", name: "people_online", unit: "people", points: [[t0 - 900000, 1], [t0 - 600000, 2], [t0 - 300000, null], [t0, 4]] },
+      { relay: "fleet", name: "messages", unit: "messages", points: [[t0 - 600000, 10], [t0 - 300000, 12], [t0, 3]] },
+      { relay: r1, name: "cpu_host", unit: "percent", points: [[t0 - 600000, 50], [t0, 95]] },
+      { relay: r2, name: "latency_console", unit: "ms", points: [[t0 - 600000, 40], [t0, 700]] }] },
+    "GET fleet/expiry": { ok: true, rows: [{ relay: r1, kind: "mgmt", notAfter: t0, daysLeft: 5 }, { relay: r2, kind: "license", notAfter: t0, daysLeft: 45 }] },
+    "GET fleet/people": { ok: true, total: 2, missing: [{ relay: r1, why: "relay-offline" }], rows: [
+      { kind: "console", id: "bob@acme.example", name: null, role: "viewer", state: "active", source: "invite", relay: null },
+      { kind: "meet", relay: r2, id: "carol@acme.example", name: "=Carol+1", role: "member", state: "active", source: "app", devices: 2, seated: true, asOf: t0 }] },
+    "GET admins": { ok: true, people: [], waiting: [], invites: [] },
+  };
+  boot(answers, { hash: "#/overview" });
+  for (let i = 0; i < 4; i++) await settle();
+  const ov = view();
+  inOrder(ov, [W["nav.overview"], W["setup.checklist"], W["setup.email"], W["setup.state-open"], W["setup.continue"], W["setup.hide"], W["kpi.relays"], "1 of 2", W["kpi.people"],
+    W["kpi.calls"], W["kpi.messages"]], "overview");
+  if (!ov.includes("Dallas east has not been in touch for 5 minutes.")) fail("fleet attention without the console's relay name:\n" + ov);
+  if (!ov.includes("Hub west: 2 certificates end within 7 days.")) fail("a relay's attention item without its relay name");
+  if (doc.getElementById("hdr-product").textContent !== W["chip.fleet"] || doc.getElementById("hdr-count").textContent !== "2 relays") fail("the header chips");
+  // 12.4: the nav order and names; Upgrades and Support are not rendered.
+  const nav = doc.getElementById("nav").textContent;
+  inOrder(nav, v.nav.filter((n) => n.phase == null).map((n) => n.label), "nav");
+  for (const n of v.nav.filter((x) => x.phase != null)) if (nav.includes(n.label)) fail("the nav renders " + n.label);
+
+  // 12.2: each step renders with "Step <n> of 6"; 12.3: Skip for now moves to the next step not done (resume).
+  const steps = [["admin", 2, "setup.first-admin"], ["signin", 3, "setup.signin"], ["email", 4, "setup.email"], ["license", 5, "setup.license"], ["relay", 6, "setup.relay"]];
+  for (const [id, n, word] of steps) {
+    await go("#/setup/" + id);
+    inOrder(view(), [W[word], "Step " + n + " of 6"], "setup step " + id);
+    if (id === "admin" && find("button", W["setup.skip"])) fail("the first admin step can be skipped");
+    if (id !== "admin" && !find("button", W["setup.skip"])) fail("step " + id + " has no Skip for now");
+    if (!find("button", id === "relay" ? W["setup.finish"] : W["setup.save"])) fail("step " + id + " has no " + (id === "relay" ? "Finish" : "Save and continue"));
+  }
+  const relayStep = view();
+  for (const w of [W["setup.this-host"], W["setup.this-host-standard"], W["setup.other-host"], W["enroll.product"], W["enroll.scopes"]]) {
+    if (!relayStep.includes(w)) fail("the first relay step lacks " + w);
+  }
+  await go("#/setup/email");
+  find("button", W["setup.skip"]).click();
+  for (let i = 0; i < 4; i++) await settle();
+  const posted = calls.find((c) => c.route === "POST setup/step");
+  if (!posted || posted.body.step !== "email" || posted.body.state !== "skipped") fail("Skip for now did not record the step");
+  if (loc.hash !== "#/setup/license") fail("after skipping email the wizard went to " + loc.hash + ", not the next open step");
+
+  // 8.2 and 9.6: Relays and the charts.
+  await go("#/relays");
+  const rel = view();
+  for (const w of ["Dallas east", "Hub west", W["health.ok"], W["health.warn"], W["fleet.read-only"], W["state.unconfirmed"], W["fleet.confirm-here"]]) {
+    if (!rel.includes(w)) fail("the relay list lacks " + w);
+  }
+  await go("#/relays/health");
+  const hv = view();
+  for (const k of ["charts.range-1h", "charts.range-24h", "charts.range-7d", "charts.range-30d", "charts.people", "charts.messages", "charts.cpu", "charts.memory",
+    "charts.network", "charts.latency", "charts.expiry", "charts.health"]) {
+    if (!hv.includes(W[k])) fail("the health page lacks " + W[k]);
+  }
+  chartsComplete("health");
+  await go("#/people");
+  const pv = view();
+  for (const w of ["Some relays did not answer: Dallas east.", "=Carol+1", W["people.invite"], W["people.import"], W["people.import-check"], W["people.kind-meet"]]) {
+    if (!pv.includes(w)) fail("the people page lacks " + w);
+  }
+
+  // AC-1 7.2 phone widths: tables become stacked cards with folded filters, charts draw narrow, still with their tables.
+  for (const [hash, what] of [["#/relays", "relays"], ["#/people", "people"], ["#/relays/health", "charts"]]) {
+    boot(answers, { hash, narrow: true });
+    for (let i = 0; i < 4; i++) await settle();
+    if (what === "charts") {
+      for (const s of chartsComplete("phone charts")) if (!String(s.getAttribute("viewBox")).startsWith("0 0 360 ")) fail("a chart is not drawn narrow on a phone");
+    } else {
+      const stack = doc.querySelectorAll(".datatable .stack section");
+      if (!stack.length) fail(what + ": no stacked cards at phone width");
+      const fold = doc.querySelector("details.filters-fold");
+      if (!fold || fold.hasAttribute("open")) fail(what + ": filters not folded at phone width");
+    }
+  }
+  console.log("fleet: setup, resume, relays, people and charts ok");
+}
+
 if (mode === "dom") main().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "fleet") fleetMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else fail("unknown mode " + mode);
 "##;
 

@@ -681,6 +681,70 @@ ul.plain { list-style: none; padding: 0; }
 .qr-light { fill: #ffffff; }
 .qr-dark { fill: #000000; }
 
+/* ---- Charts (AC-2a 9.6): charts.js colors only through these tone classes, which every palette fills from its
+   console tokens; a tone is never the only sign (each has its word in the hover title and the table). ---- */
+.ac-tone-ok { color: var(--ac-ok); }
+.ac-tone-warn { color: var(--ac-warn); }
+.ac-tone-danger { color: var(--ac-danger); }
+.ac-tone-link { color: var(--ac-link); }
+.ac-tone-muted { color: var(--text-secondary); }
+.ac-tone-none { color: var(--bg-tertiary); }
+/* Each series also has its own dash pattern, so lines differ without color. */
+.ac-series-0 { stroke-dasharray: none; }
+.ac-series-1 { stroke-dasharray: 8 4; }
+.ac-series-2 { stroke-dasharray: 2 3; }
+.ac-series-3 { stroke-dasharray: 10 3 2 3; }
+.ac-series-4 { stroke-dasharray: 4 4; }
+.chart { margin: 8px 0 16px; min-width: 0; }
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-svg text { font-size: 12px; fill: var(--text-secondary); }
+.chart-svg text.chart-label-strong { fill: var(--text-primary); }
+.chart-grid { stroke: var(--border); stroke-width: 1; }
+.chart-line { fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-area { fill: currentColor; fill-opacity: 0.14; stroke: none; }
+.chart-dot, .chart-bar, .chart-cell { fill: currentColor; }
+.chart-track { fill: var(--bg-tertiary); }
+.chart-hit { fill: var(--text-secondary); fill-opacity: 0; pointer-events: all; }
+.chart-hit:hover { fill-opacity: 0.2; }
+.chart-cell:hover { fill-opacity: 0.75; }
+.chart-swatch { display: inline-block; width: 24px; height: 10px; vertical-align: middle; margin-right: 4px; }
+.chart-legend { list-style: none; padding: 0; margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; color: var(--text-secondary); }
+.chart-empty { color: var(--text-secondary); margin: 4px 0; }
+.chart-heat-label { font-weight: 600; margin-bottom: 2px; }
+.chart-table { margin-top: 6px; }
+.chart-table summary { cursor: pointer; min-height: 24px; color: var(--ac-link); text-decoration: underline; }
+.chart-table-wrap { overflow: auto; max-height: 360px; margin-top: 6px; }
+.chart-table-wrap table { font-size: 13px; }
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 0 16px; }
+.charts-grid > section { min-width: 0; }
+.charts-grid h4 { font-size: 15px; margin: 8px 0 4px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi {
+  display: grid; gap: 2px; padding: 12px 14px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--border);
+}
+.kpi-label { font-size: 13px; color: var(--text-secondary); }
+.kpi-value { font-size: 24px; font-weight: 700; color: var(--text-primary); }
+.kpi-sub { font-size: 13px; color: var(--text-secondary); }
+.kpi-spark { display: block; width: 100%; height: 24px; }
+
+/* ---- Fleet console (AC-2a 8, 11, 12) ---- */
+.chip-row { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.chip.warn { border-color: var(--ac-warn); }
+.chip.bad { border-color: var(--ac-danger); }
+.picker { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; margin-bottom: 12px; }
+.asof { color: var(--text-secondary); font-size: 13px; }
+.code-once {
+  display: block; padding: 12px; border: 2px solid var(--ac-warn); border-radius: 8px; font-size: 16px; letter-spacing: 0.5px;
+  overflow-wrap: anywhere; background: var(--bg-primary);
+}
+.cmd { display: block; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); }
+.step-line { color: var(--text-secondary); font-size: 13px; font-weight: 600; }
+.wizard-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.checklist { list-style: none; padding: 0; display: grid; gap: 8px; }
+.checklist li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.checklist .words { flex: 1 1 200px; }
+.fingerprint { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+
 /* ---- Dialogs ---- */
 dialog {
   width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 20px;
@@ -723,6 +787,8 @@ dialog h2:focus-visible { outline: 2px solid var(--ac-focus); }
   dl.pairs { grid-template-columns: minmax(0, 1fr); }
   dl.pairs dd { margin-bottom: 6px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
+  .kpis, .charts-grid { grid-template-columns: minmax(0, 1fr); }
+  .chart-table summary, .picker select { min-height: 44px; }
   dialog { padding: 14px; }
 }
 

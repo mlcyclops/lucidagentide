@@ -51,7 +51,7 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-static ROUTES: [RouteSpec; 26] = [
+pub static ROUTES: [RouteSpec; 26] = [
     RouteSpec { method: "GET", path: "meet/people", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     // 2.4 seats and trusted time (R4-2, R3-M3): allowed in every license state
     RouteSpec { method: "GET", path: "meet/seats", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
@@ -80,6 +80,20 @@ static ROUTES: [RouteSpec; 26] = [
     RouteSpec { method: "GET", path: "meet/servers", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "POST", path: "meet/files/start", role: Role::Admin, action: "meet.files.start", target: "-", stepup: true, need: Need::Product, security: false, keys: &[], body_max: 1024 },
 ];
+
+/// AC-2a 4.11: the aggregate route served only through the fleet proxy (`read-health`). Not in ROUTES, so the relay's
+/// own console answers 404; fleet_exec takes this spec and calls `route` with it.
+pub static FLEET_ROUTES: [RouteSpec; 1] = [RouteSpec { method: "GET", path: "meet/counts", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 }];
+
+/// AC-2a 8.2 `services` of a Meeting Hub relay row, from its latest `read-health` answers of `meet/servers`
+/// (`{signer: {healthy, days_left}, files: null or {state, since}}`) and `meet/push` (`{enabled, failed24h, ...}`):
+/// flags, days, the files state word and counts only. A part whose answer is missing is null.
+pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value {
+    let signer = servers.and_then(|s| s.get("signer")).map(|h| json!({ "healthy": h.get("healthy").and_then(Value::as_bool), "daysLeft": h.get("days_left").and_then(Value::as_i64) }));
+    let files = servers.and_then(|s| s.get("files")).and_then(|f| f.get("state")).and_then(Value::as_str).map(|s| Value::from(clean(s)));
+    let push = push.map(|p| json!({ "enabled": p.get("enabled").and_then(Value::as_bool), "failed24h": p.get("failed24h").and_then(Value::as_u64) }));
+    json!({ "signer": signer, "files": files, "push": push })
+}
 
 const SECURITY_ACTIONS: [&str; 5] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place"];
 const PAGES: [&str; 15] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests"];
@@ -475,6 +489,25 @@ impl MeetSection {
     fn license_now(relay: &Relay) -> LicenseState {
         let Ok(gate) = Self::gate(relay) else { return LicenseState::None };
         license_state_of(gate.standing().license.state)
+    }
+
+    /// AC-2a 4.11 `GET /console/api/meet/counts` (fleet proxy, `read-health`): integers only, built field by field
+    /// from the projection allowlist; no id, label, name, serial, time, reason or actor.
+    fn counts(&self, relay: &Relay, t: i64) -> Value {
+        let c = relay.hub.fleet_counts();
+        let gate = Self::gate(relay).ok();
+        let seated = gate.as_ref().map_or(0, |g| c.principals.iter().filter(|p| g.is_seated(p)).count());
+        let blocked = {
+            let blocks = self.blocks.lock();
+            c.devices.iter().filter(|(p, d)| blocks.get(p, d, t).is_some()).count()
+        };
+        json!({
+            "ok": true,
+            "people": { "online": c.online.len(), "seated": seated, "total": c.principals.len(), "unseated": c.principals.len() - seated },
+            "devices": { "online": c.devices_online, "total": c.devices.len(), "blocked": blocked, "revoked": c.revoked },
+            "calls": { "active": c.calls_active, "participants": c.participants },
+            "enrollments": { "waiting": c.enrollments_waiting },
+        })
     }
 
     /// 2.4 Meet users: the seated principals (meet_license.rs, meet_seats.rs).
@@ -1195,11 +1228,15 @@ impl ProductSection for MeetSection {
         let relay = self.relay()?;
         let read = |v: Result<Value, ApiError>| v.map(SectionAnswer::Read);
         // Seats and the relay's time are always allowed (2.4)
-        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock");
+        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts");
         if call.spec.method == "GET" && call.license == LicenseState::None && !always {
             return Err(license_needed());
         }
         match (call.spec.method, call.spec.path) {
+            ("GET", "meet/counts") => {
+                filters(call.query, &[])?;
+                read(Ok(self.counts(&relay, call.t)))
+            }
             ("GET", "meet/seats") => {
                 filters(call.query, &[])?;
                 let gate = Self::gate(&relay)?;
@@ -1517,12 +1554,139 @@ pub fn start(relay: &Arc<Relay>) -> Result<(), String> {
     crate::meet_console_port::start(s, conf, tls, handler, source_ok)
 }
 
+/// AC-2a 2.1: the logger of an enrolled Meeting Hub relay's headless console and agent.
+pub fn logger() -> Arc<crate::log::Logger> {
+    Arc::new(crate::log::Logger::new("meet-fleet"))
+}
+
+/// AC-2a 2.1: the headless console of an enrolled relay whose own console is off gets the Meeting Hub section, the
+/// block list and the hooks, exactly as `start` gives the local console (no port is opened). A block list that does
+/// not read back is logged and the section is not attached (fail closed: proxied block routes then answer 503).
+pub fn attach_headless(relay: &Arc<Relay>, console: &Arc<Console>) {
+    let Some(dir) = (!relay.settings.state_dir.is_empty()).then(|| PathBuf::from(&relay.settings.state_dir)) else { return };
+    let blocks = match MeetBlocks::open(&dir.join(BLOCKS_FILE)) {
+        Ok(b) => b,
+        Err(e) => {
+            crate::meet::log_warn(&format!("fleet.blocks-unreadable category=security reason={}", m::kv(&e)));
+            return;
+        }
+    };
+    let t = (pj::now() * 1000.0) as i64;
+    relay.hub.set_blocks(blocks.mirror(t));
+    console.attach(Arc::new(MeetSection::new(Arc::downgrade(relay), blocks, t)));
+    let mut serials: Vec<String> = relay.hub.denied_serials().into_iter().collect();
+    serials.extend(relay.revoked_serials());
+    let hooks = Arc::new(Hooks { relay: Arc::downgrade(relay), console: console.clone() });
+    hooks.revoked(&serials);
+    relay.hub.set_console_hooks(hooks);
+}
+
+/// AC-2a 5.7: the console whose book holds this relay's requests: its own, else the headless one while enrolled.
+fn request_book(relay: &Relay) -> Option<Arc<Console>> {
+    relay.admin_console.get().cloned().or_else(|| relay.fleet.get().map(|f| f.book.clone()))
+}
+
+/// AC-2a 5.7 (F13) `GET /v1/admin/console/where`: `{ok, local, managedBy}`.
+pub fn console_where(relay: &Relay) -> Obj {
+    let managed_by = relay.fleet.get().and_then(|f| (f.managed_by)()).map(Value::from).unwrap_or(Value::Null);
+    obj([("ok", Value::Bool(true)), ("local", Value::Bool(relay.admin_console.get().is_some())), ("managedBy", managed_by)])
+}
+
+/// AC-2a 5.7: the 409 words of `POST /v1/admin/console/invite` on an enrolled relay with no local console.
+pub fn managed_words(origin: &str) -> String {
+    format!("This relay is managed by the Lucid Admin Console at {origin}. Sign in there.")
+}
+
+/// AC-2a 5.7 (F20): endorsement attempts per device certificate serial within the hour (at most 10).
+static ENDORSE_TRIES: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, Vec<i64>>>> = std::sync::LazyLock::new(Default::default);
+
+/// One endorsement attempt by `serial` at `t` (ms): false past 10 within the hour.
+pub fn endorse_try(serial: &str, t: i64) -> bool {
+    let mut tries = ENDORSE_TRIES.lock();
+    tries.retain(|_, v| {
+        v.retain(|at| t - at < 3_600_000);
+        !v.is_empty()
+    });
+    let mine = tries.entry(serial.to_owned()).or_default();
+    if mine.len() >= 10 {
+        return false;
+    }
+    mine.push(t);
+    true
+}
+
+/// A 3.9 refusal as the main port answers it: 409 or 403 with `code` (and `why`) beside `error`.
+fn endorse_error(e: crate::fleet_trust::EndorseRefusal) -> E {
+    let mut info = obj([("code", Value::from(e.code))]);
+    if let Some(why) = e.why {
+        info.insert("why".into(), Value::from(why));
+    }
+    match e.status {
+        409 => E::ConflictInfo(e.error, info),
+        403 => E::Held(e.error, info),
+        s => E::Status(s, e.error, false),
+    }
+}
+
+fn not_bootstrapping() -> E {
+    endorse_error(crate::fleet_trust::EndorseRefusal { status: 409, code: crate::relay::NOT_BOOTSTRAPPING, why: None, error: crate::relay::NOT_BOOTSTRAPPING_WORDS.into() })
+}
+
+/// AC-2a 3.9 `GET /v1/admin/console/fleet-bootstrap?session=`: the first-roster entries of the caller's principal.
+/// The device certificate was verified by the TLS layer (client_ca, CRL) and the denied set (`who`); the session is
+/// checked by the route.
+pub fn fleet_bootstrap(relay: &Relay, who: &Identity) -> R<Obj> {
+    let Some(f) = relay.fleet.get() else { return Err(not_bootstrapping()) };
+    let t = (pj::now() * 1000.0) as i64;
+    match crate::fleet_trust::bootstrap_view(&f.state_dir, &who.principal, t) {
+        Ok(Value::Object(o)) => Ok(o),
+        Ok(_) => Err(E::Internal("fleet-bootstrap answered no object".into())),
+        Err(e) => Err(endorse_error(e)),
+    }
+}
+
+/// AC-2a 3.9 `POST /v1/admin/console/fleet-endorse {session, endorsement, proof}`: `proof` (base64) is the device
+/// key's signature over `fleet_trust::endorse_signing_input(endorsement)`; the 3.9 checks are fleet_trust's.
+pub fn fleet_endorse(relay: &Relay, who: &Identity, b: &Obj) -> R<Obj> {
+    let Some(f) = relay.fleet.get() else { return Err(not_bootstrapping()) };
+    let t = (pj::now() * 1000.0) as i64;
+    if !endorse_try(&m::serial(&who.serial), t) {
+        return Err(E::Status(429, "too many endorsement attempts from this device; try again within the hour".into(), false));
+    }
+    let endorsement = b.get("endorsement").cloned().unwrap_or(Value::Null);
+    let proof = pj::b64_strict(&pj::s(b, "proof")).unwrap_or_default();
+    let cert = crate::meet_x509::Cert::from_pem(&who.cert_pem);
+    let key = cert.as_ref().and_then(|c| crate::der::p256_from_spki(&c.spki));
+    let verify = |input: &[u8], sig: &[u8]| key.as_ref().is_some_and(|k| crate::der::ecdsa_verify(k, input, sig));
+    let now_s = t.div_euclid(1000);
+    let relay_admin = relay.settings.admins.iter().any(|a| a.trim().eq_ignore_ascii_case(&who.principal));
+    let ctx = crate::fleet_trust::EndorseCtx {
+        state_dir: &f.state_dir,
+        product: Product::Meet,
+        email: &who.principal,
+        anchor: &who.device,
+        chain_ok: cert.is_some(),
+        in_date: cert.as_ref().is_some_and(|c| c.not_before <= now_s && now_s < c.not_after),
+        revoked: relay.hub.is_denied(&who.serial),
+        blocked: relay.hub.is_blocked(who),
+        relay_admin,
+        verify: &verify,
+        proof: Some(&proof),
+    };
+    match crate::fleet_trust::endorse(&ctx, &endorsement, t) {
+        Ok(Value::Object(o)) => Ok(o),
+        Ok(_) => Err(E::Internal("fleet-endorse answered no object".into())),
+        Err(e) => Err(endorse_error(e)),
+    }
+}
+
 // ── the main port's 4.10 routes ──────────────────────────────────────────────────────────────────────────────
 
 /// `GET /v1/admin/console/requests`: the waiting `meet.*` requests; `meet.console-invite` only to its principal.
+/// AC-2a 5.7: from the headless book on an enrolled relay whose own console is off.
 pub fn requests_for(relay: &Relay, principal: &str) -> Obj {
     let t = (pj::now() * 1000.0) as i64;
-    let list: Vec<Value> = match relay.admin_console.get() {
+    let list: Vec<Value> = match request_book(relay) {
         None => Vec::new(),
         Some(c) => c
             .requests_waiting("meet.", t)
@@ -1536,7 +1700,13 @@ pub fn requests_for(relay: &Relay, principal: &str) -> Obj {
 /// `POST /v1/admin/console/invite {session}`: a sign-in link for the caller's own principal (3.2), anchored to the
 /// calling device certificate's serial.
 pub fn device_invite(relay: &Relay, who: &Identity) -> R<Obj> {
-    let Some(console) = relay.admin_console.get() else { return Err(E::Conflict(CONSOLE_OFF.into())) };
+    let Some(console) = relay.admin_console.get() else {
+        // AC-2a 5.7: an enrolled relay with no local console sends people to the Lucid Admin Console.
+        if let Some(origin) = relay.fleet.get().and_then(|f| (f.managed_by)()) {
+            return Err(E::Conflict(managed_words(&origin)));
+        }
+        return Err(E::Conflict(CONSOLE_OFF.into()));
+    };
     let t = (pj::now() * 1000.0) as i64;
     match console.invite_device(&who.principal, &m::serial(&who.serial), t) {
         Ok(i) => Ok(obj([("ok", Value::Bool(true)), ("link", Value::from(i.link)), ("email", Value::from(who.principal.clone())), ("expires", Value::from(i.expires))])),
@@ -1683,7 +1853,10 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("lucid-console-meet-{}-{}", std::process::id(), pj::mono().to_bits()));
+        // A folder per call: tests running at the same instant never share one (or its console.lock).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("lucid-console-meet-{}-{}-{n}", std::process::id(), pj::mono().to_bits()));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -1839,6 +2012,7 @@ mod tests {
             last_check: Mutex::new(-1e9),
             pc_last_crl_check: Mutex::new(-1e9),
             admin_console: std::sync::OnceLock::new(),
+            fleet: std::sync::OnceLock::new(),
         });
         let cfg = crate::meet_license::GateConfig { state_dir: Some(dir.clone()), license_file: Some(dir.join(crate::meet_license::LICENSE_FILE)), client_ca: dir.join("client_ca.pem") };
         let gate = MeetGate::open(cfg, &relay.hub, crate::meet_time::testclock::FakeClock::new(now)).unwrap();
@@ -2072,5 +2246,91 @@ mod tests {
         for w in [CONSOLE_OFF, CONSOLE_REQUEST_FIELD, DECLINE_ID, DECLINE_REASON, NO_REQUEST] {
             assert!(!w.contains(char::from_u32(0x2014).unwrap()) && !w.contains(char::from_u32(0x2013).unwrap()));
         }
+    }
+
+    fn headless(dir: &Path) -> Arc<Console> {
+        crate::console::open_headless(Product::Meet, dir, Arc::new(crate::log::Logger::capture("t", Box::new(|_, _| {})))).unwrap()
+    }
+
+    fn enroll(relay: &Relay, book: Arc<Console>) {
+        let dir = PathBuf::from(&relay.settings.state_dir);
+        // Ann is an active roster admin: on an enrolled relay only roster admins read the headless book's requests
+        let _ = relay.fleet.set(crate::relay::FleetLink { managed_by: Box::new(|| Some("https://console.example.com".into())), book, admins: Box::new(|| vec!["ann@x.org".to_owned()]), state_dir: dir });
+    }
+
+    /// AC-2a 16.1 f-relay: `where` on a Meeting Hub relay with neither console, enrolled with its own console off,
+    /// and the 409 invite words on that relay; requests from the headless book.
+    #[test]
+    fn ac2a_where_invite_words_and_requests_on_an_enrolled_relay() {
+        let (relay, _) = fixture(&["ann@x.org"]);
+        assert_eq!(Value::Object(console_where(&relay)), json!({"ok": true, "local": false, "managedBy": null}));
+        let ann = Identity { principal: "ann@x.org".into(), serial: "5a".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        // neither: AC-1's console-off answer
+        assert!(matches!(device_invite(&relay, &ann), Err(E::Conflict(w)) if w == CONSOLE_OFF));
+        let book = headless(&temp_dir());
+        // dated now: requests_for lists what is waiting at the current time, and a request from T0 has expired
+        let now = (pj::now() * 1000.0) as i64;
+        let request = book.new_request("cy@x.org", "meet.invite", json!({"name": "Bo", "email": "bo@x.org", "days": 7}), "New hire", now).unwrap();
+        enroll(&relay, book);
+        assert_eq!(Value::Object(console_where(&relay)), json!({"ok": true, "local": false, "managedBy": "https://console.example.com"}));
+        match device_invite(&relay, &ann) {
+            Err(E::Conflict(w)) => assert_eq!(w, "This relay is managed by the Lucid Admin Console at https://console.example.com. Sign in there."),
+            other => panic!("{other:?}"),
+        }
+        let listed = requests_for(&relay, "ann@x.org");
+        assert_eq!(listed["requests"][0]["id"], request["id"]);
+    }
+
+    /// AC-2a 16.1 f-relay: a relay with its own console on answers `local: true`.
+    #[test]
+    fn ac2a_where_with_the_local_console() {
+        let (relay, _) = fixture(&["ann@x.org"]);
+        let _ = relay.admin_console.set(headless(&temp_dir()));
+        assert_eq!(Value::Object(console_where(&relay)), json!({"ok": true, "local": true, "managedBy": null}));
+    }
+
+    /// AC-2a 16.1 f-relay: the participant sampler hands the people in rooms to the counters.
+    #[test]
+    fn ac2a_the_participant_sampler_moves_the_counter() {
+        let (relay, _) = fixture(&["ann@x.org"]);
+        let ann = Identity { principal: "ann@x.org".into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let ben = Identity { principal: "ben@x.org".into(), name: "Ben".into(), device: "bbbbbbbbbbbbbbbb".into(), ..Default::default() };
+        relay.hub.join("ops", &ann, "", false, None).unwrap();
+        relay.hub.join("ops", &ben, "", false, None).unwrap();
+        let before = crate::fleet_probe::counters().participants_total();
+        assert_eq!(crate::meet_console::sample_participants(&relay), 2);
+        assert!(crate::fleet_probe::counters().participants_total() >= before + 2);
+        let m = crate::meet_console::fleet_metrics(&relay);
+        assert_eq!((m["participants"].as_u64(), m["calls_active"].as_u64()), (Some(2), Some(1)));
+    }
+
+    /// AC-2a 16.1 f-relay (A2-H1): `meet/counts` holds exactly the allowlisted fields, every value a non-negative
+    /// integer, for an empty relay and a busy one; it is not a route of the relay's own console.
+    #[test]
+    fn ac2a_meet_counts_are_integers_only() {
+        assert!(!ROUTES.iter().any(|r| r.path == "meet/counts"));
+        let (relay, section) = fixture(&["ann@x.org"]);
+        let counts = |t: i64| {
+            let caller = crate::console::Caller { email: "ann@x.org".into(), admin: true, manager: true, ip: "10.0.0.1".into() };
+            let c = SectionCall { spec: &FLEET_ROUTES[0], query: "", body: &Value::Null, caller: &caller, license: LicenseState::None, t };
+            match section.route(&c).unwrap() {
+                SectionAnswer::Read(v) => v,
+                _ => panic!("a read"),
+            }
+        };
+        let ints = |v: &Value| v.as_object().unwrap().iter().filter(|(k, _)| *k != "ok").all(|(_, x)| x.as_object().is_some_and(|o| o.values().all(Value::is_u64)));
+        let empty = counts(T0);
+        assert!(ints(&empty));
+        device(&relay, "bob@x.org", "bbbbbbbbbbbbbbbb", "7b");
+        let ann = Identity { principal: "ann@x.org".into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        relay.hub.join("ops", &ann, "", false, None).unwrap();
+        let busy = counts(T0 + 1);
+        assert!(ints(&busy));
+        assert_eq!(busy["devices"]["total"], json!(2));
+        // exactly the vector's fields and types, read from the vector, for the empty and the busy relay
+        crate::relay::projection_matches("meet/counts", &empty).unwrap();
+        crate::relay::projection_matches("meet/counts", &busy).unwrap();
+        let text = crate::codec::stringify(&busy);
+        assert!(!text.contains("x.org") && !text.contains("bbbb") && !text.contains("7b"));
     }
 }

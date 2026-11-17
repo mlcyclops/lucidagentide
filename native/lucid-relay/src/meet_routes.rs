@@ -20,6 +20,21 @@ fn get_route(path: &str) -> Option<Route> {
             c.relay.hub.check_admin(&session, &who)?;
             Ok(crate::console_meet::requests_for(c.relay, &who.principal))
         },
+        // AC-2a 5.7 (F13): whether this relay runs its own console and which Lucid Admin Console manages it
+        "/v1/admin/console/where" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            Ok(crate::console_meet::console_where(c.relay))
+        },
+        // AC-2a 3.9 (F20): the caller's first-roster entries, for the Hub app to endorse
+        "/v1/admin/console/fleet-bootstrap" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            // AC-2a 3.9: the Meeting Hub endorsement routes are relay admins' (check_admin), as on the reference relay
+            c.relay.hub.check_admin(&session, &who)?;
+            crate::console_meet::fleet_bootstrap(c.relay, &who)
+        },
         "/v1/whoami" => whoami,
         "/v1/events" => events,
         "/v1/inbox" => inbox,
@@ -432,6 +447,13 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
             crate::console_meet::device_invite(c.relay, &who)
+        },
+        // AC-2a 3.9 (F20): a device endorsement of a first-roster key; the device certificate's checks are the TLS
+        // layer's and `who`'s, the session is checked here, the 3.9 rules are fleet_trust's
+        "/v1/admin/console/fleet-endorse" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::fleet_endorse(c.relay, &who, &b)
         },
         "/v1/admin/console/requests/decline" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -1311,6 +1333,10 @@ mod tests {
         assert!(get_route("/v1/admin/console/requests").is_some());
         assert!(post_route("/v1/admin/console/invite").is_some());
         assert!(post_route("/v1/admin/console/requests/decline").is_some());
+        // AC-2a 5.7 and 3.9 on the main port
+        assert!(get_route("/v1/admin/console/where").is_some());
+        assert!(get_route("/v1/admin/console/fleet-bootstrap").is_some());
+        assert!(post_route("/v1/admin/console/fleet-endorse").is_some());
         for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
             assert!(post_route(p).is_some(), "{p}");
         }

@@ -1600,6 +1600,8 @@ impl Hub {
                     st.pu_message(None, Some(other.as_str()), &row);
                 }
             }
+            // AC-2a 9.2: one chat message relayed (room, channel or direct).
+            crate::fleet_probe::counters().message(1);
             st.dirty = true;
             Ok((row, n_files))
         })();

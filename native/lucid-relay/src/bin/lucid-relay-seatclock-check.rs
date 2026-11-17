@@ -30,6 +30,8 @@ mod console_approvals;
 mod console_audit;
 #[path = "../console_auth.rs"]
 mod console_auth;
+#[path = "../console_fleet.rs"]
+mod console_fleet;
 #[path = "../console_limits.rs"]
 mod console_limits;
 #[path = "../console_mail.rs"]
@@ -50,8 +52,36 @@ mod console_source;
 mod console_spokes;
 #[path = "../console_webauthn.rs"]
 mod console_webauthn;
+#[path = "../console_wizard.rs"]
+mod console_wizard;
 #[path = "../der.rs"]
 mod der;
+#[path = "../fleet_agent.rs"]
+mod fleet_agent;
+#[path = "../fleet_ca.rs"]
+mod fleet_ca;
+#[path = "../fleet_exec.rs"]
+mod fleet_exec;
+#[path = "../fleet_export.rs"]
+mod fleet_export;
+#[path = "../fleet_local.rs"]
+mod fleet_local;
+#[path = "../fleet_metrics.rs"]
+mod fleet_metrics;
+#[path = "../fleet_people.rs"]
+mod fleet_people;
+#[path = "../fleet_port.rs"]
+mod fleet_port;
+#[path = "../fleet_probe.rs"]
+mod fleet_probe;
+#[path = "../fleet_syslog.rs"]
+mod fleet_syslog;
+#[path = "../fleet_trust.rs"]
+mod fleet_trust;
+#[path = "../fleet_wire.rs"]
+mod fleet_wire;
+#[path = "../fleet_x509.rs"]
+mod fleet_x509;
 #[path = "../http_client.rs"]
 mod http_client;
 #[path = "../identity.rs"]

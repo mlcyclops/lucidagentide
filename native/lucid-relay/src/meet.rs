@@ -226,6 +226,11 @@ pub struct Settings {
     /// AC-1 3.1 (R41-3): "high" for a government deployment, "standard", or "" (Standard); read only while the
     /// console is not bootstrapped.
     pub console_profile: String,
+    /// AC-2a 2.2: run the console role in this process with its state in this folder ("" = off; never with
+    /// console_port; refused under High).
+    pub with_console: String,
+    /// AC-2a 3.6: the HTTP CONNECT proxy the management channel dials through ("" = none).
+    pub fleet_proxy: String,
     pub license: String,
     pub files_power: Obj,
     pub min_client: Obj,
@@ -300,12 +305,13 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 57] = [
+const SETTINGS_FIELDS: [&str; 59] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
+    "with_console", "fleet_proxy",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -355,6 +361,8 @@ impl Default for Settings {
             console_sources: Vec::new(),
             console_first_admin: String::new(),
             console_profile: String::new(),
+            with_console: String::new(),
+            fleet_proxy: String::new(),
             license: String::new(),
             files_power: Obj::new(),
             min_client: Obj::new(),
@@ -571,6 +579,8 @@ impl Settings {
         if let Some(v) = raw.get("console_port") {
             s.console_port = v.clone();
         }
+        text("with_console", &mut s.with_console)?;
+        text("fleet_proxy", &mut s.fleet_proxy)?;
         match raw.get("files_power") {
             None | Some(Value::Null) => {}
             Some(Value::Object(o)) => s.files_power = o.clone(),
@@ -1105,6 +1115,8 @@ pub struct Relay {
     pub pc_last_crl_check: Mutex<f64>,
     /// AC-1: the Admin Console when `console_port` is set (contract 3.1); None when off.
     pub admin_console: OnceLock<Arc<crate::console::Console>>,
+    /// AC-2a 5.7: the Lucid Admin Console link while enrolled (set once at start).
+    pub fleet: OnceLock<crate::relay::FleetLink>,
 }
 
 fn die(msg: &str) -> ! {
@@ -1122,6 +1134,10 @@ pub fn main(argv: &[String]) -> ! {
     // AC-1 3.2: the offline Admin Console commands, with the relay stopped
     if argv.first().map(String::as_str) == Some("console") {
         crate::console_meet::cli(&argv[1..]);
+    }
+    // AC-2a 5.7: `meet enroll <console URL> [...] --config <relay.json>` and `meet fleet <command> --config <relay.json>`
+    if matches!(argv.first().map(String::as_str), Some("enroll" | "fleet")) {
+        fleet_cli(argv);
     }
     let (mut config, mut verbose) = (None, false);
     let mut i = 0;
@@ -1146,6 +1162,99 @@ pub fn main(argv: &[String]) -> ! {
     VERBOSE.store(verbose, Ordering::Relaxed);
     let settings = Settings::load(&config).unwrap_or_else(|e| die(&e));
     serve(settings)
+}
+
+/// `--config <relay.json>` (or `--config=`) out of `args`, and the rest in order.
+fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
+    let (mut config, mut rest, mut i) = (None, Vec::new(), 0);
+    while i < args.len() {
+        if let Some(v) = args[i].strip_prefix("--config=") {
+            config = Some(v.to_string());
+        } else if args[i] == "--config" {
+            i += 1;
+            config = args.get(i).cloned();
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    (config, rest)
+}
+
+/// AC-2a 5.7: the Meeting Hub `enroll` and `fleet` commands on relay.json's state_dir. `enroll` holds `fleet.lock`
+/// (it refuses while the relay runs); the `fleet` commands take it themselves where they must.
+fn fleet_cli(argv: &[String]) -> ! {
+    let (config, rest) = split_config(&argv[1..]);
+    let config = config.unwrap_or_else(|| usage("the following arguments are required: --config"));
+    let settings = Settings::load(&config).unwrap_or_else(|e| die(&e));
+    if settings.state_dir.is_empty() {
+        die("relay settings: state_dir is required to join a Lucid Admin Console");
+    }
+    let dir = PathBuf::from(&settings.state_dir);
+    let product = crate::license::Product::Meet;
+    if argv[0] == "enroll" {
+        let lock = crate::server::fleet_lock(&dir).unwrap_or_else(|e| die(&e));
+        let r = crate::fleet_agent::enroll_cli(product, &dir, &rest);
+        drop(lock);
+        match r {
+            Ok(text) => {
+                println!("{text}");
+                std::process::exit(0)
+            }
+            Err(e) => die(&e),
+        }
+    }
+    let code = crate::fleet_local::cli(product, &dir, &rest, &mut std::io::stdin().lock(), &mut std::io::stdout());
+    std::process::exit(code)
+}
+
+/// AC-2a 2.2: the start checks of relay.json: `with_console` never with `console_port`, never under High; under High
+/// the state folder's access (F18).
+pub fn fleet_start_checks(s: &Settings) -> Result<(), String> {
+    let with_console = !s.with_console.trim().is_empty();
+    let console_on = pj::as_int(Some(&s.console_port)).is_some_and(|p| p != 0);
+    if with_console && console_on {
+        return Err(crate::server::CLI_WITH_CONSOLE_BOTH.into());
+    }
+    let high = s.console_profile.trim() == "high";
+    let dir = (!s.state_dir.is_empty()).then(|| Path::new(&s.state_dir));
+    crate::server::high_start_checks(dir, high, with_console)
+}
+
+/// AC-2a 2.1, 2.2, 5.7: at start, the console role when `with_console`, then `fleet.lock`, the headless console and
+/// the agent when enrolled (or the local console is on), the participant sampler and the metrics source.
+fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>, String> {
+    let s = &relay.settings;
+    let dir = (!s.state_dir.is_empty()).then(|| PathBuf::from(&s.state_dir));
+    crate::meet_console::start_sampler(Arc::downgrade(relay))?;
+    let weak = Arc::downgrade(relay);
+    crate::fleet_probe::set_product_source(Box::new(move |_| weak.upgrade().map(|r| crate::meet_console::fleet_metrics(&r)).unwrap_or_default()));
+    let Some(dir) = dir else { return Ok(None) };
+    let logger = crate::console_meet::logger();
+    if !s.with_console.trim().is_empty() {
+        let hosts: Vec<String> = [s.host.clone(), s.turn_host_public.clone(), s.console_public.clone(), s.guest_public.clone()].into_iter().filter(|h| !h.is_empty()).collect();
+        crate::console_fleet::start_with_console(Path::new(s.with_console.trim()), crate::license::Product::Meet, &hosts, Some(&dir), logger.clone())?;
+    }
+    let local = relay.admin_console.get().cloned();
+    let attach_to = Arc::downgrade(relay);
+    let attach = move |c: &Arc<crate::console::Console>| {
+        if let Some(r) = attach_to.upgrade() {
+            crate::console_meet::attach_headless(&r, c);
+        }
+    };
+    let opened = crate::server::fleet_open(crate::server::FleetOpen {
+        product: crate::license::Product::Meet,
+        state_dir: &dir,
+        console: local.clone(),
+        logger,
+        proxy: (!s.fleet_proxy.trim().is_empty()).then(|| s.fleet_proxy.trim().to_string()),
+        attach: &attach,
+    })?;
+    if let Some(agent) = &opened.agent {
+        let book = local.or_else(|| opened.headless.clone()).ok_or("no console for the fleet link")?;
+        let _ = relay.fleet.set(crate::server::fleet_link(agent.clone(), book, &dir));
+    }
+    Ok(Some(opened))
 }
 
 /// pc_enclave_start: PC-1 invariant 4 at start: in an enclave with `enclave_networks` the signer must resolve only
@@ -1196,6 +1305,7 @@ fn serve(settings: Settings) -> ! {
         die("the TURN secret is missing or shorter than 16 bytes");
     }
     pc_enclave_start(&settings);
+    fleet_start_checks(&settings).unwrap_or_else(|e| die(&e));
     let signer = if settings.signer_url.is_empty() {
         None
     } else {
@@ -1231,6 +1341,7 @@ fn serve(settings: Settings) -> ! {
         last_check: Mutex::new(-1e9),
         pc_last_crl_check: Mutex::new(-1e9),
         admin_console: OnceLock::new(),
+        fleet: OnceLock::new(),
     });
     {
         // the service gate reads the relay's version minimums
@@ -1274,6 +1385,8 @@ fn serve(settings: Settings) -> ! {
     hub.start();
     // AC-1 3.1: the Admin Console on its own port and host name (nothing when console_port is 0)
     crate::console_meet::start(&relay).unwrap_or_else(|e| die(&e));
+    // AC-2a 2.1, 5.7: kept for the process's life (it holds fleet.lock)
+    let _fleet = fleet_start(&relay).unwrap_or_else(|e| die(&e));
     crate::meet_guest_port::start(&settings, hub.clone(), relay.turn_secret.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
@@ -1290,7 +1403,11 @@ fn serve(settings: Settings) -> ! {
                 let Ok(tcp) = conn else { continue };
                 let Ok(peer) = tcp.peer_addr() else { continue };
                 let r = accepting.clone();
-                let _ = std::thread::Builder::new().name("relay-conn".into()).spawn(move || serve_conn(r, tcp, peer));
+                let _ = std::thread::Builder::new().name("relay-conn".into()).spawn(move || {
+                    // AC-2a 9.1 `conn_open`
+                    let _open = crate::fleet_probe::counters().conn_open();
+                    serve_conn(r, tcp, peer)
+                });
             }
         })
         .unwrap_or_else(|e| die(&e.to_string()));
@@ -1933,6 +2050,21 @@ pub fn state_file(s: &Settings, name: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// AC-2a 2.2: `with_console` never with `console_port` and never under High; both settings are known fields.
+    #[test]
+    fn ac2a_with_console_start_checks() {
+        assert!(SETTINGS_FIELDS.contains(&"with_console") && SETTINGS_FIELDS.contains(&"fleet_proxy"));
+        let mut s = Settings { with_console: "/var/lib/lucid-console".into(), console_port: Value::from(8444), ..Settings::default() };
+        assert_eq!(fleet_start_checks(&s).err().as_deref(), Some(crate::server::CLI_WITH_CONSOLE_BOTH));
+        s.console_port = Value::from(0);
+        s.state_dir = String::new();
+        assert!(fleet_start_checks(&s).is_ok());
+        s.console_profile = "high".into();
+        assert_eq!(fleet_start_checks(&s).err().as_deref(), Some(crate::server::CLI_WITH_CONSOLE_HIGH));
+        let (config, rest) = split_config(&["https://c.example".to_string(), "--config".into(), "relay.json".into(), "--yes".into()]);
+        assert_eq!((config.as_deref(), rest), (Some("relay.json"), vec!["https://c.example".to_string(), "--yes".to_string()]));
+    }
 
     #[test]
     fn versions_compare_as_the_updater_does() {

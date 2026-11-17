@@ -1,0 +1,719 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.2",
+ "about": "Section 13 words. <name> marks a value filled in at run time; \"\\n\" in cli and mail is a line break. nav is 12.4's left navigation in order, the reserved places carrying phase 4 and 5 (not rendered in AC-2a). cef maps an audit action to its CEF name (13.1); actions not in it use the action. metrics_help holds the # HELP words of every 10.1 family. key-record.* are the app loopback page's words quoted in 3.9.",
+ "placeholder": "<[^<>]+>",
+ "page": {
+  "nav.overview": "Overview",
+  "nav.people": "People",
+  "nav.spokes": "Remote Spokes",
+  "nav.meet": "Meeting Hub",
+  "nav.relays": "Relays and locations",
+  "nav.license": "License",
+  "nav.sign-in": "Sign-in",
+  "nav.email": "Email",
+  "nav.security": "Security and audit",
+  "nav.settings": "Settings",
+  "nav.upgrades": "Upgrades",
+  "nav.support": "Support",
+  "chip.fleet": "All relays",
+  "chip.count": "<n> relays",
+  "fleet.managed": "This relay is managed by the Lucid Admin Console at <origin>. Changes made there are checked here first.",
+  "fleet.no-relays-spokes": "No Remote Spokes relay is connected yet.",
+  "fleet.no-relays-meet": "No Meeting Hub relay is connected yet.",
+  "fleet.add": "Add a relay",
+  "fleet.picker": "Relay: <name>",
+  "fleet.all": "All relays",
+  "fleet.missing": "Some relays did not answer: <names>.",
+  "fleet.as-of": "As of <time>",
+  "fleet.scope-missing": "This relay did not give the Admin Console the <scope> scope, so this page is empty.",
+  "fleet.scope-ask": "Ask the relay's operator to add it",
+  "fleet.unconfirmed": "Not confirmed yet. Compare the fingerprint with the one the relay printed, then confirm it.",
+  "fleet.waiting-operator": "Waiting for this relay's operator to confirm the change (<id>).",
+  "fleet.confirm-unknown": "The relay stopped while running this change (<id>). It was not run again. Check the relay, then ask again if the change is missing.",
+  "attention.relay-confirm-unknown": "A confirmed change on <relay> may not have run. Check it.",
+  "fleet.read-only": "Read only",
+  "fleet.confirm-here": "Confirm here",
+  "fleet.roster-waiting": "Relays need to learn <n> new keys before those people can make changes on them.",
+  "fleet.endorse": "Confirm the new keys",
+  "fleet.webauthn-only": "Changes on relays need a passkey or security key. Add one in Your account.",
+  "health.ok": "Healthy",
+  "health.warn": "Needs a look",
+  "health.bad": "Problem",
+  "health.silent": "Not reachable",
+  "state.pending": "Waiting for the relay",
+  "state.unconfirmed": "Not confirmed",
+  "state.active": "Connected",
+  "state.left": "Left the console",
+  "state.removed": "Removed",
+  "scope.read-health": "Health and status",
+  "scope.read-logs": "Logs and audit",
+  "scope.people": "People",
+  "scope.config": "Configuration",
+  "scope.license": "License",
+  "scope.upgrade": "Upgrades (coming later)",
+  "enroll.title": "Add a relay",
+  "enroll.product": "Product",
+  "enroll.name": "Name",
+  "enroll.site": "Site or cloud region",
+  "enroll.scopes": "What this console may do on the relay",
+  "enroll.replaces": "Replace <name>",
+  "enroll.code-title": "Enrollment code",
+  "enroll.code-once": "Copy this code now. It is shown only once and works for 1 hour, on one relay.",
+  "enroll.commands": "On the relay's host, stop the relay, run this command and paste the code when it asks, then start the relay:",
+  "enroll.no-code-in-command": "The command does not contain the code, so it stays out of shell history.",
+  "bootstrap.how-to-anchor": "This relay trusts an admin's key only after that admin endorses it from their IDE or Hub app (Endorse my Admin Console key), or after the relay's operator added its fingerprint when enrolling.",
+  "endorse.title": "Endorse my Admin Console key",
+  "endorse.body": "Relay <relay host> is joining the Lucid Admin Console at <origin>. Endorse your key <label>, added on <date>, as <role>?",
+  "endorse.button": "Endorse",
+  "endorse.none": "This app has no record of an Admin Console key of yours. Record one from Your account in the Admin Console first.",
+  "endorse.done": "The relay accepted your endorsement.",
+  "account.record-key": "Record this key in my IDE or Hub app",
+  "bootstrap.pending": "The relay has not confirmed which admins it trusts yet.",
+  "bootstrap.done": "The relay trusts these admins.",
+  "account.fingerprints": "Key fingerprints for relays",
+  "account.fingerprints-help": "Write these down now and keep them outside the console. A relay operator can use them to trust your key.",
+  "trust.title": "Trust",
+  "trust.ca-new": "New management CA <generation>, fingerprint <fingerprint>. Each relay's operator confirms it on the relay.",
+  "trust.server-revoke": "Replace the management certificate now",
+  "trust.ca-rollover": "Start a new management CA",
+  "setup.this-host-standard": "On one machine the console and this relay share one trust boundary: if the console is broken into, so is this relay. Other relays keep their own protection.",
+  "setup.this-host-high": "Under High the console and the relay run as two services with separate accounts on this host. Run these two commands as an administrator, then add the relay with a code like any other:",
+  "enroll.local": "Or paste the code in the relay's own Admin Console, under Settings, Lucid Admin Console.",
+  "enroll.copied": "I copied the code",
+  "enroll.fingerprint": "Fingerprint",
+  "enroll.confirm-help": "The relay printed its fingerprint when it joined. Confirm only if both match.",
+  "charts.range-1h": "1 hour",
+  "charts.range-24h": "24 hours",
+  "charts.range-7d": "7 days",
+  "charts.range-30d": "30 days",
+  "charts.table": "Show as a table",
+  "charts.no-data": "No data for this time.",
+  "charts.people": "People online",
+  "charts.calls": "Calls and call minutes",
+  "charts.messages": "Messages",
+  "charts.spokes": "Spokes and lanes busy",
+  "charts.cpu": "CPU",
+  "charts.memory": "Memory",
+  "charts.network": "Network in and out",
+  "charts.latency": "Latency to the console",
+  "charts.expiry": "Certificate and license expiry",
+  "charts.health": "Health over time",
+  "kpi.relays": "Relays healthy",
+  "kpi.people": "People online",
+  "kpi.calls": "Calls now",
+  "kpi.messages": "Messages today",
+  "people.title": "People",
+  "people.kind-console": "Admin Console",
+  "people.kind-meet": "Meeting Hub",
+  "people.kind-spokes": "Remote Spokes",
+  "people.invite": "Invite",
+  "people.import": "Import from CSV",
+  "people.import-check": "Check the file",
+  "people.import-run": "Send <n> invites",
+  "people.remind": "Remind the relay's admins",
+  "people.suspend": "Suspend on this relay",
+  "people.unsuspend": "Lift the suspension",
+  "people.remove": "Remove from this relay",
+  "people.request-waiting": "Waiting for an admin in the Hub app",
+  "setup.code-title": "Set up the Lucid Admin Console",
+  "setup.code-help": "Enter the setup code. It is in the file setup-code.txt in the console's state folder on its host.",
+  "setup.code-field": "Setup code",
+  "setup.gov": "Is this a government deployment?",
+  "setup.gov-yes": "Yes, use the High security profile",
+  "setup.gov-no": "No, use the Standard security profile",
+  "setup.gov-help": "High is for government and other regulated organizations: everyone signs in with phishing-resistant methods, and admins need approved security keys. Standard suits most companies: passkeys, Windows Hello and authenticator apps all work.",
+  "setup.gov-fixed": "This console was started with the <profile> profile by its operator.",
+  "setup.first-admin": "First admin",
+  "setup.email-field": "Your email",
+  "setup.breakglass": "Under High, create the break-glass account now. On the console's host, run:",
+  "setup.signin": "Sign-in methods",
+  "setup.sso-later": "SSO comes in a later update.",
+  "setup.email": "Email",
+  "setup.license": "License",
+  "setup.relay": "First relay",
+  "setup.this-host": "Run a relay on this host",
+  "setup.this-host-help": "Restart the relay with --with-console <folder> (Remote Spokes) or set with_console in relay.json (Meeting Hub). It joins this console at its next start.",
+  "setup.other-host": "Add a relay on another host",
+  "setup.step": "Step <n> of 6",
+  "setup.save": "Save and continue",
+  "setup.skip": "Skip for now",
+  "setup.back": "Back",
+  "setup.finish": "Finish",
+  "setup.checklist": "Finish setup",
+  "setup.state-open": "Not done",
+  "setup.state-done": "Done",
+  "setup.state-skipped": "Skipped",
+  "setup.continue": "Continue",
+  "setup.hide": "Hide the checklist",
+  "exports.title": "Exports",
+  "exports.token-new": "Create a scrape token",
+  "exports.token-once": "Copy this token now. It is shown only once.",
+  "exports.siem": "Send audit and security events to a SIEM",
+  "exports.siem-reasons": "Include the reasons people typed",
+  "exports.siem-test": "Send a test message",
+  "local.title": "Lucid Admin Console",
+  "local.join": "Join a console",
+  "local.read-only": "Read only from the console",
+  "local.confirm-scopes": "Ask me before changes in",
+  "local.waiting": "Changes waiting for you",
+  "local.accept-scopes": "The console asks for more scopes: <scopes>",
+  "local.leave": "Leave the Admin Console",
+  "attention.relay-silent": "<relay> has not been in touch for <minutes> minutes.",
+  "attention.relay-unconfirmed": "<relay> joined and is waiting for an admin to confirm its fingerprint.",
+  "attention.relay-pending": "<relay> was enrolled but has not connected yet.",
+  "attention.relay-cert-expiring": "The management certificate of <relay> ends in <days> days and has not renewed.",
+  "attention.relay-cert-expired": "The management certificate of <relay> has ended. Enroll it again with Replace.",
+  "attention.relay-left": "<relay> left the console.",
+  "attention.relay-flapping": "Two machines are connecting as <relay>. Its key may have been copied.",
+  "attention.relay-read-only": "<relay> is read only from the console.",
+  "attention.relay-confirm-waiting": "<n> changes wait for the operator of <relay>.",
+  "attention.relay-scopes-pending": "<relay> has not accepted the scopes you asked for yet.",
+  "attention.relay-not-high": "<relay> is not in the High profile, so this console makes no changes on it.",
+  "attention.relay-needs-high": "<relay> is in the High profile and takes no changes until this console is High too.",
+  "attention.relay-clock": "The clock of <relay> is more than 5 minutes off.",
+  "attention.relay-version-mixed": "Your <product> relays run different versions.",
+  "attention.roster-pending": "Relays need to learn <n> new keys.",
+  "attention.roster-behind": "<relay> has not taken the latest admin keys for an hour.",
+  "attention.roster-empty": "No admin here has a passkey or security key, so no changes can be made on relays.",
+  "attention.fleet-seal-needed": "Set up sealed storage on this host before adding relays.",
+  "attention.fleet-state-unreadable": "The console could not read its list of relays; see its log.",
+  "attention.fleet-ca-expiring": "The console's management certificate authority ends in <days> days.",
+  "attention.fips-needed": "The High profile needs the FIPS build for relays, metrics export and SIEM forwarding.",
+  "attention.metrics-refused": "<relay> sent <n> health reports that were not accepted.",
+  "attention.metrics-space": "Health history reached its space limit; the oldest detail is being dropped.",
+  "attention.siem-failing": "Events cannot reach the SIEM: <why>.",
+  "attention.siem-dropped": "<n> events were dropped before the SIEM took them. Export the audit to fill the gap.",
+  "attention.token-expiring": "The scrape token <label> ends in <days> days.",
+  "attention.setup-unfinished": "Finish setting up the console.",
+  "attention.relay-bootstrap-pending": "<relay> is waiting for its operator to confirm which admins it trusts.",
+  "attention.relay-keys-held": "<n> new keys are in the 24-hour hold on <relay>.",
+  "attention.relay-keys-unattested": "<relay> could not verify <n> keys as approved security keys, so they cannot act there.",
+  "attention.key-no-evidence": "<n> admin keys were added before this version and cannot act on High relays. Add a new security key.",
+  "attention.relay-ca-unconfirmed": "<n> relays have not confirmed the new management CA.",
+  "attention.fleet-ca-lost": "The console can no longer use its management CA. Its operator must run the recovery command.",
+  "attention.relay-gap": "Some audit entries from <relay> did not reach the SIEM.",
+  "attention.relay-scope-stale": "The scope request to <relay> was replaced before its operator answered.",
+  "key-record.done": "Key recorded. You can close this tab.",
+  "key-record.used": "This link was already used."
+ },
+ "nav": [
+  {
+   "id": "nav.overview",
+   "phase": null,
+   "pages": [],
+   "label": "Overview"
+  },
+  {
+   "id": "nav.people",
+   "phase": null,
+   "pages": [],
+   "label": "People"
+  },
+  {
+   "id": "nav.spokes",
+   "phase": null,
+   "pages": [
+    "Relays",
+    "Hubs",
+    "Spokes",
+    "Seats",
+    "Relays and revocation",
+    "Blocks",
+    "Logs"
+   ],
+   "label": "Remote Spokes"
+  },
+  {
+   "id": "nav.meet",
+   "phase": null,
+   "pages": [
+    "Relays",
+    "People and devices",
+    "Seats",
+    "Calls",
+    "Waiting approvals",
+    "Organizations",
+    "Bridges",
+    "Legal holds",
+    "Release",
+    "Signer and servers",
+    "Push",
+    "Logs"
+   ],
+   "label": "Meeting Hub"
+  },
+  {
+   "id": "nav.relays",
+   "phase": null,
+   "pages": [
+    "Relays",
+    "Locations",
+    "Health",
+    "Add a relay"
+   ],
+   "label": "Relays and locations"
+  },
+  {
+   "id": "nav.upgrades",
+   "phase": 4,
+   "pages": [],
+   "label": "Upgrades"
+  },
+  {
+   "id": "nav.license",
+   "phase": null,
+   "pages": [],
+   "label": "License"
+  },
+  {
+   "id": "nav.sign-in",
+   "phase": null,
+   "pages": [],
+   "label": "Sign-in"
+  },
+  {
+   "id": "nav.email",
+   "phase": null,
+   "pages": [],
+   "label": "Email"
+  },
+  {
+   "id": "nav.security",
+   "phase": null,
+   "pages": [
+    "Approvals",
+    "Requests",
+    "Audit log",
+    "Security settings",
+    "Exports"
+   ],
+   "label": "Security and audit"
+  },
+  {
+   "id": "nav.support",
+   "phase": 5,
+   "pages": [],
+   "label": "Support"
+  },
+  {
+   "id": "nav.settings",
+   "phase": null,
+   "pages": [
+    "Console",
+    "Setup",
+    "Other consoles",
+    "Your account"
+   ],
+   "label": "Settings"
+  }
+ ],
+ "dialogs": {
+  "enroll": {
+   "title": "Make an enrollment code for <name>?",
+   "body": "Anyone with the code can join one <product> relay to this console in the next hour.",
+   "button": "Make code"
+  },
+  "confirm-relay": {
+   "title": "Confirm <name>?",
+   "body": "Fingerprint <fingerprint>. Confirm only if the relay printed the same.",
+   "button": "Confirm"
+  },
+  "label": {
+   "title": "Rename <name>?",
+   "body": "Only this console's name for it changes.",
+   "button": "Save"
+  },
+  "narrow-scopes": {
+   "title": "Remove <scopes> from <name>?",
+   "body": "This console can no longer use them on the relay.",
+   "button": "Remove"
+  },
+  "widen-scopes": {
+   "title": "Ask <name> for <scopes>?",
+   "body": "The relay's operator must accept before they apply.",
+   "button": "Ask"
+  },
+  "remove-relay": {
+   "title": "Remove <name> from the console?",
+   "body": "The relay keeps running and keeps its people. This console loses access to it.",
+   "button": "Remove relay"
+  },
+  "endorse": {
+   "title": "Confirm <n> new keys for <m> relays?",
+   "body": "These people can then make changes on those relays.",
+   "button": "Confirm keys"
+  },
+  "library-add": {
+   "title": "Add license <id> to the library?",
+   "body": "<product>, <edition>, <users> users, ends <date>.",
+   "button": "Add"
+  },
+  "invite-meet": {
+   "title": "Ask for <email> to be invited to Meeting Hub on <relay>?",
+   "body": "An admin of that relay completes the invite in the Hub app.",
+   "button": "Send request"
+  },
+  "import": {
+   "title": "Send <n> invites?",
+   "body": "<c> console invites and <m> Meeting Hub requests on <r> relays.",
+   "button": "Send invites"
+  },
+  "suspend": {
+   "title": "Suspend <name> on <relay>?",
+   "body": "Their <n> devices are blocked on this relay for <hours> hours. Other relays are not affected.",
+   "button": "Suspend"
+  },
+  "unsuspend": {
+   "title": "Lift the suspension of <name> on <relay>?",
+   "body": "Their devices work on this relay again.",
+   "button": "Lift"
+  },
+  "remove-person": {
+   "title": "Remove <name> from <relay>?",
+   "body": "Revocation requests go to the relay's admins for each of <n> devices.",
+   "button": "Remove"
+  },
+  "token": {
+   "title": "Create a scrape token for <label>?",
+   "body": "It reads health metrics of <relays> for <days> days.",
+   "button": "Create"
+  },
+  "siem-on": {
+   "title": "Send events to <host>:<port>?",
+   "body": "A test message goes first; the change applies only if it arrives.",
+   "button": "Save"
+  },
+  "siem-off": {
+   "title": "Stop sending events to the SIEM?",
+   "body": "Audit and security events stop leaving this console.",
+   "button": "Stop"
+  },
+  "local-read-only-on": {
+   "title": "Set this relay read only from the console?",
+   "body": "The Admin Console can still read; it can change nothing here.",
+   "button": "Set read only"
+  },
+  "local-read-only-off": {
+   "title": "Let the console make changes again?",
+   "body": "Changes still need an admin's confirmation, checked here.",
+   "button": "Allow changes"
+  },
+  "local-confirm": {
+   "title": "Run this change from the console?",
+   "body": "<summary>, asked by <email>.",
+   "button": "Run it"
+  },
+  "local-accept-scopes": {
+   "title": "Give the console <scopes>?",
+   "body": "It can then use them on this relay.",
+   "button": "Accept"
+  },
+  "endorse-key": {
+   "title": "Endorse your Admin Console key for <relay host>?",
+   "body": "Only your recorded key <label> is endorsed. The relay then trusts it for the console at <origin>.",
+   "button": "Endorse"
+  },
+  "local-trust-ca": {
+   "title": "Trust the new management CA?",
+   "body": "Fingerprint <fingerprint>. Only if a console admin read you the same one by phone or in person.",
+   "button": "Trust CA"
+  },
+  "server-revoke": {
+   "title": "Replace the management certificate now?",
+   "body": "Relays drop the old one as soon as they get the new trust list. Use this if the console's key may have been copied.",
+   "button": "Replace now"
+  },
+  "ca-rollover": {
+   "title": "Start management CA <generation>?",
+   "body": "Every relay's operator must confirm its fingerprint on the relay within 90 days, or that relay stops connecting.",
+   "button": "Start"
+  },
+  "roster-cancel": {
+   "title": "Cancel <hint> on <relay>?",
+   "body": "The console may fail to deliver this. Also call the relay's operator to refuse the key on the relay.",
+   "button": "Cancel key"
+  },
+  "local-leave": {
+   "title": "Leave the Admin Console at <origin>?",
+   "body": "This relay stops sending health and stops taking changes from it. Its own console stays.",
+   "button": "Leave"
+  }
+ },
+ "refusals": {
+  "setup-needed": {
+   "status": 409,
+   "words": "Finish the first step of setup first."
+  },
+  "setup-code": {
+   "status": 403,
+   "words": "That setup code is not right. It is in setup-code.txt on the console's host."
+  },
+  "setup-done": {
+   "status": 409,
+   "words": "This console is already set up. Sign in instead."
+  },
+  "fleet-code": {
+   "status": 400,
+   "words": "That enrollment code is not complete. Copy it again from the Admin Console."
+  },
+  "fleet-code-expired": {
+   "status": 410,
+   "words": "That enrollment code has ended or was already used. Ask for a new one."
+  },
+  "fleet-product": {
+   "status": 409,
+   "words": "This code is for a <product> relay. Run it on a <product> relay."
+  },
+  "fleet-pin": {
+   "status": 403,
+   "words": "This console's identity does not match the code. Ask the console's admin for a new code."
+  },
+  "fleet-preview-changed": {
+   "status": 409,
+   "words": "The console changed since you checked it. Run the command again."
+  },
+  "fleet-profile": {
+   "status": 409,
+   "words": "This console and this relay are not in the same security profile. A High relay works only with a High console, and a High console only with High relays in FIPS mode."
+  },
+  "fleet-limit": {
+   "status": 409,
+   "words": "This console already manages 200 relays."
+  },
+  "enroll-limit": {
+   "status": 429,
+   "words": "Too many open enrollment codes. Use or cancel one first."
+  },
+  "fingerprint": {
+   "status": 409,
+   "words": "That fingerprint does not match this relay. Do not confirm it."
+  },
+  "fleet-scope": {
+   "status": 403,
+   "words": "This relay did not give the Admin Console the <scope> scope."
+  },
+  "fleet-scope-required": {
+   "status": 409,
+   "words": "Health and status is always given."
+  },
+  "fleet-scope-unknown": {
+   "status": 400,
+   "words": "This relay does not know the scope <scope> yet."
+  },
+  "fleet-route": {
+   "status": 404,
+   "words": "This page is not available through the Admin Console."
+  },
+  "fleet-read-only": {
+   "status": 403,
+   "words": "This relay is set to read only from the Admin Console. Its operator can change that on the relay."
+  },
+  "fleet-confirm": {
+   "status": 202,
+   "words": "This relay's operator confirms this change on the relay. It runs when they do."
+  },
+  "fleet-stepup": {
+   "status": 403,
+   "words": "The relay could not verify your confirmation. Try again."
+  },
+  "fleet-counter": {
+   "status": 403,
+   "words": "The relay saw this security key go backwards and refused it. Tell your security team."
+  },
+  "fleet-roster": {
+   "status": 403,
+   "words": "This relay does not know your key yet. An admin must confirm new keys first."
+  },
+  "fleet-webauthn": {
+   "status": 403,
+   "words": "Changes on relays need a passkey or security key. Add one in Your account."
+  },
+  "fleet-second": {
+   "status": 409,
+   "words": "This change needs a second admin. Ask another admin to approve it in the Admin Console."
+  },
+  "fleet-op": {
+   "status": 400,
+   "words": "The relay did not understand the console. Check that both run supported versions."
+  },
+  "fleet-bootstrap": {
+   "status": 409,
+   "words": "This relay does not trust any admin key yet. Admins endorse their keys from the IDE plugin or the Hub app."
+  },
+  "fleet-roster-duplicate": {
+   "status": 409,
+   "words": "Two admin entries use the same key. The relay trusts none of them."
+  },
+  "endorse-refused": {
+   "status": 403,
+   "words": "The relay did not accept this endorsement: <why>."
+  },
+  "fleet-not-bootstrapping": {
+   "status": 409,
+   "words": "This relay is not waiting for admin keys."
+  },
+  "recovery-refused": {
+   "status": 403,
+   "words": "This relay cannot replace its certificate this way. Enroll it again with a Replace code."
+  },
+  "trust-time-refused": {
+   "status": 409,
+   "words": "The time was not reset: the console did not send a newer trust list, signed by its CA and dated within 10 minutes of this host's clock."
+  },
+  "fleet-scope-needs-people": {
+   "status": 409,
+   "words": "Logs and audit name people, so they need the People scope too."
+  },
+  "stale": {
+   "status": 409,
+   "words": "That request changed. Look at it again before you accept."
+  },
+  "relay-offline": {
+   "status": 503,
+   "words": "<relay> is not connected right now."
+  },
+  "relay-timeout": {
+   "status": 504,
+   "words": "<relay> did not answer in time."
+  },
+  "relay-busy": {
+   "status": 429,
+   "words": "<relay> is busy. Try again in a moment."
+  },
+  "relay-unconfirmed": {
+   "status": 409,
+   "words": "Confirm <relay> before making changes on it."
+  },
+  "csv-invalid": {
+   "status": 400,
+   "words": "That file is not a CSV with the columns email, name, product, role, relay and days."
+  },
+  "csv-limit": {
+   "status": 413,
+   "words": "A CSV can have at most 500 rows and 256 KiB."
+  },
+  "csv-changed": {
+   "status": 409,
+   "words": "The list changed since it was checked. Check it again."
+  },
+  "request-limit": {
+   "status": 409,
+   "words": "That relay already has 200 waiting requests."
+  },
+  "token-limit": {
+   "status": 409,
+   "words": "This console already has 10 scrape tokens. Revoke one first."
+  },
+  "siem-failed": {
+   "status": 502,
+   "words": "The test message did not reach the SIEM: <why>. Nothing was changed."
+  },
+  "siem-ca-needed": {
+   "status": 409,
+   "words": "The High profile needs the SIEM's certificate authority. Paste its PEM."
+  },
+  "fips-needed": {
+   "status": 409,
+   "words": "The High profile needs the FIPS build for this."
+  }
+ },
+ "cli": {
+  "cli.enroll-preview": "Console: <origin>\nThis relay: <name> (<site>), <product>\nScopes: <scopes>\nProfile: <profile>, two-person control <on or off>\nAdmin keys the console offers (none is trusted until its admin endorses it or you list its fingerprint):\n<one line per entry: email, role, key hint, verified as a security key or not>",
+  "cli.enroll-ask": "Join this console? Type yes to continue: ",
+  "cli.enroll-next": "Saved. Start the relay within the hour; it joins the console at start and prints its fingerprint.",
+  "cli.enrolled": "Joined the Lucid Admin Console at <origin> as <relayId>. Fingerprint: <fingerprint>. An admin there confirms it.",
+  "cli.enroll-failed": "Could not join the console: <why>",
+  "cli.enroll-high-standard": "This relay is in the High profile and that console is Standard. A High relay joins only a High console.",
+  "cli.fleet-running": "Stop the relay first, or use its Admin Console.",
+  "cli.fleet-state-needed": "Joining a console needs the relay's state folder (--state).",
+  "cli.not-enrolled": "This relay is not managed by a Lucid Admin Console.",
+  "cli.left": "This relay left the Lucid Admin Console at <origin>.",
+  "cli.with-console-both": "A relay that runs the console role does not also run its own console: drop --console or console_port.",
+  "cli.with-console-host": "The console's public host name must differ from the relay's host names.",
+  "cli.setup-code-file": "Setup code for the Lucid Admin Console. Enter it on the first page. It changes at every start until setup is done.",
+  "cli.console-needs-public": "the console needs --public <host name> (passkeys need a DNS name)",
+  "cli.enroll-ask-code": "Enrollment code (it is not shown as you type or paste): ",
+  "cli.code-file": "The code file must be a regular file only you can read.",
+  "cli.bootstrap-wait": "This relay trusts no admin key yet. Each admin endorses their key from the IDE plugin or the Hub app (Endorse my Admin Console key), or you add their key fingerprints with --fleet-admin-key when enrolling.",
+  "cli.bootstrap-done": "This relay now trusts <n> admin keys (<m> wait 24 hours under High).",
+  "cli.with-console-high": "Under the High profile the console and the relay must run as two services with separate accounts. Drop --with-console or with_console.",
+  "cli.state-acl": "Under the High profile the state folder <path> must be open only to this service's account and administrators. Run lucid-relay console seal-setup.",
+  "cli.console-identity": "The console must not run as the relay's account. Run lucid-relay console seal-setup --role console.",
+  "cli.trust-ca": "New management CA fingerprint: <fingerprint>. Confirm only if a console admin read you the same one by phone or in person.",
+  "cli.trust-time-reset": "Trusted time: <T>\nStored trust list: number <storedSeq>, issued <storedIssuedAt>\nNewer trust list from the console: number <seq>, issued <issuedAt>\nThis host's clock: <wall>\nUse the newer trust list and set trusted time to <issuedAt>? Type yes to continue: ",
+  "cli.recover": "This relay's management key is lost. Ask a console admin for a Replace code for <name>, then run lucid-relay enroll again.",
+  "cli.connect-dns": "The console's host name did not resolve.",
+  "cli.connect-tcp": "The console's management port did not answer.",
+  "cli.connect-proxy": "The proxy refused the connection.",
+  "cli.connect-tls-protocol": "The console and this relay share no allowed TLS settings.",
+  "cli.connect-server-untrusted": "The server is not the console this relay trusts (its certificate, name or trust list did not match).",
+  "cli.connect-server-expired": "The console's certificate has ended.",
+  "cli.connect-certificate-refused": "The console refused this relay's certificate. It may have been removed from the console, or its certificate ended.",
+  "cli.connect-upgrade-refused": "The console answered but did not open the channel.",
+  "cli.connect-closed": "The connection closed before the channel opened."
+ },
+ "mail": {
+  "mail.fleet-invite-waiting": {
+   "subject": "A Meeting Hub invite is waiting for you",
+   "body": "<requester> asked for <email> to be invited to Meeting Hub on <relay>.\nOpen the Hub app as an admin of that relay to complete or decline it.\nIt ends in 14 days."
+  }
+ },
+ "cef": {
+  "fleet.enroll.code": "Make an enrollment code for <name>",
+  "fleet.relay.confirm": "Confirm <name>",
+  "fleet.relay.label": "Rename <name>",
+  "fleet.relay.remove": "Remove <name> from the console",
+  "fleet.roster.endorse": "Confirm <n> new keys for <m> relays",
+  "people.invite": "Ask for <email> to be invited to Meeting Hub on <relay>",
+  "people.import": "Send <n> invites",
+  "people.suspend": "Suspend <name> on <relay>",
+  "people.unsuspend": "Lift the suspension of <name> on <relay>",
+  "people.remove": "Remove <name> from <relay>",
+  "exports.token.create": "Create a scrape token for <label>",
+  "fleet.scopes": "Give the console <scopes>",
+  "fleet.bootstrap-anchor": "Endorse your Admin Console key for <relay host>",
+  "fleet.ca.trust": "Trust the new management CA",
+  "fleet.server-revoke": "Replace the management certificate now",
+  "fleet.ca.rollover": "Start management CA <generation>",
+  "fleet.roster.cancel": "Cancel <hint> on <relay>",
+  "fleet.left": "Leave the Admin Console at <origin>"
+ },
+ "metrics_help": {
+  "lucid_console_info": "Version, security profile and FIPS mode of this Lucid Admin Console.",
+  "lucid_relay_up": "1 when the relay is connected and sent health in the last 3 minutes.",
+  "lucid_relay_last_contact_seconds": "Seconds since the relay was last in touch.",
+  "lucid_relay_health": "The relay's health as the console judges it; 1 for the current state.",
+  "lucid_relay_people_online": "People online on the relay.",
+  "lucid_relay_devices_online": "Meeting Hub devices online on the relay.",
+  "lucid_relay_calls_active": "Meeting Hub calls with two or more people.",
+  "lucid_relay_participants": "People in Meeting Hub calls.",
+  "lucid_relay_call_minutes_total": "Meeting Hub call minutes since the console started.",
+  "lucid_relay_messages_total": "Messages relayed since the console started.",
+  "lucid_relay_hubs_online": "Hubs that checked in during the last 5 minutes.",
+  "lucid_relay_spokes_online": "Spokes that checked in during the last 5 minutes.",
+  "lucid_relay_spokes_total": "Spokes seen in the last 30 days.",
+  "lucid_relay_spokes_busy_total": "Spokes that sent or received mail, summed per minute since the console started.",
+  "lucid_relay_lanes_busy": "Busy lanes on the relay's spokes.",
+  "lucid_relay_lanes_total": "Live lanes on the relay's spokes.",
+  "lucid_relay_seats_used": "License seats in use.",
+  "lucid_relay_seats_total": "License seats allowed.",
+  "lucid_relay_cpu_process_percent": "CPU used by the relay process, percent of the host.",
+  "lucid_relay_cpu_host_percent": "CPU busy on the relay's host, percent.",
+  "lucid_relay_mem_process_bytes": "Memory held by the relay process.",
+  "lucid_relay_mem_host_used_percent": "Memory in use on the relay's host, percent.",
+  "lucid_relay_network_receive_bytes_total": "Bytes received by the relay's host since the console started.",
+  "lucid_relay_network_transmit_bytes_total": "Bytes sent by the relay's host since the console started.",
+  "lucid_relay_conn_open": "Open connections on the relay's listeners.",
+  "lucid_relay_latency_console_seconds": "Round trip from the relay to the console.",
+  "lucid_relay_cert_tls_days": "Days left on the relay's TLS certificate.",
+  "lucid_relay_cert_console_days": "Days left on the relay's own console certificate.",
+  "lucid_relay_cert_mgmt_days": "Days left on the relay's management certificate.",
+  "lucid_relay_cert_signer_days": "Days left on the Meeting Hub signer certificate.",
+  "lucid_relay_crl_days": "Days until the relay's revocation list needs its next update.",
+  "lucid_relay_license_days": "Days left on the relay's license; negative in grace.",
+  "lucid_relay_adding_open": "1 when the Meeting Hub relay may add people.",
+  "lucid_relay_quota_hits_total": "Requests refused for quota since the console started.",
+  "lucid_relay_license_state": "The relay's license state; 1 for the current state."
+ }
+}

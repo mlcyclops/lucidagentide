@@ -442,7 +442,10 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn temp(name: &str, data: &str) -> String {
-        let dir = std::env::temp_dir().join(format!("lucid-console-port-{}-{}", std::process::id(), pj::mono().to_bits()));
+        // A folder per call: two tests at the same instant must never share (and overwrite) a certificate or key.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("lucid-console-port-{}-{}-{n}", std::process::id(), pj::mono().to_bits()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         std::fs::write(&p, data).unwrap();

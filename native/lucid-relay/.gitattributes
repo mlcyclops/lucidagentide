@@ -4,3 +4,4 @@ console/icon.svg -text
 console/favicon.svg -text
 data/mds3.jwt -text
 data/fido-mds-root.pem -text
+tests/*.pem -text

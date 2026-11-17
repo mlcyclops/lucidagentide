@@ -893,6 +893,12 @@ impl Console {
 
     /// A new request; one waiting per (kind, target), 200 waiting per console, 30 an hour per admin.
     pub(crate) fn new_request(&self, by: &str, kind: &str, target: Value, reason: &str, t: i64) -> Result<Value, ApiError> {
+        self.new_request_in(by, kind, target, reason, None, t)
+    }
+
+    /// `new_request` for one row of a fleet CSV import (AC-2a 11.3): the requests of one `import` id by one person
+    /// count once toward the hourly cap (each still toward the 200 waiting); the id is kept on the request.
+    pub(crate) fn new_request_in(&self, by: &str, kind: &str, target: Value, reason: &str, import: Option<&str>, t: i64) -> Result<Value, ApiError> {
         let key = canonical_json(&target).map_err(|e| ApiError::with("invalid", e))?;
         let mut inner = self.inner.lock();
         sweep(&mut inner.book, t);
@@ -907,8 +913,11 @@ impl Console {
             e.message = "Too many requests are waiting. Try again in 60 minutes.".into();
             return Err(e);
         }
-        if let Err(o) = inner.limits.hit(Limit::Requests, by, t) {
-            return Err(ApiError::rate(o.retry_secs));
+        let counted = import.is_some_and(|i| inner.book.requests.iter().any(|r| s(r, "requested_by") == by && s(r, "import") == i && r.get("requested_at").and_then(Value::as_i64).is_some_and(|at| t - at < 3_600_000)));
+        if !counted {
+            if let Err(o) = inner.limits.hit(Limit::Requests, by, t) {
+                return Err(ApiError::rate(o.retry_secs));
+            }
         }
         let id = hex_id("rq_")?;
         let mut r = Map::new();
@@ -926,6 +935,9 @@ impl Console {
         ] {
             r.insert(k.into(), v);
         }
+        if let Some(i) = import {
+            r.insert("import".into(), Value::from(i));
+        }
         let v = Value::Object(r.clone());
         inner.book.requests.push(r);
         self.save_book(&mut inner)?;
@@ -934,6 +946,38 @@ impl Console {
 
     /// POST requests/new {kind, target, reason}.
     pub(crate) fn requests_new(&self, who: &Who, body: &Value, t: i64) -> Result<Done, ApiError> {
+        self.requests_new_with(who, body, None, t)
+    }
+
+    /// AC-2a 11.2 (decision 11): POST requests/new from a fleet call (fleet_exec). An admin as `requests_new`; a user
+    /// manager roster entry only for kind `meet.invite` (the one widening of AC-1 4.4; the relay's own sessions keep
+    /// the dispatcher's Admin row). An optional `importId` (11.3) makes the rows of one import count once toward the
+    /// hourly cap.
+    pub fn requests_new_fleet(&self, who: &Who, body: &Value, t: i64) -> Result<Done, ApiError> {
+        let kind = str_of(body.get("kind")).unwrap_or("");
+        if !who.admin && !(who.manager && kind == "meet.invite") {
+            return Err(ApiError::of("role"));
+        }
+        let import = str_of(body.get("importId")).filter(|i| (1..=64).contains(&i.len()) && i.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+        if body.get("importId").is_some() && import.is_none() {
+            return Err(ApiError::with("invalid", "importId is the id of a CSV check."));
+        }
+        self.requests_new_with(who, body, import, t)
+    }
+
+    /// AC-2a 11.2: GET requests from a fleet call: admins see every request; a user manager (to remind and cancel
+    /// invites) only `meet.invite` requests.
+    pub fn requests_list_fleet(&self, who: &Who, state: &str, kind: &str, t: i64) -> Result<Out, ApiError> {
+        if who.admin {
+            return Ok(self.requests_list(state, kind, t));
+        }
+        if !who.manager || !(kind.is_empty() || kind == "meet.invite") {
+            return Err(ApiError::of("role"));
+        }
+        Ok(self.requests_list(state, "meet.invite", t))
+    }
+
+    fn requests_new_with(&self, who: &Who, body: &Value, import: Option<&str>, t: i64) -> Result<Done, ApiError> {
         let kind = str_of(body.get("kind")).unwrap_or("");
         let prefix = if self.is_meet() { "meet." } else { "rs." };
         let kinds: &[&str] = if self.is_meet() { &["meet.approve", "meet.revoke", "meet.invite"] } else { &["rs.revoke", "rs.renew", "rs.seat"] };
@@ -947,7 +991,7 @@ impl Console {
         }
         let section = self.section().ok_or_else(|| ApiError::with("invalid", "This relay has no product section."))?;
         let target = section.request_target(kind, body.get("target").unwrap_or(&Value::Null))?;
-        let request = self.new_request(&who.email, kind, target, &reason, t)?;
+        let request = self.new_request_in(&who.email, kind, target, &reason, import, t)?;
         let id = request["id"].as_str().unwrap_or("").to_owned();
         Ok(Done { out: Out::ok(json!({ "ok": true, "request": request })), target: Some(id), result: "ok", approval: None, detail: json!({ "kind": kind, "reason": reason }) })
     }
@@ -1139,5 +1183,59 @@ mod tests {
     fn audit_detail_never_keeps_secrets() {
         let d = params_detail(&json!({ "license": "tok", "reason": "r", "stepup": {}, "crl": "x", "node": "n_1" }));
         assert_eq!(d, json!({ "reason": "r", "node": "n_1" }));
+    }
+
+    fn who(role: PersonRole) -> Who {
+        let (admin, manager) = (role == PersonRole::Admin, role != PersonRole::Viewer);
+        let rights = match role {
+            PersonRole::Admin => crate::console_settings::Rights::Admin,
+            PersonRole::UserManager => crate::console_settings::Rights::Manager,
+            _ => crate::console_settings::Rights::Viewer,
+        };
+        Who { sid: "s".into(), email: "um@x.example".into(), role, rights, why: None, admin, manager }
+    }
+
+    fn headless(name: &str) -> std::sync::Arc<Console> {
+        let d = std::env::temp_dir().join(format!("lucid-approvals-fleet-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        crate::console::open_headless(crate::license::Product::Meet, &d, std::sync::Arc::new(crate::log::Logger::capture("t", Box::new(|_, _| {})))).unwrap()
+    }
+
+    /// AC-2a 16.1 f-relay (11.2, decision 11): a user manager may ask for `meet.invite` through a fleet call and for
+    /// nothing else; viewers for nothing; the relay's own sessions keep the dispatcher's Admin row.
+    #[test]
+    fn ac2a_the_user_manager_invite_widening_applies_to_fleet_calls_only() {
+        let c = headless("widening");
+        let invite = json!({ "kind": "meet.invite", "target": { "name": "Bo", "email": "bo@x.example", "days": 7 }, "reason": "New hire" });
+        let revoke = json!({ "kind": "meet.revoke", "target": { "principal": "bo@x.example", "device": "aaaaaaaaaaaaaaaa" }, "reason": "Lost" });
+        let code = |r: Result<Done, ApiError>| r.err().map(|e| e.code);
+        // past the role check the invite meets the relay's own rules (no section in this bare console), never `role`
+        assert_ne!(code(c.requests_new_fleet(&who(PersonRole::UserManager), &invite, T0)), Some("role"));
+        assert_eq!(code(c.requests_new_fleet(&who(PersonRole::UserManager), &revoke, T0)), Some("role"));
+        assert_eq!(code(c.requests_new_fleet(&who(PersonRole::Viewer), &invite, T0)), Some("role"));
+        assert_ne!(code(c.requests_new_fleet(&who(PersonRole::Admin), &revoke, T0)), Some("role"));
+        // the relay's own console: requests/new stays an admin route
+        let row = crate::console::CORE_ROUTES.iter().find(|r| r.method == "POST" && r.path == "requests/new").unwrap();
+        assert_eq!(row.role, crate::console::Role::Admin);
+        // reading: a user manager sees invites only
+        assert!(c.requests_list_fleet(&who(PersonRole::UserManager), "waiting", "", T0).is_ok());
+        assert_eq!(c.requests_list_fleet(&who(PersonRole::UserManager), "waiting", "meet.revoke", T0).err().map(|e| e.code), Some("role"));
+        assert_eq!(c.requests_list_fleet(&who(PersonRole::Viewer), "waiting", "", T0).err().map(|e| e.code), Some("role"));
+    }
+
+    /// AC-2a 11.3: the requests of one CSV import count once toward the hourly cap of 30, each toward the waiting cap.
+    #[test]
+    fn ac2a_one_import_counts_once_toward_the_hourly_cap() {
+        let c = headless("import");
+        let target = |i: usize| json!({ "email": format!("p{i}@x.example") });
+        for i in 0..40 {
+            c.new_request_in("um@x.example", "meet.invite", target(i), "Import", Some("imp1"), T0 + i as i64).unwrap();
+        }
+        // 29 single requests still fit beside the one import
+        for i in 40..69 {
+            c.new_request_in("um@x.example", "meet.invite", target(i), "One", None, T0 + i as i64).unwrap();
+        }
+        assert_eq!(c.new_request_in("um@x.example", "meet.invite", target(99), "One", None, T0 + 100).err().map(|e| e.code), Some("rate"));
     }
 }

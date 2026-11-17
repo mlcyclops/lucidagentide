@@ -815,6 +815,60 @@ pub fn verify_registration(rp_id: &str, origin: &str, challenge: &[u8], credenti
     Ok(NewPasskey { id: cred_id, cose: cose_bytes, sign_count: auth.sign_count, aaguid, attestation: Attestation { fmt: shown, chain } })
 }
 
+/// A registration's kept evidence re-checked by a relay (AC-2a 3.9 and 4.4): the checks of `verify_registration`
+/// except the challenge (the relay never saw the ceremony): client data of type `webauthn.create` for `origin`, never
+/// cross-origin; the rpIdHash of `rp_id`; user presence and verification; the attested credential and its ES256 or
+/// RS256 key; and the statement, `none` and `packed` self verified (else refused), `packed` full and `tpm` kept with
+/// their chain only when they verify. The caller compares the credential id and COSE key with the roster entry's and
+/// asks `console_mds::assess` and `why_not` against its own snapshot.
+pub fn verify_attestation_evidence(rp_id: &str, origin: &str, attestation_object: &[u8], client_data_json: &[u8]) -> Result<NewPasskey, Refusal> {
+    if attestation_object.is_empty() || attestation_object.len() > FIELD_MAX || client_data_json.is_empty() || client_data_json.len() > FIELD_MAX {
+        return Err(bad("the evidence is missing or too large"));
+    }
+    let parsed = std::str::from_utf8(client_data_json).ok().and_then(parse_json);
+    let Some(o) = parsed.as_ref().and_then(Value::as_object) else { return Err(bad("the evidence's client data could not be read")) };
+    if str_of(o.get("type")) != Some("webauthn.create") {
+        return Err(bad("the evidence is not a registration"));
+    }
+    if str_of(o.get("origin")) != Some(origin) || o.get("crossOrigin") == Some(&Value::Bool(true)) {
+        return Err(denied("the evidence was made for another website"));
+    }
+    let att = cbor_decode(attestation_object).map_err(|e| bad(&format!("the evidence could not be read ({e})")))?;
+    let (Some(Cbor::Text(fmt)), Some(stmt @ Cbor::Map(_)), Some(Cbor::Bytes(auth_raw))) = (att.text_key("fmt"), att.text_key("attStmt"), att.text_key("authData")) else {
+        return Err(bad("the evidence's attestation is malformed"));
+    };
+    let auth = parse_auth_data(auth_raw)?;
+    check_rp(&auth, rp_id, true)?;
+    let aaguid = auth.aaguid;
+    let Some((cred_id, cose, cose_bytes)) = auth.credential else { return Err(bad("the evidence names no credential")) };
+    let key = cose_key(&cose)?;
+    let client_hash = sha256(client_data_json);
+    let mut signed = auth_raw.clone();
+    signed.extend_from_slice(&client_hash);
+    let shown: String = fmt.chars().filter(|c| c.is_ascii_graphic()).take(32).collect();
+    let chain = match fmt.as_str() {
+        "none" => {
+            if *stmt != Cbor::Map(Vec::new()) {
+                return Err(bad("the evidence's attestation is malformed"));
+            }
+            Vec::new()
+        }
+        "packed" if stmt.text_key("x5c").is_none() => {
+            let (Some(Cbor::Int(alg)), Some(Cbor::Bytes(signature))) = (stmt.text_key("alg"), stmt.text_key("sig")) else {
+                return Err(bad("the evidence's attestation is malformed"));
+            };
+            if *alg != key.alg() || !key.verify(&signed, signature) {
+                return Err(bad("the evidence's self attestation does not verify"));
+            }
+            Vec::new()
+        }
+        "packed" => packed_full_verified(stmt, &signed, &aaguid).unwrap_or_default(),
+        "tpm" => tpm_verified(stmt, auth_raw, &client_hash, &key, &aaguid).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Ok(NewPasskey { id: cred_id, cose: cose_bytes, sign_count: auth.sign_count, aaguid, attestation: Attestation { fmt: shown, chain } })
+}
+
 /// `navigator.credentials.get` by the stored passkey (`cose`, its COSE key bytes, ES256 or RS256), checked: client
 /// data, rpIdHash, presence (and verification when required), the signature. Returns the authenticator's sign count.
 pub fn verify_assertion(rp_id: &str, origin: &str, challenge: &[u8], cose: &[u8], credential: &Value, require_uv: bool) -> Result<u32, Refusal> {

@@ -18,6 +18,14 @@
 //   lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] |
 //               reset --first-admin <email>   [--state <dir>]   with the relay stopped (console.lock): the Admin
 //               Console's book, offline (AC-1 3.2).
+//   lucid-relay console serve --state <dir> --public <host> [--tls-cert f --tls-key f] [flags of AC-2a 5.2]
+//               the Lucid Admin Console as its own service (each flag also LUCID_CONSOLE_<NAME> and console-serve.json).
+//   lucid-relay console fleet-ca replace --compromised|--lost | fleet-ca status   [--state <dir>]   (console stopped)
+//   lucid-relay console seal-setup [--role relay|console] [--service <name>]   (AC-2a 2.2)
+//   lucid-relay ... --with-console <console state dir>   (or LUCID_RELAY_WITH_CONSOLE): the console role in this
+//               relay's process (Standard only, AC-2a 2.2).
+//   lucid-relay enroll <console URL> [--code-file f | --code-fd n] [--fleet-admin-key <fingerprint>]... [--yes]
+//   lucid-relay fleet <command>   [--state <dir>]   the relay's link to a Lucid Admin Console (AC-2a 5.7).
 
 mod codec;
 mod collab;
@@ -27,6 +35,7 @@ mod console;
 mod console_approvals;
 mod console_audit;
 mod console_auth;
+mod console_fleet;
 mod console_limits;
 mod console_mail;
 mod console_mds;
@@ -37,7 +46,21 @@ mod console_settings;
 mod console_source;
 mod console_spokes;
 mod console_webauthn;
+mod console_wizard;
 mod der;
+mod fleet_agent;
+mod fleet_ca;
+mod fleet_exec;
+mod fleet_export;
+mod fleet_local;
+mod fleet_metrics;
+mod fleet_people;
+mod fleet_port;
+mod fleet_probe;
+mod fleet_syslog;
+mod fleet_trust;
+mod fleet_wire;
+mod fleet_x509;
 mod http_client;
 mod identity;
 mod license;
@@ -73,7 +96,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 14] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile"];
+const FLAGS: [&str; 15] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile", "with-console"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -236,13 +259,18 @@ fn root_key(pem: &str) -> Result<der::P256Key, String> {
 /// `two-person off`, and `seal-setup [--service <name>]` (AC-1 3.11, R4-H2, R4-M2). Each but seal-setup is audited
 /// at the relay's next start (AC-1 3.2 "Offline").
 fn console_cli(args: &[String]) -> ! {
-    const USAGE: &str = "usage: lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] | reset --first-admin <email> | break-glass --email <email> [--replace] | two-person off | seal-setup [--service <name>]  [--state <dir>] (or LUCID_RELAY_STATE), with the relay stopped";
+    const USAGE: &str = "usage: lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] | reset --first-admin <email> | break-glass --email <email> [--replace] | two-person off | seal-setup [--role relay|console] [--service <name>] | fleet-ca replace --compromised|--lost | fleet-ca status  [--state <dir>] (or LUCID_RELAY_STATE), with the relay or console stopped; or lucid-relay console serve --state <dir> --public <host> ...";
+    // AC-2a 5.2: the console role.
+    if args.first().map(String::as_str) == Some("serve") {
+        console_serve(&args[1..]);
+    }
     let mut state = std::env::var("LUCID_RELAY_STATE").ok();
     let mut role = None;
     let mut first_admin = None;
     let mut email = None;
     let mut service = None;
     let mut replace = false;
+    let mut ca_why: Option<&'static str> = None;
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -269,20 +297,60 @@ fn console_cli(args: &[String]) -> ! {
             service = Some(v);
         } else if a == "--replace" {
             replace = true;
+        } else if a == "--compromised" {
+            ca_why = Some("compromised");
+        } else if a == "--lost" {
+            ca_why = Some("lost");
         } else {
             rest.push(a.as_str());
         }
     }
     let dir = state.filter(|d| !d.is_empty()).unwrap_or_else(|| die("the Admin Console keeps its people in the state folder: give --state or LUCID_RELAY_STATE"));
     if rest.as_slice() == ["seal-setup"] {
-        let default = if cfg!(windows) { console_seal::WINDOWS_SERVICE } else { "lucid-relay" };
-        match console_seal::seal_setup(Path::new(&dir), service.as_deref().unwrap_or(default)) {
+        // AC-2a 2.2: `--role relay` (the default, AC-1) or `--role console`.
+        let id = match role.as_deref() {
+            None => console_seal::SealIdentity::Relay,
+            Some(r) => console_seal::SealIdentity::parse(r).unwrap_or_else(|| die("seal-setup --role is relay or console")),
+        };
+        match console_seal::seal_setup(Path::new(&dir), service.as_deref().unwrap_or(console_seal::default_service(id)), id) {
             Ok(done) => {
                 println!("lucid-relay: {done}");
                 std::process::exit(0)
             }
             Err(e) => die(&e),
         }
+    }
+    // AC-2a 3.11, 3.12, 5.2: the management CA, with the console stopped (console.lock).
+    match rest.as_slice() {
+        ["fleet-ca", "replace"] => {
+            let why = ca_why.unwrap_or_else(|| die("fleet-ca replace needs --compromised or --lost"));
+            let _lock = console_auth::lock_state(Path::new(&dir)).unwrap_or_else(|e| die(&e));
+            let high = console_auth::Book::read(&Path::new(&dir).join(console::CONSOLE_FILE), codec::now_ms()).map(|b| b.settings.high()).unwrap_or_else(|e| die(&e));
+            let t = codec::now_ms();
+            match fleet_ca::replace_offline(Path::new(&dir), why, high, t) {
+                Ok(done) => {
+                    // 3.12: audited at the console's next start (`fleet.ca.replace`, actor `operator`).
+                    let file = Path::new(&dir).join(console::CONSOLE_FILE);
+                    if let Ok(mut book) = console_auth::Book::read(&file, t) {
+                        book.pending_audit.push(serde_json::json!({ "ts": t, "actor": "operator", "action": "fleet.ca.replace", "target": "-", "detail": { "why": why } }));
+                        if let Err(e) = book.save(&file) {
+                            eprintln!("lucid-relay: the audit note could not be saved: {e}");
+                        }
+                    }
+                    println!("lucid-relay: {done}");
+                    std::process::exit(0)
+                }
+                Err(e) => die(&e),
+            }
+        }
+        ["fleet-ca", "status"] => match fleet_ca::status_offline(Path::new(&dir)) {
+            Ok(done) => {
+                println!("{done}");
+                std::process::exit(0)
+            }
+            Err(e) => die(&e),
+        },
+        _ => {}
     }
     let admin = match role.as_deref() {
         None | Some("viewer") => false,
@@ -316,6 +384,119 @@ fn console_cli(args: &[String]) -> ! {
         }
         Err(e) => die(&e),
     }
+}
+
+/// `--name value` and `--name=value` of `names`, the last one winning; nothing else is taken.
+fn parse_named(args: &[String], names: &[&str]) -> Result<HashMap<String, String>, String> {
+    let mut flags = HashMap::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        i += 1;
+        let Some(name) = a.strip_prefix("--") else { return Err(format!("unexpected argument '{a}'")) };
+        let (name, value) = match name.split_once('=') {
+            Some((n, v)) => (n, v.to_owned()),
+            None => {
+                let v = args.get(i).ok_or_else(|| format!("option '--{name} <value>' argument missing"))?;
+                i += 1;
+                (name, v.clone())
+            }
+        };
+        if !names.contains(&name) {
+            return Err(format!("unknown option '--{name}'"));
+        }
+        flags.insert(name.to_owned(), value);
+    }
+    Ok(flags)
+}
+
+/// Whether the console book in `dir` is (or will start) in the High profile: the profile it holds, or `given`
+/// while it is not bootstrapped (R41-3).
+fn book_high(dir: &Path, given: Option<console_settings::Profile>) -> bool {
+    match console_auth::Book::read(&dir.join(console::CONSOLE_FILE), codec::now_ms()) {
+        Ok(b) if b.bootstrapped => b.settings.high(),
+        Ok(b) => given.map_or(b.settings.high(), |p| p == console_settings::Profile::High),
+        // An unreadable book: the stricter reading.
+        Err(_) => true,
+    }
+}
+
+/// `lucid-relay console serve` (AC-2a 5.2): the Lucid Admin Console as its own service, holding `console.lock`.
+fn console_serve(args: &[String]) -> ! {
+    let flags = parse_named(args, &console_fleet::SERVE_FLAGS).unwrap_or_else(|e| die(&e));
+    let cfg = console_fleet::serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
+    // 2.2 start checks under High: the console's own identity and a state folder open to it and administrators only.
+    if book_high(&cfg.state, cfg.profile) {
+        console_seal::check_console_identity().unwrap_or_else(|e| die(&e));
+        console_seal::check_state_acl(&cfg.state, console_seal::SealIdentity::Console).unwrap_or_else(|e| die(&e));
+    }
+    console_fleet::write_serve_file(&cfg).unwrap_or_else(|e| die(&e));
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap_or_else(|e| die(&e.to_string()));
+    runtime.block_on(async move {
+        let (logger, console) = console::open_fleet(cfg.clone(), Logger::new("console"), console_seal::SealIdentity::Console).unwrap_or_else(|e| die(&e));
+        if console.profile_high() {
+            fleet_people::make_non_dumpable().unwrap_or_else(|e| die(&e));
+        }
+        console_fleet::serve_browser(console.clone(), &cfg).unwrap_or_else(|e| die(&e));
+        let port = fleet_port::PortConfig { host: cfg.fleet.fleet_host.clone(), port: cfg.fleet.fleet_port, names: cfg.fleet.fleet_names.clone(), sources: cfg.fleet_sources.clone(), public_host: cfg.public.clone() };
+        fleet_port::start(console.clone(), port, logger.clone()).unwrap_or_else(|e| die(&e));
+        let signal = stop_signal().await;
+        logger.ops("stopping", &Fields::new().with("signal", signal), Level::Info);
+        drop(console);
+        std::process::exit(0);
+    });
+    std::process::exit(0);
+}
+
+/// The relay's state folder for the AC-2a commands: `--state <dir>` (or LUCID_RELAY_STATE), and the other arguments.
+fn state_and_rest(args: &[String]) -> (String, Vec<String>) {
+    let mut state = std::env::var("LUCID_RELAY_STATE").ok();
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        i += 1;
+        if let Some(v) = a.strip_prefix("--state=") {
+            state = Some(v.to_owned());
+        } else if a == "--state" {
+            state = Some(args.get(i).cloned().unwrap_or_else(|| die("option '--state <value>' argument missing")));
+            i += 1;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    let dir = state.filter(|d| !d.is_empty()).unwrap_or_else(|| die("Joining a console needs the relay's state folder (--state)."));
+    (dir, rest)
+}
+
+/// `lucid-relay enroll <console URL> ...` (AC-2a 5.7, Remote Spokes): refused while the relay runs (`fleet.lock`).
+fn enroll_cli(args: &[String]) -> ! {
+    let (dir, rest) = state_and_rest(args);
+    let _lock = server::fleet_lock(Path::new(&dir)).unwrap_or_else(|e| die(&e));
+    match fleet_agent::enroll_cli(license::Product::Spokes, Path::new(&dir), &rest) {
+        Ok(done) => {
+            println!("lucid-relay: {done}");
+            std::process::exit(0)
+        }
+        Err(e) => die(&e),
+    }
+}
+
+/// `lucid-relay fleet <command>` (AC-2a 5.7, Remote Spokes): f-trust's commands, which take `fleet.lock` where needed.
+fn fleet_cli(args: &[String]) -> ! {
+    let (dir, rest) = state_and_rest(args);
+    let stdin = std::io::stdin();
+    let code = fleet_local::cli(license::Product::Spokes, Path::new(&dir), &rest, &mut stdin.lock(), &mut std::io::stdout());
+    std::process::exit(code)
+}
+
+/// 2.2: `--with-console` together with `--console 1` is one process running two consoles (13.4
+/// `cli.with-console-both`).
+fn with_console_conflict(with_console: bool, console_on: bool) -> Result<(), String> {
+    if with_console && console_on {
+        return Err(server::CLI_WITH_CONSOLE_BOTH.into());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -353,8 +534,25 @@ fn main() {
     if args.first().map(String::as_str) == Some("console") {
         console_cli(&args[1..]);
     }
+    // AC-2a 5.7: the relay's link to a Lucid Admin Console (Meeting Hub: `meet enroll` and `meet fleet`, meet.rs).
+    if args.first().map(String::as_str) == Some("enroll") {
+        enroll_cli(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("fleet") {
+        fleet_cli(&args[1..]);
+    }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
+    // AC-2a 2.2: the console role in this process, refused next to the relay's own console and under High.
+    let with_console = flags.get("with-console").filter(|v| !v.is_empty()).cloned().or_else(|| std::env::var("LUCID_RELAY_WITH_CONSOLE").ok().filter(|v| !v.is_empty()));
+    let console_on = flags.get("console").cloned().or_else(|| std::env::var("LUCID_RELAY_CONSOLE").ok()).as_deref() == Some("1");
+    with_console_conflict(with_console.is_some(), console_on).unwrap_or_else(|e| die(&e));
+    if with_console.is_some() && (c.owner.is_some() || c.state.is_none()) {
+        die("--with-console needs the relay's state folder (--state) and is not for a LAN mailbox");
+    }
+    let given_profile = flags.get("console-profile").cloned().or_else(|| std::env::var("LUCID_RELAY_CONSOLE_PROFILE").ok()).and_then(|p| console_settings::Profile::parse(&p));
+    let relay_high = c.state.as_deref().is_some_and(|d| Path::new(d).join(console::CONSOLE_FILE).exists() && book_high(Path::new(d), given_profile)) || given_profile == Some(console_settings::Profile::High);
+    server::high_start_checks(c.state.as_deref().map(Path::new), relay_high, with_console.is_some()).unwrap_or_else(|e| die(&e));
     // A shared relay always runs under the org's relay license; a spoke's LAN mailbox needs none.
     if c.owner.is_none() && c.license.is_none() {
         die("the relay license is required (--license or LUCID_RELAY_LICENSE: the license file or its armored text)");
@@ -414,6 +612,14 @@ fn main() {
         if let Some(console) = &console_handle {
             console.attach(console_spokes::section(Arc::downgrade(&relay.state)));
         }
+        // AC-2a 2.2: the console role in this process first (its same-process enrollment writes the relay's link),
+        // then the relay's own link (fleet.lock, the headless console and the agent, F7). Kept for the process's life.
+        if let Some(dir) = &with_console {
+            let mut hosts = vec![c.hostname.clone()];
+            hosts.extend(c.public_host.clone());
+            console_fleet::start_with_console(Path::new(dir), license::Product::Spokes, &hosts, c.state.as_deref().map(Path::new), logger.clone()).unwrap_or_else(|e| die(&e));
+        }
+        let _fleet_link = server::fleet_start(server::FleetStart { state_dir: c.state.as_deref().map(std::path::PathBuf::from), console: console_handle.clone(), relay: relay.clone(), logger: logger.clone() }).unwrap_or_else(|e| die(&e));
         let shown = if c.hostname.contains(':') { format!("[{}]", c.hostname) } else { c.hostname.clone() };
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);
@@ -496,5 +702,43 @@ mod tests {
         assert_eq!(f.get("port").map(String::as_str), Some("10"));
         assert!(parse_args(&["--nope".to_string(), "x".to_string()]).is_err());
         assert!(parse_args(&["status".to_string()]).is_err());
+    }
+
+    /// AC-2a 2.2, 16.1 f-console: `--with-console` together with `--console 1` is refused with 13.4
+    /// `cli.with-console-both`; under High `--with-console` is refused with `cli.with-console-high`.
+    #[test]
+    fn with_console_is_refused_next_to_a_relay_console_and_under_high() {
+        assert_eq!(with_console_conflict(true, true).unwrap_err(), server::CLI_WITH_CONSOLE_BOTH);
+        assert!(with_console_conflict(true, false).is_ok());
+        assert!(with_console_conflict(false, true).is_ok());
+        let a: Vec<String> = ["--with-console", "/srv/console", "--root", "r"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_args(&a).unwrap().get("with-console").map(String::as_str), Some("/srv/console"));
+        assert_eq!(server::high_start_checks(None, true, true).unwrap_err(), server::CLI_WITH_CONSOLE_HIGH);
+        assert!(server::high_start_checks(None, false, true).is_ok());
+    }
+
+    #[test]
+    fn named_flags_take_only_their_names() {
+        let a: Vec<String> = ["--state", "/x", "--public=console.example.org"].iter().map(|s| s.to_string()).collect();
+        let f = parse_named(&a, &console_fleet::SERVE_FLAGS).unwrap();
+        assert_eq!((f["state"].as_str(), f["public"].as_str()), ("/x", "console.example.org"));
+        assert!(parse_named(&["--code".to_string(), "x".to_string()], &console_fleet::SERVE_FLAGS).is_err(), "no code on a command line (A1-M1)");
+        assert!(parse_named(&["stray".to_string()], &console_fleet::SERVE_FLAGS).is_err());
+    }
+
+    #[test]
+    fn the_high_book_check_follows_the_book_after_bootstrap() {
+        let d = std::env::temp_dir().join(format!("lucid-main-book-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // No book yet: the flag decides; an unreadable book is High (the stricter reading).
+        assert!(book_high(&d, Some(console_settings::Profile::High)));
+        assert!(!book_high(&d, None));
+        std::fs::write(d.join(console::CONSOLE_FILE), "not json").unwrap();
+        assert!(book_high(&d, None));
+        let mut b = console_auth::Book { bootstrapped: true, ..console_auth::Book::default() };
+        b.settings.profile = console_settings::Profile::High;
+        b.save(&d.join(console::CONSOLE_FILE)).unwrap();
+        assert!(book_high(&d, Some(console_settings::Profile::Standard)), "after bootstrap the flag is ignored");
     }
 }

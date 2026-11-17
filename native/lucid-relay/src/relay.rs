@@ -62,6 +62,53 @@ pub struct Options {
     pub license_file: Option<PathBuf>,
 }
 
+/// AC-2a 5.7: the link to a Lucid Admin Console while this relay is enrolled (server.rs builds it from fleet_agent).
+pub struct FleetLink {
+    /// The console origin while the link stands; None once the relay left or was removed.
+    pub managed_by: Box<dyn Fn() -> Option<String> + Send + Sync>,
+    /// The book holding the requests the fleet creates: the headless console's, or the local console's when it is on.
+    pub book: Arc<Console>,
+    /// The active admin emails of the fleet roster: who reads `/v1/console/requests` while the local console is off.
+    pub admins: Box<dyn Fn() -> Vec<String> + Send + Sync>,
+    /// The relay's state folder (fleet.json), for the 3.9 endorsement routes.
+    pub state_dir: PathBuf,
+}
+
+/// 9.2: a spoke's latest `lanes.state` line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lanes {
+    pub busy: u8,
+    pub live: u8,
+    pub max: u8,
+    pub at: i64,
+}
+
+/// 9.1: "online" and lane reports count within this window.
+pub const ONLINE_MS: i64 = 5 * 60_000;
+/// 9.1 `spokes_total`: spokes seen within 30 days.
+const SPOKES_TOTAL_MS: i64 = 30 * 86_400_000;
+/// 9.1 `spokes_busy` and `spokes/counts` `busy`: mail sent or received within the 60 s interval.
+const BUSY_MS: i64 = 60_000;
+/// 5.7 (F20): endorsement attempts per certificate per hour.
+const ENDORSE_TRIES: usize = 10;
+/// The 409 of the endorsement routes when no bootstrap is pending (13.3).
+pub const NOT_BOOTSTRAPPING: &str = "fleet-not-bootstrapping";
+pub const NOT_BOOTSTRAPPING_WORDS: &str = "This relay is not waiting for admin keys.";
+
+/// The last valid `{"cat":"ops","event":"lanes.state","busy","live","max"}` line of a POST /v1/logs body: each value
+/// an integer 0 to 8, else the line is ignored (9.2).
+pub fn lanes_of(body: &str) -> Option<(u8, u8, u8)> {
+    let parsed = parse_json(body)?;
+    let lines = parsed.get("lines")?.as_array()?;
+    lines.iter().rev().find_map(|l| {
+        if str_of(l.get("cat")) != Some("ops") || str_of(l.get("event")) != Some("lanes.state") {
+            return None;
+        }
+        let small = |k: &str| l.get(k).and_then(Value::as_u64).filter(|n| *n <= 8).map(|n| n as u8);
+        Some((small("busy")?, small("live")?, small("max")?))
+    })
+}
+
 struct Licensed {
     token: String,
     license: License,
@@ -106,6 +153,19 @@ pub fn refuse(logger: &Logger, status: u16, error: &str, event: &str, fields: &F
     let f = Fields::new().with("status", status).with("error", error).merge(fields);
     logger.security(event, &f, Level::Warn);
     json_reply(status, &json!({ "ok": false, "error": error }))
+}
+
+/// 5.7: the 409 of the endorsement routes on a relay with no pending bootstrap (or not enrolled, or not a hub's user).
+fn not_bootstrapping(logger: &Logger, who: &Fields) -> Reply {
+    let e = crate::fleet_trust::EndorseRefusal { status: 409, code: NOT_BOOTSTRAPPING, why: None, error: NOT_BOOTSTRAPPING_WORDS.into() };
+    endorse_refused(logger, &e, "fleet.bootstrap-refused", who)
+}
+
+/// A 3.9 refusal: `{ok: false, error, code, why}`, logged as a security line.
+fn endorse_refused(logger: &Logger, e: &crate::fleet_trust::EndorseRefusal, event: &str, who: &Fields) -> Reply {
+    let f = Fields::new().with("status", e.status).with("code", e.code).with("why", e.why).merge(who);
+    logger.security(event, &f, Level::Warn);
+    json_reply(e.status, &json!({ "ok": false, "error": e.error, "code": e.code, "why": e.why }))
 }
 
 /// A CRL or directory refused: the status and reason `/v1/crl` and `/v1/directory` answer, and the security event.
@@ -174,6 +234,14 @@ pub struct State {
     notices: LicenseNotices,
     state_dir: Option<PathBuf>,
     license_file: Option<PathBuf>,
+    /// 9.2 (F14): each spoke's latest `lanes.state` line.
+    lanes: HashMap<String, Lanes>,
+    /// 9.1: when each node last sent or received mail.
+    mail_at: HashMap<String, i64>,
+    /// 5.7: the Lucid Admin Console link, while enrolled.
+    fleet: Option<FleetLink>,
+    /// 5.7 (F20): endorsement attempts per certificate serial within the hour.
+    endorse_tries: HashMap<String, Vec<i64>>,
 }
 
 fn store_name(to: &str, id: &str) -> String {
@@ -319,6 +387,10 @@ impl State {
             notices: LicenseNotices::default(),
             state_dir: opts.state_dir,
             license_file: opts.license_file,
+            lanes: HashMap::new(),
+            mail_at: HashMap::new(),
+            fleet: None,
+            endorse_tries: HashMap::new(),
         };
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
             // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
@@ -519,7 +591,7 @@ impl State {
             });
         }
         self.seen.insert(c.node.clone(), Seen { role: c.role.clone(), at: t, serial: c.serial.clone(), exp: c.exp });
-        if self.console.is_some() {
+        if self.console.is_some() || self.fleet.is_some() {
             self.labels.insert(c.node.clone(), (c.label.clone(), c.user.as_ref().map(|u| u.email.clone())));
         }
         if changed || t - self.seen_saved_at >= SEEN_SAVE_MS {
@@ -753,6 +825,9 @@ impl State {
                 if me.role == "spoke" {
                     self.polls.insert(me.node.clone(), t);
                 }
+                if self.mailboxes.get(&me.node).is_some_and(|m| !m.is_empty()) {
+                    self.note_mail(&me.node, t);
+                }
                 let mail = self.mailboxes.get(&me.node).map(Vec::as_slice).unwrap_or_default();
                 let messages: Vec<Value> = mail.iter().take(INBOX_BATCH).map(|m| m.env.clone()).collect();
                 json_reply(200, &json!({ "ok": true, "messages": messages, "more": mail.len() > INBOX_BATCH }))
@@ -800,10 +875,16 @@ impl State {
                 }
             }
             // 4.10 (I6): the waiting rs.* requests, for the hubs of active console admins, never one about the asker.
+            // AC-2a 5.7: on an enrolled relay whose local console is off, from the headless book, for the hubs of the
+            // fleet roster's active admins.
             ("/v1/console/requests", "GET") => {
-                let Some(console) = self.console.clone() else { return Ok(refuse(&logger, 409, CONSOLE_OFF, "console.requests-refused", &who)) };
                 let email = me.user.as_ref().map(|u| u.email.as_str()).filter(|_| me.role == "hub");
-                if !email.is_some_and(|e| console.is_active_admin(e)) {
+                let (console, admin) = match (&self.console, &self.fleet) {
+                    (Some(c), _) => (c.clone(), email.is_some_and(|e| c.is_active_admin(e))),
+                    (None, Some(f)) => (f.book.clone(), email.is_some_and(|e| (f.admins)().iter().any(|a| a.eq_ignore_ascii_case(e)))),
+                    (None, None) => return Ok(refuse(&logger, 409, CONSOLE_OFF, "console.requests-refused", &who)),
+                };
+                if !admin {
                     return Ok(refuse(&logger, 403, REQUESTS_REFUSED, "console.requests-refused", &who));
                 }
                 let requests: Vec<Value> = console
@@ -843,13 +924,19 @@ impl State {
             },
             // The control panel (ADR-A094): a spoke's own security and ops lines, kept in a ring per node.
             ("/v1/logs", "POST") => {
-                let Some(console) = self.console.clone() else { return Ok(refuse(&logger, 409, CONSOLE_OFF, "logs.console-off", &who)) };
+                let Some(console) = self.console.clone().or_else(|| self.fleet.as_ref().map(|f| f.book.clone())) else {
+                    return Ok(refuse(&logger, 409, CONSOLE_OFF, "logs.console-off", &who));
+                };
                 if me.role != "spoke" {
                     return Ok(refuse(&logger, 403, "only a spoke sends its log lines here", "logs.refused", &who));
                 }
                 match console.take_logs(&me.node, r.body, t) {
                     Err(e) => refuse(&logger, e.status, &e.error, e.event, &who),
                     Ok(kept) => {
+                        // 9.2 (F14): the spoke's lanes, last valid line wins; out-of-range values are ignored.
+                        if let Some((busy, live, max)) = lanes_of(r.body) {
+                            self.lanes.insert(me.node.clone(), Lanes { busy, live, max, at: t });
+                        }
                         logger.perf("logs", &Fields::new().with("node", &me.node).with("lines", kept));
                         json_reply(200, &json!({ "ok": true, "kept": kept }))
                     }
@@ -877,9 +964,88 @@ impl State {
                     }
                 }
             }
+            // AC-2a 5.7 (F13): whether this relay runs its own console and which Lucid Admin Console manages it.
+            ("/v1/console/where", "GET") => json_reply(200, &self.console_where()),
+            // AC-2a 3.9 (F20): the first-roster entries of this hub's user, for its IDE plugin to endorse.
+            ("/v1/console/fleet-bootstrap", "GET") => {
+                let Some((dir, email)) = self.endorser(&me) else { return Ok(not_bootstrapping(&logger, &who)) };
+                match crate::fleet_trust::bootstrap_view(&dir, &email, t) {
+                    Ok(v) => json_reply(200, &v),
+                    Err(e) => endorse_refused(&logger, &e, "fleet.bootstrap-refused", &who),
+                }
+            }
+            ("/v1/console/fleet-endorse", "POST") => {
+                let Some((dir, email)) = self.endorser(&me) else { return Ok(not_bootstrapping(&logger, &who)) };
+                if !self.endorse_try(&me.serial, t) {
+                    return Ok(refuse(&logger, 429, "too many endorsement attempts from this certificate; try again within the hour", "fleet.endorse-limited", &who));
+                }
+                let parsed = body();
+                let Some(endorsement) = parsed.as_ref().and_then(as_object).filter(|b| exact_keys(b, &["endorsement"], &["endorsement"])).and_then(|b| b.get("endorsement")) else {
+                    return Ok(refuse(&logger, 400, "malformed", "fleet.endorse-malformed", &who));
+                };
+                // The hub op's own signature (checked above, over this body) is the hub's signature on the endorsement;
+                // the certificate chains to --root, is in date, not revoked (authenticate) and not blocked (above).
+                let no_proof = |_: &[u8], _: &[u8]| false;
+                let ctx = crate::fleet_trust::EndorseCtx {
+                    state_dir: &dir,
+                    product: crate::license::Product::Spokes,
+                    email: &email,
+                    anchor: &me.serial,
+                    chain_ok: true,
+                    in_date: true,
+                    revoked: false,
+                    blocked: false,
+                    relay_admin: true,
+                    verify: &no_proof,
+                    proof: None,
+                };
+                match crate::fleet_trust::endorse(&ctx, endorsement, t) {
+                    Ok(v) => json_reply(200, &v),
+                    Err(e) => endorse_refused(&logger, &e, "fleet.endorse-refused", &who),
+                }
+            }
             _ => refuse(&logger, 404, "not found", "route.unknown", &who),
         };
         Ok(reply)
+    }
+
+    /// 5.7 `where`: `{ok, local, managedBy}`.
+    pub fn console_where(&self) -> Value {
+        let managed_by = self.fleet.as_ref().and_then(|f| (f.managed_by)());
+        json!({ "ok": true, "local": self.console.is_some(), "managedBy": managed_by })
+    }
+
+    /// The state folder of the fleet link and the hub's user email, for the 3.9 endorsement routes: a hub with an email
+    /// on an enrolled relay, else None (answered `fleet-not-bootstrapping`).
+    fn endorser(&self, me: &NodeCert) -> Option<(PathBuf, String)> {
+        let f = self.fleet.as_ref()?;
+        let email = me.user.as_ref().map(|u| u.email.clone()).filter(|_| me.role == "hub")?;
+        Some((f.state_dir.clone(), email))
+    }
+
+    /// One endorsement attempt by the certificate `serial`: false past 10 within the hour (5.7).
+    fn endorse_try(&mut self, serial: &str, t: i64) -> bool {
+        self.endorse_tries.retain(|_, v| {
+            v.retain(|at| t - at < 3_600_000);
+            !v.is_empty()
+        });
+        let tries = self.endorse_tries.entry(serial.to_owned()).or_default();
+        if tries.len() >= ENDORSE_TRIES {
+            return false;
+        }
+        tries.push(t);
+        true
+    }
+
+    /// Install the Lucid Admin Console link (server.rs, at start, when the relay is enrolled).
+    pub fn set_fleet(&mut self, link: FleetLink) {
+        self.fleet = Some(link);
+    }
+
+    /// 9.2: the sums of the latest `lanes.state` lines of spokes seen within 5 minutes, or None when none reports.
+    pub fn lanes_now(&self, t: i64) -> Option<(u64, u64)> {
+        let fresh: Vec<&Lanes> = self.lanes.iter().filter(|(n, l)| t - l.at < ONLINE_MS && self.seen.get(*n).is_some_and(|s| t - s.at < ONLINE_MS)).map(|(_, l)| l).collect();
+        (!fresh.is_empty()).then(|| fresh.iter().fold((0, 0), |(b, m), l| (b + u64::from(l.busy), m + u64::from(l.live))))
     }
 
     /// The control panel, when it is on.
@@ -988,7 +1154,18 @@ impl State {
         let depth = self.mailboxes.get(&to).map_or(0, Vec::len);
         let f = Fields::new().with("from", &me.node).with("to", &to).with("bytes", ct_len).with("depth", depth).with("mailboxes", self.mailboxes.len()).with("heldBytes", self.held);
         logger.perf("send", &f);
+        // 9.2: one mail item accepted; the sender is busy in this interval.
+        crate::fleet_probe::counters().message(1);
+        self.note_mail(&me.node, t);
         json_reply(200, &json!({ "ok": true }))
+    }
+
+    /// 9.2: `node` sent or received mail now (spokes only count toward `spokes_busy`).
+    fn note_mail(&mut self, node: &str, t: i64) {
+        if self.seen.get(node).is_some_and(|s| s.role == "spoke") || self.owner.as_deref() == Some(node) {
+            crate::fleet_probe::counters().spoke_mail(node);
+        }
+        self.mail_at.insert(node.to_owned(), t);
     }
 }
 
@@ -1171,6 +1348,90 @@ impl State {
         ]
     }
 
+    /// AC-2a 4.11 `GET /console/api/spokes/counts` (fleet proxy, `read-health`): integers only, built field by field
+    /// from the projection allowlist; no id, label, name, serial, time, reason or actor.
+    pub fn spokes_counts(&self, t: i64) -> Value {
+        #[derive(Default)]
+        struct Tally {
+            total: u64,
+            online: u64,
+            silent: u64,
+            busy: u64,
+            expiring: u64,
+            expired: u64,
+            revoked: u64,
+            blocked: u64,
+        }
+        let (mut hubs, mut spokes) = (Tally::default(), Tally::default());
+        for (node, s) in &self.seen {
+            let spoke = s.role != "hub";
+            let n = if spoke { &mut spokes } else { &mut hubs };
+            n.total += 1;
+            let last = if spoke { self.polls.get(node).copied() } else { Some(s.at) };
+            n.online += u64::from(last.is_some_and(|at| t - at < ONLINE_MS));
+            n.busy += u64::from(self.mail_at.get(node).is_some_and(|at| t - at < BUSY_MS));
+            match self.node_state(node, s, t) {
+                "silent" => n.silent += 1,
+                "expiring" => n.expiring += 1,
+                "expired" => n.expired += 1,
+                "revoked" => n.revoked += 1,
+                "blocked" => n.blocked += 1,
+                _ => {}
+            }
+        }
+        let lanes = self.lanes_now(t).map(|(busy, total)| json!({ "busy": busy, "total": total }));
+        json!({
+            "ok": true,
+            "hubs": { "total": hubs.total, "online": hubs.online, "silent": hubs.silent, "expiring": hubs.expiring, "expired": hubs.expired, "revoked": hubs.revoked, "blocked": hubs.blocked },
+            "spokes": { "total": spokes.total, "online": spokes.online, "silent": spokes.silent, "busy": spokes.busy, "expiring": spokes.expiring, "expired": spokes.expired, "revoked": spokes.revoked, "blocked": spokes.blocked },
+            "lanes": lanes,
+        })
+    }
+
+    /// AC-2a 9.1: the Remote Spokes product values of the metrics snapshot (fleet_probe merges the OS readings and
+    /// the interval counters). A key this relay cannot measure is null.
+    pub fn fleet_metrics(&self, t: i64) -> Map<String, Value> {
+        let online = |at: i64| t - at < ONLINE_MS;
+        let mut people = HashSet::new();
+        let (mut hubs_online, mut spokes_online, mut spokes_total) = (0u64, 0u64, 0u64);
+        for (node, s) in &self.seen {
+            if s.role == "hub" {
+                if online(s.at) {
+                    hubs_online += 1;
+                    if let Some(e) = self.labels.get(node).and_then(|(_, e)| e.as_deref()) {
+                        people.insert(e.to_ascii_lowercase());
+                    }
+                }
+            } else {
+                spokes_online += u64::from(self.polls.get(node).is_some_and(|at| online(*at)));
+                spokes_total += u64::from(t - s.at < SPOKES_TOTAL_MS);
+            }
+        }
+        let lanes = self.lanes_now(t);
+        let lic = self.licensed.as_ref().map(|l| (license_state(&l.license, t.div_euclid(1000)), l.license.users, l.users.used(), l.license.product()));
+        let license_state_code = match &lic {
+            None => 0,
+            Some((_, _, _, p)) if *p != crate::license::Product::Spokes => 4,
+            Some(((LicenseStateName::Valid, _), _, _, _)) => 1,
+            Some(((LicenseStateName::Grace, _), _, _, _)) => 2,
+            Some(_) => 3,
+        };
+        let crl_days = self.crl_next_update().map(|n| (n - t.div_euclid(1000)).div_euclid(86_400));
+        let mut m = Map::new();
+        m.insert("people_online".into(), json!(people.len()));
+        m.insert("hubs_online".into(), json!(hubs_online));
+        m.insert("spokes_online".into(), json!(spokes_online));
+        m.insert("spokes_total".into(), json!(spokes_total));
+        m.insert("lanes_busy".into(), json!(lanes.map(|l| l.0)));
+        m.insert("lanes_total".into(), json!(lanes.map(|l| l.1)));
+        m.insert("seats_used".into(), json!(lic.as_ref().map(|l| l.2)));
+        m.insert("seats_total".into(), json!(lic.as_ref().map(|l| l.1)));
+        m.insert("license_days".into(), json!(lic.as_ref().map(|l| l.0 .1)));
+        m.insert("license_state".into(), json!(license_state_code));
+        m.insert("crl_days".into(), json!(crl_days));
+        m
+    }
+
     /// The held CRL's `iat` (seconds), read from its verified token.
     fn crl_issued(&self) -> Option<i64> {
         safe_int(crate::identity::peek_compact(self.trust.crl_token()?)?.get("iat"))
@@ -1304,6 +1565,59 @@ impl HostCheck {
                 };
         }
         LOOPBACK_HOSTS.contains(&d.hostname.as_str()) && d.port == self.port
+    }
+}
+
+/// AC-2a 16.1 f-relay (A2-H1): `answer` of `GET <path>` has exactly the field set and types the projection vector
+/// lists for it (`tests/admin_console_fleet_projection_v1.json`), compared field by field. Err names the first miss.
+#[cfg(test)]
+pub(crate) fn projection_matches(path: &str, answer: &Value) -> Result<(), String> {
+    let file = format!("{}/tests/admin_console_fleet_projection_v1.json", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{file}: {e} (copy it from the Meeting Hub repository's tests/vectors/)"));
+    let v = parse_json(&text).ok_or("the projection vector does not parse")?;
+    let route = format!("GET {path}");
+    let fields = v["routes"].as_array().and_then(|r| r.iter().find(|x| x["route"] == route.as_str())).and_then(|x| x["fields"].as_array()).ok_or(format!("{route} is not in the vector"))?;
+    let at = |p: &str| p.split('.').try_fold(answer, |cur, k| cur.get(k));
+    let mut listed = HashSet::new();
+    for f in fields {
+        let p = str_of(f.get("path")).ok_or("a field without path")?;
+        listed.insert(p.to_owned());
+        let ty = str_of(f.get("type")).unwrap_or("");
+        let nullable = f.get("nullable") == Some(&Value::Bool(true));
+        let parent_null = p.rsplit_once('.').is_some_and(|(parent, _)| at(parent).is_some_and(Value::is_null));
+        if parent_null {
+            continue;
+        }
+        let x = at(p).ok_or(format!("{p} is missing"))?;
+        let ok = match ty {
+            _ if x.is_null() => nullable,
+            "count" => x.is_u64(),
+            "days" => x.is_i64() || x.is_u64(),
+            "bool" => x.is_boolean(),
+            "object" => x.is_object(),
+            _ => true,
+        };
+        if !ok {
+            return Err(format!("{p} is not a {ty}: {x}"));
+        }
+    }
+    fn walk(v: &Value, prefix: &str, out: &mut Vec<String>) {
+        if let Some(o) = v.as_object() {
+            for (k, x) in o {
+                let p = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
+                out.push(p.clone());
+                walk(x, &p, out);
+            }
+        }
+    }
+    let mut seen = Vec::new();
+    walk(answer, "", &mut seen);
+    // A grouping object the vector does not list itself (`hubs` of `hubs.total`) is allowed when it holds listed fields;
+    // its own children are still checked one by one.
+    let grouping = |p: &str| listed.iter().any(|l| l.strip_prefix(p).is_some_and(|rest| rest.starts_with('.')));
+    match seen.into_iter().find(|p| !listed.contains(p) && !(at(p).is_some_and(Value::is_object) && grouping(p))) {
+        Some(extra) => Err(format!("{extra} is not in the allowlist")),
+        None => Ok(()),
     }
 }
 
@@ -1453,6 +1767,155 @@ mod tests {
         };
         let logger = Logger::capture("relay", Box::new(move |line: &str, _| sink.lock().push(line.to_owned())));
         (State::new(opts, Arc::new(logger)).unwrap(), lines)
+    }
+
+    /// A hub's key, root-signed certificate (naming `email` as its user) and id.
+    fn hub_of(root: &SigningKey, seed: u8, email: &str) -> (SigningKey, String, String) {
+        let key = SigningKey::from_slice(&[seed; 32]).unwrap();
+        let spki = p256_spki_der(&key.verifying_key().into());
+        let id = node_id_of(&spki);
+        let now = T0 / 1000;
+        let p = json!({
+            "v": 1, "typ": "lucid-node-cert", "serial": format!("{seed:032x}"), "root": root_id(root),
+            "node": id, "role": "hub", "label": format!("hub {seed}"), "spki": b64u(&spki), "scopes": [], "iat": now - 60, "exp": now + 86_400,
+            "user": { "id": crate::identity::user_id_of(email), "email": email },
+        });
+        (key, compact(root, &p), id)
+    }
+
+    fn envelope(from: &str, to: &str, id: u32) -> String {
+        stringify(&json!({ "v": 1, "from": from, "to": to, "id": format!("{id:032x}"), "ts": T0, "cert": "a.b", "epk": "AA", "iv": "AA", "ct": "AA", "sig": "AA" }))
+    }
+
+    fn fleet_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lucid-relay-fleet-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// AC-2a 16.1 f-relay: `/v1/send` moves the `messages` counter and marks the sending spoke busy; a refused send
+    /// moves nothing.
+    #[test]
+    fn ac2a_send_moves_the_messages_counter_and_the_spoke_is_busy() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (mut st, _) = state_logged(&root);
+        let (spoke_key, spoke_cert, spoke) = node(&root, 2, "spoke");
+        let (hub_key, hub_cert, hub) = node(&root, 3, "hub");
+        assert_eq!(inbox(&mut st, &hub_key, &hub_cert, "relay:relay.example.com", T0, 1), 200);
+        assert_eq!(inbox(&mut st, &spoke_key, &spoke_cert, "relay:relay.example.com", T0, 2), 200);
+        let counters = crate::fleet_probe::counters();
+        let before = counters.messages_total();
+        // to itself: refused, nothing counted by this request
+        let r = call(&mut st, &spoke_key, &spoke_cert, "POST", "/v1/send", &envelope(&spoke, &spoke, 1), T0 + 1, 3);
+        assert_eq!(r.status, 403);
+        let r = call(&mut st, &spoke_key, &spoke_cert, "POST", "/v1/send", &envelope(&spoke, &hub, 2), T0 + 2, 4);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert!(counters.messages_total() > before);
+        assert!(counters.spoke_mail_seen(&spoke));
+        let counts = st.spokes_counts(T0 + 3);
+        assert_eq!(counts["spokes"]["busy"], json!(1));
+        assert_eq!(counts["hubs"]["busy"], Value::Null, "hubs carry no busy count");
+        assert_eq!(st.fleet_metrics(T0 + 3)["spokes_online"], json!(1));
+    }
+
+    /// AC-2a 16.1 f-relay: `lanes.state` lines are kept per spoke; out-of-range or non-integer values are ignored.
+    #[test]
+    fn ac2a_lanes_state_lines_with_out_of_range_values_are_ignored() {
+        let line = |busy: Value, live: Value, max: Value| stringify(&json!({ "lines": [{ "cat": "ops", "level": "info", "event": "lanes.state", "busy": busy, "live": live, "max": max }] }));
+        assert_eq!(lanes_of(&line(json!(1), json!(2), json!(4))), Some((1, 2, 4)));
+        assert_eq!(lanes_of(&line(json!(0), json!(0), json!(8))), Some((0, 0, 8)));
+        for bad in [line(json!(9), json!(2), json!(4)), line(json!(1), json!(-1), json!(4)), line(json!(1), json!(2), json!(4.5)), line(json!("1"), json!(2), json!(4)), line(json!(1), json!(2), Value::Null)] {
+            assert_eq!(lanes_of(&bad), None, "{bad}");
+        }
+        // another event or category is no lanes report
+        assert_eq!(lanes_of(r#"{"lines":[{"cat":"security","level":"info","event":"lanes.state","busy":1,"live":1,"max":1}]}"#), None);
+        // through the route: kept per node and summed while fresh
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let dir = fleet_dir("lanes");
+        let mut st = state(&root, None, None).unwrap();
+        let book = crate::console::open_headless(crate::license::Product::Spokes, &dir, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).unwrap();
+        st.set_fleet(FleetLink { managed_by: Box::new(|| Some("https://console.example.com".into())), book, admins: Box::new(Vec::new), state_dir: dir.clone() });
+        let (spoke_key, spoke_cert, _) = node(&root, 2, "spoke");
+        assert_eq!(st.lanes_now(T0), None, "no spoke reports: null");
+        let r = call(&mut st, &spoke_key, &spoke_cert, "POST", "/v1/logs", &line(json!(2), json!(3), json!(4)), T0, 1);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(st.lanes_now(T0 + 1), Some((2, 3)), "busy and live lanes");
+        let r = call(&mut st, &spoke_key, &spoke_cert, "POST", "/v1/logs", &line(json!(20), json!(3), json!(4)), T0 + 2, 2);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(st.lanes_now(T0 + 3), Some((2, 3)), "an out-of-range line changes nothing");
+        assert_eq!(st.spokes_counts(T0 + 3)["lanes"], json!({ "busy": 2, "total": 3 }));
+        assert_eq!(st.lanes_now(T0 + ONLINE_MS + 10), None, "older than 5 minutes: not counted");
+    }
+
+    /// AC-2a 16.1 f-relay: `GET /v1/console/where` on a relay with neither console, its own console, and enrolled.
+    #[test]
+    fn ac2a_where_answers_neither_local_and_enrolled() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let (hub_key, hub_cert, _) = hub_of(&root, 3, "alice@acme.example");
+        let r = call(&mut st, &hub_key, &hub_cert, "GET", "/v1/console/where", "", T0, 1);
+        assert_eq!((r.status, parse_json(&r.body).unwrap()), (200, json!({ "ok": true, "local": false, "managedBy": null })));
+        let dir = fleet_dir("where");
+        let book = crate::console::open_headless(crate::license::Product::Spokes, &dir, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).unwrap();
+        st.set_fleet(FleetLink { managed_by: Box::new(|| Some("https://console.example.com".into())), book: book.clone(), admins: Box::new(Vec::new), state_dir: dir.clone() });
+        let r = call(&mut st, &hub_key, &hub_cert, "GET", "/v1/console/where", "", T0 + 1, 2);
+        assert_eq!(parse_json(&r.body).unwrap(), json!({ "ok": true, "local": false, "managedBy": "https://console.example.com" }));
+        // its own console on (the console field), not managed
+        st.fleet = None;
+        st.console = Some(book);
+        let r = call(&mut st, &hub_key, &hub_cert, "GET", "/v1/console/where", "", T0 + 2, 3);
+        assert_eq!(parse_json(&r.body).unwrap(), json!({ "ok": true, "local": true, "managedBy": null }));
+    }
+
+    /// AC-2a 16.1 f-relay: with the local console off, an enrolled relay serves `/v1/console/requests` from the
+    /// headless book to the hubs of the roster's active admins, and the endorsement routes answer
+    /// `fleet-not-bootstrapping` on a relay that is not enrolled.
+    #[test]
+    fn ac2a_requests_are_readable_from_the_headless_book_by_an_admins_hub() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let (alice_key, alice_cert, _) = hub_of(&root, 3, "alice@acme.example");
+        let (bob_key, bob_cert, _) = hub_of(&root, 4, "bob@acme.example");
+        let r = call(&mut st, &alice_key, &alice_cert, "GET", "/v1/console/fleet-bootstrap", "", T0, 1);
+        assert_eq!(r.status, 409);
+        assert_eq!(parse_json(&r.body).unwrap()["code"], json!(NOT_BOOTSTRAPPING));
+        assert_eq!(parse_json(&r.body).unwrap()["error"], json!(NOT_BOOTSTRAPPING_WORDS));
+        let dir = fleet_dir("requests");
+        let book = crate::console::open_headless(crate::license::Product::Spokes, &dir, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).unwrap();
+        let request = book.new_request("carol@acme.example", "rs.revoke", json!({ "node": "n_0123456789abcdef0123456789abcdef" }), "Stolen", T0).unwrap();
+        st.set_fleet(FleetLink { managed_by: Box::new(|| Some("https://console.example.com".into())), book, admins: Box::new(|| vec!["alice@acme.example".to_owned()]), state_dir: dir });
+        let r = call(&mut st, &alice_key, &alice_cert, "GET", "/v1/console/requests", "", T0 + 1, 2);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(parse_json(&r.body).unwrap()["requests"][0]["id"], request["id"]);
+        // not a roster admin: refused
+        let r = call(&mut st, &bob_key, &bob_cert, "GET", "/v1/console/requests", "", T0 + 2, 3);
+        assert_eq!(r.status, 403);
+    }
+
+    /// AC-2a 16.1 f-relay (A2-H1): `spokes/counts` holds exactly the allowlisted fields, every value a non-negative
+    /// integer (or `lanes` null), for an empty relay and a busy one.
+    #[test]
+    fn ac2a_spokes_counts_are_integers_only() {
+        let ints = |v: &Value| v.as_object().unwrap().iter().filter(|(k, _)| *k != "ok").all(|(_, x)| x.is_null() || x.is_u64() || x.as_object().is_some_and(|o| o.values().all(Value::is_u64)));
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let empty = st.spokes_counts(T0);
+        assert!(ints(&empty) && empty["lanes"].is_null());
+        let (spoke_key, spoke_cert, _) = node(&root, 2, "spoke");
+        let (hub_key, hub_cert, _) = hub_of(&root, 3, "alice@acme.example");
+        assert_eq!(inbox(&mut st, &spoke_key, &spoke_cert, "relay:relay.example.com", T0, 1), 200);
+        assert_eq!(inbox(&mut st, &hub_key, &hub_cert, "relay:relay.example.com", T0, 2), 200);
+        st.lanes.insert(node_id_of(&p256_spki_der(&spoke_key.verifying_key().into())), Lanes { busy: 1, live: 2, max: 2, at: T0 });
+        let busy = st.spokes_counts(T0 + 1);
+        assert!(ints(&busy) && busy["lanes"].is_object());
+        // exactly the vector's fields and types, read from the vector, for the empty and the busy relay
+        projection_matches("spokes/counts", &empty).unwrap();
+        projection_matches("spokes/counts", &busy).unwrap();
+        assert_eq!((busy["hubs"]["total"].as_u64(), busy["spokes"]["online"].as_u64()), (Some(1), Some(1)));
+        // no id, label, email, serial or time anywhere
+        let text = stringify(&busy);
+        assert!(!text.contains("n_") && !text.contains("acme") && !text.contains("hub 3"));
     }
 
     #[test]

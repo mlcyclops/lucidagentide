@@ -34,6 +34,186 @@ pub const SERVICE_ACCOUNT: &str = "NT SERVICE\\LucidRelay";
 pub const WINDOWS_SERVICE: &str = "LucidRelay";
 /// The systemd install record written by `seal_setup` (R4-M2, R5-M1).
 pub const RECORD_PATH: &str = "/etc/lucid-relay/seal-provider.json";
+/// The console role's service identity (AC-2a 2.2): `NT SERVICE\LucidConsole`, service `LucidConsole`; Linux the
+/// system user `lucid-console`, the unit `lucid-console.service` and the install record below.
+pub const CONSOLE_SERVICE_ACCOUNT: &str = "NT SERVICE\\LucidConsole";
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const CONSOLE_WINDOWS_SERVICE: &str = "LucidConsole";
+pub const CONSOLE_RECORD_PATH: &str = "/etc/lucid-console/seal-provider.json";
+/// 13.4 `cli.state-acl` (with `<path>`) and `cli.console-identity`.
+pub const STATE_ACL_WORDS: &str = "Under the High profile the state folder <path> must be open only to this service's account and administrators. Run lucid-relay console seal-setup.";
+pub const CONSOLE_IDENTITY_WORDS: &str = "The console must not run as the relay's account. Run lucid-relay console seal-setup --role console.";
+
+/// Which service a state folder and its sealed secrets belong to (AC-2a 2.2, F18): the relay (AC-1, the default) or
+/// the console role.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SealIdentity {
+    Relay,
+    Console,
+}
+
+impl SealIdentity {
+    /// `--role relay` or `--role console`.
+    pub fn parse(s: &str) -> Option<SealIdentity> {
+        match s {
+            "relay" => Some(SealIdentity::Relay),
+            "console" => Some(SealIdentity::Console),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => "relay",
+            SealIdentity::Console => "console",
+        }
+    }
+
+    /// The Windows virtual service account.
+    pub fn service_account(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => SERVICE_ACCOUNT,
+            SealIdentity::Console => CONSOLE_SERVICE_ACCOUNT,
+        }
+    }
+
+    /// The Windows service name (virtual accounts are `NT SERVICE\<name>`).
+    pub fn windows_service(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => WINDOWS_SERVICE,
+            SealIdentity::Console => CONSOLE_WINDOWS_SERVICE,
+        }
+    }
+
+    /// The root-owned systemd install record.
+    pub fn record_path(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => RECORD_PATH,
+            SealIdentity::Console => CONSOLE_RECORD_PATH,
+        }
+    }
+
+    /// The folder holding the install record and the encrypted credential.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub fn etc_dir(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => ETC_DIR,
+            SealIdentity::Console => "/etc/lucid-console",
+        }
+    }
+
+    /// The Linux system user and systemd unit (without `.service`).
+    pub fn unix_name(self) -> &'static str {
+        match self {
+            SealIdentity::Relay => "lucid-relay",
+            SealIdentity::Console => "lucid-console",
+        }
+    }
+}
+
+/// The 13.4 `cli.state-acl` words for `dir`.
+pub fn state_acl_words(dir: &Path) -> String {
+    STATE_ACL_WORDS.replace("<path>", &dir.display().to_string())
+}
+
+/// The High start check of 2.2 (F18): the state folder grants no access to any identity but `id`'s own and the
+/// administrators. Linux: owned by this process's user, mode with no group or other bits. Windows: every ACL entry
+/// `icacls` lists names `id`'s service account, the Administrators group or SYSTEM, and this process runs as `id`'s
+/// account. Err holds the 13.4 `cli.state-acl` words.
+pub fn check_state_acl(dir: &Path, id: SealIdentity) -> Result<(), String> {
+    let words = || state_acl_words(dir);
+    let meta = std::fs::symlink_metadata(dir).map_err(|_| words())?;
+    if !meta.is_dir() || meta.file_type().is_symlink() {
+        return Err(words());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = id;
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let me = unsafe { geteuid() };
+        if meta.uid() != me || meta.mode() & 0o077 != 0 {
+            return Err(words());
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("icacls").arg(dir).stdin(std::process::Stdio::null()).output().map_err(|_| words())?;
+        if !out.status.success() {
+            return Err(words());
+        }
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if acl_entries_ok(&text, &dir.display().to_string(), id) {
+            Ok(())
+        } else {
+            Err(words())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (meta, id);
+        Err(words())
+    }
+}
+
+/// Whether every principal `icacls` lists for the folder is `id`'s service account, the Administrators group (by
+/// name or SID) or SYSTEM. A localized group name that matches none of these fails closed (the safe direction).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn acl_entries_ok(icacls: &str, dir: &str, id: SealIdentity) -> bool {
+    let mut seen = 0;
+    for line in icacls.lines() {
+        let line = line.strip_prefix(dir).unwrap_or(line).trim();
+        if line.is_empty() || line.starts_with("Successfully processed") || !line.contains(":(") {
+            continue;
+        }
+        let Some((who, _)) = line.split_once(":(") else { continue };
+        let who = who.trim();
+        let ok = who.eq_ignore_ascii_case(id.service_account())
+            || who.eq_ignore_ascii_case("BUILTIN\\Administrators")
+            || who.eq_ignore_ascii_case("*S-1-5-32-544")
+            || who.eq_ignore_ascii_case("NT AUTHORITY\\SYSTEM");
+        if !ok {
+            return false;
+        }
+        seen += 1;
+    }
+    seen > 0
+}
+
+/// The console role's identity check of 2.2 under High: it refuses to run as the relay's service account (Windows)
+/// or as the relay's system user `lucid-relay` (Linux). Err holds the 13.4 `cli.console-identity` words.
+pub fn check_console_identity() -> Result<(), String> {
+    #[cfg(windows)]
+    let relay = win::token_user().is_some_and(|a| a.eq_ignore_ascii_case(SERVICE_ACCOUNT));
+    #[cfg(unix)]
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let relay = unix_uid_of(SealIdentity::Relay.unix_name()).is_some_and(|uid| uid == unsafe { geteuid() });
+    #[cfg(not(any(unix, windows)))]
+    let relay = false;
+    if relay {
+        Err(CONSOLE_IDENTITY_WORDS.to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+/// A system user's uid from `/etc/passwd`, when it exists.
+#[cfg(unix)]
+fn unix_uid_of(name: &str) -> Option<u32> {
+    let text = std::fs::read_to_string("/etc/passwd").ok()?;
+    passwd_uid(&text, name)
+}
+
+#[cfg_attr(not(unix), allow(dead_code))]
+fn passwd_uid(passwd: &str, name: &str) -> Option<u32> {
+    passwd.lines().find_map(|l| {
+        let mut f = l.split(':');
+        (f.next()? == name).then_some(())?;
+        f.next()?;
+        f.next()?.parse().ok()
+    })
+}
 
 /// `seal_setup` writes `lucid-console-kek.cred` and `seal-provider.json` here.
 #[cfg_attr(not(unix), allow(dead_code))]
@@ -329,10 +509,12 @@ struct Host {
     markers: Vec<PathBuf>,
     /// The owner the install record must have (root).
     root_uid: u32,
+    /// The virtual service account `dpapi-service` needs (the relay's, or the console role's, 2.2).
+    service_account: &'static str,
 }
 
 impl Host {
-    fn real() -> Host {
+    fn real(id: SealIdentity) -> Host {
         #[cfg(windows)]
         let account = win::token_user();
         #[cfg(not(windows))]
@@ -340,9 +522,10 @@ impl Host {
         Host {
             windows: cfg!(windows),
             account,
-            record: PathBuf::from(RECORD_PATH),
+            record: PathBuf::from(id.record_path()),
             markers: vec![PathBuf::from("/run/systemd/container"), PathBuf::from("/.dockerenv")],
             root_uid: 0,
+            service_account: id.service_account(),
         }
     }
 }
@@ -483,7 +666,7 @@ fn chosen(provider: Provider, kek: Option<Key32>, compliant: bool, key_mode: Opt
 fn pick(state_dir: &Path, env: &dyn Fn(&str) -> Option<String>, high: bool, host: &Host) -> Pick {
     let mut no: Vec<(&'static str, &'static str)> = Vec::new();
     if host.windows {
-        if host.account.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(SERVICE_ACCOUNT)) {
+        if host.account.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(host.service_account)) {
             return chosen(Provider::DpapiService, None, true, None, no);
         }
         no.push((Provider::DpapiService.as_str(), WHY_NOT_SERVICE));
@@ -571,7 +754,13 @@ impl Seal {
     /// and the file is rewritten. No file yet: a new data key, written on the first put. A key file that must not
     /// be used gives Ok with `refused()` set: nothing unseals and nothing is written.
     pub fn open(state_dir: &Path, env: &dyn Fn(&str) -> Option<String>, high: bool) -> Result<Seal, String> {
-        Seal::open_with(state_dir, env, high, &Host::real())
+        Seal::open_as(state_dir, env, high, SealIdentity::Relay)
+    }
+
+    /// `open` for a service identity (2.2): the console role's secrets need `NT SERVICE\LucidConsole` for
+    /// `dpapi-service` and `/etc/lucid-console/seal-provider.json` for `systemd-credential`.
+    pub fn open_as(state_dir: &Path, env: &dyn Fn(&str) -> Option<String>, high: bool, id: SealIdentity) -> Result<Seal, String> {
+        Seal::open_with(state_dir, env, high, &Host::real(id))
     }
 
     fn open_with(state_dir: &Path, env: &dyn Fn(&str) -> Option<String>, high: bool, host: &Host) -> Result<Seal, String> {
@@ -772,13 +961,24 @@ impl Seal {
 /// key-encryption key is encrypted by `systemd-creds` (`tpm2+host`, or `host` without a TPM2) into
 /// `/etc/lucid-relay/lucid-console-kek.cred` (an existing one that matches its record is kept), the unit drop-in
 /// loads it, the root-owned install record is written with the file's path and SHA-256, and systemd reloads.
-/// Returns the words to print.
-pub fn seal_setup(state_dir: &Path, service: &str) -> Result<String, String> {
+/// Returns the words to print. `id` (AC-2a 2.2, `--role relay` or `--role console`) picks the service identity and
+/// install record: the console role's are `LucidConsole` (`NT SERVICE\LucidConsole`) and `/etc/lucid-console`; on
+/// Linux the state folder is also given to the role's system user, when it exists, with mode 700.
+pub fn seal_setup(state_dir: &Path, service: &str, id: SealIdentity) -> Result<String, String> {
     if !state_dir.is_dir() {
         return Err(format!("The state folder {} does not exist.", state_dir.display()));
     }
     let _lock = crate::console_auth::lock_state(state_dir)?;
-    setup_os(state_dir, service)
+    setup_os(state_dir, service, id)
+}
+
+/// The default `--service` of `seal-setup` for a role.
+pub fn default_service(id: SealIdentity) -> &'static str {
+    if cfg!(windows) {
+        id.windows_service()
+    } else {
+        id.unix_name()
+    }
 }
 
 /// Run a command and say what it printed when it fails.
@@ -792,41 +992,49 @@ fn run(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn setup_os(state_dir: &Path, service: &str) -> Result<String, String> {
+fn setup_os(state_dir: &Path, service: &str, id: SealIdentity) -> Result<String, String> {
     use std::process::Command;
-    if !service.eq_ignore_ascii_case(WINDOWS_SERVICE) {
-        return Err(format!("On Windows the relay's service must be named {WINDOWS_SERVICE}, so that it runs as {SERVICE_ACCOUNT}."));
+    let (name, account) = (id.windows_service(), id.service_account());
+    if !service.eq_ignore_ascii_case(name) {
+        let who = if id == SealIdentity::Console { "console's" } else { "relay's" };
+        return Err(format!("On Windows the {who} service must be named {name}, so that it runs as {account}."));
     }
-    run(Command::new("sc.exe").args(["config", WINDOWS_SERVICE, "obj=", SERVICE_ACCOUNT]), "sc.exe config")?;
+    run(Command::new("sc.exe").args(["config", name, "obj=", account]), "sc.exe config")?;
     // Inheritance removed, then full control for the service account and Administrators (by SID, any language).
-    let service_grant = format!("{SERVICE_ACCOUNT}:(OI)(CI)F");
+    let service_grant = format!("{account}:(OI)(CI)F");
     run(
         Command::new("icacls").arg(state_dir).args(["/inheritance:r", "/grant:r", service_grant.as_str(), "*S-1-5-32-544:(OI)(CI)F", "/T", "/Q"]),
         "icacls",
     )?;
     Ok(format!(
-        "The service {WINDOWS_SERVICE} now runs as {SERVICE_ACCOUNT}, and the state folder {} is open only to that account and Administrators. Restart the service. Secrets sealed under another account do not come back: enter the mail credentials again and run lucid-relay console break-glass --replace.",
+        "The service {name} now runs as {account}, and the state folder {} is open only to that account and Administrators. Restart the service. Secrets sealed under another account do not come back: enter the mail credentials again and run lucid-relay console break-glass --replace.",
         state_dir.display()
     ))
 }
 
 #[cfg(unix)]
-fn setup_os(state_dir: &Path, service: &str) -> Result<String, String> {
+fn setup_os(state_dir: &Path, service: &str, id: SealIdentity) -> Result<String, String> {
+    use std::os::unix::fs::PermissionsExt;
     // SAFETY: geteuid has no preconditions and cannot fail.
     if unsafe { geteuid() } != 0 {
         return Err("lucid-relay console seal-setup must run as root on Linux.".to_string());
     }
-    // A console.lock this root process just made must stay usable by the relay's account.
+    // The role's own system user owns the folder when it exists (2.2: mutually exclusive state folders); otherwise
+    // the folder keeps its owner. A console.lock this root process just made must stay usable by that account.
     {
         use std::os::unix::fs::MetadataExt;
+        if let Some(uid) = unix_uid_of(id.unix_name()) {
+            std::os::unix::fs::chown(state_dir, Some(uid), None).map_err(|e| format!("The state folder could not be given to {}: {e}", id.unix_name()))?;
+        }
         let m = std::fs::metadata(state_dir).map_err(|e| format!("The state folder could not be read: {e}"))?;
-        std::os::unix::fs::chown(state_dir.join(crate::console_auth::LOCK_FILE), Some(m.uid()), Some(m.gid())).map_err(|e| format!("console.lock could not be given to the relay's account: {e}"))?;
+        std::os::unix::fs::chown(state_dir.join(crate::console_auth::LOCK_FILE), Some(m.uid()), Some(m.gid())).map_err(|e| format!("console.lock could not be given to the service's account: {e}"))?;
+        std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("The state folder could not be set to 700: {e}"))?;
     }
-    setup_systemd(service, Path::new(ETC_DIR), Path::new(UNIT_DIR))
+    setup_systemd(service, Path::new(id.etc_dir()), Path::new(UNIT_DIR))
 }
 
 #[cfg(not(any(windows, unix)))]
-fn setup_os(_state_dir: &Path, _service: &str) -> Result<String, String> {
+fn setup_os(_state_dir: &Path, _service: &str, _id: SealIdentity) -> Result<String, String> {
     Err("lucid-relay console seal-setup supports Windows and Linux under systemd.".to_string())
 }
 
@@ -969,11 +1177,65 @@ mod tests {
     /// A Linux host in `d`: the install record under `d/etc`, container markers under `d`, the test's own account
     /// standing in for root.
     fn linux(d: &Path) -> Host {
-        Host { windows: false, account: None, record: d.join("etc").join("seal-provider.json"), markers: vec![d.join("run-systemd-container"), d.join("dockerenv")], root_uid: uid() }
+        Host { windows: false, account: None, record: d.join("etc").join("seal-provider.json"), markers: vec![d.join("run-systemd-container"), d.join("dockerenv")], root_uid: uid(), service_account: SERVICE_ACCOUNT }
     }
 
     fn windows(account: Option<&str>) -> Host {
-        Host { windows: true, account: account.map(str::to_string), record: PathBuf::from("/nonexistent/seal-provider.json"), markers: Vec::new(), root_uid: 0 }
+        Host { windows: true, account: account.map(str::to_string), record: PathBuf::from("/nonexistent/seal-provider.json"), markers: Vec::new(), root_uid: 0, service_account: SERVICE_ACCOUNT }
+    }
+
+    #[test]
+    fn the_console_role_has_its_own_service_identity() {
+        assert_eq!(SealIdentity::parse("console"), Some(SealIdentity::Console));
+        assert_eq!(SealIdentity::parse("relay"), Some(SealIdentity::Relay));
+        assert_eq!(SealIdentity::parse("both"), None);
+        assert_eq!(SealIdentity::Console.service_account(), "NT SERVICE\\LucidConsole");
+        assert_eq!(SealIdentity::Console.record_path(), "/etc/lucid-console/seal-provider.json");
+        assert_eq!(SealIdentity::Relay.record_path(), RECORD_PATH);
+        // The console's account picks dpapi-service only for the console role, never the relay's account.
+        let d = dir("console-identity");
+        let console = Host { service_account: CONSOLE_SERVICE_ACCOUNT, ..windows(Some(CONSOLE_SERVICE_ACCOUNT)) };
+        assert_eq!(pick(&d, &no_env, true, &console).provider, Provider::DpapiService);
+        let relay_account = Host { service_account: CONSOLE_SERVICE_ACCOUNT, ..windows(Some(SERVICE_ACCOUNT)) };
+        assert_ne!(pick(&d, &no_env, true, &relay_account).provider, Provider::DpapiService);
+        let as_relay = windows(Some(CONSOLE_SERVICE_ACCOUNT));
+        assert_ne!(pick(&d, &no_env, true, &as_relay).provider, Provider::DpapiService);
+    }
+
+    #[test]
+    fn icacls_entries_are_limited_to_the_role_and_administrators() {
+        let dir = "C:\\state";
+        let good = "C:\\state NT SERVICE\\LucidConsole:(OI)(CI)(F)\n         BUILTIN\\Administrators:(OI)(CI)(F)\n\nSuccessfully processed 1 files; Failed processing 0 files\n";
+        assert!(acl_entries_ok(good, dir, SealIdentity::Console));
+        assert!(!acl_entries_ok(good, dir, SealIdentity::Relay), "the relay's identity is not the console's");
+        let wide = "C:\\state NT SERVICE\\LucidConsole:(OI)(CI)(F)\n         NT SERVICE\\LucidRelay:(OI)(CI)(RX)\n";
+        assert!(!acl_entries_ok(wide, dir, SealIdentity::Console), "the relay's account may not read the console's folder");
+        let users = "C:\\state NT SERVICE\\LucidRelay:(OI)(CI)(F)\n         BUILTIN\\Users:(OI)(CI)(RX)\n";
+        assert!(!acl_entries_ok(users, dir, SealIdentity::Relay));
+        assert!(!acl_entries_ok("", dir, SealIdentity::Relay), "nothing listed is not proof");
+    }
+
+    #[test]
+    fn passwd_lookup_finds_the_relay_user() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\nlucid-relay:x:991:991::/var/lib/lucid-relay:/usr/sbin/nologin\nlucid-console:x:990:990::/var/lib/lucid-console:/usr/sbin/nologin\n";
+        assert_eq!(passwd_uid(passwd, "lucid-relay"), Some(991));
+        assert_eq!(passwd_uid(passwd, "lucid-console"), Some(990));
+        assert_eq!(passwd_uid(passwd, "nobody"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_state_folder_open_to_others_fails_the_high_check() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("acl");
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(check_state_acl(&d, SealIdentity::Console).is_ok());
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o750)).unwrap();
+        assert_eq!(check_state_acl(&d, SealIdentity::Console).unwrap_err(), state_acl_words(&d));
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o704)).unwrap();
+        assert!(check_state_acl(&d, SealIdentity::Relay).is_err());
+        assert!(check_state_acl(&d.join("missing"), SealIdentity::Relay).is_err());
+        assert!(STATE_ACL_WORDS.contains("<path>") && !state_acl_words(&d).contains("<path>"));
     }
 
     /// A credentials folder holding `lucid-console-kek` with `kek`.
@@ -1415,9 +1677,10 @@ mod tests {
     fn seal_setup_refuses_while_the_relay_holds_console_lock() {
         let d = dir("setup-lock");
         let held = crate::console_auth::lock_state(&d).unwrap();
-        assert_eq!(seal_setup(&d, "lucid-meet-relay").unwrap_err(), crate::console_auth::RUNNING);
+        assert_eq!(seal_setup(&d, "lucid-meet-relay", SealIdentity::Relay).unwrap_err(), crate::console_auth::RUNNING);
+        assert_eq!(seal_setup(&d, "lucid-console", SealIdentity::Console).unwrap_err(), crate::console_auth::RUNNING);
         drop(held);
-        assert!(seal_setup(&d.join("missing"), "lucid-meet-relay").is_err(), "a state folder that does not exist");
+        assert!(seal_setup(&d.join("missing"), "lucid-meet-relay", SealIdentity::Relay).is_err(), "a state folder that does not exist");
     }
 
     #[test]

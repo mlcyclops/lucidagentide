@@ -23,7 +23,7 @@ use crate::meet_org_policy::lp;
 use crate::store::write_private;
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 pub const LOCK_FILE: &str = "console.lock";
@@ -137,6 +137,30 @@ fn label_of(v: Option<&Value>, kind: KeyKind) -> String {
 pub fn stepup_challenge(sid_sha256: &[u8], action: &str, target: &str, params: &Value, nonce: &[u8]) -> Option<[u8; 32]> {
     let p = canonical_json(params).ok()?;
     Some(sha256(&lp(&[STEPUP_LABEL.as_bytes(), sid_sha256, action.as_bytes(), target.as_bytes(), &p, nonce])))
+}
+
+/// The key record handshake's `record` parameter (AC-2a 3.9): `<port>.<nonce>`, the app's loopback port (1024 to
+/// 65535) and the 16-byte nonce it drew (base64url). Ok(None) when absent; `invalid` when malformed.
+pub fn record_param(v: Option<&Value>) -> Result<Option<(u16, String)>, ApiError> {
+    let Some(v) = v.filter(|v| !v.is_null()) else { return Ok(None) };
+    let bad = || ApiError::with("invalid", "record is the app's port and nonce.");
+    let text = v.as_str().ok_or_else(bad)?;
+    let (port, nonce) = text.split_once('.').ok_or_else(bad)?;
+    let port = port.parse::<u16>().ok().filter(|p| *p >= 1024 && port.bytes().all(|b| b.is_ascii_digit())).ok_or_else(bad)?;
+    if unb64u(nonce).is_none_or(|n| n.len() != 16) {
+        return Err(bad());
+    }
+    Ok(Some((port, nonce.to_owned())))
+}
+
+/// The key record (AC-2a 3.9): base64url of `canonical_json({credentialId, cose, email, role, aaguid, createdAt,
+/// nonce})`, public values only. The page navigates to `http://127.0.0.1:<port>/admin-console/key-record?r=<it>`.
+pub fn key_record(k: &Passkey, email: &str, role: PersonRole, (_, nonce): &(u16, String)) -> String {
+    let v = json!({
+        "credentialId": k.id, "cose": k.cose, "email": email, "role": role.as_str(),
+        "aaguid": k.verdict.as_ref().map(|v| v.aaguid.clone()), "createdAt": k.created, "nonce": nonce,
+    });
+    b64u(&canonical_json(&v).unwrap_or_default())
 }
 
 /// `signin-wait` with its minutes (10 for a credential from one source, 15 for an account's lockout).
@@ -321,6 +345,47 @@ pub struct Person {
     pub break_glass: bool,
     /// The attention kinds an admin is mailed about (3.11); None: every `bad` item.
     pub mail_kinds: Option<Vec<String>>,
+    /// AC-2a 4.4: each WebAuthn method's registration evidence, by credential id (methods registered before AC-2a
+    /// have none).
+    pub evidence: BTreeMap<String, Evidence>,
+}
+
+/// A WebAuthn registration's raw evidence as the browser sent it (AC-2a 3.9, 4.4): the attestation statement's
+/// format, the `attestationObject` and the `clientDataJSON` (base64url), at most EVIDENCE_MAX bytes each.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Evidence {
+    pub fmt: String,
+    pub attestation_object: String,
+    pub client_data_json: String,
+}
+
+/// The largest `attestationObject` or `clientDataJSON` kept (AC-2a 4.4).
+pub const EVIDENCE_MAX: usize = 16 * 1024;
+
+impl Evidence {
+    /// The evidence of a registration credential (`response.attestationObject` and `response.clientDataJSON`), None
+    /// when either is missing or larger than EVIDENCE_MAX.
+    pub fn of(fmt: &str, credential: &Value) -> Option<Evidence> {
+        let r = credential.get("response")?;
+        let field = |k: &str| -> Option<String> {
+            let raw = unb64u(str_of(r.get(k))?)?;
+            (!raw.is_empty() && raw.len() <= EVIDENCE_MAX).then(|| b64u(&raw))
+        };
+        Some(Evidence { fmt: fmt.to_owned(), attestation_object: field("attestationObject")?, client_data_json: field("clientDataJSON")? })
+    }
+
+    pub fn to_value(&self) -> Value {
+        json!({ "fmt": self.fmt, "attestationObject": self.attestation_object, "clientDataJSON": self.client_data_json })
+    }
+
+    pub fn from_value(v: &Value) -> Option<Evidence> {
+        let o = v.as_object()?;
+        if !exact_keys(o, &["fmt", "attestationObject", "clientDataJSON"], &["fmt", "attestationObject", "clientDataJSON"]) {
+            return None;
+        }
+        let ok = |k: &str| str_of(o.get(k)).filter(|s| unb64u(s).is_some_and(|b| b.len() <= EVIDENCE_MAX)).map(str::to_owned);
+        Some(Evidence { fmt: str_of(o.get("fmt"))?.to_owned(), attestation_object: ok("attestationObject")?, client_data_json: ok("clientDataJSON")? })
+    }
 }
 
 impl Person {
@@ -345,6 +410,7 @@ impl Person {
             totp: None,
             break_glass: false,
             mail_kinds: None,
+            evidence: BTreeMap::new(),
         }
     }
 
@@ -419,6 +485,8 @@ pub enum InviteSource {
     Console,
     /// The operator's break-glass setup link (3.3).
     Operator,
+    /// The first admin's invite a fleet console mints at `setup/start` (AC-2a 12.1): it bootstraps at registration.
+    Setup,
 }
 
 impl InviteSource {
@@ -428,6 +496,7 @@ impl InviteSource {
             InviteSource::Device => "device",
             InviteSource::Console => "console",
             InviteSource::Operator => "operator",
+            InviteSource::Setup => "setup",
         }
     }
 
@@ -437,6 +506,7 @@ impl InviteSource {
             "device" => Some(InviteSource::Device),
             "console" => Some(InviteSource::Console),
             "operator" => Some(InviteSource::Operator),
+            "setup" => Some(InviteSource::Setup),
             _ => None,
         }
     }
@@ -492,7 +562,7 @@ impl Invite {
         match self.source {
             InviteSource::Hub => format!("hub {}", self.by),
             InviteSource::Device => format!("device {}", self.by),
-            InviteSource::Console | InviteSource::Operator => self.by.clone(),
+            InviteSource::Console | InviteSource::Operator | InviteSource::Setup => self.by.clone(),
         }
     }
 
@@ -500,7 +570,7 @@ impl Invite {
     pub fn anchor(&self) -> String {
         match self.source {
             InviteSource::Hub | InviteSource::Device => self.serial.clone().unwrap_or_else(|| CONSOLE_ANCHOR.to_owned()),
-            InviteSource::Console => CONSOLE_ANCHOR.to_owned(),
+            InviteSource::Console | InviteSource::Setup => CONSOLE_ANCHOR.to_owned(),
             InviteSource::Operator => OPERATOR_ANCHOR.to_owned(),
         }
     }
@@ -537,6 +607,10 @@ pub struct Book {
     pub requests: Vec<Map<String, Value>>,
     /// Offline commands' audit entries, appended at the next start.
     pub pending_audit: Vec<Value>,
+    /// AC-2a 2.4: a fleet console's `fleet` object (`console_fleet::FleetBook`), null elsewhere.
+    pub fleet: Value,
+    /// AC-2a 12.3: a fleet console's setup steps.
+    pub setup: crate::console_settings::Setup,
 }
 
 /// An anchor: "console", "operator", or a certificate serial in lower-case hex, 1 to 128 digits (Remote Spokes serials
@@ -700,6 +774,11 @@ impl Book {
             p.unproven = a.get("unproven").and_then(Value::as_bool).unwrap_or(false);
             p.break_glass = a.get("breakGlass").and_then(Value::as_bool).unwrap_or(false);
             p.mail_kinds = a.get("mailKinds").and_then(Value::as_array).map(|l| l.iter().filter_map(|k| k.as_str().map(str::to_owned)).collect());
+            if let Some(ev) = a.get("evidence").and_then(Value::as_object) {
+                for (id, v) in ev {
+                    p.evidence.insert(id.clone(), Evidence::from_value(v)?);
+                }
+            }
             p.password = match a.get("password") {
                 None | Some(Value::Null) => None,
                 Some(m) => {
@@ -730,6 +809,11 @@ impl Book {
         b.approvals = o.get("approvals").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_object().cloned()).collect()).unwrap_or_default();
         b.requests = o.get("requests").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_object().cloned()).collect()).unwrap_or_default();
         b.pending_audit = o.get("pendingAudit").and_then(Value::as_array).cloned().unwrap_or_default();
+        b.fleet = o.get("fleet").cloned().unwrap_or(Value::Null);
+        b.setup = match o.get("setup") {
+            None | Some(Value::Null) => crate::console_settings::Setup::default(),
+            Some(v) => crate::console_settings::Setup::from_value(v)?,
+        };
         Some(b)
     }
 
@@ -764,17 +848,29 @@ impl Book {
                     "unsuspendedAt": p.unsuspended_at, "unproven": p.unproven, "anchor": p.anchor, "passkeys": keys,
                     "password": password, "totp": totp, "breakGlass": p.break_glass, "mailKinds": p.mail_kinds,
                 });
+                let mut v = v;
+                // Evidence only for methods still in the book (AC-2a 4.4).
+                let evidence: Map<String, Value> = p.evidence.iter().filter(|(id, _)| p.passkeys.iter().any(|k| &k.id == *id)).map(|(id, e)| (id.clone(), e.to_value())).collect();
+                if !evidence.is_empty() {
+                    v["evidence"] = Value::Object(evidence);
+                }
                 (e.clone(), v)
             })
             .collect();
-        json!({
+        let mut book = json!({
             "v": 3, "origin": self.origin, "bootstrapped": self.bootstrapped, "everTwoAdmins": self.ever_two_admins,
             "firstAdmin": self.first_admin, "upgradedAt": self.upgraded_at, "invites": invites, "people": people,
             "revokedAnchors": self.revoked_anchors.iter().collect::<Vec<_>>(), "removedAt": self.removed_at,
             "singleSuspensions": times_value(&self.single_suspensions), "hubInvites": times_value(&self.hub_invites),
             "settings": self.settings.to_value(), "breakGlassUsedAt": self.break_glass_used_at,
             "approvals": self.approvals, "requests": self.requests, "pendingAudit": self.pending_audit,
-        })
+        });
+        // A fleet console's book only (AC-2a 2.4, 12.3): an AC-1 book keeps its exact shape.
+        if !self.fleet.is_null() {
+            book["fleet"] = self.fleet.clone();
+            book["setup"] = self.setup.to_value();
+        }
+        book
     }
 
     pub fn save(&mut self, file: &Path) -> Result<(), String> {
@@ -1260,7 +1356,56 @@ pub struct Inner {
     pub approved_links: HashMap<String, (String, String, i64)>,
     /// Approvals being carried out now (two approvers at once run it once).
     pub running: HashSet<String>,
+    /// AC-2a 4.6: fleet step-up ceremonies by id, each bound to its session.
+    pub fleet_stepups: HashMap<String, FleetCeremony>,
+    /// AC-2a 12.1: the setup code of this start (memory only besides `setup-code.txt`), while not bootstrapped.
+    pub setup: Option<crate::console_wizard::SetupCode>,
 }
+
+/// What a fleet step-up binds (AC-2a 4.4 to 4.7): a write's step-up (`stepup`), a second-admin request
+/// (`request`), a roster endorsement (`roster`) or a policy endorsement (`policy`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FleetKind {
+    Stepup,
+    Request,
+    Roster,
+    Policy,
+}
+
+impl FleetKind {
+    pub fn parse(s: &str) -> Option<FleetKind> {
+        match s {
+            "stepup" => Some(FleetKind::Stepup),
+            "request" => Some(FleetKind::Request),
+            "roster" => Some(FleetKind::Roster),
+            "policy" => Some(FleetKind::Policy),
+            _ => None,
+        }
+    }
+}
+
+/// A fleet step-up ceremony (AC-2a 4.6): held in memory with its session, used once, 120 s.
+#[derive(Clone, Debug)]
+pub struct FleetCeremony {
+    pub id: String,
+    pub sid: String,
+    pub kind: FleetKind,
+    pub action: String,
+    pub target: String,
+    pub params: Value,
+    /// (relay id, its nonce base64url), sorted by relay id; nonces empty for `request`, `roster` and `policy`.
+    pub targets: Vec<(String, String)>,
+    pub challenge: [u8; 32],
+    /// `request`: the approval id and time drawn at begin.
+    pub approval_id: Option<String>,
+    pub requested_at: i64,
+    /// `roster` and `policy`: the chain position endorsed.
+    pub seq: u64,
+    pub expires: i64,
+}
+
+/// At most this many fleet ceremonies per session; a newer one replaces the oldest.
+pub const FLEET_STEPUPS_PER_SESSION: usize = 4;
 
 /// The signed-in caller as a request sees it.
 #[derive(Clone, Debug)]
@@ -1760,6 +1905,8 @@ impl Console {
     /// passkey. Console invites, sign-in resets and the operator's break-glass link add working methods. The cookie
     /// is set only when the account is complete, active and working; the invite is spent then.
     pub(crate) fn register_finish(&self, source: &str, ip: &str, agent: &str, body: &Value, origin: &str, t: i64) -> Result<Out, ApiError> {
+        let record = record_param(body.get("record"))?;
+        let record = record.as_ref();
         let c = {
             let mut inner = self.inner.lock();
             self.signin_limit(&mut inner, source, t)?;
@@ -1815,7 +1962,9 @@ impl Console {
                 p.passkeys.push(working.clone());
                 (p.state_str(), "working")
             }
-            InviteSource::Hub | InviteSource::Device if !inner.book.bootstrapped => {
+            // A fleet console's setup invite after bootstrap (AC-2a 12.1): the console is already set up.
+            InviteSource::Setup if inner.book.bootstrapped => return Err(ApiError::of("setup-done")),
+            InviteSource::Hub | InviteSource::Device | InviteSource::Setup if !inner.book.bootstrapped => {
                 let pin = inner.book.first_admin.clone().or_else(|| self.cfg.first_admin.clone());
                 if pin.as_deref() != Some(email.as_str()) {
                     return Err(ApiError::with("bootstrap-pinned", format!("This console waits for its first admin, {}.", pin.unwrap_or_default())));
@@ -1838,7 +1987,7 @@ impl Console {
                 }
                 ("active", "working")
             }
-            InviteSource::Hub | InviteSource::Device => {
+            InviteSource::Hub | InviteSource::Device | InviteSource::Setup => {
                 let waiting = Passkey { state: KeyState::Waiting, from: from.clone(), ..working.clone() };
                 match inner.book.people.get_mut(&email) {
                     Some(p) => {
@@ -1864,6 +2013,12 @@ impl Console {
                 }
             }
         };
+        // AC-2a 4.4: the registration's raw evidence is kept with the method.
+        if let (Some(ev), Some(p)) = (Evidence::of(&made.attestation.fmt, &credential), inner.book.people.get_mut(&email)) {
+            if p.passkeys.iter().any(|k| k.id == id) {
+                p.evidence.insert(id.clone(), ev);
+            }
+        }
         let p = inner.book.people.get(&email).cloned().ok_or_else(|| ApiError::with("gone", GONE))?;
         let done = key_state == "working" && person_state == "active" && complete(&p, &s, &|k| if k.id == id { attested } else { self.attested_now(k, &list) });
         let spent = key_state == "waiting" || (done && (bootstrap || !matches!(invite.source, InviteSource::Hub | InviteSource::Device)));
@@ -1873,6 +2028,10 @@ impl Console {
         self.save_book(&mut inner)?;
         let view = self.verdict_view_unlocked(&working, &s);
         let mut out = Out::ok(json!({ "ok": true, "state": person_state, "passkey": key_state, "attested": view }));
+        // AC-2a 3.9 "The key record": the page navigates to the app's loopback with it.
+        if let Some(rec) = record {
+            out.body["keyRecord"] = Value::from(key_record(&working, &email, p.role, rec));
+        }
         if done {
             let methods = vec![working.kind.as_str().to_owned()];
             out.cookie = Some(inner.new_session(self.cookie_name(), &email, (&id, &working.anchor, true), methods, origin, (ip, agent), None, t)?);
@@ -2717,6 +2876,144 @@ impl Console {
         Ok(StepOk { method: id, anchor: key.anchor.clone(), invited_by: key.invited_by.clone(), enrollment: c.enrollment })
     }
 
+    // ── Fleet step-up (AC-2a 4.6) ───────────────────────────────────────────────────────────────────────────
+
+    /// The caller's WebAuthn methods a fleet step-up may use (the AC-1 step-up rule: under High for an admin or user
+    /// manager only attested ones). TOTP never authorizes a relay write.
+    pub(crate) fn fleet_keys(&self, who: &Who) -> Vec<Passkey> {
+        let (p, s) = {
+            let inner = self.inner.lock();
+            (inner.book.people.get(&who.email).cloned(), inner.book.settings.clone())
+        };
+        p.map(|p| self.stepup_keys(who, &p, &s, false)).unwrap_or_default()
+    }
+
+    /// Keep a fleet ceremony with the caller's session (at most FLEET_STEPUPS_PER_SESSION; a newer one replaces the
+    /// oldest). The `publicKey` options to answer.
+    pub(crate) fn fleet_ceremony_put(&self, c: FleetCeremony, allow: &[String], origin: &str, t: i64) -> Result<Value, ApiError> {
+        let mut inner = self.inner.lock();
+        if !inner.sessions.contains_key(&c.sid) {
+            return Err(ApiError::of("signin-first"));
+        }
+        inner.fleet_stepups.retain(|_, x| x.expires > t);
+        while inner.fleet_stepups.values().filter(|x| x.sid == c.sid).count() >= FLEET_STEPUPS_PER_SESSION {
+            let oldest = inner.fleet_stepups.values().filter(|x| x.sid == c.sid).min_by_key(|x| x.expires).map(|x| x.id.clone());
+            match oldest {
+                Some(id) => inner.fleet_stepups.remove(&id),
+                None => break,
+            };
+        }
+        let public_key = assertion_options(&c.challenge, &self.rp(origin), allow, STEPUP_MS);
+        inner.fleet_stepups.insert(c.id.clone(), c);
+        Ok(public_key)
+    }
+
+    /// The caller's fleet ceremony `id`, taken out (used once); `stepup-expired` past its 120 s, `stepup-failed` when
+    /// it is not this session's.
+    pub(crate) fn fleet_ceremony_take(&self, who: &Who, id: &str, t: i64) -> Result<FleetCeremony, ApiError> {
+        let c = self.inner.lock().fleet_stepups.remove(id).filter(|c| c.sid == who.sid);
+        let Some(c) = c else {
+            self.logger.security("console.stepup-refused", &Fields::new().with("email", &who.email).with("why", "no such fleet ceremony in this session"), Level::Warn);
+            return Err(ApiError::of("stepup-failed"));
+        };
+        if c.expires <= t {
+            return Err(ApiError::of("stepup-expired"));
+        }
+        Ok(c)
+    }
+
+    /// One fleet assertion (AC-2a 4.6: AC-1 3.6 steps 2 to 5 at the console, for its own audit) by one of the
+    /// caller's fleet keys over `challenge`, its sign count moving forward. The credential id used.
+    pub(crate) fn verify_fleet_assertion(&self, who: &Who, credential: &Value, challenge: &[u8; 32], origin: &str, t: i64) -> Result<String, ApiError> {
+        let failed = |why: &str| {
+            self.logger.security("console.stepup-refused", &Fields::new().with("email", &who.email).with("why", why).with("fleet", true), Level::Warn);
+            ApiError::of("stepup-failed")
+        };
+        let Ok(raw) = credential_id(credential) else { return Err(failed("no passkey id")) };
+        let id = b64u(&raw);
+        let Some(key) = self.fleet_keys(who).into_iter().find(|k| k.id == id) else { return Err(failed("not one of this person's fleet keys")) };
+        let cose = unb64u(&key.cose).unwrap_or_default();
+        let count = verify_stepup_assertion(&self.rp(origin), origin, challenge, &cose, credential).map_err(|e| failed(&e.message))?;
+        let mut inner = self.inner.lock();
+        let stored = inner.book.people.get(&who.email).and_then(|p| p.passkeys.iter().find(|k| k.id == id)).map_or(key.count, |k| k.count);
+        if (count != 0 || stored != 0) && count <= stored {
+            drop(inner);
+            return Err(failed("counter"));
+        }
+        if let Some(k) = inner.book.people.get_mut(&who.email).and_then(|p| p.passkeys.iter_mut().find(|k| k.id == id)) {
+            k.count = count;
+            k.last_used = t;
+        }
+        self.save_book(&mut inner)?;
+        Ok(id)
+    }
+
+    /// The signed-in caller of session `sid` (the hex SHA-256 the sessions are keyed by), as a request would see it
+    /// now (AC-1 recomputes rights at every request); None when the session is gone. Not touched as activity.
+    pub(crate) fn who_of_session(&self, sid: &str, t: i64) -> Option<Who> {
+        let origin = self.origin()?;
+        self.who_of(sid, &origin, false, t).ok().flatten()
+    }
+
+    /// The rights session `sid` holds now (f-people's `rights_now`, F11).
+    pub(crate) fn session_rights_now(&self, sid: &str, t: i64) -> Option<Rights> {
+        self.who_of_session(sid, t).map(|w| w.rights)
+    }
+
+    // ── Setup (AC-2a 12.1) and key fingerprints (3.9) ───────────────────────────────────────────────────────
+
+    /// The first admin's invite of a fleet console (`setup/start`): a 24-hour join token for `email`, role admin,
+    /// source `setup`; every older setup invite is void. Called under the setup lock with the book not bootstrapped.
+    pub(crate) fn mint_setup_invite(&self, inner: &mut Inner, email: &str, t: i64) -> Result<(String, i64), ApiError> {
+        let token = b64u(&random_bytes(32)?);
+        let expires = t + INVITE_MS;
+        inner.book.invites.retain(|_, i| i.source != InviteSource::Setup);
+        inner.book.invites.insert(sha256_hex(token.as_bytes()), Invite { email: email.to_owned(), role: PersonRole::Admin, expires, by: "setup".into(), source: InviteSource::Setup, serial: None, kind: InviteKind::Join, mailed: false });
+        Ok((token, expires))
+    }
+
+    /// Void every setup invite (a restart, 12.1: "every join token minted by setup/start is void").
+    pub(crate) fn void_setup_invites(&self, inner: &mut Inner) -> bool {
+        let before = inner.book.invites.len();
+        inner.book.invites.retain(|_, i| i.source != InviteSource::Setup);
+        before != inner.book.invites.len()
+    }
+
+    /// GET account/key-fingerprints (AC-2a 3.9 ceremony B): the caller's working WebAuthn methods, each with
+    /// `SHA-256(lp("lucid-fleet-admin-key-v1", credentialId, cose, email, role))` as 64 hex. Viewers hold no roster
+    /// role, so they get none.
+    pub(crate) fn key_fingerprints(&self, who: &Who) -> Out {
+        let p = self.inner.lock().book.people.get(&who.email).cloned();
+        let keys: Vec<Value> = p
+            .filter(|p| p.role.privileged())
+            .map(|p| {
+                p.passkeys
+                    .iter()
+                    .filter(|k| k.works())
+                    .map(|k| {
+                        let fp = crate::fleet_trust::admin_key_fingerprint(&unb64u(&k.id).unwrap_or_default(), &unb64u(&k.cose).unwrap_or_default(), &who.email, p.role.as_str());
+                        json!({ "hint": hint_of(&k.id), "label": k.label, "fingerprint": fp })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Out::ok(json!({ "ok": true, "keys": keys }))
+    }
+
+    /// POST account/key-record {hint, record, stepup} (AC-2a 3.9 "Record this key in my IDE or Hub app"): the key
+    /// record of one of the caller's working methods, after a step-up made with that same method.
+    pub(crate) fn account_key_record(&self, who: &Who, step: &StepOk, params: &Value) -> Result<(Out, Value), ApiError> {
+        let hint = str_of(params.get("hint")).unwrap_or("");
+        let rec = record_param(params.get("record"))?.ok_or_else(|| ApiError::with("invalid", "record is the app's port and nonce."))?;
+        let p = self.inner.lock().book.people.get(&who.email).cloned().ok_or_else(|| ApiError::of("signin-first"))?;
+        let k = p.passkeys.iter().find(|k| k.works() && hint_of(&k.id) == hint).ok_or_else(|| ApiError::with("not-found", "There is no such passkey."))?;
+        if step.method != k.id {
+            return Err(ApiError::with("stepup-failed", "Confirm with the key you want to record."));
+        }
+        let out = Out::ok(json!({ "ok": true, "keyRecord": key_record(k, &who.email, p.role, &rec) }));
+        Ok((out, json!({ "credential_hint": hint })))
+    }
+
     // ── Own methods and sessions ────────────────────────────────────────────────────────────────────────────
 
     /// POST passkeys/add/begin {stepup} and account/security-key/begin {stepup}: the one enrollment policy (3.3,
@@ -2742,6 +3039,7 @@ impl Console {
 
     /// POST passkeys/add/finish and account/security-key/finish {ceremony, credential, label}.
     pub(crate) fn passkey_add_finish(&self, who: &Who, body: &Value, origin: &str, t: i64) -> Result<(Out, Value), ApiError> {
+        let record = record_param(body.get("record"))?;
         let c = {
             let mut inner = self.inner.lock();
             let sess = inner.sessions.get_mut(&who.sid).ok_or_else(|| ApiError::of("signin-first"))?;
@@ -2767,11 +3065,20 @@ impl Console {
             return Err(ApiError::of("passkey-limit"));
         }
         p.passkeys.push(k.clone());
+        // AC-2a 4.4: the registration's raw evidence is kept with the method.
+        if let Some(ev) = Evidence::of(&made.attestation.fmt, &credential) {
+            p.evidence.insert(k.id.clone(), ev);
+        }
+        let role = p.role;
         self.save_book(&mut inner)?;
         drop(inner);
         let view = json!({ "hint": hint_of(&k.id), "label": k.label, "kind": k.kind.as_str(), "state": if c.waiting { "waiting" } else { "working" }, "attested": self.verdict_view_unlocked(&k, &s) });
         let detail = json!({ "credential_hint": hint_of(&k.id), "anchor": k.anchor, "kind": k.kind.as_str(), "state": if c.waiting { "waiting" } else { "working" }, "aaguid": k.verdict.as_ref().map(|v| v.aaguid.clone()) });
-        Ok((Out::ok(json!({ "ok": true, "method": view })), detail))
+        let mut out = Out::ok(json!({ "ok": true, "method": view }));
+        if let Some(rec) = &record {
+            out.body["keyRecord"] = Value::from(key_record(&k, &who.email, role, rec));
+        }
+        Ok((out, detail))
     }
 
     /// POST passkeys/confirm {hint, stepup}: the caller's waiting passkey becomes working, its anchor kept (N2). The

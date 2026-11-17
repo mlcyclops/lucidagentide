@@ -1,0 +1,541 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.2",
+ "host": "console.acme.example",
+ "vendor": "TECHLEAD 187",
+ "product": "Lucid Admin Console",
+ "version_string": "2.5.0",
+ "facility": 13,
+ "syslog_severity": {
+  "ok": 6,
+  "waiting": 6,
+  "summary": 6,
+  "refused": 4,
+  "unknown": 4,
+  "failed": 3,
+  "warn": 4,
+  "error": 3
+ },
+ "cef_severity": {
+  "ok": 3,
+  "waiting": 3,
+  "summary": 2,
+  "refused": 6,
+  "unknown": 6,
+  "failed": 7,
+  "warn": 6,
+  "error": 8
+ },
+ "msgid": {
+  "audit": "audit",
+  "relays": "relay",
+  "security": "security"
+ },
+ "about": "message <PRI>1 <RFC 3339 ms UTC> <console host> lucid-console - <msgid> - <CEF>, PRI = facility * 8 + syslog_severity of the entry's result (security lines: level); CEF:0|vendor|product|version|<action>|<name>|<cef_severity>|<extensions>, name from the words vector cef map, else the action; extensions in the 10.2 order, absent ones (label and value) left out; security lines map act=event, outcome=level, src=ip, cs2=console, cs5=code; every value is cleaned (AC-1 0, which removes CR and LF), then cut (more than 1,023 characters: the first 1,020 and \"...\"), then escaped; frame = <UTF-8 byte length> <message> (RFC 6587 octet counting)",
+ "cases": [
+  {
+   "name": "audit fleet.enroll.code ok",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 41,
+    "ts": 1794906000123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.enroll.code",
+    "target": "en_b40ab7b2c9d5a06d",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "id": "en_b40ab7b2c9d5a06d",
+     "product": "spokes",
+     "name": "Berlin relay",
+     "site": "eu-central-1",
+     "scopes": [
+      "read-health",
+      "people"
+     ],
+     "replaces": null
+    },
+    "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "c8112c30e859543c58b2498c1034e93deddfa7d45598d473dacf1a40d5f8fe87"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:00.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.enroll.code|Make an enrollment code for <name>|3|rt=1794906000123 act=fleet.enroll.code outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=en_b40ab7b2c9d5a06d cs2Label=relay cs2=console cs4Label=chain cs4=c8112c30e859543c58b2498c1034e93deddfa7d45598d473dacf1a40d5f8fe87 cn1Label=seq cn1=41",
+   "frame": "438 <110>1 2026-11-17T09:00:00.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.enroll.code|Make an enrollment code for <name>|3|rt=1794906000123 act=fleet.enroll.code outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=en_b40ab7b2c9d5a06d cs2Label=relay cs2=console cs4Label=chain cs4=c8112c30e859543c58b2498c1034e93deddfa7d45598d473dacf1a40d5f8fe87 cn1Label=seq cn1=41"
+  },
+  {
+   "name": "audit fleet.call refused",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 42,
+    "ts": 1794906001123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.call",
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "result": "refused",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "action": "spokes.block",
+     "result": "refused",
+     "code": "fleet-stepup",
+     "approval": null,
+     "mode": "one"
+    },
+    "prev": "c8112c30e859543c58b2498c1034e93deddfa7d45598d473dacf1a40d5f8fe87",
+    "hash": "143373251c0f2ee5a4e92a572fb077e6c9a28a0f20c0420b481d1965203f416a"
+   },
+   "relay": null,
+   "message": "<108>1 2026-11-17T09:00:01.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906001123 act=fleet.call outcome=refused suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=143373251c0f2ee5a4e92a572fb077e6c9a28a0f20c0420b481d1965203f416a cn1Label=seq cn1=42 cs5Label=code cs5=fleet-stepup",
+   "frame": "451 <108>1 2026-11-17T09:00:01.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906001123 act=fleet.call outcome=refused suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=143373251c0f2ee5a4e92a572fb077e6c9a28a0f20c0420b481d1965203f416a cn1Label=seq cn1=42 cs5Label=code cs5=fleet-stepup"
+  },
+  {
+   "name": "audit fleet.ca.rollover waiting",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 43,
+    "ts": 1794906002123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.ca.rollover",
+    "target": "-",
+    "result": "waiting",
+    "approval": "ap_0123456789abcdef",
+    "stepup": true,
+    "detail": {
+     "generation": 2,
+     "fingerprint": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522"
+    },
+    "prev": "143373251c0f2ee5a4e92a572fb077e6c9a28a0f20c0420b481d1965203f416a",
+    "hash": "9cf6215283f9f9c451216b8ca844ab2bacd0376e0f6454574bf771d873865f5a"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:02.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.ca.rollover|Start management CA <generation>|3|rt=1794906002123 act=fleet.ca.rollover outcome=waiting suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=- cs2Label=relay cs2=console cs3Label=approval cs3=ap_0123456789abcdef cs4Label=chain cs4=9cf6215283f9f9c451216b8ca844ab2bacd0376e0f6454574bf771d873865f5a cn1Label=seq cn1=43",
+   "frame": "465 <110>1 2026-11-17T09:00:02.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.ca.rollover|Start management CA <generation>|3|rt=1794906002123 act=fleet.ca.rollover outcome=waiting suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=- cs2Label=relay cs2=console cs3Label=approval cs3=ap_0123456789abcdef cs4Label=chain cs4=9cf6215283f9f9c451216b8ca844ab2bacd0376e0f6454574bf771d873865f5a cn1Label=seq cn1=43"
+  },
+  {
+   "name": "audit fleet.reads.summary summary",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 44,
+    "ts": 1794906003123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.reads.summary",
+    "target": null,
+    "result": "summary",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "count": 14,
+     "routes": {
+      "overview": 10,
+      "license": 4
+     }
+    },
+    "prev": "9cf6215283f9f9c451216b8ca844ab2bacd0376e0f6454574bf771d873865f5a",
+    "hash": "aadd57a0d24861669836185a823ce1ee9f90fa2a8b49d2aa44c6a9f84655d888"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:03.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.reads.summary|fleet.reads.summary|2|rt=1794906003123 act=fleet.reads.summary outcome=summary suser=alice@acme.example src=203.0.113.7 cs2Label=relay cs2=console cs4Label=chain cs4=aadd57a0d24861669836185a823ce1ee9f90fa2a8b49d2aa44c6a9f84655d888 cn1Label=seq cn1=44",
+   "frame": "392 <110>1 2026-11-17T09:00:03.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.reads.summary|fleet.reads.summary|2|rt=1794906003123 act=fleet.reads.summary outcome=summary suser=alice@acme.example src=203.0.113.7 cs2Label=relay cs2=console cs4Label=chain cs4=aadd57a0d24861669836185a823ce1ee9f90fa2a8b49d2aa44c6a9f84655d888 cn1Label=seq cn1=44"
+  },
+  {
+   "name": "audit exports.siem-test failed",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 45,
+    "ts": 1794906004123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "exports.siem-test",
+    "target": null,
+    "result": "failed",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "code": "siem-failed"
+    },
+    "prev": "aadd57a0d24861669836185a823ce1ee9f90fa2a8b49d2aa44c6a9f84655d888",
+    "hash": "5e8b71ae65b05a1d77fa1dc4ba087d6af9244a18fba81e84a9aa1f803cb1b5ce"
+   },
+   "relay": null,
+   "message": "<107>1 2026-11-17T09:00:04.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|exports.siem-test|exports.siem-test|7|rt=1794906004123 act=exports.siem-test outcome=failed suser=alice@acme.example src=203.0.113.7 cs2Label=relay cs2=console cs4Label=chain cs4=5e8b71ae65b05a1d77fa1dc4ba087d6af9244a18fba81e84a9aa1f803cb1b5ce cn1Label=seq cn1=45 cs5Label=code cs5=siem-failed",
+   "frame": "415 <107>1 2026-11-17T09:00:04.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|exports.siem-test|exports.siem-test|7|rt=1794906004123 act=exports.siem-test outcome=failed suser=alice@acme.example src=203.0.113.7 cs2Label=relay cs2=console cs4Label=chain cs4=5e8b71ae65b05a1d77fa1dc4ba087d6af9244a18fba81e84a9aa1f803cb1b5ce cn1Label=seq cn1=45 cs5Label=code cs5=siem-failed"
+  },
+  {
+   "name": "audit people.suspend ok",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 46,
+    "ts": 1794906005123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "people.suspend",
+    "target": "ann@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "relay": "r_8c41d2e07b9a6f13",
+     "subject": "ann@acme.example",
+     "results": {
+      "ok": 2,
+      "refused": 0
+     },
+     "reason": "Lost phone | found=no \\ case\r\nnext line"
+    },
+    "prev": "5e8b71ae65b05a1d77fa1dc4ba087d6af9244a18fba81e84a9aa1f803cb1b5ce",
+    "hash": "33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:05.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|people.suspend|Suspend <name> on <relay>|3|rt=1794906005123 act=people.suspend outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=ann@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776 cn1Label=seq cn1=46",
+   "frame": "420 <110>1 2026-11-17T09:00:05.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|people.suspend|Suspend <name> on <relay>|3|rt=1794906005123 act=people.suspend outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=ann@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776 cn1Label=seq cn1=46"
+  },
+  {
+   "name": "audit people.suspend ok with reasons",
+   "source": "audit",
+   "include_reasons": true,
+   "entry": {
+    "seq": 46,
+    "ts": 1794906005123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "people.suspend",
+    "target": "ann@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "relay": "r_8c41d2e07b9a6f13",
+     "subject": "ann@acme.example",
+     "results": {
+      "ok": 2,
+      "refused": 0
+     },
+     "reason": "Lost phone | found=no \\ case\r\nnext line"
+    },
+    "prev": "5e8b71ae65b05a1d77fa1dc4ba087d6af9244a18fba81e84a9aa1f803cb1b5ce",
+    "hash": "33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:05.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|people.suspend|Suspend <name> on <relay>|3|rt=1794906005123 act=people.suspend outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=ann@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776 cn1Label=seq cn1=46 cs6Label=reason cs6=Lost phone | found\\=no \\\\ casenext line",
+   "frame": "480 <110>1 2026-11-17T09:00:05.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|people.suspend|Suspend <name> on <relay>|3|rt=1794906005123 act=people.suspend outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=ann@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776 cn1Label=seq cn1=46 cs6Label=reason cs6=Lost phone | found\\=no \\\\ casenext line"
+  },
+  {
+   "name": "audit fleet.relay.label ok",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 47,
+    "ts": 1794906006123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.relay.label",
+    "target": "a=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=ba=b",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "name": "Berlin relay",
+     "site": "eu-central-1"
+    },
+    "prev": "33a0b73fb0063ce7abad462aaed2d25753501dce17e3c5df8eb1ad7551325776",
+    "hash": "9e2ec04804c8b1107f4240bba3948e2337a9edd2e1b879fcd95919b21aa5a482"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:06.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.label|Rename <name>|3|rt=1794906006123 act=fleet.relay.label outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=a\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=b... cs2Label=relay cs2=console cs4Label=chain cs4=9e2ec04804c8b1107f4240bba3948e2337a9edd2e1b879fcd95919b21aa5a482 cn1Label=seq cn1=47",
+   "frame": "1761 <110>1 2026-11-17T09:00:06.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.label|Rename <name>|3|rt=1794906006123 act=fleet.relay.label outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=a\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=ba\\=b... cs2Label=relay cs2=console cs4Label=chain cs4=9e2ec04804c8b1107f4240bba3948e2337a9edd2e1b879fcd95919b21aa5a482 cn1Label=seq cn1=47"
+  },
+  {
+   "name": "audit fleet.relay.confirm ok",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 48,
+    "ts": 1794906007123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.relay.confirm",
+    "target": "bob\u202e@acme.example\u200b",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "fingerprint": "c9f1 35fb 9067 f17a 1841"
+    },
+    "prev": "9e2ec04804c8b1107f4240bba3948e2337a9edd2e1b879fcd95919b21aa5a482",
+    "hash": "c0fa757d86e20a549a9a9ef13a9561250cebce9444595985d927cd8157e91a79"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:07.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.confirm|Confirm <name>|3|rt=1794906007123 act=fleet.relay.confirm outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=bob@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=c0fa757d86e20a549a9a9ef13a9561250cebce9444595985d927cd8157e91a79 cn1Label=seq cn1=48",
+   "frame": "419 <110>1 2026-11-17T09:00:07.123Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.confirm|Confirm <name>|3|rt=1794906007123 act=fleet.relay.confirm outcome=ok suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=bob@acme.example cs2Label=relay cs2=console cs4Label=chain cs4=c0fa757d86e20a549a9a9ef13a9561250cebce9444595985d927cd8157e91a79 cn1Label=seq cn1=48"
+  },
+  {
+   "name": "audit fleet.call unknown",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 49,
+    "ts": 1794906007623,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "fleet.call",
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "result": "unknown",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "action": "spokes.block",
+     "result": "unknown",
+     "code": null,
+     "approval": null,
+     "mode": "one"
+    },
+    "prev": "c0fa757d86e20a549a9a9ef13a9561250cebce9444595985d927cd8157e91a79",
+    "hash": "71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82"
+   },
+   "relay": null,
+   "message": "<108>1 2026-11-17T09:00:07.623Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906007623 act=fleet.call outcome=unknown suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82 cn1Label=seq cn1=49",
+   "frame": "420 <108>1 2026-11-17T09:00:07.623Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906007623 act=fleet.call outcome=unknown suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82 cn1Label=seq cn1=49"
+  },
+  {
+   "name": "relay fleet.relay.recovered",
+   "source": "relays",
+   "include_reasons": false,
+   "entry": {
+    "seq": 900,
+    "ts": 1794906008123,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "fleet.relay.recovered",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "newSerial": "789f47599da1f135680617448f566608",
+     "generation": 2,
+     "retry": true
+    },
+    "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash": "1b149638872b15df3c004d34bb0352ededce518fbafa1ff61909801496aa772a"
+   },
+   "relay": "r_3f0a9c2b7d5e1f48",
+   "message": "<110>1 2026-11-17T09:00:08.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.recovered|fleet.relay.recovered|3|rt=1794906008123 act=fleet.relay.recovered outcome=ok suser=relay cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=1b149638872b15df3c004d34bb0352ededce518fbafa1ff61909801496aa772a cn1Label=seq cn1=900",
+   "frame": "376 <110>1 2026-11-17T09:00:08.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.relay.recovered|fleet.relay.recovered|3|rt=1794906008123 act=fleet.relay.recovered outcome=ok suser=relay cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=1b149638872b15df3c004d34bb0352ededce518fbafa1ff61909801496aa772a cn1Label=seq cn1=900"
+  },
+  {
+   "name": "relay fleet.trust-time-reset",
+   "source": "relays",
+   "include_reasons": false,
+   "entry": {
+    "seq": 901,
+    "ts": 1794906009123,
+    "actor": "operator",
+    "role": null,
+    "ip": null,
+    "action": "fleet.trust-time-reset",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "from": 1861401600000,
+     "to": 1798329420000,
+     "manifestSeq": 31,
+     "previousSeq": 30,
+     "previousIssuedAt": 1829865600000
+    },
+    "prev": "1b149638872b15df3c004d34bb0352ededce518fbafa1ff61909801496aa772a",
+    "hash": "d99b2d558c29db7de40933aed49086007eaeb46acf0bb890f07ce1da169a6b1d"
+   },
+   "relay": "r_3f0a9c2b7d5e1f48",
+   "message": "<110>1 2026-11-17T09:00:09.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.trust-time-reset|fleet.trust-time-reset|3|rt=1794906009123 act=fleet.trust-time-reset outcome=ok suser=operator cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=d99b2d558c29db7de40933aed49086007eaeb46acf0bb890f07ce1da169a6b1d cn1Label=seq cn1=901",
+   "frame": "382 <110>1 2026-11-17T09:00:09.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.trust-time-reset|fleet.trust-time-reset|3|rt=1794906009123 act=fleet.trust-time-reset outcome=ok suser=operator cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=d99b2d558c29db7de40933aed49086007eaeb46acf0bb890f07ce1da169a6b1d cn1Label=seq cn1=901"
+  },
+  {
+   "name": "relay fleet.call",
+   "source": "relays",
+   "include_reasons": false,
+   "entry": {
+    "seq": 902,
+    "ts": 1794906010123,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "console c_0123456789abcdef",
+    "action": "fleet.call",
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "result": "ok",
+    "approval": "sole-admin",
+    "stepup": true,
+    "detail": {
+     "consoleId": "c_0123456789abcdef",
+     "hint": "9f86d081884c7d65",
+     "approverHint": null,
+     "mode": "one",
+     "confirm": null
+    },
+    "prev": "d99b2d558c29db7de40933aed49086007eaeb46acf0bb890f07ce1da169a6b1d",
+    "hash": "15dfdc2aa073be84ea11b703f2d1cf90588c9718a8f24c972f55cc49fa14e018"
+   },
+   "relay": "r_3f0a9c2b7d5e1f48",
+   "message": "<110>1 2026-11-17T09:00:10.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|3|rt=1794906010123 act=fleet.call outcome=ok suser=alice@acme.example src=console c_0123456789abcdef cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs3Label=approval cs3=sole-admin cs4Label=chain cs4=15dfdc2aa073be84ea11b703f2d1cf90588c9718a8f24c972f55cc49fa14e018 cn1Label=seq cn1=902",
+   "frame": "475 <110>1 2026-11-17T09:00:10.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|3|rt=1794906010123 act=fleet.call outcome=ok suser=alice@acme.example src=console c_0123456789abcdef cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs3Label=approval cs3=sole-admin cs4Label=chain cs4=15dfdc2aa073be84ea11b703f2d1cf90588c9718a8f24c972f55cc49fa14e018 cn1Label=seq cn1=902"
+  },
+  {
+   "name": "relay fleet.local",
+   "source": "relays",
+   "include_reasons": false,
+   "entry": {
+    "seq": 903,
+    "ts": 1794906011123,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "fleet.local",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "command": "refuse-key",
+     "id": "lc_0123456789abcdef",
+     "result": "ok"
+    },
+    "prev": "15dfdc2aa073be84ea11b703f2d1cf90588c9718a8f24c972f55cc49fa14e018",
+    "hash": "b706793e7581c989257d7df966269416b53f29382e835fd7cb55bc407d7db1f9"
+   },
+   "relay": "r_3f0a9c2b7d5e1f48",
+   "message": "<110>1 2026-11-17T09:00:11.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.local|fleet.local|3|rt=1794906011123 act=fleet.local outcome=ok suser=relay cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=b706793e7581c989257d7df966269416b53f29382e835fd7cb55bc407d7db1f9 cn1Label=seq cn1=903",
+   "frame": "346 <110>1 2026-11-17T09:00:11.123Z console.acme.example lucid-console - relay - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.local|fleet.local|3|rt=1794906011123 act=fleet.local outcome=ok suser=relay cs2Label=relay cs2=r_3f0a9c2b7d5e1f48 cs4Label=chain cs4=b706793e7581c989257d7df966269416b53f29382e835fd7cb55bc407d7db1f9 cn1Label=seq cn1=903"
+  },
+  {
+   "name": "security fleet.replaced",
+   "source": "security",
+   "include_reasons": false,
+   "entry": {
+    "ts": 1794906012123,
+    "level": "warn",
+    "event": "fleet.replaced",
+    "ip": "198.51.100.20",
+    "code": null
+   },
+   "relay": null,
+   "message": "<108>1 2026-11-17T09:00:12.123Z console.acme.example lucid-console - security - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.replaced|fleet.replaced|6|rt=1794906012123 act=fleet.replaced outcome=warn src=198.51.100.20 cs2Label=relay cs2=console",
+   "frame": "250 <108>1 2026-11-17T09:00:12.123Z console.acme.example lucid-console - security - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.replaced|fleet.replaced|6|rt=1794906012123 act=fleet.replaced outcome=warn src=198.51.100.20 cs2Label=relay cs2=console"
+  },
+  {
+   "name": "security fleet.counter",
+   "source": "security",
+   "include_reasons": false,
+   "entry": {
+    "ts": 1794906013123,
+    "level": "error",
+    "event": "fleet.counter",
+    "ip": null,
+    "code": "fleet-counter"
+   },
+   "relay": null,
+   "message": "<107>1 2026-11-17T09:00:13.123Z console.acme.example lucid-console - security - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.counter|fleet.counter|8|rt=1794906013123 act=fleet.counter outcome=error cs2Label=relay cs2=console cs5Label=code cs5=fleet-counter",
+   "frame": "262 <107>1 2026-11-17T09:00:13.123Z console.acme.example lucid-console - security - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.counter|fleet.counter|8|rt=1794906013123 act=fleet.counter outcome=error cs2Label=relay cs2=console cs5Label=code cs5=fleet-counter"
+  }
+ ],
+ "escape": [
+  {
+   "where": "header",
+   "in": "a|b",
+   "out": "a\\|b"
+  },
+  {
+   "where": "header",
+   "in": "a\\b",
+   "out": "a\\\\b"
+  },
+  {
+   "where": "header",
+   "in": "a=b",
+   "out": "a=b"
+  },
+  {
+   "where": "header",
+   "in": "a\\|b",
+   "out": "a\\\\\\|b"
+  },
+  {
+   "where": "extension",
+   "in": "a=b",
+   "out": "a\\=b"
+  },
+  {
+   "where": "extension",
+   "in": "a\\b",
+   "out": "a\\\\b"
+  },
+  {
+   "where": "extension",
+   "in": "a\rb",
+   "out": "a\\rb"
+  },
+  {
+   "where": "extension",
+   "in": "a\nb",
+   "out": "a\\nb"
+  },
+  {
+   "where": "extension",
+   "in": "a|b",
+   "out": "a|b"
+  },
+  {
+   "where": "extension",
+   "in": "x\\=\r\n",
+   "out": "x\\\\\\=\\r\\n"
+  }
+ ],
+ "truncate": [
+  {
+   "in_length": 1022,
+   "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "in_length": 1023,
+   "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+   "in_length": 1024,
+   "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..."
+  },
+  {
+   "in_length": 1500,
+   "in": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..."
+  }
+ ]
+}

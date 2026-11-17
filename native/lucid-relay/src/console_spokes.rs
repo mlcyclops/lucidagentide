@@ -433,7 +433,7 @@ const PRODUCT_WORDS: &str = "Remote Spokes";
 /// The 4.8 routes, each with its role (L1): user managers read nodes with emails and seats, and nothing else is
 /// theirs (every write is an admin's, R4-8). GETs check the license themselves: the section reads in every state but
 /// none (expired is read-only, 2.4); block, unblock and CRL are security actions that work in every state.
-static ROUTES: [RouteSpec; 7] = [
+pub static ROUTES: [RouteSpec; 7] = [
     RouteSpec { method: "GET", path: "spokes/nodes", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "GET", path: "spokes/seats", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "GET", path: "spokes/relays", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
@@ -442,6 +442,20 @@ static ROUTES: [RouteSpec; 7] = [
     RouteSpec { method: "POST", path: "spokes/block", role: Role::Admin, action: "spokes.block", target: "node", stepup: true, need: Need::Any, security: true, keys: &["node", "hours", "reason"], body_max: 4096 },
     RouteSpec { method: "POST", path: "spokes/unblock", role: Role::Admin, action: "spokes.unblock", target: "node", stepup: true, need: Need::Any, security: true, keys: &["node", "reason"], body_max: 4096 },
 ];
+
+/// AC-2a 4.11: the aggregate route served only through the fleet proxy (`read-health`). Not in ROUTES, so the relay's
+/// own console answers 404; fleet_exec takes this spec and calls `route` with it.
+pub static FLEET_ROUTES: [RouteSpec; 1] = [RouteSpec { method: "GET", path: "spokes/counts", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 }];
+
+/// AC-2a 8.2 `nodes` of a Remote Spokes relay row, from its latest `spokes/counts` answer: counts only, or None when
+/// the answer is not one.
+pub fn nodes_summary(counts: &Value) -> Option<Value> {
+    let n = |group: &str, k: &str| counts.get(group)?.get(k)?.as_u64();
+    Some(json!({
+        "hubs": n("hubs", "total")?, "hubsOnline": n("hubs", "online")?,
+        "spokes": n("spokes", "total")?, "spokesOnline": n("spokes", "online")?, "spokesSilent": n("spokes", "silent")?,
+    }))
+}
 
 const SECURITY_ACTIONS: [&str; 3] = ["spokes.block", "spokes.unblock", "spokes.crl"];
 const PAGES: [&str; 7] = ["hubs", "spokes", "relays", "seats", "license", "logs", "requests"];
@@ -702,6 +716,10 @@ impl ProductSection for SpokesSection {
                 Self::read_needs_license(call)?;
                 filters(call.query, &[])?;
                 Ok(SectionAnswer::Read(self.with(|st| st.spokes_relays())?))
+            }
+            ("GET", "spokes/counts") => {
+                filters(call.query, &[])?;
+                Ok(SectionAnswer::Read(self.with(|st| st.spokes_counts(call.t))?))
             }
             ("POST", "spokes/crl") => self.upload(call, "crl"),
             ("POST", "spokes/directory") => self.upload(call, "directory"),

@@ -19,6 +19,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// AC-2a 4.11 and 9.1 (`Hub::fleet_counts`): the relay's people, devices and calls, as counts for `meet/counts`.
+#[derive(Clone, Debug, Default)]
+pub struct FleetCounts {
+    /// Every principal the relay holds (directory) or sees online.
+    pub principals: Vec<String>,
+    /// The principals online now.
+    pub online: HashSet<String>,
+    /// Every (principal, device) known or online.
+    pub devices: Vec<(String, String)>,
+    pub devices_online: usize,
+    pub revoked: usize,
+    /// Rooms with 2 or more participants.
+    pub calls_active: usize,
+    pub participants: usize,
+    pub enrollments_waiting: usize,
+}
+
 // Scheduled meetings and conversations (channels, group chats, threads, pins, search): child modules, so they share
 // the hub's one lock and its private state.
 #[path = "meet_meetings.rs"]
@@ -2439,6 +2456,8 @@ impl Hub {
         }
         st.room_log(&room, &mut line);
         st.broadcast(&room, &line, None);
+        // AC-2a 9.2: one chat message relayed.
+        crate::fleet_probe::counters().message(1);
         if !mentioned.is_empty() {
             let event = obj([
                 ("type", Value::from("mention")),
@@ -3871,6 +3890,52 @@ impl Hub {
         !s.is_empty() && self.st.lock().denied.contains_key(&s)
     }
 
+    /// AC-2a 4.11 `meet/counts` and 9.1: what this relay holds, as counts and the principals and devices to count with
+    /// the console's blocks and seats. People are the directory's principals and everyone online (never the console,
+    /// guests, connectors or services); devices those of admin_devices.
+    pub fn fleet_counts(&self) -> FleetCounts {
+        let st = self.st.lock();
+        let person = |w: &Identity| !(w.is_console() || w.guest || w.connector || w.is_service());
+        let mut devices: HashSet<(String, String)> = HashSet::new();
+        let mut online_devices: HashSet<(String, String)> = HashSet::new();
+        for w in st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)) {
+            if !w.device.is_empty() && person(w) {
+                online_devices.insert((w.principal.clone(), w.device.clone()));
+            }
+        }
+        let mut revoked = 0;
+        for (principal, entry) in &st.directory {
+            let Some(list) = entry.as_object().and_then(|e| e.get("devices")).and_then(Value::as_object) else { continue };
+            for (device, info) in list {
+                let Some(info) = info.as_object() else { continue };
+                devices.insert((principal.clone(), device.clone()));
+                let serial = m::serial_of(info.get("serial"));
+                revoked += usize::from(!serial.is_empty() && st.denied.contains_key(&serial));
+            }
+        }
+        devices.extend(online_devices.iter().cloned());
+        let online: HashSet<String> = st.online().into_keys().collect();
+        let mut principals: HashSet<String> = st.directory.keys().cloned().collect();
+        principals.extend(online.iter().cloned());
+        let mut rooms: HashMap<&str, usize> = HashMap::new();
+        for p in st.peers.values().filter(|p| !p.who.is_console()) {
+            *rooms.entry(p.room.as_str()).or_default() += 1;
+        }
+        let waiting = st.enrollments.values().filter_map(Value::as_object).filter(|r| pj::text_of(r, "state") == "waiting").count()
+            + st.seed_requests.len()
+            + st.renewals.values().filter_map(Value::as_object).filter(|r| pj::truthy(r.get("needs_admin"))).count();
+        FleetCounts {
+            principals: principals.into_iter().collect(),
+            online,
+            devices: devices.into_iter().collect(),
+            devices_online: online_devices.len(),
+            revoked,
+            calls_active: rooms.values().filter(|n| **n >= 2).count(),
+            participants: rooms.values().sum(),
+            enrollments_waiting: waiting,
+        }
+    }
+
     // ── AC-1: the Admin Console's hooks (contract 3.2, 3.8, 4.9) ─────────────────────────────────────────────
 
     /// check_console_admin (I8): the same rule as check_admin (the principal is in relay.json `admins`) without a
@@ -5107,5 +5172,26 @@ mod tests {
         let text = pj::dumps(&lines_value(&h.st.lock().rooms));
         assert!(!text.contains("first draft") && !text.contains("final words"));
         assert_eq!(refusal(h.say(&b, &ben, "x", Some(&json!(id)), None, None)), "400 that message was deleted");
+    }
+
+    /// AC-2a 16.1 f-relay: the `messages` counter moves with a relayed chat message (and not with a refused one), and
+    /// `fleet_counts` sees the call.
+    #[test]
+    fn ac2a_a_chat_message_moves_the_messages_counter_and_the_call_is_counted() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let counters = crate::fleet_probe::counters();
+        let before = counters.messages_total();
+        assert!(h.say(&a, &ann, "hi", None, None, None).is_err(), "a refused line is no message");
+        h.st.lock().peers.get_mut(&b).unwrap().who.guest = true;
+        h.say(&a, &ann, "hi", None, None, None).unwrap();
+        // other tests run at once and may add more; this one added at least its one line
+        assert!(counters.messages_total() > before);
+        let c = h.fleet_counts();
+        assert_eq!((c.calls_active, c.participants), (1, 2));
+        assert!(c.online.contains("ann@x"));
     }
 }

@@ -476,6 +476,63 @@ struct Presence {
     rooms: Vec<Value>,
 }
 
+/// AC-2a 9.2: how often the participants are sampled into `call_minutes`.
+pub const SAMPLE_SECONDS: u64 = 10;
+
+/// AC-2a 9.2: one participant sample (the people in rooms now, never the console), handed to the metrics counters.
+/// The number sampled.
+pub fn sample_participants(relay: &Relay) -> u64 {
+    let n = relay.hub.fleet_counts().participants as u64;
+    crate::fleet_probe::counters().participants_sample(n);
+    n
+}
+
+/// AC-2a 9.2: the participant sampler, every SAMPLE_SECONDS for as long as the relay lives.
+pub fn start_sampler(relay: std::sync::Weak<Relay>) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("meet-participants".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(SAMPLE_SECONDS));
+            let Some(r) = relay.upgrade() else { return };
+            sample_participants(&r);
+        })
+        .map(|_| ())
+        .map_err(|e| format!("the participant sampler did not start: {e}"))
+}
+
+/// AC-2a 9.1: the Meeting Hub product values of the metrics snapshot (fleet_probe merges the OS readings and the
+/// interval counters). A key this relay cannot measure is null.
+pub fn fleet_metrics(relay: &Relay) -> serde_json::Map<String, Value> {
+    use crate::license::{license_state, LicenseStateName, Product};
+    let c = relay.hub.fleet_counts();
+    let gate = relay.hub.gate();
+    let now = pj::now() as i64;
+    let lic = gate.as_ref().and_then(|g| g.license()).map(|(l, _)| l);
+    let state = lic.as_ref().map(|l| (l.product(), license_state(l, now)));
+    let code = match state {
+        None => 0,
+        Some((p, _)) if p != Product::Meet => 4,
+        Some((_, (LicenseStateName::Valid, _))) => 1,
+        Some((_, (LicenseStateName::Grace, _))) => 2,
+        Some(_) => 3,
+    };
+    let seats = gate.as_ref().map(|g| g.seat_counts());
+    let adding = gate.as_ref().map(|g| u8::from(g.adding() != crate::meet_license::Adding::Closed));
+    let signer_days = Console::signer_headline(relay).get("days_left").and_then(Value::as_i64);
+    let mut m = serde_json::Map::new();
+    m.insert("people_online".into(), Value::from(c.online.len()));
+    m.insert("devices_online".into(), Value::from(c.devices_online));
+    m.insert("calls_active".into(), Value::from(c.calls_active));
+    m.insert("participants".into(), Value::from(c.participants));
+    m.insert("seats_used".into(), seats.map_or(Value::Null, |s| Value::from(s.0)));
+    m.insert("seats_total".into(), seats.map_or(Value::Null, |s| Value::from(s.1)));
+    m.insert("license_state".into(), Value::from(code));
+    m.insert("license_days".into(), state.map_or(Value::Null, |(_, (_, d))| Value::from(d)));
+    m.insert("adding_open".into(), adding.map_or(Value::Null, Value::from));
+    m.insert("cert_signer_days".into(), signer_days.map_or(Value::Null, Value::from));
+    m
+}
+
 impl Console {
     pub fn new(settings: &Settings, links: Arc<LinkStats>) -> Result<Console, String> {
         let power = if settings.files_power.is_empty() { None } else { Some(FilesPower::new(&settings.files_power)?) };

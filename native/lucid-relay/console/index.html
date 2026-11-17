@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/console/app.css">
 <script src="/console/theme.js"></script>
 <script src="/console/qr.js" defer></script>
+<script src="/console/charts.js" defer></script>
 <script src="/console/app.js" defer></script>
 </head>
 <body>
@@ -18,7 +19,7 @@
 <header class="top">
   <button type="button" class="menu-btn-only" id="menu-btn" data-act="nav-open" aria-haspopup="dialog" aria-controls="nav-sheet" hidden>Menu</button>
   <h1 class="brand" aria-label="LUCID Admin Console"><span class="lucid-word">LUCID</span><span class="frame-pi" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" focusable="false"><path d="M5 8h14"/><path d="M9 8v9"/><path d="M16 8v7a2 2 0 0 0 2 2"/></svg></span><span class="frame-sub">Admin Console</span></h1>
-  <span class="where"><bdi class="host" id="hdr-host"></bdi><span class="chip" id="hdr-product" hidden></span><span class="chip" id="hdr-profile" hidden></span></span>
+  <span class="where"><bdi class="host" id="hdr-host"></bdi><span class="chip" id="hdr-product" hidden></span><span class="chip" id="hdr-count" hidden></span><span class="chip" id="hdr-profile" hidden></span></span>
   <div class="searchbox" role="search" id="hdr-search" hidden>
     <label class="vh" for="search">Search</label>
     <input id="search" type="search" autocomplete="off" spellcheck="false" maxlength="100" aria-controls="search-results" aria-describedby="search-hint">

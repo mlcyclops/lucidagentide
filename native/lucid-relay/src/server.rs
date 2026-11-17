@@ -4,7 +4,8 @@
 // (CONN_LIMITS: one past the cap is dropped unread) and a TLS handshake has its own deadline.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
-use crate::console::{ConsoleReply, ConsoleRequest, ACTIVITY_HEADER, MARKER_HEADER};
+use crate::console::{Console, ConsoleReply, ConsoleRequest, ACTIVITY_HEADER, MARKER_HEADER};
+use std::path::{Path, PathBuf};
 use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
 use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
@@ -345,6 +346,181 @@ pub async fn tls_within(acceptor: &TlsAcceptor, stream: TcpStream, limit: Durati
     tokio::time::timeout(limit, acceptor.accept(stream)).await.ok()?.ok()
 }
 
+// ── AC-2a: the Lucid Admin Console link of a relay (2.1, 2.2, 5.7) ──────────────────────────────────────────────
+
+/// 2.4: held by a running relay for its whole life, so the offline `fleet` commands refuse while it runs.
+pub const FLEET_LOCK: &str = "fleet.lock";
+/// 13.4 `cli.fleet-running`.
+pub const CLI_FLEET_RUNNING: &str = "Stop the relay first, or use its Admin Console.";
+/// 13.4 `cli.with-console-both`.
+pub const CLI_WITH_CONSOLE_BOTH: &str = "A relay that runs the console role does not also run its own console: drop --console or console_port.";
+/// 13.4 `cli.with-console-high`.
+pub const CLI_WITH_CONSOLE_HIGH: &str = "Under the High profile the console and the relay must run as two services with separate accounts. Drop --with-console or with_console.";
+
+/// An exclusive advisory lock on `fleet.lock`; the operating system lets it go when the process ends.
+pub struct FleetLock {
+    _file: std::fs::File,
+}
+
+#[cfg(unix)]
+mod flock {
+    use std::os::raw::c_int;
+    extern "C" {
+        pub fn flock(fd: c_int, operation: c_int) -> c_int;
+    }
+    pub const LOCK_EX: c_int = 2;
+    pub const LOCK_NB: c_int = 4;
+}
+
+/// Take `fleet.lock` in `dir` (creating the folder), or say why not: CLI_FLEET_RUNNING while another process holds it.
+pub fn fleet_lock(dir: &Path) -> Result<FleetLock, String> {
+    let _ = crate::store::make_dir(dir);
+    let path = dir.join(FLEET_LOCK);
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // No sharing: a second open, by any process, fails while this handle lives.
+        o.share_mode(0);
+    }
+    let file = match o.open(&path) {
+        Ok(f) => f,
+        Err(e) if e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33) => return Err(CLI_FLEET_RUNNING.into()),
+        Err(e) => return Err(format!("cannot open {}: {e}", path.display())),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: flock on a file descriptor this function owns; no memory is shared with the call.
+        let r = unsafe { flock::flock(file.as_raw_fd(), flock::LOCK_EX | flock::LOCK_NB) };
+        if r != 0 {
+            return Err(CLI_FLEET_RUNNING.into());
+        }
+    }
+    Ok(FleetLock { _file: file })
+}
+
+/// 2.2 start checks, before anything is opened: `with_console` (the console role in this process) is refused under
+/// High; under High the state folder must be open only to this service's account and the administrators (F18).
+pub fn high_start_checks(state_dir: Option<&Path>, high: bool, with_console: bool) -> Result<(), String> {
+    if !high {
+        return Ok(());
+    }
+    if with_console {
+        return Err(CLI_WITH_CONSOLE_HIGH.into());
+    }
+    match state_dir {
+        Some(dir) => crate::console_seal::check_state_acl(dir, crate::console_seal::SealIdentity::Relay),
+        None => Ok(()),
+    }
+}
+
+/// What `fleet_start` needs (main.rs, Remote Spokes).
+pub struct FleetStart {
+    pub state_dir: Option<PathBuf>,
+    /// The relay's own console when `--console 1`.
+    pub console: Option<Arc<Console>>,
+    pub relay: Arc<Relay>,
+    pub logger: Arc<Logger>,
+}
+
+/// The running link: keep it for the process's life (it holds `fleet.lock`, the agent and the headless console).
+pub struct Fleet {
+    _lock: FleetLock,
+    _agent: Option<Arc<crate::fleet_agent::Agent>>,
+    _headless: Option<Arc<Console>>,
+}
+
+/// What a relay of either product opens for the Lucid Admin Console at start (2.1, 5.7, invariant 22): `fleet.lock`
+/// always (with a state folder); then, when enrolled (fleet.json) or holding a handoff, the headless console (unless
+/// its own console is on) and the agent; with only its own console on, the agent for an in-process Join. With none of
+/// these nothing else is opened, written or dialed. `attach` gives the headless console its product section.
+pub struct FleetOpen<'a> {
+    pub product: crate::license::Product,
+    pub state_dir: &'a Path,
+    pub console: Option<Arc<Console>>,
+    pub logger: Arc<Logger>,
+    pub proxy: Option<String>,
+    pub attach: &'a dyn Fn(&Arc<Console>),
+}
+
+/// The pieces `fleet_open` started, and the closures the main ports read (`where`, requests).
+pub struct FleetOpened {
+    pub lock: FleetLock,
+    pub agent: Option<Arc<crate::fleet_agent::Agent>>,
+    pub headless: Option<Arc<Console>>,
+}
+
+pub fn fleet_open(o: FleetOpen) -> Result<FleetOpened, String> {
+    let lock = fleet_lock(o.state_dir)?;
+    let link = crate::fleet_agent::read_link(o.state_dir, &o.logger);
+    let handoff = crate::fleet_agent::has_handoff(o.state_dir);
+    if link.is_none() && !handoff && o.console.is_none() {
+        return Ok(FleetOpened { lock, agent: None, headless: None });
+    }
+    let headless = match &o.console {
+        Some(_) => None,
+        None => {
+            let c = crate::console::open_headless(o.product, o.state_dir, o.logger.clone())?;
+            (o.attach)(&c);
+            Some(c)
+        }
+    };
+    let console = o.console.clone().or_else(|| headless.clone()).ok_or("no console for the fleet agent")?;
+    let cfg = crate::fleet_agent::AgentConfig {
+        product: o.product,
+        state_dir: o.state_dir.to_path_buf(),
+        link,
+        console,
+        logger: o.logger.clone(),
+        proxy: o.proxy,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    };
+    let agent = crate::fleet_agent::start(cfg)?;
+    Ok(FleetOpened { lock, agent: Some(agent), headless })
+}
+
+/// Remote Spokes (main.rs, right after attaching the console's section): `fleet_open`, then the relay's main ports
+/// learn the link (`/v1/console/where`, `/v1/console/requests`, the 3.9 endorsement routes). None without `--state`.
+pub fn fleet_start(cfg: FleetStart) -> Result<Option<Fleet>, String> {
+    let Some(dir) = cfg.state_dir.clone() else { return Ok(None) };
+    let weak = Arc::downgrade(&cfg.relay.state);
+    let attach = move |c: &Arc<Console>| c.attach(crate::console_spokes::section(weak.clone()));
+    let opened = fleet_open(FleetOpen {
+        product: crate::license::Product::Spokes,
+        state_dir: &dir,
+        console: cfg.console.clone(),
+        logger: cfg.logger.clone(),
+        proxy: std::env::var("LUCID_RELAY_FLEET_PROXY").ok().filter(|p| !p.is_empty()),
+        attach: &attach,
+    })?;
+    if let Some(agent) = &opened.agent {
+        let book = cfg.console.clone().or_else(|| opened.headless.clone()).ok_or("no console for the fleet link")?;
+        cfg.relay.state.lock().set_fleet(fleet_link(agent.clone(), book, &dir));
+    }
+    // 9.1: the product values of the metrics snapshot.
+    let weak = Arc::downgrade(&cfg.relay.state);
+    crate::fleet_probe::set_product_source(Box::new(move |t| weak.upgrade().map(|s| s.lock().fleet_metrics(t)).unwrap_or_default()));
+    Ok(Some(Fleet { _lock: opened.lock, _agent: opened.agent, _headless: opened.headless }))
+}
+
+/// The main ports' view of the link: the console origin while linked, the book, the roster's active admins.
+pub fn fleet_link(agent: Arc<crate::fleet_agent::Agent>, book: Arc<Console>, dir: &Path) -> crate::relay::FleetLink {
+    let roster_dir = dir.to_path_buf();
+    crate::relay::FleetLink {
+        managed_by: Box::new(move || agent.managed_by()),
+        book,
+        admins: Box::new(move || crate::fleet_trust::active_admin_emails(&roster_dir)),
+        state_dir: dir.to_path_buf(),
+    }
+}
+
 /// Accept connections until the process stops.
 pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsAcceptor>, limits: ConnLimits) {
     let slots = Arc::new(Semaphore::new(limits.connections));
@@ -365,6 +541,8 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
             let _permit = permit;
+            // AC-2a 9.1 `conn_open`: counted while the connection lives.
+            let _open = crate::fleet_probe::counters().conn_open();
             let svc = service_fn(move |req| {
                 let relay = relay.clone();
                 async move { Ok::<_, Infallible>(handle(relay, req, peer, limits.body).await) }
@@ -388,6 +566,46 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fleet_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lucid-server-fleet-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// AC-2a 16.1 f-relay: a running relay holds `fleet.lock`, so the offline commands (which take it) refuse with
+    /// `cli.fleet-running`; once it stops they run.
+    #[test]
+    fn ac2a_fleet_lock_makes_the_offline_commands_refuse_while_running() {
+        let dir = fleet_dir("lock");
+        let running = fleet_lock(&dir).unwrap();
+        assert_eq!(fleet_lock(&dir).err().as_deref(), Some(CLI_FLEET_RUNNING));
+        drop(running);
+        assert!(fleet_lock(&dir).is_ok());
+    }
+
+    /// AC-2a 16.1 f-relay (invariant 22): a relay that is not enrolled, holds no handoff and runs no console of its
+    /// own starts no agent (no listener, no connection) and writes only `fleet.lock`.
+    #[test]
+    fn ac2a_an_unenrolled_relay_writes_only_fleet_lock() {
+        let dir = fleet_dir("unenrolled");
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let attached = std::sync::atomic::AtomicBool::new(false);
+        let attach = |_: &Arc<Console>| attached.store(true, std::sync::atomic::Ordering::SeqCst);
+        let opened = fleet_open(FleetOpen { product: crate::license::Product::Spokes, state_dir: &dir, console: None, logger, proxy: None, attach: &attach }).unwrap();
+        assert!(opened.agent.is_none() && opened.headless.is_none());
+        assert!(!attached.load(std::sync::atomic::Ordering::SeqCst));
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec![FLEET_LOCK.to_string()]);
+    }
+
+    /// AC-2a 2.2: under High a relay never runs the console role in process.
+    #[test]
+    fn ac2a_high_refuses_with_console() {
+        assert_eq!(high_start_checks(None, true, true).err().as_deref(), Some(CLI_WITH_CONSOLE_HIGH));
+        assert!(high_start_checks(None, false, true).is_ok());
+    }
 
     #[test]
     fn hosts_normalize_as_whatwg_urls_do() {

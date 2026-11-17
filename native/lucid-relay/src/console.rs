@@ -63,8 +63,6 @@ pub const LOG_POST_LINES: usize = 100;
 pub const LOG_POST_BYTES: usize = 64 * 1024;
 pub const LOG_POSTS_PER_MINUTE: usize = 6;
 const PAGE_LINES: usize = 500;
-/// Refusals counted for "quotas hit" (seen through the log tap).
-const QUOTA_EVENTS: [&str; 6] = ["send.rate-limited", "send.quota", "mailbox.full", "store.full", "user.refused", "logs.rate-limited"];
 pub const SOURCE_REFUSED: &str = "The Admin Console is not open to your network. Ask the person who runs this relay to add it to the console's allowed networks.";
 pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'";
 const SECURITY_HEADERS: [(&str, &str); 9] = [
@@ -464,8 +462,74 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
         "method" => (405, "Method not allowed."),
         "too-large" => (413, "Request too large."),
         "json" => (415, "Send JSON."),
+        // AC-2a 13.3 (`<placeholders>` filled by `ApiError::with` where they appear).
+        "setup-needed" => (409, "Finish the first step of setup first."),
+        "setup-code" => (403, "That setup code is not right. It is in setup-code.txt on the console's host."),
+        "setup-done" => (409, "This console is already set up. Sign in instead."),
+        "fleet-code" => (400, "That enrollment code is not complete. Copy it again from the Admin Console."),
+        "fleet-code-expired" => (410, "That enrollment code has ended or was already used. Ask for a new one."),
+        "fleet-product" => (409, "This code is for a <product> relay. Run it on a <product> relay."),
+        "fleet-pin" => (403, "This console's identity does not match the code. Ask the console's admin for a new code."),
+        "fleet-preview-changed" => (409, "The console changed since you checked it. Run the command again."),
+        "fleet-profile" => (409, "This console and this relay are not in the same security profile. A High relay works only with a High console, and a High console only with High relays in FIPS mode."),
+        "fleet-limit" => (409, "This console already manages 200 relays."),
+        "enroll-limit" => (429, "Too many open enrollment codes. Use or cancel one first."),
+        "fingerprint" => (409, "That fingerprint does not match this relay. Do not confirm it."),
+        "fleet-scope" => (403, "This relay did not give the Admin Console the <scope> scope."),
+        "fleet-scope-required" => (409, "Health and status is always given."),
+        "fleet-scope-unknown" => (400, "This relay does not know the scope <scope> yet."),
+        "fleet-route" => (404, "This page is not available through the Admin Console."),
+        "fleet-read-only" => (403, "This relay is set to read only from the Admin Console. Its operator can change that on the relay."),
+        "fleet-confirm" => (202, "This relay's operator confirms this change on the relay. It runs when they do."),
+        "fleet-stepup" => (403, "The relay could not verify your confirmation. Try again."),
+        "fleet-counter" => (403, "The relay saw this security key go backwards and refused it. Tell your security team."),
+        "fleet-roster" => (403, "This relay does not know your key yet. An admin must confirm new keys first."),
+        "fleet-webauthn" => (403, "Changes on relays need a passkey or security key. Add one in Your account."),
+        "fleet-second" => (409, "This change needs a second admin. Ask another admin to approve it in the Admin Console."),
+        "fleet-op" => (400, "The relay did not understand the console. Check that both run supported versions."),
+        "fleet-bootstrap" => (409, "This relay does not trust any admin key yet. Admins endorse their keys from the IDE plugin or the Hub app."),
+        "fleet-roster-duplicate" => (409, "Two admin entries use the same key. The relay trusts none of them."),
+        "endorse-refused" => (403, "The relay did not accept this endorsement: <why>."),
+        "fleet-not-bootstrapping" => (409, "This relay is not waiting for admin keys."),
+        "recovery-refused" => (403, "This relay cannot replace its certificate this way. Enroll it again with a Replace code."),
+        "trust-time-refused" => (409, "The time was not reset: the console did not send a newer trust list, signed by its CA and dated within 10 minutes of this host's clock."),
+        "fleet-scope-needs-people" => (409, "Logs and audit name people, so they need the People scope too."),
+        "relay-offline" => (503, "<relay> is not connected right now."),
+        "relay-timeout" => (504, "<relay> did not answer in time."),
+        "relay-busy" => (429, "<relay> is busy. Try again in a moment."),
+        "relay-unconfirmed" => (409, "Confirm <relay> before making changes on it."),
+        "csv-invalid" => (400, "That file is not a CSV with the columns email, name, product, role, relay and days."),
+        "csv-limit" => (413, "A CSV can have at most 500 rows and 256 KiB."),
+        "csv-changed" => (409, "The list changed since it was checked. Check it again."),
+        "request-limit" => (409, "That relay already has 200 waiting requests."),
+        "token-limit" => (409, "This console already has 10 scrape tokens. Revoke one first."),
+        "siem-failed" => (502, "The test message did not reach the SIEM: <why>. Nothing was changed."),
+        "siem-ca-needed" => (409, "The High profile needs the SIEM's certificate authority. Paste its PEM."),
+        "fips-needed" => (409, "The High profile needs the FIPS build for this."),
+        "rate-limited" => (429, "Too many requests. Try again in 1 minute."),
         _ => return None,
     })
+}
+
+/// Every code of the refusal table (AC-1 8.3 and AC-2a 13.3), for codes that arrive as text (a relay's answer).
+const CODES: [&str; 117] = [
+    "signin-first", "signin-refused", "signin-wait", "banner-needed", "password-length", "password-weak", "password-wrong", "totp-wrong", "profile-high", "not-manageable",
+    "invite-role", "last-method", "seat-protected", "not-over", "mail-off", "mail-secret-high", "mail-failed", "mds-refused", "break-glass-needed", "seal-provider-needed",
+    "bad-mailbox", "clock-disagree", "license-inactive", "no-seat", "waiting", "suspended", "anchor-revoked", "role", "stepup-needed", "stepup-expired",
+    "stepup-failed", "not-eligible", "no-approver", "gone", "approval-exists", "request-exists", "exists", "not-waiting", "not-relay-admin", "not-device-anchored",
+    "last-admin", "passkey-limit", "invite-limit", "people-limit", "joiner-limit", "bootstrap-pinned", "bad-url", "license-refused", "license-ended", "license-path",
+    "license-needed", "license-expired", "crl-refused", "directory-refused", "not-found", "rate", "source", "origin", "origin-session", "stale",
+    "unknown-field", "audit-broken", "state-unreadable", "write-failed", "invalid", "host", "method", "too-large", "json", "setup-needed",
+    "setup-code", "setup-done", "fleet-code", "fleet-code-expired", "fleet-product", "fleet-pin", "fleet-preview-changed", "fleet-profile", "fleet-limit", "enroll-limit",
+    "fingerprint", "fleet-scope", "fleet-scope-required", "fleet-scope-unknown", "fleet-route", "fleet-read-only", "fleet-confirm", "fleet-stepup", "fleet-counter", "fleet-roster",
+    "fleet-webauthn", "fleet-second", "fleet-op", "fleet-bootstrap", "fleet-roster-duplicate", "endorse-refused", "fleet-not-bootstrapping", "recovery-refused", "trust-time-refused", "fleet-scope-needs-people",
+    "relay-offline", "relay-timeout", "relay-busy", "relay-unconfirmed", "csv-invalid", "csv-limit", "csv-changed", "request-limit", "token-limit", "siem-failed",
+    "siem-ca-needed", "fips-needed", "rate-limited", "csv-email", "csv-role", "csv-relay", "scope",
+];
+
+/// The static code for a code that arrives as text (a relay's answer, 5.1); None for a code not in the table.
+pub fn code_words_static(code: &str) -> Option<&'static str> {
+    CODES.iter().copied().find(|c| *c == code)
 }
 
 impl ApiError {
@@ -571,7 +635,10 @@ impl LineRing {
 
     fn push(&self, cat: &str, level: Level, event: &str, json: &str) {
         let mut r = self.0.lock();
-        if QUOTA_EVENTS.contains(&event) {
+        // Refusals counted for "quotas hit" (seen through the log tap).
+        if crate::fleet_probe::QUOTA_EVENTS.contains(&event) {
+            // AC-2a 9.1 `quota_hits` (F9).
+            crate::fleet_probe::counters().quota_hit();
             *r.hits.entry(event.to_owned()).or_insert(0) += 1;
             let now = crate::codec::now_ms();
             r.hits_at.push_back(now);
@@ -759,6 +826,19 @@ pub struct Console {
     pub(crate) seal: Mutex<Option<Seal>>,
     pub(crate) mailer: Arc<Mailer>,
     _lock: StateLock,
+    /// AC-2a 2.1 (F7): a relay's own console, or the fleet console of the console role.
+    kind: ConsoleKind,
+    /// AC-2a 2.1: an enrolled relay's console with no listener (its book, audit chain and `fleet-key`).
+    headless: bool,
+    /// AC-2a: the fleet section of a fleet console.
+    fleet: OnceLock<Arc<crate::console_fleet::Fleet>>,
+}
+
+/// What a console serves (AC-2a 2.1, F7): one product's relay (AC-1), or the fleet of the console role.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConsoleKind {
+    Local(Product),
+    Fleet,
 }
 
 /// The Remote Spokes flags of the console (each also `LUCID_RELAY_CONSOLE_<NAME>`).
@@ -814,11 +894,67 @@ pub fn open(flags: SpokesFlags, env: impl Fn(&str) -> Option<String>, state: Opt
     Ok((logger, Some(console)))
 }
 
+/// AC-2a 2.1 (F7): the headless console of an enrolled relay whose own console is off: no listener and no people,
+/// its book holding the requests the fleet creates, its audit chain every console request, its `Seal` the relay's
+/// `fleet-key`. It takes `console.lock` like any console.
+pub fn open_headless(product: Product, state_dir: &std::path::Path, logger: Arc<Logger>) -> Result<Arc<Console>, String> {
+    let cfg = ConsoleConfig { product, state_dir: state_dir.to_path_buf(), origin: None, sources: Vec::new(), trusted_fronts: Vec::new(), behind_front: false, first_admin: None, profile: None, host: String::new() };
+    Console::open_with(cfg, logger, Arc::new(LineRing::default()), ConsoleKind::Local(product), true, crate::console_seal::SealIdentity::Relay)
+}
+
+/// AC-2a 2.1 and 5.2 (F7): the fleet console of the console role (`console serve`, or all-in-one with
+/// `seal_id` the relay's): the logger tapped for the console's ring and its security lines for the SIEM (10.2), the
+/// console, and its fleet section attached.
+pub fn open_fleet(cfg: crate::console_fleet::ServeConfig, logger: Logger, seal_id: crate::console_seal::SealIdentity) -> Result<(Arc<Logger>, Arc<Console>), String> {
+    let ring = Arc::new(LineRing::default());
+    let fleet_cell: Arc<OnceLock<std::sync::Weak<crate::console_fleet::Fleet>>> = Arc::new(OnceLock::new());
+    let tap: Tap = {
+        let (ring, cell) = (ring.clone(), fleet_cell.clone());
+        Arc::new(move |cat: &str, level: Level, event: &str, json: &str| {
+            ring.push(cat, level, event, json);
+            if cat == "security" {
+                if let Some(f) = cell.get().and_then(std::sync::Weak::upgrade) {
+                    if let Some(Value::Object(m)) = parse_json(json) {
+                        f.siem.security_line(&m);
+                    }
+                }
+            }
+        })
+    };
+    let logger = Arc::new(logger.with_tap(tap));
+    for f in cfg.trusted_fronts.iter().filter(|f| f.wide()) {
+        let words = format!("a trusted front range of {f} lets every host in it name the client; list only the front's addresses");
+        logger.security("console.fronts-wide", &Fields::new().with("range", f.to_string()).with("why", words), Level::Warn);
+    }
+    let ccfg = ConsoleConfig {
+        product: Product::Spokes,
+        state_dir: cfg.state.clone(),
+        origin: Some(format!("https://{}", cfg.public)),
+        sources: cfg.sources.clone(),
+        trusted_fronts: cfg.trusted_fronts.clone(),
+        behind_front: cfg.tls.is_none(),
+        first_admin: cfg.first_admin.clone(),
+        profile: cfg.profile,
+        host: cfg.public_host.clone(),
+    };
+    let console = Console::open_with(ccfg, logger.clone(), ring, ConsoleKind::Fleet, false, seal_id)?;
+    let fleet = crate::console_fleet::Fleet::open(&console, cfg.fleet.clone())?;
+    let _ = fleet_cell.set(Arc::downgrade(&fleet));
+    Ok((logger, console))
+}
+
 impl Console {
     /// The console in `cfg.state_dir`: takes `console.lock` for the process's life, reads the book (a book that does not
     /// read back makes every console route answer 503, never a refused start), refuses to start while not bootstrapped
     /// without the first-admin pin, verifies the audit, and appends what offline commands left.
     pub fn open(cfg: ConsoleConfig, logger: Arc<Logger>, ring: Arc<LineRing>) -> Result<Arc<Console>, String> {
+        let kind = ConsoleKind::Local(cfg.product);
+        Console::open_with(cfg, logger, ring, kind, false, crate::console_seal::SealIdentity::Relay)
+    }
+
+    /// `open` for a console kind (AC-2a 2.1, F7): a fleet console needs no first-admin pin (its setup code is the
+    /// gate, 12.1) and seals under the console role's identity; a headless console has no people and no listener.
+    pub fn open_with(cfg: ConsoleConfig, logger: Arc<Logger>, ring: Arc<LineRing>, kind: ConsoleKind, headless: bool, seal_id: crate::console_seal::SealIdentity) -> Result<Arc<Console>, String> {
         let lock = lock_state(&cfg.state_dir).map_err(|e| if e == crate::console_auth::RUNNING { format!("another relay process holds {} in {}", crate::console_auth::LOCK_FILE, cfg.state_dir.display()) } else { e })?;
         let t = crate::codec::now_ms();
         let file = cfg.state_dir.join(CONSOLE_FILE);
@@ -829,7 +965,11 @@ impl Console {
                 (Book::default(), true)
             }
         };
-        if !unreadable && !book.bootstrapped && book.first_admin.is_none() && cfg.first_admin.is_none() {
+        if kind == ConsoleKind::Fleet && !unreadable && book.fleet.is_null() {
+            // Marks the book as a fleet console's from its first start (the fleet section fills it in).
+            book.fleet = json!({});
+        }
+        if kind != ConsoleKind::Fleet && !headless && !unreadable && !book.bootstrapped && book.first_admin.is_none() && cfg.first_admin.is_none() {
             return Err(match cfg.product {
                 Product::Spokes => "the console needs --console-first-admin <email> until its first admin signs in".into(),
                 Product::Meet => "set console_first_admin to the relay admin who signs in first".into(),
@@ -850,7 +990,7 @@ impl Console {
         // Sealed secrets (3.11): an unreadable file answers 503 like the book; a data key that does not unwrap is
         // `seal-lost`: a new decoy key, mail off, every authenticator app unusable.
         let high = book.settings.high();
-        let seal = match Seal::open(&cfg.state_dir, &|k| std::env::var(k).ok(), high) {
+        let seal = match Seal::open_as(&cfg.state_dir, &|k| std::env::var(k).ok(), high, seal_id) {
             Ok(s) => Some(s),
             Err(e) => {
                 logger.ops("console.state-unreadable", &Fields::new().with("file", crate::console_seal::SECRETS_FILE).with("reason", e), Level::Error);
@@ -880,8 +1020,15 @@ impl Console {
             seal: Mutex::new(seal),
             mailer,
             _lock: lock,
+            kind,
+            headless,
+            fleet: OnceLock::new(),
         });
         c.open_secrets(t);
+        // AC-2a 12.1: a fleet console not yet bootstrapped draws its setup code at every start.
+        if kind == ConsoleKind::Fleet {
+            c.draw_setup_code("start", t)?;
+        }
         for e in pending {
             let mut r = Record::new("operator", str_of(e.get("action")).unwrap_or("operator"), "ok");
             r.target = str_of(e.get("target")).map(str::to_owned);
@@ -985,6 +1132,10 @@ impl Console {
         for e in &due {
             self.ship(e);
         }
+        // AC-2a: the fleet's minute (expiry, summaries, roster, counts).
+        if let Some(f) = self.fleet() {
+            f.tick(self, t);
+        }
         if self.mailer.config().mode == Mode::Off {
             return;
         }
@@ -1018,6 +1169,51 @@ impl Console {
 
     pub(crate) fn section(&self) -> Option<Arc<dyn ProductSection>> {
         self.section.get().cloned()
+    }
+
+    /// AC-2a 2.1 (F7).
+    pub fn kind(&self) -> ConsoleKind {
+        self.kind
+    }
+
+    pub fn is_fleet(&self) -> bool {
+        self.kind == ConsoleKind::Fleet
+    }
+
+    /// The `product` of `me` and `overview`: "spokes", "meet", or "fleet" (5.3).
+    pub(crate) fn product_word(&self) -> &'static str {
+        if self.is_fleet() {
+            "fleet"
+        } else {
+            self.cfg.product.as_str()
+        }
+    }
+
+    /// An enrolled relay's console with no listener (2.1).
+    pub fn is_headless(&self) -> bool {
+        self.headless
+    }
+
+    /// The fleet section of a fleet console (F7, F15).
+    pub fn fleet(&self) -> Option<Arc<crate::console_fleet::Fleet>> {
+        self.fleet.get().cloned()
+    }
+
+    /// Attach the fleet section: as `fleet()` and as the console's product section (I9).
+    pub(crate) fn attach_fleet(&self, fleet: Arc<crate::console_fleet::Fleet>) {
+        let _ = self.fleet.set(fleet.clone());
+        let section: Arc<dyn ProductSection> = fleet;
+        let _ = self.section.set(section);
+    }
+
+    /// Whether the console's profile is High (f-people's non-dumpable start check, F7).
+    pub fn high_profile(&self) -> bool {
+        self.profile_high()
+    }
+
+    /// A refusal naming the relay it came from (5.1: `{"ok": false, "code", "error", "relay"}`).
+    pub(crate) fn with_relay(&self, e: ApiError, relay: &str) -> ApiError {
+        self.with_extra(e, "relay", Value::from(relay))
     }
 
     pub fn is_meet(&self) -> bool {
@@ -1073,6 +1269,10 @@ impl Console {
         drop(audit);
         for e in summaries.iter().chain(written.as_ref().ok()) {
             self.ship(e);
+            // AC-2a 10.2: a fleet console forwards its own entries to the SIEM (allow-listed fields only, f-metrics).
+            if let (Some(f), Some(m)) = (self.fleet.get(), e.as_object()) {
+                f.siem.console_entry(m);
+            }
         }
         if let Err(e) = written {
             self.logger.ops("console.audit-failed", &Fields::new().with("reason", e).with("action", r.action.as_str()), Level::Error);
@@ -1164,6 +1364,12 @@ impl Console {
         if let Some(s) = self.section.get() {
             all.extend(s.routes().iter());
         }
+        // AC-2a 5.7: the relay's own console only; a fleet console has the fleet routes instead (5.3).
+        if !self.is_fleet() {
+            all.extend(FLEET_LINK_ROUTES.iter());
+        } else {
+            all.extend(crate::console_wizard::WIZARD_ROUTES.iter());
+        }
         all
     }
 
@@ -1171,6 +1377,11 @@ impl Console {
     pub(crate) fn stepup_actions(&self) -> Vec<&'static str> {
         let mut v: Vec<&'static str> = self.routes().into_iter().filter(|r| r.stepup).map(|r| r.action).collect();
         v.extend(["approvals.approve", "admins.remove", "requests.cancel", "audit.export", "license.install"]);
+        if self.is_fleet() {
+            v.extend(["fleet.license.library", "account.key-record"]);
+        } else {
+            v.extend(FLEET_LINK_ROUTES.iter().filter(|r| r.stepup).map(|r| r.action));
+        }
         v
     }
 
@@ -1263,7 +1474,7 @@ fn cookie_of<'a>(header: &'a str, name: &str) -> &'a str {
 }
 
 /// A query string's pairs, percent-decoded.
-fn query_pairs(q: &str) -> Vec<(String, String)> {
+pub(crate) fn query_pairs(q: &str) -> Vec<(String, String)> {
     fn dec(s: &str) -> String {
         let b = s.as_bytes();
         let mut out = Vec::with_capacity(b.len());
@@ -1314,7 +1525,7 @@ pub static CORE_ROUTES: [RouteSpec; 71] = [
     get("banner", Role::None),
     route("POST", "join", Role::None, "", "-", false, false, &["token"]),
     route("POST", "register/begin", Role::None, "", "-", false, false, &["token", "kind"]),
-    route("POST", "register/finish", Role::None, "", "-", false, false, &["ceremony", "credential", "label"]),
+    route("POST", "register/finish", Role::None, "", "-", false, false, &["ceremony", "credential", "label", "record"]),
     route("POST", "join/password", Role::None, "", "-", false, false, &["token", "password"]),
     route("POST", "join/totp/begin", Role::None, "", "-", false, false, &["token"]),
     route("POST", "join/totp/finish", Role::None, "", "-", false, false, &["token", "enrollment", "code"]),
@@ -1356,12 +1567,12 @@ pub static CORE_ROUTES: [RouteSpec; 71] = [
     route("POST", "sessions/end", Role::Viewer, "sessions.end", "id_hint", false, true, &["id_hint"]),
     route("POST", "sessions/end-all", Role::Admin, "sessions.end-all", "email", true, true, &["email"]),
     route("POST", "passkeys/add/begin", Role::Viewer, "passkeys.add", "-", true, false, &[]),
-    route("POST", "passkeys/add/finish", Role::Viewer, "passkeys.add", "-", false, false, &["ceremony", "credential", "label"]),
+    route("POST", "passkeys/add/finish", Role::Viewer, "passkeys.add", "-", false, false, &["ceremony", "credential", "label", "record"]),
     route("POST", "passkeys/confirm", Role::Viewer, "passkeys.confirm", "hint", true, false, &["hint"]),
     route("POST", "passkeys/remove", Role::Viewer, "passkeys.remove", "hint", true, false, &["hint"]),
     route("POST", "passkeys/rename", Role::Viewer, "passkeys.rename", "hint", false, false, &["hint", "label"]),
     route("POST", "account/security-key/begin", Role::Viewer, "account.security-key", "-", true, false, &[]),
-    route("POST", "account/security-key/finish", Role::Viewer, "account.security-key", "-", false, false, &["ceremony", "credential", "label"]),
+    route("POST", "account/security-key/finish", Role::Viewer, "account.security-key", "-", false, false, &["ceremony", "credential", "label", "record"]),
     route("POST", "account/password", Role::Viewer, "account.password", "-", true, false, &["current", "password"]),
     route("POST", "account/totp/begin", Role::Viewer, "account.totp", "-", true, false, &[]),
     route("POST", "account/totp/finish", Role::Viewer, "account.totp", "-", false, false, &["enrollment", "code"]),
@@ -1386,6 +1597,22 @@ pub static CORE_ROUTES: [RouteSpec; 71] = [
     get("license", Role::Viewer),
     // Step-up checked by the handler (target the token's license id).
     RouteSpec { method: "POST", path: "license/install", role: Role::Admin, action: "license.install", target: "-", stepup: false, need: Need::Any, security: false, keys: &["license", "reason", "stepup"], body_max: LICENSE_BODY_MAX },
+];
+
+/// AC-2a 5.7: a relay's own console's "Lucid Admin Console" panel (admin; AC-1 step-up except to refuse a change or a
+/// held key). Each runs in process exactly as its `fleet` command (f-trust's `fleet_local`, which audits it).
+pub static FLEET_LINK_ROUTES: [RouteSpec; 11] = [
+    get("fleet-link", Role::Admin),
+    route("POST", "fleet-link/preview", Role::Admin, "", "-", false, false, &["url", "code"]),
+    route("POST", "fleet-link/join", Role::Admin, "fleet.join", "url", true, false, &["url", "code", "previewHash", "adminKeys"]),
+    route("POST", "fleet-link/read-only", Role::Admin, "fleet.read-only", "-", true, true, &["on"]),
+    route("POST", "fleet-link/confirm-scopes", Role::Admin, "fleet.confirm-scopes", "-", true, false, &["scopes"]),
+    route("POST", "fleet-link/confirm", Role::Admin, "fleet.confirm", "id", true, false, &["id"]),
+    route("POST", "fleet-link/refuse", Role::Admin, "fleet.confirm", "id", false, true, &["id"]),
+    route("POST", "fleet-link/accept-scopes", Role::Admin, "fleet.scopes", "requestId", true, false, &["requestId", "hash"]),
+    route("POST", "fleet-link/trust-ca", Role::Admin, "fleet.ca.trust", "generation", true, false, &["generation", "fingerprint"]),
+    route("POST", "fleet-link/refuse-key", Role::Admin, "fleet.roster", "hint", false, true, &["hint"]),
+    route("POST", "fleet-link/leave", Role::Admin, "fleet.left", "-", true, true, &[]),
 ];
 
 /// Routes a broken audit never pauses (6 "A broken chain"): sign-in and its steps, exports, the restart.
@@ -1470,10 +1697,24 @@ impl Console {
             return closing(fail(&ApiError::of("method")));
         }
         let routes = self.routes();
-        let Some(spec) = routes.iter().copied().find(|s| s.path == path && s.method == r.method) else {
-            let e = if routes.iter().any(|s| s.path == path) { ApiError::of("method") } else { ApiError::of("not-found") };
-            return closing(fail(&e));
+        // AC-2a 5.3: a fleet console's own routes (with the relay detail and the 5.4 proxy matched by prefix); a
+        // relay's own console has none of them, and a fleet console none of the product routes of AC-1.
+        let fleet_hit = if self.is_fleet() { crate::console_fleet::fleet_route(r.method, path) } else { None };
+        let (spec, at) = match fleet_hit {
+            Some((s, at)) => (s, Some(at)),
+            None => {
+                let Some(spec) = routes.iter().copied().find(|s| s.path == path && s.method == r.method) else {
+                    let e = if routes.iter().any(|s| s.path == path) { ApiError::of("method") } else { ApiError::of("not-found") };
+                    return closing(fail(&e));
+                };
+                (spec, None)
+            }
         };
+        // AC-2a 5.3, 12.1: before bootstrap a fleet console answers only the setup and join routes.
+        if self.is_fleet() && !crate::console_wizard::BEFORE_BOOTSTRAP.contains(&path) && self.before_bootstrap() {
+            return fail(&ApiError::of("setup-needed"));
+        }
+        let proxied = at.as_ref().and_then(|a| a.as_ref()).is_some_and(|(_, sub)| !sub.is_empty());
         let mut body = Value::Object(Map::new());
         let mut pairs = Vec::new();
         if post {
@@ -1494,7 +1735,8 @@ impl Console {
                 Some(v @ Value::Object(_)) => body = v,
                 _ => return fail(&ApiError::with("invalid", "The body must be a JSON object.")),
             }
-            if let Some(k) = body.as_object().and_then(|o| o.keys().find(|k| !(spec.keys.contains(&k.as_str()) || (spec.stepup && k.as_str() == "stepup")))) {
+            // A proxied body's exact keys are the relay's to check (4.8 step 2); `stepup` is the fleet step-up.
+            if let Some(k) = body.as_object().filter(|_| !proxied).and_then(|o| o.keys().find(|k| !(spec.keys.contains(&k.as_str()) || (spec.stepup && k.as_str() == "stepup")))) {
                 return fail(&ApiError::with("unknown-field", format!("Unknown field: {k}.")));
             }
         } else if CORE_ROUTES.iter().any(|c| std::ptr::eq(c, spec)) {
@@ -1554,8 +1796,12 @@ impl Console {
                 return refuse(e, who.as_ref());
             }
         }
+        // AC-2a 4.5: on a fleet console the profile and two-person settings take a policy step-up, so one confirmation
+        // serves the console and every relay.
+        let fleet = self.fleet();
+        let fleet_policy = post && fleet.is_some() && matches!(path, "settings/profile" | "settings/two-person");
         let mut step: Option<StepOk> = None;
-        if spec.stepup {
+        if spec.stepup && !fleet_policy {
             let Some(w) = &who else { return refuse(ApiError::of("signin-first"), None) };
             let target = target_of(spec, &params);
             match self.verify_stepup(w, stepup.as_ref(), Bind { action: spec.action, target: &target, params: &params }, &origin, t) {
@@ -1563,9 +1809,43 @@ impl Console {
                 Err(e) => return refuse(e, Some(w)),
             }
         }
-        let stepped = step.is_some();
+        let freq = crate::console_fleet::FleetReq { method: r.method, query: r.query, body: &body, params: &params, who: who.as_ref(), step: step.as_ref(), origin: &origin, ip: &ip_text, source: &key, t };
+        let mut policy_bind = None;
+        if let (true, Some(f)) = (fleet_policy, &fleet) {
+            match f.verify_policy(self, &freq, spec.action) {
+                Ok(b) => policy_bind = Some(b),
+                Err(e) => return refuse(e, who.as_ref()),
+            }
+        }
+        let stepped = step.is_some() || policy_bind.is_some();
         let ctx = Ctx { r, who: who.as_ref(), body: &body, params: &params, pairs: &pairs, origin: &origin, source: &key, ip: &ip_text, step: step.as_ref(), t };
-        let done = if CORE_ROUTES.iter().any(|c| std::ptr::eq(c, spec)) { self.core(spec, &ctx) } else { self.product(spec, &ctx) };
+        let fleet_approval = path == "approvals/approve" && fleet.as_ref().is_some_and(|f| f.owns_approval(str_of(params.get("id")).unwrap_or("")));
+        let done = match (&fleet, at) {
+            (Some(f), Some(at)) => f.dispatch(self, spec, at, &freq),
+            (Some(f), None) if fleet_approval => f.approve(self, &freq),
+            _ if FLEET_LINK_ROUTES.iter().any(|c| std::ptr::eq(c, spec)) => self.fleet_link(spec, &ctx),
+            _ if CORE_ROUTES.iter().any(|c| std::ptr::eq(c, spec)) => self.core(spec, &ctx),
+            _ => self.product(spec, &ctx),
+        };
+        if let (Ok(d), Some(f)) = (&done, &fleet) {
+            if post {
+                if let Some(b) = policy_bind {
+                    f.after_policy(self, d, b, t);
+                    f.siem.set_high(self.profile_high());
+                }
+                if d.result == "ok" {
+                    match path {
+                        "settings/sign-in" => self.setup_done("signin"),
+                        "settings/email" if d.out.body.get("verified") == Some(&Value::Bool(true)) => self.setup_done("email"),
+                        _ => {}
+                    }
+                }
+                // 4.4: a suspension, removal, demotion or a method's removal reaches the relays at once.
+                if ["admins/", "passkeys/", "account/", "settings/", "approvals/"].iter().any(|p| path.starts_with(p)) {
+                    f.sync_roster(self, t);
+                }
+            }
+        }
         match done {
             Ok(d) => {
                 if post && !d.result.is_empty() && !spec.action.is_empty() {
@@ -1616,6 +1896,130 @@ impl Console {
                 })?;
                 d.detail = detail;
                 Ok(d)
+            }
+        }
+    }
+
+    /// AC-2a 5.7: the relay's own console's "Lucid Admin Console" panel, run by f-trust's `fleet_local` exactly as its
+    /// `fleet` command (which audits it).
+    fn fleet_link(&self, spec: &'static RouteSpec, c: &Ctx) -> Result<Done, ApiError> {
+        if spec.method == "GET" {
+            return Ok(Done::plain(Out::ok(crate::fleet_local::console_view(self, c.t))));
+        }
+        let who = c.who()?;
+        let x = spec.path.strip_prefix("fleet-link/").unwrap_or("");
+        let v = crate::fleet_local::console_route(self, x, c.params, &who.email, c.t)?;
+        Ok(Done::plain(Out::ok(v)))
+    }
+
+    /// AC-2a 4.8 step 7 (F5): the route a verified fleet frame names, on a relay's console (its own or headless),
+    /// the role check and step-up already the relay's (f-trust). The core or product route as the local console runs
+    /// it: body keys and core filters checked, the growth gate and the product license for writes; a section's
+    /// `Second` resolved by the relay's policy. Nothing is audited here (f-trust writes the 7.2 `fleet.call`).
+    pub(crate) fn fleet_route_spec(&self, method: &str, path: &str) -> Option<&'static RouteSpec> {
+        let routes = self.routes();
+        routes
+            .into_iter()
+            .chain(crate::console_spokes::FLEET_ROUTES.iter())
+            .chain(crate::console_meet::FLEET_ROUTES.iter())
+            .find(|s| s.method == method && s.path == path && !FLEET_LINK_ROUTES.iter().any(|f| std::ptr::eq(f, *s)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn fleet_route(&self, method: &str, path: &str, query: &str, body: &Value, caller: &Caller, second: crate::fleet_exec::FleetSecond, t: i64) -> Result<crate::fleet_exec::FleetRan, ApiError> {
+        use crate::fleet_exec::{FleetRan, FleetSecond};
+        let spec = self.fleet_route_spec(method, path).ok_or_else(|| ApiError::of("not-found"))?;
+        let post = method == "POST";
+        let core = CORE_ROUTES.iter().any(|c| std::ptr::eq(c, spec));
+        let pairs = if post { Vec::new() } else { query_pairs(query) };
+        if post {
+            if let Some(k) = body.as_object().and_then(|o| o.keys().find(|k| !spec.keys.contains(&k.as_str()) || k.as_str() == "stepup")) {
+                return Err(ApiError::with("unknown-field", format!("Unknown field: {k}.")));
+            }
+            if let Some(Err(e)) = self.section().map(|s| s.may_add(spec.action, body)) {
+                return Err(e);
+            }
+            if spec.need == Need::Product {
+                self.need_product_license(t)?;
+            }
+        } else if core {
+            if let Some((k, _)) = pairs.iter().find(|(k, _)| !filters_of(path).contains(&k.as_str())) {
+                return Err(ApiError::with("invalid", format!("Unknown filter: {k}.")));
+            }
+        }
+        let role = if caller.admin { PersonRole::Admin } else if caller.manager { PersonRole::UserManager } else { PersonRole::Viewer };
+        let who = Who { sid: String::new(), email: caller.email.clone(), role, rights: Rights::of_role(role), why: None, admin: caller.admin, manager: caller.manager };
+        let ran = |out: Out, target: Option<String>, result: &'static str, approval: Option<String>| FleetRan { status: out.status, body: out.body, target, result, approval };
+        let second_run = |run: &dyn Fn(Option<&str>) -> Result<Value, ApiError>| -> Result<(Value, Option<String>), ApiError> {
+            match &second {
+                FleetSecond::Refuse => Err(ApiError::of("fleet-second")),
+                FleetSecond::Single(label) => run(None).map(|v| (v, Some((*label).to_owned()))),
+                FleetSecond::Approved { approver, approval_id } => run(Some(*approver)).map(|v| (v, Some((*approval_id).to_owned()))),
+            }
+        };
+        if !core {
+            let section = self.section().ok_or_else(|| ApiError::of("not-found"))?;
+            let license = self.license_view(t).state;
+            let call = SectionCall { spec, query, body, caller, license, t };
+            return match section.route(&call)? {
+                SectionAnswer::Read(v) => Ok(ran(Out::ok(v), None, "", None)),
+                SectionAnswer::Done { answer, target, .. } => Ok(ran(Out::ok(answer), Some(target), "ok", None)),
+                SectionAnswer::Second { target, params, .. } => {
+                    let (v, approval) = second_run(&|approver| section.execute(&Approved { action: spec.action, target: &target, params: &params, requested_by: &caller.email, approved_by: approver, t }))?;
+                    Ok(ran(Out::ok(v), Some(target), "ok", approval))
+                }
+            };
+        }
+        match (method, path) {
+            ("GET", "requests") => {
+                let state = pairs.iter().find(|(k, _)| k == "state").map_or("waiting", |(_, v)| v.as_str());
+                let kind = pairs.iter().find(|(k, _)| k == "kind").map_or("", |(_, v)| v.as_str());
+                Ok(ran(self.requests_list_fleet(&who, state, kind, t)?, None, "", None))
+            }
+            ("POST", "requests/new") => {
+                let d = self.requests_new_fleet(&who, body, t)?;
+                Ok(ran(d.out, d.target, d.result, d.approval))
+            }
+            ("POST", "requests/cancel") => {
+                let d = self.requests_cancel(body, t)?;
+                Ok(ran(d.out, d.target, d.result, d.approval))
+            }
+            ("POST", "license/install") => {
+                let section = self.section().ok_or_else(|| ApiError::of("license-refused"))?;
+                let token = str_of(body.get("license")).unwrap_or("").to_owned();
+                crate::console_auth::reason_of(body.get("reason"))?;
+                let cand = section.license_candidate(&token, t)?;
+                if cand.ended {
+                    return Err(ApiError::of("license-ended"));
+                }
+                let id = cand.id().to_owned();
+                if cand.single() {
+                    let v = section.license_install(&token, t)?;
+                    return Ok(ran(Out::ok(json!({ "ok": true, "license": v })), Some(id), "ok", None));
+                }
+                let (v, approval) = second_run(&|_| section.license_install(&token, t).map(|v| json!({ "ok": true, "license": v })))?;
+                Ok(ran(Out::ok(v), Some(id), "ok", approval))
+            }
+            ("POST", "audit/export") => {
+                let from = body.get("from").and_then(Value::as_u64).unwrap_or(0);
+                let to = body.get("to").and_then(Value::as_u64).unwrap_or(0);
+                let text = self.audit.lock().export(from, to, t).map_err(|e| ApiError::with("invalid", e))?;
+                Ok(ran(Out::ok(json!({ "ok": true, "file": text })), Some(format!("{from}-{to}")), "ok", None))
+            }
+            _ => {
+                let dialed = Dialed { host: String::new(), hostname: String::new(), port: 443 };
+                let r = ConsoleRequest { method, pathname: "", query, cookie: "", origin: None, marker: None, activity: false, content_type: "application/json", user_agent: "", peer: IpAddr::from([127, 0, 0, 1]), forwarded: &[], body: "", dialed: &dialed, host_ok: true };
+                let step = StepOk::default();
+                let empty = Value::Object(Map::new());
+                let params = if post { body } else { &empty };
+                let ctx = Ctx { r: &r, who: Some(&who), body: params, params, pairs: &pairs, origin: "", source: "", ip: &caller.ip, step: Some(&step), t };
+                let d = self.core(spec, &ctx)?;
+                // A download goes back as its text; the console turns it into a file again (5.4).
+                let out = match d.out.file {
+                    Some((bytes, _, _)) => Out::ok(json!({ "ok": true, "file": String::from_utf8_lossy(&bytes) })),
+                    None => d.out,
+                };
+                Ok(ran(out, d.target, d.result, d.approval))
             }
         }
     }
@@ -1789,7 +2193,7 @@ impl Console {
             (user.unwrap_or(Value::Null), json!({ "pinned": pinned, "bootstrapped": inner.book.bootstrapped }), s)
         };
         Out::ok(json!({
-            "ok": true, "user": user, "origin": self.origin(), "product": self.cfg.product.as_str(), "profile": s.profile.as_str(),
+            "ok": true, "user": user, "origin": self.origin(), "product": self.product_word(), "profile": s.profile.as_str(),
             "relay": { "host": self.cfg.host, "version": env!("CARGO_PKG_VERSION") },
             "sections": sections, "idle": { "minutes": s.idle_minutes_now(), "maxHours": s.max_hours_now() },
             "pages": pages, "locked": locked, "securityActions": security,
@@ -1951,7 +2355,9 @@ impl Console {
         }
         let manager_kind = |k: &str| k.starts_with("seats-") || k == "joiner-waiting" || k == "signin-locked";
         if !who.admin {
-            attention.retain(|a| str_of(a.get("kind")).is_some_and(|k| VIEWER_KINDS.contains(&k) || (who.manager && manager_kind(k))));
+            // AC-2a 8.1: viewers of a fleet console also see `relay-silent` and `relay-cert-*`.
+            let fleet_viewer = |k: &str| self.is_fleet() && matches!(k, "relay-silent" | "relay-cert-expiring" | "relay-cert-expired");
+            attention.retain(|a| str_of(a.get("kind")).is_some_and(|k| VIEWER_KINDS.contains(&k) || fleet_viewer(k) || (who.manager && manager_kind(k))));
         }
         let mut banners: Vec<Value> = Vec::new();
         for a in attention.iter_mut() {
@@ -2006,7 +2412,15 @@ impl Console {
             "used": lic.license.get("used").cloned().unwrap_or(Value::Null), "daysLeft": lic.license.get("daysLeft").cloned().unwrap_or(Value::Null),
             "exp": lic.license.get("exp").cloned().unwrap_or(Value::Null),
         });
-        let mut v = json!({ "ok": true, "product": self.cfg.product.as_str(), "relay": relay, "license": license, "cards": cards, "attention": attention, "banners": banners });
+        let mut v = json!({ "ok": true, "product": self.product_word(), "relay": relay, "license": license, "cards": cards, "attention": attention, "banners": banners });
+        // AC-2a 5.3, 8.1: the fleet's relays, people and calls, and its KPIs.
+        if let Some(f) = self.fleet() {
+            v["fleet"] = f.overview(self, t);
+            v["license"] = Value::Null;
+            if let Some(c) = v["cards"].as_array_mut() {
+                c.retain(|x| x["id"] != "health" && x["id"] != "license");
+            }
+        }
         if who.admin {
             let inner = self.inner.lock();
             let waiting: Vec<&Map<String, Value>> = inner.book.approvals.iter().filter(|a| a.get("state").and_then(Value::as_str) == Some("waiting")).collect();
@@ -2201,10 +2615,12 @@ impl Console {
 // ── The page ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The page's files (7.1), served by the relay itself.
-pub const ASSETS: [(&str, &str, &[u8]); 8] = [
+pub const ASSETS: [(&str, &str, &[u8]); 9] = [
     ("index.html", "text/html; charset=utf-8", include_bytes!("../console/index.html")),
     ("theme.js", "text/javascript; charset=utf-8", include_bytes!("../console/theme.js")),
     ("app.js", "text/javascript; charset=utf-8", include_bytes!("../console/app.js")),
+    // AC-2a 9.6 (F7): the dependency-free SVG chart builders.
+    ("charts.js", "text/javascript; charset=utf-8", include_bytes!("../console/charts.js")),
     ("qr.js", "text/javascript; charset=utf-8", include_bytes!("../console/qr.js")),
     ("app.css", "text/css; charset=utf-8", include_bytes!("../console/app.css")),
     ("icon.svg", "image/svg+xml", include_bytes!("../console/icon.svg")),

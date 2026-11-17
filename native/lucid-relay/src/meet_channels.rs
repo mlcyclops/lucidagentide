@@ -776,6 +776,8 @@ impl Hub {
             st.dirty = true;
             st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), Some(session));
             st.pu_message(Some(cid.as_str()), None, &msg);
+            // AC-2a 9.2: one chat message relayed.
+            crate::fleet_probe::counters().message(1);
             Ok(msg)
         })();
         drop(st);
