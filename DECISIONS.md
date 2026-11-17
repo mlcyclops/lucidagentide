@@ -27681,3 +27681,21 @@ It stays catastrophic (fail-closed) when the interpreter is bare, takes `-` or (
 **Proof.** `desktop/exec_policy.test.ts`: the risky corpus gains the field command and eight data-pipe forms (risky, not catastrophic); the catastrophic corpus gains twelve stdin-program forms (bare interpreter, `-`, `-s`, an option value mistaken for a script, `exec(`/`eval`/`$(...)` code, `sudo`, a pipe inside `bash -lc '...'`). `make demo-P-FLEET.AUTO1`.
 
 **Invariants.** #3: every unparseable or stdin-program form keeps the floor; the change only clears forms whose program is named in an argument. #4: the in-process gate is untouched.
+
+## ADR-0611 -- P-FLEET.AUTO2: Fleet full auto-mode answers every ask except the org's managed denylist; the #612 catastrophic floor no longer stops it (2026-11-17)
+
+**Status:** Accepted. Supersedes the auto-mode half of #612 (the exec floor in `desktop/fleet_lanes.ts`). Open PR #618, which widened that floor further, is closed unmerged.
+
+**Context.** #612 made Fleet full auto-mode stop for a human on every command `execFloor` calls catastrophic (rm -rf and the Windows recursive deletes, sudo, a pipe into an interpreter, force-push, hard reset, dd, mkfs, format) and on managed-denylisted programs. In use, a lane in full auto-mode asked for approval many times a day: four days of this workstation's sessions held 73 floor hits in 4,032 commands, nearly all ordinary agent work (deleting a temp or build folder, reading a fetched answer with `| python -c`). The owner: "I can't be sitting here clicking approve all day." Full auto-mode is opt-in behind the P-FLEET.L6 risk modal, whose text already says every approval is granted automatically.
+
+**Decision.**
+- In full auto-mode a lane answers every permission ask itself except one whose program the organization's managed policy denies (`execManagedDeny`: `denyPrograms` from the managed exec ceiling, ADR-0068). A user switch never widens what the org forbids, so that ask still reaches the human, and turning auto on while it is open does not answer it (`pending.managedDeny`, renamed from `floor`).
+- Catastrophic patterns no longer stop auto-mode. Turning auto on with any other ask open answers it.
+- A session grant ("Session" on an ask) is narrower than auto-mode and keeps the whole #612 floor: it still never carries a catastrophic command.
+- Unchanged: remote lanes (P-CTRL-REMOTE.1) follow their pairing's tier policy; controller lanes stay supervised; the main chat keeps the floor under danger mode; the unattended goal loop still blocks T4; the in-omp security gate still scans every tool call (invariant 4).
+
+**Consequences.** A lane in full auto-mode can run `rm -rf`, `git push --force` or `curl … | sh` with no human, including when a poisoned repo instruction asks for it; that is the risk the auto-mode modal names and the owner accepts. The security gate still quarantines hidden-Unicode and injection findings in tool arguments, and an org that wants a hard stop names the program in its managed denylist.
+
+**Proof.** `desktop/fleet_lanes.test.ts`: auto-mode answers the fake agent's `rm -rf /` ask with no permission event; a session grant on an ordinary command still stops at the floor for `rm -rf`, and turning auto on answers that open ask. `desktop/exec_policy.test.ts`: `execManagedDeny` clears catastrophic commands the org does not deny, and keeps a managed-denied program (catastrophic or not, pinned or not). `make demo-P-FLEET.AUTO2`.
+
+**Invariants.** #3 untouched: the scanner gate still fails closed. #4: the in-process gate is the control that stays; this ADR removes only a human approval step the owner opted out of.

@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationAnswer, elicitationApproval, elicitationOptions, execFloor, execVerdict,
+  applyExecChoice, classifyCommand, classifyEval, clampDialRow, clampExec, elicitationAnswer, elicitationApproval, elicitationOptions, execFloor, execManagedDeny, execVerdict,
   loopVerdict, type ExecStore, type RiskTier,
 } from "./exec_policy.ts";
 
@@ -180,6 +180,21 @@ describe("execFloor: the floor no standing scope crosses", () => {
   test("#616: a patch in an edit's input is not a command; the same field on an exec tool is", () => {
     expect(execFloor({ kind: "edit", title: "apply patch", rawInput: { input: "- rm -rf /" } }, {})).toBeNull();
     expect(execFloor({ kind: "execute", title: "shell", rawInput: { input: "rm -rf /" } }, {})).toContain("rm -rf");
+  });
+});
+
+// P-FLEET.AUTO2 (ADR-0611): Fleet FULL auto-mode keeps only the org's managed denylist from the #612 floor.
+describe("execManagedDeny: what full auto-mode still never answers", () => {
+  test("a catastrophic command the org does not deny runs in auto-mode", () => {
+    expect(execManagedDeny({ kind: "execute", rawInput: { command: "rm -rf build" } }, {})).toBeNull();
+    expect(execManagedDeny({ kind: "execute", rawInput: { command: "git push --force" } }, { allowPrograms: ["git"] })).toBeNull();
+  });
+  test("a program the org's managed policy denies still reaches a human, catastrophic or not, pinned or not", () => {
+    expect(execManagedDeny({ kind: "execute", rawInput: { command: "npm install x" } }, { denyPrograms: ["npm"], allowPrograms: ["npm"] })).toContain("organization");
+    expect(execManagedDeny({ kind: "execute", rawInput: { command: "rm -rf build" } }, { denyPrograms: ["rm"] })).toContain("rm");
+  });
+  test("an ask that is not exec is never denied here", () => {
+    expect(execManagedDeny({ kind: "edit", title: "npm notes" }, { denyPrograms: ["npm"] })).toBeNull();
   });
 });
 

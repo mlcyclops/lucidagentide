@@ -6291,3 +6291,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** the exec floor's "pipes downloaded code into an interpreter" rule clears a pipe into an interpreter that has its own program (`-c`, `-e`, `-m`, a script file); bare, `-`, `-s`, option-value, `exec`/`eval`/`$(...)` forms stay catastrophic. On this workstation's last four days of commands the floor hits drop from 73 to 33 (all 40 pipe false positives gone).
 - **stubbed:** recursive deletes (rm -rf, rmdir /s, Remove-Item -Recurse) still ask in auto-mode by the #612 decision; heredoc bodies are still read as commands (2 hits).
 - **next:** decide whether auto-mode may run recursive deletes scoped to the lane's own folder or temp, and carry this exception into PR #618.
+## Fleet full auto-mode means no approvals (P-FLEET.AUTO2, ADR-0611)
+- **shipped (2026-11-17):** a lane in full auto-mode answers every ask except a program the org's managed policy denies; the #612 catastrophic floor (rm -rf, sudo, pipe into an interpreter, force-push and the rest) no longer stops it, and turning auto on answers an open catastrophic ask. Session grants keep the floor. PR #618 closed unmerged.
+- **stubbed:** the P-FLEET.L6 risk modal text is unchanged (it already says every approval is granted); no per-lane opt-back-in to the floor.
+- **next:** in the installed app, run a full auto-mode lane through a task that deletes a build folder and confirm it never asks.

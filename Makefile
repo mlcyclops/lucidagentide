@@ -631,6 +631,10 @@ demo-P-FLEET.STAGE1: ## P-FLEET.STAGE1 (ADR-0609): a lane prompt stages ONCE und
 demo-P-FLEET.AUTO1: ## P-FLEET.AUTO1 (ADR-0610): Fleet full auto-mode no longer stops for a pipe into an interpreter that has its own program (`| python -c`, `-m`, `-e`, a script file); a bare interpreter, `-`, `-s`, an option value read as a script, and code that evals its input or is built at run time stay catastrophic
 	$(BUN) test $(TEST_IGNORES) desktop/exec_policy.test.ts
 
+.PHONY: demo-P-FLEET.AUTO2
+demo-P-FLEET.AUTO2: ## P-FLEET.AUTO2 (ADR-0611): Fleet full auto-mode answers every ask, catastrophic commands included, except a program the org's managed policy denies; a session grant still stops at the #612 floor, and turning auto on answers an open catastrophic ask
+	$(BUN) test $(TEST_IGNORES) desktop/exec_policy.test.ts desktop/fleet_lanes.test.ts
+
 .PHONY: demo-P-FLEET.L4
 demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clock (a mid-turn child crash lands error in milliseconds, event-driven, never a 600s deadline), error is a recoverable state (Retry re-sends the last prompt, Respawn revives IN PLACE on the same lane id with the transcript carried - capability-gated session/load when the agent offers it, delimited-transcript preamble otherwise), fail-closed survives recovery (an ask open at death dies as a DENY and the revived lane RE-ASKS a human), and a user-stopped lane is refused by prompt but revived by explicit respawn with memory intact
 	$(BUN) run harness/scripts/demo_pfleetl4.ts

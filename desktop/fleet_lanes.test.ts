@@ -710,39 +710,38 @@ test("turning auto ON with an ask open resolves the pending ask as an ALLOW - it
   expect(text).toContain("selected"); // the human granted everything; the open ask went with it
 }, TIMEOUT);
 
-// #612: the exec floor. A poisoned repo instruction that gets `rm -rf /` asked in an auto-mode lane still reaches
-// the human, the same floor the main chat keeps under danger mode.
-test("auto mode never answers a catastrophic command: the ask reaches the human, and a deny stops it", async () => {
+// P-FLEET.AUTO2 (ADR-0611): full auto-mode means no human in the loop. The #612 floor kept catastrophic commands
+// asking even then, and a lane under it stopped for approval all day; the owner turned it off for auto-mode.
+test("full auto-mode answers a catastrophic command too: no ask reaches the human", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const id = r.lane!.id;
   expect(live.setAuto(id, true).ok).toBe(true);
   const events: LaneEvent[] = [];
-  const turn = live.prompt(id, "do it", (e) => events.push(e)); // the fake's default ask: rm -rf /
-  let pending: { summary: string; kind: string } | undefined;
-  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
-  expect(pending?.summary).toContain("always asks: recursive force-delete (rm -rf)");
-  expect(live.answer(id, false).ok).toBe(true);
-  await turn;
-  expect(events.some((e) => e.type === "auto-approved")).toBe(false);
+  await live.prompt(id, "do it", (e) => events.push(e)); // the fake's default ask: rm -rf /
+  expect(events.some((e) => e.type === "permission")).toBe(false);
+  expect(events.some((e) => e.type === "auto-approved")).toBe(true);
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
-  expect(text).toContain('"cancelled"');
+  expect(text).toContain("selected");
 }, TIMEOUT);
 
-test("turning auto ON does not answer an open catastrophic ask; only the human's answer settles it", async () => {
+test("turning auto ON answers an open catastrophic ask; a session grant still stops at the #612 floor", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const id = r.lane!.id;
+  // A session grant for the `execute` kind (given on an ordinary command) does not carry a catastrophic one.
+  const granted = live.prompt(id, RISKY, () => {});
+  let pending: { summary: string; kind: string } | undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(live.answer(id, true, "session").ok).toBe(true);
+  await granted;
   const events: LaneEvent[] = [];
   const turn = live.prompt(id, "do it", (e) => events.push(e));
-  let pending = false;
-  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
-  expect(pending).toBe(true);
-  live.setAutoAll(true);
+  pending = undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending?.summary).toContain("always asks: recursive force-delete (rm -rf)");
+  // Auto ON while that ask is open: the human just granted everything, so it rides along.
   expect(live.setAuto(id, true).ok).toBe(true);
-  // setAuto resolves an open ask synchronously, so the ask still being open right after it is the proof.
-  expect((await live.status()).lanes[0]!.pendingApproval).toBeDefined();
-  expect(live.answer(id, true).ok).toBe(true); // an explicit yes still works
   await turn;
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("selected");
