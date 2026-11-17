@@ -57,7 +57,7 @@ export interface LocalModelCompat {
   thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
   /** Assistant field carrying chain-of-thought. vLLM's OpenAI server emits "reasoning". */
   reasoningContentField?: "reasoning_content" | "reasoning" | "reasoning_text";
-  /** Whether the endpoint accepts a `reasoning_effort` request param. vLLM's OpenAI server does not. */
+  /** Whether the endpoint accepts a `reasoning_effort` request param (the DGX vLLM does, ADR-0607). */
   supportsReasoningEffort?: boolean;
 }
 
