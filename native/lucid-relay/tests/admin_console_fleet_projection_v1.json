@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-2a revision 3.2",
+ "contract": "AC-2a revision 3.4",
  "about": "4.11 and 5.4 (revision 3, A2-H2): under read-health alone the relay builds each answer field by field from this list and nothing else may appear; paths are dotted, \"name[]\" is a list whose items have the fields \"name[].x\"; an \"object\" field lists its own fields under its path; nullable fields may be null (an object then has no sub-fields); the routes are exactly the 5.4 rows whose read-health projection is viewer or whole",
  "types": {
   "count": "a non-negative integer",
@@ -36,8 +36,9 @@
     "kind": "license-grace",
     "args": [
      {
-      "path": "n",
-      "type": "days"
+      "path": "date and time",
+      "type": "date",
+      "form": "ms"
      }
     ]
    },
@@ -51,20 +52,34 @@
      {
       "path": "n",
       "type": "days"
+     },
+     {
+      "path": "date",
+      "type": "date",
+      "form": "iso"
      }
     ]
    },
    {
-    "kind": "license-adding-off",
-    "args": []
+    "kind": "license-stopped",
+    "args": [
+     {
+      "path": "product",
+      "type": "enum",
+      "values": [
+       "Remote Spokes",
+       "Meeting Hub"
+      ]
+     }
+    ]
    },
    {
     "kind": "license-upgrade-period",
     "args": [
      {
-      "path": "date",
+      "path": "date and time",
       "type": "date",
-      "form": "iso"
+      "form": "ms"
      }
     ]
    },
@@ -309,28 +324,34 @@
      "type": "count"
     },
     {
-     "path": "adding",
-     "type": "object",
-     "nullable": true
+     "path": "service",
+     "type": "object"
     },
     {
-     "path": "adding.state",
+     "path": "service.state",
      "type": "enum",
      "values": [
-      "open",
-      "closed",
-      "upgrade-period"
+      "on",
+      "grace",
+      "upgrade-period",
+      "stopped"
      ]
     },
     {
-     "path": "adding.upgradePeriodEnds",
+     "path": "service.stopsAt",
      "type": "date",
      "form": "ms",
      "nullable": true
     },
     {
-     "path": "adding.lastUsers",
-     "type": "count",
+     "path": "service.why",
+     "type": "enum",
+     "values": [
+      "none",
+      "wrong-product",
+      "wrong-root",
+      "expired"
+     ],
      "nullable": true
     }
    ]

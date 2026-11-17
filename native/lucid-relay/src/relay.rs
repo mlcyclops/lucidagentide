@@ -8,7 +8,7 @@
 
 use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int, sha256_hex, str_of, stringify, unb64u, utf8_lossy};
 use crate::console::{Console, CONSOLE_OFF};
-use crate::console_spokes::{license_notice, observes, Block, BlockPath, Blocks, LicenseNotices, Observed, UncountedRing, BLOCKS_FILE, LICENSE_MAIL, NODE_BLOCKED, REQUESTS_REFUSED};
+use crate::console_spokes::{observes, Block, BlockPath, Blocks, LicenseClock, Observed, UncountedRing, BLOCKS_FILE, NODE_BLOCKED, REQUESTS_REFUSED};
 use crate::der::{ecdsa_verify, CertNames};
 use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
 use crate::license::{
@@ -36,6 +36,10 @@ const SEEN_MS: i64 = MESSAGE_TTL_MS;
 const SEEN_SAVE_MS: i64 = 3_600_000;
 pub const LICENSE_CHECK_MS: u64 = 24 * 3_600_000;
 const EXPIRED_LOG_EVERY_MS: i64 = 60_000;
+/// The license a relay started without --license reads from its state folder, and where the console installs one.
+pub const DEFAULT_LICENSE_FILE: &str = "license.lic";
+/// 8.1 `spokes.license-inactive` (R42-1): the 503 every service route answers while service is stopped.
+pub const SPOKES_LICENSE_INACTIVE: &str = "Your organization's Remote Spokes license is not active. Ask your admin.";
 /// The books are swept at most this often, and only for a request whose authorization parses.
 const SWEEP_EVERY_MS: i64 = 1000;
 /// Why a LAN mailbox refuses its owner's node id on a certificate that is not a spoke's.
@@ -230,8 +234,15 @@ pub struct State {
     blocks: Blocks,
     /// Hubs refused with `user.uncounted` (4.8 seats view).
     uncounted: UncountedRing,
-    /// The license notice mailed last (3.11, I12), when the console is on.
-    notices: LicenseNotices,
+    /// R42-1 (contract 4.2.1): why the license handed in at start was refused; the relay runs stopped until a fitting
+    /// one is installed.
+    refused: Option<(crate::license::ServiceWhy, String)>,
+    /// R7-M1: the time license deadlines are judged in.
+    clock: LicenseClock,
+    /// R7-M2: the 4.7 reference when no license is in force (`unknown_reference` when the file did not read back).
+    last_license: Option<crate::console::LicenseRecord>,
+    /// The service state last logged (`license.service` line).
+    service_seen: Option<crate::console::ServiceState>,
     state_dir: Option<PathBuf>,
     license_file: Option<PathBuf>,
     /// 9.2 (F14): each spoke's latest `lanes.state` line.
@@ -318,14 +329,20 @@ impl State {
             }
         }
         let now = crate::codec::now_ms();
+        // R7-M1: a license clock that does not read back stops the start (fail closed).
+        let mut clock = LicenseClock::open(opts.state_dir.as_deref())?;
+        let eff = clock.now(now);
+        let mut refused = None;
         let licensed = match &opts.license {
             None => None,
             Some(token) => {
                 let keys = license_keys(|k| std::env::var(k).ok())?;
-                match verify_license(token, &trust.root_id, &keys, now.div_euclid(1000)) {
+                match verify_license(token, &trust.root_id, &keys, eff.div_euclid(1000)) {
                     Err(reason) => {
-                        logger.security("license.refused", &Fields::new().with("reason", &reason), Level::Error);
-                        return Err(format!("relay license refused: {reason}"));
+                        // R42-1 (4.2.1): the relay starts, stopped, so an admin can install a fitting license.
+                        logger.security("license.refused", &Fields::new().with("reason", &reason), Level::Warn);
+                        refused = Some((crate::license::ServiceWhy::of_refusal(&reason), reason.clone()));
+                        None
                     }
                     Ok(c) => {
                         if let Some(file) = opts.users_file.as_deref().filter(|f| f.file_name().is_some_and(|n| n == LICENSE_USERS_FILE)) {
@@ -348,6 +365,25 @@ impl State {
                 logger.ops("license.v1-seats-ignored", &f, Level::Warn);
             }
         }
+        // R7-M2: the last fitting license is kept as the 4.7 reference; one that does not read back makes every install a
+        // second-admin change (fail closed).
+        let last_license = match opts.state_dir.as_deref() {
+            None => None,
+            Some(dir) => {
+                if let Some(l) = &licensed {
+                    if let Err(e) = crate::console_spokes::write_last_license(dir, &l.license) {
+                        logger.ops("license.last-failed", &Fields::new().with("why", e), Level::Warn);
+                    }
+                }
+                match crate::console_spokes::read_last_license(dir) {
+                    Ok(r) => r,
+                    Err(why) => {
+                        logger.security("license.last-unreadable", &Fields::new().with("why", why), Level::Warn);
+                        Some(crate::console_spokes::unknown_reference())
+                    }
+                }
+            }
+        };
         // A security list: with the console on, a block list that does not read back stops the start (section 0).
         let blocks = match (&opts.console, &opts.state_dir) {
             (Some(_), Some(dir)) => Blocks::open(&dir.join(BLOCKS_FILE)).inspect_err(|reason| {
@@ -384,7 +420,10 @@ impl State {
             labels: HashMap::new(),
             blocks,
             uncounted: UncountedRing::default(),
-            notices: LicenseNotices::default(),
+            refused,
+            clock,
+            last_license,
+            service_seen: None,
             state_dir: opts.state_dir,
             license_file: opts.license_file,
             lanes: HashMap::new(),
@@ -392,6 +431,15 @@ impl State {
             fleet: None,
             endorse_tries: HashMap::new(),
         };
+        // R7-M1: an offline `license-time reset` is audited at the next start.
+        if let Some((before, after)) = st.clock.take_reset() {
+            st.logger.security("license.time-reset", &Fields::new().with("before", before).with("after", after), Level::Warn);
+            if let Some(c) = &st.console {
+                let mut r = crate::console_audit::Record::new("operator", "license.time-reset", "ok");
+                r.detail = json!({ "before": before, "after": after });
+                c.record(r, now);
+            }
+        }
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
             // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
             let t = now.div_euclid(1000);
@@ -637,7 +685,7 @@ impl State {
         self.free_users(t)?;
         let Some(lic) = self.licensed.as_ref() else { return Ok(()) };
         let l = &lic.license;
-        let (state, days_left) = license_state(l, t.div_euclid(1000));
+        let (state, days_left) = license_state(l, self.license_time_peek(t).div_euclid(1000));
         self.license_seen = Some(state);
         let fields = Fields::new()
             .with("id", &l.id)
@@ -667,24 +715,58 @@ impl State {
         Ok(())
     }
 
-    /// Past its grace a licensed relay answers 503 to every route but /healthz, before reading the body.
+    /// R7-M1: the license clock's time at host time `t` (ms), never going back.
+    pub fn license_time(&mut self, t: i64) -> i64 {
+        self.clock.now(t)
+    }
+
+    /// `license_time` without moving the clock (read-only views).
+    fn license_time_peek(&self, t: i64) -> i64 {
+        self.clock.peek(t)
+    }
+
+    /// R7-M2: the 4.7 reference license: the one in force, else the last fitting one kept.
+    pub fn license_reference(&self) -> Option<crate::console::LicenseRecord> {
+        self.licensed.as_ref().map(|l| crate::console::LicenseRecord::of(&l.license)).or_else(|| self.last_license.clone())
+    }
+
+    /// The 4.7 `service` (R42-1) in license-clock time.
+    pub fn service_view(&mut self, t: i64) -> crate::console::ServiceView {
+        let eff = self.license_time(t);
+        crate::console_spokes::service_of(self.licensed.as_ref().map(|l| &l.license), self.refused.as_ref(), eff)
+    }
+
+    /// R42-1: while service is stopped (no license, a refused one, or past its at most 2 grace days) every service route
+    /// answers 503 `license-inactive`, before reading the body; the caller lets exempt routes through first.
     pub fn license_gate(&mut self, t: i64, where_: &Fields) -> Result<Option<Reply>, String> {
-        let Some(state) = self.licensed.as_ref().map(|l| license_state(&l.license, t.div_euclid(1000)).0) else { return Ok(None) };
-        if Some(state) != self.license_seen {
-            self.check_license(t)?;
+        // A spoke's LAN mailbox carries no license (it serves one spoke's own nodes).
+        if self.owner.is_some() {
+            return Ok(None);
         }
-        if state != LicenseStateName::Expired {
+        let eff = self.license_time(t);
+        if let Some(state) = self.licensed.as_ref().map(|l| license_state(&l.license, eff.div_euclid(1000)).0) {
+            if Some(state) != self.license_seen {
+                self.check_license(t)?;
+            }
+        }
+        let service = self.service_view(t);
+        if self.service_seen != Some(service.state) {
+            let f = Fields::new().with("state", service.state.as_str()).with("why", service.why);
+            self.logger.security("license.service", &f, if service.state == crate::console::ServiceState::Stopped { Level::Error } else { Level::Info });
+            self.service_seen = Some(service.state);
+        }
+        if service.state != crate::console::ServiceState::Stopped {
             return Ok(None);
         }
         // One line a minute with the count, not one per poll: every spoke keeps polling a stopped relay.
         self.expired_refused += 1;
         if self.expired_logged_at.is_none_or(|at| t - at >= EXPIRED_LOG_EVERY_MS) {
             let f = where_.clone().with("status", 503u16).with("refused", self.expired_refused);
-            self.logger.security("license.expired.refused", &f, Level::Warn);
+            self.logger.security("license.gate", &f.with("why", service.why), Level::Warn);
             self.expired_refused = 0;
             self.expired_logged_at = Some(t);
         }
-        Ok(Some(json_reply(503, &json!({ "ok": false, "error": "license expired" }))))
+        Ok(Some(json_reply(503, &json!({ "ok": false, "code": "license-inactive", "error": SPOKES_LICENSE_INACTIVE }))))
     }
 
     /// Drop envelopes from the books and from disk (acknowledged, expired or over a cap).
@@ -724,20 +806,8 @@ impl State {
         if let Err(e) = self.blocks.sweep(t) {
             self.logger.ops("console.blocks-write-failed", &Fields::new().with("reason", e), Level::Warn);
         }
-        self.license_notices(t);
-    }
-
-    /// 3.11 (I12): the Remote Spokes license notice due now, mailed once to every active console admin.
-    fn license_notices(&mut self, t: i64) {
-        let Some(console) = self.console.clone() else { return };
-        let due = self.licensed.as_ref().and_then(|l| license_notice(&l.license, t).map(|(stage, args)| (l.license.id.clone(), stage, args)));
-        if !self.notices.due(due.as_ref().map(|(id, stage, _)| (id.clone(), *stage))) {
-            return;
-        }
-        let Some((_, _, args)) = due else { return };
-        for to in console.active_admin_emails() {
-            crate::console_mail::send(LICENSE_MAIL, &to, &args);
-        }
+        // R7-M1: the license clock's mark kept at least once a minute.
+        self.clock.now(t);
     }
 
     /// The caller's certificate, or why it was refused: (event, reason, claimed node).
@@ -1316,10 +1386,10 @@ impl State {
     pub fn license_view(&self, t: i64) -> Option<(Value, LicenseStateName)> {
         let lic = self.licensed.as_ref()?;
         let l = &lic.license;
-        let (state, days_left) = license_state(l, t.div_euclid(1000));
+        let (state, days_left) = license_state(l, self.license_time_peek(t).div_euclid(1000));
         let view = json!({
             "id": l.id, "org": l.org, "product": l.product().as_str(), "edition": l.edition, "users": l.users, "used": lic.users.used(),
-            "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": lic.dev, "graceDays": l.grace_days,
+            "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": lic.dev, "graceDays": l.effective_grace_days(),
         });
         Some((view, state))
     }
@@ -1408,8 +1478,11 @@ impl State {
             }
         }
         let lanes = self.lanes_now(t);
-        let lic = self.licensed.as_ref().map(|l| (license_state(&l.license, t.div_euclid(1000)), l.license.users, l.users.used(), l.license.product()));
+        let eff = self.license_time_peek(t);
+        let lic = self.licensed.as_ref().map(|l| (license_state(&l.license, eff.div_euclid(1000)), l.license.users, l.users.used(), l.license.product()));
+        let service = crate::console_spokes::service_of(self.licensed.as_ref().map(|l| &l.license), self.refused.as_ref(), eff);
         let license_state_code = match &lic {
+            None if matches!(self.refused, Some((crate::license::ServiceWhy::WrongProduct | crate::license::ServiceWhy::WrongRoot, _))) => 4,
             None => 0,
             Some((_, _, _, p)) if *p != crate::license::Product::Spokes => 4,
             Some(((LicenseStateName::Valid, _), _, _, _)) => 1,
@@ -1428,6 +1501,7 @@ impl State {
         m.insert("seats_total".into(), json!(lic.as_ref().map(|l| l.1)));
         m.insert("license_days".into(), json!(lic.as_ref().map(|l| l.0 .1)));
         m.insert("license_state".into(), json!(license_state_code));
+        m.insert("license_service".into(), json!(service.state.code()));
         m.insert("crl_days".into(), json!(crl_days));
         m
     }
@@ -1500,11 +1574,6 @@ impl State {
         Ok(Offered { license: c.license, dev: c.dev, token })
     }
 
-    /// The license in force now, for the 4.7 one-admin test.
-    pub fn license_now(&self) -> Option<&License> {
-        self.licensed.as_ref().map(|l| &l.license)
-    }
-
     /// Where an installed license goes (4.7): the file --license named when it is inside --state; Err names where
     /// the relay reads its license from instead (a file outside --state, or LUCID_RELAY_LICENSE text).
     pub fn license_target(&self) -> Result<PathBuf, String> {
@@ -1525,7 +1594,15 @@ impl State {
             None => LicenseUsers::open(self.state_dir.as_ref().map(|d| d.join(LICENSE_USERS_FILE)).as_deref())?,
         };
         let f = Fields::new().with("id", &offered.license.id).with("exp", offered.license.exp).with("file", file.display().to_string());
+        if let Some(dir) = &self.state_dir {
+            match crate::console_spokes::write_last_license(dir, &offered.license) {
+                Ok(()) => self.last_license = Some(crate::console::LicenseRecord::of(&offered.license)),
+                Err(e) => self.logger.ops("license.last-failed", &Fields::new().with("why", e), Level::Warn),
+            }
+        }
         self.licensed = Some(Licensed { token: offered.token, license: offered.license, dev: offered.dev, users });
+        // R42-1: a fitting license turns service on at once, from stopped too.
+        self.refused = None;
         self.logger.security("license.installed", &f, Level::Info);
         self.license_seen = None;
         self.check_license(t)
@@ -2025,19 +2102,54 @@ mod tests {
     }
 
     #[test]
-    fn the_remote_spokes_service_gate_is_unchanged_503_past_grace_and_no_upgrade_period() {
+    fn the_remote_spokes_service_gate_stops_with_no_license_past_2_grace_days_and_never_goes_back() {
         let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
         let (mut st, _) = state_logged(&root);
         let where_ = Fields::new();
-        // No license: no gate and no upgrade period (that is Meeting Hub's alone, 2.4).
-        assert!(st.license_gate(T0 + 400 * 86_400_000, &where_).unwrap().is_none());
+        // No license: stopped (R42-1), no upgrade period (that is Meeting Hub's alone, 2.4).
+        let r = st.license_gate(T0, &where_).unwrap().expect("no license refuses");
+        assert_eq!(r.status, 503);
+        assert!(r.body.contains("\"code\":\"license-inactive\"") && r.body.contains(SPOKES_LICENSE_INACTIVE));
+        assert_eq!(st.service_view(T0).why, Some("none"));
         let exp = T0 / 1000 + 86_400;
         let license = crate::license::License { id: "l_1".into(), org: "acme".into(), root: root_id(&root), edition: "standard".into(), users: 5, relays: 1, exp, grace_days: 14 };
         st.licensed = Some(Licensed { token: String::new(), license, dev: false, users: crate::license::LicenseUsers::open(None).unwrap() });
         assert!(st.license_gate(T0, &where_).unwrap().is_none(), "valid serves");
         assert!(st.license_gate((exp + 86_400) * 1000, &where_).unwrap().is_none(), "grace serves");
-        let r = st.license_gate((exp + 14 * 86_400) * 1000, &where_).unwrap().expect("past grace refuses");
+        // R42-2: graceDays 14 in the token, 2 days honored
+        let r = st.license_gate((exp + 2 * 86_400) * 1000, &where_).unwrap().expect("past 2 grace days refuses");
         assert_eq!(r.status, 503);
+        // R7-M1: moving the host clock back does not bring service back
+        assert!(st.license_gate(T0, &where_).unwrap().is_some(), "a clock moved back stays stopped");
+        assert_eq!(st.service_view(T0).why, Some("expired"));
+    }
+
+    #[test]
+    fn a_wrong_root_license_starts_the_relay_stopped() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        // a license of another org root (signed by a key this relay does not know as its root): refused, started stopped
+        let other = SigningKey::from_slice(&[9u8; 32]).unwrap();
+        let token = compact(&other, &json!({ "v": 2, "typ": "lucid-relay-license" }));
+        let opts = Options {
+            root: root.verifying_key().into(),
+            owner: None,
+            license: Some(token),
+            crl_file: None,
+            store: None,
+            seen_file: None,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            console: None,
+            state_dir: None,
+            license_file: None,
+        };
+        let mut st = State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).expect("the relay starts");
+        let s = st.service_view(T0);
+        assert_eq!(s.state, crate::console::ServiceState::Stopped);
+        assert!(s.why.is_some_and(|w| w != "none"), "{:?}", s.why);
+        assert!(st.license_gate(T0, &Fields::new()).unwrap().is_some());
     }
 
     #[test]

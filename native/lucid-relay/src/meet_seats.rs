@@ -5,12 +5,11 @@
 // `state_dir/meet-seats.json`, owner-only, fail closed:
 //   {clock: null or {startedAt, startElapsed, notices: [{day, at}]}, picks: [{principal, by, at}],
 //    unseated: [{principal, at, why}], held: [{principal, at}], firstSeen: {principal: at}, migrated: [principal],
-//    everSeated: [principal], lastUsers: null or n, lastLicense: null or {product, root, id, edition, users, relays,
-//    exp}}
+//    lastLicense: null or {product, root, id, edition, users, relays, exp}}
 // (`startElapsed`, the seat clock's `seatElapsed` when the clock started, and `migrated`, the principals whose
 // `firstSeen` came from the upgrade migration, are what the contract's fields need to be kept across a restart.)
-// `everSeated` (R6-M2) is every principal this relay ever seated, never shrinking: a new principal is one not in it.
-// `lastLicense` (R6-M1) is the last fitting license's comparison record, the 4.7 reference with none in force.
+// `lastLicense` (R6-M1) is the last fitting license's comparison record, the 4.7 reference with none in force; it is
+// never a seat limit. The seat rules run only while a fitting license is in force (R42-1).
 //
 // Everything here is pure bookkeeping over the effective time and the seat clock of meet_time.rs; the caller
 // (meet_license.rs) writes the book before it answers, then audits, mails and closes sessions for the events.
@@ -30,7 +29,7 @@ pub fn seat_protected(principal: &str) -> String {
     format!("{principal} is a relay admin or console admin and always keeps a seat.")
 }
 pub const NOT_OVER: &str = "This relay is within its seats, so no one gives up a seat.";
-const KEYS: [&str; 9] = ["clock", "picks", "unseated", "held", "firstSeen", "migrated", "everSeated", "lastUsers", "lastLicense"];
+const KEYS: [&str; 7] = ["clock", "picks", "unseated", "held", "firstSeen", "migrated", "lastLicense"];
 
 /// The last fitting license's comparison record (R6-M1): what 4.7 compares a replacement with when no fitting
 /// license is in force.
@@ -143,13 +142,8 @@ pub struct Seats {
     pub held: Vec<(String, i64)>,
     pub first_seen: BTreeMap<String, i64>,
     pub migrated: Vec<String>,
-    /// R41-1: the last fitting license's `users` (written whenever one is in valid or grace); None for a relay that
-    /// never had a license.
-    pub last_users: Option<i64>,
-    /// R6-M1: the last fitting license's comparison record, written with `last_users`.
+    /// R6-M1: the last fitting license's comparison record (written whenever one is in on or grace).
     pub last_license: Option<LastLicense>,
-    /// R6-M2: every principal this relay ever seated; never shrinks.
-    pub ever_seated: std::collections::BTreeSet<String>,
     /// The limit the last reconcile used (not kept): a larger one reseats with `why: "license"`.
     seen_limit: Option<i64>,
 }
@@ -202,18 +196,11 @@ impl Seats {
         for p in o.get("migrated").and_then(Value::as_array).ok_or_else(bad)? {
             s.migrated.push(p.as_str().ok_or_else(bad)?.to_owned());
         }
-        s.last_users = match o.get("lastUsers") {
-            Some(Value::Null) => None,
-            v => Some(v.and_then(Value::as_i64).filter(|n| *n >= 1).ok_or_else(bad)?),
-        };
         s.last_license = match o.get("lastLicense") {
             Some(Value::Null) => None,
             Some(v) => Some(LastLicense::from_value(v).ok_or_else(bad)?),
             None => return Err(bad()),
         };
-        for p in o.get("everSeated").and_then(Value::as_array).ok_or_else(bad)? {
-            s.ever_seated.insert(p.as_str().filter(|p| !p.is_empty()).ok_or_else(bad)?.to_owned());
-        }
         Ok(Some(s))
     }
 
@@ -221,11 +208,8 @@ impl Seats {
     /// persisted timestamp the relay holds for it (None: no trustworthy one). Equal values are ordered by principal
     /// id; principals without one get the migration time and come after every principal that had one. Map iteration
     /// order is never used: the result depends only on the values and the ids.
-    /// `holders` (R6-M2): every principal with at least one device certificate that is not revoked, the people
-    /// seated at the upgrade, who fill `everSeated`.
-    pub fn migrate(dir: Option<&Path>, existing: &[(String, Option<i64>)], holders: &[String], t: i64) -> Seats {
+    pub fn migrate(dir: Option<&Path>, existing: &[(String, Option<i64>)], t: i64) -> Seats {
         let mut s = Seats { file: dir.map(|d| d.join(SEATS_FILE)), ..Default::default() };
-        s.ever_seated.extend(holders.iter().cloned());
         let mut rows: Vec<(String, Option<i64>)> = existing.to_vec();
         rows.sort();
         rows.dedup_by(|a, b| {
@@ -261,8 +245,6 @@ impl Seats {
             "held": self.held.iter().map(|(p, at)| json!({"principal": p, "at": at})).collect::<Vec<_>>(),
             "firstSeen": first,
             "migrated": self.migrated,
-            "everSeated": self.ever_seated.iter().collect::<Vec<_>>(),
-            "lastUsers": self.last_users,
             "lastLicense": self.last_license.as_ref().map(LastLicense::to_value),
         })
     }
@@ -270,12 +252,6 @@ impl Seats {
     pub fn save(&self) -> Result<(), String> {
         let Some(f) = &self.file else { return Ok(()) };
         crate::store::write_private(f, format!("{}\n", self.to_value()).as_bytes()).map_err(|e| format!("{SEATS_FILE} cannot be written: {e}"))
-    }
-
-    /// The seat limit (I13 `limit()`, R41-1): the fitting license's `users` while one is in valid or grace (`active`),
-    /// else `lastUsers`, else none (a relay that never had a license).
-    pub fn limit(&self, active: Option<i64>) -> Option<i64> {
-        active.or(self.last_users)
     }
 
     pub fn is_unseated(&self, principal: &str) -> bool {
@@ -357,11 +333,6 @@ impl Seats {
         for p in &live {
             if !self.first_seen.contains_key(p) {
                 self.first_seen.insert(p.clone(), now.t);
-                changed = true;
-            }
-            // R6-M2: whoever is seated joins `everSeated` in the same write and never leaves it
-            if !self.is_unseated(p) && !self.ever_seated.contains(p) {
-                self.ever_seated.insert(p.clone());
                 changed = true;
             }
         }
@@ -652,8 +623,7 @@ mod tests {
     #[test]
     fn the_migration_orders_by_value_then_id_and_puts_unknown_last() {
         let rows = vec![("c@x.org".to_string(), Some(T0)), ("b@x.org".to_string(), Some(T0)), ("z@x.org".to_string(), None), ("a@x.org".to_string(), None), ("d@x.org".to_string(), Some(T0 - 5)), ("d@x.org".to_string(), Some(T0 - 9))];
-        let s = Seats::migrate(None, &rows, &["d@x.org".to_string()], T0 + 100);
-        assert!(s.ever_seated.contains("d@x.org") && s.ever_seated.len() == 1, "the upgrade fills everSeated with the holders");
+        let s = Seats::migrate(None, &rows, T0 + 100);
         assert_eq!(s.first_seen["d@x.org"], T0 - 9, "the earliest record");
         assert_eq!(s.first_seen["a@x.org"], T0 + 100);
         let live: Vec<String> = ["a@x.org", "b@x.org", "c@x.org", "d@x.org", "z@x.org"].iter().map(|s| s.to_string()).collect();
@@ -668,19 +638,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         assert!(Seats::read(Some(&d)).unwrap().is_none());
-        let mut s = Seats::migrate(Some(&d), &[("a@x.org".into(), Some(T0))], &["a@x.org".to_string()], T0 + 1);
+        let mut s = Seats::migrate(Some(&d), &[("a@x.org".into(), Some(T0))], T0 + 1);
         s.last_license = Some(LastLicense { product: "meet".into(), root: "m_1".into(), id: "l_1".into(), edition: "enterprise".into(), users: 100, relays: 1, exp: 1_900_000_000 });
         s.clock = Some(Clock { started_at: T0, start_elapsed: 5, notices: vec![(0, T0)] });
-        assert_eq!(s.limit(None), None, "never licensed: no limit");
-        s.last_users = Some(3);
-        assert_eq!((s.limit(Some(5)), s.limit(None)), (Some(5), Some(3)), "the license, else lastUsers");
         s.save().unwrap();
         let back = Seats::read(Some(&d)).unwrap().unwrap();
-        assert_eq!(back.last_users, Some(3));
         assert_eq!(back.last_license, s.last_license);
-        assert_eq!(back.ever_seated, s.ever_seated);
         assert_eq!(back.clock, s.clock);
         assert_eq!(back.first_seen, s.first_seen);
+        // exactly the 7 keys: no lastUsers or everSeated (R42-1)
+        let saved: Value = serde_json::from_slice(&std::fs::read(d.join(SEATS_FILE)).unwrap()).unwrap();
+        assert_eq!(saved.as_object().unwrap().len(), KEYS.len());
         std::fs::write(d.join(SEATS_FILE), b"{\"clock\": null}").unwrap();
         assert!(Seats::read(Some(&d)).is_err());
     }

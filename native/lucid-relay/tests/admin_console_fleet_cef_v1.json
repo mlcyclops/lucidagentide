@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-2a revision 3.2",
+ "contract": "AC-2a revision 3.4",
  "host": "console.acme.example",
  "vendor": "TECHLEAD 187",
  "product": "Lucid Admin Console",
@@ -319,6 +319,36 @@
    "relay": null,
    "message": "<108>1 2026-11-17T09:00:07.623Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906007623 act=fleet.call outcome=unknown suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82 cn1Label=seq cn1=49",
    "frame": "420 <108>1 2026-11-17T09:00:07.623Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.call|fleet.call|6|rt=1794906007623 act=fleet.call outcome=unknown suser=alice@acme.example src=203.0.113.7 cs1Label=target cs1=n_0123456789abcdef0123456789abcdef cs2Label=relay cs2=console cs4Label=chain cs4=71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82 cn1Label=seq cn1=49"
+  },
+  {
+   "name": "audit fleet.license.reminder ok",
+   "source": "audit",
+   "include_reasons": false,
+   "entry": {
+    "seq": 50,
+    "ts": 1794906007923,
+    "actor": "console",
+    "role": null,
+    "ip": null,
+    "action": "fleet.license.reminder",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "relay": "r_8c41d2e07b9a6f13",
+     "product": "meet",
+     "step": "grace",
+     "key": "l_0123456789abcdef",
+     "stopsAt": 1795046400000,
+     "sent": 2
+    },
+    "prev": "71e95397916bbd255d4a01972fc07ec67d2733ffc90e26b6a326286ac0017b82",
+    "hash": "bf53931868662d9bfff4de37426e6b9459e7abff908bf39915981bdd755fe707"
+   },
+   "relay": null,
+   "message": "<110>1 2026-11-17T09:00:07.923Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.license.reminder|fleet.license.reminder|3|rt=1794906007923 act=fleet.license.reminder outcome=ok suser=console cs2Label=relay cs2=console cs4Label=chain cs4=bf53931868662d9bfff4de37426e6b9459e7abff908bf39915981bdd755fe707 cn1Label=seq cn1=50",
+   "frame": "369 <110>1 2026-11-17T09:00:07.923Z console.acme.example lucid-console - audit - CEF:0|TECHLEAD 187|Lucid Admin Console|2.5.0|fleet.license.reminder|fleet.license.reminder|3|rt=1794906007923 act=fleet.license.reminder outcome=ok suser=console cs2Label=relay cs2=console cs4Label=chain cs4=bf53931868662d9bfff4de37426e6b9459e7abff908bf39915981bdd755fe707 cn1Label=seq cn1=50"
   },
   {
    "name": "relay fleet.relay.recovered",

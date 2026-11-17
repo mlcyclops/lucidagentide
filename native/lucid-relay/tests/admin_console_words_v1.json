@@ -1,8 +1,8 @@
 {
  "version": 1,
- "contract": "AC-1 revision 4",
- "about": "Exact words of the Lucid Admin Console. <name> marks a value filled in at run time; quotes are part of the words. 'page' is section 8.1 (compound rows split into <id>.<part>; lists keep the contract's order), 'sign' the signing side's words, 'people' the words the Meeting Hub relay answers people, 'dialogs' section 8.2 (second: a two-admin action, showing dialog.second with two-person control on and dialog.single with it off; button_single: its button with two-person control off), 'refusals' section 8.3 (the first words are the answer, later ones the alternates), 'mail' section 8.4 (\\n a line break; every mail ends with mail.footer's body), 'relay' the relay's start and other words, 'labels' section 7, 'clean' the characters removed from untrusted text (inclusive code point ranges). Not page text: cli.* (the offline CLI and start log; cli.dev-license is the start log of a dev-license build, which accepts development-key licenses and is never signed or shipped, R4-H1) and python.test-only with python.test-only.seatclock (the start refusals of the Python reference relay and lucid-relay-seatclock-check for every publisher-signed license and a production state folder). In attention.clock-uncertain and mail.clock-uncertain, <n> is the hours left before the hold, counting downtime, never an absolute time (R4-M1, R5-L1); mail.clock-uncertain's <time> is when the time became uncertain.",
- "placeholder": "<[a-z][a-z ]*>",
+ "contract": "AC-1 revision 4.2",
+ "about": "Exact words of the Lucid Admin Console. <name> marks a value filled in at run time; quotes are part of the words. 'page' is section 8.1 (compound rows split into <id>.<part>; lists keep the contract's order), 'sign' the signing side's words, 'people' the words the Meeting Hub and Remote Spokes relays answer people, 'dialogs' section 8.2 (second: a two-admin action, showing dialog.second with two-person control on and dialog.single with it off; button_single: its button with two-person control off), 'refusals' section 8.3 (the first words are the answer, later ones the alternates), 'mail' section 8.4 (\\n a line break; every mail ends with mail.footer's body), 'relay' the relay's start and other words, 'labels' section 7, 'clean' the characters removed from untrusted text (inclusive code point ranges). Not page text: cli.* (the offline CLI and start log; cli.dev-license is the start log of a dev-license build, which accepts development-key licenses and is never signed or shipped, R4-H1) and python.test-only with python.test-only.seatclock (the start refusals of the Python reference relay and lucid-relay-seatclock-check for every publisher-signed license and a production state folder). In attention.clock-uncertain and mail.clock-uncertain, <n> is the hours left before the hold, counting downtime, never an absolute time (R4-M1, R5-L1); mail.clock-uncertain's <time> is when the time became uncertain.",
+ "placeholder": "<[a-z][A-Za-z ]*>",
  "page": {
   "title": "LUCID Admin Console",
   "title.document": "Lucid Admin Console: <host>",
@@ -129,10 +129,28 @@
   "join.reset": "An admin reset your sign-in. Set up how you sign in again.",
   "account.key-waiting": "Your security key is set up. Another admin must approve it before it gives you admin rights.",
   "bootstrap.pinned": "This console waits for its first admin, <email>.",
-  "banner.grace": "The license ended on <date>. This console keeps working for <n> more days. Install a new license.",
+  "banner.expiring": "The <product> license ends in <n> days, on <date>. Install a new license before then, or this relay stops serving people.",
+  "banner.grace": "The <product> license ended on <date>. Service stops on <date and time> unless a new license is installed.",
+  "banner.grace.button": "Install a license",
   "banner.expired": "The license and its grace days are over. <product> pages are read-only until a new license is installed.",
-  "banner.license-inactive": "The Meeting Hub license is not active, so no one new can be added. People who already have a seat keep using Meeting Hub. Install a license to add people again.",
-  "banner.upgrade-period": "This relay needs a Meeting Hub license. People can be added until <date>; after that no one new can be added until a license is installed. People who already have a seat keep using Meeting Hub.",
+  "banner.license-stopped": "This relay has stopped serving people: its <product> license is not active (<why>). Install a license to turn service back on.",
+  "banner.license-stopped.button": "Install a license",
+  "banner.upgrade-period": "This relay needs a Meeting Hub license. Service stops on <date and time> unless a license is installed.",
+  "banner.upgrade-period.button": "Install a license",
+  "license.why": [
+   "no license is installed",
+   "the license is for another product",
+   "the license is for another root",
+   "the license file could not be used: <verifier words>",
+   "the license and its grace days are over"
+  ],
+  "license.why.codes": [
+   "none",
+   "wrong-product",
+   "wrong-root",
+   "invalid",
+   "expired"
+  ],
   "banner.seats-over": "<seated> people use Meeting Hub; the license covers <users>. On <date> the relay takes seats from <n> people. Request more seats, or pick who gives up a seat.",
   "banner.seats-over.button": "Request more seats",
   "locked.title": "<product> needs a license",
@@ -144,9 +162,10 @@
   "attention.title": "What needs your attention",
   "attention.none": "Nothing needs your attention.",
   "attention.license-none": "No license is installed for <product>.",
-  "attention.license-grace": "The license ended. <n> grace days left.",
+  "attention.license-grace": "The license ended. Service stops on <date and time> unless a new license is installed.",
   "attention.license-expired": "The license and its grace days are over.",
-  "attention.license-expiring": "The license ends in <n> days.",
+  "attention.license-expiring": "The license ends in <n> days. Install a new license before <date>.",
+  "attention.license-stopped": "This relay has stopped serving people: the <product> license is not active. Install a license.",
   "attention.seats-high": "<used> of <users> licensed people are in use.",
   "attention.seats-over": "<used> people use Meeting Hub; the license covers <users>. Day <day> of 14: seats are taken from <n> people on <date>.",
   "attention.uncounted": "<n> hubs were refused because they have no license seat.",
@@ -171,8 +190,7 @@
   "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
   "attention.blocks-active": "<n> blocks are active on this relay.",
   "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
-  "attention.license-adding-off": "No one new can be added to Meeting Hub: the license is not active.",
-  "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or no one new can be added after that.",
+  "attention.license-upgrade-period": "Install a Meeting Hub license by <date and time>, or this relay stops serving people.",
   "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
   "attention.seats-protected": "Admins alone use more seats than the license covers. Request more seats.",
   "attention.profile-standard": "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment.",
@@ -194,9 +212,7 @@
   "meet.viewer-rights": "Signed in with a passkey that does not come from your Meeting Hub device, so admin actions are off. Sign out, then sign in with a passkey you added from your own Meeting Hub device.",
   "high.viewer-rights": "You signed in without an approved security key, so you have viewer rights. Under this console's High profile, admins and user managers sign in with a FIPS certified hardware security key. You can add one in Your account; another admin then approves it.",
   "seats.migrated": "People who had devices before this version are ordered by the earliest record this relay kept for them; where there was none, by their ID.",
-  "seats.last-license": "No Meeting Hub license is active. Seats still follow the last license, which covered <users> people.",
-  "seats.no-license": "This relay has never had a Meeting Hub license. The <seated> people it has keep their seats, and no one new can be added until a license is installed.",
-  "seats.no-license.upgrade-period": "This relay has no Meeting Hub license yet. People can be added until <date>.",
+  "seats.stopped": "No Meeting Hub license is active, so this relay serves no one and seat rules wait. Install a license.",
   "cli.profile-ignored": "The Admin Console is already set up, so <flag> is ignored. Change the security profile in Settings, Security.",
   "cli.profile-ignored.flags": [
    "--console-profile",
@@ -205,6 +221,10 @@
   "clock.title": "Relay time",
   "clock.title.body": "Relay clock: <time>. Your browser: <time>.",
   "clock.title.button": "Confirm the relay's time",
+  "clock.title.note": "This changes only the seat clock. It never extends a license, its grace or the upgrade period.",
+  "cli.license-time-reset": "The license clock reads <highWater>; this host's clock reads <now>. Type this host's name to set the license clock to the host's clock.",
+  "cli.license-time-reset.done": "License clock set to <time>.",
+  "log.license-reminders-unreadable": "License reminder records could not be read. Past reminders were not sent again; banners still show.",
   "seal.provider": "Secrets are protected by <provider>.",
   "seal.provider.names": [
    "Windows DPAPI under the relay's service account",
@@ -385,7 +405,8 @@
   "sign.requests-refused": "Only the hubs of console admins can read Admin Console requests."
  },
  "people": {
-  "meet.license-inactive": "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.",
+  "meet.license-inactive": "Your organization's Meeting Hub license is not active. Ask your admin.",
+  "spokes.license-inactive": "Your organization's Remote Spokes license is not active. Ask your admin.",
   "meet.no-seat": "Your organization has no Meeting Hub seat for you. Ask your admin."
  },
  "dialogs": {
@@ -597,13 +618,18 @@
     "Install",
     "Ask for approval"
    ],
+   "both": {
+    "stopped": [
+     "This relay starts serving people again."
+    ],
+    "grace": [
+     "This relay honors 2 grace days of the <n> in this license."
+    ]
+   },
    "spokes": [
     "Every hub needs a new license seat from the root before it is admitted again."
    ],
    "meet": {
-    "adding": [
-     "People can be added to Meeting Hub again."
-    ],
     "upgrade": [
      "The upgrade period ends now: this license lasts past <date>.",
      "The upgrade period stays until <date>, because this license ends before it."
@@ -615,7 +641,7 @@
      "<n> people without a seat get one back now."
     ]
    },
-   "note": "The Now line only when a license is installed. Then the product's lines (R3-L4): 'spokes' only on a Remote Spokes relay when the new license has a new ID; on a Meeting Hub relay each 'meet' group that applies, one sentence from each group.",
+   "note": "The Now line only when a license is installed. Then, on both products, each 'both' line that applies (R42-1: 'stopped' while service is stopped; R42-2: 'grace' when the token's grace is longer than 2 days). Then the product's lines (R3-L4): 'spokes' only on a Remote Spokes relay when the new license has a new ID; on a Meeting Hub relay each 'meet' group that applies, one sentence from each group.",
    "second": true,
    "button_single": "Install"
   },
@@ -1342,9 +1368,13 @@
   "license-inactive": {
    "status": 403,
    "words": [
-    "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin."
+    "Your organization's Meeting Hub license is not active. Ask your admin."
    ],
-   "note": "an add-people action while adding is closed, on the Meeting Hub main port (4.10) and in the console (4.9, 5), R41-1"
+   "status_spokes": 503,
+   "words_spokes": [
+    "Your organization's Remote Spokes license is not active. Ask your admin."
+   ],
+   "note": "every service route while service is stopped (4.10), never on the console, R42-1; 403 on Meeting Hub with meet.license-inactive, 503 on Remote Spokes with spokes.license-inactive"
   },
   "no-seat": {
    "status": 403,
@@ -1530,23 +1560,20 @@
    "body": "A Meeting Hub seat on <host> is yours again. Meeting Hub works for you now."
   },
   "mail.upgrade-period": {
-   "subject": "Meeting Hub on <host> needs a license by <date>",
-   "body": "This Meeting Hub relay was upgraded and has no license. People can be added until <date>. After that no one new can be added until a Meeting Hub license is installed; people who already have a seat keep using Meeting Hub.\n\nInstall one in the Admin Console: <console>#/meet/license"
+   "subject": "Meeting Hub on <host> needs a license by <date and time>",
+   "body": "This Meeting Hub relay was upgraded and has no license. Service stops on <date and time> unless a Meeting Hub license is installed.\n\nInstall one in the Admin Console: <console>#/meet/license"
   },
-  "mail.license": {
-   "subject": "<product> license on <host>: <state words>",
-   "body": [
-    "The license ends in <n> days, on <date>.",
-    "The license ended on <date>. Its grace days end on <date>.",
-    "The license and its grace days are over."
-   ],
-   "body_meet": " No one new can be added to Meeting Hub until a new license is installed; people who already have a seat keep using it.",
-   "body_end": "\n\nInstall a license: <console>#/<section>/license",
-   "state_words": [
-    "ends in <n> days",
-    "in grace",
-    "ended"
-   ]
+  "mail.license-expiring": {
+   "subject": "<product> license on <host> ends in <n> days",
+   "body": "The <product> license of this relay ends on <date> (ID <license id>). Install a new license before then, or the relay stops serving people after at most 2 grace days.\n\nInstall a license: <console>#/<section>/license"
+  },
+  "mail.license-grace": {
+   "subject": "<product> on <host>: service stops on <date and time>",
+   "body": "The <product> license of this relay ended on <date> (ID <license id>). Service stops on <date and time> unless a new license is installed.\n\nInstall a license: <console>#/<section>/license"
+  },
+  "mail.license-stopped": {
+   "subject": "<product> on <host> has stopped serving people",
+   "body": "This relay stopped serving people on <date and time> because its <product> license is not active (<why>). The Admin Console still works.\n\nInstall a license to turn service back on: <console>#/<section>/license"
   },
   "mail.clock-uncertain": {
    "subject": "Meeting Hub on <host>: confirm the relay's time",

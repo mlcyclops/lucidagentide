@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-1 revision 4",
+ "contract": "AC-1 revision 4.2",
  "about": "Section 3.3 (I10): RFC 6238 with HMAC-SHA-1, 6 digits, 30-second steps, one step either side accepted; a step at or below the last one used is refused, at sign-in and step-up alike. The secret is shown once as the otpauth URI: label pct(host):pct(email), pct encoding every UTF-8 byte outside RFC 3986 unreserved with upper-case hex; secret in RFC 4648 base32 without padding. qr: the URI as qr.js draws it (7.1): byte mode, level M, the smallest version that holds it, the mask with the lowest penalty (Project Nayuki's QR Code generator rules, the lower mask on a tie); matrix rows top to bottom, 1 dark, no quiet zone.",
  "algorithm": "SHA1",
  "digits": 6,

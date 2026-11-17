@@ -233,6 +233,138 @@ fn product_str(p: Product) -> &'static str {
     p.as_str()
 }
 
+/// AC-2a 8.1, 8.2 (3.4): the License column of a relay stopped for its license.
+pub const STOPPED_WORDS: &str = "Stopped: no active license";
+const SERVICE_STATES: [&str; 4] = ["on", "grace", "upgrade-period", "stopped"];
+const SERVICE_WHYS: [&str; 5] = ["none", "wrong-product", "wrong-root", "expired", "invalid"];
+
+/// The 5.6 `state` frame's license object (3.4.1, R7-L1), exactly `{id, exp, state, daysLeft, service: {state,
+/// stopsAt, why, upgradePeriodEnds}}`: every key present, `id` text or null, `exp`, `daysLeft`, `stopsAt` and
+/// `upgradePeriodEnds` integers or null, `state` text, `service.state` one of the four and `why` one of the five or
+/// null. None for anything else: the frame is refused (`fleet-op`), never normalized field by field.
+fn license_report(v: &Value) -> Option<Value> {
+    let o = v.as_object().filter(|o| o.len() == 5)?;
+    let s = o.get("service")?.as_object().filter(|s| s.len() == 4)?;
+    let int = |x: Option<&Value>| match x? {
+        Value::Null => Some(Value::Null),
+        n => n.as_i64().map(Value::from),
+    };
+    let text = |x: &Value, max: usize| x.as_str().filter(|t| !t.is_empty() && t.len() <= max && !t.chars().any(char::is_control)).map(Value::from);
+    let id = match o.get("id")? {
+        Value::Null => Value::Null,
+        x => text(x, 80)?,
+    };
+    let why = match s.get("why")? {
+        Value::Null => Value::Null,
+        w => Value::from(*SERVICE_WHYS.iter().find(|x| w.as_str() == Some(**x))?),
+    };
+    let state = SERVICE_STATES.iter().copied().find(|x| s.get("state").and_then(Value::as_str) == Some(*x))?;
+    Some(json!({
+        "id": id, "exp": int(o.get("exp"))?, "state": text(o.get("state")?, 16)?, "daysLeft": int(o.get("daysLeft"))?,
+        "service": { "state": state, "stopsAt": int(s.get("stopsAt"))?, "why": why, "upgradePeriodEnds": int(s.get("upgradePeriodEnds"))? },
+    }))
+}
+
+/// A relay's service at `t` from what it last pushed (8.1): its `exp` and `stopsAt` carry it on while it is silent,
+/// so `on` past `exp` reads as grace and grace or an upgrade period past `stopsAt` as stopped. None without a
+/// pushed `service`.
+fn pushed_service(lic: &Value, t: i64) -> Option<crate::console::ServiceView> {
+    use crate::console::ServiceState as S;
+    let svc = lic.get("service")?;
+    let mut state = match service_state_of(lic)? {
+        "on" => S::On,
+        "grace" => S::Grace,
+        "upgrade-period" => S::UpgradePeriod,
+        _ => S::Stopped,
+    };
+    let exp = lic.get("exp").and_then(Value::as_i64);
+    let stops_at = svc.get("stopsAt").and_then(Value::as_i64);
+    if state == S::On && exp.is_some_and(|e| t >= e) {
+        state = S::Grace;
+    }
+    if matches!(state, S::Grace | S::UpgradePeriod) && stops_at.is_some_and(|s| t >= s) {
+        state = S::Stopped;
+    }
+    Some(crate::console::ServiceView {
+        state,
+        stops_at,
+        why: svc.get("why").and_then(Value::as_str).and_then(|w| SERVICE_WHYS.iter().copied().find(|x| *x == w)),
+        reason: None,
+        upgrade_period_ends: svc.get("upgradePeriodEnds").and_then(Value::as_i64),
+        license_id: lic.get("id").and_then(Value::as_str).map(str::to_owned),
+        exp,
+        at: t,
+    })
+}
+
+/// AC-2a 8.1 (revision 3.4.1, R7-L1): a relay's reminder key and every step of its schedule from the pushed license
+/// object alone: key the license `id`, else `"upgrade:" + upgradePeriodEnds`, else none (no steps); `30d` to `1d` at
+/// `exp` minus those days, `expiry` at `exp`, `grace` every 12 hours after `exp` while before `stopsAt`, `stopped` at
+/// `stopsAt`; an upgrade period's `grace` steps every 12 hours from 2 days before its end, then `stopped`. Steps
+/// already past are listed too; the console sends each once per relay and key.
+pub fn fleet_steps(lic: &Value) -> (Option<String>, Vec<(&'static str, i64)>) {
+    use crate::license_reminders::{DAY_MS, DAYS_BEFORE, REPEAT_MS, UPGRADE_PERIOD_MS};
+    let svc = lic.get("service");
+    let stops_at = svc.and_then(|s| s.get("stopsAt")).and_then(Value::as_i64);
+    let mut steps = Vec::new();
+    if let Some(id) = lic.get("id").and_then(Value::as_str) {
+        if let Some(exp) = lic.get("exp").and_then(Value::as_i64) {
+            for d in DAYS_BEFORE {
+                steps.push((days_step(d), exp - d * DAY_MS));
+            }
+            steps.push(("expiry", exp));
+            if let Some(stop) = stops_at {
+                let mut at = exp + REPEAT_MS;
+                while at < stop {
+                    steps.push(("grace", at));
+                    at += REPEAT_MS;
+                }
+                steps.push(("stopped", stop));
+            }
+        }
+        return (Some(id.to_owned()), steps);
+    }
+    let Some(ends) = svc.and_then(|s| s.get("upgradePeriodEnds")).and_then(Value::as_i64) else { return (None, steps) };
+    let stop = stops_at.unwrap_or(ends);
+    let mut at = ends - UPGRADE_PERIOD_MS;
+    while at < stop {
+        steps.push(("grace", at));
+        at += REPEAT_MS;
+    }
+    steps.push(("stopped", stop));
+    (Some(format!("upgrade:{ends}")), steps)
+}
+
+/// The record kind (license_reminders.rs) of a fleet step.
+fn step_kind(step: &str) -> &'static str {
+    match step {
+        "30d" => "days-30",
+        "14d" => "days-14",
+        "7d" => "days-7",
+        "3d" => "days-3",
+        "1d" => "days-1",
+        "expiry" => "grace-start",
+        "grace" => "grace-repeat",
+        _ => "stopped",
+    }
+}
+
+fn days_step(d: i64) -> &'static str {
+    match d {
+        30 => "30d",
+        14 => "14d",
+        7 => "7d",
+        3 => "3d",
+        _ => "1d",
+    }
+}
+
+/// The pushed license view's `service.state` (AC-1 4.7, 5.6), when it is one of the four.
+fn service_state_of(lic: &Value) -> Option<&'static str> {
+    let s = lic.get("service").and_then(|s| s.get("state")).and_then(Value::as_str)?;
+    SERVICE_STATES.iter().copied().find(|x| *x == s)
+}
+
 fn product_of(s: &str) -> Option<Product> {
     match s {
         "spokes" => Some(Product::Spokes),
@@ -449,6 +581,8 @@ pub struct FleetBook {
     pub library: Vec<Value>,
     /// Fleet approvals by approval id: `{kind, relays, ...binding, credential}` (the request's assertion).
     pub approvals: Map<String, Value>,
+    /// AC-2a 8.1 `licenseReminders`: `{relay id: sealed reminder record}` (license_reminders.rs, R7-L2).
+    pub license_reminders: Map<String, Value>,
 }
 
 fn hash_hex(h: &[u8; 32]) -> String {
@@ -471,14 +605,14 @@ impl FleetBook {
     fn new(policy: Value) -> Result<FleetBook, ApiError> {
         let console_id = format!("c_{}", hex(&random_bytes(8)?));
         let policy_hash = crate::fleet_trust::policy_hash(&console_id, 1, &[0u8; 32], &policy).ok_or_else(|| ApiError::of("write-failed"))?;
-        Ok(FleetBook { console_id, policy, policy_seq: 1, policy_hash, roster_seq: 0, roster_hash: [0u8; 32], roster: Vec::new(), roster_log: Vec::new(), policy_log: Vec::new(), library: Vec::new(), approvals: Map::new() })
+        Ok(FleetBook { console_id, policy, policy_seq: 1, policy_hash, roster_seq: 0, roster_hash: [0u8; 32], roster: Vec::new(), roster_log: Vec::new(), policy_log: Vec::new(), library: Vec::new(), approvals: Map::new(), license_reminders: Map::new() })
     }
 
     pub fn to_value(&self) -> Value {
         json!({
             "consoleId": self.console_id, "policy": self.policy, "policySeq": self.policy_seq, "policyHash": hash_hex(&self.policy_hash),
             "rosterSeq": self.roster_seq, "rosterHash": hash_hex(&self.roster_hash), "roster": self.roster, "rosterLog": self.roster_log,
-            "policyLog": self.policy_log, "library": self.library, "approvals": self.approvals,
+            "policyLog": self.policy_log, "library": self.library, "approvals": self.approvals, "licenseReminders": self.license_reminders,
         })
     }
 
@@ -499,6 +633,11 @@ impl FleetBook {
             policy_log: v.get("policyLog")?.as_array()?.clone(),
             library: v.get("library")?.as_array()?.clone(),
             approvals: v.get("approvals")?.as_object()?.clone(),
+            // absent in a book from before revision 3.4
+            license_reminders: match v.get("licenseReminders") {
+                None => Map::new(),
+                Some(r) => r.as_object()?.clone(),
+            },
         })
     }
 }
@@ -1281,7 +1420,7 @@ impl Fleet {
         let lic = rec.report.get("license").cloned().unwrap_or(Value::Null);
         let state = str_of(lic.get("state")).unwrap_or("none");
         let days = lic.get("daysLeft").and_then(Value::as_i64);
-        let adding_closed = lic.get("adding").and_then(|a| a.get("state")).and_then(Value::as_str) == Some("closed");
+        let service = service_state_of(&lic);
         let cert_days = rec.serials.iter().filter(|s| s.current).map(|s| (s.not_after - t).div_euclid(86_400_000)).min();
         let signer_bad = rec.servers.get("signer").and_then(|s| s.get("healthy")).and_then(Value::as_bool) == Some(false);
         let sustained = |key: &str, above: f64| {
@@ -1290,14 +1429,13 @@ impl Fleet {
         };
         let latest = |key: &str| self.metrics.latest(&rec.id).and_then(|l| l.m.get(key).and_then(Value::as_f64));
         let sev = |s: &str| rec.attention.iter().any(|a| a["severity"] == s);
-        let license_bad = match rec.product {
-            Product::Spokes => matches!(state, "expired" | "none"),
-            Product::Meet => adding_closed,
-        };
+        // AC-2a 8.2 (3.4): stopped for its license is `bad` on either product; grace or upgrade period `warn`.
+        let license_bad = service == Some("stopped");
+        let license_warn = matches!(service, Some("grace" | "upgrade-period")) || state == "grace";
         if license_bad || signer_bad || cert_days.is_some_and(|d| d < 0) || sustained("cpu_host", 90.0) || latest("mem_host_used").is_some_and(|m| m > 95.0) || sev("bad") {
             return "bad";
         }
-        if state == "grace" || days.is_some_and(|d| d <= 30) || cert_days.is_some_and(|d| d <= 21) || sustained("cpu_host", 75.0) || latest("mem_host_used").is_some_and(|m| m > 85.0) || sustained("latency_console", 500.0) || sev("warn") {
+        if license_warn || days.is_some_and(|d| d <= 30) || cert_days.is_some_and(|d| d <= 21) || sustained("cpu_host", 75.0) || latest("mem_host_used").is_some_and(|m| m > 85.0) || sustained("latency_console", 500.0) || sev("warn") {
             return "warn";
         }
         "ok"
@@ -1320,7 +1458,9 @@ impl Fleet {
             "license": {
                 "state": lic.get("state").and_then(Value::as_str).map(clean), "daysLeft": lic.get("daysLeft").and_then(Value::as_i64),
                 "users": seats.as_ref().and_then(|s| s.get("total")).and_then(Value::as_u64), "used": seats.as_ref().and_then(|s| s.get("seated")).and_then(Value::as_u64),
-                "adding": lic.get("adding").and_then(|a| a.get("state")).and_then(Value::as_str).map(clean),
+                "service": service_state_of(&lic), "stopsAt": lic.get("service").and_then(|s| s.get("stopsAt")).and_then(Value::as_i64),
+                "why": lic.get("service").and_then(|s| s.get("why")).and_then(Value::as_str).filter(|w| SERVICE_WHYS.contains(w)),
+                "words": (service_state_of(&lic) == Some("stopped")).then_some(STOPPED_WORDS),
             },
             "health": self.health(rec, connected, t), "scopes": rec.scopes, "pendingScopes": rec.pending_scopes,
             "readOnly": rec.report_bool("readOnly"), "confirm": strings(rec.report.get("confirm")), "certNotAfter": cert,
@@ -2200,7 +2340,7 @@ impl Fleet {
             .filter(|x| x.state.live())
             .map(|x| {
                 let lic = x.report.get("license").cloned().unwrap_or(Value::Null);
-                json!({ "relay": x.id, "product": product_str(x.product), "license": { "state": lic.get("state"), "daysLeft": lic.get("daysLeft") }, "adding": lic.get("adding").cloned().unwrap_or(Value::Null), "seats": x.counts.get("people").cloned().unwrap_or(Value::Null) })
+                json!({ "relay": x.id, "product": product_str(x.product), "license": { "state": lic.get("state"), "daysLeft": lic.get("daysLeft"), "id": lic.get("id"), "exp": lic.get("exp"), "service": lic.get("service") }, "seats": x.counts.get("people").cloned().unwrap_or(Value::Null) })
             })
             .collect();
         let library: Vec<Value> = self.book.lock().library.iter().map(|l| { let mut l = l.clone(); if let Some(o) = l.as_object_mut() { o.remove("token"); } l }).collect();
@@ -2628,13 +2768,19 @@ impl Fleet {
 
     // ── Channel frames from relays (5.6) ────────────────────────────────────────────────────────────────
 
-    /// Take a relay's report fields into its record (untrusted, kept as reported; shown cleaned).
-    fn take_report(rec: &mut RelayRecord, body: &Value) {
+    /// Take a relay's report fields into its record (untrusted, kept as reported; shown cleaned). A frame whose
+    /// `license` is not the exact 5.6 shape (3.4.1) is refused whole with `fleet-op`: nothing of it is taken.
+    fn take_report(rec: &mut RelayRecord, body: &Value) -> Result<(), ApiError> {
         const KEYS: [&str; 22] = ["version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "scopeRequest", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter", "held", "unattested", "license", "waiting", "anchors", "trustTimeAhead"];
-        let Some(o) = body.as_object() else { return };
+        let Some(o) = body.as_object() else { return Err(ApiError::of("fleet-op")) };
+        let license = match o.get("license") {
+            Some(v) => Some(license_report(v).ok_or_else(|| ApiError::of("fleet-op"))?),
+            None => None,
+        };
         for k in KEYS {
             if let Some(v) = o.get(k) {
-                rec.report.insert(k.to_owned(), v.clone());
+                let v = if k == "license" { license.clone().unwrap_or(Value::Null) } else { v.clone() };
+                rec.report.insert(k.to_owned(), v);
             }
         }
         if let Some(v) = str_of(o.get("version")) {
@@ -2656,6 +2802,7 @@ impl Fleet {
             rec.scopes = granted;
         }
         rec.settle_state();
+        Ok(())
     }
 
     /// The relay's first frame (5.6 `hello`), after fleet_port verified its certificate: the record moves
@@ -2678,7 +2825,7 @@ impl Fleet {
             if r.state == RelayState::Pending {
                 r.state = RelayState::Unconfirmed;
             }
-            Self::take_report(r, body);
+            Self::take_report(r, body)?;
             r.last_contact_at = Some(t);
             r.source_address = Some(source.to_owned()).filter(|s| !s.is_empty()).or(r.source_address.take());
             let after = r.report.get("bootstrap").cloned();
@@ -2751,7 +2898,13 @@ impl Fleet {
                     let pins_before = r.report.get("pins").cloned();
                     let (gen, profile) = (r.report_u64("scopeGeneration"), r.profile.clone());
                     let request_before = r.report.get("scopeRequest").cloned();
-                    Self::take_report(r, body);
+                    // a malformed license refuses the whole frame (3.4.1, `fleet-op`): nothing of it is taken
+                    if Self::take_report(r, body).is_err() {
+                        // 5.5: an event with unknown keys is refused (`fleet-op`) and logged.
+                        drop(reg);
+                        c.logger.security("fleet.op-refused", &Fields::new().with("relay", relay).with("op", "state").with("code", "fleet-op"), Level::Warn);
+                        return;
+                    }
                     let request_after = r.report.get("scopeRequest").cloned();
                     if request_before.as_ref().is_some_and(|b| !b.is_null()) && request_after != request_before && !r.pending_scopes.is_empty() {
                         r.scope_stale = true;
@@ -2870,6 +3023,7 @@ impl Fleet {
         self.sync_roster(c, t);
         self.people.tick(t);
         self.refresh_counts();
+        self.license_reminders(c, t);
         let (roster_seq, policy_seq) = {
             let b = self.book.lock();
             (b.roster_seq, b.policy_seq)
@@ -2880,6 +3034,76 @@ impl Fleet {
             r.behind_since = if behind { r.behind_since.or(Some(t)) } else { None };
         }
         let _ = self.save_registry(&reg);
+    }
+
+    /// AC-2a 8.1 "License reminders" (revision 3.4, R42-6): for each live relay, from its last pushed license (`exp`,
+    /// `service.stopsAt`), the AC-1 R42-3 steps mailed to every active admin of this console, each once per relay and
+    /// key (license id or `upgrade:<upgradePeriodEnds>`), kept in `console.json` `fleet.licenseReminders` across
+    /// restarts and audited `fleet.license.reminder`. A silent relay goes on from what it last pushed.
+    fn license_reminders(&self, c: &Console, t: i64) {
+        use crate::license_reminders::{Book, Sent};
+        let mut books: Map<String, Value> = self.book.lock().license_reminders.clone();
+        let relays: Vec<(String, String, Product, Value)> =
+            self.registry.lock().relays.values().filter(|r| r.state.live()).map(|r| (r.id.clone(), r.name.clone(), r.product, r.report.get("license").cloned().unwrap_or(Value::Null))).collect();
+        let mut changed = false;
+        let mut mails: Vec<(&'static str, Vec<(&'static str, String)>, String, &'static str, String, Option<i64>)> = Vec::new();
+        for (id, name, product, lic) in relays {
+            let (Some(key), steps) = fleet_steps(&lic) else { continue };
+            // Only the latest step already due goes out (one mail per relay and step, never a backlog).
+            let Some(&(step, moment)) = steps.iter().filter(|(_, at)| *at <= t).max_by_key(|(_, at)| *at) else { continue };
+            let kind = step_kind(step);
+            // R7-L2: a record that does not check is started again from now: the step due now counts as sent.
+            let stored = books.get(&id).cloned().map(Book::from_sealed);
+            let fresh = |sent: Vec<Sent>| Book { key: Some(key.clone()), service: None, sent };
+            let mut book = match stored {
+                Some(Ok(b)) if b.key.as_deref() == Some(key.as_str()) => b,
+                Some(Err(why)) => {
+                    c.logger.ops("fleet.license-reminders-unreadable", &Fields::new().with("relay", id.as_str()).with("why", why), Level::Warn);
+                    fresh(vec![Sent { kind, moment, at: t }])
+                }
+                _ => fresh(Vec::new()),
+            };
+            if !book.has(kind, moment) {
+                book.sent.push(Sent { kind, moment, at: t });
+                let relay = clean(&name);
+                let pname = product.name().to_owned();
+                let exp = lic.get("exp").and_then(Value::as_i64);
+                let stops_at = lic.get("service").and_then(|s| s.get("stopsAt")).and_then(Value::as_i64);
+                let (mail, args) = match step {
+                    "stopped" => ("fleet.mail.license-stopped", vec![("relay", relay), ("product", pname)]),
+                    "expiry" | "grace" => ("fleet.mail.license-grace", vec![("relay", relay), ("product", pname), ("date and time", stops_at.map(crate::license_reminders::when).unwrap_or_default())]),
+                    _ => {
+                        let days = exp.map(|e| (e - t + crate::license_reminders::DAY_MS - 1).div_euclid(crate::license_reminders::DAY_MS).max(0)).unwrap_or(0);
+                        ("fleet.mail.license-reminder", vec![("relay", relay), ("product", pname), ("days", days.to_string()), ("date", exp.map(crate::license_reminders::day).unwrap_or_default())])
+                    }
+                };
+                mails.push((mail, args, id.clone(), step, key.clone(), stops_at));
+            }
+            let sealed = book.sealed();
+            if books.get(&id) != Some(&sealed) {
+                books.insert(id, sealed);
+                changed = true;
+            }
+        }
+        if changed {
+            let mut book = self.book.lock();
+            book.license_reminders = books;
+            if let Err(e) = self.save_book(c, &book) {
+                c.logger.ops("fleet.license-reminders-failed", &Fields::new().with("why", e.message), Level::Error);
+            }
+        }
+        if mails.is_empty() {
+            return;
+        }
+        let admins = c.active_admin_emails();
+        let on = c.mailer.config().mode != crate::console_mail::Mode::Off;
+        for (mail, args, relay, step, key, stops_at) in mails {
+            for to in &admins {
+                c.mailer.enqueue_reminder(mail, to, &args);
+            }
+            let product = self.registry.lock().relays.get(&relay).map(|r| product_str(r.product));
+            self.record(c, "console", "fleet.license.reminder", Some(relay.clone()), json!({ "relay": relay, "product": product, "step": step, "key": key, "stopsAt": stops_at, "sent": if on { admins.len() } else { 0 } }), t);
+        }
     }
 
     /// 8.2: `nodes` and `services` from the latest `read-health` reads, refreshed each minute while connected.
@@ -2965,6 +3189,21 @@ impl Fleet {
             out.push(item("metrics-space", "warn", json!({}), "#/relays/health".into()));
         }
         let names: HashMap<String, String> = self.registry.lock().relays.values().map(|r| (r.id.clone(), r.name.clone())).collect();
+        // 8.1 (revision 3.4): each live relay's license service, from what it last pushed.
+        let lics: Vec<(String, String, Value)> = self.registry.lock().relays.values().filter(|r| r.state.live()).map(|r| (r.id.clone(), r.name.clone(), r.report.get("license").cloned().unwrap_or(Value::Null))).collect();
+        for (id, name, lic) in lics {
+            let Some(s) = pushed_service(&lic, t) else { continue };
+            let go = format!("#/licenses?relay={id}");
+            match s.state {
+                crate::console::ServiceState::Stopped => out.push(item("relay-license-stopped", "bad", json!({ "relay": clean(&name), "why": s.why }), go)),
+                crate::console::ServiceState::Grace | crate::console::ServiceState::UpgradePeriod => out.push(item("relay-license-grace", "bad", json!({ "relay": clean(&name), "date and time": s.stops_at }), go)),
+                crate::console::ServiceState::On => {
+                    if let Some(days) = s.exp.map(|e| (e - t + 86_399_999).div_euclid(86_400_000)).filter(|d| *d <= 30) {
+                        out.push(item("relay-license-expiring", "warn", json!({ "relay": clean(&name), "days": days }), go));
+                    }
+                }
+            }
+        }
         for (relay, n) in ma.refused {
             out.push(item("metrics-refused", "warn", json!({ "relay": names.get(&relay).cloned().unwrap_or(relay.clone()), "n": n }), format!("#/relays/{relay}")));
         }
@@ -3163,8 +3402,8 @@ impl ProductSection for Fleet {
     }
 
     /// A fleet console holds no product license of its own; each relay's is on its row (8.2).
-    fn license(&self, _t: i64) -> LicenseView {
-        LicenseView { license: Value::Null, problem: None, state: LicenseState::Valid }
+    fn license(&self, t: i64) -> LicenseView {
+        LicenseView { license: Value::Null, problem: None, state: LicenseState::Valid, service: crate::console::ServiceView::on(t) }
     }
 
     fn overview_cards(&self, admin: bool, t: i64) -> Vec<Value> {
@@ -3267,7 +3506,7 @@ impl crate::fleet_people::PeopleHost for PeopleBridge {
                 profile: r.profile.clone(),
                 scope_generation: r.report_u64("scopeGeneration"),
                 scopes: r.scopes.clone(),
-                adding_closed: r.report.get("license").and_then(|l| l.get("adding")).and_then(|a| a.get("state")).and_then(Value::as_str) == Some("closed"),
+                service_stopped: r.report.get("license").and_then(service_state_of) == Some("stopped"),
                 waiting_requests: r.report_u64("waitingRequests"),
                 admins: strings(r.report.get("admins")).into_iter().map(|a| a.to_lowercase()).collect(),
                 two_person: two,
@@ -3867,6 +4106,7 @@ impl Console {
                     last_contact_ms: r.last_contact_at,
                     health: f.health(r, connected, t).to_owned(),
                     license_state: f.metrics.latest(&r.id).and_then(|l| l.m.get("license_state").and_then(Value::as_i64)),
+                    license_service: f.metrics.latest(&r.id).and_then(|l| l.m.get("license_service").and_then(Value::as_i64)),
                 }
             })
             .collect();
@@ -3880,6 +4120,107 @@ impl Console {
             headers.push(("Retry-After", s.to_string()));
         }
         crate::console::ConsoleReply { status: a.status, content_type: a.content_type, body: a.body, headers, close: false }
+    }
+}
+
+#[cfg(test)]
+mod state_frame_tests {
+    //! AC-2a 3.4.1 (R7-L1): the 5.6 `state` frame's license object against tests/admin_console_fleet_state_frame_v1.json.
+    use super::*;
+
+    fn vector() -> Value {
+        serde_json::from_str(include_str!("../tests/admin_console_fleet_state_frame_v1.json")).unwrap()
+    }
+
+    fn record(product: &str) -> RelayRecord {
+        RelayRecord::from_value(&json!({ "id": "r_0123456789abcdef", "name": "Relay", "product": product, "state": "active", "serials": [], "enrolledAt": 1 })).unwrap()
+    }
+
+    #[test]
+    fn every_vector_frame_is_taken_with_its_license_exact() {
+        let v = vector();
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut rec = record(c["product"].as_str().unwrap());
+            let body = &c["frame"]["body"];
+            assert_eq!(c["frame"]["op"], "state", "{name}");
+            Fleet::take_report(&mut rec, body).unwrap_or_else(|e| panic!("{name}: {}", e.code));
+            assert_eq!(rec.report.get("license"), Some(&body["license"]), "{name}: the license object is exact");
+            assert_eq!(rec.report.get("trustSeq"), Some(&body["trustSeq"]), "{name}");
+        }
+        // every why of the vector is one the console knows
+        for w in v["service_why"].as_array().unwrap() {
+            assert!(SERVICE_WHYS.contains(&w.as_str().unwrap()), "{w}");
+        }
+    }
+
+    #[test]
+    fn every_malformed_vector_frame_is_refused_whole_with_fleet_op() {
+        let v = vector();
+        for c in v["malformed"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut rec = record("meet");
+            let err = Fleet::take_report(&mut rec, &c["body"]).err().unwrap_or_else(|| panic!("{name}: taken"));
+            assert_eq!(err.code, c["code"].as_str().unwrap(), "{name}");
+            assert!(rec.report.is_empty(), "{name}: nothing of the frame is taken");
+        }
+    }
+
+    #[test]
+    fn wrong_types_and_extra_keys_are_refused_never_normalized() {
+        let v = vector();
+        let good = v["cases"][0]["frame"]["body"]["license"].clone();
+        let bad = |path: &[&str], value: Value| {
+            let mut l = good.clone();
+            let mut at = &mut l;
+            for p in &path[..path.len() - 1] {
+                at = at.get_mut(*p).unwrap();
+            }
+            at[path[path.len() - 1]] = value;
+            l
+        };
+        for (what, l) in [
+            ("exp as text", bad(&["exp"], json!("1822521600000"))),
+            ("daysLeft as a fraction", bad(&["daysLeft"], json!(1.5))),
+            ("an unknown service state", bad(&["service", "state"], json!("paused"))),
+            ("an unknown why", bad(&["service", "why"], json!("lapsed"))),
+            ("an extra key", bad(&["extra"], json!(1))),
+            ("an extra service key", bad(&["service", "extra"], json!(1))),
+            ("an empty id", bad(&["id"], json!(""))),
+        ] {
+            assert_eq!(license_report(&l), None, "{what}");
+        }
+        assert_eq!(license_report(&good), Some(good.clone()));
+    }
+}
+
+#[cfg(test)]
+mod reminder_tests {
+    //! AC-2a 8.1 (revision 3.4.1, R7-L1): the reminder key and steps of each vector frame.
+    use super::*;
+
+    #[test]
+    fn the_reminder_key_and_steps_match_the_vector() {
+        let v: Value = serde_json::from_str(include_str!("../tests/admin_console_fleet_state_frame_v1.json")).unwrap();
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let (key, steps) = fleet_steps(&c["frame"]["body"]["license"]);
+            assert_eq!(key.as_deref(), c["reminders"]["key"].as_str(), "{name}");
+            let want: Vec<(String, i64)> = c["reminders"]["steps"].as_array().unwrap().iter().map(|s| (s["step"].as_str().unwrap().to_owned(), s["at"].as_i64().unwrap())).collect();
+            let got: Vec<(String, i64)> = steps.into_iter().map(|(s, at)| (s.to_owned(), at)).collect();
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_silent_relay_goes_on_from_its_last_pushed_exp_and_stops_at() {
+        let v: Value = serde_json::from_str(include_str!("../tests/admin_console_fleet_state_frame_v1.json")).unwrap();
+        let lic = &v["cases"][0]["frame"]["body"]["license"];
+        let exp = lic["exp"].as_i64().unwrap();
+        let stop = lic["service"]["stopsAt"].as_i64().unwrap();
+        assert_eq!(pushed_service(lic, exp - 1).unwrap().state, crate::console::ServiceState::On);
+        assert_eq!(pushed_service(lic, exp).unwrap().state, crate::console::ServiceState::Grace);
+        assert_eq!(pushed_service(lic, stop).unwrap().state, crate::console::ServiceState::Stopped);
     }
 }
 
@@ -4478,10 +4819,12 @@ mod tests {
         assert!(kinds(&h, t).contains(&"relay-unconfirmed".to_owned()));
         assert!(kinds(&h, t).contains(&"relay-bootstrap-pending".to_owned()));
         // Silent after 3 minutes without contact, and clear once connected again.
+        // (measured from after the hello, which stamps the last contact with the wall clock)
+        let later = crate::codec::now_ms() + SILENT_MS + 1;
         h.link.up.lock().clear();
-        assert!(kinds(&h, t + SILENT_MS + 1).contains(&"relay-silent".to_owned()));
+        assert!(kinds(&h, later).contains(&"relay-silent".to_owned()));
         h.link.up.lock().insert(relay.clone());
-        assert!(!kinds(&h, t + SILENT_MS + 1).contains(&"relay-silent".to_owned()));
+        assert!(!kinds(&h, later).contains(&"relay-silent".to_owned()));
         // A relay's own items: unknown kinds dropped, AC-1 kinds kept with the console's name for the relay.
         h.f.on_event(&relay, "attention", &json!({ "items": [{ "kind": "evil-kind", "severity": "bad", "args": {} }, { "kind": "crl-stale", "severity": "warn", "args": {} }] }), t);
         let items = h.f.attention_items(&h.c, t);

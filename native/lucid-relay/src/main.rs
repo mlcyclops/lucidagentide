@@ -47,6 +47,7 @@ mod console_source;
 mod console_spokes;
 mod console_webauthn;
 mod console_wizard;
+mod license_reminders;
 mod der;
 mod fleet_agent;
 mod fleet_ca;
@@ -386,6 +387,55 @@ fn console_cli(args: &[String]) -> ! {
     }
 }
 
+/// `lucid-relay license-time reset --state <dir>` (R7-M1, 8.1 `cli.license-time-reset`): with the relay stopped
+/// (console.lock), after the operator types the relay's host name, the license clock is set to this host's clock
+/// (decision 67: it may give back grace a rollback took; only the host's operator can run it). Audited `license.time-reset` at the next start.
+/// A state folder holding `meet-time.json` is a Meeting Hub relay's: its trusted time's `highWater` is reset
+/// (`meet_time::reset_offline`, every other key kept); otherwise the Remote Spokes license clock.
+fn license_time_cli(args: &[String]) -> ! {
+    const USAGE: &str = "usage: lucid-relay license-time reset --state <dir> (or LUCID_RELAY_STATE), with the relay stopped";
+    let (cmd, rest) = args.split_first().unwrap_or_else(|| die(USAGE));
+    if cmd != "reset" {
+        die(USAGE);
+    }
+    let flags = parse_named(rest, &["state"]).unwrap_or_else(|e| die(&format!("{e}; {USAGE}")));
+    let dir = flags.get("state").cloned().or_else(|| std::env::var("LUCID_RELAY_STATE").ok()).filter(|d| !d.is_empty()).unwrap_or_else(|| die(USAGE));
+    let dir = Path::new(&dir);
+    let _lock = console_auth::lock_state(dir).unwrap_or_else(|e| die(&e));
+    let meet = dir.join(meet_time::TIME_FILE).exists();
+    // Remote Spokes: the license clock; Meeting Hub: the stored trusted time (fail closed when it does not read back)
+    let mut clock = if meet { None } else { Some(console_spokes::LicenseClock::open(Some(dir)).unwrap_or_else(|e| die(&e))) };
+    let high_water = match &clock {
+        Some(c) => c.high_water(),
+        None => meet_time::stored_high_water(dir).unwrap_or_else(|e| die(&e)),
+    };
+    let wall = codec::now_ms();
+    let host = console_auth::book_host(dir).unwrap_or_default();
+    let when = license_reminders::when;
+    eprint!(
+        "lucid-relay: The license clock reads {}; this host's clock reads {}. Type this host's name to set the license clock to the host's clock.\nHost name ({}): ",
+        when(high_water),
+        when(wall),
+        if host.is_empty() { "none recorded: press Enter" } else { host.as_str() }
+    );
+    let mut typed = String::new();
+    let _ = std::io::stdin().read_line(&mut typed);
+    if !typed.trim().eq_ignore_ascii_case(&host) {
+        die("the host name did not match; nothing was changed");
+    }
+    let done = match clock.as_mut() {
+        Some(c) => c.reset_to(wall),
+        None => meet_time::reset_offline(dir, wall),
+    };
+    match done {
+        Ok((_, after)) => {
+            println!("lucid-relay: License clock set to {}.", when(after));
+            std::process::exit(0)
+        }
+        Err(e) => die(&e),
+    }
+}
+
 /// `--name value` and `--name=value` of `names`, the last one winning; nothing else is taken.
 fn parse_named(args: &[String], names: &[&str]) -> Result<HashMap<String, String>, String> {
     let mut flags = HashMap::new();
@@ -541,6 +591,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("fleet") {
         fleet_cli(&args[1..]);
     }
+    // AC-1 2.4 "The license clock" (R7-M1): the offline recovery from a false forward jump (Remote Spokes).
+    if args.first().map(String::as_str) == Some("license-time") {
+        license_time_cli(&args[1..]);
+    }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
     // AC-2a 2.2: the console role in this process, refused next to the relay's own console and under High.
@@ -553,9 +607,19 @@ fn main() {
     let given_profile = flags.get("console-profile").cloned().or_else(|| std::env::var("LUCID_RELAY_CONSOLE_PROFILE").ok()).and_then(|p| console_settings::Profile::parse(&p));
     let relay_high = c.state.as_deref().is_some_and(|d| Path::new(d).join(console::CONSOLE_FILE).exists() && book_high(Path::new(d), given_profile)) || given_profile == Some(console_settings::Profile::High);
     server::high_start_checks(c.state.as_deref().map(Path::new), relay_high, with_console.is_some()).unwrap_or_else(|e| die(&e));
-    // A shared relay always runs under the org's relay license; a spoke's LAN mailbox needs none.
+    // A shared relay serves people only under the org's relay license; a spoke's LAN mailbox needs none. With no
+    // --license it reads `<state>/license.lic` and, with none there either, starts stopped (R42-1) so an admin can
+    // install one in its console; with no state folder there is nowhere to install one.
+    let mut c = c;
     if c.owner.is_none() && c.license.is_none() {
-        die("the relay license is required (--license or LUCID_RELAY_LICENSE: the license file or its armored text)");
+        let Some(dir) = c.state.as_deref() else {
+            die("the relay license is required (--license or LUCID_RELAY_LICENSE: the license file or its armored text), or a state folder (--state) to install one into");
+        };
+        let file = Path::new(dir).join(relay::DEFAULT_LICENSE_FILE);
+        if file.exists() {
+            c.license = Some(license_token_of(&std::fs::read_to_string(&file).unwrap_or_else(|e| die(&format!("{}: {e}", file.display())))));
+        }
+        c.license_file = Some(file);
     }
     // The Admin Console (src/console.rs): --console 1 or LUCID_RELAY_CONSOLE=1; when on, the logger feeds its ring and
     // the relay holds console.lock in its state folder for its whole life.

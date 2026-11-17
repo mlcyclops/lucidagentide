@@ -56,7 +56,7 @@ const SOURCE_KEYS: [&str; 19] = [
     "crl_days",
     "license_days",
     "license_state",
-    "adding_open",
+    "license_service",
     "conn_open",
 ];
 

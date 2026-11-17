@@ -389,7 +389,6 @@ impl Frames {
     pub fn state_body(&self, t: i64) -> Value {
         let high = self.high();
         let lic = self.console.license_view(t);
-        let adding = self.console.section().map(|s| s.adding(t)).unwrap_or(Value::Null);
         let chan = crate::fleet_agent::load_link_json(&self.state_dir).ok().flatten().unwrap_or_default();
         let st = self.st.lock();
         let Some(link) = st.link.as_ref() else { return Value::Null };
@@ -400,7 +399,11 @@ impl Frames {
             "held": link.hints_in(ft::KeyState::Held), "unattested": link.hints_in(ft::KeyState::Unattested),
             "pins": chan.get("pins").cloned().unwrap_or(Value::Null), "trustSeq": chan.get("trust").and_then(|x| x.get("seq")).cloned().unwrap_or(Value::Null),
             "version": env!("CARGO_PKG_VERSION"),
-            "license": { "state": lic.state.as_str(), "daysLeft": lic.license.get("daysLeft").cloned().unwrap_or(Value::Null), "adding": adding },
+            // AC-2a 5.6 (R42-6, R7-L1): what the fleet's reminders need; `exp` in ms.
+            "license": {
+                "state": lic.state.as_str(), "daysLeft": lic.license.get("daysLeft").cloned().unwrap_or(Value::Null),
+                "id": lic.service.license_id, "exp": lic.service.exp, "service": lic.service.to_value(),
+            },
         })
     }
 
@@ -1275,6 +1278,8 @@ mod tests {
         meet: bool,
         admins: Vec<String>,
         ran: Mutex<Vec<String>>,
+        /// A license view the test sets (the 4.7 object, its state and the service view); None: valid, always on.
+        lic: Mutex<Option<(Value, LicenseState, crate::console::ServiceView)>>,
     }
 
     impl ProductSection for Section {
@@ -1287,8 +1292,11 @@ mod tests {
         fn relay_info(&self, _t: i64) -> Value {
             json!({ "version": "1.2.3", "uptimeSeconds": 5, "fips": false, "tlsNotAfter": null })
         }
-        fn license(&self, _t: i64) -> LicenseView {
-            LicenseView { license: json!({ "state": "valid", "daysLeft": 100 }), problem: None, state: LicenseState::Valid }
+        fn license(&self, t: i64) -> LicenseView {
+            if let Some((license, state, service)) = self.lic.lock().clone() {
+                return LicenseView { license, problem: None, state, service };
+            }
+            LicenseView { license: json!({ "state": "valid", "daysLeft": 100 }), problem: None, state: LicenseState::Valid, service: crate::console::ServiceView::on(t) }
         }
         fn overview_cards(&self, _a: bool, _t: i64) -> Vec<Value> {
             vec![]
@@ -1352,7 +1360,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         crate::store::make_dir(&dir).unwrap();
         let console = crate::console::open_headless(product, &dir, Arc::new(crate::log::Logger::new("fleet-test"))).unwrap();
-        let section = Arc::new(Section { meet: product == Product::Meet, admins: admins.iter().map(|s| (*s).to_owned()).collect(), ran: Mutex::new(Vec::new()) });
+        let section = Arc::new(Section { meet: product == Product::Meet, admins: admins.iter().map(|s| (*s).to_owned()).collect(), ran: Mutex::new(Vec::new()), lic: Mutex::new(None) });
         console.attach(section.clone());
         let (mut alice, mut uma) = (Authenticator::new(61), Authenticator::new(62));
         let entries = [entry_of(&mut alice, ALICE, "admin", false), entry_of(&mut uma, UMA, "user-manager", false)];
@@ -1385,6 +1393,50 @@ mod tests {
 
     fn audit_actions(w: &World) -> Vec<(String, String, String)> {
         w.console.audit.lock().entries().iter().map(|e| (str_of(e.get("action")).unwrap_or("").to_owned(), str_of(e.get("actor")).unwrap_or("").to_owned(), str_of(e.get("result")).unwrap_or("").to_owned())).collect()
+    }
+
+    /// AC-2a 3.4.1 (R7-L1): the `state` body's license object for every case of
+    /// tests/admin_console_fleet_state_frame_v1.json, from the license view the product gives.
+    #[test]
+    fn the_state_frame_license_object_matches_the_vector() {
+        use crate::console::{ServiceState, ServiceView};
+        let v: Value = serde_json::from_str(include_str!("../tests/admin_console_fleet_state_frame_v1.json")).unwrap();
+        const WHYS: [&str; 5] = ["none", "wrong-product", "wrong-root", "invalid", "expired"];
+        for (i, c) in v["cases"].as_array().unwrap().iter().enumerate() {
+            let name = c["name"].as_str().unwrap();
+            let product = if c["product"] == "meet" { Product::Meet } else { Product::Spokes };
+            let w = world(&format!("state-frame-{i}"), product, &[ALICE]);
+            let now = c["now"].as_i64().unwrap();
+            let want = &c["frame"]["body"]["license"];
+            let s = &want["service"];
+            let state = match want["state"].as_str().unwrap() {
+                "valid" => LicenseState::Valid,
+                "grace" => LicenseState::Grace,
+                "expired" => LicenseState::Expired,
+                _ => LicenseState::None,
+            };
+            let service = ServiceView {
+                state: match s["state"].as_str().unwrap() {
+                    "on" => ServiceState::On,
+                    "grace" => ServiceState::Grace,
+                    "upgrade-period" => ServiceState::UpgradePeriod,
+                    _ => ServiceState::Stopped,
+                },
+                stops_at: s["stopsAt"].as_i64(),
+                why: s["why"].as_str().map(|x| *WHYS.iter().find(|w| **w == x).unwrap()),
+                reason: None,
+                upgrade_period_ends: s["upgradePeriodEnds"].as_i64(),
+                license_id: want["id"].as_str().map(str::to_owned),
+                exp: want["exp"].as_i64(),
+                at: now,
+            };
+            // daysLeft is floor((exp - now) / 1 day), null with no fitting license
+            let days = want["exp"].as_i64().map(|exp| (exp - now).div_euclid(86_400_000));
+            assert_eq!(want["daysLeft"].as_i64(), days, "{name}: the vector's daysLeft");
+            *w.section.lic.lock() = Some((json!({ "daysLeft": want["daysLeft"] }), state, service));
+            let body = w.f.state_body(now);
+            assert_eq!(&body["license"], want, "{name}");
+        }
     }
 
     #[test]

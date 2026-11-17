@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-1 revision 4",
+ "contract": "AC-1 revision 4.2",
  "about": "Section 3.11 \"Header safety\" (I12, R3-M8). mailbox: a strict RFC 5321 Mailbox: ASCII dot-atom local part (atext and dots, no dot first, last or doubled, 1 to 64 bytes), one @, a domain of 2 or more labels of letters, digits and hyphens (1 to 63 bytes, no hyphen first or last; xn-- A-labels are checked as LDH only), no trailing dot, at most 254 bytes; anything else is bad-mailbox. header: every configured field and subject argument; a value holding U+0000 to U+001F, U+007F to U+009F, U+2028 or U+2029 is refused (code bad-mailbox for mailbox fields, null otherwise). fold: printable ASCII header text as \"Name: text\"; while a line is over 78 characters it breaks before the last space at index 78 or less (never the space right after \"Name:\"), else before the first space after, else the line stays whole; the space starts the next line; lines joined with CRLF. encoded_words: any other text as RFC 2047 \"=?UTF-8?B?<base64 with padding>?=\" words of whole characters, greedy, each word at most 75 characters and its line at most 78 (the first line includes \"Name: \"), joined with CRLF and a space. qp: the body with \\n line breaks to quoted-printable: bytes 33 to 126 except = literal, space and tab literal except as a hard line's last byte, every other byte =XX upper-case; before a token that would make the line longer than 75, the line ends with a soft break \"=\"; lines joined with CRLF, ending with CRLF. dot_stuff: a \".\" at the start of the data or right after CRLF gets one more (a bare LF starts no line). graph_path: the Graph sendMail mailbox as one path segment, every UTF-8 byte outside RFC 3986 unreserved percent-encoded upper-case. subjects: the 8.4 subjects filled with args, as the Subject header.",
  "mailbox": [
   {
@@ -1034,242 +1034,422 @@
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC",
    "ok": true,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\rBcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\rBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\nBcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\r\nBcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\r\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\u0000Bcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\u0000Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\tBcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\tBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\u007fBcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\u007fBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\u0085Bcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\u0085Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\u2028Bcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\u2028Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.upgrade-period:date",
-   "value": "2026-12-17\u2029Bcc: evil@attacker.example",
+   "field": "mail.upgrade-period:date and time",
+   "value": "2026-12-17 09:00 UTC\u2029Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example",
    "ok": true,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:host",
+   "field": "mail.license-expiring:host",
    "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub",
    "ok": true,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\rBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\r\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\u0000Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\tBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\u007fBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\u0085Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\u2028Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:product",
+   "field": "mail.license-expiring:product",
    "value": "Meeting Hub\u2029Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace",
+   "field": "mail.license-expiring:n",
+   "value": "7",
    "ok": true,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\rBcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\rBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\nBcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\r\nBcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\r\nBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\u0000Bcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\u0000Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\tBcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\tBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\u007fBcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\u007fBcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\u0085Bcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\u0085Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\u2028Bcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\u2028Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
   {
-   "field": "mail.license:state words",
-   "value": "in grace\u2029Bcc: evil@attacker.example",
+   "field": "mail.license-expiring:n",
+   "value": "7\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-grace:date and time",
+   "value": "2026-12-19 09:00 UTC\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:product",
+   "value": "Remote Spokes\u2029Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example",
+   "ok": true,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\rBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\r\nBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\u0000Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\tBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\u007fBcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\u0085Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\u2028Bcc: evil@attacker.example",
+   "ok": false,
+   "code": null
+  },
+  {
+   "field": "mail.license-stopped:host",
+   "value": "meet-admin.acme.example\u2029Bcc: evil@attacker.example",
    "ok": false,
    "code": null
   },
@@ -1627,18 +1807,35 @@
    "id": "mail.upgrade-period",
    "args": {
     "host": "meet-admin.acme.example",
-    "date": "2026-12-17"
+    "date and time": "2026-12-17 09:00 UTC"
    },
-   "header": "Subject: Meeting Hub on meet-admin.acme.example needs a license by 2026-12-17"
+   "header": "Subject: Meeting Hub on meet-admin.acme.example needs a license by 2026-12-17\r\n 09:00 UTC"
   },
   {
-   "id": "mail.license",
+   "id": "mail.license-expiring",
    "args": {
     "product": "Meeting Hub",
     "host": "meet-admin.acme.example",
-    "state words": "in grace"
+    "n": "7"
    },
-   "header": "Subject: Meeting Hub license on meet-admin.acme.example: in grace"
+   "header": "Subject: Meeting Hub license on meet-admin.acme.example ends in 7 days"
+  },
+  {
+   "id": "mail.license-grace",
+   "args": {
+    "product": "Meeting Hub",
+    "host": "meet-admin.acme.example",
+    "date and time": "2026-12-19 09:00 UTC"
+   },
+   "header": "Subject: Meeting Hub on meet-admin.acme.example: service stops on 2026-12-19\r\n 09:00 UTC"
+  },
+  {
+   "id": "mail.license-stopped",
+   "args": {
+    "product": "Remote Spokes",
+    "host": "admin-console.meeting-hub.operations.department.agency.example.gov"
+   },
+   "header": "Subject: Remote Spokes on\r\n admin-console.meeting-hub.operations.department.agency.example.gov has\r\n stopped serving people"
   },
   {
    "id": "mail.clock-uncertain",

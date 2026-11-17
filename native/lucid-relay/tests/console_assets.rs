@@ -439,18 +439,19 @@ fn strings_of(v: &Value, out: &mut Vec<String>) {
 #[test]
 fn every_page_word_is_in_the_page() {
     let words = vector("admin_console_words_v1.json");
-    // The `cli.*` sentences are the offline CLI's and the start log's, and `python.test-only` (with its seat clock check
-    // variant) is a test binary's start refusal: not page text.
-    let not_page = |id: &str| id.starts_with("cli.") || id.starts_with("python.test-only");
+    // The `cli.*` sentences are the offline CLI's and the start log's, `log.*` the relay's log lines, and
+    // `python.test-only` (with its seat clock check variant) is a test binary's start refusal: not page text.
+    let not_page = |id: &str| id.starts_with("cli.") || id.starts_with("log.") || id.starts_with("python.test-only");
     let mut all = Vec::new();
     for (id, v) in words["page"].as_object().expect("page words") {
         if !not_page(id) {
             strings_of(v, &mut all);
         }
     }
-    // R41-1: the page shows meet.license-inactive beside its disabled add controls.
+    // AC-2a 11.4 (revision 3.4): the fleet People page shows meet.license-inactive beside the invite controls of a
+    // Meeting Hub relay stopped for its license, still focusable with aria-disabled (7.4).
     strings_of(&words["people"]["meet.license-inactive"], &mut all);
-    assert!(APP_JS.contains("\"aria-disabled\": \"true\""), "disabled add controls stay focusable with aria-disabled (7.4)");
+    assert!(APP_JS.contains("\"aria-disabled\": \"true\""), "disabled invite controls stay focusable with aria-disabled (7.4)");
     strings_of(&words["dialogs"], &mut all);
     strings_of(&words["labels"], &mut all);
     assert!(all.len() > 150);
@@ -462,6 +463,41 @@ fn every_page_word_is_in_the_page() {
         .map(|(s, f)| format!("{f:?} (of {s:?})"))
         .collect();
     assert!(missing.is_empty(), "words missing from app.js and index.html:\n{}", missing.join("\n"));
+}
+
+#[test]
+fn no_growth_gate_remains_and_the_service_state_shows() {
+    // AC-1 R42-1 and AC-2a revision 3.4: the R41-1 growth gate is removed from the page (no adding state, last-license
+    // limit or "no one new can be added" words), and the 4.2 license view's `service` is shown on both consoles.
+    for gone in [
+        "license-adding-off",
+        "seats.last-license",
+        "seats.no-license",
+        "banner.license-inactive",
+        "no one new can be added",
+        "lastUsers",
+        ".adding",
+        "addingClosed",
+        "isNewPrincipal",
+    ] {
+        assert!(!APP_JS.contains(gone), "app.js still holds the growth gate: {gone}");
+    }
+    assert!(!APP_CSS.contains(".menu-note"), "app.css still styles the disabled menu items of the growth gate");
+    for shown in [
+        "\"banner.license-stopped\"",
+        "\"banner.grace\"",
+        "\"banner.expiring\"",
+        "\"seats.stopped\"",
+        "\"attention.license-stopped\"",
+        "\"relay.license-stopped\"",
+        "\"relay.license-grace\"",
+        "\"relay.license-reminders\"",
+        "\"relay.license-install-stopped\"",
+        "service.state === \"stopped\"",
+        "s.state === \"stopped\"",
+    ] {
+        assert!(APP_JS.contains(shown), "app.js lacks {shown}");
+    }
 }
 
 #[test]
@@ -1191,7 +1227,7 @@ async function main() {
       cards: [{ id: "hubs", state: "ok", n: 2, m: 0 }],
       attention: [{ kind: "admin-suspended", severity: "warn", args: { email: "bob@acme.example" }, go: "#/admins/people" }],
       approvals: { waiting: 1, mine: 1 }, requests: { waiting: 0 }, links: [{ label: "Meet", url: "https://meet.acme.example/console/" }],
-      banners: [{ id: "breakglass.gate", args: {} }],
+      banners: [{ id: "breakglass.gate", args: {} }, { id: "banner.license-stopped", args: { why: "none" } }],
     },
   });
   await settle();
@@ -1199,6 +1235,12 @@ async function main() {
   for (const want of ["bob@acme.example", "ann@acme.example", "relay.acme.example", "What needs your attention"]) {
     if (!before.includes(want)) fail("the signed-in page does not show " + want + " (the harness did not reach the overview)");
   }
+  // AC-1 7.2 (R42-1): the blocking stopped banner with the why words and "Install a license" for admins.
+  const stoppedText = doc.querySelectorAll(".banner.bad").map((b) => b.textContent).join("\n");
+  if (!stoppedText.includes("This relay has stopped serving people: its Remote Spokes license is not active (no license is installed). Install a license to turn service back on.")) {
+    fail("no banner.license-stopped with its why words:\n" + stoppedText);
+  }
+  if (!doc.querySelector('.banner.bad a[href="#/license"]')) fail("the stopped banner has no Install a license link for an admin");
   await a.advance(15 * 60000 + 5000);
   const after = snapshot();
   if (!after.includes("Session locked") || !after.includes("Sign in again")) fail("no lock screen after the idle limit:\n" + after);
@@ -1286,19 +1328,21 @@ async function fleetMain(v) {
     "GET banner": { ok: true, banner: null },
     "GET overview": {
       ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 },
-      fleet: { relays: { total: 2, ok: 1, warn: 1, bad: 0, silent: 0, unconfirmed: 1 }, people: { online: 3 }, calls: { active: 1 },
+      fleet: { relays: { total: 2, ok: 1, warn: 0, bad: 1, silent: 0, unconfirmed: 1 }, people: { online: 3 }, calls: { active: 1 },
         kpis: { relaysHealthy: { n: 1, total: 2, spark: [[t0 - 3600000, 2], [t0, 1]] }, peopleOnline: { n: 3, spark: [[t0 - 3600000, 2], [t0, 3]] },
           callsNow: { n: 1, spark: [] }, messagesToday: { n: 40, spark: [] } } },
       attention: [{ kind: "relay-silent", severity: "bad", args: { relay: r1, minutes: 5 }, go: "#/relays/" + r1 },
-        { kind: "cert-expiring", severity: "warn", relay: r2, args: { n: 2 } }, { kind: "no-such-kind", severity: "bad", relay: r2, args: {} }],
+        { kind: "cert-expiring", severity: "warn", relay: r2, args: { n: 2 } }, { kind: "no-such-kind", severity: "bad", relay: r2, args: {} },
+        { kind: "relay-license-stopped", severity: "bad", relay: r2, args: {}, go: "#/license?relay=" + r2 }],
     },
     "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "open", license: "skipped", relay: "open" } },
     "GET fleet/relays": { ok: true, total: 2, relays: [
       { id: r1, name: "Dallas east", site: "us-east", product: "spokes", state: "active", connected: true, lastContactAt: t0, version: "2.5.0", health: "ok",
         license: { state: "valid", daysLeft: 200 }, scopes: ["read-health", "people"], readOnly: false, confirm: [] },
-      { id: r2, name: "Hub west", site: "us-west", product: "meet", state: "unconfirmed", connected: true, lastContactAt: t0, version: "2.5.0", health: "warn",
-        license: { state: "grace", daysLeft: -3, adding: { state: "closed" } }, scopes: ["read-health"], readOnly: true, confirm: ["people"] }] },
-    "GET fleet/licenses": { ok: true, relays: [{ relay: r2, product: "meet", license: { state: "grace" }, adding: { state: "closed" }, seats: { seated: 5, users: 4 } }], library: [] },
+      { id: r2, name: "Hub west", site: "us-west", product: "meet", state: "unconfirmed", connected: true, lastContactAt: t0, version: "2.5.0", health: "bad",
+        license: { state: "expired", daysLeft: -3, service: { state: "stopped", stopsAt: null, why: "expired" } }, scopes: ["read-health"], readOnly: true, confirm: ["people"] }] },
+    "GET fleet/licenses": { ok: true, relays: [{ relay: r2, product: "meet", license: { state: "expired" }, service: { state: "stopped", stopsAt: null, why: "expired" },
+      reminders: [{ kind: "stopped", at: t0 }], seats: { seated: 5, users: 4 } }], library: [] },
     "GET fleet/metrics": { ok: true, range: "24h", step: 300000, series: [
       { relay: "fleet", name: "people_online", unit: "people", points: [[t0 - 900000, 1], [t0 - 600000, 2], [t0 - 300000, null], [t0, 4]] },
       { relay: "fleet", name: "messages", unit: "messages", points: [[t0 - 600000, 10], [t0 - 300000, 12], [t0, 3]] },
@@ -1317,6 +1361,9 @@ async function fleetMain(v) {
     W["kpi.calls"], W["kpi.messages"]], "overview");
   if (!ov.includes("Dallas east has not been in touch for 5 minutes.")) fail("fleet attention without the console's relay name:\n" + ov);
   if (!ov.includes("Hub west: 2 certificates end within 7 days.")) fail("a relay's attention item without its relay name");
+  // AC-2a 8.1 (revision 3.4): a relay stopped for its license, named by the console, without a doubled prefix.
+  if (!ov.includes("Hub west stopped: no active license. It serves no one until a license is installed.")) fail("no relay-license-stopped item:\n" + ov);
+  if (ov.includes("Hub west: Hub west stopped")) fail("the relay-license-stopped item names its relay twice");
   if (doc.getElementById("hdr-product").textContent !== W["chip.fleet"] || doc.getElementById("hdr-count").textContent !== "2 relays") fail("the header chips");
   // 12.4: the nav order and names; Upgrades and Support are not rendered.
   const nav = doc.getElementById("nav").textContent;
@@ -1346,9 +1393,17 @@ async function fleetMain(v) {
   // 8.2 and 9.6: Relays and the charts.
   await go("#/relays");
   const rel = view();
-  for (const w of ["Dallas east", "Hub west", W["health.ok"], W["health.warn"], W["fleet.read-only"], W["state.unconfirmed"], W["fleet.confirm-here"]]) {
+  for (const w of ["Dallas east", "Hub west", W["health.ok"], W["health.bad"], W["fleet.read-only"], W["state.unconfirmed"], W["fleet.confirm-here"],
+    "Stopped: no active license"]) {
     if (!rel.includes(w)) fail("the relay list lacks " + w);
   }
+  // 11.4 (revision 3.4): the License page shows the service state with why and the reminders, with no adding column.
+  await go("#/license");
+  const lv = view();
+  for (const w of ["Stopped: no active license", "The license ended and its grace is over.", "Reminders sent: "]) {
+    if (!lv.includes(w)) fail("the license page lacks " + w + ":\n" + lv);
+  }
+  if (lv.includes("Adding people")) fail("the license page still shows the adding state");
   await go("#/relays/health");
   const hv = view();
   for (const k of ["charts.range-1h", "charts.range-24h", "charts.range-7d", "charts.range-30d", "charts.people", "charts.messages", "charts.cpu", "charts.memory",

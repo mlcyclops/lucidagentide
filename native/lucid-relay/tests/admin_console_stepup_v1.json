@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-1 revision 4",
+ "contract": "AC-1 revision 4.2",
  "about": "Section 3.6. challenge = SHA-256(lp(domain, sid_sha256, action, target, canonical_json(params), nonce)); lp writes each part as its byte length (4 bytes, big-endian) then its bytes, UTF-8 for text and raw bytes for sid_sha256 and nonce. canonical_json is CE-1 canonical JSON with null written as null. params is the request body without stepup (approvals.approve: the approval's own params). target is the route's target field, a template of body fields, license.id (the id in the token's payload) or the literal \"-\". The WebAuthn challenge is the 32 digest bytes (base64url on the wire).",
  "domain": "lucid-console-stepup-v1",
  "canonical_json": "CE-1 canonical JSON: keys sorted by UTF-8 bytes, no whitespace, integers within 2^53-1, no floats, escapes \\\" \\\\ \\b \\f \\n \\r \\t and \\u00xx (lower-case hex) for the other characters below 0x20, every other character as UTF-8; null as null",

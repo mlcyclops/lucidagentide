@@ -4,7 +4,7 @@
 // section the console calls. The relay's own books stay in relay.rs; this file holds the console's rules about them.
 
 use crate::codec::{as_object, parse_json, safe_int, str_of, stringify};
-use crate::console::{ApiError, Approved, Caller, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
+use crate::console::{ApiError, Approved, Caller, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall, ServiceState, ServiceView};
 use crate::license::{license_state, License, LicenseStateName};
 use crate::log::Fields;
 use crate::relay::{NodeFilter, State, Taken, BODY_BYTES};
@@ -317,48 +317,157 @@ pub fn observes(kind: &str, target: &Value, requested_at: i64, what: &Observed, 
     }
 }
 
-/// The I12 mail kind of a license notice (8.4).
-pub const LICENSE_MAIL: &str = "mail.license";
-const DAY_SEC: i64 = 86_400;
+/// R7-M1: the Remote Spokes license clock in the state folder:
+/// `{highWater, reset: null or {before, after}}` (ms; `reset` the offline reset not yet audited).
+pub const LICENSE_TIME_FILE: &str = "spokes-license-time.json";
+/// R7-M2: the last fitting license as 4.7 compares it, `{product, root, id, edition, users, relays, exp}`.
+pub const LAST_LICENSE_FILE: &str = "spokes-last-license.json";
+const CLOCK_SAVE_MS: i64 = 60_000;
 
-/// The Remote Spokes license notice due at `t` (3.11: 30, 14 and 3 days before `exp`, the start of grace, past
-/// grace): its stage and the `mail.license` arguments (the mailer fills `host` and `console`), or None. Remote
-/// Spokes has no upgrade period (2.4), so a relay without a license gets no notice.
-pub fn license_notice(l: &License, t: i64) -> Option<(&'static str, Vec<(&'static str, String)>)> {
-    let (state, days_left) = license_state(l, t.div_euclid(1000));
-    let (stage, words) = match state {
-        LicenseStateName::Valid if days_left <= 3 => ("3", "ends"),
-        LicenseStateName::Valid if days_left <= 14 => ("14", "ends"),
-        LicenseStateName::Valid if days_left <= 30 => ("30", "ends"),
-        LicenseStateName::Valid => return None,
-        LicenseStateName::Grace => ("grace", "grace"),
-        LicenseStateName::Expired => ("ended", "ended"),
-    };
-    let n = if state == LicenseStateName::Valid { days_left } else { 0 };
-    let args = vec![
-        ("product", PRODUCT_WORDS.to_owned()),
-        ("state", words.to_owned()),
-        ("n", n.to_string()),
-        ("date", crate::meet_json::iso_date(l.exp)),
-        ("graceEnd", crate::meet_json::iso_date(l.exp + l.grace_days * DAY_SEC)),
-        ("section", "spokes".to_owned()),
-    ];
-    Some((stage, args))
+/// R7-M1: the time license deadlines (expiry, grace, reminders) are judged in on Remote Spokes. It never goes back:
+/// the later of the host clock and the high-water mark advanced by the monotonic clock, so moving the host clock back
+/// cannot extend a license or its grace, in a run or across a restart. Only the offline `license-time reset` sets the
+/// mark down, to the host clock (operator level, decision 67). An absent file is created at start from the host clock.
+pub struct LicenseClock {
+    high_water: i64,
+    since: std::time::Instant,
+    file: Option<PathBuf>,
+    saved_at: i64,
+    /// A reset the offline command made, to audit at the next start (`license.time-reset`).
+    reset: Option<(i64, i64)>,
 }
 
-/// Which license notice went out last: each stage of a license id is mailed once (per relay start; the stage is held
-/// in memory). A stage that goes away (a renewal) clears it, so the next license's stages mail again.
-#[derive(Default)]
-pub struct LicenseNotices(Option<(String, &'static str)>);
-
-impl LicenseNotices {
-    /// Whether the notice `now` (license id and stage, or None) is due: a stage not mailed yet.
-    pub fn due(&mut self, now: Option<(String, &'static str)>) -> bool {
-        if now == self.0 {
-            return false;
+impl LicenseClock {
+    /// The clock of `dir` (None: in memory). A file that does not read back stops the start (fail closed).
+    pub fn open(dir: Option<&Path>) -> Result<LicenseClock, String> {
+        let file = dir.map(|d| d.join(LICENSE_TIME_FILE));
+        let mut c = LicenseClock { high_water: i64::MIN, since: std::time::Instant::now(), file, saved_at: i64::MIN, reset: None };
+        if let Some(f) = c.file.as_ref().filter(|f| f.exists()) {
+            let bad = || format!("{LICENSE_TIME_FILE} is not valid; the relay will not start until it is fixed or restored");
+            let v: Value = serde_json::from_slice(&std::fs::read(f).map_err(|e| format!("{LICENSE_TIME_FILE} cannot be read: {e}"))?).map_err(|_| bad())?;
+            let o = v.as_object().filter(|o| o.keys().all(|k| ["highWater", "reset"].contains(&k.as_str()))).ok_or_else(bad)?;
+            c.high_water = o.get("highWater").and_then(Value::as_i64).ok_or_else(bad)?;
+            c.reset = match o.get("reset") {
+                None | Some(Value::Null) => None,
+                Some(r) => Some((r.get("before").and_then(Value::as_i64).ok_or_else(bad)?, r.get("after").and_then(Value::as_i64).ok_or_else(bad)?)),
+            };
+            c.saved_at = c.high_water;
         }
-        self.0 = now;
-        self.0.is_some()
+        Ok(c)
+    }
+
+    /// The effective time at host time `t` (ms); the mark moves up with it and is saved at most once a minute.
+    pub fn now(&mut self, t: i64) -> i64 {
+        let eff = self.peek(t);
+        self.high_water = eff;
+        self.since = std::time::Instant::now();
+        if eff.saturating_sub(self.saved_at) >= CLOCK_SAVE_MS || eff < self.saved_at {
+            self.save();
+        }
+        eff
+    }
+
+    /// The effective time without moving the mark (read-only views).
+    pub fn peek(&self, t: i64) -> i64 {
+        let ran = i64::try_from(self.since.elapsed().as_millis()).unwrap_or(i64::MAX);
+        t.max(self.high_water.saturating_add(ran))
+    }
+
+    /// A reset made offline since the last start, taken once for the audit: (before, after).
+    pub fn take_reset(&mut self) -> Option<(i64, i64)> {
+        let r = self.reset.take();
+        if r.is_some() {
+            self.save();
+        }
+        r
+    }
+
+    fn value(&self) -> Value {
+        json!({
+            "highWater": self.high_water,
+            "reset": self.reset.map(|(b, a)| json!({ "before": b, "after": a })),
+        })
+    }
+
+    pub fn save(&mut self) {
+        let Some(f) = &self.file else { return };
+        if write_owner_only(f, &self.value()).is_ok() {
+            self.saved_at = self.high_water;
+        }
+    }
+
+    /// The offline `license-time reset` (R7-M1): the mark set to the host clock `wall`. Returns (before, after).
+    pub fn reset_to(&mut self, wall: i64) -> Result<(i64, i64), String> {
+        let before = self.high_water;
+        self.high_water = wall;
+        self.reset = Some((before, wall));
+        let f = self.file.clone().ok_or("no state folder")?;
+        write_owner_only(&f, &self.value())?;
+        Ok((before, wall))
+    }
+
+    pub fn high_water(&self) -> i64 {
+        self.high_water
+    }
+}
+
+/// Written atomically, owner-only.
+fn write_owner_only(f: &Path, v: &Value) -> Result<(), String> {
+    write_private(f, format!("{v}\n").as_bytes()).map_err(|e| e.to_string())
+}
+
+/// R7-M2: the stored reference license: Ok(None) when there is none, Err when the file does not read back (fail
+/// closed: the caller compares against `LastLicense::unknown()`).
+pub fn read_last_license(dir: &Path) -> Result<Option<LicenseRecord>, String> {
+    let f = dir.join(LAST_LICENSE_FILE);
+    if !f.exists() {
+        return Ok(None);
+    }
+    let bad = || format!("{LAST_LICENSE_FILE} is not valid");
+    let v: Value = serde_json::from_slice(&std::fs::read(&f).map_err(|e| e.to_string())?).map_err(|_| bad())?;
+    let s = |k: &str| str_of(v.get(k)).map(str::to_owned).ok_or_else(bad);
+    let n = |k: &str| v.get(k).and_then(Value::as_i64).ok_or_else(bad);
+    if s("product")? != "spokes" {
+        return Err(bad());
+    }
+    Ok(Some(LicenseRecord { product: crate::license::Product::Spokes, root: s("root")?, id: s("id")?, edition: s("edition")?, users: n("users")?, relays: n("relays")?, exp: n("exp")? }))
+}
+
+/// R7-M2: keep `l` as the reference license.
+pub fn write_last_license(dir: &Path, l: &License) -> Result<(), String> {
+    let r = LicenseRecord::of(l);
+    write_owner_only(&dir.join(LAST_LICENSE_FILE), &json!({ "product": "spokes", "root": r.root, "id": r.id, "edition": r.edition, "users": r.users, "relays": r.relays, "exp": r.exp }))
+}
+
+/// A reference no offered license matches: the stored one did not read back, so every install needs a second admin.
+pub fn unknown_reference() -> LicenseRecord {
+    LicenseRecord { product: crate::license::Product::Spokes, root: String::new(), id: String::new(), edition: String::new(), users: i64::MAX, relays: i64::MAX, exp: i64::MAX }
+}
+
+/// The 4.7 `service` of a Remote Spokes relay at license-clock time `eff` (ms).
+pub fn service_of(licensed: Option<&License>, refused: Option<&(crate::license::ServiceWhy, String)>, eff: i64) -> ServiceView {
+    let secs = eff.div_euclid(1000);
+    let s = match licensed {
+        Some(l) => crate::license::service_state(Ok(l), None, secs),
+        None => crate::license::service_state(Err(refused.map_or(crate::license::ServiceWhy::None, |(w, _)| *w)), None, secs),
+    };
+    // the verifier's words only for a refused token (8.1 `license.why`)
+    let reason = refused.filter(|_| licensed.is_none()).map(|(_, r)| r.clone());
+    let state = match s.state {
+        crate::license::ServiceStateName::On => ServiceState::On,
+        crate::license::ServiceStateName::Grace => ServiceState::Grace,
+        crate::license::ServiceStateName::UpgradePeriod => ServiceState::UpgradePeriod,
+        crate::license::ServiceStateName::Stopped => ServiceState::Stopped,
+    };
+    ServiceView {
+        state,
+        stops_at: s.stops_at.map(|x| x * 1000),
+        why: s.why.map(|w| w.as_str()),
+        reason,
+        upgrade_period_ends: None,
+        license_id: licensed.map(|l| l.id.clone()),
+        exp: licensed.map(|l| l.exp * 1000),
+        at: eff,
     }
 }
 
@@ -563,15 +672,15 @@ pub fn node_filter(query: &str) -> Result<NodeFilter, ApiError> {
     Ok(f)
 }
 
-/// 4.7: the offered license as the core compares it. The reference license is the one in force; with none, the offered
-/// one is a first license (R6-M1: Remote Spokes keeps "no current license" as a first license).
-fn candidate_of(now: Option<&crate::license::License>, offered: &crate::license::License, dev: bool, t: i64) -> LicenseCandidate {
+/// 4.7: the offered license as the core compares it against `reference`: the license in force, else the last fitting
+/// one this relay kept (R7-M2, `spokes-last-license.json`); None only when this relay never had one (a first license).
+fn candidate_of(reference: Option<LicenseRecord>, offered: &crate::license::License, dev: bool, t: i64) -> LicenseCandidate {
     let (state, _) = license_state(offered, t.div_euclid(1000));
     LicenseCandidate {
         offered: LicenseRecord::of(offered),
         valid: state == LicenseStateName::Valid,
         ended: state == LicenseStateName::Expired,
-        reference: now.map(LicenseRecord::of),
+        reference,
         view: license_object(offered, dev, None, t),
     }
 }
@@ -580,7 +689,7 @@ fn license_object(l: &crate::license::License, dev: bool, used: Option<i64>, t: 
     let (state, days_left) = license_state(l, t.div_euclid(1000));
     json!({
         "id": l.id, "org": l.org, "product": l.product().as_str(), "edition": l.edition, "users": l.users, "used": used,
-        "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": dev, "graceDays": l.grace_days,
+        "relays": l.relays, "exp": l.exp, "state": state.as_str(), "daysLeft": days_left, "dev": dev, "graceDays": l.effective_grace_days(),
     })
 }
 
@@ -673,9 +782,13 @@ impl ProductSection for SpokesSection {
     }
 
     fn license(&self, t: i64) -> LicenseView {
-        match self.with(|st| st.license_view(t)) {
-            Ok(Some((view, state))) => LicenseView { license: view, problem: None, state: license_state_of(state) },
-            _ => LicenseView { license: Value::Null, problem: Some("This relay has no Remote Spokes license.".into()), state: LicenseState::None },
+        match self.with(|st| (st.license_view(t), st.service_view(t))) {
+            Ok((Some((view, state)), service)) => LicenseView { license: view, problem: None, state: license_state_of(state), service },
+            Ok((None, service)) => {
+                let problem = service.reason.as_ref().map_or_else(|| "This relay has no Remote Spokes license.".to_owned(), |r| format!("This license cannot be used here: {}.", clean(r)));
+                LicenseView { license: Value::Null, problem: Some(problem), state: LicenseState::None, service }
+            }
+            Err(_) => LicenseView { license: Value::Null, problem: Some("This relay has no Remote Spokes license.".into()), state: LicenseState::None, service: ServiceView::none(t) },
         }
     }
 
@@ -752,14 +865,15 @@ impl ProductSection for SpokesSection {
         self.with(|st| {
             let offered = st.license_offered(token, t).map_err(|r| ApiError::with("license-refused", format!("This license cannot be used here: {r}.")))?;
             st.license_target().map_err(|p| ApiError::with("license-path", format!("This relay reads its license from {p}. Replace that file and restart the relay.")))?;
-            Ok(candidate_of(st.license_now(), &offered.license, offered.dev, t))
+            let eff = st.license_time(t);
+            Ok(candidate_of(st.license_reference(), &offered.license, offered.dev, eff))
         })?
     }
 
     fn license_install(&self, token: &str, t: i64) -> Result<Value, ApiError> {
         self.with(|st| {
             let offered = st.license_offered(token, t).map_err(|r| ApiError::with("license-refused", format!("This license cannot be used here: {r}.")))?;
-            if license_state(&offered.license, t.div_euclid(1000)).0 == LicenseStateName::Expired {
+            if license_state(&offered.license, st.license_time(t).div_euclid(1000)).0 == LicenseStateName::Expired {
                 return Err(ApiError::of("license-ended"));
             }
             st.license_target().map_err(|p| ApiError::with("license-path", format!("This relay reads its license from {p}. Replace that file and restart the relay.")))?;
@@ -937,20 +1051,21 @@ mod tests {
     }
 
     #[test]
-    fn no_current_license_makes_a_first_license_and_the_one_in_force_is_the_reference() {
+    fn a_relay_that_never_had_a_license_takes_a_first_license_and_otherwise_compares_with_the_reference() {
         let cur = crate::license::License { id: "l_1".into(), org: "acme".into(), root: "n_1".into(), edition: "standard".into(), users: 20, relays: 1, exp: 1000, grace_days: 14 };
         let renewal = crate::license::License { exp: 2000, ..cur.clone() };
         let smaller = crate::license::License { users: 19, ..renewal.clone() };
         let t = 500_000;
-        // No current license: a first license, one admin, whatever it holds (R6-M1).
+        // Never licensed here: a first license, one admin, whatever it holds (R7-M2).
         let c = candidate_of(None, &smaller, false, t);
         assert!(c.reference.is_none() && c.single() && c.valid && !c.ended);
-        // The license in force is the reference license.
-        let c = candidate_of(Some(&cur), &renewal, false, t);
+        // The reference license (in force, or the last one kept).
+        let r = Some(LicenseRecord::of(&cur));
+        let c = candidate_of(r.clone(), &renewal, false, t);
         assert_eq!(c.reference.as_ref().map(|r| r.id.as_str()), Some("l_1"));
         assert!(c.single());
-        assert!(!candidate_of(Some(&cur), &smaller, false, t).single());
-        assert!(!candidate_of(Some(&cur), &crate::license::License { id: "l_2".into(), ..renewal }, false, t).single());
+        assert!(!candidate_of(r.clone(), &smaller, false, t).single());
+        assert!(!candidate_of(r, &crate::license::License { id: "l_2".into(), ..renewal }, false, t).single());
     }
 
     #[test]
@@ -1002,33 +1117,79 @@ mod tests {
     }
 
     #[test]
-    fn license_notices_at_30_14_and_3_days_grace_and_past_grace() {
-        const DAY: i64 = 86_400;
-        let exp = T0 / 1000 + 40 * DAY;
+    fn service_stops_two_days_after_exp_and_without_a_fitting_license() {
+        const DAY: i64 = 86_400_000;
+        let exp = T0 / 1000 + 10 * 86_400;
         let l = License { id: "l_1".into(), org: "acme".into(), root: "n_1".into(), edition: "standard".into(), users: 20, relays: 1, exp, grace_days: 14 };
-        let at = |secs: i64| secs * 1000;
-        let stage = |t: i64| license_notice(&l, t).map(|(s, _)| s);
-        assert_eq!(stage(at(exp - 31 * DAY)), None);
-        assert_eq!(stage(at(exp - 30 * DAY)), Some("30"));
-        assert_eq!(stage(at(exp - 14 * DAY)), Some("14"));
-        assert_eq!(stage(at(exp - 3 * DAY)), Some("3"));
-        assert_eq!(stage(at(exp)), Some("grace"));
-        assert_eq!(stage(at(exp + 14 * DAY)), Some("ended"));
-        let (_, args) = license_notice(&l, at(exp - 14 * DAY)).unwrap();
-        let arg = |k: &str| args.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone()).unwrap();
-        assert_eq!((arg("product"), arg("state"), arg("n"), arg("section")), ("Remote Spokes".into(), "ends".into(), "14".into(), "spokes".into()));
-        assert_eq!(arg("date"), crate::meet_json::iso_date(exp));
-        assert_eq!(arg("graceEnd"), crate::meet_json::iso_date(exp + 14 * DAY));
-        // Each stage once; a renewal clears it so the new license's stages mail again.
-        let mut sent = LicenseNotices::default();
-        let key = |t: i64| stage(t).map(|s| (l.id.clone(), s));
-        assert!(!sent.due(key(at(exp - 31 * DAY))));
-        assert!(sent.due(key(at(exp - 30 * DAY))));
-        assert!(!sent.due(key(at(exp - 29 * DAY))), "one mail per stage");
-        assert!(sent.due(key(at(exp - 14 * DAY))));
-        assert!(sent.due(key(at(exp))));
-        assert!(!sent.due(None));
-        assert!(sent.due(key(at(exp - 30 * DAY))), "a renewed license starts over");
+        let at = |ms: i64| service_of(Some(&l), None, ms);
+        assert_eq!(at(exp * 1000 - 1).state, ServiceState::On);
+        let g = at(exp * 1000);
+        assert_eq!((g.state, g.stops_at, g.exp, g.license_id.as_deref()), (ServiceState::Grace, Some(exp * 1000 + 2 * DAY), Some(exp * 1000), Some("l_1")));
+        let s = at(exp * 1000 + 2 * DAY);
+        assert_eq!((s.state, s.why), (ServiceState::Stopped, Some("expired")));
+        let none = service_of(None, None, T0);
+        assert_eq!((none.state, none.why), (ServiceState::Stopped, Some("none")));
+        let refused = (crate::license::ServiceWhy::WrongRoot, "license is for another root".to_owned());
+        let wrong = service_of(None, Some(&refused), T0);
+        assert_eq!((wrong.state, wrong.why, wrong.reason.as_deref()), (ServiceState::Stopped, Some("wrong-root"), Some("license is for another root")));
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lucid-spokes-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_license_clock_never_goes_back_in_a_run_or_across_a_restart() {
+        // R7-M1
+        let d = tmp("clock");
+        let mut c = LicenseClock::open(Some(&d)).unwrap();
+        assert_eq!(c.now(T0), T0);
+        assert!(c.now(T0 - 86_400_000) >= T0, "a host clock moved back changes nothing");
+        assert!(c.now(T0 + 5) >= T0 + 5);
+        c.save();
+        drop(c);
+        let mut c = LicenseClock::open(Some(&d)).unwrap();
+        assert!(c.now(T0 - 10 * 86_400_000) >= T0 + 5, "nor across a restart");
+        // the offline reset sets the mark to the host clock and is audited once at the next start
+        let ahead = c.now(T0 + 400 * 86_400_000);
+        let (before, after) = c.reset_to(T0 + 10).unwrap();
+        assert_eq!((before, after), (ahead, T0 + 10));
+        drop(c);
+        let mut c = LicenseClock::open(Some(&d)).unwrap();
+        assert_eq!(c.take_reset(), Some((ahead, T0 + 10)));
+        assert_eq!(c.take_reset(), None);
+        assert!(c.now(T0 + 10) < ahead);
+        std::fs::write(d.join(LICENSE_TIME_FILE), b"{\"highWater\": \"x\"}").unwrap();
+        assert!(LicenseClock::open(Some(&d)).is_err(), "fail closed");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_last_license_stays_the_reference_and_fails_closed() {
+        // R7-M2
+        let d = tmp("last");
+        assert_eq!(read_last_license(&d).unwrap(), None);
+        let l = License { id: "l_1".into(), org: "acme".into(), root: "n_1".into(), edition: "enterprise".into(), users: 50, relays: 3, exp: 2_000_000_000, grace_days: 2 };
+        write_last_license(&d, &l).unwrap();
+        let r = read_last_license(&d).unwrap().unwrap();
+        assert_eq!(r, LicenseRecord::of(&l));
+        let smaller = License { users: 10, exp: 2_100_000_000, ..l.clone() };
+        assert!(!candidate_of(Some(r.clone()), &smaller, false, T0).single(), "smaller after removal: second admin");
+        let other = License { id: "l_2".into(), exp: 2_100_000_000, ..l.clone() };
+        assert!(!candidate_of(Some(r.clone()), &other, false, T0).single(), "another id: second admin");
+        let earlier = License { exp: 1_900_000_000, ..l.clone() };
+        assert!(!candidate_of(Some(r.clone()), &earlier, false, T0).single());
+        let edition = License { edition: "standard".into(), exp: 2_100_000_000, ..l.clone() };
+        assert!(!candidate_of(Some(r.clone()), &edition, false, T0).single());
+        let renewal = License { exp: 2_100_000_000, ..l.clone() };
+        assert!(candidate_of(Some(r), &renewal, false, T0).single(), "a valid renewal: one admin");
+        std::fs::write(d.join(LAST_LICENSE_FILE), b"garbage").unwrap();
+        assert!(read_last_license(&d).is_err());
+        assert!(!candidate_of(Some(unknown_reference()), &renewal, false, T0).single(), "unreadable: every install needs a second admin");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

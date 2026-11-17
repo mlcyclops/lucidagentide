@@ -140,6 +140,35 @@ pub fn dialed_of(host_header: &str, tls: bool) -> Dialed {
 
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 
+/// A route's place in the Remote Spokes license gate (AC-1 2.4, R42-1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gate {
+    /// Refused with 503 `license-inactive` while service is stopped.
+    Service,
+    /// Answers in every license state, so an admin can fix it.
+    Exempt,
+}
+
+/// The routes that keep answering while service is stopped: CRL reads and uploads (revocation), the console's request
+/// list for admin hubs, and the AC-2a channel's endorsement routes. `/healthz` and `/console/` are let through before
+/// the gate. Every other route, a route missing here included, is `service`.
+pub const EXEMPT_ROUTES: [(&str, &str); 6] = [
+    ("GET", "/v1/crl"),
+    ("POST", "/v1/crl"),
+    ("GET", "/v1/console/requests"),
+    ("GET", "/v1/console/where"),
+    ("GET", "/v1/console/fleet-bootstrap"),
+    ("POST", "/v1/console/fleet-endorse"),
+];
+
+pub fn license_gate_of(method: &str, path: &str) -> Gate {
+    if EXEMPT_ROUTES.iter().any(|(m, p)| *m == method && *p == path) {
+        Gate::Exempt
+    } else {
+        Gate::Service
+    }
+}
+
 fn to_response(r: Reply) -> Response<Full<Bytes>> {
     let mut b = Response::builder().status(r.status).header(CONTENT_TYPE, r.content_type);
     if r.content_type == "application/json" {
@@ -183,7 +212,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     // The control panel (src/console.rs, ADR-A094) answers under /console/ when it is on, before the license gate: an
     // admin must see an expired license there. When it is off these paths are relay routes like any other.
     let console = if pathname == "/console" || pathname.starts_with("/console/") { relay.state.lock().console() } else { None };
-    if console.is_none() {
+    if console.is_none() && license_gate_of(&method, &pathname) == Gate::Service {
         let gate = relay.state.lock().license_gate(t, &where_);
         match gate {
             Err(_) => return internal_error(),
@@ -567,6 +596,16 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_license_gate_table_names_every_exempt_route_and_refuses_the_rest() {
+        for (m, p) in EXEMPT_ROUTES {
+            assert_eq!(license_gate_of(m, p), Gate::Exempt, "{m} {p}");
+        }
+        for (m, p) in [("POST", "/v1/send"), ("GET", "/v1/inbox"), ("POST", "/v1/ack"), ("GET", "/v1/directory"), ("POST", "/v1/directory"), ("GET", "/v1/presence"), ("GET", "/v1/license"), ("POST", "/v1/logs"), ("POST", "/v1/console/invite"), ("GET", "/v1/not-a-route"), ("DELETE", "/v1/crl")] {
+            assert_eq!(license_gate_of(m, p), Gate::Service, "{m} {p}");
+        }
+    }
+
     fn fleet_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lucid-server-fleet-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -718,8 +757,8 @@ mod tests {
         let limits = ConnLimits { connections: 8, handshake: Duration::from_secs(10), body: Duration::from_millis(300) };
         let port = listen(None, limits).await;
         let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        // Ten bytes of the hundred it declares, then nothing.
-        c.write_all(b"POST /v1/send HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{\"v\":1,\"x\"").await.unwrap();
+        // Ten bytes of the hundred it declares, then nothing (a CRL upload: the unlicensed test relay still reads it).
+        c.write_all(b"POST /v1/crl HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{\"v\":1,\"x\"").await.unwrap();
         let started = Instant::now();
         let mut answer = Vec::new();
         let read = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut answer)).await;

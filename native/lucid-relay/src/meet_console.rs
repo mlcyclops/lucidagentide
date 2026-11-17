@@ -517,7 +517,7 @@ pub fn fleet_metrics(relay: &Relay) -> serde_json::Map<String, Value> {
         Some(_) => 3,
     };
     let seats = gate.as_ref().map(|g| g.seat_counts());
-    let adding = gate.as_ref().map(|g| u8::from(g.adding() != crate::meet_license::Adding::Closed));
+    let service = gate.as_ref().map(|g| g.service_view().state.code());
     let signer_days = Console::signer_headline(relay).get("days_left").and_then(Value::as_i64);
     let mut m = serde_json::Map::new();
     m.insert("people_online".into(), Value::from(c.online.len()));
@@ -528,7 +528,7 @@ pub fn fleet_metrics(relay: &Relay) -> serde_json::Map<String, Value> {
     m.insert("seats_total".into(), seats.map_or(Value::Null, |s| Value::from(s.1)));
     m.insert("license_state".into(), Value::from(code));
     m.insert("license_days".into(), state.map_or(Value::Null, |(_, (_, d))| Value::from(d)));
-    m.insert("adding_open".into(), adding.map_or(Value::Null, Value::from));
+    m.insert("license_service".into(), service.map_or(Value::Null, Value::from));
     m.insert("cert_signer_days".into(), signer_days.map_or(Value::Null, Value::from));
     m
 }

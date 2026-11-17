@@ -31,6 +31,8 @@ pub const NO_MEET_ROOT: &str = "this relay's client_ca has no root certificate";
 const EDITIONS: [&str; 2] = ["standard", "enterprise"];
 const DEFAULT_GRACE_DAYS: i64 = 14;
 const MAX_GRACE_DAYS: i64 = 30;
+/// R42-2: the most grace the relay grants, whatever the token says: effective grace = min(graceDays, 2).
+pub const EFFECTIVE_MAX_GRACE_DAYS: i64 = 2;
 const STANDARD_MAX_USERS: i64 = 20;
 const MAX_USERS: i64 = 10_000;
 /// F2 (ADR-A100): what a licensed relay answers (403) a hub with no good seat for this relay's license (seat_problem
@@ -214,9 +216,14 @@ impl Product {
 }
 
 impl License {
-    /// When the license's grace ends (seconds): exp plus graceDays.
+    /// The grace the relay grants (R42-2): min(token graceDays, 2). A token may still carry up to 30.
+    pub fn effective_grace_days(&self) -> i64 {
+        self.grace_days.min(EFFECTIVE_MAX_GRACE_DAYS)
+    }
+
+    /// When the license's grace ends (seconds): exp plus the effective grace, min(graceDays, 2) days (R42-2).
     pub fn grace_end(&self) -> i64 {
-        self.exp + self.grace_days * DAY_SEC
+        self.exp + self.effective_grace_days() * DAY_SEC
     }
 
     /// The license's product. A verified license's root has its product's form (`m_` for Meeting Hub, `n_` for Remote
@@ -418,7 +425,7 @@ impl LicenseStateName {
     }
 }
 
-/// Where a license stands at `now` (seconds): valid until exp, then grace for graceDays, then expired.
+/// Where a license stands at `now` (seconds): valid until exp, then grace for min(graceDays, 2) days (R42-2), then expired.
 pub fn license_state(l: &License, now: i64) -> (LicenseStateName, i64) {
     let ceil_days = |s: i64| (s + DAY_SEC - 1).div_euclid(DAY_SEC);
     if now < l.exp {
@@ -454,6 +461,89 @@ pub fn license_standing(l: Option<&License>, now: i64) -> LicenseStanding {
         None => LicenseStanding { state: None, grace_end: None, users: 0 },
         Some(l) => LicenseStanding { state: Some(license_state(l, now).0), grace_end: Some(l.grace_end()), users: l.users },
     }
+}
+
+/// The relay's service state (AC-1 2.4, R42-1, I13), the same on both products.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServiceStateName {
+    On,
+    Grace,
+    UpgradePeriod,
+    Stopped,
+}
+
+/// Why a relay has no license in force (the `license.why` words): "none", "invalid", "wrong-product", "wrong-root",
+/// "expired".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServiceWhy {
+    /// No token installed.
+    None,
+    /// A token refused for anything but its product or root (contract 4.2.1, R42-1): malformed, a bad signature,
+    /// version 1, outside its edition limits, or a development license in a production build.
+    Invalid,
+    WrongProduct,
+    WrongRoot,
+    Expired,
+}
+
+impl ServiceWhy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Invalid => "invalid",
+            Self::WrongProduct => "wrong-product",
+            Self::WrongRoot => "wrong-root",
+            Self::Expired => "expired",
+        }
+    }
+
+    /// The why of a token verify_license_for refused: another product, another root (or a Meet relay with no root
+    /// to fit), else invalid. Never None: a refused token is still a token.
+    pub fn of_refusal(reason: &str) -> Self {
+        if reason.starts_with("this license is for ") {
+            Self::WrongProduct
+        } else if reason.starts_with("license is for another root") || reason == NO_MEET_ROOT {
+            Self::WrongRoot
+        } else {
+            Self::Invalid
+        }
+    }
+}
+
+/// The service state at a moment: `stops_at` (seconds) is when service stops unless a license is installed (the
+/// end of the honored grace, or of the upgrade period if later), None while stopped; `why` is set only while stopped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ServiceState {
+    pub state: ServiceStateName,
+    pub stops_at: Option<i64>,
+    pub why: Option<ServiceWhy>,
+}
+
+/// The service state at `now` (seconds), shared by both products (I13). `license`: the verified, fitting license in
+/// force, or why there is none (ServiceWhy::of_refusal for a refused token: WrongProduct, WrongRoot or Invalid;
+/// ServiceWhy::None with no token; never Expired). `upgrade_period_ends`: Meeting Hub's unretired upgrade period end (seconds), None for Remote Spokes or
+/// once retired. The honored grace is min(graceDays, 2) (R42-2, License::grace_end). A license does not use up the
+/// period (R3-M4): service runs while either the license (with grace) or the period runs.
+pub fn service_state(license: Result<&License, ServiceWhy>, upgrade_period_ends: Option<i64>, now: i64) -> ServiceState {
+    let period = upgrade_period_ends.filter(|&e| now < e);
+    let (lic_state, grace_end, why) = match license {
+        Ok(l) => (Some(license_state(l, now).0), Some(l.grace_end()), ServiceWhy::Expired),
+        Err(why) => (None, None, why),
+    };
+    let state = match (lic_state, period) {
+        (Some(LicenseStateName::Valid), _) => ServiceStateName::On,
+        (Some(LicenseStateName::Grace), _) => ServiceStateName::Grace,
+        (_, Some(_)) => ServiceStateName::UpgradePeriod,
+        _ => ServiceStateName::Stopped,
+    };
+    if state == ServiceStateName::Stopped {
+        return ServiceState { state, stops_at: None, why: Some(why) };
+    }
+    let stops_at = match (grace_end.filter(|&g| now < g), period) {
+        (Some(g), Some(p)) => Some(g.max(p)),
+        (g, p) => g.or(p),
+    };
+    ServiceState { state, stops_at, why: None }
 }
 
 /// The token inside a license file or value: armored, or the bare token.
@@ -707,9 +797,65 @@ mod tests {
         let l = License { id: String::new(), org: String::new(), root: String::new(), edition: "standard".into(), users: 1, relays: 1, exp: 1_800_000_000 + 10 * DAY_SEC, grace_days: 14 };
         assert_eq!(license_state(&l, 1_800_000_000), (LicenseStateName::Valid, 10));
         assert_eq!(license_state(&l, l.exp - 1), (LicenseStateName::Valid, 1));
-        assert_eq!(license_state(&l, l.exp), (LicenseStateName::Grace, 14));
-        assert_eq!(license_state(&l, l.exp + 13 * DAY_SEC + 1), (LicenseStateName::Grace, 1));
-        assert_eq!(license_state(&l, l.exp + 14 * DAY_SEC), (LicenseStateName::Expired, 0));
+        // R42-2: a token's graceDays 14 grants 2 days.
+        assert_eq!(license_state(&l, l.exp), (LicenseStateName::Grace, 2));
+        assert_eq!(license_state(&l, l.exp + DAY_SEC + 1), (LicenseStateName::Grace, 1));
+        assert_eq!(license_state(&l, l.exp + 2 * DAY_SEC), (LicenseStateName::Expired, 0));
+        let at = |g: i64, now: i64| license_state(&License { grace_days: g, ..l.clone() }, now);
+        assert_eq!(at(1, l.exp), (LicenseStateName::Grace, 1));
+        assert_eq!(at(1, l.exp + DAY_SEC), (LicenseStateName::Expired, 0));
+        assert_eq!(at(0, l.exp), (LicenseStateName::Expired, 0));
+        assert_eq!((at(2, l.exp + 2 * DAY_SEC - 1).0, at(30, l.exp + 2 * DAY_SEC).0), (LicenseStateName::Grace, LicenseStateName::Expired));
+    }
+
+    /// R42-2, I13: graceDays 0, 1, 2, 14 and 30 are honored as 0, 1, 2, 2 and 2, at instants around exp.
+    #[test]
+    fn service_state_honors_at_most_two_grace_days() {
+        let exp = 1_800_000_000;
+        let base = License { id: String::new(), org: String::new(), root: String::new(), edition: "standard".into(), users: 1, relays: 1, exp, grace_days: 0 };
+        let on = |g: i64, now: i64| service_state(Ok(&License { grace_days: g, ..base.clone() }), None, now);
+        for (g, honored) in [(0, 0), (1, 1), (2, 2), (14, 2), (30, 2)] {
+            let end = exp + honored * DAY_SEC;
+            assert_eq!(on(g, exp - 1), ServiceState { state: ServiceStateName::On, stops_at: Some(end), why: None }, "graceDays {g} before exp");
+            let stopped = ServiceState { state: ServiceStateName::Stopped, stops_at: None, why: Some(ServiceWhy::Expired) };
+            if honored > 0 {
+                assert_eq!(on(g, exp), ServiceState { state: ServiceStateName::Grace, stops_at: Some(end), why: None }, "graceDays {g} at exp");
+                assert_eq!(on(g, end - 1).state, ServiceStateName::Grace, "graceDays {g} just before the end");
+            } else {
+                assert_eq!(on(g, exp), stopped, "graceDays 0 stops at exp");
+            }
+            assert_eq!(on(g, end), stopped, "graceDays {g} at the end");
+        }
+    }
+
+    /// I13: no license, wrong product or root, the Meeting Hub upgrade period, and a license that does not use it up.
+    #[test]
+    fn service_state_without_a_license_and_with_the_upgrade_period() {
+        let now = 1_800_000_000;
+        let stop = |why| ServiceState { state: ServiceStateName::Stopped, stops_at: None, why: Some(why) };
+        assert_eq!(service_state(Err(ServiceWhy::None), None, now), stop(ServiceWhy::None));
+        assert_eq!(service_state(Err(ServiceWhy::WrongRoot), Some(now), now), stop(ServiceWhy::WrongRoot));
+        let ends = now + 2 * DAY_SEC;
+        assert_eq!(service_state(Err(ServiceWhy::WrongProduct), Some(ends), now), ServiceState { state: ServiceStateName::UpgradePeriod, stops_at: Some(ends), why: None });
+        // R3-M4: a short license ending inside the period: on, then grace, then the period, stopping at its end.
+        let l = License { id: String::new(), org: String::new(), root: String::new(), edition: "standard".into(), users: 1, relays: 1, exp: now + DAY_SEC / 2, grace_days: 0 };
+        assert_eq!(service_state(Ok(&l), Some(ends), now), ServiceState { state: ServiceStateName::On, stops_at: Some(ends), why: None });
+        assert_eq!(service_state(Ok(&l), Some(ends), l.exp).state, ServiceStateName::UpgradePeriod);
+        assert_eq!(service_state(Ok(&l), Some(ends), ends), stop(ServiceWhy::Expired));
+        let long = License { exp: now + 10 * DAY_SEC, ..l.clone() };
+        assert_eq!(service_state(Ok(&long), Some(ends), now).stops_at, Some(long.exp));
+        assert_eq!(ServiceWhy::of_refusal("this license is for Meeting Hub, not Remote Spokes"), ServiceWhy::WrongProduct);
+        assert_eq!(ServiceWhy::of_refusal("license is for another root (m_1, this relay trusts m_2)"), ServiceWhy::WrongRoot);
+        assert_eq!(ServiceWhy::of_refusal(NO_MEET_ROOT), ServiceWhy::WrongRoot);
+        // Contract 4.2.1: every other refusal is invalid, never none.
+        for reason in ["malformed license: x", "license is not signed by the license publisher", LICENSE_V1_REASON, NOT_DEV_SIGNED, "license is not valid yet"] {
+            assert_eq!(ServiceWhy::of_refusal(reason), ServiceWhy::Invalid, "{reason}");
+        }
+        assert_eq!(service_state(Err(ServiceWhy::Invalid), None, now), stop(ServiceWhy::Invalid));
+        assert_eq!(
+            [ServiceWhy::None, ServiceWhy::Invalid, ServiceWhy::WrongProduct, ServiceWhy::WrongRoot, ServiceWhy::Expired].map(ServiceWhy::as_str),
+            ["none", "invalid", "wrong-product", "wrong-root", "expired"]
+        );
     }
 
     #[test]
@@ -949,7 +1095,8 @@ mod tests {
     #[test]
     fn license_standing_for_valid_grace_expired_and_none() {
         let l = License { id: String::new(), org: String::new(), root: String::new(), edition: "standard".into(), users: 7, relays: 1, exp: 1_800_000_000, grace_days: 14 };
-        let end = l.exp + 14 * DAY_SEC;
+        // R42-2: graceDays 14 in the token, 2 days granted.
+        let end = l.exp + 2 * DAY_SEC;
         assert_eq!(l.grace_end(), end);
         let at = |now| license_standing(Some(&l), now);
         assert_eq!(at(l.exp - 1), LicenseStanding { state: Some(LicenseStateName::Valid), grace_end: Some(end), users: 7 });

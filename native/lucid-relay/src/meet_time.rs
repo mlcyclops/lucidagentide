@@ -11,6 +11,9 @@
 //   running, marks the time uncertain: the gap is held (not credited) and every seat notice and the day-14 unseat
 //   wait until an admin confirms the time (`meet.clock.confirm`).
 // - A wall clock behind the effective time raises `clock-back` and changes nothing.
+// - Only the offline `lucid-relay license-time reset` (R7-M1, decision 67, with the relay stopped) lowers the mark: it
+//   sets `highWater` to the host clock, keeps every other key and records `reset: {before, after}`, which the next
+//   start audits once (`license.time-reset`, actor operator) and then drops.
 //
 // No clock setting is read from the environment or relay.json (R3-M10). Tests inject a `Clock`; the live check
 // binary `lucid-relay-seatclock-check` (feature `live-check-clock`, never shipped) installs its own.
@@ -122,6 +125,47 @@ pub fn live_check_folder(dir: &Path) -> Result<(), String> {
     crate::store::write_private(&marker, b"lucid-relay-seatclock-check\n").map_err(|e| format!("the live-check-state marker cannot be written: {e}"))
 }
 
+/// The keys of `meet-time.json`: exactly KEYS, plus an optional `reset: {before, after}`. Some(the reset) when they
+/// fit, None when not.
+fn check_keys(o: &serde_json::Map<String, Value>) -> Option<Option<(i64, i64)>> {
+    if !KEYS.iter().all(|k| o.contains_key(*k)) || o.keys().any(|k| !KEYS.contains(&k.as_str()) && k != "reset") {
+        return None;
+    }
+    match o.get("reset") {
+        None => Some(None),
+        Some(r) => {
+            let r = r.as_object().filter(|r| r.len() == 2)?;
+            Some(Some((int_of(r.get("before"))?, int_of(r.get("after"))?)))
+        }
+    }
+}
+
+/// The stored `highWater` of `dir`'s meet-time.json (the offline reset's prompt). Err when the file is missing or
+/// does not read back (fail closed).
+pub fn stored_high_water(dir: &Path) -> Result<i64, String> {
+    let bad = || format!("{TIME_FILE} is not valid; nothing was changed");
+    let o = read_object(&dir.join(TIME_FILE))?.ok_or_else(|| format!("{TIME_FILE} is missing; nothing was changed"))?;
+    check_keys(&o).ok_or_else(bad)?;
+    int_of(o.get("highWater")).filter(|v| *v >= 0).ok_or_else(bad)
+}
+
+/// The offline `lucid-relay license-time reset` on a Meeting Hub state folder (R7-M1, decision 67). The caller holds
+/// `console.lock` (the relay is stopped). `highWater` is set to the host clock `wall`; every other key is kept; the
+/// reset is recorded as `reset: {before, after}` for the next start to audit (`license.time-reset`, actor operator)
+/// and log. Written atomically. Err when the file is missing or does not read back (nothing is changed).
+pub fn reset_offline(dir: &Path, wall: i64) -> Result<(i64, i64), String> {
+    let bad = || format!("{TIME_FILE} is not valid; nothing was changed");
+    let file = dir.join(TIME_FILE);
+    let mut o = read_object(&file)?.ok_or_else(|| format!("{TIME_FILE} is missing; nothing was changed"))?;
+    check_keys(&o).ok_or_else(bad)?;
+    let before = int_of(o.get("highWater")).filter(|v| *v >= 0).ok_or_else(bad)?;
+    let after = wall.max(0);
+    o.insert("highWater".into(), Value::from(after));
+    o.insert("reset".into(), json!({"before": before, "after": after}));
+    crate::store::write_private(&file, format!("{}\n", Value::Object(o)).as_bytes()).map_err(|e| format!("{TIME_FILE} cannot be written: {e}"))?;
+    Ok((before, after))
+}
+
 /// Read a fail-closed state file: Ok(None) when missing, Err when unreadable or not a JSON object.
 pub fn read_object(file: &Path) -> Result<Option<serde_json::Map<String, Value>>, String> {
     let bytes = match std::fs::read(file) {
@@ -182,6 +226,23 @@ struct Inner {
     since: Option<i64>,
     unc_base: i64,
     unc_mono: i64,
+    /// R42-1: the seat clock does not count while no fitting license is in force.
+    seat_paused: bool,
+    /// The downtime this start credited to the seat clock; taken back when the first check finds service stopped.
+    start_credit: Option<i64>,
+    /// R7-M1: an offline reset not audited yet: (before, after).
+    reset: Option<(i64, i64)>,
+}
+
+impl Inner {
+    /// The running time `run` as it counts toward the seat clock.
+    fn seat_run(&self, run: i64) -> i64 {
+        if self.seat_paused {
+            0
+        } else {
+            run
+        }
+    }
 }
 
 impl Inner {
@@ -220,12 +281,10 @@ impl TrustedTime {
             None => None,
         };
         let (wall, mono) = (clock.wall_ms(), clock.mono_ms());
-        let mut inner = Inner { base_eff: wall, base_mono: mono, seat_base: 0, uncertain: false, back: false, held_gap: 0, saved_mono: mono, since: None, unc_base: 0, unc_mono: mono };
+        let mut inner = Inner { base_eff: wall, base_mono: mono, seat_base: 0, uncertain: false, back: false, held_gap: 0, saved_mono: mono, since: None, unc_base: 0, unc_mono: mono, seat_paused: false, start_credit: None, reset: None };
         if let Some(o) = stored {
             let bad = || format!("{TIME_FILE} is not valid; the relay will not start until it is fixed or restored");
-            if o.len() != KEYS.len() || !KEYS.iter().all(|k| o.contains_key(*k)) {
-                return Err(bad());
-            }
+            inner.reset = check_keys(&o).ok_or_else(bad)?;
             let high = int_of(o.get("highWater")).filter(|v| *v >= 0).ok_or_else(bad)?;
             let seat = int_of(o.get("seatElapsed")).filter(|v| *v >= 0).ok_or_else(bad)?;
             let uncertain = o.get("seatUncertain").and_then(Value::as_bool).ok_or_else(bad)?;
@@ -250,6 +309,7 @@ impl TrustedTime {
                     inner.held_gap = gap;
                 } else {
                     inner.seat_base += gap;
+                    inner.start_credit = Some(gap);
                 }
             }
             // R4-M1 (round 3): while uncertain, the wall-clock downtime since the last high-water mark (never below
@@ -276,12 +336,12 @@ impl TrustedTime {
         if wall > eff + AHEAD_MAX_MS {
             inner.mark_uncertain(wall, mono);
             inner.held_gap += wall - eff;
-            inner.seat_base += run;
+            inner.seat_base += inner.seat_run(run);
             inner.base_eff = wall;
             inner.base_mono = mono;
         } else if wall > eff {
             // within the tolerance: follow the wall clock forward, crediting the running time only
-            inner.seat_base += run;
+            inner.seat_base += inner.seat_run(run);
             inner.base_eff = wall;
             inner.base_mono = mono;
         } else if wall < eff - BEHIND_MAX_MS {
@@ -291,7 +351,28 @@ impl TrustedTime {
 
     fn snapshot(&self, inner: &Inner) -> (i64, i64) {
         let run = (self.clock.mono_ms() - inner.base_mono).max(0);
-        (inner.base_eff + run, inner.seat_base + run)
+        (inner.base_eff + run, inner.seat_base + inner.seat_run(run))
+    }
+
+    /// R42-1: pause or resume the seat clock (paused while no fitting license is in force: the days do not count).
+    /// The first call after a start takes back the downtime that start credited when it pauses.
+    pub fn set_seat_paused(&self, paused: bool) {
+        let mut inner = self.inner.lock();
+        if let Some(credit) = inner.start_credit.take() {
+            if paused {
+                inner.seat_base = (inner.seat_base - credit).max(0);
+            }
+        }
+        if inner.seat_paused == paused {
+            return;
+        }
+        self.tick(&mut inner);
+        let mono = self.clock.mono_ms();
+        let run = (mono - inner.base_mono).max(0);
+        inner.base_eff += run;
+        inner.seat_base += inner.seat_run(run);
+        inner.base_mono = mono;
+        inner.seat_paused = paused;
     }
 
     /// The effective time now (milliseconds), written to the file at most a minute apart.
@@ -352,18 +433,33 @@ impl TrustedTime {
     }
 
     /// Write `{highWater, seatElapsed, seatUncertain, uncertainSince, uncertainRunning}` now (before every deadline
-    /// action).
+    /// action), with `reset` while an offline reset waits for its audit.
     pub fn save(&self) -> Result<(), String> {
         let mut inner = self.inner.lock();
         self.tick(&mut inner);
         let (eff, seat) = self.snapshot(&inner);
         let mono = self.clock.mono_ms();
         inner.saved_mono = mono;
-        let (uncertain, since, running) = (inner.uncertain, inner.since, inner.running(mono));
+        let (uncertain, since, running, reset) = (inner.uncertain, inner.since, inner.running(mono), inner.reset);
         drop(inner);
         let Some(file) = &self.file else { return Ok(()) };
-        let body = json!({"highWater": eff, "seatElapsed": seat, "seatUncertain": uncertain, "uncertainSince": since, "uncertainRunning": running});
+        let mut body = json!({"highWater": eff, "seatElapsed": seat, "seatUncertain": uncertain, "uncertainSince": since, "uncertainRunning": running});
+        if let Some((before, after)) = reset {
+            body["reset"] = json!({"before": before, "after": after});
+        }
         crate::store::write_private(file, format!("{body}\n").as_bytes()).map_err(|e| format!("{TIME_FILE} cannot be written: {e}"))
+    }
+
+    /// R7-M1: the offline reset made since the last start, taken once for its audit: (before, after). The file then
+    /// drops it.
+    pub fn take_reset(&self) -> Option<(i64, i64)> {
+        let r = self.inner.lock().reset.take();
+        if r.is_some() {
+            if let Err(e) = self.save() {
+                crate::meet::log_error(&e);
+            }
+        }
+        r
     }
 
     /// Whether confirming now would set the effective time behind the high-water mark (a second admin when
@@ -384,20 +480,22 @@ impl TrustedTime {
             return Err(CLOCK_DISAGREE);
         }
         let (old, seat) = self.snapshot(&inner);
-        let credited = inner.held_gap;
+        // the seat clock gets the held gap (not while it is paused: R42-1)
+        let credited = if inner.seat_paused { 0 } else { inner.held_gap };
         inner.seat_base = seat + credited;
-        inner.base_eff = wall;
+        // R7-M1: a confirmation never lowers the clock license expiry, grace and the upgrade period are judged by
+        inner.base_eff = wall.max(old);
         inner.base_mono = mono;
         inner.held_gap = 0;
         inner.uncertain = false;
-        inner.back = false;
+        inner.back = wall < old - BEHIND_MAX_MS;
         inner.since = None;
         inner.unc_base = 0;
         drop(inner);
         if let Err(e) = self.save() {
             crate::meet::log_error(&e);
         }
-        Ok(Confirmed { old, new: wall, credited })
+        Ok(Confirmed { old, new: wall.max(old), credited })
     }
 }
 
@@ -455,6 +553,94 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_confirmation_never_lowers_the_effective_time() {
+        // R7-M1: running and across a restart, a confirmed rollback keeps the high-water mark
+        for restart in [false, true] {
+            let d = dir(&format!("confirm-back-{restart}"));
+            let c = FakeClock::new(T0);
+            let mut t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+            c.run(5 * HOUR);
+            c.shift_wall(-3 * DAY_MS);
+            if restart {
+                t.save().unwrap();
+                drop(t);
+                c.restart(1000);
+                t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+            }
+            let done = t.confirm(c.wall_ms()).unwrap();
+            assert_eq!(done.new, done.old, "restart {restart}");
+            assert!(t.now() >= T0 + 5 * HOUR, "restart {restart}");
+        }
+    }
+
+    #[test]
+    fn the_offline_reset_sets_high_water_keeps_every_other_key_and_is_taken_once() {
+        // R7-M1, decision 67: the host's operator resets a mark that ran ahead
+        let d = dir("offline-reset");
+        let c = FakeClock::new(T0);
+        let t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+        c.shift_wall(30 * DAY_MS);
+        t.now();
+        c.shift_wall(-30 * DAY_MS);
+        c.run(HOUR);
+        t.save().unwrap();
+        drop(t);
+        let before: Value = serde_json::from_slice(&std::fs::read(d.join(TIME_FILE)).unwrap()).unwrap();
+        let high = before["highWater"].as_i64().unwrap();
+        assert_eq!(stored_high_water(&d), Ok(high));
+        let wall = c.wall_ms();
+        assert_eq!(reset_offline(&d, wall), Ok((high, wall)));
+        let after: Value = serde_json::from_slice(&std::fs::read(d.join(TIME_FILE)).unwrap()).unwrap();
+        assert_eq!(after["highWater"], wall);
+        for k in KEYS.iter().filter(|k| **k != "highWater") {
+            assert_eq!(after[*k], before[*k], "{k} kept");
+        }
+        assert_eq!(after["reset"], json!({"before": high, "after": wall}));
+        // the next start runs from the host clock, takes the reset once, and the file drops it
+        c.restart(0);
+        let t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+        assert_eq!(t.now(), wall);
+        assert_eq!(t.take_reset(), Some((high, wall)));
+        assert_eq!(t.take_reset(), None);
+        let saved: Value = serde_json::from_slice(&std::fs::read(d.join(TIME_FILE)).unwrap()).unwrap();
+        assert!(saved.get("reset").is_none());
+    }
+
+    #[test]
+    fn the_offline_reset_refuses_a_missing_or_unreadable_file_and_changes_nothing() {
+        let d = dir("offline-bad");
+        assert!(reset_offline(&d, T0).is_err(), "missing");
+        assert!(stored_high_water(&d).is_err());
+        for body in [&b"{\"highWater\": 1"[..], b"{\"highWater\": \"x\", \"seatElapsed\": 0, \"seatUncertain\": false, \"uncertainSince\": null, \"uncertainRunning\": 0}", b"{\"highWater\": 1, \"other\": 2}"] {
+            std::fs::write(d.join(TIME_FILE), body).unwrap();
+            assert!(reset_offline(&d, T0).is_err(), "{}", String::from_utf8_lossy(body));
+            assert_eq!(std::fs::read(d.join(TIME_FILE)).unwrap(), body, "nothing was changed");
+        }
+    }
+
+    #[test]
+    fn a_paused_seat_clock_does_not_count_running_time_or_start_downtime() {
+        let d = dir("paused");
+        let c = FakeClock::new(T0);
+        let t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+        t.set_seat_paused(false);
+        c.run(HOUR);
+        t.set_seat_paused(true);
+        c.run(5 * HOUR);
+        assert_eq!(t.seat_elapsed(), HOUR);
+        assert_eq!(t.now(), T0 + 6 * HOUR, "the effective time still runs");
+        t.save().unwrap();
+        drop(t);
+        c.restart(10 * HOUR);
+        let t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+        t.set_seat_paused(true);
+        assert_eq!(t.seat_elapsed(), HOUR, "a start while paused credits no downtime");
+        t.set_seat_paused(false);
+        c.run(HOUR);
+        assert_eq!(t.seat_elapsed(), 2 * HOUR);
     }
 
     #[test]

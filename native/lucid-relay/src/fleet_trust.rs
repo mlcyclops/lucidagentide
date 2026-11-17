@@ -64,7 +64,7 @@ pub const ATTENTION_VIEWER: [&str; 15] = [
     "license-grace",
     "license-expired",
     "license-expiring",
-    "license-adding-off",
+    "license-stopped",
     "license-upgrade-period",
     "crl-stale",
     "signer-unhealthy",

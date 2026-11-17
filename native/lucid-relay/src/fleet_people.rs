@@ -130,8 +130,9 @@ pub struct RelayView {
     pub profile: String,
     pub scope_generation: u64,
     pub scopes: Vec<String>,
-    /// The license view's `adding.state` is `closed` (R41-1).
-    pub adding_closed: bool,
+    /// The license view's `service.state` is `stopped` (AC-1 R42-1, AC-2a 3.4): invites and CSV rows are refused with
+    /// `license-inactive`.
+    pub service_stopped: bool,
     /// Waiting requests on the relay, as last reported.
     pub waiting_requests: u64,
     /// Meeting Hub `relay.json` `admins` (principals, lower case); empty for Remote Spokes.
@@ -938,7 +939,7 @@ impl People {
                 Ok(d) => {
                     rows.extend(d.rows.iter().cloned());
                     if v.product == Product::Meet {
-                        seats.push(json!({"relay": v.id, "name": v.name, "addingClosed": v.adding_closed, "seats": d.seats, "asOf": d.as_of}));
+                        seats.push(json!({"relay": v.id, "name": v.name, "serviceStopped": v.service_stopped, "seats": d.seats, "asOf": d.as_of}));
                     }
                 }
                 Err(reason) => missing.push(json!({"relay": v.id, "name": v.name, "reason": reason})),
@@ -988,7 +989,7 @@ impl People {
             None | Some(Value::Null) => DAYS_DEFAULT,
             v => safe_int(v).filter(|d| (1..=30).contains(d)).ok_or_else(|| invalid("days is 1 to 30."))?,
         };
-        if view.adding_closed {
+        if view.service_stopped {
             return Err(ApiError::of("license-inactive"));
         }
         if view.waiting_requests >= WAITING_CAP {
@@ -1151,7 +1152,7 @@ impl People {
                     let email = s(&canonical, "email");
                     let status = if existing.get(&relay_id).and_then(Option::as_ref).is_some_and(|k| k.contains(&email)) {
                         "exists"
-                    } else if view.is_some_and(|v| v.adding_closed) {
+                    } else if view.is_some_and(|v| v.service_stopped) {
                         "license-inactive"
                     } else {
                         let count = per_relay.entry(relay_id.clone()).or_insert(0);
@@ -1231,7 +1232,7 @@ impl People {
                 if !view.grants("people") {
                     return Err(ApiError::with("invalid", "This relay did not give the Admin Console the people scope."));
                 }
-                if view.adding_closed {
+                if view.service_stopped {
                     return Err(ApiError::of("license-inactive"));
                 }
                 let count = per_relay.entry(relay.clone()).or_insert(0);
@@ -1437,7 +1438,7 @@ mod tests {
             profile: "standard".into(),
             scope_generation: 1,
             scopes: vec!["read-health".into(), "people".into()],
-            adding_closed: false,
+            service_stopped: false,
             waiting_requests: 0,
             admins: vec!["ann@x.org".into()],
             two_person: true,
@@ -1735,13 +1736,13 @@ mod tests {
     #[tokio::test]
     async fn csv_check_problem_codes() {
         let (fake, people, admin) = setup();
-        let mut closed = view("m2", Product::Meet);
-        closed.adding_closed = true;
+        let mut stopped = view("m2", Product::Meet);
+        stopped.service_stopped = true;
         let mut noscope = view("m3", Product::Meet);
         noscope.scopes = vec!["read-health".into()];
         let mut full = view("m4", Product::Meet);
         full.waiting_requests = 199;
-        fake.relays.lock().extend([closed, noscope, full]);
+        fake.relays.lock().extend([stopped, noscope, full]);
         fake.console.lock().insert("old@x.org".into());
         let csv = csv_of(&[
             "ok@x.org,Ok,console,viewer,,",           // 2 ok
@@ -1866,16 +1867,16 @@ mod tests {
         let done = people.import(&admin, &body, Value::Null, T0 + 1).await.unwrap();
         assert_eq!(done["done"].as_array().unwrap().len(), 2);
         assert_eq!(done["refused"][0]["code"], "request-limit");
-        // the relay's adding closed since the check: refused as license-inactive
+        // the relay's service stopped for its license since the check (3.4): re-checked at execution, license-inactive
         fake.relays.lock()[0].waiting_requests = 0;
         let out = people.import_check(&admin, csv_of(&["k@x.org,K,meet,member,m1,"]), T0).await.unwrap();
-        fake.relays.lock()[0].adding_closed = true;
+        fake.relays.lock()[0].service_stopped = true;
         let body = json!({"importId": out["importId"], "digest": out["digest"]});
         assert_eq!(people.import(&admin, &body, Value::Null, T0 + 1).await.unwrap()["refused"][0]["code"], "license-inactive");
-        // and a closed relay's invite is refused before any frame
+        // and a stopped relay's invite is refused before any frame
         assert_eq!(people.invite_meet(&admin, &json!({"relay": "m1", "email": "k@x.org", "name": "K"}), Value::Null).await.unwrap_err().code, "license-inactive");
         // the relay's own refusal comes back with its code
-        fake.relays.lock()[0].adding_closed = false;
+        fake.relays.lock()[0].service_stopped = false;
         *fake.refuse_new.lock() = Some((409, json!({"ok": false, "code": "request-exists", "message": "This request is already waiting."})));
         assert_eq!(people.invite_meet(&admin, &json!({"relay": "m1", "email": "k@x.org", "name": "K"}), Value::Null).await.unwrap_err().code, "request-exists");
     }

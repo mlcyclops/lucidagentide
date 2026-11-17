@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-2a revision 3.2",
+ "contract": "AC-2a revision 3.4",
  "encoding": "lp(...) writes each part as its byte length (4 bytes, big-endian) then its bytes. Inside lp: text (labels, ids such as c_, r_, en_, ap_ and sr_ ids, actions, targets, emails, roles) as UTF-8; integers (seq, generation, requestedAt) as decimal ASCII; hashes (previewHash, a previous rosterHash or policyHash, the first being 32 zero bytes) as their raw 32 bytes; credentialId, cose, attestationObject, clientDataJSON, spki and serials as raw bytes. canonical_json is AC-1 3.6's (CE-1 with null). In JSON: hashes and fingerprints are lowercase hex; keys, certificates, MACs, nonces and signatures are base64url without padding; serials are lowercase hex; times are milliseconds. Every ECDSA signature is the ASN.1 DER ECDSA-Sig-Value.",
  "console_id": "c_0123456789abcdef",
  "enrollment_id": "en_b40ab7b2c9d5a06d",

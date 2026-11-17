@@ -1,25 +1,27 @@
-// The Meeting Hub relay's growth gate (contract AC-1 2.4, 4.10; R41-1 replacing R4-1's service gate, R3-M4,
-// decisions 39, 55 and 56; I13).
+// The Meeting Hub relay's service gate (contract AC-1 2.4, 4.10; R42-1, R42-2 and R42-4 replacing revision 4.1's
+// growth gate; R3-M4, decisions 39, 62, 63 and 65; I13).
 //
 // - The license: relay.json `license` (a path), else `state_dir/license.lic`, re-read at every check so installing
-//   a fitting license opens adding at once and removing the file closes it at the next check. A malformed or
+//   a fitting license turns service on at once and removing the file stops it at the next check. A malformed or
 //   wrong-root file is logged (`license.refused`) and the relay runs unlicensed.
-// - The license limits growth, never service: in every license state every seated person is served on every route.
-//   Adding is open with a fitting license in valid or grace, or during the upgrade period; otherwise it is closed and
-//   every action that would seat a **new principal** (one of whom the relay knows no device that is not revoked) is
-//   refused with 403 `license-inactive`. The gate table names every main-port route `adds` (may seat a principal:
-//   the route checks the principal it would seat through `may_add`) or `serves`; a route missing from it is treated
-//   as `adds`. The backstop: a never-seen device (or seed) of a new principal is refused at its first request and
-//   never counted, however its certificate was issued. Unseated and held people get 403 `no-seat`.
+// - No valid license, no service: the service state is `on` (a fitting license before `exp`), `grace` (after `exp`,
+//   before `exp` plus min(graceDays, 2) days), `upgrade-period` (no fitting license during the 2-day upgrade period)
+//   or `stopped`. While stopped every `service` route of the gate table (main and guest port) refuses with 403
+//   `license-inactive`; `exempt` routes (`/healthz`, revocation, CRL, the 4.10 console routes) always answer, and
+//   `admin-presence` routes are exempt for a relay admin only (the presence session the 4.10 routes need). A route
+//   missing from the table is refused while stopped. The console port and the AC-2a channel never pass here. Unseated
+//   and held people get 403 `no-seat` while service runs.
 // - The upgrade period: `state_dir/meet-license-state.json` `{firstStart, upgradePeriodEnds}` (seconds; ends null
 //   when there is no period or the period is retired), written at the first start of this version before anything
-//   is answered, never reset by a restart. During it adding is open with no seat limit. A license does not use the
+//   is answered, never reset by a restart. During it the relay serves with no seat limit. A license does not use the
 //   period up (R3-M4): it is retired only when an installed license's grace end is at or after `upgradePeriodEnds`,
 //   or when the period runs out.
-// - Seats (meet_seats.rs) follow the limit: the fitting license's `users`, else `lastUsers`, else none (a relay
-//   that never had a license unseats no one). Every deadline is judged in trusted time (meet_time.rs).
+// - Seats (meet_seats.rs) run only while a fitting license is in force (`on` or `grace`), against its `users`.
+//   While stopped no seat rule runs: the seat clock's days do not count, no notice is sent and no one is unseated.
+//   Every deadline is judged in trusted time (meet_time.rs). The renewal reminders (R42-3) are sent by the console
+//   (license_reminders.rs) from `service_view`; `license.service` is audited there.
 
-use crate::license::{license_keys, license_standing, license_token_of, meet_roots, verify_meet_license, License, LicenseStanding, LicenseStateName};
+use crate::license::{license_keys, license_standing, license_token_of, meet_roots, service_state, verify_meet_license, License, LicenseStanding, LicenseStateName, ServiceStateName, ServiceWhy};
 use crate::meet::{Identity, E};
 use crate::meet_hub::Hub;
 use crate::meet_json::obj;
@@ -33,12 +35,11 @@ use std::sync::{Arc, Weak};
 
 pub const LICENSE_STATE_FILE: &str = "meet-license-state.json";
 pub const LICENSE_FILE: &str = "license.lic";
-/// 8.1 `meet.license-inactive`, 8.3 `license-inactive` (R41-1).
-pub const LICENSE_INACTIVE: &str = "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.";
+/// 8.1 `meet.license-inactive`, 8.3 `license-inactive` (R42-1).
+pub const LICENSE_INACTIVE: &str = "Your organization's Meeting Hub license is not active. Ask your admin.";
 pub const NO_LICENSE: &str = "This relay has no Meeting Hub license.";
-pub const UPGRADE_DAYS: i64 = 30;
-/// The upgrade-period mails go out on these days of the period.
-pub const UPGRADE_MAIL_DAYS: [i64; 3] = [0, 23, 29];
+/// R42-4: the one-time upgrade period is 2 days.
+pub const UPGRADE_DAYS: i64 = 2;
 /// The AC-1 state files: any of them next to a missing meet-license-state.json means no upgrade period.
 const AC1_FILES: [&str; 4] = [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, "console.json", "console-audit-head.json"];
 /// Checks at most this often (the license file, the seats); a principal never seen before checks at once.
@@ -54,25 +55,29 @@ pub static LIVE_CHECK_DEV_PUB: std::sync::OnceLock<String> = std::sync::OnceLock
 #[cfg(test)]
 pub static TEST_DEV_PUB: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// A main-port route's place in the gate table.
+/// A route's place in the gate table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
-    /// May seat a principal: the route checks the principal it would seat (`may_add`).
-    Adds,
-    /// Never seats anyone.
-    Serves,
+    /// Serves people: refused while service is stopped.
+    Service,
+    /// Answers in every service state (health, revocation, CRL, the 4.10 console routes).
+    Exempt,
+    /// Presence: exempt for a relay admin (the session the exempt admin routes need), service for anyone else.
+    AdminPresence,
 }
 
-use Class::{Adds as A, Serves as S};
+use Class::{AdminPresence as P, Exempt as X, Service as S};
 
-/// The gate table (2.4, R41-1): every route of the main port. The guest port does not consult the license.
+/// The gate table of the main port (2.4, R42-1): every route.
 pub static GATE: &[(&str, &str, Class)] = &[
     // GET
-    ("GET", "/healthz", S),
-    ("GET", "/v1/admin/console/requests", S),
-    ("GET", "/v1/crl", S),
-    ("GET", "/v1/whoami", S),
-    ("GET", "/v1/events", S),
+    ("GET", "/healthz", X),
+    ("GET", "/v1/admin/console/requests", X),
+    ("GET", "/v1/crl", X),
+    ("GET", "/v1/admin/console/where", X),
+    ("GET", "/v1/admin/console/fleet-bootstrap", X),
+    ("GET", "/v1/whoami", P),
+    ("GET", "/v1/events", P),
     ("GET", "/v1/inbox", S),
     ("GET", "/v1/notify/reads", S),
     ("GET", "/v1/dm/history", S),
@@ -119,25 +124,25 @@ pub static GATE: &[(&str, &str, Class)] = &[
     ("GET", "/v1/sso/asks", S),
     ("GET", "/v1/docs/history", S),
     ("GET", "/v1/docs/list", S),
-    // POST: the routes that can seat a principal
-    ("POST", "/v1/enroll", A),
-    ("POST", "/v1/admin/approve", A),
-    ("POST", "/v1/admin/enrolled", A),
-    ("POST", "/v1/admin/seeded", A),
-    ("POST", "/v1/admin/invite", A),
-    ("POST", "/v1/admin/organizations", A),
-    ("POST", "/v1/devices/add", A),
-    ("POST", "/v1/sso/answer", A),
-    ("POST", "/v1/sso/c/sign", A),
-    ("POST", "/v1/sso/c/org-member", A),
-    ("POST", "/v1/sso/c/pending-add", A),
-    // POST: everything else
-    ("POST", "/v1/admin/crl", S),
-    ("POST", "/v1/admin/revoke", S),
-    ("POST", "/v1/admin/console/invite", S),
-    ("POST", "/v1/admin/console/requests/decline", S),
-    ("POST", "/v1/hello", S),
-    ("POST", "/v1/bye", S),
+    // POST
+    ("POST", "/v1/enroll", S),
+    ("POST", "/v1/admin/approve", S),
+    ("POST", "/v1/admin/enrolled", S),
+    ("POST", "/v1/admin/seeded", S),
+    ("POST", "/v1/admin/invite", S),
+    ("POST", "/v1/admin/organizations", S),
+    ("POST", "/v1/devices/add", S),
+    ("POST", "/v1/sso/answer", S),
+    ("POST", "/v1/sso/c/sign", S),
+    ("POST", "/v1/sso/c/org-member", S),
+    ("POST", "/v1/sso/c/pending-add", S),
+    ("POST", "/v1/admin/crl", X),
+    ("POST", "/v1/admin/revoke", X),
+    ("POST", "/v1/admin/console/invite", X),
+    ("POST", "/v1/admin/console/requests/decline", X),
+    ("POST", "/v1/admin/console/fleet-endorse", X),
+    ("POST", "/v1/hello", P),
+    ("POST", "/v1/bye", P),
     ("POST", "/v1/join", S),
     ("POST", "/v1/signal", S),
     ("POST", "/v1/link", S),
@@ -236,13 +241,24 @@ pub static GATE: &[(&str, &str, Class)] = &[
     ("POST", "/v1/docs/delete", S),
 ];
 
-/// The route's class; a route missing from the table is treated as `adds` (dispatch: `admits`).
-#[cfg(test)]
-pub fn class_of(method: &str, path: &str) -> Class {
-    GATE.iter().find(|(m, p, _)| *m == method && *p == path).map(|(_, _, c)| *c).unwrap_or(Class::Adds)
+/// The gate table of the guest port (2.4, R42-1): every API route; all serve people (guests joining calls).
+pub static GUEST_GATE: &[(&str, &str, Class)] = &[
+    ("GET", "/g/v1/wait", S),
+    ("GET", "/g/v1/events", S),
+    ("POST", "/g/v1/knock", S),
+    ("POST", "/g/v1/signal", S),
+    ("POST", "/g/v1/chat", S),
+    ("POST", "/g/v1/stage", S),
+    ("POST", "/g/v1/consent", S),
+    ("POST", "/g/v1/leave", S),
+];
+
+/// A route's class in `table`; None for a route missing from it (refused while stopped).
+pub fn class_in(table: &[(&str, &str, Class)], method: &str, path: &str) -> Option<Class> {
+    table.iter().find(|(m, p, _)| *m == method && *p == path).map(|(_, _, c)| *c)
 }
 
-/// The 403 `license-inactive` refusal of an add-people action (main port shape: `code` and words).
+/// The 403 `license-inactive` refusal while service is stopped (main and guest port shape: `code` and words).
 pub fn inactive() -> E {
     E::Held(LICENSE_INACTIVE.into(), obj([("code", Value::from("license-inactive"))]))
 }
@@ -251,23 +267,30 @@ fn no_seat() -> E {
     E::Held(NO_SEAT.into(), obj([("code", Value::from("no-seat"))]))
 }
 
-/// Whether people can be added (I13 `adding()`).
+/// The relay's service state (2.4, R42-1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Adding {
-    /// A fitting license in valid or grace.
-    Open,
-    /// The upgrade period with no fitting license in force: open, with no seat limit.
+pub enum Service {
+    /// A fitting license before its `exp`.
+    On,
+    /// A fitting license after `exp`, within its honored grace (at most 2 days).
+    Grace,
+    /// No fitting license in force, during the 2-day upgrade period: served, with no seat limit.
     UpgradePeriod,
-    Closed,
+    Stopped,
 }
 
-impl Adding {
+impl Service {
     pub fn as_str(self) -> &'static str {
         match self {
-            Adding::Open => "open",
-            Adding::UpgradePeriod => "upgrade-period",
-            Adding::Closed => "closed",
+            Service::On => "on",
+            Service::Grace => "grace",
+            Service::UpgradePeriod => "upgrade-period",
+            Service::Stopped => "stopped",
         }
+    }
+
+    pub fn serving(self) -> bool {
+        self != Service::Stopped
     }
 }
 
@@ -356,7 +379,11 @@ pub struct Standing {
     pub active: bool,
     /// The upgrade period runs (not retired, not over).
     pub period: bool,
-    pub adding: Adding,
+    pub service: Service,
+    /// When service stops (seconds), None while stopped (license::service_state).
+    pub stops_at: Option<i64>,
+    /// Why service is stopped, None while it runs.
+    pub why: Option<ServiceWhy>,
 }
 
 /// Where the gate reads its files.
@@ -367,7 +394,7 @@ pub struct GateConfig {
     pub client_ca: PathBuf,
 }
 
-/// The growth gate, the upgrade period and the seats of one Meet relay (I13).
+/// The service gate, the upgrade period and the seats of one Meet relay (I13).
 pub struct MeetGate {
     cfg: GateConfig,
     hub: Weak<Hub>,
@@ -376,12 +403,12 @@ pub struct MeetGate {
     problem: Mutex<String>,
     upgrade: Mutex<Upgrade>,
     seats: Mutex<Seats>,
-    adding: Mutex<Option<Adding>>,
     checked: Mutex<Option<i64>>,
     logged: Mutex<HashMap<String, i64>>,
     /// Audit entries made before the console's hooks are installed (the first start writes before it answers).
     pending: Mutex<Vec<(String, String, Value)>>,
-    upgrade_mailed: Mutex<Vec<i64>>,
+    /// R7-M1: an offline license clock reset (before, after) to audit with actor operator once the hooks exist.
+    pending_reset: Mutex<Option<(i64, i64)>>,
     protected_short: Mutex<bool>,
     clock_mailed: Mutex<Option<i64>>,
 }
@@ -398,7 +425,7 @@ impl MeetGate {
         // decided before this start writes any state file
         let before = dir.as_deref().map(from_before_ac1).unwrap_or(false);
         // R6-L1: an absent meet-seats.json or meet-time.json next to other AC-1 state stops the start (recreating them
-        // would forget the seat clock, lastUsers, lastLicense, everSeated or the high-water mark)
+        // would forget the seat clock, lastLicense or the high-water mark)
         if let Some(d) = dir.as_deref() {
             let has = |f: &str| d.join(f).exists();
             let others = |skip: &str| [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, crate::meet_time::TIME_FILE, "console.json", "console-audit-head.json"].iter().any(|f| *f != skip && has(f));
@@ -435,7 +462,7 @@ impl MeetGate {
             Some(s) => s,
             None => {
                 let records = hub.seat_records();
-                let s = Seats::migrate(dir.as_deref(), &records, &hub.holders(), t);
+                let s = Seats::migrate(dir.as_deref(), &records, t);
                 s.save()?;
                 if !s.migrated.is_empty() {
                     let from_records = records.iter().filter(|(_, at)| at.is_some()).count();
@@ -452,16 +479,21 @@ impl MeetGate {
             problem: Mutex::new(NO_LICENSE.into()),
             upgrade: Mutex::new(upgrade),
             seats: Mutex::new(seats),
-            adding: Mutex::new(None),
             checked: Mutex::new(None),
             logged: Mutex::new(HashMap::new()),
             pending: Mutex::new(pending),
-            upgrade_mailed: Mutex::new(Vec::new()),
+            pending_reset: Mutex::new(None),
             protected_short: Mutex::new(false),
             clock_mailed: Mutex::new(None),
         });
-        // a start with a protected principal unseated repairs it (R3-M6); `lastUsers` and the seat clock are written
-        // before the first answer
+        // R7-M1: an offline `license-time reset` since the last start is logged and audited once (actor operator)
+        if let Some((before, after)) = gate.time.take_reset() {
+            crate::meet::log_warn(&format!("license.time-reset category=security before={before} after={after}"));
+            *gate.pending_reset.lock() = Some((before, after));
+            gate.flush_pending();
+        }
+        // a start with a protected principal unseated repairs it (R3-M6); `lastLicense` and the seat clock are written
+        // before the first answer, and a start without a license in force does not credit the downtime to the seat clock
         gate.check(true);
         // the live check binary does not start with a publisher-signed license (R4-H1)
         if gate.time.clock().live_check() && gate.problem().contains("for tests only") {
@@ -488,6 +520,9 @@ impl MeetGate {
         let Some(h) = self.hub.upgrade().and_then(|h| h.console_hooks_installed()) else { return };
         for (a, t, d) in self.pending.lock().drain(..) {
             h.audit(&a, &t, d);
+        }
+        if let Some((before, after)) = self.pending_reset.lock().take() {
+            h.audit_operator("license.time-reset", "-", json!({"before": before, "after": after}));
         }
     }
 
@@ -579,72 +614,98 @@ impl MeetGate {
         self.seats.lock().last_license.clone()
     }
 
-    /// Whether this principal was ever seated on this relay (`everSeated`, R6-M2); one that never was is new.
-    pub fn ever_seated(&self, principal: &str) -> bool {
-        self.seats.lock().ever_seated.contains(&principal.trim().to_lowercase())
-    }
-
-    /// `lastUsers` (R41-1): the last fitting license's `users`, None for a relay that never had one.
-    pub fn last_users(&self) -> Option<i64> {
-        self.seats.lock().last_users
-    }
-
-    /// Where the gate stands at effective time `t` (milliseconds).
+    /// Where the gate stands at effective time `t` (milliseconds). The license standing honors min(graceDays, 2)
+    /// (R42-2, license.rs).
     pub fn standing_at(&self, t: i64) -> Standing {
         let license = license_standing(self.licensed.lock().as_ref().map(|l| &l.license), t.div_euclid(1000));
         let active = matches!(license.state, Some(LicenseStateName::Valid | LicenseStateName::Grace));
-        let period = self.upgrade.lock().ends.is_some_and(|e| t.div_euclid(1000) < e);
-        let adding = if active {
-            Adding::Open
-        } else if period {
-            Adding::UpgradePeriod
-        } else {
-            Adding::Closed
+        let ends = self.upgrade.lock().ends;
+        let period = ends.is_some_and(|e| t.div_euclid(1000) < e);
+        let state = {
+            let cur = self.licensed.lock();
+            let given = match cur.as_ref() {
+                Some(l) => Ok(&l.license),
+                None => Err(self.why_none()),
+            };
+            service_state(given, ends, t.div_euclid(1000))
         };
-        Standing { license, active, period, adding }
+        let service = match state.state {
+            ServiceStateName::On => Service::On,
+            ServiceStateName::Grace => Service::Grace,
+            ServiceStateName::UpgradePeriod => Service::UpgradePeriod,
+            ServiceStateName::Stopped => Service::Stopped,
+        };
+        Standing { license, active, period, service, stops_at: state.stops_at, why: state.why }
     }
 
     pub fn standing(&self) -> Standing {
         self.standing_at(self.time.now())
     }
 
-    /// I13 `adding()`.
-    pub fn adding(&self) -> Adding {
-        self.standing().adding
+    /// The service state now (I13).
+    pub fn service(&self) -> Service {
+        self.standing().service
     }
 
-    /// I13 `may_add(principal)`: false only while adding is closed and the principal is new (the relay knows no
-    /// device of theirs that is not revoked).
-    pub fn may_add(&self, principal: &str) -> bool {
-        if self.adding() != Adding::Closed {
-            return true;
+    /// The service view the console's reminders, banners and attention read (I13, R42-3): the state, when service
+    /// stops (ms: the honored grace end, or the upgrade period's end), why it is stopped, the period's end, the
+    /// fitting license's id and `exp` (ms), and the trusted time it was judged at.
+    pub fn service_view(&self) -> crate::console::ServiceView {
+        use crate::console::ServiceState;
+        let t = self.time.now();
+        let s = self.standing_at(t);
+        let ends = self.upgrade.lock().ends.map(|e| e * 1000);
+        let lic = self.licensed.lock().as_ref().map(|l| (l.license.id.clone(), l.license.exp));
+        let state = match s.service {
+            Service::On => ServiceState::On,
+            Service::Grace => ServiceState::Grace,
+            Service::UpgradePeriod => ServiceState::UpgradePeriod,
+            Service::Stopped => ServiceState::Stopped,
+        };
+        crate::console::ServiceView {
+            state,
+            stops_at: s.stops_at.map(|e| e * 1000),
+            why: s.why.map(ServiceWhy::as_str),
+            upgrade_period_ends: ends,
+            license_id: lic.as_ref().map(|(id, _)| id.clone()),
+            exp: lic.as_ref().map(|(_, exp)| exp * 1000),
+            // the verifier's words for a refused file (never the token), only with a refusal why
+            reason: match s.why {
+                Some(ServiceWhy::WrongProduct | ServiceWhy::WrongRoot | ServiceWhy::Invalid) => self.refusal(),
+                _ => None,
+            },
+            at: t,
         }
-        self.ever_seated(principal)
     }
 
-    /// The relay-side refusal of an add-people action for `principal` (enrollment approval, invite, organization
-    /// change, SSO provisioning): Ok, or 403 `license-inactive`, logged at most once per principal an hour.
-    pub fn check_add(&self, principal: &str) -> Result<(), E> {
-        self.check(false);
-        if self.may_add(principal) {
-            return Ok(());
+    /// The verifier's words for the refused license file, without the "This license cannot be used here: " frame;
+    /// None with no file or a fitting one.
+    fn refusal(&self) -> Option<String> {
+        let p = self.problem.lock();
+        if p.as_str() == NO_LICENSE || p.is_empty() {
+            return None;
         }
-        self.log_refused(principal);
-        Err(inactive())
+        let reason = p.strip_prefix("This license cannot be used here: ").unwrap_or(&p);
+        Some(reason.strip_suffix('.').unwrap_or(reason).to_owned())
     }
 
-    /// The limit the seat rules use now: the fitting license's `users`, else `lastUsers` (none during the upgrade
-    /// period without a license, and none for a relay that never had a license).
+    /// Why no fitting license is in force: none, or the verifier's refusal of the file (wrong product or root, or
+    /// invalid).
+    fn why_none(&self) -> ServiceWhy {
+        match self.refusal() {
+            None => ServiceWhy::None,
+            Some(reason) => ServiceWhy::of_refusal(&reason),
+        }
+    }
+
+    /// The limit the seat rules use now: the fitting license's `users` while one is in force (`on` or `grace`), else
+    /// none (no seat rule runs).
     fn limit_of(&self, s: &Standing) -> Option<i64> {
-        if s.period && !s.active {
-            None
-        } else {
-            self.seats.lock().limit(s.active.then_some(s.license.users))
-        }
+        s.active.then_some(s.license.users)
     }
 
-    /// The periodic check: the license file, the upgrade period (retirement and mails), the gate's audit on change,
-    /// `lastUsers` and the seats. `force` skips the 10-second spacing.
+    /// The periodic check: the license file, the upgrade period, `lastLicense`, the seat clock's pause and the seats.
+    /// `force` skips the 10-second spacing.
     pub fn check(&self, force: bool) {
         let t = self.time.now();
         {
@@ -657,30 +718,20 @@ impl MeetGate {
         self.read_license(t);
         self.upgrade_tick(t);
         let s = self.standing_at(t);
-        // R41-1: a fitting license in valid or grace writes its `users` into `lastUsers` before anything is answered
+        // R6-M1: a fitting license in on or grace writes its comparison record into `lastLicense` before anything is
+        // answered (its only use is the 4.7 install comparison)
         if s.active {
             let mut seats = self.seats.lock();
             let record = self.licensed.lock().as_ref().map(|l| crate::meet_seats::LastLicense::of(&l.license));
-            if seats.last_users != Some(s.license.users) || seats.last_license != record {
-                // R41-1 and R6-M1: `lastUsers` and `lastLicense` in one write
-                seats.last_users = Some(s.license.users);
+            if seats.last_license != record {
                 seats.last_license = record;
                 if let Err(e) = seats.save() {
                     crate::meet::log_error(&e);
                 }
             }
         }
-        let open = s.adding != Adding::Closed;
-        let changed = {
-            let mut last = self.adding.lock();
-            let changed = last.is_some_and(|l| (l != Adding::Closed) != open);
-            *last = Some(s.adding);
-            changed
-        };
-        if changed {
-            let why = if s.active { "license" } else if s.period { "upgrade-period" } else { s.license.state_str() };
-            self.audit("meet.license.adding", "-", json!({"state": if open { "open" } else { "closed" }, "why": why, "lastUsers": self.last_users()}));
-        }
+        // R42-1: the seat clock's days count only while a fitting license is in force
+        self.time.set_seat_paused(!s.active);
         self.seats_tick(t, &s);
     }
 
@@ -706,25 +757,8 @@ impl MeetGate {
                 }
             }
             self.audit("meet.license.upgrade-period", "-", json!({"ends": ends * 1000, "retired": why}));
-            return;
         }
-        let day = (now_s - u.first_start).max(0) / 86_400;
-        drop(u);
-        let mut mailed = self.upgrade_mailed.lock();
-        let latest = UPGRADE_MAIL_DAYS.iter().copied().filter(|d| *d <= day).max();
-        for d in UPGRADE_MAIL_DAYS {
-            if day >= d && !mailed.contains(&d) {
-                mailed.push(d);
-                // after a restart late in the period only the latest due mail goes out
-                if Some(d) != latest {
-                    continue;
-                }
-                let date = crate::meet_json::iso_date(ends);
-                for to in self.admin_emails() {
-                    self.mail("mail.upgrade-period", &to, &[("date", date.clone())]);
-                }
-            }
-        }
+        // the period's reminders (at its start, every 12 hours, then the stop mail) are the console's (R42-3)
     }
 
     fn seats_tick(&self, t: i64, s: &Standing) {
@@ -733,7 +767,6 @@ impl MeetGate {
         let protected = |p: &str| self.protected(p);
         let view = self.time.view();
         let limit = self.limit_of(s);
-        let from = if s.active { "license" } else { "lastUsers" };
         let now = Now { t, seat_elapsed: view.seat_elapsed, day_ms: self.time.seat_day_ms(), uncertain: view.uncertain, hold_due: view.hold_due(), users: limit, protected: &protected };
         let mut seats = self.seats.lock();
         let (changed, events) = seats.reconcile(&live, &now);
@@ -762,8 +795,8 @@ impl MeetGate {
                         self.mail("mail.reseated", &principal, &[("date", crate::meet_json::iso_date(t / 1000))]);
                     }
                 }
-                Event::ClockStart { .. } => self.audit("meet.seats.clock", "-", json!({"state": "start", "seated": seated, "users": users, "limit": from})),
-                Event::ClockClear => self.audit("meet.seats.clock", "-", json!({"state": "clear", "seated": seated, "users": users, "limit": from})),
+                Event::ClockStart { .. } => self.audit("meet.seats.clock", "-", json!({"state": "start", "seated": seated, "users": users})),
+                Event::ClockClear => self.audit("meet.seats.clock", "-", json!({"state": "clear", "seated": seated, "users": users})),
                 Event::Notice { day } => {
                     let admins = self.admin_emails();
                     for to in &admins {
@@ -798,50 +831,55 @@ impl MeetGate {
         }
     }
 
-    /// The gate at main-port dispatch (2.4, 4.10): Ok to go on, 403 `no-seat` to an unseated or held person's
-    /// device, or 403 `license-inactive` while adding is closed for a new principal's never-seen device or seed (the
-    /// backstop) and for a route missing from the table called by anyone the relay does not hold. Seated people are
-    /// served on every route in every license state.
+    /// The gate at main-port dispatch (2.4, 4.10): `exempt` routes always go on; while service is stopped every
+    /// `service` route (and a route missing from the table) answers 403 `license-inactive`, and an `admin-presence`
+    /// route goes on only for a relay admin's device; while service runs, an unseated or held person's device gets
+    /// 403 `no-seat`.
     pub fn admits(&self, method: &str, path: &str, who: Option<&Identity>) -> Result<(), E> {
-        let fresh = who.is_some_and(|w| (person(w) || w.seed) && !self.seats.lock().first_seen.contains_key(&w.principal));
+        self.gate(GATE, method, path, who)
+    }
+
+    /// The gate at guest-port dispatch (2.4, R42-1): every guest route serves people (guests have no seat).
+    pub fn admits_guest(&self, method: &str, path: &str) -> Result<(), E> {
+        self.gate(GUEST_GATE, method, path, None)
+    }
+
+    fn gate(&self, table: &[(&str, &str, Class)], method: &str, path: &str, who: Option<&Identity>) -> Result<(), E> {
+        let class = class_in(table, method, path);
+        if class == Some(Class::Exempt) {
+            return Ok(());
+        }
+        let fresh = who.is_some_and(|w| person(w) && !self.seats.lock().first_seen.contains_key(&w.principal));
         self.check(fresh);
+        if !self.service().serving() {
+            let admin = || who.is_some_and(|w| person(w) && self.hub.upgrade().is_some_and(|h| h.is_admin(&w.principal)));
+            if class == Some(Class::AdminPresence) && admin() {
+                return Ok(());
+            }
+            self.log_refused(who.map(|w| if w.device.is_empty() { w.principal.as_str() } else { w.device.as_str() }).unwrap_or_default());
+            return Err(inactive());
+        }
         if let Some(w) = who.filter(|w| person(w)) {
             let seats = self.seats.lock();
             if seats.is_unseated(&w.principal) || seats.is_held(&w.principal) {
                 return Err(no_seat());
             }
         }
-        // /healthz names no one and seats no one: it answers anyone, as on the Python reference relay
-        if self.adding() != Adding::Closed || (method == "GET" && path == "/healthz") {
-            return Ok(());
-        }
-        let held = |w: &Identity| self.ever_seated(&w.principal);
-        // the backstop: however its certificate was issued, a new principal's device never gets in while adding is
-        // closed (and is never counted, since nothing past this point sees it)
-        if let Some(w) = who.filter(|w| person(w) || w.seed) {
-            if !held(w) {
-                self.log_refused(&w.principal);
-                return Err(inactive());
-            }
-        }
-        if GATE.iter().all(|(m, p, _)| !(*m == method && *p == path)) && !who.is_some_and(held) {
-            self.log_refused(who.map(|w| w.principal.as_str()).unwrap_or_default());
-            return Err(inactive());
-        }
         Ok(())
     }
 
-    fn log_refused(&self, principal: &str) {
+    /// `license.gate` (security, warn), at most once per device an hour.
+    fn log_refused(&self, device: &str) {
         let t = self.time.now();
         let mut logged = self.logged.lock();
-        if logged.get(principal).is_some_and(|at| t - at < GATE_LOG_MS) {
+        if logged.get(device).is_some_and(|at| t - at < GATE_LOG_MS) {
             return;
         }
         if logged.len() > 10_000 {
             logged.clear();
         }
-        logged.insert(principal.to_owned(), t);
-        crate::meet::log_warn(&format!("meet.license-gate category=security principal={}", crate::meet::kv(principal)));
+        logged.insert(device.to_owned(), t);
+        crate::meet::log_warn(&format!("license.gate category=security device={}", crate::meet::kv(device)));
     }
 
     // ── the console's views and actions (4.7, 4.9) ──
@@ -862,11 +900,6 @@ impl MeetGate {
         self.verify(text, self.time.now())
     }
 
-    /// 4.7 `adding` (Meeting Hub only): `{state, upgradePeriodEnds, lastUsers}`.
-    pub fn adding_view(&self) -> Value {
-        json!({"state": self.adding().as_str(), "upgradePeriodEnds": self.upgrade().ends.map(|e| e * 1000), "lastUsers": self.last_users()})
-    }
-
     /// `meet.seats.pick`.
     pub fn pick(&self, principal: &str, by: &str, pick: bool) -> Result<(), (&'static str, String)> {
         let Some(hub) = self.hub.upgrade() else { return Err(("not-found", "There is no such person.".into())) };
@@ -882,19 +915,14 @@ impl MeetGate {
         })
     }
 
-    /// GET meet/seats (4.9): `users` is the limit in force (`limitFrom` says which: "license", "lastUsers", or null
-    /// with no limit, the Seats page then showing `seats.no-license`).
+    /// GET meet/seats (4.9): `users` is the fitting license's `users` while one is in force, else null (no seat rule
+    /// runs); `service` is the service state (the Seats page shows `seats.stopped` while `stopped`).
     pub fn seats_view(&self, names: &dyn Fn(&str) -> String, request_to: Option<String>) -> Value {
         self.check(false);
         let Some(hub) = self.hub.upgrade() else { return Value::Null };
         let t = self.time.now();
         let s = self.standing_at(t);
         let limit = self.limit_of(&s);
-        let limit_from = match (s.active, limit) {
-            (true, _) => Value::from("license"),
-            (false, Some(_)) => Value::from("lastUsers"),
-            (false, None) => Value::Null,
-        };
         let users = limit.unwrap_or(0);
         let live = hub.seat_live(t.div_euclid(1000));
         let seats = self.seats.lock();
@@ -924,7 +952,7 @@ impl MeetGate {
         json!({
             "ok": true, "users": limit, "seated": seated, "state": Seats::level(seated, users).as_str(), "clock": clock, "people": people,
             "unseated": seats.unseated.len(), "held": seats.held.len(), "requestTo": request_to, "migrated": seats.migrated_seated(&live),
-            "limitFrom": limit_from, "lastUsers": seats.last_users, "adding": s.adding.as_str(), "upgradePeriodEnds": self.upgrade().ends.map(|e| e * 1000),
+            "service": s.service.as_str(), "upgradePeriodEnds": self.upgrade().ends.map(|e| e * 1000),
         })
     }
 
@@ -951,17 +979,8 @@ impl MeetGate {
             v["banner"] = Value::from(id);
             v
         };
+        // the license items and banners (license-*, the upgrade period) come from the console's service view (R42-3)
         let mut out = Vec::new();
-        let t = self.time.now();
-        let s = self.standing_at(t);
-        match s.adding {
-            Adding::UpgradePeriod => {
-                let date = self.upgrade.lock().ends.map(crate::meet_json::iso_date).unwrap_or_default();
-                out.push(with_banner(item("license-upgrade-period", "warn", json!({"date": date}), "#/license"), "banner.upgrade-period"));
-            }
-            Adding::Closed => out.push(with_banner(item("license-adding-off", "bad", json!({}), "#/license"), "banner.license-inactive")),
-            Adding::Open => {}
-        }
         let view = self.time.view();
         if view.uncertain {
             out.push(item("clock-uncertain", "bad", json!({"n": self.time.hold_hours_left().unwrap_or(0)}), "#/meet/seats"));
@@ -1061,100 +1080,171 @@ mod tests {
     }
 
     #[test]
-    fn every_tabled_route_is_a_main_port_route_and_a_missing_one_is_treated_as_adds() {
+    fn every_tabled_route_is_a_route_and_only_the_contract_routes_are_exempt() {
         let mut seen = std::collections::HashSet::new();
         for (m, p, _) in GATE {
             assert!(crate::meet_routes::has_route(m, p), "{m} {p} is not a route of the main port");
             assert!(seen.insert((m, p)), "{m} {p} twice");
         }
-        assert_eq!(class_of("POST", "/v1/not-a-route"), Class::Adds);
-        for p in ["/v1/enroll", "/v1/admin/approve", "/v1/admin/invite", "/v1/admin/organizations", "/v1/sso/answer", "/v1/sso/c/sign"] {
-            assert_eq!(class_of("POST", p), Class::Adds, "{p}");
-        }
-        // while adding is closed: a missing route is refused for anyone the relay does not hold, served to a seated person
-        let d = dir("missing");
-        let h = hub(&d);
-        seat(&h, "bob@x.org", "bbbbbbbbbbbbbbbb", "77");
-        let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
-        assert_eq!(refused(g.admits("POST", "/v1/not-a-route", None)), format!("license-inactive {LICENSE_INACTIVE}"));
-        assert_eq!(refused(g.admits("POST", "/v1/not-a-route", Some(&device("bob@x.org", "bbbbbbbbbbbbbbbb", "77")))), "ok");
+        let exempt: Vec<(&str, &str)> = GATE.iter().filter(|(_, _, c)| *c == Class::Exempt).map(|(m, p, _)| (*m, *p)).collect();
+        assert_eq!(
+            exempt,
+            vec![
+                ("GET", "/healthz"),
+                ("GET", "/v1/admin/console/requests"),
+                ("GET", "/v1/crl"),
+                ("GET", "/v1/admin/console/where"),
+                ("GET", "/v1/admin/console/fleet-bootstrap"),
+                ("POST", "/v1/admin/crl"),
+                ("POST", "/v1/admin/revoke"),
+                ("POST", "/v1/admin/console/invite"),
+                ("POST", "/v1/admin/console/requests/decline"),
+                ("POST", "/v1/admin/console/fleet-endorse"),
+            ]
+        );
+        let presence: Vec<&str> = GATE.iter().filter(|(_, _, c)| *c == Class::AdminPresence).map(|(_, p, _)| *p).collect();
+        assert_eq!(presence, vec!["/v1/whoami", "/v1/events", "/v1/hello", "/v1/bye"]);
+        assert!(GUEST_GATE.iter().all(|(_, _, c)| *c == Class::Service), "the guest port serves people only");
+        assert_eq!(class_in(GATE, "POST", "/v1/not-a-route"), None);
     }
 
-    #[test]
-    fn with_adding_closed_a_seated_person_is_served_on_every_route() {
-        let d = dir("seated");
-        let h = hub(&d);
-        seat(&h, "bob@x.org", "bbbbbbbbbbbbbbbb", "77");
-        let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
-        assert_eq!(g.adding(), Adding::Closed, "a fresh install with no license has no period");
-        let bob = device("bob@x.org", "bbbbbbbbbbbbbbbb", "77");
-        for (m, p, _) in GATE {
-            assert_eq!(refused(g.admits(m, p, Some(&bob))), "ok", "{m} {p}");
-        }
-        // a seated person's new device and seed are served too (their own devices within the caps)
-        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&device("bob@x.org", "cccccccccccccccc", "78")))), "ok");
-        let seed = Identity { principal: "bob@x.org".into(), seed: true, ..Default::default() };
-        assert_eq!(refused(g.admits("POST", "/v1/enroll", Some(&seed))), "ok");
-        assert!(g.may_add("bob@x.org"));
-    }
-
-    #[test]
-    fn with_adding_closed_a_new_principal_is_refused_from_every_path() {
-        let d = dir("new");
-        let h = hub(&d);
-        let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
+    /// Every route of both ports in one service state: `service` routes refused (or served), `exempt` ones always.
+    fn every_route(g: &MeetGate, serving: bool, who: &Identity, what: &str) {
         let words = format!("license-inactive {LICENSE_INACTIVE}");
-        // an enrollment request (its seed), a never-seen device however its certificate was issued, a relay admin's too
-        let seed = Identity { principal: "new@x.org".into(), seed: true, ..Default::default() };
-        assert_eq!(refused(g.admits("POST", "/v1/enroll", Some(&seed))), words);
-        assert_eq!(refused(g.admits("POST", "/v1/hello", Some(&device("new@x.org", "dddddddddddddddd", "99")))), words);
-        assert_eq!(refused(g.admits("POST", "/v1/hello", Some(&device("admin@x.org", "eeeeeeeeeeeeeeee", "98")))), words);
-        assert!(h.seat_live(T0 / 1000).is_empty(), "never counted");
-        // approval, invite, organization change and SSO answer for a new principal
-        assert_eq!(refused(g.check_add("new@x.org")), words);
+        for (m, p, c) in GATE {
+            let want = if serving || *c == Class::Exempt { "ok".to_string() } else { words.clone() };
+            assert_eq!(refused(g.admits(m, p, Some(who))), want, "{what}: {m} {p} ({c:?})");
+        }
+        for (m, p, _) in GUEST_GATE {
+            let want = if serving { "ok".to_string() } else { words.clone() };
+            assert_eq!(refused(g.admits_guest(m, p)), want, "{what}: guest {m} {p}");
+        }
+        // a route missing from the table is refused while stopped
+        let want = if serving { "ok".to_string() } else { words.clone() };
+        assert_eq!(refused(g.admits("POST", "/v1/not-a-route", Some(who))), want, "{what}: a missing route");
     }
 
     #[test]
-    fn a_person_whose_every_device_was_revoked_keeps_their_admission() {
-        // R6-M2: revoking a seated person's sole device frees the seat but keeps them in everSeated
-        let d = dir("revoked");
-        let c = FakeClock::new(T0);
+    fn the_service_gate_in_every_license_state() {
+        let v = products();
+        let bob = device("bob@x.org", "bbbbbbbbbbbbbbbb", "77");
+        // valid, grace (a 2-day token one day past exp), expired past grace, none, wrong product, wrong root
+        for (name, token_name, ca, serving, why) in [
+            ("valid", Some("Meeting Hub, root A"), 2, true, None),
+            ("grace", Some("Meeting Hub graceDays 2"), 2, true, None),
+            ("expired", Some("Meeting Hub expired"), 2, false, Some("expired")),
+            ("none", None, 2, false, Some("none")),
+            ("wrong product", Some("Remote Spokes"), 2, false, Some("wrong-product")),
+            ("wrong root", Some("Meeting Hub, root B"), 1, false, Some("wrong-root")),
+        ] {
+            let d = dir(&format!("state-{}", name.replace(' ', "-")));
+            std::fs::write(d.join("client_ca.pem"), v["clientCas"][ca]["pem"].as_str().unwrap()).unwrap();
+            if let Some(t) = token_name {
+                std::fs::write(d.join(LICENSE_FILE), format!("{}\n", token(&v, t))).unwrap();
+            }
+            let h = hub(&d);
+            seat(&h, "bob@x.org", "bbbbbbbbbbbbbbbb", "77");
+            let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
+            assert_eq!(g.service().serving(), serving, "{name}");
+            assert_eq!(g.service_view().why, why, "{name}");
+            // the verifier's words only for a refused file, never the token
+            let reason = g.service_view().reason;
+            assert_eq!(reason.is_some(), matches!(why, Some("wrong-product" | "wrong-root" | "invalid")), "{name}: {reason:?}");
+            assert!(reason.as_deref().is_none_or(|r| !r.contains("eyJ") && !r.starts_with("This license")), "{name}");
+            every_route(&g, serving, &bob, name);
+        }
+    }
+
+    #[test]
+    fn a_relay_admin_keeps_the_presence_session_the_exempt_routes_need() {
+        let d = dir("admin-presence");
         let h = hub(&d);
-        seat(&h, "bob@x.org", "bbbbbbbbbbbbbbbb", "77");
-        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
-        assert_eq!(g.adding(), Adding::Closed);
-        assert!(g.ever_seated("bob@x.org"));
-        h.st.lock().denied.insert("77".into(), json!({"principal": "bob@x.org", "device": "bbbbbbbbbbbbbbbb"}));
-        assert!(h.seat_live(T0 / 1000).is_empty(), "the seated count falls at once");
-        g.check(true);
-        assert!(g.may_add("bob@x.org"), "still admitted");
-        // their replacement enrollment (seed) and its device get in while adding is closed
-        let seed = Identity { principal: "bob@x.org".into(), seed: true, ..Default::default() };
-        assert_eq!(refused(g.admits("POST", "/v1/enroll", Some(&seed))), "ok");
-        assert_eq!(refused(g.admits("POST", "/v1/hello", Some(&device("bob@x.org", "cccccccccccccccc", "78")))), "ok");
-        // a principal never seen here is still refused
-        assert_eq!(refused(g.check_add("stranger@x.org")), format!("license-inactive {LICENSE_INACTIVE}"));
-        // everSeated survives a restart and an unseat
-        g.seats.lock().unseated.push(crate::meet_seats::Unseated { principal: "bob@x.org".into(), at: T0, why: "newest".into() });
-        g.seats.lock().save().unwrap();
-        drop(g);
-        c.restart(1000);
-        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
-        assert!(g.ever_seated("bob@x.org"));
+        let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
+        assert_eq!(g.service(), Service::Stopped, "a fresh install with no license has no period and no service");
+        let admin = device("admin@x.org", "aaaaaaaaaaaaaaaa", "71");
+        let other = device("bob@x.org", "bbbbbbbbbbbbbbbb", "77");
+        assert_eq!(refused(g.admits("POST", "/v1/hello", Some(&admin))), "ok");
+        assert_eq!(refused(g.admits("POST", "/v1/admin/revoke", Some(&admin))), "ok");
+        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&admin))), format!("license-inactive {LICENSE_INACTIVE}"));
+        assert_eq!(refused(g.admits("POST", "/v1/hello", Some(&other))), format!("license-inactive {LICENSE_INACTIVE}"));
+        let seed = Identity { principal: "new@x.org".into(), seed: true, ..Default::default() };
+        assert_eq!(refused(g.admits("POST", "/v1/enroll", Some(&seed))), format!("license-inactive {LICENSE_INACTIVE}"));
     }
 
     #[test]
-    fn an_upgrade_from_before_ac1_opens_adding_for_thirty_days_with_no_seat_limit() {
+    fn grace_is_at_most_two_days() {
+        let v = products();
+        let exp = 1_799_913_600_000;
+        // tokens with graceDays 0, 1, 2, 14 and 30 stop at exp, exp + 1 day, and exp + 2 days for the last three
+        for (i, (name, stops)) in [("Meeting Hub graceDays 0", exp), ("Meeting Hub graceDays 1", exp + DAY), ("Meeting Hub graceDays 2", exp + 2 * DAY), ("Meeting Hub in grace", exp + 2 * DAY), ("Meeting Hub graceDays 30", exp + 2 * DAY)].into_iter().enumerate() {
+            let d = licensed_dir(&v, &format!("grace-{i}"));
+            let c = FakeClock::new(exp - DAY);
+            let g = MeetGate::open(cfg(&d), &hub(&d), c.clone()).unwrap();
+            install(&g, &d, &token(&v, name));
+            assert_eq!(g.service(), Service::On, "{name}");
+            assert_eq!(g.service_view().stops_at, Some(stops), "{name}");
+            // the console shows the honored value (2 for the 14 and 30 day tokens)
+            assert_eq!(g.license().unwrap().0.effective_grace_days(), (stops - exp) / DAY, "{name}");
+            c.run(stops - (exp - DAY) - 1000);
+            g.check(true);
+            assert!(g.service().serving(), "{name}: served until the stop");
+            c.run(1000);
+            g.check(true);
+            assert_eq!(g.service(), Service::Stopped, "{name}: stopped at {stops}");
+            assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&device("bob@x.org", "bbbbbbbbbbbbbbbb", "77")))), format!("license-inactive {LICENSE_INACTIVE}"));
+        }
+    }
+
+    #[test]
+    fn installing_serves_at_once_and_removing_the_file_stops_at_the_next_check() {
+        let v = products();
+        let d = licensed_dir(&v, "install-serve");
+        let h = hub(&d);
+        let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();
+        let bob = device("bob@x.org", "bbbbbbbbbbbbbbbb", "77");
+        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&bob))), format!("license-inactive {LICENSE_INACTIVE}"));
+        install(&g, &d, &token(&v, "Meeting Hub, root A"));
+        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&bob))), "ok", "at once");
+        std::fs::remove_file(d.join(LICENSE_FILE)).unwrap();
+        g.check(true);
+        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&bob))), format!("license-inactive {LICENSE_INACTIVE}"));
+    }
+
+    #[test]
+    fn no_growth_gate_code_remains() {
+        // R42-1: a source scan of the Meeting Hub files
+        let words = ["ever_seated", "everSeated", "last_users", "lastUsers", "meet.license.adding", "license-adding-off", "may_add", "check_add", "Adding::"];
+        for (file, text) in [
+            ("meet_license.rs", include_str!("meet_license.rs")),
+            ("meet_seats.rs", include_str!("meet_seats.rs")),
+            ("meet_routes.rs", include_str!("meet_routes.rs")),
+            ("meet_hub.rs", include_str!("meet_hub.rs")),
+            ("console_meet.rs", include_str!("console_meet.rs")),
+            ("meet_console.rs", include_str!("meet_console.rs")),
+        ] {
+            // the code before each file's test module
+            let code = text.find("\nmod tests {").map_or(text, |at| &text[..at]);
+            for w in words {
+                assert!(!code.contains(w), "{file} still names {w}");
+            }
+            assert!(!code.contains("Class::Adds") && !code.contains("Class::Serves"), "{file} still tags adds or serves");
+        }
+    }
+
+    #[test]
+    fn an_upgrade_from_before_ac1_serves_for_two_days_with_no_seat_limit_then_stops() {
         let d = dir("upgrade");
         old_state(&d);
         let c = FakeClock::new(T0);
         let h = hub(&d);
         let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
         let ends = g.upgrade().ends.unwrap();
-        assert_eq!(ends, T0 / 1000 + 30 * 86_400);
+        assert_eq!(ends, T0 / 1000 + 2 * 86_400);
         assert!(d.join(LICENSE_STATE_FILE).is_file(), "written before the first answer");
-        assert_eq!(g.adding(), Adding::UpgradePeriod);
-        assert!(g.may_add("new@x.org"));
+        assert_eq!(g.service(), Service::UpgradePeriod);
+        let view = g.service_view();
+        assert_eq!((view.stops_at, view.upgrade_period_ends, view.license_id), (Some(ends * 1000), Some(ends * 1000), None), "the reminders' inputs");
+        every_route(&g, true, &device("p3@x.org", &format!("{:016x}", 3), "67"), "upgrade period");
         // no seat limit: many people, no clock
         for i in 0..30 {
             seat(&h, &format!("p{i}@x.org"), &format!("{i:016x}"), &format!("{:x}", 100 + i));
@@ -1165,38 +1255,81 @@ mod tests {
         c.restart(DAY);
         let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
         assert_eq!(g.upgrade().ends, Some(ends), "a restart keeps the same end");
-        // the period runs out: adding closes, seated people keep their service, no one is unseated (never licensed)
-        c.run(30 * DAY);
+        assert_eq!(g.service(), Service::UpgradePeriod);
+        // the period runs out: service stops for everyone, and no one is unseated
+        c.run(DAY);
         g.check(true);
-        assert_eq!(g.adding(), Adding::Closed);
+        assert_eq!(g.service(), Service::Stopped);
         assert_eq!(g.upgrade().ends, None, "retired");
-        assert_eq!(refused(g.admits("POST", "/v1/dm", Some(&device("p3@x.org", &format!("{:016x}", 3), "67")))), "ok");
-        assert!(!g.may_add("new@x.org"));
+        assert_eq!(g.service_view().why, Some("none"));
+        every_route(&g, false, &device("p3@x.org", &format!("{:016x}", 3), "67"), "after the period");
         c.run(20 * DAY);
         g.check(true);
-        assert!(g.seats.lock().clock.is_none() && g.seats.lock().unseated.is_empty(), "a never-licensed relay unseats no one");
-        assert_eq!(g.seats_view(&|_| String::new(), None)["limitFrom"], Value::Null, "seats.no-license");
+        assert!(g.seats.lock().clock.is_none() && g.seats.lock().unseated.is_empty(), "no seat rule runs without a license");
+        let seats = g.seats_view(&|_| String::new(), None);
+        assert_eq!((seats["users"].clone(), seats["service"].clone()), (Value::Null, Value::from("stopped")), "seats.stopped");
     }
 
     #[test]
-    fn last_users_keeps_the_seat_rules_after_the_license_ends() {
-        let d = dir("lastusers");
+    fn while_stopped_the_seat_clock_does_not_count_and_no_one_is_unseated() {
+        let v = products();
+        let d = licensed_dir(&v, "stopped-seats");
         let c = FakeClock::new(T0);
         let h = hub(&d);
-        for i in 0..4 {
+        // 21 people against a 20-user license
+        for i in 0..21 {
             seat(&h, &format!("p{i}@x.org"), &format!("{i:016x}"), &format!("{:x}", 100 + i));
         }
         let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
-        // as a license of 3 users once wrote it; the license is gone now
-        g.seats.lock().last_users = Some(3);
+        install(&g, &d, &token(&v, "Meeting Hub, root B"));
+        assert!(g.seats.lock().clock.is_some(), "one over starts the clock");
+        c.run(3 * DAY);
         g.check(true);
-        assert!(g.seats.lock().clock.is_some(), "one over lastUsers starts the clock");
-        assert_eq!(g.seat_counts(), (4, 3));
-        assert_eq!(g.seats_view(&|_| String::new(), None)["limitFrom"], "lastUsers");
-        c.run(14 * DAY);
+        let day = |g: &MeetGate| g.seats.lock().day(g.time.seat_elapsed(), g.time.seat_day_ms());
+        assert_eq!(day(&g), Some(3));
+        // the license is removed: stopped; 12 days pass, and a restart after 10 hours down
+        std::fs::remove_file(d.join(LICENSE_FILE)).unwrap();
         g.check(true);
-        assert_eq!(g.seats.lock().unseated.len(), 1, "day 14 unseats the overage against lastUsers");
-        assert!(!g.may_add("p9@x.org"), "and nobody new is added");
+        assert_eq!(g.service(), Service::Stopped);
+        c.run(12 * DAY);
+        g.check(true);
+        assert_eq!(day(&g), Some(3), "the clock's days do not count while stopped");
+        assert!(g.seats.lock().unseated.is_empty(), "no one is unseated");
+        assert_eq!(g.seats.lock().clock.as_ref().map(|k| k.notices.len()), Some(1), "only the day 0 notice");
+        assert_eq!(g.seat_counts().1, 0, "no seat limit while stopped");
+        drop(g);
+        c.restart(10 * 3_600_000);
+        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+        assert_eq!(day(&g), Some(3), "a start while stopped credits no downtime");
+        // a license installed after the stopped days finds the clock on the day it had
+        install(&g, &d, &token(&v, "Meeting Hub, root B"));
+        assert_eq!(day(&g), Some(3));
+        c.run(11 * DAY);
+        g.check(true);
+        assert_eq!(g.seats.lock().unseated.len(), 1, "day 14 unseats the overage");
+    }
+
+    #[test]
+    fn last_license_is_kept_for_the_install_comparison_only() {
+        let v = products();
+        let d = licensed_dir(&v, "lastlicense");
+        let h = hub(&d);
+        let c = FakeClock::new(T0);
+        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+        assert_eq!(g.last_license(), None, "lastLicense null: any fitting license is a first license");
+        install(&g, &d, &token(&v, "Meeting Hub, root A"));
+        let last = g.last_license().unwrap();
+        assert_eq!((last.product.as_str(), last.root.as_str(), last.id.as_str(), last.edition.as_str(), last.users, last.relays, last.exp), ("meet", "m_ce517b0ccdc38867dd717e1eb95fb88e", "l_00000000000000b1", "enterprise", 500, 2, 1831449600));
+        // removed: stopped, lastLicense kept
+        std::fs::remove_file(d.join(LICENSE_FILE)).unwrap();
+        g.check(true);
+        assert_eq!((g.service(), g.last_license()), (Service::Stopped, Some(last.clone())));
+        // a second run: expired past grace, lastLicense kept
+        install(&g, &d, &token(&v, "Meeting Hub, root A"));
+        c.run(400 * DAY);
+        g.check(true);
+        assert_eq!((g.service(), g.last_license()), (Service::Stopped, Some(last)));
+        assert_eq!(g.service_view().why, Some("expired"));
     }
 
     #[test]
@@ -1225,6 +1358,7 @@ mod tests {
 
     fn products() -> Value {
         let v: Value = serde_json::from_str(include_str!("../tests/license-v2-products.json")).unwrap();
+        assert_eq!(v["now"].as_i64().unwrap() * 1000, T0, "the fixtures' clock");
         let _ = TEST_DEV_PUB.set(v["devPub"].as_str().unwrap().to_owned());
         v
     }
@@ -1243,40 +1377,6 @@ mod tests {
     fn install(g: &MeetGate, d: &Path, tok: &str) {
         std::fs::write(d.join(LICENSE_FILE), format!("{tok}\n")).unwrap();
         g.installed();
-    }
-
-    #[test]
-    fn installing_a_fitting_license_opens_adding_at_once_and_writes_last_users_and_last_license() {
-        let v = products();
-        assert_eq!(v["now"].as_i64().unwrap() * 1000, T0, "the fixtures' clock");
-        let d = licensed_dir(&v, "install");
-        let h = hub(&d);
-        let c = FakeClock::new(T0);
-        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
-        assert_eq!(g.adding(), Adding::Closed);
-        assert_eq!((g.last_users(), g.last_license()), (None, None), "lastLicense null: any fitting license is a first license");
-        install(&g, &d, &token(&v, "Meeting Hub, root A"));
-        assert_eq!(g.adding(), Adding::Open, "at once");
-        assert!(g.may_add("new@x.org"));
-        assert_eq!(g.last_users(), Some(500));
-        let last = g.last_license().unwrap();
-        assert_eq!((last.product.as_str(), last.root.as_str(), last.id.as_str(), last.edition.as_str(), last.users, last.relays, last.exp), ("meet", "m_76eb5ad60ebd0f7e5b1aed0f77f107af", "l_00000000000000b1", "enterprise", 500, 2, 1831449600));
-        // removing the file closes adding at the next check and keeps both records
-        std::fs::remove_file(d.join(LICENSE_FILE)).unwrap();
-        g.check(true);
-        assert_eq!(g.adding(), Adding::Closed);
-        assert_eq!(g.last_users(), Some(500));
-        assert_eq!(g.last_license(), Some(last.clone()));
-        // a smaller license (20 users, root B) lowers lastUsers; a larger one raises it again
-        install(&g, &d, &token(&v, "Meeting Hub, root B"));
-        assert_eq!(g.last_users(), Some(20));
-        install(&g, &d, &token(&v, "Meeting Hub, root A"));
-        assert_eq!(g.last_users(), Some(500));
-        // a second run: the license expires past grace; lastUsers and lastLicense stay, adding closes
-        c.run(400 * DAY);
-        g.check(true);
-        assert_eq!(g.adding(), Adding::Closed);
-        assert_eq!((g.last_users(), g.last_license()), (Some(500), Some(last)));
     }
 
     #[test]
@@ -1304,20 +1404,109 @@ mod tests {
     }
 
     #[test]
-    fn a_forward_jump_closes_adding_early_and_moving_the_clock_back_extends_nothing() {
+    fn a_forward_jump_stops_service_early_and_moving_the_clock_back_extends_nothing() {
         let d = dir("jump");
         old_state(&d);
         let c = FakeClock::new(T0);
         let h = hub(&d);
         let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
-        c.run(29 * DAY);
+        c.run(DAY);
         c.shift_wall(2 * DAY);
         g.check(true);
-        assert_eq!(g.adding(), Adding::Closed, "a forward jump can close adding early");
+        assert_eq!(g.service(), Service::Stopped, "a forward jump can stop service early");
         c.shift_wall(-10 * DAY);
         g.check(true);
-        assert_eq!(g.adding(), Adding::Closed, "moving the clock back extends nothing");
+        assert_eq!(g.service(), Service::Stopped, "moving the clock back extends nothing");
         assert!(g.time.view().back);
+    }
+
+    /// R7-M1: the host clock moved back and then confirmed (`meet.clock.confirm` with an agreeing browser), while
+    /// running and across a restart, never brings service back or lengthens it: before expiry, during grace and
+    /// during the upgrade period.
+    #[test]
+    fn a_confirmed_rollback_never_extends_expiry_grace_or_the_upgrade_period() {
+        let v = products();
+        let exp = 1_799_913_600_000;
+        // (what, the token, the start, the stop)
+        for (what, tok, start, stop) in [
+            ("before expiry", Some("Meeting Hub graceDays 0"), exp - DAY, exp),
+            ("during grace", Some("Meeting Hub graceDays 2"), exp + DAY, exp + 2 * DAY),
+            ("upgrade period", None, T0, T0 + 2 * DAY),
+        ] {
+            for restart in [false, true] {
+                let d = licensed_dir(&v, &format!("rollback-{}-{restart}", what.replace(' ', "-")));
+                if tok.is_none() {
+                    old_state(&d);
+                }
+                let c = FakeClock::new(start);
+                let h = hub(&d);
+                let mut g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+                if let Some(t) = tok {
+                    install(&g, &d, &token(&v, t));
+                }
+                assert!(g.service().serving(), "{what}");
+                // run to the stop
+                c.run(stop - start);
+                g.check(true);
+                assert_eq!(g.service(), Service::Stopped, "{what}: stopped at the end");
+                // the host clock is set back 3 days
+                c.shift_wall(-3 * DAY);
+                if restart {
+                    drop(g);
+                    c.restart(1000);
+                    g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+                }
+                g.check(true);
+                assert_eq!(g.service(), Service::Stopped, "{what}: a rollback extends nothing (restart {restart})");
+                // an admin confirms the rolled back time with an agreeing browser
+                g.confirm_clock(c.wall_ms()).unwrap();
+                assert_eq!(g.service(), Service::Stopped, "{what}: a confirmation never lowers the license clock (restart {restart})");
+                assert!(g.time.now() >= stop, "{what}: the effective time stays at or past the stop");
+            }
+        }
+    }
+
+    /// Records audit entries as (actor, action, detail).
+    struct Recorder(Mutex<Vec<(String, String, Value)>>);
+
+    impl crate::meet_hub::ConsoleHooks for Recorder {
+        fn revoked(&self, _serials: &[String]) {}
+        fn observed(&self, _kind: &str, _target: &crate::meet_json::Obj, _by: &str, _link: Option<&str>) {}
+        fn audit(&self, action: &str, _target: &str, detail: Value) {
+            self.0.lock().push(("relay".into(), action.into(), detail));
+        }
+        fn audit_operator(&self, action: &str, _target: &str, detail: Value) {
+            self.0.lock().push(("operator".into(), action.into(), detail));
+        }
+    }
+
+    /// R7-M1: the offline `license-time reset` is audited once at the next start (actor operator, {before, after}),
+    /// and a start after a reset that gave back grace serves again only by the host clock.
+    #[test]
+    fn an_offline_license_time_reset_is_audited_once_at_the_next_start() {
+        let d = dir("time-reset");
+        let c = FakeClock::new(T0);
+        let h = hub(&d);
+        let rec = Arc::new(Recorder(Mutex::new(Vec::new())));
+        h.set_console_hooks(rec.clone());
+        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+        c.shift_wall(3 * DAY);
+        g.check(true);
+        g.time.save().unwrap();
+        let high = crate::meet_time::stored_high_water(&d).unwrap();
+        assert!(high >= T0 + 3 * DAY);
+        drop(g);
+        c.shift_wall(-3 * DAY);
+        let wall = c.wall_ms();
+        assert_eq!(crate::meet_time::reset_offline(&d, wall), Ok((high, wall)));
+        let g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+        let resets: Vec<(String, String, Value)> = rec.0.lock().iter().filter(|(_, a, _)| a == "license.time-reset").cloned().collect();
+        assert_eq!(resets, vec![("operator".to_string(), "license.time-reset".to_string(), json!({"before": high, "after": wall}))]);
+        assert!(g.time.now() < high, "the license clock runs from the host clock again");
+        drop(g);
+        // a later start audits nothing again
+        let _g = MeetGate::open(cfg(&d), &h, c.clone()).unwrap();
+        assert_eq!(rec.0.lock().iter().filter(|(_, a, _)| a == "license.time-reset").count(), 1);
     }
 
     #[test]
@@ -1332,7 +1521,9 @@ mod tests {
 
     #[test]
     fn an_unseated_or_held_device_gets_no_seat() {
+        // while service runs (here the upgrade period)
         let d = dir("noseat");
+        old_state(&d);
         let h = hub(&d);
         seat(&h, "bob@x.org", "bbbbbbbbbbbbbbbb", "77");
         let g = MeetGate::open(cfg(&d), &h, FakeClock::new(T0)).unwrap();

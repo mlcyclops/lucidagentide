@@ -89,10 +89,15 @@
     "account.key-waiting": "Your security key is set up. Another admin must approve it before it gives you admin rights.",
     // The relay answers this as the bootstrap-pinned refusal (8.3); the page shows the relay's words.
     "bootstrap.pinned": "This console waits for its first admin, <email>.",
-    "banner.grace": "The license ended on <date>. This console keeps working for <n> more days. Install a new license.",
+    "banner.expiring": "The <product> license ends in <n> days, on <date>. Install a new license before then, or this relay stops serving people.",
+    "banner.grace": "The <product> license ended on <date>. Service stops on <date and time> unless a new license is installed.",
     "banner.expired": "The license and its grace days are over. <product> pages are read-only until a new license is installed.",
-    "banner.license-inactive": "The Meeting Hub license is not active, so no one new can be added. People who already have a seat keep using Meeting Hub. Install a license to add people again.",
-    "banner.upgrade-period": "This relay needs a Meeting Hub license. People can be added until <date>; after that no one new can be added until a license is installed. People who already have a seat keep using Meeting Hub.",
+    "banner.license-stopped": "This relay has stopped serving people: its <product> license is not active (<why>). Install a license to turn service back on.",
+    "banner.upgrade-period": "This relay needs a Meeting Hub license. Service stops on <date and time> unless a license is installed.",
+    // 8.1 license.why, in the order of the service view's `why` codes (R42-1).
+    "license.why": ["no license is installed", "the license is for another product", "the license is for another root",
+      "the license file could not be used: <verifier words>", "the license and its grace days are over"],
+    "license.why.codes": ["none", "wrong-product", "wrong-root", "invalid", "expired"],
     "banner.seats-over": "<seated> people use Meeting Hub; the license covers <users>. On <date> the relay takes seats from <n> people. Request more seats, or pick who gives up a seat.",
     "banner.seats-over.button": "Request more seats",
     "locked.title": "<product> needs a license",
@@ -104,9 +109,10 @@
     "attention.title": "What needs your attention",
     "attention.none": "Nothing needs your attention.",
     "attention.license-none": "No license is installed for <product>.",
-    "attention.license-grace": "The license ended. <n> grace days left.",
+    "attention.license-grace": "The license ended. Service stops on <date and time> unless a new license is installed.",
     "attention.license-expired": "The license and its grace days are over.",
-    "attention.license-expiring": "The license ends in <n> days.",
+    "attention.license-expiring": "The license ends in <n> days. Install a new license before <date>.",
+    "attention.license-stopped": "This relay has stopped serving people: the <product> license is not active. Install a license.",
     "attention.seats-high": "<used> of <users> licensed people are in use.",
     "attention.seats-over": "<used> people use Meeting Hub; the license covers <users>. Day <day> of 14: seats are taken from <n> people on <date>.",
     "attention.uncounted": "<n> hubs were refused because they have no license seat.",
@@ -131,8 +137,7 @@
     "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
     "attention.blocks-active": "<n> blocks are active on this relay.",
     "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
-    "attention.license-adding-off": "No one new can be added to Meeting Hub: the license is not active.",
-    "attention.license-upgrade-period": "Install a Meeting Hub license by <date>, or no one new can be added after that.",
+    "attention.license-upgrade-period": "Install a Meeting Hub license by <date and time>, or this relay stops serving people.",
     "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
     "attention.seats-protected": "Admins alone use more seats than the license covers. Request more seats.",
     "attention.profile-standard": "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment.",
@@ -157,6 +162,7 @@
     "clock.title": "Relay time",
     "clock.title.line": "Relay clock: <time>. Your browser: <time>.",
     "clock.title.button": "Confirm the relay's time",
+    "clock.title.note": "This changes only the seat clock. It never extends a license, its grace or the upgrade period.",
     "seal.provider": "Secrets are protected by <provider>.",
     "seal.provider.names": ["Windows DPAPI under the relay's service account", "machine-wide Windows DPAPI (Standard only)",
       "a systemd encrypted credential (<key mode>)", "a key file next to the state (Standard only)"],
@@ -167,11 +173,10 @@
       "the credential file does not match the install record"],
     "breakglass.gate": "This console needs its break-glass account before it can be administered. The person who runs this relay creates it with lucid-relay console break-glass.",
     "seats.summary": "<seated> of <users> seats in use.",
-    "seats.last-license": "No Meeting Hub license is active. Seats still follow the last license, which covered <users> people.",
-    "seats.no-license": "This relay has never had a Meeting Hub license. The <seated> people it has keep their seats, and no one new can be added until a license is installed.",
-    "seats.no-license.upgrade": "This relay has no Meeting Hub license yet. People can be added until <date>.",
-    // 8.1 "Words the Meeting Hub relay answers people": also the words beside disabled add controls (R41-1).
-    "meet.license-inactive": "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.",
+    "seats.stopped": "No Meeting Hub license is active, so this relay serves no one and seat rules wait. Install a license.",
+    // 8.1 "Words the Meeting Hub relay answers people" (R42-1); the fleet People page shows them beside the invite
+    // controls of a stopped Meeting Hub relay (AC-2a 11.4).
+    "meet.license-inactive": "Your organization's Meeting Hub license is not active. Ask your admin.",
     "seats.state": ["Seated", "Picked to give up a seat", "No seat", "Always keeps a seat"],
     "seats.actions": ["Give up seat first", "Keep seat", "Request more seats"],
     "seats.request": "Request more Meeting Hub seats",
@@ -295,9 +300,10 @@
       title: "Install the license for <org>?",
       body: ["Now: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>.",
         "New: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>.",
-        "Every hub needs a new license seat from the root before it is admitted again."],
-      meet: ["People can be added to Meeting Hub again.",
-        "The upgrade period ends now: this license lasts past <date>.",
+        "Every hub needs a new license seat from the root before it is admitted again.",
+        "This relay starts serving people again.",
+        "This relay honors 2 grace days of the <n> in this license."],
+      meet: ["The upgrade period ends now: this license lasts past <date>.",
         "The upgrade period stays until <date>, because this license ends before it.",
         "<seated> people use Meeting Hub and this license covers <users>, so a 14-day seat clock starts.",
         "<seated> people use Meeting Hub and this license covers <users>, so the seat clock keeps running (day <day> of 14).",
@@ -456,9 +462,14 @@
     qrLabel: "QR code for your authenticator app",
     key: "Key",
     changed: "<name>: <old> to <new>",
-    adding: { open: "Open", closed: "Closed", "upgrade-period": "Open in the upgrade period, with no seat limit" },
-    addingLabel: "Adding people",
-    lastUsers: "Seat limit from the last license",
+    // The license view's `service` (4.7, R42-1).
+    service: { on: "On", grace: "Grace", "upgrade-period": "Upgrade period", stopped: "Stopped" },
+    serviceLabel: "Service to people",
+    stopsAt: "Service stops",
+    serviceWhy: "Why",
+    reminders: "Reminders sent",
+    reminderKind: { "days-30": "30 days", "days-14": "14 days", "days-7": "7 days", "days-3": "3 days", "days-1": "1 day",
+      "grace-start": "At expiry", "grace-repeat": "In grace", stopped: "Service stopped", "upgrade-period": "Upgrade period" },
     wantedNeeded: "Write a number of seats above the license's <users>, at most 10,000.",
     emailNeeded: "Write an email.",
   };
@@ -650,6 +661,20 @@
     "attention.relay-gap": "Some audit entries from <relay> did not reach the SIEM.",
     "attention.relay-scope-stale": "The scope request to <relay> was replaced before its operator answered.",
     "attention.relay-confirm-unknown": "A confirmed change on <relay> may not have run. Check it.",
+    // Revision 3.4 (R42-6): a relay's license service.
+    "relay.license-stopped": "Stopped: no active license",
+    "relay.license-grace": "Grace: stops on <date and time>",
+    "relay.license-upgrade-period": "Upgrade period: stops on <date and time>",
+    "relay.license-why-none": "No license is installed.",
+    "relay.license-why-wrong-product": "The license is for another product.",
+    "relay.license-why-wrong-root": "The license is for another organization.",
+    "relay.license-why-invalid": "The relay could not use its license file. See the relay's log.",
+    "relay.license-why-expired": "The license ended and its grace is over.",
+    "relay.license-reminders": "Reminders sent: <list>. Next: <date>.",
+    "relay.license-install-stopped": "Installing a license here starts the relay serving people again.",
+    "attention.relay-license-stopped": "<relay> stopped: no active license. It serves no one until a license is installed.",
+    "attention.relay-license-grace": "The license of <relay> has ended. Service stops on <date and time> unless a new license is installed.",
+    "attention.relay-license-expiring": "The license of <relay> ends in <days> days.",
   };
 
   // ---- Fleet confirmation dialogs (AC-2a 13.2, exact; the vector's "dialogs", keyed by its kebab-case action). ----
@@ -824,7 +849,7 @@
     "crl-stale", "signer-unhealthy", "signer-expiring", "cert-expiring", "tls-expiring", "spokes-silent", "enrollments-waiting",
     "approvals-mine", "requests-old", "admins-few", "anchor-single", "admin-suspended", "passkey-waiting", "joiner-waiting",
     "audit-broken", "audit-rotating", "audit-dropped-unexported", "audit-not-exported", "quota-hits", "blocks-active", "admins-unproven",
-    "license-adding-off", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
+    "license-stopped", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
     "break-glass-missing", "break-glass-used", "key-unattested", "mds-old", "signin-locked", "mail-failing", "clock-uncertain",
     "clock-back", "aaguids-relaxed", "seal-key-file", "seal-lost", "seats-held", "seal-machine-scope"];
 
@@ -1408,11 +1433,7 @@
     const b = el("button", { type: "button", "data-act": "menu", "aria-haspopup": "menu", "aria-expanded": "false", "aria-controls": id, "aria-label": label }, MSG.more);
     const ul = el("ul", { class: "menu", role: "menu", id, "aria-label": label, hidden: true });
     for (const it of list) {
-      // A disabled item (R41-1) stays focusable with aria-disabled and carries its reason beside the label.
-      if (it.disabled) {
-        ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "aria-disabled": "true", class: "is-disabled" },
-          it.label, el("span", { class: "menu-note" }, it.disabled))));
-      } else ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "data-act": "run", "data-k": reg(it.run) }, it.label)));
+      ul.append(el("li", { role: "none" }, el("button", { type: "button", role: "menuitem", tabindex: "-1", "data-act": "run", "data-k": reg(it.run) }, it.label)));
     }
     return el("div", { class: "menu-wrap" }, b, ul);
   }
@@ -1482,34 +1503,41 @@
   function banner(kind, tag, ...kids) {
     return el("div", { class: "banner " + kind, role: "status" }, el("span", { class: "tag" }, tag), el("span", null, ...kids));
   }
-  function licenseBanner(lic) {
-    if (!lic) return null;
-    if (lic.state === "grace") {
-      const ended = lic.exp ? daySec(lic.exp) : "";
-      return banner("warn", MSG.sev.warn, fill(W["banner.grace"], { date: ended, n: lic.daysLeft }), " ", el("a", { href: "#/license" }, W["license.install"]));
-    }
-    if (lic.state === "expired") return banner("bad", MSG.sev.bad, fill(W["banner.expired"], { product: PRODUCT_NAME[product()] }), " ", el("a", { href: "#/license" }, W["license.install"]));
+  // The service view's `why` code (4.7, R42-1) as its 8.1 license.why words.
+  // `invalid` (4.2.1) carries the verifier's words: the banner's `verifier words` argument or the license view's `problem`.
+  const WHY_CODES = W["license.why.codes"];
+  const whyWords = (why, verifier) => (WHY_CODES.includes(why) ? fillText(W["license.why"][WHY_CODES.indexOf(why)], { "verifier words": verifier || "" }) : why || "");
+  // The license banners of 7.2 (R42-1, R42-3, R42-4), with "Install a license" for admins.
+  const LICENSE_BANNERS = ["banner.expiring", "banner.grace", "banner.expired", "banner.license-stopped", "banner.upgrade-period"];
+  const installLink = () => (isAdmin() ? [" ", el("a", { href: "#/license" }, W["license.install"])] : []);
+  // The license page's own banner from the license view's `service`, shown only when the relay's overview banners
+  // do not already carry a license banner.
+  function serviceBanner(view) {
+    const svc = view && view.service;
+    if (!svc || ((S.overview && S.overview.banners) || []).some((b) => b && LICENSE_BANNERS.includes(b.id))) return null;
+    const lic = view.license;
+    const args = argsOf({ date: lic && lic.exp ? lic.exp : null, "date and time": svc.stopsAt, why: svc.why, problem: view.problem });
+    if (svc.state === "stopped") return banner("bad", MSG.sev.bad, fill(W["banner.license-stopped"], args), ...installLink());
+    if (svc.state === "grace") return banner("warn", MSG.sev.warn, fill(W["banner.grace"], args), ...installLink());
+    if (svc.state === "upgrade-period") return banner("warn", MSG.sev.warn, fill(W["banner.upgrade-period"], args), ...installLink());
     return null;
   }
-  // Attention and banner arguments: dates and times formatted, n defaulting to days.
+  // Attention and banner arguments: dates and times formatted, n defaulting to days, `why` as its words.
   function argsOf(args) {
     const out = { product: PRODUCT_NAME[product()] };
     for (const [k, v] of Object.entries(args || {})) {
       if (k === "date" && typeof v === "number") out[k] = dayAny(v);
-      else if (k === "time" && typeof v === "number") out[k] = whenAny(v);
-      else out[k] = v;
+      else if ((k === "time" || k === "date and time") && typeof v === "number") out[k] = whenAny(v);
+      else if (k === "why") out[k] = whyWords(v, args["verifier words"] || args.problem);
+      else if (v != null) out[k] = v;
     }
     if (out.n == null && out.days != null) out.n = out.days;
     return out;
   }
   // The 7.2 banners under the header on every page: the relay's (overview "banners") and the session's reduced rights.
-  const BANNER_TONE = { "banner.seats-over": "bad", "banner.license-inactive": "bad", "breakglass.gate": "bad", "attention.clock-uncertain": "bad" };
-  // banner.license-inactive shows on Overview and every Meeting Hub page (7.2, R41-1); the others on every page.
-  const MEET_ONLY_BANNERS = ["banner.license-inactive"];
+  const BANNER_TONE = { "banner.seats-over": "bad", "banner.license-stopped": "bad", "banner.expired": "bad", "breakglass.gate": "bad", "attention.clock-uncertain": "bad" };
   function bannerNodes() {
     const out = [];
-    const where = parseHash().parts[0];
-    const meetPage = where === "overview" || where === "meet" || where === "license";
     const why = me() ? me().rightsWhy : null;
     if (why === "not-attested") out.push(banner("warn", MSG.sev.warn, W["high.viewer-rights"]));
     if (why === "not-device-anchored") out.push(banner("warn", MSG.sev.warn, W["meet.viewer-rights"]));
@@ -1519,11 +1547,10 @@
     for (const b of (S.overview && S.overview.banners) || []) {
       if (!b || b.id === "high.viewer-rights" || b.id === "meet.viewer-rights") continue;
       if (b.id === "fleet.managed" && managedBy) continue;
-      if (MEET_ONLY_BANNERS.includes(b.id) && !meetPage) continue;
       const tpl = W[b.id] || FW[b.id];
       if (typeof tpl !== "string") continue;
       const tone = BANNER_TONE[b.id] || "warn";
-      const extra = [];
+      const extra = LICENSE_BANNERS.includes(b.id) ? installLink() : [];
       if (b.id === "banner.seats-over" && isAdmin()) extra.push(" ", btn(W["banner.seats-over.button"], () => go("#/meet/seats?request=1")));
       if (b.id === "attention.clock-uncertain" && isAdmin()) extra.push(" ", btn(W["clock.title.button"], () => confirmTime(null)));
       out.push(banner(tone, MSG.sev[tone], fill(tpl, argsOf(b.args)), ...extra));
@@ -2433,14 +2460,17 @@
     for (const it of list.slice(0, 20)) {
       // AC-2a 8.1: the fleet's own kinds have fleet words; a relay's pushed item is an AC-1 kind (any other kind is
       // dropped), shown as "<relay name>: <words>" with the console's own name for the relay.
-      const own = fleet() && !it.relay ? FW["attention." + it.kind] : null;
+      // The console's relay-* kinds (revision 3.4 license items among them) name their relay in the words.
+      const own = fleet() && (!it.relay || String(it.kind).startsWith("relay-")) ? FW["attention." + it.kind] : null;
       const tpl = own || W["attention." + it.kind];
       if (typeof tpl !== "string") continue;
       const sev = it.severity === "bad" ? "bad" : it.severity === "warn" ? "warn" : "info";
       const target = safeGo(it.go);
-      const prefix = fleet() && it.relay ? [u(relayName(it.relay)), ": "] : [];
+      const prefix = fleet() && it.relay && !own ? [u(relayName(it.relay)), ": "] : [];
+      const row = it.relay ? (S.relays || []).find((r) => r.id === it.relay) : null;
+      const args = fleet() ? fleetArgs(Object.assign(it.relay ? { relay: it.relay, product: row ? row.product : "" } : {}, it.args)) : argsOf(it.args);
       ul.append(el("li", { class: "sev-" + sev }, el("span", { class: "st st-" + (sev === "info" ? "none" : sev) }, MSG.sev[sev]),
-        el("span", { class: "words" }, ...prefix, fill(tpl, fleet() ? fleetArgs(it.args) : argsOf(it.args))), target && canOpen(target) ? el("a", { href: target }, MSG.go) : null));
+        el("span", { class: "words" }, ...prefix, fill(tpl, args)), target && canOpen(target) ? el("a", { href: target }, MSG.go) : null));
     }
     return ul;
   }
@@ -2492,7 +2522,7 @@
         /* the next tick tries again; a 401 already went to sign-in */
       }
     }, 30000);
-    return [head(W["nav.overview"]), help("help.overview"), licenseBanner(o.license), cards,
+    return [head(W["nav.overview"]), help("help.overview"), cards,
       el("section", { class: "panel", "aria-labelledby": "att-h" }, el("h3", { id: "att-h" }, W["attention.title"]), att),
       otherConsoles(o.links)];
   };
@@ -2544,7 +2574,7 @@
       kids.push(el("p", null, fill(W["locked.body"], { product: PRODUCT_NAME[product()] })));
       if (d.problem) kids.push(el("p", null, fill(W["locked.reason"], { problem: d.problem })));
     }
-    kids.push(licenseBanner(l));
+    kids.push(serviceBanner(d));
     if (l) {
       kids.push(panel(null, pairs([
         ["Organization", l.org], ["Product", l.product === "meet" ? W["nav.meet"] : W["nav.spokes"]], ["Edition", l.edition],
@@ -2552,37 +2582,43 @@
         ["Ends", daySec(l.exp)], ["Grace days", l.graceDays], [W["dialog.id"], code(l.id)], ["Development license", l.dev ? MSG.yes : undefined],
       ])));
     } else kids.push(panel(null, emptyLine(fillText(W["attention.license-none"], { product: PRODUCT_NAME[product()] }))));
-    // Meeting Hub (R41-1): the license limits adding people, never seated people's service.
-    if (d.adding) {
-      kids.push(panel(null, pairs([[MSG.addingLabel, MSG.adding[d.adding.state] || stateWord(d.adding.state)],
-        ["Upgrade period ends", d.adding.upgradePeriodEnds ? when(d.adding.upgradePeriodEnds) : undefined],
-        [MSG.lastUsers, d.adding.lastUsers != null && !(l && (l.state === "valid" || l.state === "grace")) ? d.adding.lastUsers : undefined]])));
+    // Both products (4.7, R42-1): with no valid license the relay serves no one; the reminders sent (R42-3).
+    const svc = d.service;
+    if (svc) {
+      kids.push(panel(null, pairs([[MSG.serviceLabel, MSG.service[svc.state] || stateWord(svc.state)],
+        [MSG.serviceWhy, svc.state === "stopped" && svc.why ? whyWords(svc.why, d.problem) : undefined],
+        [MSG.stopsAt, svc.stopsAt ? when(svc.stopsAt) : undefined],
+        ["Upgrade period ends", svc.upgradePeriodEnds ? when(svc.upgradePeriodEnds) : undefined],
+        [MSG.reminders, (svc.reminders || []).length ? svc.reminders.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + ", " + whenAny(r.at)).join("; ") : undefined]])));
     }
     if (isAdmin()) {
       const { box, area } = pasteOrFile(W["license.install.field"], ".lic,.txt");
-      const install = btn(W["license.install.button"], () => installLicense(area.value, l, d.adding), "primary");
-      kids.push(panel(W["license.install"], box, install));
+      const install = btn(W["license.install.button"], () => installLicense(area.value, l, svc), "primary");
+      // AC-2a 11.4: from the fleet console, installing works on a relay stopped for its license.
+      const again = S.px && svc && svc.state === "stopped" ? el("p", { class: "note" }, FW["relay.license-install-stopped"]) : null;
+      kids.push(panel(W["license.install"], again, box, install));
     }
     return kids;
   };
-  // The Meeting Hub lines of the license dialog (8.2, R3-L4, R3-M4, R41-1): adding reopens, the upgrade period, the
-  // seat clock. `svc` is the license answer's `adding`.
+  // The grace a relay honors: min(token graceDays, 2), 2 when absent (2.4, R42-2).
+  const honoredGrace = (p) => Math.min(p.graceDays != null ? p.graceDays : 2, 2);
+  // The Meeting Hub lines of the license dialog (8.2, R3-L4, R3-M4): the upgrade period, the seat clock. `svc` is the
+  // license answer's `service`.
   function meetLicenseLines(p, svc, seats) {
     const M = D.license.meet;
     const lines = [];
-    const graceEnd = (p.exp || 0) + (p.graceDays != null ? p.graceDays : 14) * 86400;
-    if (svc && svc.state === "closed") lines.push(M[0]);
+    const graceEnd = (p.exp || 0) + honoredGrace(p) * 86400;
     if (svc && svc.upgradePeriodEnds) {
       const ends = svc.upgradePeriodEnds / 1000;
-      lines.push(fill(graceEnd >= ends ? M[1] : M[2], { date: daySec(ends) }));
+      lines.push(fill(graceEnd >= ends ? M[0] : M[1], { date: daySec(ends) }));
     }
     if (seats) {
       const users = p.users || 0;
       const seated = seats.seated || 0;
       const vals = { seated, users, day: seats.clock ? seats.clock.day : 0 };
-      if (seated > users) lines.push(fill(seats.clock ? M[4] : M[3], vals));
-      else if (seats.clock) lines.push(fill(M[5], vals));
-      if (seats.unseated > 0 && users > seated) lines.push(fill(M[6], { n: Math.min(seats.unseated, users - seated) }));
+      if (seated > users) lines.push(fill(seats.clock ? M[3] : M[2], vals));
+      else if (seats.clock) lines.push(fill(M[4], vals));
+      if (seats.unseated > 0 && users > seated) lines.push(fill(M[5], { n: Math.min(seats.unseated, users - seated) }));
     }
     return lines;
   }
@@ -2594,7 +2630,7 @@
       return;
     }
     const now = Date.now() / 1000;
-    const grace = (p.graceDays != null ? p.graceDays : 14) * 86400;
+    const grace = honoredGrace(p) * 86400;
     if (p.exp && p.exp + grace <= now) {
       fail(R["license-ended"]);
       return;
@@ -2617,6 +2653,8 @@
       dlg: "license", vals: { org: p.org }, name: p.org, id: p.id, two,
       params: [["Organization", p.org], ["Product", prodName], ["Edition", p.edition], ["Users", p.users], ["Relays", p.relays], ["Ends", daySec(p.exp)], [W["dialog.id"], code(p.id)]],
       body: () => [cur ? licenseLine(D.license.body[0], cur, PRODUCT_NAME[product()]) : null, licenseLine(D.license.body[1], p, prodName),
+        svc && svc.state === "stopped" ? D.license.body[3] : null,
+        p.graceDays > 2 ? fill(D.license.body[4], { n: p.graceDays }) : null,
         newId && !meet ? D.license.body[2] : null].concat(meet ? meetLicenseLines(p, svc, seats) : []).filter(Boolean),
       fields: [{ kind: "reason" }],
       run: (v) => post("license/install", { license: text.trim(), reason: v.reason }, { action: "license.install", target: p.id || "-" }),
@@ -2882,7 +2920,7 @@
   pages.spokes_logs = pages.logs;
   pages.meet_logs = pages.logs;
 
-  // ---- Meeting Hub growth gate (R41-1): while adding is closed, add-people controls show disabled with the words ----
+  // ---- The license view's service (4.7, R42-1) for the Seats page ----
   async function meetLicense() {
     try {
       return await api("GET", "license");
@@ -2890,9 +2928,8 @@
       return null;
     }
   }
-  const addingClosed = (lic) => !!(lic && lic.adding && lic.adding.state === "closed");
-  // A new principal has no unrevoked device on this relay (2.4).
-  const isNewPrincipal = (p) => !p || !(p.devices || []).some((d) => !d.revoked);
+  const serviceStopped = (lic) => !!(lic && lic.service && lic.service.state === "stopped");
+  // AC-2a 11.4: the invite controls of a Meeting Hub relay stopped for its license, disabled with the AC-1 words.
   function disabledAdd(label) {
     const id = uid("why");
     return el("span", { class: "disabled-add" }, el("button", { type: "button", "aria-disabled": "true", class: "is-disabled", "aria-describedby": id }, label),
@@ -2903,9 +2940,7 @@
   const PERSON_STATES = [["online", "Online"], ["joined", "Joined"], ["waiting", "Waiting"], ["approved", "Approved"], ["invited", "Invited"], ["expired", "Expired"]];
   const lastSeenOf = (p) => Math.max(0, ...(p.devices || []).map((d) => d.lastSeenAt || 0)) || null;
   pages.meet_people = async (c) => {
-    const [d, orgs, lic] = await Promise.all([api("GET", "meet/people?limit=500"), isAdmin() ? api("GET", "meet/organizations").catch(() => ({ organizations: [] })) : { organizations: [] },
-      isAdmin() ? meetLicense() : null]);
-    const closed = isAdmin() && addingClosed(lic);
+    const [d, orgs] = await Promise.all([api("GET", "meet/people?limit=500"), isAdmin() ? api("GET", "meet/organizations").catch(() => ({ organizations: [] })) : { organizations: [] }]);
     const people = d.people || [];
     const orgList = orgs.organizations || [];
     const side = el("div", { id: "person-panel" });
@@ -2918,7 +2953,7 @@
         el("h3", { id: "person-h", tabindex: "-1" }, u(nameOf(p))),
         el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), code(p.principal)),
         el("div", { class: "page-head" },
-          closed && isNewPrincipal(p) ? disabledAdd("Put in an organization") : canWrite() ? btn("Put in an organization", () => orgSet(p, orgList)) : null,
+          canWrite() ? btn("Put in an organization", () => orgSet(p, orgList)) : null,
           canWrite() && p.org ? btn(fillText("Take out of <org>", { org: p.org.label || p.org.id }), () => orgRemove(p)) : null),
         dataTable({
           caption: "Devices", rows: devs, empty: MSG.noneYet, name: (dv) => dv.label || dv.device,
@@ -2933,7 +2968,7 @@
         })));
       $("person-h").focus();
     }
-    const invite = closed ? disabledAdd("Ask an admin to invite someone") : canWrite() ? btn("Ask an admin to invite someone", () => {
+    const invite = canWrite() ? btn("Ask an admin to invite someone", () => {
       confirmDialog({
         dlg: "request-invite", vals: {},
         fields: [{ kind: "text", key: "name", label: "Name", maxlength: "80", required: true }, { kind: "text", type: "email", key: "email", label: "Email", maxlength: "254", required: true },
@@ -2996,19 +3031,9 @@
     const clock = d.clock;
     const over = Math.max(0, (d.seated || 0) - (d.users || 0));
     const unseatDate = clock ? dayAny(clock.unseatAt) : "";
-    // R41-1: with no fitting license in force the limit is the last license's users (seats.last-license); a relay that
-    // never had a license shows seats.no-license (its upgrade-period form while the period runs) instead of the summary.
-    const adding = (lic && lic.adding) || {};
-    const fitting = !!(lic && lic.license && (lic.license.state === "valid" || lic.license.state === "grace"));
-    const never = !!lic && !lic.license && adding.lastUsers == null;
-    let summary;
-    if (never && adding.state === "upgrade-period") summary = [el("p", null, fill(W["seats.no-license.upgrade"], { date: dayAny(adding.upgradePeriodEnds) }))];
-    else if (never) summary = [el("p", null, fill(W["seats.no-license"], { seated: d.seated }))];
-    else {
-      const users = !fitting && adding.lastUsers != null ? adding.lastUsers : d.users;
-      summary = [el("p", null, fill(W["seats.summary"], { seated: d.seated, users })),
-        !fitting && adding.lastUsers != null ? el("p", null, fill(W["seats.last-license"], { users: adding.lastUsers })) : null];
-    }
+    // R42-1: while service is stopped, seats.stopped instead of the summary.
+    const summary = [el("p", null, d.service === "stopped" || serviceStopped(lic) ? W["seats.stopped"]
+      : d.users != null ? fill(W["seats.summary"], { seated: d.seated, users: d.users }) : MSG.unknown)];
     const kids = [head(PAGE_LABEL.meet.seats), panel(null, ...summary,
       clock ? el("p", null, fill(W["attention.seats-over"], { used: d.seated, users: d.users, day: clock.day, n: over, date: unseatDate })) : null,
       clock ? el("p", null, W["help.seats"]) : null,
@@ -3058,19 +3083,8 @@
     return kids;
   };
   pages.meet_enrollments = async () => {
-    const [d, lic] = await Promise.all([api("GET", "meet/enrollments"), meetLicense()]);
+    const d = await api("GET", "meet/enrollments");
     const rows = d.waiting || [];
-    // While adding is closed (R41-1), approving a new principal's enrollment shows disabled with the words.
-    const closed = addingClosed(lic);
-    let known = new Set();
-    if (closed) {
-      try {
-        known = new Set(((await api("GET", "meet/people?limit=500")).people || []).filter((p) => !isNewPrincipal(p)).map((p) => p.principal));
-      } catch (e) {
-        known = new Set();
-      }
-    }
-    const blocksNew = (w) => closed && !known.has(w.principal);
     const ask = (w, decision) => {
       const name = w.name || w.principal;
       newRequest(decision === "approve" ? "request-approve" : "request-refuse", { name, device: w.device, check: w.check }, name, w.id, "meet.approve",
@@ -3085,7 +3099,6 @@
         { key: "request", label: "Request", cell: (w) => (w.request ? code(w.request) : "") }],
       actions: (w) => {
         if (w.request || !isAdmin()) return [];
-        if (blocksNew(w)) return [{ label: "Ask an admin to approve", disabled: W["meet.license-inactive"] }, canWrite() ? { label: "Ask an admin to refuse", run: () => ask(w, "refuse") } : null];
         return canWrite() ? [{ label: "Ask an admin to approve", run: () => ask(w, "approve") }, { label: "Ask an admin to refuse", run: () => ask(w, "refuse") }] : [];
       },
     }))];
@@ -3836,7 +3849,7 @@
       el("p", null, bg ? fill(W["breakglass.set"], { email: bg.email, "time or never": bg.lastUsedAt ? when(bg.lastUsedAt) : MSG.never }) : W["breakglass.none"]),
       sealLines(seal),
       clock ? sub(W["clock.title"], el("p", null, fillList(W["clock.title.line"], [when(clock.wall), when(Date.now())])),
-        clockHold(clock), btn(W["clock.title.button"], () => confirmTime(clock))) : null);
+        clockHold(clock), btn(W["clock.title.button"], () => confirmTime(clock)), el("p", { class: "note" }, W["clock.title.note"])) : null);
   }
   // While the relay's time is uncertain: the hours left before the 72-hour hold (R4-M1, R5-L1; never an absolute time).
   function clockHold(clock) {
@@ -4325,7 +4338,8 @@
       if (k === "relay") out.relay = relayName(v);
       else if (k === "product") out.product = FMSG.product[v] || v;
       else if (k === "date" && typeof v === "number") out.date = dayAny(v);
-      else if (k === "time" && typeof v === "number") out.time = whenAny(v);
+      else if ((k === "time" || k === "date and time") && typeof v === "number") out[k] = whenAny(v);
+      else if (k === "stopsAt" && typeof v === "number") out["date and time"] = whenAny(v);
       else out[k] = v;
     }
     return out;
@@ -4468,10 +4482,53 @@
   }
 
   // ---- Relays and locations (8.2) ----
+  // A relay's license `service` (revision 3.4, AC-1 4.7): on the 8.2 rows inside `license`, on fleet/licenses beside it.
+  const serviceOf = (r) => (r && (r.service || (r.license && r.license.service))) || null;
+  function serviceText(r) {
+    const s = serviceOf(r);
+    if (!s) return null;
+    if (s.state === "stopped") return FW["relay.license-stopped"];
+    if (s.state === "grace") return fillText(FW["relay.license-grace"], { "date and time": whenAny(s.stopsAt) });
+    if (s.state === "upgrade-period") return fillText(FW["relay.license-upgrade-period"], { "date and time": whenAny(s.stopsAt) });
+    return null;
+  }
   function licenseCell(r) {
+    const said = serviceText(r);
+    if (said) return said;
     const l = r.license || {};
     if (!l.state) return MSG.unknown;
     return stateWord(l.state) + (l.daysLeft != null ? ", " + l.daysLeft + " " + FMSG.daysWord : "");
+  }
+  // The `why` of a stopped relay as its 13.1 words.
+  const relayWhy = (s) => (s && s.why && FW["relay.license-why-" + s.why]) || null;
+  // The reminder steps (AC-1 R42-3): 30, 14, 7, 3 and 1 days before `exp`, at `exp`, then every 12 hours until the stop.
+  function nextReminder(exp, s, sent) {
+    if (!s || s.state === "stopped") return null;
+    const now = Date.now();
+    const last = Math.max(0, ...(sent || []).map((r) => (r.at > 1e12 ? r.at : r.at * 1000) || 0));
+    const expMs = exp ? (exp > 1e12 ? exp : exp * 1000) : null;
+    const stop = s.stopsAt ? (s.stopsAt > 1e12 ? s.stopsAt : s.stopsAt * 1000) : null;
+    if (s.state === "grace" || s.state === "upgrade-period") {
+      const at = last ? last + 12 * 3600000 : now;
+      return stop && at >= stop ? stop : at;
+    }
+    if (!expMs) return null;
+    const steps = [30, 14, 7, 3, 1].map((n) => expMs - n * 86400000).concat([expMs]);
+    return steps.find((t) => t > now) || null;
+  }
+  // The License part of the relay detail (8.2): the service state, why, the stop time, the reminders sent and next,
+  // and "Install a license", which works on a stopped relay (11.4).
+  function relayLicense(d, l) {
+    const s = serviceOf(d) || serviceOf(l);
+    const sent = (l && l.reminders) || (s && s.reminders) || [];
+    const exp = l && l.license ? l.license.exp : d.license ? d.license.exp : null;
+    const next = nextReminder(exp, s, sent);
+    const list = sent.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + " " + whenAny(r.at)).join(", ");
+    return panel(FMSG.cols.license, pairs([[FMSG.cols.license, licenseCell(d)],
+      [MSG.serviceWhy, s && s.state === "stopped" ? relayWhy(s) || undefined : undefined]]),
+      sent.length || next ? el("p", null, fill(FW["relay.license-reminders"], { list: list || MSG.noneYet, date: next ? when(next) : MSG.never })) : null,
+      s && s.state === "stopped" ? el("p", { class: "note" }, FW["relay.license-install-stopped"]) : null,
+      isAdmin() && d.state === "active" ? el("a", { class: "btn", href: "#/license?relay=" + encodeURIComponent(d.id) }, W["license.install"]) : null);
   }
   function relayChips(r) {
     return el("span", { class: "chip-row" },
@@ -4622,8 +4679,10 @@
       d.state !== "removed" ? btn(FMSG.remove, () => removeRelayDialog(d), "danger") : null] : [];
     const kids = [head(u(d.name || id), ...tools), nav];
     if (d.state === "unconfirmed") kids.push(banner("warn", MSG.sev.warn, FW["fleet.unconfirmed"]));
-    if (tab === "summary") kids.push(relaySummary(d));
-    else if (tab === "trust") kids.push(await relayTrust(d));
+    if (tab === "summary") {
+      const lics = await api("GET", "fleet/licenses", null, { direct: true }).catch(() => null);
+      kids.push(relaySummary(d), relayLicense(d, ((lics && lics.relays) || []).find((x) => x.relay === d.id) || null));
+    } else if (tab === "trust") kids.push(await relayTrust(d));
     else if (tab === "health") kids.push(rangeButtons(base + "?tab=health", rangeOf(c)), await relayCharts(d, rangeOf(c)));
     else if (tab === "scopes") kids.push(relayScopes(d));
     else if (tab === "attention") kids.push(panel(FMSG.tabs.attention, attentionList(Array.isArray(d.attention) ? d.attention : [])));
@@ -5018,10 +5077,10 @@
     const admin = isAdmin();
     const consoleAdmins = rows.filter((p) => p.kind === "console" && p.role === "admin" && p.state === "active").length;
     const mrel = relays.filter((x) => x.product === "meet" && readable(x));
-    const closed = (id) => {
-      const x = relays.find((y) => y.id === id);
-      const a = x && x.license ? x.license.adding : null;
-      return !!(a && (a === "closed" || a.state === "closed"));
+    // AC-2a 11.4 (revision 3.4): a Meeting Hub relay stopped for its license takes no invites.
+    const stopped = (id) => {
+      const s = serviceOf(relays.find((y) => y.id === id));
+      return !!(s && s.state === "stopped");
     };
     // Filters (11.1 exact query names), applied on the console with Show.
     const f = {};
@@ -5084,7 +5143,7 @@
     };
     const missing = (d.missing || []).map((m) => relayName(m.relay || m));
     const asOf = [...new Map(rows.filter((p) => p.relay && p.asOf).map((p) => [p.relay, p.asOf])).entries()];
-    const kids = [head(FW["people.title"], isManager() ? btn(FW["people.invite"], () => inviteFleet(relays, closed), "primary") : null),
+    const kids = [head(FW["people.title"], isManager() ? btn(FW["people.invite"], () => inviteFleet(relays, stopped), "primary") : null),
       missingLine(missing),
       asOf.length ? el("ul", { class: "plain asof" }, asOf.map(([id, t]) => el("li", null, u(relayName(id)), ": ", fill(FW["fleet.as-of"], { time: when(t) })))) : null,
       panel(null, filters, dataTable({
@@ -5103,7 +5162,7 @@
           return x.rows || x.people || [];
         } : null,
       }))];
-    if (isManager()) kids.push(await seatStrips(mrel, closed), csvPanel());
+    if (isManager()) kids.push(await seatStrips(mrel, stopped), csvPanel());
     if (admin) kids.push(...(await pages.admins_people()).slice(2));
     return kids;
   };
@@ -5124,8 +5183,8 @@
     });
   }
   // Invite (11.2): a console account (AC-1 invite, AC-1 step-up) or a Meeting Hub invite request on one relay (fleet
-  // step-up). A relay whose adding is closed (R41-1) is not offered, and the dialog says why.
-  function inviteFleet(relays, closed) {
+  // step-up). A Meeting Hub relay stopped for its license (revision 3.4) takes no invite, and the dialog says why.
+  function inviteFleet(relays, stopped) {
     const meet = relays.filter((x) => x.product === "meet" && x.state === "active");
     const roles = [["viewer", ROLE_WORD.viewer], ["user-manager", ROLE_WORD["user-manager"]]].concat(isAdmin() ? [["admin", ROLE_WORD.admin]] : []);
     confirmDialog({
@@ -5140,7 +5199,7 @@
       vals2: (v) => ({ email: v.email, relay: v.product === "meet" ? relayName(v.relay) : "" }),
       two: (v) => v.product !== "meet" && v.role === "admin",
       check: (v) => (!/^[^@\s]+@[^@\s]+$/.test(v.email) ? MSG.emailNeeded
-        : v.product === "meet" && closed(v.relay) ? W["meet.license-inactive"]
+        : v.product === "meet" && stopped(v.relay) ? W["meet.license-inactive"]
           : v.product === "meet" && (!v.name || !(Number.isInteger(v.days) && v.days >= 1 && v.days <= 30)) ? FMSG.cols.name : ""),
       run: (v) => (v.product === "meet"
         ? fleetPost("fleet/people/invite", { product: "meet", relay: v.relay, email: v.email, name: v.name, role: "member", days: v.days }, { action: "people.invite", target: v.email }, [v.relay])
@@ -5148,9 +5207,9 @@
       done: (r) => showLink(r, r && r.mailed ? r.email || null : null),
     });
   }
-  // A Seats strip per Meeting Hub relay (11.4): seated of users (or the last license's), the clock while over, and
-  // the add controls closed with the R41-1 words while the relay's adding is closed.
-  async function seatStrips(mrel, closed) {
+  // A Seats strip per Meeting Hub relay (11.4): seated of the license's users (no total without a license), the clock
+  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled.
+  async function seatStrips(mrel, stopped) {
     if (!mrel.length) return null;
     let lic = null;
     try {
@@ -5162,13 +5221,13 @@
     return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x) => {
       const l = byRelay.get(x.id) || {};
       const s = l.seats || {};
-      const users = s.users != null ? s.users : s.lastUsers;
-      const line = s.seated != null && users != null ? fillText(W["seats.summary"], { seated: s.seated, users }) : MSG.unknown;
+      const users = s.users;
+      const line = stopped(x.id) ? W["seats.stopped"] : s.seated != null && users != null ? fillText(W["seats.summary"], { seated: s.seated, users }) : MSG.unknown;
       const clock = s.clock ? fillText(W["attention.seats-over"], { used: s.seated, users, day: s.clock.day, n: s.overage || Math.max(0, (s.seated || 0) - (users || 0)), date: dayAny(s.clock.unseatAt) }) : "";
       return el("li", null, el("span", { class: "words" }, u(x.name), ": ", line, clock ? [" ", clock] : null),
         el("a", { href: "#/meet/seats?relay=" + encodeURIComponent(x.id) }, FMSG.pick),
         isAdmin() ? el("a", { href: "#/meet/seats?relay=" + encodeURIComponent(x.id) + "&request=1" }, W["seats.request"]) : null,
-        closed(x.id) ? disabledAdd(FW["people.invite"]) : null);
+        stopped(x.id) ? disabledAdd(FW["people.invite"]) : null);
     })));
   }
   // CSV import (11.3): check (no step-up), then send with one step-up; values stay text.
@@ -5211,7 +5270,7 @@
     }), send);
   }
 
-  // ---- License (11.4): every relay's license and adding state, the library, install per relay ----
+  // ---- License (11.4): every relay's license and service state, its reminders, the library, install per relay ----
   pages.fleetLicense = async () => {
     const d = await api("GET", "fleet/licenses", null, { direct: true });
     await fleetRelays();
@@ -5223,7 +5282,20 @@
         { key: "state", label: FMSG.cols.state, cell: (x) => stateWord((x.license || {}).state || "none"), sort: (x) => (x.license || {}).state },
         { key: "users", label: "Users", cell: (x) => (x.license && x.license.users != null ? (x.license.used || 0) + " of " + x.license.users : "") },
         { key: "days", label: FMSG.cols.days, cell: (x) => (x.license && x.license.daysLeft != null ? x.license.daysLeft : "") },
-        { key: "adding", label: MSG.addingLabel, cell: (x) => (x.adding ? MSG.adding[x.adding.state || x.adding] || stateWord(x.adding.state || x.adding) : "") }],
+        { key: "service", label: MSG.serviceLabel, cell: (x) => {
+          const s = serviceOf(x);
+          if (!s) return "";
+          const said = serviceText(x);
+          return el("span", null, said ? toneChip(said, s.state === "stopped" ? "bad" : "warn") : MSG.service[s.state] || stateWord(s.state),
+            s.state === "stopped" && relayWhy(s) ? [" ", relayWhy(s)] : null);
+        }, sort: (x) => (serviceOf(x) || {}).state },
+        { key: "reminders", label: MSG.reminders, sortable: false, cell: (x) => {
+          const sent = x.reminders || [];
+          const next = nextReminder(x.license ? x.license.exp : null, serviceOf(x), sent);
+          return sent.length || next ? el("span", null, fill(FW["relay.license-reminders"], { list: sent.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + " " + whenAny(r.at)).join(", ") || MSG.noneYet,
+            date: next ? when(next) : MSG.never })) : "";
+        } }],
+      // Install works on a stopped relay (11.4): the channel and the `license` scope keep working.
       actions: (x) => (admin ? [{ label: FMSG.install, run: () => go("#/license?relay=" + encodeURIComponent(x.relay)) }] : []),
     })), libraryPanel(d.library || [])];
   };

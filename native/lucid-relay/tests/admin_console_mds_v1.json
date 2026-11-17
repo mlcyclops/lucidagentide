@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-1 revision 4",
+ "contract": "AC-1 revision 4.2",
  "about": "Section 3.3 \"Attestation\" and \"The MDS3 snapshot\" (I11). A blob is used when its RS256 JWS verifies with the leaf of its x5c chain, the chain ends at root_pem (the stand-in for data/fido-mds-root.pem) and is in date at now, and its no is greater than the blob in force (why: signature, root, date, older). A statement is an attested hardware authenticator under High when it is packed with x5c or tpm and verifies (WebAuthn Level 2, 8.2 and 8.3), its chain ends at a root the blob lists for its AAGUID, its latest status report (greatest effectiveDate, the later one in the array on a tie) is not a bad_status, its metadata shows fips_rule and key_protection_rule, and, when the approved list is not empty, its AAGUID is on it. Under High the list only restricts; under Standard a listed AAGUID that passes steps 1 to 3 counts as approved without step 4 and raises aaguids-relaxed. verdicts[].expect is the stored verdict; attested is whether it counts as an approved security key under that profile (under High: the AAL3 verdict that gives admins and user managers their rights). All signing keys are RSA 2048 with seeded primes, so the file is reproducible; credentials are EC P-256 except packed-self (RS256).",
  "now": 1794873600,
  "now_iso": "2026-11-17T00:00:00Z",

@@ -1986,19 +1986,6 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true))]))
     }
 
-    /// AC-1 R41-1: the principal an SSO ask would provision (`[INFERENCE]` the ask's `principal` field), for the
-    /// growth gate of its approval; None when the ask names none.
-    pub fn pc_sso_ask_principal(&self, ask_id: &str) -> Option<String> {
-        let mut st = self.st.lock();
-        let rows: Vec<Value> = st.pc_map("sso").values().cloned().collect();
-        rows.iter()
-            .flat_map(|row| row.get("asks").and_then(Value::as_array).cloned().unwrap_or_default())
-            .filter_map(|ask| ask.as_object().cloned())
-            .find(|ask| pj::text_of(ask, "id") == ask_id)
-            .map(|ask| pj::text_of(&ask, "principal").trim().to_lowercase())
-            .filter(|p| !p.is_empty())
-    }
-
     /// `POST /v1/sso/c/org-member {principal, org, on}`: the relay's directory only (coverage never comes from it).
     pub fn pc_sso_org_member(&self, who: &Identity, principal: Body, org: Body, on: Body) -> R<Obj> {
         if who.kind != "sso" {

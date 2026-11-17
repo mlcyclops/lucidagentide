@@ -1,6 +1,6 @@
 {
  "version": 1,
- "contract": "AC-2a revision 3.2",
+ "contract": "AC-2a revision 3.4",
  "about": "Section 13 words. <name> marks a value filled in at run time; \"\\n\" in cli and mail is a line break. nav is 12.4's left navigation in order, the reserved places carrying phase 4 and 5 (not rendered in AC-2a). cef maps an audit action to its CEF name (13.1); actions not in it use the action. metrics_help holds the # HELP words of every 10.1 family. key-record.* are the app loopback page's words quoted in 3.9.",
  "placeholder": "<[^<>]+>",
  "page": {
@@ -194,6 +194,19 @@
   "attention.fleet-ca-lost": "The console can no longer use its management CA. Its operator must run the recovery command.",
   "attention.relay-gap": "Some audit entries from <relay> did not reach the SIEM.",
   "attention.relay-scope-stale": "The scope request to <relay> was replaced before its operator answered.",
+  "relay.license-stopped": "Stopped: no active license",
+  "relay.license-grace": "Grace: stops on <date and time>",
+  "relay.license-upgrade-period": "Upgrade period: stops on <date and time>",
+  "relay.license-why-none": "No license is installed.",
+  "relay.license-why-wrong-product": "The license is for another product.",
+  "relay.license-why-wrong-root": "The license is for another organization.",
+  "relay.license-why-invalid": "The relay could not use its license file. See the relay's log.",
+  "relay.license-why-expired": "The license ended and its grace is over.",
+  "relay.license-reminders": "Reminders sent: <list>. Next: <date>.",
+  "relay.license-install-stopped": "Installing a license here starts the relay serving people again.",
+  "attention.relay-license-stopped": "<relay> stopped: no active license. It serves no one until a license is installed.",
+  "attention.relay-license-grace": "The license of <relay> has ended. Service stops on <date and time> unless a new license is installed.",
+  "attention.relay-license-expiring": "The license of <relay> ends in <days> days.",
   "key-record.done": "Key recorded. You can close this tab.",
   "key-record.used": "This link was already used."
  },
@@ -657,6 +670,18 @@
   "mail.fleet-invite-waiting": {
    "subject": "A Meeting Hub invite is waiting for you",
    "body": "<requester> asked for <email> to be invited to Meeting Hub on <relay>.\nOpen the Hub app as an admin of that relay to complete or decline it.\nIt ends in 14 days."
+  },
+  "fleet.mail.license-reminder": {
+   "subject": "The <product> license of <relay> ends in <days> days",
+   "body": "The <product> license of <relay> ends on <date>.\nInstall a new license before then from the License page of the Admin Console.\nIf it ends, <relay> stops serving people after at most 2 days of grace."
+  },
+  "fleet.mail.license-grace": {
+   "subject": "<relay> stops on <date and time> unless a new license is installed",
+   "body": "The <product> license of <relay> has ended.\nService stops on <date and time> unless a new license is installed.\nInstall one from the License page of the Admin Console."
+  },
+  "fleet.mail.license-stopped": {
+   "subject": "<relay> stopped: no active license",
+   "body": "<relay> stopped serving people because it has no active <product> license.\nThe Admin Console can still reach it. Install a license from the License page and it starts again."
   }
  },
  "cef": {
@@ -712,8 +737,8 @@
   "lucid_relay_cert_signer_days": "Days left on the Meeting Hub signer certificate.",
   "lucid_relay_crl_days": "Days until the relay's revocation list needs its next update.",
   "lucid_relay_license_days": "Days left on the relay's license; negative in grace.",
-  "lucid_relay_adding_open": "1 when the Meeting Hub relay may add people.",
   "lucid_relay_quota_hits_total": "Requests refused for quota since the console started.",
-  "lucid_relay_license_state": "The relay's license state; 1 for the current state."
+  "lucid_relay_license_state": "The relay's license state; 1 for the current state.",
+  "lucid_relay_license_service": "Whether the relay serves people under its license (on, grace, upgrade-period or stopped); 1 for the current state."
  }
 }

@@ -34,6 +34,8 @@ const DAY_MS: i64 = 86_400_000;
 pub const HEALTH_STATES: [&str; 4] = ["ok", "warn", "bad", "silent"];
 /// `lucid_relay_license_state{state}` states by the 9.1 code (0 to 4).
 pub const LICENSE_STATES: [&str; 5] = ["none", "valid", "grace", "expired", "wrong"];
+/// `lucid_relay_license_service{state}` states by the 9.1 code (0 to 3, R42-6).
+pub const LICENSE_SERVICES: [&str; 4] = ["stopped", "on", "grace", "upgrade-period"];
 
 /// The `# HELP` words of every family (the fleet words vector's `metrics_help`).
 pub const HELP: [(&str, &str); 35] = [
@@ -69,9 +71,9 @@ pub const HELP: [(&str, &str); 35] = [
     ("lucid_relay_cert_signer_days", "Days left on the Meeting Hub signer certificate."),
     ("lucid_relay_crl_days", "Days until the relay's revocation list needs its next update."),
     ("lucid_relay_license_days", "Days left on the relay's license; negative in grace."),
-    ("lucid_relay_adding_open", "1 when the Meeting Hub relay may add people."),
     ("lucid_relay_quota_hits_total", "Requests refused for quota since the console started."),
     ("lucid_relay_license_state", "The relay's license state; 1 for the current state."),
+    ("lucid_relay_license_service", "Whether the relay serves people under its license (on, grace, upgrade-period or stopped); 1 for the current state."),
 ];
 
 pub fn help_of(family: &str) -> &'static str {
@@ -232,6 +234,8 @@ pub struct RelayRow {
     pub health: String,
     /// The 9.1 code, 0 to 4.
     pub license_state: Option<i64>,
+    /// The 9.1 `license_service` code, 0 to 3.
+    pub license_service: Option<i64>,
 }
 
 /// What `/metrics` answers. `code` names a refusal for the AC-1 global refusal summary; `used_hint` is the token to
@@ -340,10 +344,10 @@ fn family(out: &mut String, name: &str, kind: &str) {
 }
 
 /// The exposition (text format 0.0.4): `lucid_console_info`, `lucid_relay_up`, `lucid_relay_last_contact_seconds`,
-/// `lucid_relay_health{state}`, a gauge or counter for each 9.1 key but `license_state` in 9.1 order, then
-/// `lucid_relay_license_state{state}`. Relays in registry order within each family; a null or absent value has no
-/// sample; a counter is the sum of every accepted interval value since the console started (no sample before the
-/// relay's first value); latency in seconds (the ms value divided by 1000).
+/// `lucid_relay_health{state}`, a gauge or counter for each 9.1 key but the state sets in 9.1 order, then
+/// `lucid_relay_license_state{state}` and `lucid_relay_license_service{state}`. Relays in registry order within each
+/// family; a null or absent value has no sample; a counter is the sum of every accepted interval value since the
+/// console started (no sample before the relay's first value); latency in seconds (the ms value divided by 1000).
 pub fn exposition(console: &ConsoleInfo, rows: &[&RelayRow], snaps: &[Snap], now: i64) -> String {
     let mut out = String::new();
     family(&mut out, "lucid_console_info", "gauge");
@@ -386,6 +390,13 @@ pub fn exposition(console: &ConsoleInfo, rows: &[&RelayRow], snaps: &[Snap], now
             out.push_str(&format!("lucid_relay_license_state{{{},state=\"{st}\"}} {}\n", labels(r), u8::from(n as i64 == code)));
         }
     }
+    family(&mut out, "lucid_relay_license_service", "gauge");
+    for r in rows {
+        let Some(code) = r.license_service.filter(|c| (0..=3).contains(c)) else { continue };
+        for (n, st) in LICENSE_SERVICES.iter().enumerate() {
+            out.push_str(&format!("lucid_relay_license_service{{{},state=\"{st}\"}} {}\n", labels(r), u8::from(n as i64 == code)));
+        }
+    }
     out
 }
 
@@ -413,7 +424,7 @@ mod tests {
     }
 
     fn row(id: &str, name: &str, product: Product) -> RelayRow {
-        RelayRow { id: id.into(), name: name.into(), site: "HQ".into(), product, connected: true, last_contact_ms: None, health: "ok".into(), license_state: Some(1) }
+        RelayRow { id: id.into(), name: name.into(), site: "HQ".into(), product, connected: true, last_contact_ms: None, health: "ok".into(), license_state: Some(1), license_service: Some(1) }
     }
 
     #[test]
@@ -547,6 +558,7 @@ mod tests {
                 last_contact_ms: r["last_contact_ms"].as_i64(),
                 health: r["health"].as_str().unwrap().into(),
                 license_state: r["license_state"].as_i64().or_else(|| r["license_state"].as_str().and_then(|s| LICENSE_STATES.iter().position(|x| *x == s)).map(|n| n as i64)),
+                license_service: r["license_service"].as_i64().or_else(|| r["license_service"].as_str().and_then(|s| LICENSE_SERVICES.iter().position(|x| *x == s)).map(|n| n as i64)),
             })
             .collect();
         let refs: Vec<&RelayRow> = rows.iter().collect();

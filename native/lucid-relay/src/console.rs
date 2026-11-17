@@ -80,9 +80,9 @@ const SECURITY_HEADERS: [(&str, &str); 9] = [
 /// The 8.1 `attention.<kind>` words the relay itself mails (3.11 `mail.attention`); the page holds the same words.
 pub const ATTENTION_WORDS: [(&str, &str); 47] = [
     ("license-none", "No license is installed for <product>."),
-    ("license-grace", "The license ended. <n> grace days left."),
+    ("license-grace", "The license ended. Service stops on <date and time> unless a new license is installed."),
     ("license-expired", "The license and its grace days are over."),
-    ("license-expiring", "The license ends in <n> days."),
+    ("license-expiring", "The license ends in <n> days. Install a new license before <date>."),
     ("seats-high", "<used> of <users> licensed people are in use."),
     ("seats-over", "<used> people use Meeting Hub; the license covers <users>. Day <day> of 14: seats are taken from <n> people on <date>."),
     ("uncounted", "<n> hubs were refused because they have no license seat."),
@@ -107,8 +107,8 @@ pub const ATTENTION_WORDS: [(&str, &str); 47] = [
     ("quota-hits", "<n> requests were refused for limits in the last hour."),
     ("blocks-active", "<n> blocks are active on this relay."),
     ("admins-unproven", "<n> admins have not signed in since the upgrade. Ask them to try now."),
-    ("license-adding-off", "No one new can be added to Meeting Hub: the license is not active."),
-    ("license-upgrade-period", "Install a Meeting Hub license by <date>, or no one new can be added after that."),
+    ("license-stopped", "This relay has stopped serving people: the <product> license is not active. Install a license."),
+    ("license-upgrade-period", "Install a Meeting Hub license by <date and time>, or this relay stops serving people."),
     ("seats-unseated", "<n> people have no Meeting Hub seat."),
     ("seats-protected", "Admins alone use more seats than the license covers. Request more seats."),
     ("profile-standard", "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment."),
@@ -128,9 +128,17 @@ pub const ATTENTION_WORDS: [(&str, &str); 47] = [
     ("seal-lost", "Saved secrets could not be unlocked on this host. Email is off; enter its secrets again. Authenticator apps must be set up again."),
 ];
 
-/// The attention words of `kind` with its args filled in (`<hub or device>` from `from`); None for an unknown kind.
+/// AC-2a 13.1 (revision 3.4): the fleet console's license items, so `mail.attention` renders them too.
+pub const FLEET_ATTENTION_WORDS: [(&str, &str); 3] = [
+    ("relay-license-stopped", "<relay> stopped: no active license. It serves no one until a license is installed."),
+    ("relay-license-grace", "The license of <relay> has ended. Service stops on <date and time> unless a new license is installed."),
+    ("relay-license-expiring", "The license of <relay> ends in <days> days."),
+];
+
+/// The attention words of `kind` with its args filled in (`<hub or device>` from `from`; a `<date and time>` given in
+/// ms as `2026-11-18 10:00 UTC`, a `<date>` in ms as `2026-11-18`); None for an unknown kind.
 pub fn attention_words(kind: &str, args: &Value) -> Option<String> {
-    let (_, words) = ATTENTION_WORDS.iter().find(|(k, _)| *k == kind)?;
+    let (_, words) = ATTENTION_WORDS.iter().chain(FLEET_ATTENTION_WORDS.iter()).find(|(k, _)| *k == kind)?;
     let mut out = String::new();
     let mut rest = *words;
     while let Some(i) = rest.find('<') {
@@ -139,6 +147,8 @@ pub fn attention_words(kind: &str, args: &Value) -> Option<String> {
         let name = &rest[i + 1..i + j];
         let key = if name == "hub or device" { "from" } else { name };
         match args.get(key) {
+            Some(Value::Number(n)) if key == "date and time" => out.push_str(&n.as_i64().map(crate::license_reminders::when).unwrap_or_default()),
+            Some(Value::Number(n)) if key == "date" => out.push_str(&n.as_i64().map(crate::license_reminders::day).unwrap_or_default()),
             Some(Value::String(s)) => out.push_str(&crate::console_auth::clean(s)),
             Some(Value::Null) | None => {}
             Some(v) => out.push_str(&v.to_string()),
@@ -265,6 +275,75 @@ pub struct LicenseView {
     pub license: Value,
     pub problem: Option<String>,
     pub state: LicenseState,
+    /// The 4.7 `service` (R42-1).
+    pub service: ServiceView,
+}
+
+/// Whether the relay serves people (AC-1 2.4, R42-1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ServiceState {
+    On,
+    Grace,
+    UpgradePeriod,
+    Stopped,
+}
+
+impl ServiceState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ServiceState::On => "on",
+            ServiceState::Grace => "grace",
+            ServiceState::UpgradePeriod => "upgrade-period",
+            ServiceState::Stopped => "stopped",
+        }
+    }
+
+    /// The AC-2a 9.1 `license_service` code: 0 stopped, 1 on, 2 grace, 3 upgrade period.
+    pub fn code(self) -> u8 {
+        match self {
+            ServiceState::Stopped => 0,
+            ServiceState::On => 1,
+            ServiceState::Grace => 2,
+            ServiceState::UpgradePeriod => 3,
+        }
+    }
+}
+
+/// The service a product section reports (4.7 `service`, R42-1), judged at `at` (ms; trusted time on Meeting Hub, the
+/// license clock on Remote Spokes, R7-M1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServiceView {
+    pub state: ServiceState,
+    /// The end of grace or of the upgrade period (ms).
+    pub stops_at: Option<i64>,
+    /// None, or "none", "wrong-product", "wrong-root", "invalid", "expired".
+    pub why: Option<&'static str>,
+    /// The verifier's words for a refused token (8.1 `license.why` `<verifier words>`), only with `why` "invalid",
+    /// "wrong-product" or "wrong-root"; never the token.
+    pub reason: Option<String>,
+    pub upgrade_period_ends: Option<i64>,
+    /// The fitting license's id (also past its grace); None with none or during an upgrade period alone.
+    pub license_id: Option<String>,
+    /// The fitting license's `exp` (ms).
+    pub exp: Option<i64>,
+    pub at: i64,
+}
+
+impl ServiceView {
+    /// Always on, no license (a fleet console, which holds no product license).
+    pub fn on(at: i64) -> ServiceView {
+        ServiceView { state: ServiceState::On, stops_at: None, why: None, reason: None, upgrade_period_ends: None, license_id: None, exp: None, at }
+    }
+
+    /// Stopped for want of a license.
+    pub fn none(at: i64) -> ServiceView {
+        ServiceView { state: ServiceState::Stopped, why: Some("none"), ..ServiceView::on(at) }
+    }
+
+    /// The 4.7 JSON without `reminders`.
+    pub fn to_value(&self) -> Value {
+        json!({ "state": self.state.as_str(), "stopsAt": self.stops_at, "why": self.why, "upgradePeriodEnds": self.upgrade_period_ends })
+    }
 }
 
 /// A license as 4.7 compares it (R6-M1): Meeting Hub keeps the last fitting one as `meet-seats.json` `lastLicense`
@@ -361,22 +440,9 @@ pub trait ProductSection: Send + Sync {
     fn relay_lines(&self, _f: &Filter) -> Option<Vec<String>> {
         None
     }
-    /// The 4.7 `adding` object of GET license (Meeting Hub, R41-1: `{state: "open" or "closed" or "upgrade-period",
-    /// upgradePeriodEnds, lastUsers}`); null elsewhere.
-    fn adding(&self, _t: i64) -> Value {
-        Value::Null
-    }
     /// The console changed who is an admin or active (a promotion, an unsuspension, a removal, a role change): the
     /// product applies what follows from it (Meeting Hub: protected people always hold a seat, R3-M6).
     fn people_changed(&self, _t: i64) {}
-    /// The growth gate for the console's add-people writes (2.4, 4.9, R41-1, I13): Err(`license-inactive`) when the
-    /// POST `action` with `params` (the body without `stepup`) would seat a new principal while adding is closed
-    /// (Meeting Hub: `requests.new` of `meet.invite` or of `meet.approve` approving a new principal's enrollment, and
-    /// `meet.org.set` naming a new principal, through `meet_license::may_add`). The console asks before the
-    /// product-license check, so the refusal names the real reason. Ok elsewhere.
-    fn may_add(&self, _action: &str, _params: &Value) -> Result<(), ApiError> {
-        Ok(())
-    }
 }
 
 // ── Refusals (8.3) ──────────────────────────────────────────────────────────────────────────────────────────
@@ -415,7 +481,7 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
         "seal-provider-needed" => (409, "Under the High profile, secrets need the relay's own service account on Windows or a systemd encrypted credential set up by lucid-relay console seal-setup, and this relay has neither. Nothing was saved."),
         "bad-mailbox" => (400, "That is not an email address this console can send to or from."),
         "clock-disagree" => (409, "The relay's clock and your browser differ by more than 5 minutes. Fix the relay's clock first."),
-        "license-inactive" => (403, "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin."),
+        "license-inactive" => (403, "Your organization's Meeting Hub license is not active. Ask your admin."),
         "no-seat" => (403, "Your organization has no Meeting Hub seat for you. Ask your admin."),
         "waiting" => (403, "An admin of this console must approve you before you can sign in."),
         "suspended" => (403, "Your access to this console is suspended. Ask another admin."),
@@ -832,6 +898,8 @@ pub struct Console {
     headless: bool,
     /// AC-2a: the fleet section of a fleet console.
     fleet: OnceLock<Arc<crate::console_fleet::Fleet>>,
+    /// R42-3: `license-reminders.json`, read at the first check (None until then).
+    reminders: Mutex<Option<crate::license_reminders::Book>>,
 }
 
 /// What a console serves (AC-2a 2.1, F7): one product's relay (AC-1), or the fleet of the console role.
@@ -1023,6 +1091,7 @@ impl Console {
             kind,
             headless,
             fleet: OnceLock::new(),
+            reminders: Mutex::new(None),
         });
         c.open_secrets(t);
         // AC-2a 12.1: a fleet console not yet bootstrapped draws its setup code at every start.
@@ -1136,6 +1205,8 @@ impl Console {
         if let Some(f) = self.fleet() {
             f.tick(self, t);
         }
+        // R42-1, R42-3: the service state audited and the renewal reminders, with email off too (audit, banners).
+        self.license_check(t);
         if self.mailer.config().mode == Mode::Off {
             return;
         }
@@ -1165,6 +1236,10 @@ impl Console {
     /// The product section; set once, before serving.
     pub fn attach(&self, section: Arc<dyn ProductSection>) {
         let _ = self.section.set(section);
+        // R42-3: a reminder whose moment passed while the relay was down goes out at its start.
+        if !self.inner.lock().unreadable {
+            self.license_check(crate::codec::now_ms());
+        }
     }
 
     pub(crate) fn section(&self) -> Option<Arc<dyn ProductSection>> {
@@ -1345,8 +1420,132 @@ impl Console {
     pub(crate) fn license_view(&self, t: i64) -> LicenseView {
         match self.section() {
             Some(s) => s.license(t),
-            None => LicenseView { license: Value::Null, problem: Some("this relay has no product section".into()), state: LicenseState::None },
+            None => LicenseView { license: Value::Null, problem: Some("this relay has no product section".into()), state: LicenseState::None, service: ServiceView::none(t) },
         }
+    }
+
+    /// The license items of Overview and their banners (7.2, 7.3; R42-1, R42-3), from the service view alone, so they
+    /// show with email off and whatever `license-reminders.json` holds.
+    fn license_attention(&self, lic: &LicenseView) -> Vec<Value> {
+        let s = &lic.service;
+        let product = self.cfg.product.name();
+        let item = |kind: &str, severity: &str, args: Value, banner: Option<&str>, blocking: bool| {
+            let mut v = json!({ "kind": kind, "severity": severity, "args": args, "go": "#/license" });
+            if let Some(b) = banner {
+                v["banner"] = Value::from(b);
+            }
+            if blocking {
+                v["blocking"] = Value::Bool(true);
+            }
+            v
+        };
+        let mut out = Vec::new();
+        match s.state {
+            ServiceState::Stopped => {
+                match s.why {
+                    Some("expired") => out.push(item("license-expired", "bad", json!({}), None, false)),
+                    _ => out.push(item("license-none", "bad", json!({ "product": product }), None, false)),
+                }
+                // 8.1 `license.why`: the verifier's words of a refused token (never the token).
+                let words = s.reason.as_deref().map(crate::console_auth::clean);
+                out.push(item("license-stopped", "bad", json!({ "product": product, "why": s.why, "verifier words": words }), Some("banner.license-stopped"), true));
+            }
+            ServiceState::Grace => out.push(item("license-grace", "bad", json!({ "product": product, "date": s.exp, "date and time": s.stops_at }), Some("banner.grace"), false)),
+            ServiceState::UpgradePeriod => out.push(item("license-upgrade-period", "warn", json!({ "date and time": s.stops_at }), Some("banner.upgrade-period"), false)),
+            ServiceState::On => {
+                if let Some(exp) = s.exp {
+                    let n = (exp - s.at + crate::license_reminders::DAY_MS - 1).div_euclid(crate::license_reminders::DAY_MS);
+                    if n <= 30 {
+                        out.push(item("license-expiring", "warn", json!({ "product": product, "n": n, "date": exp }), Some("banner.expiring"), false));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The 4.7 `service.reminders`: the reminders sent on the current schedule.
+    fn reminders_view(&self, s: &ServiceView) -> Value {
+        let key = crate::license_reminders::key_of(s);
+        match self.reminders.lock().as_ref() {
+            Some(b) if b.key.as_deref() == Some(key.as_str()) => b.view(),
+            _ => json!([]),
+        }
+    }
+
+    /// R42-1, R42-3 (once a minute and at attach): audits a change of the service state (`license.service`) and sends
+    /// the reminder due now to every active console admin (`license.reminder`), kept in `license-reminders.json`.
+    pub(crate) fn license_check(&self, t: i64) {
+        if self.is_fleet() || self.section().is_none() {
+            return;
+        }
+        let s = self.license_view(t).service;
+        self.license_check_with(&s);
+    }
+
+    pub(crate) fn license_check_with(&self, s: &ServiceView) {
+        use crate::license_reminders::{key_of, mail_of, Book};
+        let dir = self.cfg.state_dir.clone();
+        let mut guard = self.reminders.lock();
+        if guard.is_none() {
+            *guard = Some(match Book::read(&dir) {
+                Ok(b) => b,
+                Err(why) => {
+                    // R7-L2: reinitialized from now on, so past steps are not replayed (banners still show).
+                    self.logger.security(
+                        "license.reminders-unreadable",
+                        &Fields::new().with("words", "License reminder records could not be read. Past reminders were not sent again; banners still show.").with("why", why),
+                        Level::Warn,
+                    );
+                    let b = Book::reset_at(s);
+                    if let Err(e) = b.write(&dir) {
+                        self.logger.ops("license.reminders-failed", &Fields::new().with("why", e), Level::Error);
+                    }
+                    b
+                }
+            });
+        }
+        let Some(book) = guard.as_mut() else { return };
+        let mut changed = false;
+        let key = key_of(s);
+        let state = s.state.as_str();
+        if book.service.is_some_and(|prev| prev != state) {
+            let mut r = Record::new("relay", "license.service", "ok");
+            r.target = s.license_id.clone();
+            r.detail = json!({ "state": state, "why": s.why, "licenseId": s.license_id });
+            self.record(r, s.at);
+        }
+        if book.service != Some(state) {
+            book.service = Some(state);
+            changed = true;
+        }
+        if book.key.as_deref() != Some(key.as_str()) {
+            book.key = Some(key);
+            book.sent.clear();
+            changed = true;
+        }
+        let due = crate::license_reminders::due(s, book);
+        if let Some((kind, moment)) = due {
+            book.sent.push(crate::license_reminders::Sent { kind, moment, at: s.at });
+            changed = true;
+        }
+        if changed {
+            if let Err(e) = book.write(&dir) {
+                self.logger.ops("license.reminders-failed", &Fields::new().with("why", e), Level::Error);
+            }
+        }
+        drop(guard);
+        let Some((kind, _)) = due else { return };
+        let (mail, args) = mail_of(kind, s, self.cfg.product);
+        let admins = self.active_admin_emails();
+        let mailed = if self.mailer.config().mode == Mode::Off { 0 } else { admins.len() };
+        for to in &admins {
+            self.mailer.enqueue_reminder(mail, to, &args);
+        }
+        let mut r = Record::new("relay", "license.reminder", "ok");
+        r.target = s.license_id.clone();
+        r.detail = json!({ "kind": kind, "key": key_of(s), "mailed": mailed });
+        self.record(r, s.at);
     }
 
     /// Writes that need the product license in valid or grace (2.4).
@@ -1784,13 +1983,6 @@ impl Console {
         }
         let mut params = body.clone();
         let stepup = params.as_object_mut().and_then(|o| o.remove("stepup"));
-        // The growth gate before the product license (4.9, R41-1): an add-people write while adding is closed answers
-        // `license-inactive`, never `license-needed` or `license-expired`.
-        if post {
-            if let Some(Err(e)) = self.section().map(|s| s.may_add(spec.action, &params)) {
-                return refuse(e, who.as_ref());
-            }
-        }
         if post && spec.need == Need::Product {
             if let Err(e) = self.need_product_license(t) {
                 return refuse(e, who.as_ref());
@@ -1935,9 +2127,6 @@ impl Console {
         if post {
             if let Some(k) = body.as_object().and_then(|o| o.keys().find(|k| !spec.keys.contains(&k.as_str()) || k.as_str() == "stepup")) {
                 return Err(ApiError::with("unknown-field", format!("Unknown field: {k}.")));
-            }
-            if let Some(Err(e)) = self.section().map(|s| s.may_add(spec.action, body)) {
-                return Err(e);
             }
             if spec.need == Need::Product {
                 self.need_product_license(t)?;
@@ -2145,8 +2334,9 @@ impl Console {
             ("POST", "logs/export") => self.logs_export(c),
             ("GET", "license") => {
                 let v = self.license_view(t);
-                let adding = self.section().map(|s| s.adding(t)).unwrap_or(Value::Null);
-                Ok(Done::plain(Out::ok(json!({ "ok": true, "license": v.license, "problem": v.problem, "adding": adding }))))
+                let mut service = v.service.to_value();
+                service["reminders"] = self.reminders_view(&v.service);
+                Ok(Done::plain(Out::ok(json!({ "ok": true, "license": v.license, "problem": v.problem, "service": service }))))
             }
             ("POST", "license/install") => self.license_install(c),
             _ => Err(ApiError::of("not-found")),
@@ -2205,13 +2395,8 @@ impl Console {
     fn core_attention(&self, who: &Who, lic: &LicenseView, t: i64) -> Vec<Value> {
         let item = |kind: &str, severity: &str, args: Value, go: &str| json!({ "kind": kind, "severity": severity, "args": args, "go": go });
         let mut out = Vec::new();
-        let days = lic.license.get("daysLeft").and_then(Value::as_i64);
-        match lic.state {
-            LicenseState::None => out.push(item("license-none", "bad", json!({ "product": self.cfg.product.name() }), "#/license")),
-            LicenseState::Expired => out.push(item("license-expired", "bad", json!({}), "#/license")),
-            LicenseState::Grace => out.push(item("license-grace", "bad", json!({ "days": days }), "#/license")),
-            LicenseState::Valid if days.is_some_and(|d| d <= 30) => out.push(item("license-expiring", "warn", json!({ "n": days }), "#/license")),
-            LicenseState::Valid => {}
+        if !self.is_fleet() {
+            out.extend(self.license_attention(lic));
         }
         if !who.manager {
             return out;
@@ -2347,7 +2532,7 @@ impl Console {
     }
 
     fn attention_and_banners(&self, who: &Who, t: i64) -> (Vec<Value>, Vec<Value>) {
-        const VIEWER_KINDS: [&str; 9] = ["license-none", "license-grace", "license-expired", "license-expiring", "crl-stale", "signer-unhealthy", "signer-expiring", "tls-expiring", "spokes-silent"];
+        const VIEWER_KINDS: [&str; 11] = ["license-none", "license-grace", "license-expired", "license-expiring", "license-stopped", "license-upgrade-period", "crl-stale", "signer-unhealthy", "signer-expiring", "tls-expiring", "spokes-silent"];
         let lic = self.license_view(t);
         let mut attention = self.core_attention(who, &lic, t);
         if let Some(s) = self.section() {
@@ -2356,7 +2541,7 @@ impl Console {
         let manager_kind = |k: &str| k.starts_with("seats-") || k == "joiner-waiting" || k == "signin-locked";
         if !who.admin {
             // AC-2a 8.1: viewers of a fleet console also see `relay-silent` and `relay-cert-*`.
-            let fleet_viewer = |k: &str| self.is_fleet() && matches!(k, "relay-silent" | "relay-cert-expiring" | "relay-cert-expired");
+            let fleet_viewer = |k: &str| self.is_fleet() && matches!(k, "relay-silent" | "relay-cert-expiring" | "relay-cert-expired" | "relay-license-stopped" | "relay-license-grace" | "relay-license-expiring");
             attention.retain(|a| str_of(a.get("kind")).is_some_and(|k| VIEWER_KINDS.contains(&k) || fleet_viewer(k) || (who.manager && manager_kind(k))));
         }
         let mut banners: Vec<Value> = Vec::new();
@@ -2397,10 +2582,10 @@ impl Console {
         }
         let (attention, banners) = self.attention_and_banners(who, t);
         let mut cards = vec![json!({ "id": "health", "state": "ok", "n": null })];
-        let lic_card = match lic.state {
-            LicenseState::Valid => "ok",
-            LicenseState::Grace => "warn",
-            _ => "bad",
+        let lic_card = match lic.service.state {
+            ServiceState::On => "ok",
+            ServiceState::Grace | ServiceState::UpgradePeriod => "warn",
+            ServiceState::Stopped => "bad",
         };
         cards.push(json!({ "id": "license", "state": lic_card, "n": lic.license.get("daysLeft").cloned().unwrap_or(Value::Null) }));
         if let Some(s) = &section {
@@ -2410,7 +2595,7 @@ impl Console {
             "state": lic.state.as_str(), "product": self.cfg.product.as_str(),
             "edition": lic.license.get("edition").cloned().unwrap_or(Value::Null), "users": lic.license.get("users").cloned().unwrap_or(Value::Null),
             "used": lic.license.get("used").cloned().unwrap_or(Value::Null), "daysLeft": lic.license.get("daysLeft").cloned().unwrap_or(Value::Null),
-            "exp": lic.license.get("exp").cloned().unwrap_or(Value::Null),
+            "exp": lic.license.get("exp").cloned().unwrap_or(Value::Null), "service": lic.service.to_value(),
         });
         let mut v = json!({ "ok": true, "product": self.product_word(), "relay": relay, "license": license, "cards": cards, "attention": attention, "banners": banners });
         // AC-2a 5.3, 8.1: the fleet's relays, people and calls, and its KPIs.

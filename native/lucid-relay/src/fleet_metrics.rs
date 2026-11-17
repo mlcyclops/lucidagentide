@@ -47,7 +47,7 @@ pub enum Products {
 
 /// How a fleet series combines relays (9.5): counts and interval metrics summed, percentages averaged,
 /// `latency_console` the maximum; `cert_*`, `crl_days`, `license_days` never (nor the codes `license_state` and
-/// `adding_open`, which are neither counts nor percentages).
+/// `license_service`, which are neither counts nor percentages).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Aggregate {
     Sum,
@@ -136,7 +136,7 @@ pub static KEYS: [Key; 31] = [
     k("crl_days", "days", N, B, -3_650.0, 3_650.0, true, ANever, "lucid_relay_crl_days", G, 1.0),
     k("license_days", "days", N, B, -3_650.0, 3_650.0, true, ANever, "lucid_relay_license_days", G, 1.0),
     k("license_state", "code", N, B, 0.0, 4.0, true, ANever, "lucid_relay_license_state", SS, 1.0),
-    k("adding_open", "0 or 1", N, M, 0.0, 1.0, true, ANever, "lucid_relay_adding_open", G, 1.0),
+    k("license_service", "code", N, B, 0.0, 3.0, true, ANever, "lucid_relay_license_service", SS, 1.0),
     k("quota_hits", "refusals", I, B, 0.0, 10_000_000.0, true, ASum, "lucid_relay_quota_hits_total", C, 1.0),
 ];
 

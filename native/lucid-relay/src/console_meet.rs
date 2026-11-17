@@ -6,7 +6,7 @@
 // (`["meet"]`, the `m_` root of a self-signed `client_ca` certificate), the hooks that latch passkey anchors and
 // observe `meet.*` requests, the 4.10 routes of the main port and the offline `meet console` commands.
 
-use crate::console::{AdminRule, ApiError, Approved, Console, ConsoleConfig, Filter, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
+use crate::console::{AdminRule, ApiError, Approved, Console, ConsoleConfig, Filter, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall, ServiceView};
 use crate::console_limits::Limit;
 use crate::console_spokes::{clean, reason_of};
 use crate::license::{license_standing, license_token_of, License, LicenseStateName, Product};
@@ -525,7 +525,7 @@ impl MeetSection {
         let keeps = gate.as_ref().is_some_and(|g| g.keeps_period(l.grace_end()));
         json!({
             "id": l.id, "org": l.org, "product": l.product().as_str(), "edition": l.edition, "users": l.users, "used": Self::used(relay),
-            "relays": l.relays, "exp": l.exp, "state": standing.state_str(), "daysLeft": days_left, "dev": dev, "graceDays": l.grace_days,
+            "relays": l.relays, "exp": l.exp, "state": standing.state_str(), "daysLeft": days_left, "dev": dev, "graceDays": l.effective_grace_days(),
             "graceEnd": standing.grace_end.map(|g| g * 1000), "upgradePeriodEnds": upgrade.map(|e| e * 1000), "keepsUpgradePeriod": keeps,
         })
     }
@@ -970,12 +970,6 @@ impl MeetSection {
         match action {
             "meet.org.set" => {
                 let remove = p.get("remove").filter(|v| v.as_bool() == Some(true));
-                // R41-1: an approval carried out later is checked again (adding may have closed meanwhile)
-                if let Some(principal) = Self::adds_principal(&relay, action, params) {
-                    if !Self::gate(&relay)?.may_add(&principal) {
-                        return Err(ApiError::of("license-inactive"));
-                    }
-                }
                 relay.hub.admin_set_organization("", &who, p.get("principal"), p.get("id"), p.get("label"), remove).map_err(from_hub)?;
                 Ok(json!({"ok": true}))
             }
@@ -1037,27 +1031,6 @@ impl MeetSection {
 
     fn core(&self) -> Option<Arc<Console>> {
         self.relay.upgrade().and_then(|r| r.admin_console.get().cloned())
-    }
-
-    /// The principal a console write would seat (R41-1), or None when it seats no one: `requests.new` of
-    /// `meet.invite` (its email) or of `meet.approve` approving an enrollment (the enrollment's principal), and
-    /// `meet.org.set` (its principal, unless it removes them).
-    fn adds_principal(relay: &Relay, action: &str, params: &Value) -> Option<String> {
-        match action {
-            "requests.new" => {
-                let target = params.get("target")?;
-                match params.get("kind").and_then(Value::as_str)? {
-                    "meet.invite" => Some(m::principal(target.get("email"))).filter(|p| !p.is_empty()),
-                    "meet.approve" if pj::str_or(target.get("kind")) == "enroll" && pj::str_or(target.get("decision")) == "approve" => {
-                        // an enrollment the relay no longer has seats no one (the approval itself is refused later)
-                        relay.hub.enrollment_principal(&pj::str_or(target.get("id")))
-                    }
-                    _ => None,
-                }
-            }
-            "meet.org.set" if params.get("remove") != Some(&Value::Bool(true)) => Some(m::principal(params.get("principal"))).filter(|p| !p.is_empty()),
-            _ => None,
-        }
     }
 
     /// The `meet.*` request target checks (3.8): `meet.approve {kind, id, csr_sha256, decision}`, `meet.revoke
@@ -1137,13 +1110,15 @@ impl ProductSection for MeetSection {
         })
     }
 
-    fn license(&self, _t: i64) -> LicenseView {
-        let none = |problem: String| LicenseView { license: Value::Null, problem: Some(problem), state: LicenseState::None };
-        let Ok(relay) = self.relay() else { return none(NO_LICENSE.into()) };
-        let Ok(gate) = Self::gate(&relay) else { return none(NO_LICENSE.into()) };
+    /// The license view with the service state (R42-1, R42-3), judged in trusted time.
+    fn license(&self, t: i64) -> LicenseView {
+        let none = |problem: String, service: ServiceView| LicenseView { license: Value::Null, problem: Some(problem), state: LicenseState::None, service };
+        let Ok(relay) = self.relay() else { return none(NO_LICENSE.into(), ServiceView::none(t)) };
+        let Ok(gate) = Self::gate(&relay) else { return none(NO_LICENSE.into(), ServiceView::none(t)) };
+        let service = gate.service_view();
         match gate.license() {
-            Some((l, dev)) => LicenseView { license: self.license_object(&relay, &l, dev), problem: None, state: Self::license_now(&relay) },
-            None => none(Some(gate.problem()).filter(|p| !p.is_empty()).unwrap_or_else(|| NO_LICENSE.into())),
+            Some((l, dev)) => LicenseView { license: self.license_object(&relay, &l, dev), problem: None, state: Self::license_now(&relay), service },
+            None => none(Some(gate.problem()).filter(|p| !p.is_empty()).unwrap_or_else(|| NO_LICENSE.into()), service),
         }
     }
 
@@ -1404,25 +1379,6 @@ impl ProductSection for MeetSection {
         Some(relay.console.ring.json_lines(f.min as i64))
     }
 
-    /// 4.7 `adding` (Meeting Hub only, R41-1): `{state: "open" or "closed" or "upgrade-period", upgradePeriodEnds,
-    /// lastUsers}`.
-    fn adding(&self, _t: i64) -> Value {
-        let Some(gate) = self.relay.upgrade().and_then(|r| r.hub.gate()) else { return Value::Null };
-        gate.adding_view()
-    }
-
-    /// The growth gate for the console's add-people writes (4.9, R41-1): `requests.new` of `meet.invite`, or of
-    /// `meet.approve` approving a new principal's enrollment, and `meet.org.set` naming a new principal.
-    fn may_add(&self, action: &str, params: &Value) -> Result<(), ApiError> {
-        let Some(relay) = self.relay.upgrade() else { return Ok(()) };
-        let Some(gate) = relay.hub.gate() else { return Ok(()) };
-        let principal = Self::adds_principal(&relay, action, params);
-        match principal {
-            Some(p) if !gate.may_add(&p) => Err(ApiError::of("license-inactive")),
-            _ => Ok(()),
-        }
-    }
-
     /// A promotion to admin, an unsuspension, a removal or a role change: protected people reseat at once (R3-M6).
     fn people_changed(&self, _t: i64) {
         if let Some(gate) = self.relay.upgrade().and_then(|r| r.hub.gate()) {
@@ -1503,6 +1459,13 @@ impl ConsoleHooks for Hooks {
 
     fn audit(&self, action: &str, target: &str, detail: Value) {
         self.console.audit_relay(action, target, detail);
+    }
+
+    fn audit_operator(&self, action: &str, target: &str, detail: Value) {
+        let mut r = crate::console_audit::Record::new("operator", action, "ok");
+        r.target = Some(target.to_owned());
+        r.detail = detail;
+        self.console.record(r, (pj::now() * 1000.0) as i64);
     }
 
     fn mail(&self, kind: &str, to: &str, args: &[(&str, String)]) {
@@ -2172,18 +2135,9 @@ mod tests {
         // removing someone from an organization is always two-admin
         let remove = json!({"principal": "c@x.org", "remove": true, "reason": "left"});
         assert!(matches!(call(&section, "POST", "meet/organizations", "", remove, "ann@x.org", true, LicenseState::Valid, T0).unwrap(), SectionAnswer::Second { .. }));
-        // R41-1: with no license (adding closed), a new principal is refused before anything else
+        // moving someone with no organization into one with no bridge on and no org_admins is one admin
         let put = json!({"principal": "c@x.org", "id": "acme", "label": "Acme", "reason": "joined"});
-        assert_eq!(section.may_add("meet.org.set", &put).err().unwrap().code, "license-inactive");
-        assert!(section.may_add("meet.org.set", &json!({"principal": "c@x.org", "remove": true})).is_ok());
-        let invite = json!({"kind": "meet.invite", "target": {"name": "C", "email": "c@x.org", "days": 7}});
-        assert_eq!(section.may_add("requests.new", &invite).err().unwrap().code, "license-inactive");
-        // a principal the relay holds may be moved: someone with none into an org with no bridge on and no
-        // org_admins is one admin
         device(&relay, "c@x.org", "cccccccccccccccc", "c1");
-        relay.hub.gate().unwrap().check(true); // seated now, so in everSeated (R6-M2)
-        assert!(section.may_add("meet.org.set", &put).is_ok());
-        assert!(section.may_add("requests.new", &invite).is_ok());
         assert!(matches!(call(&section, "POST", "meet/organizations", "", put, "ann@x.org", true, LicenseState::Valid, T0).unwrap(), SectionAnswer::Done { .. }));
         // moving them again is two-admin
         let again = json!({"principal": "c@x.org", "id": "other", "label": "Other", "reason": "moved"});

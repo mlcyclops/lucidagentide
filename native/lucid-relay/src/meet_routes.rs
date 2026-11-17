@@ -269,10 +269,6 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/status" => status,
         "/v1/admin/organizations" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            if b.get("remove") != Some(&Value::Bool(true)) {
-                c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
-                may_add(c, &m::principal(b.get("principal")))?;
-            }
             c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))
         },
         "/v1/caption" => caption,
@@ -385,13 +381,6 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/enroll" => enroll,
         "/v1/admin/enrolled" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            // R41-1: a signed certificate delivered for a new principal's enrollment (a refusal always goes through)
-            if !pj::truthy(b.get("refused")) {
-                c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
-                if let Some(p) = c.relay.hub.enrollment_principal(&pj::s(&b, "seed_serial")) {
-                    may_add(c, &p)?;
-                }
-            }
             c.relay.hub.admin_enrolled(&pj::s(&b, "session"), &who, &pj::s(&b, "seed_serial"), b.get("cert_pem"), b.get("ca_pem"), b.get("refused"))
         },
         "/v1/devices/add" => |c: &mut Ctx| {
@@ -413,12 +402,6 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/admin/approve" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             let link = console_request(c, &who, &b)?;
-            // R41-1: approving a new principal's enrollment (from the Hub app, or as the signer carries it)
-            if pj::s(&b, "kind") == "enroll" && pj::s(&b, "decision") == "approve" {
-                if let Some(p) = c.relay.hub.enrollment_principal(&pj::s(&b, "id")) {
-                    may_add(c, &p)?;
-                }
-            }
             let answer = c.relay.hub.admin_approve(&pj::s(&b, "session"), &who, &pj::s(&b, "kind"), &pj::s(&b, "id"), &pj::s(&b, "csr_sha256"), &pj::s(&b, "decision"), b.get("reason"), b.get("proof"), b.get("ts"))?;
             let target = obj([("kind", Value::from(pj::s(&b, "kind"))), ("id", Value::from(pj::s(&b, "id"))), ("csr_sha256", Value::from(pj::s(&b, "csr_sha256").to_lowercase()))]);
             c.relay.hub.console_observed("meet.approve", &target, &who.principal, link.as_deref());
@@ -427,8 +410,6 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/admin/invite" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             let link = console_request(c, &who, &b)?;
-            // R41-1: an invite for an email that is not a principal the relay holds
-            may_add(c, &m::principal(b.get("email")))?;
             let answer = c.relay.hub.admin_invite(&pj::s(&b, "session"), &who, b.get("name"), b.get("email"), b.get("days"), b.get("seed_csr_pem"), b.get("proof"), b.get("ts"))?;
             let target = obj([("email", Value::from(pj::s(&b, "email").trim().to_lowercase()))]);
             c.relay.hub.console_observed("meet.invite", &target, &who.principal, link.as_deref());
@@ -670,12 +651,6 @@ fn post_route(path: &str) -> Option<Route> {
         // the SSO service and its admins
         "/v1/sso/answer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            // R41-1: the SSO answer that would provision a new principal
-            if pj::s(&b, "answer") == "approve" {
-                if let Some(p) = c.relay.hub.pc_sso_ask_principal(&pj::s(&b, "id")) {
-                    may_add(c, &p)?;
-                }
-            }
             c.relay.hub.pc_sso_answer(&pj::s(&b, "session"), &who, b.get("id"), b.get("answer"), b.get("proof"), b.get("ts"), b.get("service"))
         },
         "/v1/sso/c/hello" => |c: &mut Ctx| {
@@ -685,10 +660,6 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/sso/c/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            // R41-1: an SSO enrollment signed for a new principal (`[INFERENCE]` the body's `principal`)
-            if who.kind == "sso" && pj::s(&b, "op") == "sign_sso_enrollment" {
-                may_add(c, &m::principal(b.get("principal")))?;
-            }
             c.relay.pc_sso_sign(&who, &b)
         },
         "/v1/sso/c/revoke" => |c: &mut Ctx| {
@@ -697,16 +668,10 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/sso/c/org-member" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            if who.kind == "sso" && pj::truthy(b.get("on")) {
-                may_add(c, &m::principal(b.get("principal")))?;
-            }
             c.relay.hub.pc_sso_org_member(&who, b.get("principal"), b.get("org"), b.get("on"))
         },
         "/v1/sso/c/pending-add" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            if who.kind == "sso" {
-                may_add(c, &m::principal(b.get("principal")))?;
-            }
             c.relay.hub.pc_sso_pending_add(&who, b.get("principal"), b.get("cid"), b.get("idp"), b.get("group"))
         },
         // canvases and lists
@@ -730,15 +695,6 @@ fn post_route(path: &str) -> Option<Route> {
     Some(route)
 }
 
-/// AC-1 R41-1: the growth gate of an `adds` route for the principal it would seat (403 `license-inactive` while
-/// adding is closed and that principal is new).
-fn may_add(c: &Ctx, principal: &str) -> R<()> {
-    match c.relay.hub.gate() {
-        Some(g) if !principal.trim().is_empty() => g.check_add(principal),
-        _ => Ok(()),
-    }
-}
-
 /// Whether the main port has this route (the gate table's test, meet_license.rs).
 #[cfg(test)]
 pub fn has_route(method: &str, path: &str) -> bool {
@@ -759,7 +715,7 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
     let Some(route) = route else {
         return Some((404, obj([("error", Value::from("unknown path"))])));
     };
-    // AC-1 2.4 and 4.10 (R41-1): the seat refusal and the growth gate's backstop, before the route reads anything
+    // AC-1 2.4 and 4.10 (R42-1): the service gate and the seat refusal, before the route reads anything
     if let Some(gate) = ctx.relay.hub.gate() {
         let who = m::identity_from_cert(ctx.der).ok();
         if let Err(refused) = gate.admits(method, &ctx.path, who.as_ref()) {

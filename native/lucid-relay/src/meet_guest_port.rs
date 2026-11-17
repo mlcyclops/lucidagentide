@@ -221,9 +221,13 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         let sent = json(reader.get_mut(), 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
         return Ok(sent.is_ok() && !close && !post);
     }
-    // AC-1 R41-1: the guest port does not consult the license (it seats no one); guests have no certificate
+    // AC-1 2.4 (R42-1): every guest route serves people, so it answers `license-inactive` while service is stopped
+    let refused = port.hub.gate().and_then(|g| g.admits_guest(&head.method, &path).err());
     let mut req = Req { port, head: &head, query: m::parse_query(&query), reader: &mut *reader, address, body_read: false, close: false };
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path)));
+    let result = match refused {
+        Some(e) => Ok(Err(e)),
+        None => std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path))),
+    };
     let (body_read, closing) = (req.body_read, req.close);
     close |= closing;
     if m::drain_unread(reader, &head, body_read) {

@@ -423,12 +423,10 @@ button, .btn {
 }
 button:hover, .btn:hover { background: var(--bg-tertiary); }
 button:disabled { cursor: not-allowed; opacity: 0.6; }
-/* Add controls closed by the license (R41-1): still focusable, with the reason beside them. */
+/* Fleet invite controls of a relay stopped for its license (AC-2a 11.4): still focusable, with the reason beside them. */
 button[aria-disabled="true"] { cursor: not-allowed; border-style: dashed; }
 button[aria-disabled="true"]:hover { background: var(--bg-secondary); }
 .disabled-add { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.menu-note { display: block; font-size: 12px; color: var(--text-secondary); white-space: normal; }
-.menu [aria-disabled="true"] { flex-direction: column; align-items: flex-start; cursor: not-allowed; }
 button.primary, .btn.primary {
   background: var(--text-primary); color: var(--bg-primary); border-color: var(--text-primary); font-weight: 600;
 }

@@ -1,0 +1,605 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.4.1",
+ "about": "5.6 state frame (revision 3.4.1, R7-L1): license {id, exp, state, daysLeft, service: {state, stopsAt, why, upgradePeriodEnds}}; id and exp (ms) of the verified license in force, both null with no fitting license; daysLeft = floor((exp - now) / 1 day), display only; the other frame fields are fixed examples, the license object is exact. reminders is 8.1: key the license id, or \"upgrade:\" + upgradePeriodEnds in an upgrade period, null with neither; steps at exp minus 30, 14, 7, 3 and 1 days, expiry at exp, grace every 12 hours after exp while before stopsAt, stopped at stopsAt; an upgrade period gets grace steps every 12 hours over its 2 days, ending at stopsAt [INFERENCE: counted back from its end]. Steps already past at now are still listed; the console sends each once per relay and key. malformed: frames the console refuses.",
+ "service_why": [
+  "none",
+  "wrong-product",
+  "wrong-root",
+  "invalid",
+  "expired"
+ ],
+ "reminder_days": [
+  30,
+  14,
+  7,
+  3,
+  1
+ ],
+ "cases": [
+  {
+   "name": "licensed",
+   "product": "spokes",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": "l_0123456789abcdef",
+      "exp": 1822521600000,
+      "state": "valid",
+      "daysLeft": 20,
+      "service": {
+       "state": "on",
+       "stopsAt": 1822694400000,
+       "why": null,
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": "l_0123456789abcdef",
+    "steps": [
+     {
+      "step": "30d",
+      "at": 1819929600000
+     },
+     {
+      "step": "14d",
+      "at": 1821312000000
+     },
+     {
+      "step": "7d",
+      "at": 1821916800000
+     },
+     {
+      "step": "3d",
+      "at": 1822262400000
+     },
+     {
+      "step": "1d",
+      "at": 1822435200000
+     },
+     {
+      "step": "expiry",
+      "at": 1822521600000
+     },
+     {
+      "step": "grace",
+      "at": 1822564800000
+     },
+     {
+      "step": "grace",
+      "at": 1822608000000
+     },
+     {
+      "step": "grace",
+      "at": 1822651200000
+     },
+     {
+      "step": "stopped",
+      "at": 1822694400000
+     }
+    ]
+   }
+  },
+  {
+   "name": "grace",
+   "product": "meet",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": "l_0123456789abcdef",
+      "exp": 1820707200000,
+      "state": "grace",
+      "daysLeft": -1,
+      "service": {
+       "state": "grace",
+       "stopsAt": 1820880000000,
+       "why": null,
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": "l_0123456789abcdef",
+    "steps": [
+     {
+      "step": "30d",
+      "at": 1818115200000
+     },
+     {
+      "step": "14d",
+      "at": 1819497600000
+     },
+     {
+      "step": "7d",
+      "at": 1820102400000
+     },
+     {
+      "step": "3d",
+      "at": 1820448000000
+     },
+     {
+      "step": "1d",
+      "at": 1820620800000
+     },
+     {
+      "step": "expiry",
+      "at": 1820707200000
+     },
+     {
+      "step": "grace",
+      "at": 1820750400000
+     },
+     {
+      "step": "grace",
+      "at": 1820793600000
+     },
+     {
+      "step": "grace",
+      "at": 1820836800000
+     },
+     {
+      "step": "stopped",
+      "at": 1820880000000
+     }
+    ]
+   }
+  },
+  {
+   "name": "stopped expired",
+   "product": "meet",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": "l_0123456789abcdef",
+      "exp": 1820534400000,
+      "state": "expired",
+      "daysLeft": -3,
+      "service": {
+       "state": "stopped",
+       "stopsAt": null,
+       "why": "expired",
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": "l_0123456789abcdef",
+    "steps": [
+     {
+      "step": "30d",
+      "at": 1817942400000
+     },
+     {
+      "step": "14d",
+      "at": 1819324800000
+     },
+     {
+      "step": "7d",
+      "at": 1819929600000
+     },
+     {
+      "step": "3d",
+      "at": 1820275200000
+     },
+     {
+      "step": "1d",
+      "at": 1820448000000
+     },
+     {
+      "step": "expiry",
+      "at": 1820534400000
+     }
+    ]
+   }
+  },
+  {
+   "name": "stopped none",
+   "product": "spokes",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": null,
+      "exp": null,
+      "state": "none",
+      "daysLeft": null,
+      "service": {
+       "state": "stopped",
+       "stopsAt": null,
+       "why": "none",
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": null,
+    "steps": []
+   }
+  },
+  {
+   "name": "stopped wrong-product",
+   "product": "spokes",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": null,
+      "exp": null,
+      "state": "none",
+      "daysLeft": null,
+      "service": {
+       "state": "stopped",
+       "stopsAt": null,
+       "why": "wrong-product",
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": null,
+    "steps": []
+   }
+  },
+  {
+   "name": "stopped wrong-root",
+   "product": "spokes",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": null,
+      "exp": null,
+      "state": "none",
+      "daysLeft": null,
+      "service": {
+       "state": "stopped",
+       "stopsAt": null,
+       "why": "wrong-root",
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": null,
+    "steps": []
+   }
+  },
+  {
+   "name": "stopped invalid",
+   "product": "meet",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": null,
+      "exp": null,
+      "state": "none",
+      "daysLeft": null,
+      "service": {
+       "state": "stopped",
+       "stopsAt": null,
+       "why": "invalid",
+       "upgradePeriodEnds": null
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": null,
+    "steps": []
+   }
+  },
+  {
+   "name": "upgrade period",
+   "product": "meet",
+   "now": 1820793600000,
+   "frame": {
+    "t": "evt",
+    "op": "state",
+    "body": {
+     "readOnly": false,
+     "confirm": [],
+     "scopes": [
+      "read-health",
+      "license"
+     ],
+     "scopeGeneration": 1,
+     "scopeRequest": null,
+     "profile": "standard",
+     "bootstrap": "done",
+     "held": 0,
+     "unattested": 0,
+     "pins": [
+      1
+     ],
+     "trustSeq": 7,
+     "version": "2.5.0",
+     "license": {
+      "id": null,
+      "exp": null,
+      "state": "none",
+      "daysLeft": null,
+      "service": {
+       "state": "upgrade-period",
+       "stopsAt": 1820901600000,
+       "why": null,
+       "upgradePeriodEnds": 1820901600000
+      }
+     }
+    }
+   },
+   "reminders": {
+    "key": "upgrade:1820901600000",
+    "steps": [
+     {
+      "step": "grace",
+      "at": 1820728800000
+     },
+     {
+      "step": "grace",
+      "at": 1820772000000
+     },
+     {
+      "step": "grace",
+      "at": 1820815200000
+     },
+     {
+      "step": "grace",
+      "at": 1820858400000
+     },
+     {
+      "step": "stopped",
+      "at": 1820901600000
+     }
+    ]
+   }
+  }
+ ],
+ "malformed": [
+  {
+   "name": "license without id",
+   "body": {
+    "readOnly": false,
+    "confirm": [],
+    "scopes": [
+     "read-health",
+     "license"
+    ],
+    "scopeGeneration": 1,
+    "scopeRequest": null,
+    "profile": "standard",
+    "bootstrap": "done",
+    "held": 0,
+    "unattested": 0,
+    "pins": [
+     1
+    ],
+    "trustSeq": 7,
+    "version": "2.5.0",
+    "license": {
+     "exp": 1822521600000,
+     "state": "valid",
+     "daysLeft": 20,
+     "service": {
+      "state": "on",
+      "stopsAt": 1822694400000,
+      "why": null,
+      "upgradePeriodEnds": null
+     }
+    }
+   },
+   "code": "fleet-op"
+  },
+  {
+   "name": "license without exp",
+   "body": {
+    "readOnly": false,
+    "confirm": [],
+    "scopes": [
+     "read-health",
+     "license"
+    ],
+    "scopeGeneration": 1,
+    "scopeRequest": null,
+    "profile": "standard",
+    "bootstrap": "done",
+    "held": 0,
+    "unattested": 0,
+    "pins": [
+     1
+    ],
+    "trustSeq": 7,
+    "version": "2.5.0",
+    "license": {
+     "id": "l_0123456789abcdef",
+     "state": "valid",
+     "daysLeft": 20,
+     "service": {
+      "state": "on",
+      "stopsAt": 1822694400000,
+      "why": null,
+      "upgradePeriodEnds": null
+     }
+    }
+   },
+   "code": "fleet-op"
+  },
+  {
+   "name": "license without service.upgradePeriodEnds",
+   "body": {
+    "readOnly": false,
+    "confirm": [],
+    "scopes": [
+     "read-health",
+     "license"
+    ],
+    "scopeGeneration": 1,
+    "scopeRequest": null,
+    "profile": "standard",
+    "bootstrap": "done",
+    "held": 0,
+    "unattested": 0,
+    "pins": [
+     1
+    ],
+    "trustSeq": 7,
+    "version": "2.5.0",
+    "license": {
+     "id": "l_0123456789abcdef",
+     "exp": 1822521600000,
+     "state": "valid",
+     "daysLeft": 20,
+     "service": {
+      "state": "on",
+      "stopsAt": 1822694400000,
+      "why": null
+     }
+    }
+   },
+   "code": "fleet-op"
+  }
+ ]
+}

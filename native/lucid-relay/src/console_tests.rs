@@ -72,18 +72,17 @@ static FAKE_ROUTES: [RouteSpec; 3] = [
 ];
 
 /// The product section of the tests. It keeps every other default method of the trait (`may_approve`, `admin_rule`,
-/// `relay_lines`, `adding`, `people_changed`); `may_add` refuses `fake.widen` and `requests.new` of `rs.seat` while
-/// `closed`, as Meeting Hub refuses its add-people writes while adding is closed (R41-1).
+/// `relay_lines`, `people_changed`). Its service (4.7, R42-1) follows `lic` unless a test sets `service`.
 struct Fake {
     lic: Mutex<LicenseState>,
-    closed: Mutex<bool>,
+    service: Mutex<Option<ServiceView>>,
     ran: Mutex<Vec<String>>,
     installed: Mutex<Vec<String>>,
 }
 
 impl Fake {
     fn new() -> Fake {
-        Fake { lic: Mutex::new(LicenseState::Valid), closed: Mutex::new(false), ran: Mutex::new(Vec::new()), installed: Mutex::new(Vec::new()) }
+        Fake { lic: Mutex::new(LicenseState::Valid), service: Mutex::new(None), ran: Mutex::new(Vec::new()), installed: Mutex::new(Vec::new()) }
     }
 }
 
@@ -97,10 +96,16 @@ impl ProductSection for Fake {
     fn relay_info(&self, _t: i64) -> Value {
         json!({ "host": RP, "version": "test", "uptimeSeconds": 1, "fips": false, "tlsNotAfter": null })
     }
-    fn license(&self, _t: i64) -> LicenseView {
+    fn license(&self, t: i64) -> LicenseView {
         let state = *self.lic.lock();
         let license = if state == LicenseState::None { Value::Null } else { json!({ "id": "l_0000000000000001", "edition": "standard", "users": 20, "used": 1, "daysLeft": 100, "exp": 1 }) };
-        LicenseView { license, problem: (state == LicenseState::None).then(|| "no license".to_owned()), state }
+        let service = self.service.lock().clone().map(|s| ServiceView { at: t, ..s }).unwrap_or_else(|| match state {
+            LicenseState::Valid => ServiceView::on(t),
+            LicenseState::Grace => ServiceView { state: ServiceState::Grace, ..ServiceView::on(t) },
+            LicenseState::Expired => ServiceView { why: Some("expired"), ..ServiceView::none(t) },
+            LicenseState::None => ServiceView::none(t),
+        });
+        LicenseView { license, problem: (state == LicenseState::None).then(|| "no license".to_owned()), state, service }
     }
     fn overview_cards(&self, _admin: bool, _t: i64) -> Vec<Value> {
         vec![json!({ "id": "hubs", "state": "ok", "n": 1 })]
@@ -113,13 +118,6 @@ impl ProductSection for Fake {
     }
     fn security_actions(&self) -> &'static [&'static str] {
         &["fake.block"]
-    }
-    fn may_add(&self, action: &str, params: &Value) -> Result<(), ApiError> {
-        let adds = action == "fake.widen" || (action == "requests.new" && str_of(params.get("kind")) == Some("rs.seat"));
-        if adds && *self.closed.lock() {
-            return Err(ApiError::of("license-inactive"));
-        }
-        Ok(())
     }
     fn route(&self, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
         let node = str_of(call.body.get("node")).unwrap_or("").to_owned();
@@ -166,6 +164,11 @@ fn build_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind
 
 /// The console in `dir` started with `--console-profile` `profile` (None: not given).
 fn open_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind: bool, profile: Option<Profile>) -> Result<Built, String> {
+    open_serving(dir, pin, sources, fronts, behind, profile, None)
+}
+
+/// `open_in` with the section reporting `service` from the start, so the check at attach sees that license.
+fn open_serving(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind: bool, profile: Option<Profile>, service: Option<ServiceView>) -> Result<Built, String> {
     let written = Arc::new(Mutex::new(Vec::<String>::new()));
     let w = written.clone();
     let ring = Arc::new(LineRing::default());
@@ -183,6 +186,7 @@ fn open_in(dir: PathBuf, pin: Option<&str>, sources: &str, fronts: &str, behind:
     };
     let c = Console::open(cfg, logger, ring)?;
     let fake = Arc::new(Fake::new());
+    *fake.service.lock() = service;
     c.attach(fake.clone());
     Ok(Built { c, log: written, fake, dir })
 }
@@ -3414,34 +3418,137 @@ fn one_admin_installs_only_a_first_license_or_a_renewal_of_the_reference_license
     assert!(!one_admin_install(Some(&reference), &LicenseRecord { product: Product::Spokes, ..renewal }, true));
 }
 
+// ── License service and reminders (2.4, 4.7, R42-1, R42-3, R7-L2) ─────────────────────────────────────────────
+
+const DAY_MS: i64 = 86_400_000;
+
+/// A service on license `l_1` ending at `exp`, judged at `at`, as the section reports it.
+fn svc(state: ServiceState, exp: i64, at: i64) -> ServiceView {
+    let stops_at = (state == ServiceState::Grace).then_some(exp + 2 * DAY_MS);
+    let why = (state == ServiceState::Stopped).then_some("expired");
+    ServiceView { state, stops_at, why, reason: None, upgrade_period_ends: None, license_id: Some("l_1".into()), exp: Some(exp), at }
+}
+
+fn reminder_kinds(c: &Console) -> Vec<String> {
+    entries(c).into_iter().filter(|e| e["action"] == "license.reminder").map(|e| e["detail"]["kind"].as_str().unwrap().to_owned()).collect()
+}
+
 #[test]
-fn add_people_writes_answer_license_inactive_before_the_license_check() {
-    let b = build("addingclosed");
+fn reminders_go_to_every_active_admin_once_per_step_and_survive_a_restart() {
+    let dir = temp_dir("reminders");
+    let exp = T0 + 40 * DAY_MS;
+    let b = build_in(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false).unwrap();
+    let c = &b.c;
+    let mut a = Authenticator::new(5);
+    enrol_first(c, &mut a, T0);
+    mail_on(c);
+    let steps = [
+        (ServiceState::On, exp - 30 * DAY_MS, Some("days-30")),
+        (ServiceState::On, exp - 29 * DAY_MS, None),
+        (ServiceState::On, exp - 7 * DAY_MS, Some("days-7")),
+    ];
+    for (state, at, want) in steps {
+        let before = reminder_kinds(c).len();
+        c.license_check_with(&svc(state, exp, at));
+        assert_eq!(reminder_kinds(c).len(), before + usize::from(want.is_some()), "{at}");
+    }
+    let mails = c.mailer.captured();
+    assert_eq!(mails.iter().filter(|m| m.0 == "mail.license-expiring" && m.1 == ALICE).count(), 2);
+    assert!(mails.iter().all(|m| !m.2.iter().any(|(_, v)| v.contains("lic:") || v.contains("eyJ"))), "no mail holds a license token");
+    assert_eq!(last_entry(c, "license.reminder")["detail"]["mailed"], 1);
+    // a restart between two moments (on the same license) neither repeats nor skips one
+    drop(b);
+    let b = open_serving(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false, None, Some(svc(ServiceState::On, exp, 0))).unwrap();
+    let c = &b.c;
+    mail_on(c);
+    c.license_check_with(&svc(ServiceState::On, exp, exp - 6 * DAY_MS));
+    assert!(c.mailer.captured().is_empty(), "the 7-day step is not sent again: {:?}", c.mailer.captured());
+    c.license_check_with(&svc(ServiceState::On, exp, exp - 3 * DAY_MS));
+    c.license_check_with(&svc(ServiceState::Grace, exp, exp));
+    c.license_check_with(&svc(ServiceState::Grace, exp, exp + 12 * 3_600_000));
+    c.license_check_with(&svc(ServiceState::Stopped, exp, exp + 2 * DAY_MS));
+    c.license_check_with(&svc(ServiceState::Stopped, exp, exp + 3 * DAY_MS));
+    let kinds: Vec<String> = c.mailer.captured().into_iter().map(|m| m.0).collect();
+    assert_eq!(kinds, ["mail.license-expiring", "mail.license-grace", "mail.license-grace", "mail.license-stopped"]);
+    // each change of the service state is audited
+    let services: Vec<String> = entries(c).into_iter().filter(|e| e["action"] == "license.service").map(|e| e["detail"]["state"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(services, ["grace", "stopped"]);
+    // a new license id starts a new schedule
+    let mut renewed = svc(ServiceState::On, exp + 400 * DAY_MS, exp + 3 * DAY_MS);
+    renewed.license_id = Some("l_2".into());
+    c.license_check_with(&renewed);
+    renewed.at = exp + 371 * DAY_MS;
+    c.license_check_with(&renewed);
+    assert_eq!(c.mailer.captured().last().unwrap().0, "mail.license-expiring");
+}
+
+#[test]
+fn an_unreadable_reminder_record_replays_nothing_and_banners_still_show() {
+    let dir = temp_dir("reminders-bad");
+    let exp = T0 + 40 * DAY_MS;
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(crate::license_reminders::FILE), b"{torn").unwrap();
+    let b = build_in(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false).unwrap();
     let c = &b.c;
     let mut a = Authenticator::new(5);
     let sid = enrol_first(c, &mut a, T0);
-    // Adding closed and the license expired or missing: the refusal names the real reason (4.9, R41-1).
-    *b.fake.closed.lock() = true;
-    let inactive = "Your organization's Meeting Hub license is not active, so no one new can be added. Ask your admin.";
-    for (i, state) in [LicenseState::Expired, LicenseState::None].into_iter().enumerate() {
-        *b.fake.lic.lock() = state;
-        let t = T0 + 1 + i as i64 * 10;
-        let r = post_su(c, &sid, &mut a, "/console/api/fake/widen", "fake.widen", "n_1", json!({ "node": "n_1", "reason": "x" }), t);
-        assert_eq!((r.status, code(&r).as_str(), json_of(&r)["error"].as_str()), (403, "license-inactive", Some(inactive)));
-        let r = send(c, call("POST", "/console/api/requests/new", json!({ "kind": "rs.seat", "target": { "node": "n_1" }, "reason": "More" }), &sid), t + 1);
-        assert_eq!((r.status, code(&r).as_str()), (403, "license-inactive"));
-        // Writes that add no one keep their own answers: a security action runs, a security request is made.
-        let r = post_su(c, &sid, &mut a, "/console/api/fake/block", "fake.block", "n_1", json!({ "node": "n_1", "reason": "x" }), t + 2);
-        assert_eq!(r.status, 200, "{}", text_of(&r));
+    mail_on(c);
+    // the file was read at attach (now) or is read now: either way no past step is mailed
+    *c.reminders.lock() = None;
+    std::fs::write(dir.join(crate::license_reminders::FILE), b"{torn").unwrap();
+    c.license_check_with(&svc(ServiceState::Grace, exp, exp + 13 * 3_600_000));
+    assert!(c.mailer.captured().is_empty(), "past steps are marked sent without mail");
+    assert!(lines_of(&b.log).iter().any(|l| l.contains("license.reminders-unreadable")));
+    // the next step still goes out, and service never depended on the file
+    c.license_check_with(&svc(ServiceState::Grace, exp, exp + 24 * 3_600_000));
+    assert_eq!(c.mailer.captured().len(), 1);
+    // with email off the banner and item still show
+    c.mailer.configure(MailConfig::off());
+    *b.fake.service.lock() = Some(svc(ServiceState::Grace, exp, 0));
+    let v = json_of(&send(c, get("/console/api/overview", &sid), T0 + 1));
+    assert!(v["attention"].as_array().unwrap().iter().any(|x| x["kind"] == "license-grace"));
+    assert!(v["banners"].as_array().unwrap().iter().any(|x| x["id"] == "banner.grace"));
+}
+
+#[test]
+fn fleet_license_items_render_for_the_attention_mail() {
+    // AC-2a 13.1 words, filled as mail.attention fills them; times given in ms read as UTC.
+    let at = crate::meet_json::days_from_civil(2026, 11, 18) * DAY_MS + 10 * 3_600_000;
+    assert_eq!(attention_words("relay-license-stopped", &json!({ "relay": "Berlin", "why": "expired" })).as_deref(), Some("Berlin stopped: no active license. It serves no one until a license is installed."));
+    assert_eq!(
+        attention_words("relay-license-grace", &json!({ "relay": "Berlin", "date and time": at })).as_deref(),
+        Some("The license of Berlin has ended. Service stops on 2026-11-18 10:00 UTC unless a new license is installed.")
+    );
+    assert_eq!(attention_words("relay-license-expiring", &json!({ "relay": "Berlin", "days": 7 })).as_deref(), Some("The license of Berlin ends in 7 days."));
+    let mail = crate::console_mail::render("mail.attention", RP, "https://relay.example.com/console/", &[("attention words", attention_words("relay-license-stopped", &json!({ "relay": "Berlin" })).unwrap()), ("go", "#/licenses".into())]);
+    assert!(mail.is_some_and(|(_, body)| body.starts_with("Berlin stopped: no active license.")));
+}
+
+#[test]
+fn the_license_view_answers_service_in_each_state_and_a_stop_is_blocking() {
+    let b = build("license-service");
+    let c = &b.c;
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first(c, &mut a, T0);
+    let exp = T0 + 5 * DAY_MS;
+    for (state, want, why) in [(ServiceState::On, "on", None), (ServiceState::Grace, "grace", None), (ServiceState::Stopped, "stopped", Some("expired"))] {
+        *b.fake.service.lock() = Some(svc(state, exp, 0));
+        let v = json_of(&send(c, get("/console/api/license", &sid), T0 + 1));
+        assert_eq!(v["service"]["state"], want);
+        assert_eq!(v["service"]["why"].as_str(), why);
+        assert!(v.get("adding").is_none(), "no growth gate (R42-1)");
+        if state == ServiceState::Grace {
+            assert_eq!(v["service"]["stopsAt"], exp + 2 * DAY_MS);
+        }
     }
-    let r = send(c, call("POST", "/console/api/requests/new", json!({ "kind": "rs.revoke", "target": { "node": "n_2" }, "reason": "Stolen" }), &sid), T0 + 30);
-    assert_eq!(r.status, 200, "{}", text_of(&r));
-    // Adding open again: the product license check answers as before.
-    *b.fake.closed.lock() = false;
-    *b.fake.lic.lock() = LicenseState::Expired;
-    let r = post_su(c, &sid, &mut a, "/console/api/fake/widen", "fake.widen", "n_1", json!({ "node": "n_1", "reason": "x" }), T0 + 40);
-    assert_eq!((r.status, code(&r).as_str()), (402, "license-expired"));
-    assert!(b.fake.ran.lock().is_empty());
+    let v = json_of(&send(c, get("/console/api/overview", &sid), T0 + 2));
+    let banner = v["banners"].as_array().unwrap().iter().find(|x| x["id"] == "banner.license-stopped").cloned().expect("the stop banner");
+    assert_eq!(banner["args"]["why"], "expired");
+    assert!(v["attention"][0]["blocking"].as_bool().unwrap_or(false) || v["attention"].as_array().unwrap().iter().any(|x| x["kind"] == "license-stopped"));
+    // installing a fitting license turns service on at once: the section reports on and the stop item is gone
+    *b.fake.service.lock() = None;
+    *b.fake.lic.lock() = LicenseState::Valid;
+    assert!(!attention_kinds(c, &sid, T0 + 3).iter().any(|k| k == "license-stopped"));
 }
 
 // ── Overview and viewers (7.3) ──────────────────────────────────────────────────────────────────────────────
@@ -3897,9 +4004,10 @@ fn every_refusal_word_matches_the_words_vector() {
     // (R3-L4) The license dialog: the hub reseating line for Remote Spokes, and one group per Meeting Hub case.
     let lic = &v["dialogs"]["license"];
     assert!(lic["spokes"].as_array().is_some_and(|l| l.len() == 1 && l[0].as_str().unwrap().contains("license seat")));
-    for group in ["adding", "upgrade", "seats"] {
+    for group in ["upgrade", "seats"] {
         assert!(lic["meet"][group].as_array().is_some_and(|l| !l.is_empty()), "{group}");
     }
+    assert!(lic["meet"].get("adding").is_none(), "no growth gate (R42-1)");
 }
 
 #[test]
@@ -4117,6 +4225,61 @@ fn signed_get(st: &mut State, n: &Node, path: &str, t: i64, nonce: u32) -> (u16,
     let r = Request { method: "GET", pathname: path, path, authorization: &authorization, seat: None, dialed: &d, body: "", where_: &where_ };
     let reply = st.serve(&r, t, true).unwrap();
     (reply.status, parse_json(&reply.body).unwrap_or(Value::Null))
+}
+
+#[test]
+fn a_malformed_license_at_start_shows_why_invalid_and_the_verifier_words() {
+    // R42-1 (4.2.1): the relay starts stopped; the console shows why, with the verifier's words, never the token.
+    let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    let dir = temp_dir("verifier-words");
+    let ring = Arc::new(LineRing::default());
+    let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})).with_tap(ring.tap()));
+    let cfg = ConsoleConfig {
+        product: Product::Spokes,
+        state_dir: dir.clone(),
+        origin: None,
+        sources: parse_cidr_list("0.0.0.0/0,::/0", SOURCES_MAX).unwrap(),
+        trusted_fronts: Vec::new(),
+        behind_front: false,
+        first_admin: Some(ALICE.to_owned()),
+        profile: None,
+        host: RP.into(),
+    };
+    let c = Console::open(cfg, logger.clone(), ring).unwrap();
+    let token = "not.a-license";
+    let opts = Options {
+        root: root.verifying_key().into(),
+        owner: None,
+        license: Some(token.into()),
+        crl_file: None,
+        store: None,
+        seen_file: None,
+        directory_file: None,
+        users_file: None,
+        store_bytes: STORE_BYTES,
+        sender_bytes: SENDER_BYTES,
+        console: Some(c.clone()),
+        state_dir: None,
+        license_file: None,
+    };
+    let st = Arc::new(parking_lot::Mutex::new(State::new(opts, logger).expect("the relay starts stopped")));
+    c.attach(crate::console_spokes::section(Arc::downgrade(&st)));
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first(&c, &mut a, T0);
+    let lic = json_of(&send(&c, get("/console/api/license", &sid), T0 + 1));
+    assert_eq!((lic["service"]["state"].as_str(), lic["service"]["why"].as_str()), (Some("stopped"), Some("invalid")));
+    let problem = lic["problem"].as_str().unwrap().to_owned();
+    assert!(problem.starts_with("This license cannot be used here: "), "{problem}");
+    let v = json_of(&send(&c, get("/console/api/overview", &sid), T0 + 2));
+    let banner = v["banners"].as_array().unwrap().iter().find(|b| b["id"] == "banner.license-stopped").cloned().expect("the stop banner");
+    assert_eq!(banner["args"]["why"], "invalid");
+    let words = banner["args"]["verifier words"].as_str().expect("the verifier words").to_owned();
+    assert!(!words.is_empty() && problem.contains(&words), "{words} / {problem}");
+    assert!(!stringify(&v).contains(token) && !stringify(&lic).contains(token), "never the token");
+    // the stop mail names the full why
+    let s = st.lock().service_view(T0 + 3);
+    let (_, args) = crate::license_reminders::mail_of("stopped", &s, Product::Spokes);
+    assert!(args.iter().any(|(k, w)| *k == "why" && w.starts_with("the license file could not be used: ")));
 }
 
 #[test]

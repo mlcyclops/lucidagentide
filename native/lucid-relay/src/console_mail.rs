@@ -7,9 +7,8 @@
 // plus `caPem`.
 //
 // Mail arguments (`render`, `send`): each key is the 8.4 placeholder name exactly ("seated", "license id",
-// "attention words", ...); the mailer fills <host> and <console> itself. `mail.license` takes `product`, `state`
-// ("ends", "grace" or "ended"), `n`, `date`, `graceEnd` (the second <date> of the grace line) and `section` ("spokes"
-// or "meet"). Values in a subject must hold no control character (the mail is refused); values in a body have every
+// "attention words", "date and time", ...); the mailer fills <host> and <console> itself. `section` (the license
+// reminders of R42-3) must be "spokes" or "meet". Values in a subject must hold no control character (the mail is refused); values in a body have every
 // control character turned into a space and Bidi and default-ignorable characters removed.
 
 use crate::codec::{b64u, exact_keys, hex, now_ms, sha256, str_of, stringify};
@@ -50,6 +49,8 @@ const MAILBOX_LABEL: &str = "Mailbox";
 const SECRET_HIGH_REASON: &str = "a client secret is not allowed under the High security profile";
 
 const QUEUE_MAX: usize = 500;
+/// License reminders queued at most (R7-L2).
+const REMINDER_MAX: usize = 64;
 const ATTEMPTS: u8 = 3;
 const FAILING_AFTER: u32 = 3;
 /// 3 tries over an hour: now, after 30 minutes, after an hour.
@@ -73,8 +74,8 @@ const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
 /// `mail.footer`, appended to every body.
 pub const FOOTER: &str = "\n\nThis message was sent by the Lucid Admin Console at <host>. It never asks for your password or a code.";
 
-/// Every 8.4 mail but `mail.license`: (id, subject, body).
-pub const MAIL_WORDS: [(&str, &str, &str); 11] = [
+/// Every 8.4 mail: (id, subject, body).
+pub const MAIL_WORDS: [(&str, &str, &str); 14] = [
     (
         "mail.invite",
         "Your invite to the Lucid Admin Console at <host>",
@@ -104,8 +105,23 @@ pub const MAIL_WORDS: [(&str, &str, &str); 11] = [
     ("mail.reseated", "Your Meeting Hub seat is back", "A Meeting Hub seat on <host> is yours again. Meeting Hub works for you now."),
     (
         "mail.upgrade-period",
-        "Meeting Hub on <host> needs a license by <date>",
-        "This Meeting Hub relay was upgraded and has no license. People can be added until <date>. After that no one new can be added until a Meeting Hub license is installed; people who already have a seat keep using Meeting Hub.\n\nInstall one in the Admin Console: <console>#/meet/license",
+        "Meeting Hub on <host> needs a license by <date and time>",
+        "This Meeting Hub relay was upgraded and has no license. Service stops on <date and time> unless a Meeting Hub license is installed.\n\nInstall one in the Admin Console: <console>#/meet/license",
+    ),
+    (
+        "mail.license-expiring",
+        "<product> license on <host> ends in <n> days",
+        "The <product> license of this relay ends on <date> (ID <license id>). Install a new license before then, or the relay stops serving people after at most 2 grace days.\n\nInstall a license: <console>#/<section>/license",
+    ),
+    (
+        "mail.license-grace",
+        "<product> on <host>: service stops on <date and time>",
+        "The <product> license of this relay ended on <date> (ID <license id>). Service stops on <date and time> unless a new license is installed.\n\nInstall a license: <console>#/<section>/license",
+    ),
+    (
+        "mail.license-stopped",
+        "<product> on <host> has stopped serving people",
+        "This relay stopped serving people on <date and time> because its <product> license is not active (<why>). The Admin Console still works.\n\nInstall a license to turn service back on: <console>#/<section>/license",
     ),
     (
         "mail.clock-uncertain",
@@ -124,20 +140,24 @@ pub const MAIL_WORDS: [(&str, &str, &str); 11] = [
     ),
 ];
 
-pub const LICENSE_KIND: &str = "mail.license";
-pub const LICENSE_SUBJECT: &str = "<product> license on <host>: <state words>";
-/// The `state` argument of `mail.license`, in the order of the lines below.
-pub const LICENSE_STATES: [&str; 3] = ["ends", "grace", "ended"];
-pub const LICENSE_STATE_WORDS: [&str; 3] = ["ends in <n> days", "in grace", "ended"];
-pub const LICENSE_BODY: [&str; 3] = [
-    "The license ends in <n> days, on <date>.",
-    "The license ended on <date>. Its grace days end on <date>.",
-    "The license and its grace days are over.",
+/// The AC-2a 13.5 license reminder mails a fleet console sends its own admins per relay (revision 3.4).
+pub const FLEET_MAIL_WORDS: [(&str, &str, &str); 3] = [
+    (
+        "fleet.mail.license-reminder",
+        "The <product> license of <relay> ends in <days> days",
+        "The <product> license of <relay> ends on <date>.\nInstall a new license before then from the License page of the Admin Console.\nIf it ends, <relay> stops serving people after at most 2 days of grace.",
+    ),
+    (
+        "fleet.mail.license-grace",
+        "<relay> stops on <date and time> unless a new license is installed",
+        "The <product> license of <relay> has ended.\nService stops on <date and time> unless a new license is installed.\nInstall one from the License page of the Admin Console.",
+    ),
+    (
+        "fleet.mail.license-stopped",
+        "<relay> stopped: no active license",
+        "<relay> stopped serving people because it has no active <product> license.\nThe Admin Console can still reach it. Install a license from the License page and it starts again.",
+    ),
 ];
-/// Added after the "over" line on Meeting Hub (R41-1: the license limits growth, not service).
-pub const LICENSE_BODY_MEET: &str = " No one new can be added to Meeting Hub until a new license is installed; people who already have a seat keep using it.";
-pub const LICENSE_BODY_END: &str = "\n\nInstall a license: <console>#/<section>/license";
-const MEET_PRODUCT: &str = "Meeting Hub";
 
 // ── Settings ───────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -839,27 +859,6 @@ fn fill(template: &str, part: &dyn Fn(&str) -> Option<String>) -> Option<String>
     Some(out)
 }
 
-fn license_words(args: &[(&str, String)], subject_part: &dyn Fn(&str) -> Option<String>, body_part: &dyn Fn(&str) -> Option<String>) -> Option<(String, String)> {
-    let state = arg(args, "state")?;
-    let i = LICENSE_STATES.iter().position(|s| *s == state)?;
-    if !matches!(arg(args, "section"), Some("spokes" | "meet")) {
-        return None;
-    }
-    let words = fill(LICENSE_STATE_WORDS[i], subject_part)?;
-    let subject = fill(LICENSE_SUBJECT, &|name: &str| if name == "state words" { Some(words.clone()) } else { subject_part(name) })?;
-    // The grace line names two dates: the end, then the end of the grace days.
-    let line = match (i, LICENSE_BODY[i].rfind("<date>")) {
-        (1, Some(at)) => format!("{}<graceEnd>{}", &LICENSE_BODY[i][..at], &LICENSE_BODY[i][at + "<date>".len()..]),
-        _ => LICENSE_BODY[i].to_owned(),
-    };
-    let mut body = fill(&line, body_part)?;
-    if i == 2 && arg(args, "product") == Some(MEET_PRODUCT) {
-        body.push_str(LICENSE_BODY_MEET);
-    }
-    body.push_str(&fill(LICENSE_BODY_END, body_part)?);
-    Some((subject, body))
-}
-
 /// The 8.4 subject and body of `kind` without `mail.footer` (the text a page shows to copy, 4.9 seat requests).
 pub fn render_words(kind: &str, host: &str, console: &str, args: &[(&str, String)]) -> Option<(String, String)> {
     let subject_part = |name: &str| -> Option<String> {
@@ -874,10 +873,11 @@ pub fn render_words(kind: &str, host: &str, console: &str, args: &[(&str, String
         };
         Some(body_text(v))
     };
-    if kind == LICENSE_KIND {
-        return license_words(args, &subject_part, &body_part);
+    // The license link names a console page: only a product's.
+    if arg(args, "section").is_some_and(|s| !matches!(s, "spokes" | "meet")) {
+        return None;
     }
-    let &(_, subject, body) = MAIL_WORDS.iter().find(|(id, _, _)| *id == kind)?;
+    let &(_, subject, body) = MAIL_WORDS.iter().chain(FLEET_MAIL_WORDS.iter()).find(|(id, _, _)| *id == kind)?;
     Some((fill(subject, &subject_part)?, fill(body, &body_part)?))
 }
 
@@ -1405,6 +1405,8 @@ struct Job {
     body: String,
     attempts: u8,
     due: Instant,
+    /// A license reminder (R7-L2): its own bounded, coalescing class that never evicts other mail.
+    reminder: bool,
 }
 
 #[derive(Default)]
@@ -1450,16 +1452,35 @@ enum Next {
 }
 
 impl Inner {
-    /// Queue a job, dropping (and logging) the oldest past 500.
+    /// Queue a job past 500 dropping (and logging) the oldest reminder, else the oldest job. A reminder (R7-L2)
+    /// replaces a queued one to the same address (one per recipient), is itself dropped past REMINDER_MAX queued
+    /// reminders or a full queue, and so never evicts other mail.
     fn push(&self, job: Job) {
         let dropped = {
             let mut q = self.queue.lock();
-            let dropped = if q.len() >= QUEUE_MAX { q.pop_front() } else { None };
-            q.push_back(job);
-            dropped
+            if job.reminder {
+                if let Some(i) = q.iter().position(|j| j.reminder && j.to == job.to) {
+                    q[i] = job;
+                    None
+                } else if q.len() >= QUEUE_MAX || q.iter().filter(|j| j.reminder).count() >= REMINDER_MAX {
+                    Some((job.kind, "reminder-cap"))
+                } else {
+                    q.push_back(job);
+                    None
+                }
+            } else {
+                let dropped = if q.len() >= QUEUE_MAX {
+                    let i = q.iter().position(|j| j.reminder).unwrap_or(0);
+                    q.remove(i).map(|d| (d.kind, "queue-full"))
+                } else {
+                    None
+                };
+                q.push_back(job);
+                dropped
+            }
         };
-        if let Some(d) = dropped {
-            self.logger.security("console.mail-dropped", &Fields::new().with("kind", d.kind.as_str()).with("why", "queue-full"), Level::Warn);
+        if let Some((kind, why)) = dropped {
+            self.logger.security("console.mail-dropped", &Fields::new().with("kind", kind.as_str()).with("why", why), Level::Warn);
         }
         self.wake.notify_one();
     }
@@ -1607,6 +1628,15 @@ impl Mailer {
     /// Queue one mail (rendered now) off the request path; nothing while mail is off. An address or arguments that
     /// cannot be mailed are logged (`console.mail-failed`), never queued.
     pub fn enqueue(&self, kind: &str, to: &str, args: &[(&str, String)]) {
+        self.enqueue_as(kind, to, args, false);
+    }
+
+    /// `enqueue` in the license reminder class (R42-3, R7-L2): bounded and coalescing, never evicting other mail.
+    pub fn enqueue_reminder(&self, kind: &str, to: &str, args: &[(&str, String)]) {
+        self.enqueue_as(kind, to, args, true);
+    }
+
+    fn enqueue_as(&self, kind: &str, to: &str, args: &[(&str, String)], reminder: bool) {
         if self.inner.cfg.lock().mode == Mode::Off {
             return;
         }
@@ -1624,7 +1654,7 @@ impl Mailer {
         };
         let Ok(to) = parse_mailbox(to) else { return refused("the address cannot be mailed") };
         let Some((subject, body)) = render(kind, &self.host, &self.console_url, args) else { return refused("the message could not be built") };
-        self.inner.push(Job { kind: kind.to_owned(), to, subject, body, attempts: 0, due: Instant::now() });
+        self.inner.push(Job { kind: kind.to_owned(), to, subject, body, attempts: 0, due: Instant::now(), reminder });
     }
 
     /// Blocking send through `cfg` now (the test mail, the staged save): Ok, or Err(the server's answer, cleaned,
@@ -1794,7 +1824,7 @@ mod tests {
         v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())
     }
 
-    /// One value for every 8.4 placeholder (and the `mail.license` arguments).
+    /// One value for every 8.4 placeholder.
     fn sample() -> Vec<(String, String)> {
         [
             ("inviter", "Ann Admin"),
@@ -1813,8 +1843,8 @@ mod tests {
             ("attention words", "Email is failing: 451 try later. Check Settings, Email."),
             ("go", "#/settings/email"),
             ("product", "Meeting Hub"),
-            ("state", "ends"),
-            ("graceEnd", "2026-12-15"),
+            ("date and time", "2026-12-03 10:00 UTC"),
+            ("why", "no license is installed"),
             ("section", "meet"),
         ]
         .iter()
@@ -1829,20 +1859,6 @@ mod tests {
 
     fn refs(a: &[(String, String)]) -> Vec<(&str, String)> {
         a.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()
-    }
-
-    /// `mail.license` takes its state, not its state words: map the words back.
-    fn license_state(a: &mut Vec<(String, String)>, words: &str) {
-        if words == "in grace" {
-            set(a, "state", "grace");
-        } else if words == "ended" {
-            set(a, "state", "ended");
-        } else if let Some(n) = words.strip_prefix("ends in ").and_then(|w| w.strip_suffix(" days")) {
-            set(a, "state", "ends");
-            set(a, "n", n);
-        } else {
-            set(a, "state", words);
-        }
     }
 
     fn test_fill(template: &str, value: &dyn Fn(&str) -> String) -> String {
@@ -2257,7 +2273,7 @@ mod tests {
         let w = vector("admin_console_words_v1.json");
         let mail = w["mail"].as_object().expect("the words vector has no \"mail\"");
         let mut ours: Vec<&str> = MAIL_WORDS.iter().map(|(id, _, _)| *id).collect();
-        ours.extend(["mail.footer", LICENSE_KIND]);
+        ours.push("mail.footer");
         let mut theirs: Vec<&str> = mail.keys().map(String::as_str).collect();
         ours.sort_unstable();
         theirs.sort_unstable();
@@ -2268,12 +2284,6 @@ mod tests {
             assert_eq!(mail[id]["subject"], subject, "{id}");
             assert_eq!(mail[id]["body"], body, "{id}");
         }
-        let l = &mail[LICENSE_KIND];
-        assert_eq!(l["subject"], LICENSE_SUBJECT);
-        assert_eq!(l["body"], json!(LICENSE_BODY));
-        assert_eq!(l["body_meet"], LICENSE_BODY_MEET);
-        assert_eq!(l["body_end"], LICENSE_BODY_END);
-        assert_eq!(l["state_words"], json!(LICENSE_STATE_WORDS));
 
         // Every mail rendered equals the vector's words filled with the same values, footer included.
         let args = sample();
@@ -2290,39 +2300,12 @@ mod tests {
             assert_eq!(subject, test_fill(mail[id]["subject"].as_str().unwrap(), &value), "{id}");
             assert_eq!(body, format!("{}{footer}", test_fill(mail[id]["body"].as_str().unwrap(), &value)), "{id}");
         }
-        for (i, state) in LICENSE_STATES.iter().enumerate() {
-            for (product, section) in [("Meeting Hub", "meet"), ("Remote Spokes", "spokes")] {
-                let mut a = sample();
-                set(&mut a, "state", state);
-                set(&mut a, "product", product);
-                set(&mut a, "section", section);
-                let v = |name: &str| -> String {
-                    match name {
-                        "host" => HOST.to_owned(),
-                        "console" => CONSOLE.to_owned(),
-                        _ => a.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap(),
-                    }
-                };
-                let words = test_fill(l["state_words"][i].as_str().unwrap(), &v);
-                let subject = test_fill(&l["subject"].as_str().unwrap().replace("<state words>", &words), &v);
-                let line = l["body"][i].as_str().unwrap().replacen("<date>", "2026-12-01", 1).replace("<date>", "2026-12-15");
-                let mut body = test_fill(&line, &v);
-                if i == 2 && product == "Meeting Hub" {
-                    body.push_str(l["body_meet"].as_str().unwrap());
-                }
-                body.push_str(&test_fill(l["body_end"].as_str().unwrap(), &v));
-                body.push_str(&footer);
-                assert_eq!(render(LICENSE_KIND, HOST, CONSOLE, &refs(&a)), Some((subject, body)), "{state} {product}");
-            }
-        }
     }
 
     #[test]
     fn every_kind_renders_safely_and_no_word_has_a_long_dash() {
         let dashes = ['\u{2014}', '\u{2013}'];
-        let mut words: Vec<&str> = vec![FOOTER, LICENSE_SUBJECT, LICENSE_BODY_MEET, LICENSE_BODY_END, DISPLAY_NAME];
-        words.extend(LICENSE_BODY);
-        words.extend(LICENSE_STATE_WORDS);
+        let mut words: Vec<&str> = vec![FOOTER, DISPLAY_NAME];
         for (id, s, b) in MAIL_WORDS {
             words.extend([id, s, b]);
         }
@@ -2332,9 +2315,7 @@ mod tests {
         assert!(!include_str!("console_mail.rs").contains(&dashes[..]));
 
         let args = sample();
-        let mut ids: Vec<&str> = MAIL_WORDS.iter().map(|(id, _, _)| *id).collect();
-        ids.push(LICENSE_KIND);
-        for id in ids {
+        for (id, _, _) in MAIL_WORDS {
             let (subject, body) = render(id, HOST, CONSOLE, &refs(&args)).unwrap_or_else(|| panic!("{id}"));
             assert!(header_value_ok(&subject), "{id}");
             assert!(!body.contains('\r'), "{id}");
@@ -2360,14 +2341,13 @@ mod tests {
         assert!(body.starts_with("Organization: Acme  Bcc: eve@acme.example x\nLicense ID: "), "{body}");
         // Remote Spokes and Meeting Hub license mails.
         let mut a = sample();
-        set(&mut a, "state", "ended");
         set(&mut a, "product", "Remote Spokes");
         set(&mut a, "section", "spokes");
-        let (subject, body) = render(LICENSE_KIND, HOST, CONSOLE, &refs(&a)).unwrap();
-        assert_eq!(subject, "Remote Spokes license on relay.acme.example: ended");
-        assert!(body.starts_with("The license and its grace days are over.\n\nInstall a license: https://console.acme.example/console/#/spokes/license"), "{body}");
+        let (subject, body) = render("mail.license-stopped", HOST, CONSOLE, &refs(&a)).unwrap();
+        assert_eq!(subject, "Remote Spokes on relay.acme.example has stopped serving people");
+        assert!(body.starts_with("This relay stopped serving people on 2026-12-03 10:00 UTC because its Remote Spokes license is not active (no license is installed). The Admin Console still works.\n\nInstall a license to turn service back on: https://console.acme.example/console/#/spokes/license"), "{body}");
         set(&mut a, "section", "elsewhere");
-        assert_eq!(render(LICENSE_KIND, HOST, CONSOLE, &refs(&a)), None);
+        assert_eq!(render("mail.license-stopped", HOST, CONSOLE, &refs(&a)), None);
         // The page's copy of a seat request has no footer.
         let (_, words_only) = render_words("mail.seats-request", HOST, CONSOLE, &refs(&args)).unwrap();
         assert!(words_only.ends_with("Sent from the Lucid Admin Console on 2026-11-18 10:00 UTC."));
@@ -2449,7 +2429,6 @@ mod tests {
                 let val = text(val);
                 match k.as_str() {
                     "host" => host = val,
-                    "state words" if id == LICENSE_KIND => license_state(&mut a, &val),
                     _ => set(&mut a, k, &val),
                 }
             }
@@ -2488,7 +2467,6 @@ mod tests {
                     let mut host = HOST.to_owned();
                     match ph {
                         "host" => host = value.to_owned(),
-                        "state words" if id == LICENSE_KIND => license_state(&mut a, value),
                         _ => set(&mut a, ph, value),
                     }
                     match render(id, &host, CONSOLE, &refs(&a)) {
@@ -2778,6 +2756,43 @@ mod tests {
         assert!(lines.lock().iter().any(|l| l.contains("\"event\":\"console.mail-dropped\"") && l.contains("\"count\":500") && l.contains("\"why\":\"off\"")));
         m.enqueue("mail.test", "u9@acme.example", &[]);
         assert!(m.queued().is_empty(), "nothing is queued while mail is off");
+    }
+
+    #[test]
+    fn license_reminders_never_evict_other_mail_and_coalesce() {
+        // R7-L2: more than 500 active admins and repeated reminder passes
+        let rt = runtime();
+        let (m, lines) = mailer();
+        let (listener, port) = listen(&rt);
+        let (tx, rx) = std::sync::mpsc::channel();
+        rt.spawn(hold(listener, tx));
+        test_net::add_route("mail-hold-r.test", port, local(port));
+        m.configure(smtp_cfg("mail-hold-r.test", port, SmtpTls::StartTls, None));
+        m.enqueue("mail.test", "u0@acme.example", &[]);
+        rx.recv_timeout(Duration::from_secs(10)).expect("the sender connects");
+        let mut args = sample();
+        set(&mut args, "section", "spokes");
+        for i in 1..=450 {
+            m.enqueue("mail.break-glass", &format!("s{i}@acme.example"), &refs(&args));
+        }
+        for _pass in 0..3 {
+            for i in 0..600 {
+                m.enqueue_reminder("mail.license-stopped", &format!("a{i}@acme.example"), &refs(&args));
+            }
+        }
+        let q = m.queued();
+        assert_eq!(q.iter().filter(|t| t.starts_with('s')).count(), 450, "no security mail evicted");
+        assert_eq!(q.iter().filter(|t| t.starts_with('a')).count(), REMINDER_MAX.min(QUEUE_MAX - 450));
+        assert!(lines.lock().iter().any(|l| l.contains("\"why\":\"reminder-cap\"")));
+        // other mail still enters a full queue by evicting a reminder first
+        for i in 0..60 {
+            m.enqueue("mail.break-glass", &format!("t{i}@acme.example"), &refs(&args));
+        }
+        let q = m.queued();
+        assert_eq!(q.len(), QUEUE_MAX);
+        assert_eq!(q.iter().filter(|t| t.starts_with('a')).count(), 0, "the 50 reminders went first");
+        assert_eq!(q.iter().filter(|t| t.starts_with('t')).count(), 60);
+        m.configure(MailConfig::off());
     }
 
     #[test]
