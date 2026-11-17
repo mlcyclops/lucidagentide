@@ -21,6 +21,12 @@
 //
 // Rewriting is by prefix and only to paths that exist in the copy: anything the copy does not carry (the IDE's own
 // big binaries in repo/bin, which an agent runs only briefly) keeps its install path.
+//
+// P-HOLDER.3 (ADR-0606): omp's Python kernel (the eval tool) picks its interpreter itself, and without a venv of the
+// lane's own it took omp's managed ~/.omp/python-env, a venv that may be built on the install folder's Python, so a
+// held lane's kernel still pinned the install folder (issue #633). Each copy therefore carries `lane-python.yml`, an
+// omp settings overlay naming the copy's interpreter (`python.interpreter`), and a held lane's PI_CONFIG_FILES lists
+// it. The bundled Python needs no packages for omp's runner, so no venv is built.
 
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
@@ -29,6 +35,14 @@ import { basename, delimiter, dirname, join, sep } from "node:path";
 import { resolvedRepo } from "./repo_root.ts";
 
 const COMPLETE = ".complete";
+/** P-HOLDER.3 (ADR-0606): the omp settings overlay in a copy that names the copy's Python as omp's interpreter. */
+export const PYTHON_OVERLAY = "lane-python.yml";
+
+/** The overlay body: omp's `python.interpreter` set to `python`. The path is a JSON string, which YAML reads as a
+ *  double-quoted scalar with the same escapes, so a Windows path's backslashes survive. */
+export function pythonOverlayYaml(python: string): string {
+  return `# Written by LUCID with this lane runtime copy (P-HOLDER.3). Held lanes' Python kernels run on the copy.\npython:\n  interpreter: ${JSON.stringify(python)}\n`;
+}
 /** How many files are copied at once. */
 const COPY_PARALLEL = 16;
 
@@ -84,9 +98,19 @@ export class LaneRuntime {
   /** What a held lane runs, relative to `resources`: the directory trees and single files the copy carries. */
   #plan(): { dirs: string[]; files: string[] } {
     return {
-      dirs: ["repo", join("runtimes", `python-${this.#platform}-${this.#arch}`)],
+      dirs: ["repo", this.#pythonDir],
       files: [join("runtimes", `bun${this.#exe}`)],
     };
+  }
+
+  /** The bundled Python tree, relative to `resources`. */
+  get #pythonDir(): string { return join("runtimes", `python-${this.#platform}-${this.#arch}`); }
+
+  /** Where the bundled Python's interpreter may sit, relative to `resources`, best first (desktop/runtime.ts
+   *  bundledPython looks in the same places). */
+  #pythonRels(): string[] {
+    return this.#platform === "win32" ? [join(this.#pythonDir, "python.exe")]
+      : ["python3", "python3.12", "python"].map((n) => join(this.#pythonDir, "bin", n));
   }
 
   /** Under `repo/bin` only the holder is copied: the rest are the IDE's own binaries (hundreds of MB). */
@@ -142,6 +166,9 @@ export class LaneRuntime {
         bytes += (await stat(to)).size;
       }));
     }
+    // P-HOLDER.3 (ADR-0606): the omp overlay naming the copy's Python (its final path: the folder is renamed below).
+    const python = this.#pythonRels().find((rel) => existsSync(join(partial, rel)));
+    if (python) await writeFile(join(partial, PYTHON_OVERLAY), pythonOverlayYaml(join(dest, python)));
     await writeFile(join(partial, COMPLETE), JSON.stringify({ key: this.key, from: this.resources, files: files.length, bytes, at: Date.now() }));
     await rm(dest, { recursive: true, force: true });
     await rename(partial, dest);
@@ -165,19 +192,43 @@ export class LaneRuntime {
 
   /** `p` in the copy `dir` when it lies under the install's resources and the copy has it, else `p` unchanged. */
   mapPath(p: string, dir: string): string {
-    const prefix = this.resources + sep;
-    const win = this.#platform === "win32";
-    if (!(win ? p.toLowerCase().startsWith(prefix.toLowerCase()) : p.startsWith(prefix))) return p;
-    const to = join(dir, p.slice(prefix.length));
+    if (!this.#underInstall(p)) return p;
+    const to = join(dir, p.slice(this.resources.length + 1));
     return existsSync(to) ? to : p;
   }
 
   /** A held lane's command, arguments and environment pointed at the copy `dir`: every argument and every entry of
-   *  every path-list variable (PATH, LUCID_BUN_BIN, SCANNER_PYTHON...) that names something the copy has. */
-  map(dir: string, cmd: string, args: string[], env: Record<string, string | undefined>): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
+   *  every path-list variable (PATH, LUCID_BUN_BIN, SCANNER_PYTHON...) that names something the copy has.
+   *  P-HOLDER.3 (ADR-0606): and omp's Python kernel too. Unless the lane's own venv in `cwd` (or VIRTUAL_ENV /
+   *  CONDA_PREFIX) would be picked first, omp would fall back to its managed ~/.omp/python-env, a venv that may be
+   *  built on the install folder's Python; so the copy's overlay naming the copy's interpreter is appended to
+   *  PI_CONFIG_FILES (omp loads every file listed there as a `--config` overlay). */
+  map(dir: string, cmd: string, args: string[], env: Record<string, string | undefined>, cwd: string): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
     const out: Record<string, string | undefined> = {};
     for (const [k, v] of Object.entries(env)) out[k] = v === undefined ? v : v.split(delimiter).map((s) => this.mapPath(s, dir)).join(delimiter);
+    const overlay = join(dir, PYTHON_OVERLAY);
+    if (existsSync(overlay) && !this.#ownVenv(cwd, out)) out.PI_CONFIG_FILES = out.PI_CONFIG_FILES ? `${out.PI_CONFIG_FILES}${delimiter}${overlay}` : overlay;
     return { cmd: this.mapPath(cmd, dir), args: args.map((a) => this.mapPath(a, dir)), env: out };
+  }
+
+  /** True when omp would run its kernel on a venv of the lane's own that does not live on the install folder's
+   *  Python. omp's order (eval/py/runtime.ts enumeratePythonRuntimes): VIRTUAL_ENV, then CONDA_PREFIX, then
+   *  `<cwd>/.venv`, then `<cwd>/venv`, used when its Scripts/python.exe (bin/python) exists. A venv whose
+   *  pyvenv.cfg `home` is under the install folder pins it like the managed one, so it does not count. */
+  #ownVenv(cwd: string, env: Record<string, string | undefined>): boolean {
+    const venv = env.VIRTUAL_ENV || env.CONDA_PREFIX || [join(cwd, ".venv"), join(cwd, "venv")].find((d) => existsSync(d));
+    if (!venv) return false;
+    const win = this.#platform === "win32";
+    if (!existsSync(join(venv, win ? "Scripts" : "bin", win ? "python.exe" : "python"))) return false;
+    let home = "";
+    try { home = /^\s*home\s*=\s*(.+?)\s*$/m.exec(readFileSync(join(venv, "pyvenv.cfg"), "utf8"))?.[1] ?? ""; } catch { /* no pyvenv.cfg */ }
+    return !this.#underInstall(venv) && !this.#underInstall(home);
+  }
+
+  /** True when `p` lies under the install's resources folder (case-insensitively on Windows). */
+  #underInstall(p: string): boolean {
+    const prefix = this.resources + sep;
+    return this.#platform === "win32" ? p.toLowerCase().startsWith(prefix.toLowerCase()) : p.startsWith(prefix);
   }
 
   /** The holder binary in the copy `dir`, or null when it has none. */
