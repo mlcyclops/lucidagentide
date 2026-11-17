@@ -43,7 +43,7 @@ const KINDS: readonly (readonly [string, string])[] = [
   ["#creatorStudio", "Creator Studio"],
   ["#knowledge", "Knowledge graph"],
   ["#meetings", "Meetings"],
-  ["#remoteSpokes", "Remote spokes"],
+  ["#remoteSpokes", "Remote agents"],
   ["#preview", "Preview panel"],
   ["#trainerPanel", "Trainer"],
   ["#agentBuilder", "Agent builder"],

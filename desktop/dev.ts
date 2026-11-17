@@ -2280,7 +2280,7 @@ const switchRefused = (busy: string, sessionId: string | null) =>
 /** P-SWITCH.2 (ADR-0404): the 409 for a session a live spoke holds. `heldBy` lets a client attach to that
  *  spoke instead; no flag overrides it, because two processes on one session corrupt its history. */
 const sessionHeld = (lane: SessionLiveSpoke) =>
-  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in spoke "${lane.name}". Attach to that spoke instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
+  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in agent "${lane.name}". Attach to that agent instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
 
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
@@ -5376,7 +5376,7 @@ return Bun.serve({
       if (p === "/api/session/archive" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id ?? "");
-        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or a spoke. Switch away from it (or stop the spoke) first." } });
+        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or an agent. Switch away from it (or stop the agent) first." } });
         if (otherEnginesSessions().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in another LUCID window. Switch away from it there first." } });
         return json({ ok: true, data: archiveSession(sid, { cwd: currentWorkspace() }) });
       }
@@ -5406,7 +5406,7 @@ return Bun.serve({
         const sid = String(id);
         // P-SWITCH.2: deleting the file under a running spoke would leave it appending to nothing.
         const held = spokeHolding(sid);
-        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in spoke "${held.name}". Stop that spoke first, then delete it.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in agent "${held.name}". Stop that agent first, then delete it.` } });
         // If it's the live session, close it first so omp releases the file handle (Windows
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
@@ -6898,7 +6898,7 @@ return Bun.serve({
         const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
         if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
         const held = spokeHolding(b.value.sessionId); // P-SWITCH.2 (ADR-0404)
-        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in spoke "${held.name}", so it was not reopened in Main.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in agent "${held.name}", so it was not reopened in Main.` } });
         return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
       }
       if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });

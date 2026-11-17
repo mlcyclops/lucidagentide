@@ -361,7 +361,7 @@ describe("P-HOLDER.2: once an update install is committed, no held lane starts f
       // No runtime copy: every launch of this pool would run from the install folder.
       const pool = new HolderPool(join(dir, "lane-holders"), join(dir, "no-such-holder.exe"));
       expect(pool.commitInstall(true)).toBe(0);
-      await expect(pool.launch("late", "agent", [], dir, {})).rejects.toThrow('lane "late" did not start: an update is installing, and this engine has no lane runtime copy (a source checkout, or LUCID_LANE_RUNTIME=install), so it would run from the install folder');
+      await expect(pool.launch("late", "agent", [], dir, {})).rejects.toThrow('agent "late" did not start: an update is installing, and this engine has no lane runtime copy (a source checkout, or LUCID_LANE_RUNTIME=install), so it would run from the install folder');
       expect(pool.commitInstall(false)).toBe(0);
       // Lifted: the launch is tried again (this holder binary does not exist, so it fails later, at the spawn).
       await expect(pool.launch("late", "agent", [], dir, {})).rejects.toThrow("lane holder did not start");

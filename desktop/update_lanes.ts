@@ -68,7 +68,7 @@ export function updatePrompt(version: string, c: UpdateCheck | null | "unavailab
   const later: UpdateChoice = { label: "Later", stop: false, install: false };
   // The engine was asked and did not answer (a timeout, a crash). A held lane may still run from the install folder,
   // so not knowing is not "no lanes": the update waits (fail-closed). `null` means there is no fleet to ask at all.
-  if (c === "unavailable") return { detail: `LUCID could not check which agent lanes are running, so ${version} waits rather than install over a lane that may still be using these files. It is offered again at the next launch, or quit LUCID and start it again to install it now.`, choices: [later], stop: [] };
+  if (c === "unavailable") return { detail: `LUCID could not check which agents are running, so ${version} waits rather than install over an agent that may still be using these files. It is offered again at the next launch, or quit LUCID and start it again to install it now.`, choices: [later], stop: [] };
   const lanes = c?.lanes ?? [];
   if (!lanes.length) return { detail: "Restart to apply the update. Your session and credentials are kept.", choices: [{ label: "Restart now", stop: false, install: true }, later], stop: [] };
   const stuck = lanes.filter((l) => l.group === "stuck"), idle = lanes.filter((l) => l.group === "idle"), working = lanes.filter((l) => l.group === "working");
@@ -80,13 +80,13 @@ export function updatePrompt(version: string, c: UpdateCheck | null | "unavailab
   if (ends.length) lines.push(`Working, ends when the IDE restarts (${ends.length}): ${laneNames(ends)}.`);
   if (blocks.length) lines.push(`Working from the install folder (${blocks.length}): ${laneNames(blocks)}. The update cannot install while they run: let them finish or stop them, then restart.`);
   const stop = [...stuck, ...idle].map((l) => l.id);
-  if (stop.length) lines.push("", "Stopping keeps each lane's transcript; Respawn brings it back.");
+  if (stop.length) lines.push("", "Stopping keeps each agent's transcript; Respawn brings it back.");
   const detail = lines.join("\n");
   if (blocks.length) return { detail, choices: [later], stop };
   const choices: UpdateChoice[] = [];
-  if (stop.length) choices.push({ label: `Stop ${stop.length} idle or stuck ${stop.length === 1 ? "lane" : "lanes"} and restart`, stop: true, install: true });
+  if (stop.length) choices.push({ label: `Stop ${stop.length} idle or stuck ${stop.length === 1 ? "agent" : "agents"} and restart`, stop: true, install: true });
   // Keeping every lane installs only when none of the idle or stuck ones runs from the install folder.
-  if (!lanes.some((l) => l.blocksInstall)) choices.push({ label: stop.length ? "Restart and keep every lane" : "Restart now", stop: false, install: true });
+  if (!lanes.some((l) => l.blocksInstall)) choices.push({ label: stop.length ? "Restart and keep every agent" : "Restart now", stop: false, install: true });
   return { detail, choices: [...choices, later], stop };
 }
 
@@ -132,10 +132,10 @@ export async function decideInstall(choice: UpdateChoice | undefined, stopIds: r
   const refuse = async (waits: string) => { await lanes.commit(false).catch(() => null); return { install: false as const, waits }; };
   if (choice.stop && stopIds.length) await lanes.stop([...stopIds]).catch(() => null);
   const committed = await lanes.commit(true).catch(() => null);
-  if (!committed) return refuse("LUCID could not keep new agent lanes from starting from the install folder. It is offered again at the next launch.");
-  if (committed.pending > 0) return refuse(`${committed.pending === 1 ? "An agent lane is" : `${committed.pending} agent lanes are`} starting from the install folder. It is offered again at the next launch.`);
+  if (!committed) return refuse("LUCID could not keep new agents from starting from the install folder. It is offered again at the next launch.");
+  if (committed.pending > 0) return refuse(`${committed.pending === 1 ? "An agent is" : `${committed.pending} agents are`} starting from the install folder. It is offered again at the next launch.`);
   const last = await lanes.check().catch(() => null);
-  if (!last) return refuse("LUCID could not check the agent lanes right before installing. It is offered again at the next launch.");
+  if (!last) return refuse("LUCID could not check the agents right before installing. It is offered again at the next launch.");
   const blocking = last.lanes.filter((l) => l.blocksInstall);
   if (blocking.length) return refuse(`${laneNames(blocking)} still ${blocking.length === 1 ? "runs" : "run"} from the install folder. It is offered again at the next launch.`);
   return { install: true };

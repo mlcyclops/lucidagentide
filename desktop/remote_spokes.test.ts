@@ -80,13 +80,13 @@ function rig(o: { scopes?: string[]; endpoint?: boolean; installed?: boolean; hu
 
 describe("the hub view", () => {
   test("not installed, not running, not set up: each says what to do, and nothing is forwarded", async () => {
-    expect((await rig({ endpoint: false, installed: false }).call("GET", "/api/remote-spokes")).data).toEqual({ available: false, plugin: "missing", reason: "Install the Remote Spokes plugin to see remote spokes here." });
+    expect((await rig({ endpoint: false, installed: false }).call("GET", "/api/remote-spokes")).data).toEqual({ available: false, plugin: "missing", reason: "Install the Remote Agents plugin to see remote agents here." });
     const stopped = rig({ endpoint: false });
     expect((await stopped.call("GET", "/api/remote-spokes")).data).toMatchObject({ available: false, plugin: "stopped" });
-    expect((await stopped.call("POST", "/api/remote-spokes/recall", { node: NODE })).data).toEqual({ ok: false, error: "The Remote Spokes plugin is not running. Start it to see your remote spokes here." });
+    expect((await stopped.call("POST", "/api/remote-spokes/recall", { node: NODE })).data).toEqual({ ok: false, error: "The Remote Agents plugin is not running. Start it to see your remote agents here." });
     expect(stopped.calls).toEqual([]);
     const unset = rig({ hub: { hub: null, spokes: [] } });
-    expect((await unset.call("GET", "/api/remote-spokes")).data).toMatchObject({ available: false, plugin: "running", reason: "This hub is not set up yet. Finish setup in the Remote Spokes panel." });
+    expect((await unset.call("GET", "/api/remote-spokes")).data).toMatchObject({ available: false, plugin: "running", reason: "This hub is not set up yet. Finish setup in the Remote Agents panel." });
   });
 
   test("the plugin is reached with the engine's host token, and the renderer's view never carries it", async () => {
@@ -139,7 +139,7 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
 
   test("an unknown spoke and malformed bodies are refused, never coerced", async () => {
     const r = rig();
-    expect((await r.call("POST", "/api/remote-spokes/cancel", { node: `n_${"2".repeat(32)}`, task: TASK })).data).toEqual({ ok: false, error: "this hub does not know that spoke" });
+    expect((await r.call("POST", "/api/remote-spokes/cancel", { node: `n_${"2".repeat(32)}`, task: TASK })).data).toEqual({ ok: false, error: "this hub does not know that agent" });
     for (const body of [
       { node: NODE, task: TASK, extra: 1 },
       { node: NODE, task: 5 },
@@ -167,7 +167,7 @@ describe("scope gating: nothing the hub certificate does not allow reaches the p
     const spoke = { node: NODE, label: "dgx-spark (shared)", tasks: [{ id: TASK, name: "triage", state: "idle", turns: 1, updatedAt: 1 }] };
     const hub = { node: HUB, label: "workstation", scopes: ["recall", "drive", "approve"] };
     const r = rig({ hub: { hub, spokes: [{ ...spoke, deactivated: { since, reason: "shipped to Alex's site" } }] } });
-    const error = `dgx-spark (shared): Deactivated since 2026-11-05: shipped to Alex's site. Nothing is sent to a deactivated spoke; reactivate it on the hub first (hub reactivate --spoke ${NODE})`;
+    const error = `dgx-spark (shared): Deactivated since 2026-11-05: shipped to Alex's site. Nothing is sent to a deactivated agent; reactivate it on the hub first (hub reactivate --spoke ${NODE})`;
     for (const [op, body] of [
       ...actions,
       ["recall", { node: NODE }],

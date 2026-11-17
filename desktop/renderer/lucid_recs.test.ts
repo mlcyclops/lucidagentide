@@ -36,8 +36,8 @@ describe("candidates", () => {
   test("each signal yields its suggestion, named after the real thing", () => {
     const c = candidates(BUSY);
     expect(kinds(c)).toEqual(["approval", "failure", "screen", "preview", "orbit", "lane", "session", "sessions", "knowledge"]);
-    expect(c[0]).toEqual({ id: "approval:release", kind: "approval", label: "What is release waiting on?", question: 'What is lane "release" waiting for, and should I approve it?' });
-    expect(c[1]!.question).toBe('Why did lane "tests" fail, and what would you do about it?');
+    expect(c[0]).toEqual({ id: "approval:release", kind: "approval", label: "What is release waiting on?", question: 'What is agent "release" waiting for, and should I approve it?' });
+    expect(c[1]!.question).toBe('Why did agent "tests" fail, and what would you do about it?');
     expect(c[2]!.question).toBe('Explain what I am looking at in the Dialog "Connect a provider": what it shows, and what I can do here.');
     expect(c[4]!.question).toContain('"Ship the beta"');
     expect(c[6]!.label).toBe('Where does "Fix the gate" stand?');

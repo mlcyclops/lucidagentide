@@ -65,13 +65,13 @@ export function remoteViewHtml(): string {
   return `<aside class="kg rsv" id="remoteSpokes" hidden>
     <div class="resizer resizer-l" data-resize="remoteSpokes" data-tip="Drag to resize|Widen the view or collapse toward the chat" data-tip-side="left"></div>
     <div class="set-head">
-      <div class="set-title" data-tip="Remote spokes|LUCID engines on your other machines, reached through this hub. The orbit shows only the ones working; every one is here.">${icon("link", 17)} Remote spokes <span class="set-sub" data-rsv-sub></span></div>
+      <div class="set-title" data-tip="Remote agents|LUCID engines on your other machines, reached through this hub. The orbit shows only the ones working; every one is here.">${icon("link", 17)} Remote agents <span class="set-sub" data-rsv-sub></span></div>
       <div class="kg-tools">
-        <div class="rsv-tabs" role="tablist" aria-label="Remote spokes">
-          <button class="rsv-tab on" role="tab" aria-selected="true" data-rsv-tab="spokes">Spokes</button>
-          <button class="rsv-tab" role="tab" aria-selected="false" data-rsv-tab="admin" data-tip="Admin|The hub's own panel: add, approve and remove spokes, presence, custody, models, relays and licenses. It opens in a window of its own.">Admin</button>
+        <div class="rsv-tabs" role="tablist" aria-label="Remote agents">
+          <button class="rsv-tab on" role="tab" aria-selected="true" data-rsv-tab="spokes">Agents</button>
+          <button class="rsv-tab" role="tab" aria-selected="false" data-rsv-tab="admin" data-tip="Admin|The hub's own panel: add, approve and remove remote agents, presence, custody, models, relays and licenses. It opens in a window of its own.">Admin</button>
         </div>
-        <button class="btn-mini" data-rs-deploy hidden data-tip="Start a task on a remote spoke|Pick a spoke by how fast it answers, its models and its free lanes, then start a task there.">${icon("bolt", 13)} Start a task</button>
+        <button class="btn-mini" data-rs-deploy hidden data-tip="Start a task on a remote agent|Pick a remote agent by how fast it answers, its models and its free agent slots, then start a task there.">${icon("bolt", 13)} Start a task</button>
         <button class="btn-mini btn-icon" data-rsv-refresh data-tip="Refresh|Re-read the hub.">${icon("refresh", 14)}</button>
         <button class="set-close" data-rsv-close data-tip="Close">${icon("close", 16)}</button>
       </div>
@@ -144,7 +144,7 @@ function paint(): void {
   // P-RS-LANES.1 (ADR-0551): the same count as the badges, the Fleet pill and the hub summary (remoteCounts).
   const c = remoteCounts();
   const sub = !snap ? "" : !snap.available ? "not running" : [
-    `${snap.hub.label} \u00b7 ${c.spokes} ${c.spokes === 1 ? "spoke" : "spokes"}`,
+    `${snap.hub.label} \u00b7 ${c.spokes} ${c.spokes === 1 ? "agent" : "agents"}`,
     c.working ? `${c.working} working` : "",
     c.waiting ? `${c.waiting} waiting on you` : "",
   ].filter(Boolean).join(" \u00b7 ");
@@ -159,7 +159,7 @@ function paint(): void {
   const box = $("[data-rsv-detail]", root) as HTMLElement;
   if (detail?.kind === "spoke") refreshRemotePanel(box);
   else if (detail?.kind === "deploy") refreshDeployPanel(box);
-  else if (!box.firstChild) box.innerHTML = `<div class="orbit-ghosts-empty">Pick a spoke to see its tasks, parked actions, models and journal.</div>`;
+  else if (!box.firstChild) box.innerHTML = `<div class="orbit-ghosts-empty">Pick an agent to see its tasks, parked actions, models and journal.</div>`;
 }
 
 /** One spoke as a row. The node id is NODE_RE-checked by the model; every spoke-written word goes through esc(). */
@@ -181,12 +181,12 @@ function listHtml(): string {
   if (!snap) return `<div class="orbit-ghosts-empty">Asking the hub\u2026</div>`;
   if (!snap.available) {
     const btn = snap.plugin === "stopped"
-      ? `<button class="btn-mini" data-rs-start>${icon("bolt", 12)} Start Remote Spokes</button>`
+      ? `<button class="btn-mini" data-rs-start>${icon("bolt", 12)} Start Remote Agents</button>`
       : snap.plugin === "running" ? `<button class="btn-mini" data-rsv-admin-open>${icon("link", 12)} Set up in the admin panel</button>` : "";
     return `<div class="rsv-notice"><p class="rs-note">${esc(snap.reason)}</p>${btn}</div>`;
   }
   if (snap.spokes.length === 0) {
-    return `<div class="rsv-notice"><p class="rs-note">This hub has no spokes yet.</p><button class="btn-mini" data-rsv-admin-open>${icon("plus", 12)} Add a spoke in the admin panel</button></div>`;
+    return `<div class="rsv-notice"><p class="rs-note">This hub has no remote agents yet.</p><button class="btn-mini" data-rsv-admin-open>${icon("plus", 12)} Add an agent in the admin panel</button></div>`;
   }
   const now = Date.now();
   const working = snap.spokes.filter(onOrbit);
@@ -197,7 +197,7 @@ function listHtml(): string {
     + groupHtml("Working", working, now)
     + groupHtml("No task", noTask, now)
     + groupHtml("Deactivated", off, now)
-    + (working.length === 0 ? `<p class="rs-note rsv-foot">No remote spoke holds a task, so none is on the Fleet Orbit. A spoke joins the orbit when it starts one.</p>` : "");
+    + (working.length === 0 ? `<p class="rs-note rsv-foot">No remote agent holds a task, so none is on the Fleet Orbit. A remote agent joins the orbit when it starts one.</p>` : "");
 }
 
 // -------------------------------------------------------------------------------------- the detail pane

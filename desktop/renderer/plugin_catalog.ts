@@ -91,10 +91,10 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     // ADR-0505: the remote-spokes hub (TechLead187/lucidagentIDEaddon remote-spoke/plugin). Coming soon until a
     // build signed with the TECHLEAD 187 LLC publisher key is uploaded and the entitlements catalog sells
     // PLG-REMOTESPOKES-OTF; until then a private build installs from the Installed tab, shown as unsigned.
-    id: "remote-spokes", name: "Remote Spokes", section: "civilian", sale: "buy", lookupKey: "PLG-REMOTESPOKES-OTF", available: false,
+    id: "remote-spokes", name: "Remote Agents", section: "civilian", sale: "buy", lookupKey: "PLG-REMOTESPOKES-OTF", available: false,
     kicker: "LUCID on your other machines",
-    pitch: "Drive headless LUCID engines on your VMs, a DGX Spark, or a cloud VM from this IDE through a sealed relay: pair a spoke once, hand it tasks, watch its lanes, and approve or reject what it asks with a decision the spoke's engine verifies.",
-    lucid: "A hub that runs on this machine and opens as Remote spokes on the left rail. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
+    pitch: "Drive headless LUCID engines on your VMs, a DGX Spark, or a cloud VM from this IDE through a sealed relay: pair a machine once, hand it tasks, watch its agents, and approve or reject what it asks with a decision that machine's engine verifies.",
+    lucid: "A hub that runs on this machine and opens as Remote agents on the left rail. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
     media: { loop: false, poster: "generated", glyph: "share", tone: "cyan" },
   },
   {

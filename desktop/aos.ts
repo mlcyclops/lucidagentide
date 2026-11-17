@@ -344,15 +344,15 @@ export function validateTaskInput(raw: unknown, goal: AosGoal | null, laneIds: r
   const title = one(b.title);
   if (!title || title.length > AOS_TITLE_MAX) return { ok: false, error: "The task needs a short title." };
   const prompt = typeof b.prompt === "string" ? b.prompt.trim() : "";
-  if (!prompt || prompt.length > 8000) return { ok: false, error: "Tell the spoke what to do (up to 8,000 characters)." };
+  if (!prompt || prompt.length > 8000) return { ok: false, error: "Tell the agent what to do (up to 8,000 characters)." };
   const outputContract = one(b.outputContract);
-  if (!outputContract || outputContract.length > 1000) return { ok: false, error: "Say what the spoke must deliver (AOS-1: every task has an output contract)." };
+  if (!outputContract || outputContract.length > 1000) return { ok: false, error: "Say what the agent must deliver (AOS-1: every task has an output contract)." };
   const lines = Array.isArray(b.checks) ? b.checks.filter((c): c is string => typeof c === "string").map((c) => c.trim()).filter(Boolean) : [];
   const checks = lines.map((l) => (l.startsWith("$ ") ? { kind: "command" as const, text: l.slice(2).trim() } : { kind: "human" as const, text: l.replace(/\s+/g, " ") }));
-  if (!checks.length || checks.some((c) => !c.text)) return { ok: false, error: "Add at least one acceptance check (AOS-1). Start a line with \"$ \" for a command the spoke runs." };
+  if (!checks.length || checks.some((c) => !c.text)) return { ok: false, error: "Add at least one acceptance check (AOS-1). Start a line with \"$ \" for a command the agent runs." };
   if (checks.length > 10 || checks.some((c) => c.text.length > AOS_CRITERION_MAX)) return { ok: false, error: `At most 10 checks, each under ${AOS_CRITERION_MAX} characters.` };
   const assignee = typeof b.assignee === "string" ? b.assignee : "";
-  if (!laneIds.includes(assignee)) return { ok: false, error: "Pick the spoke that runs this task." };
+  if (!laneIds.includes(assignee)) return { ok: false, error: "Pick the agent that runs this task." };
   const deps = Array.isArray(b.dependsOn) ? [...new Set(b.dependsOn.filter((d): d is string => typeof d === "string"))] : [];
   // Dependencies may only name tasks that already exist, so the graph is acyclic by construction.
   if (deps.some((d) => !goal.tasks.some((t) => t.id === d))) return { ok: false, error: "A dependency names a task that does not exist." };
@@ -456,7 +456,7 @@ export function planTasks(goal: AosGoal, lanes: readonly AosLaneInput[], now: nu
     }
     if (t.status !== "ready") continue;
     const lane = lanes.find((l) => l.id === t.assignee);
-    if (!lane) { g = withTask(g, { ...t, status: "failed", lastFailure: "its spoke is gone", updatedAt: now }); continue; }
+    if (!lane) { g = withTask(g, { ...t, status: "failed", lastFailure: "its agent is gone", updatedAt: now }); continue; }
     const laneTaken = lane.busy || lane.status === "stopped" || g.tasks.some((x) => x.assignee === lane.id && x.status === "running") || dispatch.some((d) => d.laneId === lane.id);
     if (laneTaken) continue;
     t = { ...t, status: "running", turn: "work", attempts: t.attempts + 1, updatedAt: now };
@@ -471,7 +471,7 @@ export function planTasks(goal: AosGoal, lanes: readonly AosLaneInput[], now: nu
 export function taskTurnEnded(goal: AosGoal, taskId: string, turn: "work" | "verify", outcome: AosTurnOutcome, now: number): { goal: AosGoal; dispatch: AosDispatch[] } {
   const t = goal.tasks.find((x) => x.id === taskId);
   if (!t || t.status !== "running" || t.turn !== turn) return { goal, dispatch: [] };
-  if (!outcome.ok) return { goal: withTask(goal, failAttempt(t, `the spoke's turn failed: ${outcome.error.slice(0, 200)}`, now)), dispatch: [] };
+  if (!outcome.ok) return { goal: withTask(goal, failAttempt(t, `the agent's turn failed: ${outcome.error.slice(0, 200)}`, now)), dispatch: [] };
   if (turn === "work") {
     const done = { ...t, result: outcome.text.trim().slice(-AOS_RESULT_MAX) || null, updatedAt: now };
     if (done.acceptance.some((c) => c.kind === "command")) {
@@ -495,7 +495,7 @@ export function setTaskCheck(goal: AosGoal | null, taskId: string, checkId: stri
   const t = goal.tasks.find((x) => x.id === taskId);
   if (!t) return { ok: false, error: "No such task." };
   const c = t.acceptance.find((x) => x.id === checkId);
-  if (!c || c.kind !== "human") return { ok: false, error: "Only a person's check can be ticked here; command checks are run by the spoke." };
+  if (!c || c.kind !== "human") return { ok: false, error: "Only a person's check can be ticked here; command checks are run by the agent." };
   if (t.status !== "needs_review") return { ok: false, error: "This task is not waiting for review." };
   const next = { ...t, acceptance: t.acceptance.map((x) => (x.id === checkId ? { ...x, passed, detail: passed ? "checked by a person" : "rejected by a person" } : x)), updatedAt: now };
   if (!passed) return { ok: true, goal: withTask(goal, failAttempt(next, `a reviewer rejected: ${c.text}`, now)) };

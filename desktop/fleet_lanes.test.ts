@@ -308,7 +308,7 @@ test("spawn refuses a session Main or a live lane holds, and creates nothing", a
   const held = first.lane!.sessionId!;
   const twice = await live.spawn(resume(held));
   expect(twice.ok).toBe(false);
-  expect(twice.reason).toContain(`spoke "first"`);
+  expect(twice.reason).toContain(`agent "first"`);
   expect((await live.status()).lanes).toHaveLength(1);
 
   // Stopped, the lane lets go; Main opens that session; the lane may not come back onto it.

@@ -141,7 +141,7 @@ export function pushLaneName(src: Pick<PushSource, "kind" | "name">, existing: r
 export function parallelPushPrompt(src: PushSource, wt: { branch: string; path?: string }, text: string): string {
   const where = wt.path ? ` at ${wt.path}` : "";
   const preamble = [
-    `[LUCID parallel push] Another agent (${src.kind === "master" ? "the main LUCID agent" : `lane "${src.name}"`}) is still working on its own task in ${src.cwd || "the main checkout of this repo"}.`,
+    `[LUCID parallel push] Another agent (${src.kind === "master" ? "the main LUCID agent" : `agent "${src.name}"`}) is still working on its own task in ${src.cwd || "the main checkout of this repo"}.`,
     `You are a separate agent in your own git worktree of the same repo${where}, on branch ${wt.branch}.`,
     "Complete the request below independently on your branch. Do not edit files in, commit to, or run commands against the other agent's checkout.",
   ].join(" ");
@@ -155,8 +155,8 @@ export function parallelPushNotice(src: PushSource, lane: string, opts: { branch
   const where = `in its own worktree${opts.branch ? ` (branch ${opts.branch})` : ""}`;
   const who = src.kind === "master" ? "The main agent" : src.name;
   const desc = opts.busy
-    ? `${who} is still working on its current task. Your request is being actioned in parallel by a new lane, ${lane}, ${where}.`
-    : `${who} is not running a turn right now. Your request is being actioned by a new lane, ${lane}, ${where}.`;
+    ? `${who} is still working on its current task. Your request is being actioned in parallel by a new agent, ${lane}, ${where}.`
+    : `${who} is not running a turn right now. Your request is being actioned by a new agent, ${lane}, ${where}.`;
   return { title: opts.branch ? `Running in parallel: ${lane}` : `Starting ${lane} in parallel`, desc };
 }
 
@@ -169,12 +169,12 @@ export type PushNowRoute = { kind: "send" } | { kind: "parallel" } | { kind: "st
 export function pushNowRoute(ctx: { running: boolean; cwd: string; images: number }): PushNowRoute {
   if (!ctx.running) return { kind: "send" };
   if (ctx.cwd.trim()) return { kind: "parallel" };
-  return noWorktreeFallback("No workspace folder is open, so there is no repo to give a parallel lane its own worktree.", ctx.images, true);
+  return noWorktreeFallback("No workspace folder is open, so there is no repo to give a parallel agent its own worktree.", ctx.images, true);
 }
 
 function noWorktreeFallback(why: string, images: number, steerable: boolean): { kind: "steer" | "stage"; title: string; desc: string } {
   if (steerable && images === 0) return { kind: "steer", title: "Steering the running turn instead", desc: `${why} Your prompt goes into the running turn as a steer note.` };
-  return { kind: "stage", title: "Push now could not start a parallel lane", desc: `${why} ${images ? "A steer note cannot carry images, so it" : "It"} stays staged and runs as the next turn.` };
+  return { kind: "stage", title: "Push now could not start a parallel agent", desc: `${why} ${images ? "A steer note cannot carry images, so it" : "It"} stays staged and runs as the next turn.` };
 }
 
 /** A refused parallel push (the spawn, or the new lane's first prompt). `code: "no-repo"` means no worktree

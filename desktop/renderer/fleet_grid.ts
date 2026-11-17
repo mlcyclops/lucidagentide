@@ -252,19 +252,19 @@ function moreMenuItems(): PlusItem[] {
   const mode = boardLayoutOf(boards, currentBoard).layout;
   const check = (on: boolean): string => (on ? "\u2713" : "");
   return [
-    { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the hub-and-spoke map. Same lanes, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
+    { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the map of the hub and its agents. Same agents, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
     ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
-    { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each lane works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
-    { id: "board", label: "New board", icon: icon("plus", 15), tip: tipValue("New board", "A named set of lanes with its own layout. Board tabs appear once you have one."), run: () => { void addBoard(); } },
+    { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each agent works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
+    { id: "board", label: "New board", icon: icon("plus", 15), tip: tipValue("New board", "A named set of agents with its own layout. Board tabs appear once you have one."), run: () => { void addBoard(); } },
     { id: "home", label: "Open the grid first", icon: icon("star", 15), kbd: check(fleetHome() === "grid"), tip: tipValue("Open the grid first", "Make the grid what the Fleet button opens. The orbit has the same setting."), run: () => setFleetHome("grid") },
-    { id: "hub", label: "Classic hub in a terminal", icon: icon("terminal", 15), tip: tipValue("Classic hub", "Opens the classic hub in a new terminal window: your lanes and boards as panes, linked to this app. You can also type lucid hub in any terminal."), run: (a) => { if (a instanceof HTMLButtonElement) void openHubFrom(a, () => deps?.hubOpen()); } },
+    { id: "hub", label: "Classic hub in a terminal", icon: icon("terminal", 15), tip: tipValue("Classic hub", "Opens the classic hub in a new terminal window: your agents and boards as panes, linked to this app. You can also type lucid hub in any terminal."), run: (a) => { if (a instanceof HTMLButtonElement) void openHubFrom(a, () => deps?.hubOpen()); } },
   ];
 }
 
 const LAYOUT_TIPS: Record<BoardLayout, string> = {
-  side: "The lanes on this board fill the panel. Drag an edge to resize; double-click an edge for equal sizes.",
+  side: "The agents on this board fill the panel. Drag an edge to resize; double-click an edge for equal sizes.",
   grid4: "Two by two.",
-  focus: "One lane large, the rest in a strip. Click a strip card to bring it up.",
+  focus: "One agent large, the rest in a strip. Click a strip card to bring it up.",
   free: "You size each card.",
 };
 
@@ -308,17 +308,17 @@ export function openFleetGrid(): void {
   currentBoard = storage().get(FLEET_BOARD_KEY) || EVERYTHING; // P-FLEET-BOARDS.1: the board shown last time
   boardsAt = 0; tabsSig = ""; renamingBoard = null; lastJump = null;
   dockState.minimized = false; // an explicit open always shows the panel, never just the pill
-  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local and remote spokes">
+  dock = el(`<div id="fleetDock" class="share-dock fleet-dock side-${dockState.side}" role="dialog" aria-label="LUCID Fleet - local and remote agents">
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
-      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Lanes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
+      <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Agents are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
-      <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New lane|Spawn a new local lane in this grid. The Orbit map calls the same thing + Spoke.">${icon("plus", 12)} Lane</button>
+      <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every agent, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Start a new local agent in this grid. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
       <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
-      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (spokes keep running)">${UP_ARROW}</button>
-      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (spokes keep running)">${icon("close", 15)}</button>
+      <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (agents keep running)">${UP_ARROW}</button>
+      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (agents keep running)">${icon("close", 15)}</button>
     </div>
     <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
     <button class="fleet-boards-handle" data-fleet-boards-toggle type="button" hidden aria-expanded="false" aria-label="Show boards"><span class="fleet-boards-handle-chev">${icon("chevron", 9)}</span><i class="fleet-board-dot" data-board-handle-dot hidden></i></button>
@@ -780,9 +780,9 @@ function applyOrder(grid: HTMLElement): void {
     const closed = s.group !== null && !!groups.collapsed[s.group];
     if (s.group !== null) {
       grid.append(el(`<div class="fleet-group-head${closed ? " closed" : ""}" data-group="${esc(s.group)}">
-        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The spokes keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
+        <button class="fleet-grp-btn" data-grp-toggle="${esc(s.group)}" data-tip="${closed ? "Expand" : "Collapse"}|The agents keep running either way; collapse only tidies the grid.">${icon("chevron", 11)}</button>
         <b>${esc(s.group)}</b><span>${s.ids.length}</span>
-        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its spokes back to the ungrouped tail. Never touches the spokes themselves.">${icon("close", 11)}</button>
+        <button class="fleet-grp-btn" data-grp-disband="${esc(s.group)}" data-tip="Disband group|Frees its agents back to the ungrouped tail. Never touches the agents themselves.">${icon("close", 11)}</button>
       </div>`));
     }
     for (const id of s.ids) {
@@ -1090,13 +1090,13 @@ function paintPill(): void {
     const remotePip = remoteAttn ? `<span class="fleet-pip rs-${remote.waiting ? "approval" : "stuck"}" data-tip="${esc(tipEsc(remoteLine))}"><i aria-hidden="true"></i><b>${remoteAttn}</b></span>` : "";
     const html = (roll.counts
       .map((c, i) => `<span class="fleet-pip lane-${c.status}" data-tip="${esc(tipEsc(roll.lines[i] ?? ""))}"><i aria-hidden="true"></i><b>${c.count}</b></span>`)
-      .join("") + remotePip) || `<span class="fleet-pip lane-idle" data-tip="No spokes running"><i aria-hidden="true"></i><b>0</b></span>`;
+      .join("") + remotePip) || `<span class="fleet-pip lane-idle" data-tip="No agents running"><i aria-hidden="true"></i><b>0</b></span>`;
     if (box.innerHTML !== html) box.innerHTML = html;
   }
   const lines = remoteLine ? [...roll.lines, remoteLine] : roll.lines;
-  const tip = lines.length ? lines.join(" \u00b7 ") : "No spokes running";
+  const tip = lines.length ? lines.join(" \u00b7 ") : "No agents running";
   // P-TIP.1 (ADR-0599): the pill's name as the tip title, the roll-up as its body.
-  setTip(pill, "LUCID Fleet", `${tip}. Click to reopen; spokes keep running either way.`);
+  setTip(pill, "LUCID Fleet", `${tip}. Click to reopen; agents keep running either way.`);
   pill.classList.toggle("live", roll.busy);
   pill.classList.toggle("attn", roll.attention || remoteAttn > 0);
 }
@@ -1268,7 +1268,7 @@ function paintNeeds(): void {
   const handle = $("[data-fleet-boards-toggle]", dock);
   if (handle) {
     const open = handle.getAttribute("aria-expanded") === "true";
-    const tip = `${open ? "Hide boards" : "Show boards"}|Showing ${findBoard(boards, cur)?.name ?? "Everything"}.${elsewhere ? " A lane on another board needs you." : ""}`;
+    const tip = `${open ? "Hide boards" : "Show boards"}|Showing ${findBoard(boards, cur)?.name ?? "Everything"}.${elsewhere ? " An agent on another board needs you." : ""}`;
     if (handle.dataset.tip !== tip) handle.dataset.tip = tip;
     const dot = $("[data-board-handle-dot]", handle);
     if (dot && dot.hidden === elsewhere) dot.hidden = !elsewhere;
@@ -1539,11 +1539,11 @@ function paintHeadroom(hr: HTMLElement, res: FleetResources, laneCount: number):
     const over = held >= res.sustainMs;
     const c = over ? "var(--red)" : p >= line ? "var(--amber)" : "var(--green)";
     const hot = p >= line
-      ? `<span class="fleet-hr-hot${over ? " over" : ""}" data-tip="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New spokes are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
+      ? `<span class="fleet-hr-hot${over ? " over" : ""}" data-tip="${lbl} has held ${line}%+ for ${Math.round(held / 1000)}s. New agents are refused at ${sustainS}s.">${Math.round(held / 1000)}s/${sustainS}s</span>`
       : "";
     return `${head}<span class="fleet-hr-bar" style="--wm:${line}%"><span class="fleet-hr-fill" style="width:${p}%;background:${c}"></span></span><span class="fleet-hr-val">${p}%</span>${hot}`;
   };
-  const lanes = `<span class="fleet-hr-lanes" data-tip="Lanes running|There is no cap: a new lane is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} lane${laneCount === 1 ? "" : "s"}</span>`;
+  const lanes = `<span class="fleet-hr-lanes" data-tip="Agents running|There is no cap: a new agent is refused only while CPU or memory stays at or above ${line}% for ${sustainS}s straight, so a burst never blocks you.">${laneCount} agent${laneCount === 1 ? "" : "s"}</span>`;
   hr.innerHTML = bar("CPU", res.cpuPct, res.cpuHotMs) + bar("MEM", res.memPct, res.memHotMs) + lanes;
 }
 
@@ -1560,8 +1560,8 @@ function paintEmpty(): void {
   if (empty && empty.dataset.kind !== kind) empty.remove();
   if (!kind || (empty && empty.dataset.kind === kind)) return;
   const text = kind === "none"
-    ? "No lanes yet - spawn one with + Lane. Each lane is a headless LUCID engine working its own folder."
-    : "No lanes on this board yet. Open Everything and use the board button on a lane's card, or start a new lane while this board is shown.";
+    ? "No agents yet - start one with + Agent. Each agent is a headless LUCID engine working its own folder."
+    : "No agents on this board yet. Open Everything and use the board button on an agent's card, or start a new agent while this board is shown.";
   grid.append(el(`<div class="fleet-empty" data-kind="${kind}">${icon("info", 13)}<span>${esc(text)}</span></div>`));
 }
 
@@ -1575,25 +1575,25 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
 function buildCard(run: LaneRun): HTMLElement {
   return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}">
     <div class="fleet-card-head">
-      <span class="fleet-grip" data-fleet-grip data-tip="Drag to reorder this spoke" aria-hidden="true"></span>
+      <span class="fleet-grip" data-fleet-grip data-tip="Drag to reorder this agent" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
-      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this spoke from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder."></span>
+      <span class="fleet-lane-name" data-fleet-name data-tip="Open in composer|Click the header to drive this agent from the full composer - the same takeover as clicking it in the orbit. Drag the grip to reorder."></span>
       <span class="fleet-cwd-chip spoke-repo-tag" data-fleet-cwd></span>
-      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this spoke under a named group on the grid. Presentation only - the spoke's work is untouched."></button>
+      <button class="fleet-grp-chip" data-fleet-grp data-tip="Group|File this agent under a named group on the grid. Presentation only - the agent's work is untouched."></button>
       <span class="fleet-usage" data-fleet-usage data-tone="ok" hidden></span>
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
-      <select class="fleet-model" data-fleet-model aria-label="Spoke model"></select>
-      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this spoke from the main composer" data-tip="Promote|Point the main composer at this spoke" hidden>${icon("arrowRight", 12)}</button>
+      <select class="fleet-model" data-fleet-model aria-label="Agent model"></select>
+      <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this agent from the main composer" data-tip="Promote|Point the main composer at this agent" hidden>${icon("arrowRight", 12)}</button>
       ${CARD_BOARDS_BTN}
-      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this spoke's transcript" data-tip="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
+      <button class="fleet-card-btn fleet-copy" data-fleet-copy aria-label="Copy this agent's transcript" data-tip="Copy the whole transcript as plain text">${icon("copy", 12)}</button>
       <button class="fleet-card-btn fleet-auto-btn" data-fleet-auto aria-label="Toggle full auto-mode" data-tip="Full auto-mode|Approve every ask automatically">${icon("bolt", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this spoke" data-tip="Check in|Status, turns, last activity, queue depth">${icon("eye", 12)}</button>
-      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the spoke card" data-tip="Collapse (keeps the header)">${icon("minus", 12)}</button>
-      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this spoke" data-tip="Stop the spoke">${icon("close", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-checkin aria-label="Check in on this agent" data-tip="Check in|Status, turns, last activity, queue depth">${icon("eye", 12)}</button>
+      <button class="fleet-card-btn" data-fleet-collapse aria-label="Collapse the agent card" data-tip="Collapse (keeps the header)">${icon("minus", 12)}</button>
+      <button class="fleet-card-btn fleet-dismiss" data-fleet-stop aria-label="Stop this agent" data-tip="Stop the agent">${icon("close", 12)}</button>
     </div>
-    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This spoke's repository and push target"></button>
+    <button class="repo-chip fleet-repo" data-fleet-repo type="button" hidden aria-label="This agent's repository and push target"></button>
     <div class="fleet-card-main">
       <div class="fleet-out-wrap">
         <div class="fleet-out" data-fleet-out>
@@ -1616,7 +1616,7 @@ function buildCard(run: LaneRun): HTMLElement {
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
         <span class="fleet-approve-acts">
           <button class="btn-mini ok" data-fleet-allow>${icon("check", 11)} Allow</button>
-          <button class="btn-mini ok" data-fleet-allow-session data-tip="Approve this ask and every same-kind ask for the rest of this spoke's session">${icon("check", 11)} Session</button>
+          <button class="btn-mini ok" data-fleet-allow-session data-tip="Approve this ask and every same-kind ask for the rest of this agent's session">${icon("check", 11)} Session</button>
           <button class="btn-mini danger" data-fleet-deny>${icon("close", 11)} Deny</button>
         </span>
       </div>
@@ -1630,7 +1630,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="lane-progress" data-lane-progress hidden>
         <div class="lane-bar"><div class="lane-fill"></div></div>
         <div class="lane-progress-line" data-lane-est></div>
-        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden data-tip="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this lane</button></div>
+        <div class="lane-alive-row"><span class="lane-alive" data-lane-alive data-state="idle"></span><span class="lane-signal" data-lane-signal></span><button class="btn-mini lane-stopcall" data-lane-stopcall hidden data-tip="Ends only the processes this tool call started. The agent is told why and continues.">Stop command</button><button class="btn-mini lane-restart" data-fleet-respawn data-lane-restart hidden>Restart this agent</button></div>
         <div class="lane-wait" data-lane-wait hidden></div>
       </div>
       <div class="fleet-queue" data-fleet-queue hidden></div>
@@ -1639,8 +1639,8 @@ function buildCard(run: LaneRun): HTMLElement {
       <div class="att-tray fleet-files" data-fleet-files hidden></div>
       <div class="fleet-compose">
         <button class="fleet-card-btn fleet-plus" data-fleet-plus type="button" hidden aria-label="Add files and more" data-tip="${esc(plusButtonTip(true))}">${icon("plus", 13)}</button>
-        <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this spoke\u2026" spellcheck="false"></textarea>
-        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this spoke" data-tip="Send">${icon("send", 13)}</button>
+        <textarea class="fleet-input" rows="1" data-fleet-input placeholder="Prompt this agent\u2026" spellcheck="false"></textarea>
+        <button class="fleet-card-btn fleet-send" data-fleet-send aria-label="Send to this agent" data-tip="Send">${icon("send", 13)}</button>
         <button class="btn-mini danger fleet-cancel" data-fleet-cancel hidden>${icon("close", 11)} Cancel</button>
       </div>
     </div>
@@ -1659,7 +1659,7 @@ function paintRing(card: HTMLElement, p: ProgressView | null, at: number): void 
   const ring = $("[data-lane-ring]", card) as HTMLElement | null; if (!ring) return;
   ring.hidden = !p || p.liveness.state === "idle" || !statusRing();
   if (ring.hidden || !p) return;
-  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this spoke");
+  const v = ringView(agedProgress(p, Math.max(0, Date.now() - at)), statusEta(), "Restart this agent");
   ($(".hud-ring-arc", ring) as SVGCircleElement).style.strokeDashoffset = String(100 - Math.min(100, Math.max(0, v.pct ?? 0)));
   ring.dataset.tone = v.tone;
   ring.dataset.empty = v.pct === null ? "1" : "0";
@@ -1745,11 +1745,11 @@ function paintFrame(run: LaneRun): void {
       promote.dataset.on = on;
       promote.innerHTML = v.promoted ? icon("restore", 12) : icon("arrowRight", 12);
       const label = v.promoted
-        ? "Pull the main composer back off this spoke"
-        : "Drive this spoke from the main composer";
+        ? "Pull the main composer back off this agent"
+        : "Drive this agent from the main composer";
       promote.setAttribute("aria-label", label);
-      if (v.promoted) setTip(promote, "The main composer is typing into this spoke. Click to pull it back to the master agent; the spoke keeps running either way.");
-      else setTip(promote, "Promote", "Point the main composer at this spoke, even mid-turn. This card stays fully usable.");
+      if (v.promoted) setTip(promote, "The main composer is typing into this agent. Click to pull it back to the master agent; this agent keeps running either way.");
+      else setTip(promote, "Promote", "Point the main composer at this agent, even mid-turn. This card stays fully usable.");
     }
   }
   // P-FLEET.L10: the close button RELABELS with lane state, because the same glyph doing two different
@@ -1760,10 +1760,10 @@ function paintFrame(run: LaneRun): void {
     const gone = v.status === "stopped" ? "1" : "0";
     if (dismiss.dataset.gone !== gone) {
       dismiss.dataset.gone = gone;
-      const label = gone === "1" ? "Dismiss this spoke" : "Stop this spoke";
+      const label = gone === "1" ? "Dismiss this agent" : "Stop this agent";
       dismiss.setAttribute("aria-label", label);
-      if (gone === "1") setTip(dismiss, "Dismiss", "Remove this card from the grid. The spoke's session history stays on disk and stays reviewable in the Timeline.");
-      else setTip(dismiss, "Stop the spoke. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.");
+      if (gone === "1") setTip(dismiss, "Dismiss", "Remove this card from the grid. The agent's session history stays on disk and stays reviewable in the Timeline.");
+      else setTip(dismiss, "Stop the agent. The card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it.");
     }
   }
   const name = $("[data-fleet-name]", card) as HTMLElement | null;
@@ -1772,7 +1772,7 @@ function paintFrame(run: LaneRun): void {
     // P-TIP.1 (ADR-0599): one premium tip carries both the old native title (name and state) and the
     // header's "open in composer" explanation, which the native title used to hide.
     setTip(name, `${v.name || v.id} \u00b7 ${v.status} \u00b7 ${v.turns} turns${v.respawns ? ` \u00b7 respawned ${v.respawns}\u00d7, memory carried` : ""}`,
-      "Click the header to drive this spoke from the full composer - the same takeover as clicking its spoke in the orbit. Drag the grip to reorder.");
+      "Click the header to drive this agent from the full composer - the same takeover as clicking it in the orbit. Drag the grip to reorder.");
   }
   const cwd = $("[data-fleet-cwd]", card) as HTMLElement | null;
   // P-HUB-PICK.1 (ADR-0516): the codebase, not just the folder, in the same color as on the orbit and in
@@ -1804,7 +1804,7 @@ function paintFrame(run: LaneRun): void {
     if (badge.pct !== null) {
       usage.dataset.tone = badge.tone;
       usage.textContent = `ctx ${badge.pct}%`;
-      setTip(usage, badge.label, `${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this spoke, not estimated.`);
+      setTip(usage, badge.label, `${fmtTokens(run.meter.ctxTokens)} of ${fmtTokens(run.meter.ctxSize)} tokens, ${fmtUsd(run.meter.costUsd)} so far. Measured by this agent, not estimated.`);
     }
   }
   // P-HEALTH.1: the harness probed or recovered this lane BY ITSELF - the user must see that a silent lane
@@ -1817,8 +1817,8 @@ function paintFrame(run: LaneRun): void {
       health.dataset.healthAction = h.action;
       health.textContent = h.action === "probe" ? "probed" : "recovered";
       setTip(health, h.action === "probe"
-        ? `The harness asked this spoke for a status because it went quiet: ${h.reason}`
-        : `The harness canceled and resumed this spoke in place: ${h.reason}`);
+        ? `The harness asked this agent for a status because it went quiet: ${h.reason}`
+        : `The harness canceled and resumed this agent in place: ${h.reason}`);
     }
   }
   paintProgress(run); // P-PROGRESS.1
@@ -1833,7 +1833,7 @@ function paintFrame(run: LaneRun): void {
       const secs = Math.round(quietMs / 1000);
       const open = v.openCalls > 0 ? ` ${v.openCalls} tool call${v.openCalls === 1 ? "" : "s"} are still out, which is why the harness is waiting rather than probing.` : "";
       quiet.textContent = m >= 1 ? `quiet ${m}m` : `quiet ${secs}s`;
-      setTip(quiet, `Nothing has streamed for ${secs}s. Long turns run to completion (no spoke clock) - Cancel is yours whenever you want it.${open}`);
+      setTip(quiet, `Nothing has streamed for ${secs}s. Long turns run to completion (no agent clock) - Cancel is yours whenever you want it.${open}`);
     }
   }
   const sel = $("[data-fleet-model]", card) as HTMLSelectElement | null;
@@ -1851,7 +1851,7 @@ function paintFrame(run: LaneRun): void {
   if (ap) {
     ap.hidden = v.status !== "needs-approval";
     const txt = $("[data-fleet-approve-txt]", card) as HTMLElement | null;
-    if (txt) { const s = v.pendingApproval?.summary ?? "The spoke asks to run a gated action."; txt.textContent = s; setTip(txt, v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s); }
+    if (txt) { const s = v.pendingApproval?.summary ?? "The agent asks to run a gated action."; txt.textContent = s; setTip(txt, v.pendingApproval?.kind ? `${s} (${v.pendingApproval.kind})` : s); }
   }
   // P-FLEET.L4: error is a state, not a grave. Retry re-sends the last prompt (error lanes with one);
   // Respawn revives in place. A user-STOPPED lane gets Respawn only - stopping was a decision.
@@ -1862,8 +1862,8 @@ function paintFrame(run: LaneRun): void {
     if (show) {
       const txt = $("[data-fleet-recover-txt]", card) as HTMLElement | null;
       const msg = v.status === "error"
-        ? "The spoke failed. Retry re-sends the last prompt; either way its memory is carried."
-        : "Spoke stopped. Respawn revives it in place with its memory.";
+        ? "The agent failed. Retry re-sends the last prompt; either way its memory is carried."
+        : "Agent stopped. Respawn revives it in place with its memory.";
       if (txt) { txt.textContent = msg; setTip(txt, msg); }
       const retry = $("[data-fleet-retry]", card) as HTMLButtonElement | null;
       if (retry) retry.hidden = v.status !== "error" || !v.canRetry;
@@ -1888,8 +1888,8 @@ function paintFrame(run: LaneRun): void {
     const pushing = pushingLanes.has(v.id);
     const html = v.queued
       .map((item, i) => `<span class="fleet-q-chip" data-q-row="${i}" data-tip="Right-click or long-press to copy"><b>${i + 1}</b><span class="fleet-q-txt" data-tip="${esc(tipEsc(item.text))}">${esc(item.text)}</span>${item.images ? `<span class="fleet-q-img" data-tip="${item.images} image${item.images === 1 ? "" : "s"} ride with this prompt">${item.images} img</span>` : ""}${item.files ? `<span class="fleet-q-img fleet-q-files" data-tip="${item.files} file${item.files === 1 ? "" : "s"} ride with this prompt">${item.files} file${item.files === 1 ? "" : "s"}</span>` : ""}<button class="fleet-q-btn fleet-q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt, its images and its files back into the composer to edit" aria-label="Update staged prompt ${i + 1}">Update</button>${pushing
-        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for a prompt from this lane" aria-label="Push in progress">Pushing\u2026</button>`
-        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree while this lane keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel lane on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" data-tip="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" data-tip="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" data-tip="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
+        ? `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" aria-disabled="true" data-tip="Pushing|A new agent on its own worktree is starting for a prompt from this one" aria-label="Push in progress">Pushing\u2026</button>`
+        : `<button class="fleet-q-btn fleet-q-push" data-q-go="${i}" data-tip="Push now|Run this in parallel in a new agent on its own worktree while this one keeps working" aria-label="Push staged prompt ${i + 1} to a new parallel agent on its own worktree">Push now</button>`}<button class="fleet-q-btn" data-q-up="${i}" data-tip="Run earlier" aria-label="Move staged prompt ${i + 1} up" ${i === 0 ? "disabled" : ""}>\u2191</button><button class="fleet-q-btn" data-q-dn="${i}" data-tip="Run later" aria-label="Move staged prompt ${i + 1} down" ${i === v.queued.length - 1 ? "disabled" : ""}>\u2193</button><button class="fleet-q-btn" data-q-x="${i}" data-tip="Remove" aria-label="Remove staged prompt ${i + 1}">\u00d7</button></span>`)
       .join("");
     // Compared with the HTML last WRITTEN, never `q.innerHTML`: the browser re-serializes (`disabled` reads
     // back as `disabled=""`), so that comparison never matched and rebuilt the chips on every paint.
@@ -1907,14 +1907,14 @@ function paintFrame(run: LaneRun): void {
     send.disabled = v.status === "stopped" || run.staging;
     send.setAttribute("aria-busy", run.staging ? "true" : "false");
     if (run.staging) setTip(send, "Staging\u2026", "Waiting for the engine to confirm");
-    else if (staging) setTip(send, "Stage for later", "Runs in order when this spoke goes idle");
+    else if (staging) setTip(send, "Stage for later", "Runs in order when this agent goes idle");
     else setTip(send, "Send");
     send.classList.toggle("staging", staging);
   }
   const input = $("[data-fleet-input]", card) as HTMLTextAreaElement | null;
   if (input) {
     input.disabled = v.status === "stopped";
-    input.placeholder = run.streaming || v.status === "working" ? "Stage the next prompt\u2026" : "Prompt this spoke\u2026";
+    input.placeholder = run.streaming || v.status === "working" ? "Stage the next prompt\u2026" : "Prompt this agent\u2026";
   }
 }
 
@@ -2064,9 +2064,9 @@ function liveCopy(run: LaneRun): { text: string; thinking?: string; tools: reado
 }
 
 function idleLabel(run: LaneRun): string {
-  if (run.view.status === "starting") return "Starting the spoke\u2026";
-  if (run.view.status === "stopped") return "Spoke stopped.";
-  return "No output yet - prompt this spoke below.";
+  if (run.view.status === "starting") return "Starting the agent\u2026";
+  if (run.view.status === "stopped") return "Agent stopped.";
+  return "No output yet - prompt this agent below.";
 }
 
 /** APPEND newly-settled turns. Existing turn nodes are not read, not diffed and not rewritten: the node
@@ -2321,7 +2321,7 @@ function sendPrompt(run: LaneRun): void {
       run.stageKey = null;
       run.turns = run.turns.filter((t) => t.id !== turnId);
       run.view.queued = [...run.view.queued, chip];
-      setLaneNote(run, "This spoke was still busy, so your prompt was staged. It runs when the current turn ends.");
+      setLaneNote(run, "This agent was still busy, so your prompt was staged. It runs when the current turn ends.");
       paintOutput(run); paintFrame(run);
       return;
     }
@@ -2343,7 +2343,7 @@ function editStaged(run: LaneRun, i: number): void {
   if (!deps) return;
   const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
   if (!input) return;
-  if (input.value.trim() || run.attached.length || run.files?.count()) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this lane's composer, then press Update."); return; }
+  if (input.value.trim() || run.attached.length || run.files?.count()) { setLaneNote(run, "Update never overwrites a draft. Send, stage or clear this agent's composer, then press Update."); return; }
   if (!run.view.queued[i]) return;
   const id = run.view.id;
   run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
@@ -2435,7 +2435,7 @@ async function copyStaged(run: LaneRun, i: number, remove: boolean): Promise<voi
   // P-ATTACH.1 (ADR-0598): the text goes to the clipboard; the files are not text, so they come back to this
   // lane's bar as ready chips instead of leaving with the removed prompt.
   const back = await restoreLaneFiles(run, fileIds);
-  const filesNote = back.ready > 0 ? ` Its ${back.ready} file${back.ready === 1 ? " is" : "s are"} on this lane's bar.` : "";
+  const filesNote = back.ready > 0 ? ` Its ${back.ready} file${back.ready === 1 ? " is" : "s are"} on this agent's bar.` : "";
   setLaneNote(run, `Copied and removed. Paste it into a prompt bar to edit or keep it${imgs ? `; its ${imgs} image${imgs === 1 ? " was" : "s were"} removed with it` : ""}.${filesNote}${back.note ? ` ${back.note}` : ""}`);
 }
 
@@ -2446,15 +2446,15 @@ async function steerStaged(run: LaneRun, i: number): Promise<void> {
   const id = run.view.id;
   const r = await deps.fleetQueuePeek(id, i).catch(() => null);
   if (!r?.ok || !r.item) { void refresh(); setLaneNote(run, `Not steered: ${r?.reason ?? "the engine did not answer"}.`); return; }
-  if (r.item.images.length) { setLaneNote(run, "Steer is text only. This prompt carries images, so it stays staged; Push now runs it with them in a parallel lane."); return; }
-  if (r.item.attachments?.length) { setLaneNote(run, "Steer is text only. This prompt carries files, so it stays staged; Push now runs it with them in a parallel lane."); return; }
+  if (r.item.images.length) { setLaneNote(run, "Steer is text only. This prompt carries images, so it stays staged; Push now runs it with them in a parallel agent."); return; }
+  if (r.item.attachments?.length) { setLaneNote(run, "Steer is text only. This prompt carries files, so it stays staged; Push now runs it with them in a parallel agent."); return; }
   const text = r.item.text;
   run.view.queued = run.view.queued.filter((_, n) => n !== i); // optimistic; the poll is truth
   paintFrame(run);
   const res = await deps.interject(id, text, { live: true });
   if (res.ok) { void deps.fleetQueueRemove(id, i, text).catch(() => { /* the next poll corrects it */ }); return; }
   void refresh(); // repaint the chip the optimistic removal hid
-  setLaneNote(run, `Not steered: ${res.reason}. It stays staged and runs as this lane's next prompt.`);
+  setLaneNote(run, `Not steered: ${res.reason}. It stays staged and runs as this agent's next prompt.`);
 }
 
 /** Push now on a lane's staged chip: the prompt (full text + its own images) runs at once in a NEW lane on
@@ -2464,7 +2464,7 @@ async function steerStaged(run: LaneRun, i: number): Promise<void> {
 async function pushStagedParallel(run: LaneRun, i: number): Promise<void> {
   if (!deps) return;
   const id = run.view.id;
-  if (pushingLanes.has(id)) { setLaneNote(run, "A parallel lane from this lane is still starting. Push the next prompt once it runs."); return; }
+  if (pushingLanes.has(id)) { setLaneNote(run, "A parallel agent pushed from this one is still starting. Push the next prompt once it runs."); return; }
   if (!run.view.queued[i]) return;
   pushingLanes.add(id); paintFrame(run);
   try {
@@ -2521,7 +2521,7 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
   if (!dock) openFleetGrid();
   const r = await d.fleetSpawn({ cwd: mainCheckoutCwd(src.cwd), model: src.model || undefined, name, worktree: true })
     .catch((e: unknown) => ({ ok: false, reason: e instanceof Error ? e.message : String(e), code: undefined, lane: undefined, worktree: undefined }));
-  if (!r?.ok || !r.lane || !r.worktree) return { ok: false, reason: r?.reason || "the engine refused the lane", ...(r?.code ? { code: r.code } : {}) };
+  if (!r?.ok || !r.lane || !r.worktree) return { ok: false, reason: r?.reason || "the engine refused the agent", ...(r?.code ? { code: r.code } : {}) };
   const lane = r.lane;
   const branch = r.worktree.branch;
   addToShownBoard(lane.id); // P-FLEET-BOARDS.1: a new agent joins the board shown
@@ -2549,7 +2549,7 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
         target.streaming = false; foldPending(target); paintFrame(target); paintOutput(target); paintPill(); maybeDrain(target);
       });
   });
-  if (refused) return { ok: false, reason: `the new lane ${name} started but did not take the prompt: ${refused}` };
+  if (refused) return { ok: false, reason: `the new agent ${name} started but did not take the prompt: ${refused}` };
   return { ok: true, laneId: lane.id, name, branch };
 }
 
@@ -2694,7 +2694,7 @@ function runRespawn(run: LaneRun): void {
   void deps.fleetRespawn(run.view.id)
     .then((r) => {
       if (r?.ok && r.lane) { run.view = r.lane; paintFrame(run); paintOutput(run); paintPill(); return; }
-      setLaneNote(run, r?.reason ?? "the spoke could not be restarted");
+      setLaneNote(run, r?.reason ?? "the agent could not be restarted");
       void refresh();
     })
     .catch(() => { /* the next poll corrects it */ });
@@ -2720,7 +2720,7 @@ async function dismissLane(run: LaneRun): Promise<void> {
   if (r && !r.ok) {
     // The only refusal is a live turn, and it names the fix. Surface it rather than failing silently:
     // a close button that does nothing is indistinguishable from a broken one.
-    setLaneNote(run, r.reason ?? "that spoke could not be dismissed");
+    setLaneNote(run, r.reason ?? "that agent could not be dismissed");
     return;
   }
   run.follow?.stop();
@@ -2766,10 +2766,10 @@ function openAutoRiskModal(run: LaneRun): void {
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fleetAutoRiskTitle">
       <div class="modal-icon">${icon("bolt", 24)}</div>
       <h2 class="modal-title" id="fleetAutoRiskTitle">Enable full auto-mode?</h2>
-      <p class="modal-desc">Every approval this lane asks for - commands, file edits, network access - will be granted automatically, without asking you.</p>
+      <p class="modal-desc">Every approval this agent asks for - commands, file edits, network access - will be granted automatically, without asking you.</p>
       <p class="modal-desc">LUCID's security gate still scans every tool call and quarantines suspicious content. Auto-mode removes the human approval step only.</p>
       <p class="modal-desc">By enabling it you accept the risk of the commands the agent chooses to run.</p>
-      <label class="fleet-auto-all"><input type="checkbox" data-auto-all /><span>Apply to all lanes, including new ones</span></label>
+      <label class="fleet-auto-all"><input type="checkbox" data-auto-all /><span>Apply to all agents, including new ones</span></label>
       <div class="modal-actions">
         <button class="btn-mini" type="button" data-auto-cancel>Cancel</button>
         <button class="btn-mini danger" type="button" data-auto-accept>${icon("bolt", 12)} Accept risk and enable</button>
@@ -2811,13 +2811,13 @@ function toggleSpawnForm(): void {
   const form = el(`<div class="fleet-card fleet-spawn-card">
     <div class="fleet-card-head">
       <span class="fleet-led" aria-hidden="true"></span>
-      <span class="fleet-lane-name">New lane</span>
-      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-spoke form" data-tip="Close">${icon("close", 12)}</button>
+      <span class="fleet-lane-name">New agent</span>
+      <button class="fleet-card-btn" data-spawn-cancel aria-label="Close the new-agent form" data-tip="Close">${icon("close", 12)}</button>
     </div>
     <div class="fleet-spawn">
       <label class="fleet-spawn-lbl" data-spawn-cwd-lbl>Folder</label>
       <div class="fleet-spawn-row">
-        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this spoke works in" />
+        <input class="fleet-spawn-in" data-spawn-cwd type="text" value="${esc(deps.getMasterCwd())}" spellcheck="false" aria-label="The folder this agent works in" />
         <button class="btn-mini fleet-browse" data-spawn-browse data-tip="Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button>
       </div>
       ${repoPickerHtml()}
@@ -2831,11 +2831,11 @@ function toggleSpawnForm(): void {
         <input class="fleet-spawn-in" data-spawn-pat type="password" autocomplete="off" spellcheck="false" aria-label="Personal access token for this repository host" placeholder="Personal access token (private repos)" />
         <label class="fleet-spawn-save"><input type="checkbox" data-spawn-save checked /><span data-spawn-save-txt>Remember this token for this host</span></label>
       </div>
-      <label class="fleet-spawn-save fleet-spawn-wt" data-tip="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this lane gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+      <label class="fleet-spawn-save fleet-spawn-wt" data-tip="The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the agent closes."><input type="checkbox" data-spawn-wt /><span>Own worktree: this agent gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
       <label class="fleet-spawn-lbl">Name <span class="fleet-spawn-opt">optional</span></label>
-      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="spoke-${runs.size + 1}" spellcheck="false" aria-label="A name for this spoke" />
+      <input class="fleet-spawn-in" data-spawn-name type="text" placeholder="agent-${runs.size + 1}" spellcheck="false" aria-label="A name for this agent" />
       <label class="fleet-spawn-lbl">Model</label>
-      <select class="fleet-spawn-in" data-spawn-model aria-label="The model this spoke runs">${opts}</select>
+      <select class="fleet-spawn-in" data-spawn-model aria-label="The model this agent runs">${opts}</select>
       <div class="fleet-spawn-err" data-spawn-err hidden></div>
       <div class="fleet-spawn-acts"><button class="btn-mini ok" data-spawn-go>${icon("bolt", 12)} Spawn</button></div>
     </div>
@@ -2886,7 +2886,7 @@ function revealPathEnd(input: HTMLInputElement | null): void {
 async function browseSpawnFolder(): Promise<void> {
   if (!dock || !deps) return;
   const form = $(".fleet-spawn-card", dock) as HTMLElement | null; if (!form) return;
-  const picked = await deps.pickFolder({ title: "Choose or create the folder this spoke works in", confirm: "Use this folder" }).catch(() => null);
+  const picked = await deps.pickFolder({ title: "Choose or create the folder this agent works in", confirm: "Use this folder" }).catch(() => null);
   if (!picked) return;
   const input = $("[data-spawn-cwd]", form) as HTMLInputElement | null;
   if (input) input.value = picked;
@@ -2940,7 +2940,7 @@ async function submitSpawn(): Promise<void> {
   const fail = (msg: string): void => { if (err) { err.textContent = msg; err.hidden = false; } };
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
   if (repoRaw && !remote) { fail("That is not a repo URL. Paste an https:// link, or a git@host:org/repo remote."); return; }
-  if (!repoRaw && !cwd) { fail("Pick the folder the spoke works in, or paste a repo URL to clone."); return; }
+  if (!repoRaw && !cwd) { fail("Pick the folder the agent works in, or paste a repo URL to clone."); return; }
   const go = $("[data-spawn-go]", form) as HTMLButtonElement | null;
   const goHtml = go?.innerHTML ?? "";
   if (err) err.hidden = true;
@@ -2983,7 +2983,7 @@ async function submitSpawn(): Promise<void> {
   if (go) { go.disabled = false; go.innerHTML = goHtml; }
   // A refusal carries the measured numbers ("system CPU has been at 93% for 34s") or the redacted git
   // failure - show it verbatim, it is the whole point of the guard.
-  fail([warn, r?.reason || "The engine refused the spoke."].filter(Boolean).join(" "));
+  fail([warn, r?.reason || "The engine refused the agent."].filter(Boolean).join(" "));
 }
 
 // ---------------------------------------------------------------- delegated events
@@ -3073,7 +3073,7 @@ function onClick(ev: Event): void {
   const rc = t.closest("[data-fleet-repo]") as HTMLElement | null;
   if (rc) {
     const rrun = runs.get((rc.closest(".fleet-card[data-lane]") as HTMLElement | null)?.dataset.lane ?? "");
-    if (rrun?.view.repo) openRepoDetails(rc, rrun.view.repo, `spoke ${rrun.view.name}`, (u) => deps?.openUrl?.(u));
+    if (rrun?.view.repo) openRepoDetails(rc, rrun.view.repo, `agent ${rrun.view.name}`, (u) => deps?.openUrl?.(u));
     return;
   }
   const gc = t.closest("[data-fleet-grp]") as HTMLElement | null;

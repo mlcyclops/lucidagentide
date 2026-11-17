@@ -461,7 +461,7 @@ function buildShell(): void {
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
       <label class="agent-tier-control" id="agentTierControl" hidden data-tip="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
-      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet lanes, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
+      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet agents, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimize">${icon("minus", 15)}</button>
@@ -479,7 +479,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
         <!-- P-RS-VIEW.1 (ADR-0539): shown once the Remote Spokes plugin is installed; the badge counts parked approvals and open alerts. -->
-        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote spokes|LUCID on your other machines: what each one is doing, its alerts, and a button for the hub's admin panel" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
+        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote agents|LUCID on your other machines: what each one is doing, its alerts, and a button for the hub's admin panel" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
@@ -506,7 +506,7 @@ function buildShell(): void {
         <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
         <div class="sess-find">
           <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
-          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" aria-label="Show spoke sessions" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom">${icon("share", 14)}<span class="sess-spokes-n" hidden></span></button>
+          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" aria-label="Show agent sessions" data-tip="Agents hidden|Sessions your fleet agents ran are hidden. Click to show them." data-tip-side="bottom">${icon("share", 14)}<span class="sess-spokes-n" hidden></span></button>
         </div>
         <div class="side-list" id="sessList"></div>
         <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
@@ -562,7 +562,7 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1/L17: the fleet - headless local engine lanes. Opens the hub-and-spoke ORBIT map;
                  the classic grid of mini agent windows is one click away inside it. -->
-            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub and agents|Your agents around the Main hub. Click an agent to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
             <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
                  A failed startup status probe used to paint a paragraph into an empty thread ("Connection
                  unavailable: signal timed out. Reconnect to check session status before sending."), which
@@ -572,7 +572,7 @@ function buildShell(): void {
                  a turn that may still be running. -->
             <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
-            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet spokes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet agents, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyzer of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -784,7 +784,7 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   // P-SWITCH.2 (ADR-0404): where this session is running right now, visible before the click.
   const badge = liveBadge(s.live);
   // P-SESS-SEARCH.1: a spoke session that is not live still says which spoke ran it (shown only with Spokes on).
-  const spokeLine = !badge && s.spoke ? `<div class="sess-live">spoke "${esc(s.spoke)}"</div>` : "";
+  const spokeLine = !badge && s.spoke ? `<div class="sess-live">agent "${esc(s.spoke)}"</div>` : "";
   // P-SESS-ARCHIVE.1 (ADR-0517): an archived row says so and offers Restore; a live row offers Archive.
   const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
   const archBtn = s.archived
@@ -818,13 +818,13 @@ function paintSpokesToggle(hidden: number | undefined): void {
   const b = $("#sessSpokes") as HTMLElement | null;
   if (!b) return;
   b.setAttribute("aria-pressed", String(showSpokes));
-  b.setAttribute("aria-label", showSpokes ? "Hide spoke sessions" : "Show spoke sessions");
+  b.setAttribute("aria-label", showSpokes ? "Hide agent sessions" : "Show agent sessions");
   b.classList.toggle("on", showSpokes);
   const n = $(".sess-spokes-n", b) as HTMLElement | null;
   if (n) { n.textContent = String(hidden ?? 0); n.hidden = showSpokes || !hidden; }
   b.dataset.tip = showSpokes
-    ? "Spokes shown|Sessions your fleet spokes ran are listed. Click to hide them."
-    : `Spokes hidden|${hidden ?? 0} session${hidden === 1 ? "" : "s"} your fleet spokes ran ${hidden === 1 ? "is" : "are"} hidden. Click to show them.`;
+    ? "Agents shown|Sessions your fleet agents ran are listed. Click to hide them."
+    : `Agents hidden|${hidden ?? 0} session${hidden === 1 ? "" : "s"} your fleet agents ran ${hidden === 1 ? "is" : "are"} hidden. Click to show them.`;
 }
 
 async function renderSessionSearch(): Promise<void> {
@@ -837,7 +837,7 @@ async function renderSessionSearch(): Promise<void> {
   if (!r) { list.innerHTML = `<div class="side-empty">Search did not answer. The engine may be restarting; try again in a moment.</div>`; return; }
   lastSearchHits = r.hits;
   paintSpokesToggle(r.hiddenSpokes);
-  const hiddenNote = r.hiddenSpokes ? ` ${r.hiddenSpokes} more in spoke sessions; turn on Spokes to see them.` : "";
+  const hiddenNote = r.hiddenSpokes ? ` ${r.hiddenSpokes} more in agent sessions; turn on Agents to see them.` : "";
   if (!r.hits.length) { list.innerHTML = `<div class="side-empty">No sessions match "${esc(q)}".${hiddenNote}</div>`; return; }
   const head = `<div class="sess-count">${r.total === r.hits.length ? `${r.total} match${r.total === 1 ? "" : "es"}` : `Newest ${r.hits.length} of ${r.total} matches`}</div>`;
   const tail = r.total > r.hits.length || hiddenNote ? `<div class="side-empty">${r.total > r.hits.length ? "Add a word to narrow it." : ""}${hiddenNote}</div>` : "";
@@ -933,9 +933,9 @@ async function openArchiveRule(anchor: HTMLElement): Promise<void> {
       <div class="arch-pop-h">${icon("archive", 14)} <b>Auto-archive</b></div>
       <label class="arch-pop-row"><input type="checkbox" data-ap-auto ${st.policy.auto ? "checked" : ""}/> <span>Archive automatically (at start, then every 6 hours)</span></label>
       <label class="arch-pop-row"><span>Sessions untouched for</span> <input type="number" min="1" max="3650" data-ap-days value="${st.policy.days}"/> <span>days</span></label>
-      <label class="arch-pop-row"><span>Spoke and empty sessions after</span> <input type="number" min="1" max="3650" data-ap-spoke value="${st.policy.spokeDays}"/> <span>days</span></label>
+      <label class="arch-pop-row"><span>Agent and empty sessions after</span> <input type="number" min="1" max="3650" data-ap-spoke value="${st.policy.spokeDays}"/> <span>days</span></label>
       <p class="arch-pop-note" data-ap-preview>${st.wouldArchive} session${st.wouldArchive === 1 ? "" : "s"} match the saved rule now. ${esc(last)}</p>
-      <p class="arch-pop-note">Covers every workspace. Sessions open in Main or any spoke are never moved, and nothing is deleted.</p>
+      <p class="arch-pop-note">Covers every workspace. Sessions open in Main or any agent are never moved, and nothing is deleted.</p>
       <div class="arch-pop-actions"><button class="btn-mini" data-ap-save>Save</button><button class="btn-mini" data-ap-now>Save and archive now</button></div>
     </div>`);
   const read = (): ArchivePolicyView => ({
@@ -959,7 +959,7 @@ async function openArchiveRule(anchor: HTMLElement): Promise<void> {
         if (!s) return;
         showToast({
           title: `Archive ${s.wouldArchive} session${s.wouldArchive === 1 ? "" : "s"}?`,
-          desc: `Sessions untouched for ${s.policy.days} days (spoke and empty ones after ${s.policy.spokeDays}) move to the Archived group, in every workspace. Nothing is deleted.`,
+          desc: `Sessions untouched for ${s.policy.days} days (agent and empty ones after ${s.policy.spokeDays}) move to the Archived group, in every workspace. Nothing is deleted.`,
           actions: [
             { label: "Cancel" },
             { label: "Archive", run: async () => {
@@ -2354,7 +2354,7 @@ function renderStartupFailed(container: HTMLElement, reason?: string): void {
  *  app; only a refusal needs words here, with the engine's own reason. */
 async function openTerminalHub(): Promise<void> {
   const r = await bridge.hubOpen().catch(() => null);
-  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same spokes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same agents. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
   else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
 }
 
@@ -2984,7 +2984,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // did not exist.
     if (wireType === "error" && opts.laneId) {
       terminal = true;
-      const why = ("message" in e && typeof e.message === "string" && e.message) || "the lane did not accept the prompt";
+      const why = ("message" in e && typeof e.message === "string" && e.message) || "the agent did not accept the prompt";
       const started = buf.trim() || sawTool;
       stopThinkingCues(); finishHud(); setPhase(started ? "Failed" : "Not sent"); paintHud();
       if (started) { buf += `\n\n[turn ended in error: ${why}]`; (node as MsgNode)._md = buf; renderAnswerBody(streamEl, buf, marks); }
@@ -3077,7 +3077,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // write's own path is the signal - so without this the spoke takeover had no preview pane at all.
       if (opts.laneId && e.code?.path && isAutoPreviewPath(e.code.path)) {
         const lt = state.composerTarget;
-        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "lane", e.code.path);
+        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "agent", e.code.path);
       }
       scrollChat();
     }
@@ -3218,7 +3218,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   };
   const reconnect = async () => {
     if (!owns() || settled || connecting) return;
-    if (opts.laneId) { showTurnReconnect("Reopen this lane from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
+    if (opts.laneId) { showTurnReconnect("Reopen this agent from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
     try {
       if (turnId) {
         const status = await bridge.chatStatus();
@@ -3251,7 +3251,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       if (!owns()) return;
       try {
         const result = await (opts.laneId ? bridge.fleetCancel(opts.laneId) : bridge.cancelChat());
-        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The lane did not confirm Stop");
+        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The agent did not confirm Stop");
         stopped = true; if (owns()) settle();
       } catch (error) { if (owns()) showTurnReconnect(`Stop was not confirmed: ${error instanceof Error ? error.message : String(error)}. Reconnect or try Stop again.`, () => void reconnect()); }
     },
@@ -3349,9 +3349,9 @@ function renderQueued(): void {
     const files = nf ? `<span class="q-files" data-tip="${nf} file${nf === 1 ? "" : "s"} ride with this prompt|Copied and scanned when they were added. Update brings them back to the composer.">${nf} file${nf === 1 ? "" : "s"}</span>` : "";
     // P-PUSH.PAR1: an item already starting its parallel lane cannot be pushed or sent again until that settles.
     const push = q.mode !== "hold" ? ""
-      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for this prompt">Pushing\u2026</button>`
+      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new agent on its own worktree is starting for this prompt">Pushing\u2026</button>`
       : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
-      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree" aria-label="Push now: run this in parallel in a new lane on its own worktree">Push now</button>`;
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new agent on its own worktree" aria-label="Push now: run this in parallel in a new agent on its own worktree">Push now</button>`;
     const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
     return `<div class="q-pill" data-q-row="${i}" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}|Right-click or long-press to copy it">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
@@ -3374,7 +3374,7 @@ function renderQueued(): void {
   $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qEdit);
     // P-PUSH.PAR1: pulled back mid-push, the same prompt would sit in the composer AND run in the new lane.
-    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel lane. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
+    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel agent. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
     editStagedPrompt(i);
   }));
   $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
@@ -3722,7 +3722,7 @@ async function promoteLane(laneId: string): Promise<void> {
     // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
     // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
     // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
-    showToast({ tone: "warn", title: "Can't attach to this spoke", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    showToast({ tone: "warn", title: "Can't attach to this agent", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
     void recoverMasterTurn();
     return;
   }
@@ -3788,7 +3788,7 @@ function demoteLane(): void {
   const held = nextHold(state.queuedItems);
   if (held.item) {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
-    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the spoke's turn to end. It is back in the composer; reattach the spoke to send it there.", timeout: 7000 });
+    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the agent's turn to end. It is back in the composer; reattach the agent to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
@@ -3802,7 +3802,7 @@ function demoteLane(): void {
   void bridge.fleetDemote().then((r) => {
     if (r?.ok) return;
     // The composer has already detached; the fleet card may still paint as attached until it reconciles.
-    showToast({ tone: "warn", title: "The spoke still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
+    showToast({ tone: "warn", title: "The agent still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
   // P-QUEUE-IMG.1 (ADR-0469): the held prompt comes back WITH its own images, after the swap, so they land
@@ -3910,7 +3910,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
   if (e.type === "error") {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();
-    addNoteChip(`The lane reported an error: ${e.message}`);
+    addNoteChip(`The agent reported an error: ${e.message}`);
     releaseHeldPrompt();
     return;
   }
@@ -4348,7 +4348,7 @@ async function openJobsSheet(): Promise<void> {
     const cron = readCron();
     if (!cron) { if (err) err.textContent = "Pick a valid time, day set, or cron expression."; return; }
     const t = tlist.find((x) => x.laneId === String(fd.get("target")));
-    if (!t) { if (err) err.textContent = "Pick a spoke (spawn one in Fleet first)."; return; }
+    if (!t) { if (err) err.textContent = "Pick an agent (start one in Fleet first)."; return; }
     const spec = {
       name: String(fd.get("name") ?? ""), prompt: String(fd.get("prompt") ?? ""), cron,
       target: { laneId: t.laneId, name: t.name, cwd: t.cwd, model: t.model, repo: t.repo },
@@ -4370,7 +4370,7 @@ async function openJobsSheet(): Promise<void> {
     const arm = t.closest("[data-job-arm]") as HTMLElement | null;
     if (arm) { void bridge.jobsUpdate(arm.dataset.jobArm!, { armed: arm.dataset.armTo === "1" }).then(redraw); return; }
     const run = t.closest("[data-job-run]") as HTMLElement | null;
-    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the spoke in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
+    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the agent in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
     const hist = t.closest("[data-job-hist]") as HTMLElement | null;
     if (hist) { const box = hist.closest(".job-row")?.querySelector(".job-hist") as HTMLElement | null; if (box) { box.hidden = !box.hidden; hist.setAttribute("aria-expanded", String(!box.hidden)); } return; }
     const del = t.closest("[data-job-del]") as HTMLElement | null;
@@ -5213,7 +5213,7 @@ async function recSignalsForLucid(): Promise<RecSignals | null> {
   const lanes = (fleet?.lanes ?? []).map((l) => {
     const r = l as unknown as Record<string, unknown>;
     const status = typeof r.status === "string" ? r.status : "";
-    return { name: typeof r.name === "string" && r.name ? r.name : "a lane", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
+    return { name: typeof r.name === "string" && r.name ? r.name : "an agent", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
   });
   const g = (goal?.goal ?? null) as unknown as Record<string, unknown> | null;
   const active = $(".sess.active") as HTMLElement | null;
@@ -5318,19 +5318,19 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
   if (a.kind === "set_setting") return applyAskSetting(a.params.key, a.params.value);
   if (a.kind === "spawn_lane") {
     const cwd = state.workspace?.current ?? "";
-    if (!cwd) return { ok: false, message: "There is no workspace folder open to start a lane in." };
+    if (!cwd) return { ok: false, message: "There is no workspace folder open to start an agent in." };
     const r = await bridge.fleetSpawn({ cwd, name: a.params.name }).catch(() => null);
-    if (!r?.ok || !r.lane) return failed("The lane could not start", r?.reason);
+    if (!r?.ok || !r.lane) return failed("The agent could not start", r?.reason);
     const q = await bridge.fleetQueueAdd(r.lane.id, a.params.prompt).catch(() => null);
     openFleetGrid();
-    if (!q?.ok) return failed(`Lane "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
-    return { ok: true, message: `Started lane "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
+    if (!q?.ok) return failed(`Agent "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
+    return { ok: true, message: `Started agent "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
   }
   if (a.kind === "prompt_lane") {
     const q = await bridge.fleetQueueAdd(a.params.laneId, a.params.text).catch(() => null);
     if (!q?.ok) return failed("The prompt could not be staged", q?.reason);
     openFleetGrid();
-    return { ok: true, message: `Staged on lane ${a.params.laneId}. The Fleet view is open: it runs there when the lane is idle.` };
+    return { ok: true, message: `Staged on agent ${a.params.laneId}. The Fleet view is open: it runs there when that agent is idle.` };
   }
   // P-ASKLUCID.9 (ADR-0600): the user confirmed an Edit image card that named the model. The engine scans the
   // change, checks egress, edits and saves under ~/.omp/ask-lucid/images; the result opens in the Preview's Ask
@@ -5349,7 +5349,7 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
   }
   const t = await bridge.fleetTaskAdd(a.params).catch(() => null);
   if (!t?.ok) return failed("The task could not be added", t && !t.ok ? t.error : undefined);
-  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to lane ${a.params.assignee}.` };
+  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to agent ${a.params.assignee}.` };
 }
 let miniRunner: RunnerHandle | null = null;
 // P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new
@@ -6024,7 +6024,7 @@ function secSubagents(v: PerCallModelView | null): string {
   const locked = v?.clamp != null;
   const body = `<div class="set-note">${icon("info", 12)} When the agent starts a <b>subagent</b> (a helper that takes one slice of the work), it normally runs on the model its role is set to. Turn this on to let the agent pick the model for each subagent it starts, for example a fast model for a quick search and a strong one for a hard review. It can only pick models you already have set up. The agent cannot turn this on itself.</div>
     <div class="voice-row"><label class="voice-lbl" for="perCallModel">Subagents may pick their model</label>
-      <select id="perCallModel" class="prov-key" data-percall-set="mode"${locked ? " disabled" : ""} data-tip="Per-call model choice|Off: subagents use their role's model. Only in eval agents: the agent may choose a model in eval agent() and workpool() calls only. On: also for every subagent it starts with the task tool. Takes effect for the main session now and for each lane at its next start.">
+      <select id="perCallModel" class="prov-key" data-percall-set="mode"${locked ? " disabled" : ""} data-tip="Per-call model choice|Off: subagents use their role's model. Only in eval agents: the agent may choose a model in eval agent() and workpool() calls only. On: also for every subagent it starts with the task tool. Takes effect for the main session now and for each fleet agent at its next start.">
         <option value="off"${sel("off")}>Off - subagents use their role's model (default)</option>
         <option value="eval"${sel("eval")}>Only in eval agents</option>
         <option value="on"${sel("on")}>On - the agent picks per subagent</option>
@@ -6432,10 +6432,10 @@ function secChatScroll(): string {
   const v = spokeSwitchScroll();
   const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
   const inner = `
-    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching spokes</label>
+    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching agents</label>
       <select id="spokeSwitchScroll" class="prov-key">${opt("latest", "Jump to the newest message")}${opt("resume", "Return to where I left off")}</select></div>
-    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
-  return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
+    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and an agent, or from one agent to another.</div>`;
+  return setCard("chatScroll", "Chat scrolling", "follow · agent switching", inner, true);
 }
 /** P-PROGRESS.3 (ADR-0412): the quiet footer is the default; this card opts into the P-PROGRESS.1 detail and
  *  the experimental time estimate. Rendered from localStorage, so it paints with no fetch. */
@@ -6448,7 +6448,7 @@ function secWorkingStatus(): string {
     <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
       <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
     <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
-      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet lane's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet agent's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
     <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }
@@ -10562,7 +10562,7 @@ function renderPrevTabs(): void {
       kindIcon +
       `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
       // P-TIP.1 (ADR-0599): aria-label keeps the name the native title used to give the close glyph.
-      `<span class="prev-tab-x" data-close="${esc(t.id)}" aria-label="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}" data-tip="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}">${icon("close", 10)}</span>` +
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" aria-label="${plugin ? "Close this tab and stop the plugin" : "Close this agent's preview tab"}" data-tip="${plugin ? "Close this tab and stop the plugin" : "Close this agent's preview tab"}">${icon("close", 10)}</span>` +
       `</button>`;
   }).join("");
   strip.innerHTML =
@@ -10581,7 +10581,7 @@ function ensureLaneTabFrame(tabId: string): void {
   f.setAttribute("sandbox", PREVIEW_SANDBOX);
   f.setAttribute("allow", PREVIEW_ALLOW);
   f.setAttribute("referrerpolicy", "no-referrer");
-  f.title = "A fleet lane's app preview";
+  f.title = "A fleet agent's app preview";
   f.hidden = true;
   if (prevDevice !== "desktop") { const d = PREV_DEVICES[prevDevice]; f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
   stage.appendChild(f);
@@ -10877,7 +10877,7 @@ async function captureCurrentPreview(): Promise<void> {
   const frame = laneFrame();
   const path = prevPathByLane[prevLane] ?? "";
   if (!frame || !path) {
-    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this spoke first.", actions: [{ label: "OK" }], timeout: 4200 });
+    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this agent first.", actions: [{ label: "OK" }], timeout: 4200 });
     return;
   }
   const btn = $("#prevCapture") as HTMLButtonElement | null;
@@ -12553,7 +12553,7 @@ async function recoverMasterTurn(): Promise<void> {
     if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
     if (promoted?.lane) {
       state.streaming = false; setSendEnabled();
-      showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
+      showTurnReconnect("A fleet agent owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
       return;
     }
     // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
@@ -12730,7 +12730,7 @@ async function openSession(id: string): Promise<void> {
   const [main, fleet] = pre;
   const plan = planSessionSwitch({ busy: main?.busy ?? null, mainSessionId: main?.sessionId ?? null, targetId: id, lanes: fleet?.lanes ?? [] });
   if (plan.kind === "promote") { void promoteLane(plan.laneId); return; }
-  if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in a spoke", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
+  if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in an agent", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
   if (plan.kind === "ask") { showSwitchSheet(id, plan.reason, main?.sessionId ?? null); return; }
   void resumeSession(id);
 }
@@ -12809,7 +12809,7 @@ async function openInSpoke(node: HTMLElement, targetId: string | null, target: S
   if (switchSheet !== node) return; // closed (Esc) while the spoke was starting: the spoke still exists in the fleet
   if (!r?.ok || !r.lane) {
     for (const b of buttons) b.disabled = false;
-    err.textContent = `The spoke could not start: ${r?.reason ?? "the engine did not answer"}.`;
+    err.textContent = `The agent could not start: ${r?.reason ?? "the engine did not answer"}.`;
     err.hidden = false;
     return;
   }
@@ -13413,7 +13413,7 @@ function renderStatus(): void {
   // already shows it) and the gate-active pill retired (the gate's WORK surfaces in the Security
   // panel + rail badge); the cache/session-cost pills live on in the Memory panel.
   $("#statusbar")!.innerHTML = `
-    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This spoke has not reported its context fill yet. It fills in with the spoke's next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this spoke's own sample" : " · live this session" : ""}`}">
+    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This agent has not reported its context fill yet. It fills in with its next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this agent's own sample" : " · live this session" : ""}`}">
       <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
         <circle class="ctx-track" cx="11" cy="11" r="8"/>
         <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
@@ -17673,7 +17673,7 @@ async function showPreviousVersionLanes(): Promise<void> {
   if (!old.length) return;
   const shown = old.slice(0, 4).map((l) => `"${l.name}"`).join(", ");
   showToast({
-    tone: "info", title: `${old.length} ${old.length === 1 ? "lane runs" : "lanes run"} the previous version`, timeout: 0,
+    tone: "info", title: `${old.length} ${old.length === 1 ? "agent runs" : "agents run"} the previous version`, timeout: 0,
     desc: `${shown}${old.length > 4 ? ` and ${old.length - 4} more` : ""} kept running through the update. Stop and respawn ${old.length === 1 ? "it" : "them"} when idle to use this version.`,
     actions: [{ label: "OK" }],
   });
@@ -18591,7 +18591,7 @@ function wire(): void {
     remoteSpokeAct: bridge.remoteSpokeAct,
     startRemoteSpokes: async () => {
       const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
-      if (!r || !r.ok) showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
+      if (!r || !r.ok) showToast({ title: "Remote Agents did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
     },
     openRemoteView: (at) => openRemoteView(at), // P-RS-VIEW.1 (ADR-0539)
     openRemoteAdmin: () => void openRemoteAdmin(), // P-RS-WINDOW.1 (ADR-0543): the plugin's panel in its own window
@@ -18665,14 +18665,14 @@ function wire(): void {
     stuckIds = now;
     const names = st.lanes.filter((l) => now.has(l.id)).map((l) => l.name);
     fleetBtn.classList.toggle("fleet-stuck", names.length > 0);
-    const tip = names.length ? `Likely stuck|${names.join(", ")}: a running tool call shows no activity. Open the spoke to Stop the turn or Restart the agent; LUCID will not stop it on its own.` : fleetTip;
+    const tip = names.length ? `Likely stuck|${names.join(", ")}: a running tool call shows no activity. Open the agent to Stop the turn or Restart it; LUCID will not stop it on its own.` : fleetTip;
     if (fleetBtn.getAttribute("data-tip") !== tip) fleetBtn.setAttribute("data-tip", tip);
     for (const l of fresh) {
       showToast({
         tone: "warn",
-        title: `Spoke "${l.name}" is likely stuck`,
+        title: `Agent "${l.name}" is likely stuck`,
         desc: `${l.progress?.liveness.label ?? "No activity on its running tool call"}. Open it to Stop the turn or Restart the agent; LUCID will not stop it on its own.`,
-        actions: [{ label: "Open spoke", run: () => void promoteLane(l.id) }, { label: "Dismiss" }],
+        actions: [{ label: "Open agent", run: () => void promoteLane(l.id) }, { label: "Dismiss" }],
       });
     }
   })(), 10_000);
@@ -18827,7 +18827,7 @@ function wire(): void {
       const next = await bridge.setPerCallModel((t0 as HTMLSelectElement).value as PerCallModelSetting).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save per-call model choice", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
       fillSec("subagents", secSubagents(next));
-      showToast({ title: `Per-call model choice: ${next.effective}`, desc: next.clamp ? "Saved, but it stays off while the limit above applies." : "The agent restarts with it; lanes take it at their next start.", timeout: 4000 });
+      showToast({ title: `Per-call model choice: ${next.effective}`, desc: next.clamp ? "Saved, but it stays off while the limit above applies." : "The agent restarts with it; fleet agents take it at their next start.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -19867,7 +19867,7 @@ const palette = createPalette(() => {
     { id: "mkt", title: "Open Plugins", icon: "plugins", hint: "drawer", run: () => openPluginsDrawer() }, // P-PLUGINS.1 (ADR-0461)
     { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
-    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet lane while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
+    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet agent while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },

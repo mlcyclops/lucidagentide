@@ -21,8 +21,8 @@ function job(over: Partial<ScheduledJob> = {}): ScheduledJob {
 describe("normalizeJobSpec", () => {
   test("refuses what must not arm, names why", () => {
     expect(normalizeJobSpec({ prompt: "x", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs a name" });
-    expect(normalizeJobSpec({ name: "n", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the prompt it sends to the lane" });
-    expect(normalizeJobSpec({ name: "n", prompt: "p", target: {}, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the lane's folder" });
+    expect(normalizeJobSpec({ name: "n", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the prompt it sends to the agent" });
+    expect(normalizeJobSpec({ name: "n", prompt: "p", target: {}, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the agent's folder" });
     const bad = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "every tuesday" });
     expect(bad.ok).toBe(false);
     const never = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "0 9 30 2 *" });

@@ -159,9 +159,9 @@ function paint(s: Session, host: HTMLElement, fresh: boolean): void {
   const line = status.querySelector("span");
   if (line) {
     line.textContent = s.error
-      ? `Could not read the spoke: ${s.error}`
+      ? `Could not read the agent: ${s.error}`
       : v ? `${STATE_WORDS[v.state]}${v.awaiting && v.state === "awaiting_approval" ? ` (${v.awaiting})` : ""} \u00b7 ${v.turns} ${v.turns === 1 ? "turn" : "turns"} \u00b7 updated ${new Date(v.updatedAt).toLocaleTimeString()}${s.loaded ? "" : " \u00b7 reading the journal\u2026"}`
-      : "Reading the spoke\u2026";
+      : "Reading the agent\u2026";
   }
   const rows = sessionRows(s.entries, prompts);
   const painted = out.querySelectorAll("[data-rs-row]").length;

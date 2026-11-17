@@ -18,7 +18,7 @@ import { laneHoldsSession, type SessionLive } from "../session_owner.ts"; // P-S
 export function liveBadge(live: SessionLive | undefined): { text: string; tone: "work" | "ask" | "ready" | "done" | "dim" } | null {
   if (!live) return null;
   if (live.where === "main") return live.busy ? { text: "working in Main", tone: "work" } : null;
-  const spoke = `spoke "${clip(live.name)}"`;
+  const spoke = `agent "${clip(live.name)}"`;
   switch (live.status) {
     case "working": return { text: `${spoke} \u00b7 working`, tone: "work" };
     case "needs-approval": return { text: `${spoke} \u00b7 needs your approval`, tone: "ask" };
@@ -125,8 +125,8 @@ export function switchSheetCopy(main: string | null, target: string | null, reas
   return {
     title: `${running} is still working`,
     body: `Opening ${next} here would stop it (${reason}). Choose how to open it.`,
-    spoke: target ? "Open as a spoke" : "Start it as a spoke",
-    spokeHint: `${running} keeps running in Main. ${next.charAt(0).toUpperCase()}${next.slice(1)} opens in its own spoke, and this composer drives it.`,
+    spoke: target ? "Open as an agent" : "Start it as an agent",
+    spokeHint: `${running} keeps running in Main. ${next.charAt(0).toUpperCase()}${next.slice(1)} opens in its own agent, and this composer drives it.`,
     stop: target ? "Stop it and switch" : "Stop it and start new",
     stay: "Stay here",
   };

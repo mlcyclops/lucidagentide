@@ -59,7 +59,7 @@ const collected = {
   facts: ["The user's role is developer.", "The main session is idle."],
   preview: { tab: "Yours", title: "Quarterly dashboard", url: "/work/site/page.html", text: `Revenue by region EMEA grew 14 percent. Deploy key: ${KEY}`, headings: ["Revenue by region"], errors: [] },
 };
-const part = (user: string): string => user.slice(user.indexOf("## The user's screen right now"), user.indexOf("## Fleet lanes"));
+const part = (user: string): string => user.slice(user.indexOf("## The user's screen right now"), user.indexOf("## Fleet agents"));
 
 console.log("1) the screen is the first view, the top surface marked, inside the untrusted envelope");
 {

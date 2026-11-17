@@ -56,8 +56,8 @@ describe("the update prompt", () => {
     const p = prompt([lane("idle1"), lane("stuck1", { status: "working", progress: stuckProgress }), lane("busy", { status: "working" })]);
     expect(p.stop).toEqual(["stuck1", "idle1"]);
     expect(p.choices).toEqual([
-      { label: "Stop 2 idle or stuck lanes and restart", stop: true, install: true },
-      { label: "Restart and keep every lane", stop: false, install: true },
+      { label: "Stop 2 idle or stuck agents and restart", stop: true, install: true },
+      { label: "Restart and keep every agent", stop: false, install: true },
       { label: "Later", stop: false, install: false },
     ]);
     expect(p.detail).toContain('Working (1): "busy". They keep running on the previous version; restart them later to pick up 2.6.0.');
@@ -72,7 +72,7 @@ describe("the update prompt", () => {
 
   test("from the install folder: a working one leaves only Later; an idle one only the stop-and-restart path", () => {
     expect(prompt([lane("old", { status: "working", heldRuntime: "install" }), lane("idle1")]).choices.map((c) => c.label)).toEqual(["Later"]);
-    expect(prompt([lane("old", { heldRuntime: "install" })]).choices.map((c) => c.label)).toEqual(["Stop 1 idle or stuck lane and restart", "Later"]);
+    expect(prompt([lane("old", { heldRuntime: "install" })]).choices.map((c) => c.label)).toEqual(["Stop 1 idle or stuck agent and restart", "Later"]);
   });
 });
 
@@ -141,7 +141,7 @@ describe("every install choice reads the lanes one final time", () => {
     const before = [lane("a"), lane("w", { status: "working", heldRuntime: "previous" })];
     const after = [...before, lane("late", { status: "working", heldRuntime: "install" })];
     const { p, choices } = installChoices(before);
-    expect(choices.map((c) => c.label)).toEqual(["Stop 1 idle or stuck lane and restart", "Restart and keep every lane"]);
+    expect(choices.map((c) => c.label)).toEqual(["Stop 1 idle or stuck agent and restart", "Restart and keep every agent"]);
     for (const choice of choices) {
       const e = engine([view(after)]);
       expect(await decideInstall(choice, p.stop, e.deps)).toEqual({ install: false, waits: "\"late\" still runs from the install folder. It is offered again at the next launch." });
@@ -153,13 +153,13 @@ describe("every install choice reads the lanes one final time", () => {
     const [restart] = installChoices([]).choices;
     expect(restart!.label).toBe("Restart now");
     const unreadable = engine([{ lanes: [{ id: "x", name: "x", status: "working", group: "working", held: true, blocksInstall: "true", lastActivityAt: 1 }] }]);
-    expect(await decideInstall(restart, [], unreadable.deps)).toEqual({ install: false, waits: "LUCID could not check the agent lanes right before installing. It is offered again at the next launch." });
+    expect(await decideInstall(restart, [], unreadable.deps)).toEqual({ install: false, waits: "LUCID could not check the agents right before installing. It is offered again at the next launch." });
     expect(unreadable.calls).toEqual(["commit true", "check", "commit false"]);
     const noCommit = engine([view([])], 0, false);
-    expect(await decideInstall(restart, [], noCommit.deps)).toEqual({ install: false, waits: "LUCID could not keep new agent lanes from starting from the install folder. It is offered again at the next launch." });
+    expect(await decideInstall(restart, [], noCommit.deps)).toEqual({ install: false, waits: "LUCID could not keep new agents from starting from the install folder. It is offered again at the next launch." });
     expect(noCommit.calls).toEqual(["commit true", "commit false"]);
     const starting = engine([view([])], 1);
-    expect(await decideInstall(restart, [], starting.deps)).toEqual({ install: false, waits: "An agent lane is starting from the install folder. It is offered again at the next launch." });
+    expect(await decideInstall(restart, [], starting.deps)).toEqual({ install: false, waits: "An agent is starting from the install folder. It is offered again at the next launch." });
     expect(starting.calls).toEqual(["commit true", "commit false"]);
   });
 
