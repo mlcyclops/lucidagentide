@@ -374,6 +374,11 @@ demo-P-MODEL.10: ## P-MODEL.10 (ADR-0526): omp 18.18.6 with Claude Fable 5.2 / M
 	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/omp/judgment_extension.test.ts desktop/model_pricing.test.ts desktop/renderer/model_families.test.ts desktop/packaged_boot.test.ts
 	$(BUN) run harness/scripts/demo02_prefix_hash.ts
 
+.PHONY: demo-P-OMP.1821
+demo-P-OMP.1821: ## P-OMP.1821 (ADR-0608, issue #634): omp 18.18.6 to 18.21.0 - six packages pinned together, the prompt-audit counts skills from omp's own prompt source claims (estimateSkillsTokens is gone), R-07 at 97 ids after the sovereignty review, frozen prefix still byte-stable
+	$(BUN) test $(TEST_IGNORES) harness/prompt/prefix_compaction.test.ts harness/omp/provider_catalog.test.ts harness/prompt/prompt_audit.test.ts
+	$(BUN) run harness/scripts/demo02_prefix_hash.ts
+
 .PHONY: demo-P-BOOTPERF.1
 demo-P-BOOTPERF.1: ## P-BOOTPERF.1 (ADR-0527): the renderer's boot burst never blocks the engine's event loop - async sessions/usage/code-activity/compaction-policy/omp probe, cached workspace bar, self-healing Reconnect button (a dead engine keeps it)
 	$(BUN) test $(TEST_IGNORES) desktop/omp_bin.test.ts desktop/renderer/turn_restore.test.ts desktop/sessions_index.test.ts desktop/sessions_ingest.test.ts harness/usage_ledger.test.ts harness/code_activity.test.ts
