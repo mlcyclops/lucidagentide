@@ -7636,6 +7636,20 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-boards{flex:none;display:flex;align-items:center;gap:4px;min-width:0;padding:5px 8px;border-bottom:1px solid var(--line-soft);
   background:var(--bg-1);overflow-x:auto;scrollbar-width:thin}
 .fleet-boards:empty{display:none}
+/* P-FLEET.HEAD1 (ADR-0612): collapsed by default and slid open from the header chip. Shut it takes no height (a
+   13-inch screen keeps its line of cards); the transition runs on max-height and padding together. */
+.fleet-boards:not(.open){max-height:0;padding-top:0;padding-bottom:0;border-bottom-width:0;overflow:hidden}
+.fleet-boards.open{max-height:44px}
+.fleet-boards{transition:max-height var(--t) var(--ease),padding var(--t) var(--ease),border-color var(--t) var(--ease)}
+@media (prefers-reduced-motion:reduce){.fleet-boards{transition:none}}
+.fleet-board-chip{flex:none;display:inline-flex;align-items:center;gap:5px;max-width:160px;min-width:0;height:24px;margin-left:8px;
+  padding:0 7px 0 9px;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--txt-2);
+  font:inherit;font-size:11.5px;font-weight:600;white-space:nowrap;cursor:pointer;
+  transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast)}
+.fleet-board-chip:hover{color:var(--txt);background:var(--bg-2)}
+.fleet-board-chip.on{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.fleet-board-chip-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.fleet-board-chip.on .fleet-more-chev{transform:rotate(-90deg)}
 .fleet-board-tab{flex:none;display:inline-flex;align-items:center;gap:5px;max-width:180px;min-width:0;height:24px;padding:0 9px;
   border:1px solid transparent;border-radius:7px;background:transparent;color:var(--txt-3);font:inherit;font-size:11.5px;font-weight:600;
   white-space:nowrap;cursor:pointer;transition:color var(--t-fast),background var(--t-fast),border-color var(--t-fast)}

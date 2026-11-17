@@ -205,6 +205,9 @@ let groupByRepo = false;
 // P-FLEET-BOARDS.1: boards. The engine owns them; this module holds the last answer and which board is shown.
 /** The board shown, remembered per machine. A board id, or `all` for Everything. */
 const FLEET_BOARD_KEY = "lucid.fleetBoard.v1";
+/** P-FLEET.HEAD1 (ADR-0612): whether the board tab row is slid open. Absent means collapsed: on a 13-inch screen the
+ *  row costs a line of cards, so it opens only when asked (the header chip). */
+const FLEET_BOARDS_OPEN_KEY = "lucid.fleetBoardsOpen";
 /** Boards ride the status poll, but are asked for at most this often (a board change answers with them anyway). */
 const BOARDS_MS = 10_000;
 /** Agents that are gone are pruned off the boards at most this often. */
@@ -309,6 +312,7 @@ export function openFleetGrid(): void {
     <div class="share-dock-head" data-dock-drag>
       <span class="share-dock-grip">${icon("bolt", 14)}</span>
       <span class="share-dock-title">LUCID Fleet</span>
+      <button class="fleet-board-chip" data-fleet-boards-toggle type="button" hidden aria-expanded="false" data-tip="Boards|Show the board tabs. The shown board is named here; a dot means a lane on another board needs you."><span class="fleet-board-chip-name" data-board-chip-name>Everything</span><i class="fleet-board-dot" data-board-chip-dot hidden></i><span class="fleet-more-chev">${icon("chevron", 10)}</span></button>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Spokes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
@@ -1191,10 +1195,13 @@ function paintTabs(): void {
   const row = dock ? $("[data-fleet-boards]", dock) : null;
   if (!row) return;
   const list = boards?.boards ?? [];
-  // P-FLEET.HEAD1 (ADR-0612): boards are for people who arrange many lanes, so the tab row stays out of the way
-  // until one exists (More > New board makes the first; the row then carries its own + Board).
-  const hide = list.length === 0;
-  if (row.hidden !== hide) row.hidden = hide;
+  // P-FLEET.HEAD1 (ADR-0612): boards are for people who arrange many lanes. With none, neither the header chip nor
+  // the tab row shows (More > New board makes the first). With some, the chip names the shown board and the row
+  // stays collapsed until the chip slides it open.
+  const chip = $("[data-fleet-boards-toggle]", dock!);
+  const none = list.length === 0;
+  if (chip && chip.hidden !== none) chip.hidden = none;
+  paintBoardsOpen(!none && storage().get(FLEET_BOARDS_OPEN_KEY) === "1");
   const full = list.length >= BOARDS_MAX;
   const sig = JSON.stringify([list.map((b) => [b.id, b.name]), full]);
   if (sig !== tabsSig && renamingBoard === null) {
@@ -1211,6 +1218,21 @@ function paintTabs(): void {
   paintNeeds();
 }
 
+/** P-FLEET.HEAD1 (ADR-0612): slide the board tab row open or shut. Shut, it takes no height; the header chip
+ *  still names the shown board, so nothing is lost by keeping it shut. */
+function paintBoardsOpen(open: boolean): void {
+  const row = dock ? $("[data-fleet-boards]", dock) : null;
+  const chip = dock ? $("[data-fleet-boards-toggle]", dock) : null;
+  if (row && row.classList.contains("open") !== open) { row.classList.toggle("open", open); row.setAttribute("aria-hidden", String(!open)); row.inert = !open; }
+  if (chip && chip.getAttribute("aria-expanded") !== String(open)) { chip.setAttribute("aria-expanded", String(open)); chip.classList.toggle("on", open); }
+}
+
+function toggleBoardsOpen(): void {
+  const open = storage().get(FLEET_BOARDS_OPEN_KEY) !== "1";
+  storage().set(FLEET_BOARDS_OPEN_KEY, open ? "1" : "0");
+  paintBoardsOpen(open);
+}
+
 /** "Next that needs you (N)" (shown only when N > 0), the current tab, and each tab's dot. */
 function paintNeeds(): void {
   if (!dock) return;
@@ -1225,6 +1247,7 @@ function paintNeeds(): void {
   const row = $("[data-fleet-boards]", dock);
   if (!row) return;
   const cur = shownId();
+  let elsewhere = false;
   for (const tab of row.querySelectorAll<HTMLElement>("[data-board-tab]")) {
     const id = tab.dataset.boardTab ?? "";
     const on = id === cur;
@@ -1232,9 +1255,16 @@ function paintNeeds(): void {
     tab.closest(".fleet-board-tabwrap")?.classList.toggle("on", on);
     const b = findBoard(boards, id);
     const needs = id === EVERYTHING ? boardHasNeeds(EVERYTHING, live) : b !== null && boardHasNeeds(b, live);
+    if (needs && !on) elsewhere = true;
     const dot = $("[data-board-dot]", tab);
     if (dot && dot.hidden === needs) dot.hidden = !needs;
   }
+  // P-FLEET.HEAD1: the collapsed row's stand-in names the shown board and dots when another tab would.
+  const name = $("[data-board-chip-name]", dock);
+  const label = findBoard(boards, cur)?.name ?? "Everything";
+  if (name && name.textContent !== label) name.textContent = label;
+  const chipDot = $("[data-board-chip-dot]", dock);
+  if (chipDot && chipDot.hidden === elsewhere) chipDot.hidden = !elsewhere;
 }
 
 /** Rename a board inline: its tab becomes a text field. Enter or leaving the field saves, Escape keeps the old
@@ -1286,6 +1316,9 @@ async function addBoard(): Promise<void> {
   const b = await boardChange(deps.fleetBoardCreate(nextBoardName(boards)), "The board was not made");
   const made = b ? b.boards[b.boards.length - 1] : undefined;
   if (!made) return;
+  // Its name is typed on its tab, so the row slides open for it (and stays open: the person is arranging boards).
+  storage().set(FLEET_BOARDS_OPEN_KEY, "1");
+  paintBoardsOpen(true);
   showBoard(made.id);
   startRename(made.id);
 }
@@ -2990,6 +3023,7 @@ function onClick(ev: Event): void {
   // P-FLEET-BOARDS.1: Next that needs you, and the board tabs. Orbit, layouts, By repo, the default view and the
   // classic hub live in the More menu (P-FLEET.HEAD1), which handles its own clicks.
   if (t.closest("[data-fleet-next]")) { jumpNext(); return; }
+  if (t.closest("[data-fleet-boards-toggle]")) { toggleBoardsOpen(); return; }
   const boardTab = t.closest<HTMLElement>("[data-board-tab]");
   if (boardTab) { showBoard(boardTab.dataset.boardTab ?? EVERYTHING); return; }
   const boardMenu = t.closest<HTMLElement>("[data-board-menu]");
