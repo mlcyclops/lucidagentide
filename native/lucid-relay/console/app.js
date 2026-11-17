@@ -1702,7 +1702,7 @@
         const lbl = textField(W["join.label"], { maxlength: "40" });
         lbl.input.value = security ? MSG.kinds["security-key"] : MSG.kinds.passkey;
         steps.replaceChildren(el("h3", null, security ? W["join.security-key"] : W["join.passkey"]),
-          security ? el("p", null, W["join.security-key.body"]) : null, lbl.box,
+          ...(security ? [el("p", null, W["join.security-key.body"])] : []), lbl.box,
           el("div", null, btn(security ? W["join.security-key.button"] : W["join.button"], run(async () => {
             const b = await api("POST", "register/begin", { token, kind }, { noRedirect: true });
             const cred = await passkeyCreate(b.publicKey);
