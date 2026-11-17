@@ -465,7 +465,7 @@ export class HolderPool {
     // so an update can replace the install folder while this lane lives on. No copy: the install folder, as before.
     const copy = this.runtime ? await this.runtime.prepare() : null;
     const holder = copy ? this.runtime!.holderIn(copy) : null;
-    const plan = copy && holder ? this.runtime!.map(copy, cmd, args, env) : { cmd, args, env };
+    const plan = copy && holder ? this.runtime!.map(copy, cmd, args, env, cwd) : { cmd, args, env };
     const fromInstall = !(copy && holder);
     if (fromInstall) {
       const why = !this.runtime ? "this engine has no lane runtime copy (a source checkout, or LUCID_LANE_RUNTIME=install)"

@@ -130,7 +130,7 @@ import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById,
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, perCallModelView, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
-import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { FleetLaneManager, parseStageId, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
 import { stopForUpdate, updateCheck } from "./update_lanes.ts"; // P-HOLDER.2 (ADR-0574): the lanes an update meets
 import { answerChannel, CHANNEL_ROUTES, channelAdmits } from "./lane_channel.ts"; // LH-03 (ADR-0544): a held lane's channel
@@ -6683,21 +6683,38 @@ return Bun.serve({
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.
       if (p === "/api/fleet/prompt" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown; stageId?: unknown }>(req);
         const laneId = String(b.laneId ?? "");
+        // P-FLEET.STAGE1 (ADR-0609): with a stage id, a lane that is busy RIGHT NOW stages the prompt (raw text
+        // and file ids, expanded at drain like any staged item) instead of refusing it. Checked again after the
+        // attachment await, and stageIfBusy and prompt() both check synchronously, so no turn can start between.
+        const stageId = parseStageId(b.stageId);
+        const stageNow = (): Response | null => {
+          if (!stageId) return null;
+          const ids = parseAttachmentIds(b.attachments);
+          if (ids.length && !managedAttachmentPolicy().enabled) return null; // the prompt path reports the refusal
+          const r = fleet.stageIfBusy(laneId, String(b.text ?? ""), laneImages(b.images), ids, stageId);
+          if (!r) return null;
+          return ndjsonStream("fleet", async (emit) => { emit(r.ok ? { type: "staged", queued: r.queued ?? 0 } : { type: "error", message: r.reason ?? "could not stage the prompt" }); });
+        };
+        const early = stageNow();
+        if (early) return early;
         // P-ATTACH.1 (ADR-0598): the staged files' block rides after the text; a refusal is the stream's error.
         const withFiles = await promptWithAttachments(String(b.text ?? ""), b.attachments);
         if (!withFiles.ok) { const error = withFiles.error; return ndjsonStream("fleet", async (emit) => { emit({ type: "error", message: error }); }); }
+        const late = stageNow();
+        if (late) return late;
         return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, withFiles.text, emit, laneImages(b.images)));
       }
       // P-FLEET.L3: the staged-prompt queue - manager-owned (survives dock close), drained FIFO by the
       // renderer when the lane goes idle, so every drained turn streams into a visible card.
       // P-ATTACH.1 (ADR-0598): staged file ids are kept with the item and expanded (and scanned) at drain.
       if (p === "/api/fleet/queue" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown; stageId?: unknown }>(req);
         const ids = parseAttachmentIds(b.attachments);
         if (ids.length && !managedAttachmentPolicy().enabled) return json({ ok: true, data: { ok: false, reason: ATTACH_DISABLED } });
-        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images), ids) });
+        // P-FLEET.STAGE1 (ADR-0609): the client's stage id makes a retried or doubled request stage once.
+        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images), ids, parseStageId(b.stageId)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);

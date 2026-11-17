@@ -66,11 +66,10 @@ export const LOCAL_MODEL_PRESETS: LocalModelPreset[] = [
     // returns 450 chars of content and ZERO reasoning, while `chat_template_kwargs {enable_thinking:
     // true}` returns a 372 char trace on `reasoning`. That is the silent loss this block prevents.
     //
-    // `supportsReasoningEffort: false` is now known to be CONSERVATIVE rather than required: the same
-    // head accepted `reasoning_effort: "medium"` with HTTP 200 and returned a 419 char trace. Left
-    // false deliberately, because flipping it changes what omp puts on the wire and that has not been
-    // verified end to end through omp itself, only against raw vLLM. Flip it as its own increment.
-    compat: { thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: false },
+    // `supportsReasoningEffort: true`: the box's vLLM accepts `reasoning_effort` (the live head took
+    // `"medium"` with HTTP 200 and returned a 419 char trace, ADR-0367; recorded as current in ADR-0550
+    // item 6). Flipped in ADR-0607; omp's own emission path still needs one live check on the box.
+    compat: { thinkingFormat: "qwen-chat-template", reasoningContentField: "reasoning", supportsReasoningEffort: true },
     note: "Zhipu GLM served by vLLM. Carries the chat-template thinking wire format that a LAN endpoint cannot advertise.",
   },
   { id: "laguna-2.1-poolside", name: "Laguna 2.1 (Poolside)", family: "Poolside", contextWindow: 262144, reasoning: true, params: "large coder", fits: ["m3-ultra", "dgx-spark"], note: "Poolside's coding model - point at your self-hosted Laguna endpoint." },

@@ -63,7 +63,7 @@ const glmEntry = model("glm-5.3-flash");
 check("GLM is a reasoning model", glmEntry.reasoning === true);
 check("GLM thinking goes through the chat template", glmEntry.compat?.thinkingFormat === "qwen-chat-template");
 check("GLM's trace is read off the `reasoning` field", glmEntry.compat?.reasoningContentField === "reasoning");
-check("GLM does not advertise a reasoning_effort param (vLLM rejects it)", glmEntry.compat?.supportsReasoningEffort === false);
+check("GLM advertises reasoning_effort (the box's vLLM accepts it, ADR-0550 item 6)", glmEntry.compat?.supportsReasoningEffort === true);
 check("a preset with no wire quirks emits no compat key at all", !("compat" in model("gemma-4")));
 
 // (5b) THE ID THE BOX ACTUALLY SERVES. The catalog's ids are editorial and this file tells the user to
@@ -99,7 +99,7 @@ try {
   const stored = store.listLocalProviders()[0]!.models;
   const storedGlm = stored.find((m) => m.id === "glm-5.3-flash")!;
   check("compat survives the save/reload round trip", storedGlm.compat?.thinkingFormat === "qwen-chat-template");
-  check("the curated context window survives the save too", storedGlm.contextWindow === 131072);
+  check("the curated context window survives the save too", storedGlm.contextWindow === def!.models.find((m) => m.id === "glm-5.3-flash")!.contextWindow);
   check("an out-of-enum compat value never reaches disk", stored.find((m) => m.id === "junk")!.compat === undefined);
 
   // (6c) and the seam this demo originally skipped: models.yml is built from the STORED def by
