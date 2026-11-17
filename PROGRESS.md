@@ -6313,3 +6313,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** a lane in full auto-mode answers every ask except a program the org's managed policy denies; the #612 catastrophic floor (rm -rf, sudo, pipe into an interpreter, force-push and the rest) no longer stops it, and turning auto on answers an open catastrophic ask. Session grants keep the floor. PR #618 closed unmerged.
 - **stubbed:** the P-FLEET.L6 risk modal text is unchanged (it already says every approval is granted); no per-lane opt-back-in to the floor.
 - **next:** in the installed app, run a full auto-mode lane through a task that deletes a build folder and confirm it never asks.
+## Share session: its own animated glyph, and the LUCID relay in Relay setup (P-SHARE.ICON1, ADR-0613)
+- **shipped (2026-11-17):** a new `shareLive` glyph (a screen casting from its corner) on the Share session rail button, dock grip, Start sharing and Sign in with Google; it animates while a share is live. Relay setup now offers "Use the LUCID relay" first, which makes the engine gate the relay and show Sign in with Google and phone invites; self-hosted and public stay as alternatives.
+- **stubbed:** nothing; the hosted relay, sign-in page and phone web app are the existing P-REMOTE services.
+- **next:** in the installed app, Share > Use the LUCID relay > Sign in with Google > Start sharing, then open the invite on a phone.

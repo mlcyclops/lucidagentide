@@ -486,7 +486,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-plg-toggle data-tip="Free plugins|Integrations that come with LUCID: Excalidraw, Git, Obsidian, Whisper and more. Premium apps are one tab over." data-tip-icon="plugins">${icon("plugins", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
-        <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
+        <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="shareLive">${icon("shareLive", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
         <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
         <button class="rail-btn" id="railStudio" hidden data-tip="Creator Studio|Audio, video, 3D and game integrations, their real capabilities, and your local track library" data-tip-icon="volume">${icon("volume", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
@@ -16672,6 +16672,10 @@ function dockSec(id: string, title: string, defaultOpen: boolean, inner: string,
     + `<div class="dock-sec-b">${inner}</div></details>`;
 }
 
+/** P-SHARE.ICON1 (ADR-0613): the first-party hosted relay (P-REMOTE.7). The engine treats it as gated (Google sign-in)
+ *  and sends phone invites to the LUCID web app; the same URL desktop/scripts/configure_remote_relay.ts writes. */
+const LUCID_HOSTED_RELAY = "wss://relay.aiworkshopapps.com";
+
 function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | null, auth?: { gated: boolean; signedIn: boolean; email?: string }, collapsed: Record<string, boolean> = {}, ui?: { allowEdit: boolean; preferDirect: boolean }): string {
   if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
   if (st.active) {
@@ -16732,8 +16736,9 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
   }
   if (!st.relay) {
     return dockSec("sec-relay-setup", "Relay setup", true, `
-      <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</span></div>
-      <label class="share-lbl">Self-hosted relay URL</label>
+      <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. Pick one: the <b>LUCID relay</b> (sign in with Google once; a phone can open the invite in the LUCID web app and, if you allow it, drive), or your own <b>self-hosted</b> relay for a sovereign, air-gapped posture.</span></div>
+      <div class="dock-foot"><button class="btn-mini ok" data-share-relay-hosted>${icon("shareLive", 12)} Use the LUCID relay</button></div>
+      <label class="share-lbl">Or a self-hosted relay URL</label>
       <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
       <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
       <div id="shareRelayErr" class="modal-err" hidden></div>`, collapsed)
@@ -16748,7 +16753,7 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
   const signedIn = auth?.signedIn ?? false;
   if (gated && !signedIn) {
     return dockSec("sec-relay", "Relay", true, `${relayReady}<div class="share-setup-note">${icon("shield", 13)}<span>To share with your phone, sign in so this desktop can authorize with the secure relay. You only need to do this once.</span></div>`, collapsed)
-      + `<div class="dock-foot"><button class="btn-mini ok" data-share-signin>${icon("share", 12)} Sign in with Google</button></div>`;
+      + `<div class="dock-foot"><button class="btn-mini ok" data-share-signin>${icon("shareLive", 12)} Sign in with Google</button></div>`;
   }
   const authChip = signedIn
     ? `<div class="share-ready-note">${icon("check", 13)}<span>Signed in as <b>${esc(auth?.email ?? "your account")}</b></span></div>`
@@ -16775,7 +16780,7 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
     + `<div class="dock-foot">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       ${signedIn ? `<button class="btn-mini" data-share-signout>Sign out</button>` : ""}
-      <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
+      <button class="btn-mini ok" data-share-start>${icon("shareLive", 12)} Start sharing</button>
     </div>
     <div id="shareProg" class="share-prog" hidden><span class="share-prog-dot"></span><div class="share-prog-tx"><div id="shareProgL1"></div><div id="shareProgL2"></div></div></div>`;
 }
@@ -16925,6 +16930,7 @@ async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
   const s = st !== undefined ? st : await currentShareStatus();
   const dot = $("#railShareDot");
   if (dot) (dot as HTMLElement).hidden = !s?.active;
+  $("#railShare")?.classList.toggle("sharing", !!s?.active); // P-SHARE.ICON1: the glyph's arcs pulse while live
   // Resume/stop the guest-prompt poller to match reality (e.g. after a reload while a relay edit share is live).
   // A DIRECT-P2P edit share delivers guest prompts via a callback, not the inbox - so it never polls.
   if (s?.active && s.allowEdit && !s.direct) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
@@ -17043,12 +17049,12 @@ function reconnectSectionHtml(st: CollabShareStatus | null, collapsed: Record<st
   const inner = `
     <label class="share-check"><input type="checkbox" id="reconnEnable" ${reconnEnabled() ? "checked" : ""} /> <span><b>Save a reconnect code to Google Drive</b> - writes the current invite link to a single <code>lucid_relay_codes</code> file in <b>your</b> Drive (scope: only that file) so you can rejoin after a disconnect.</span></label>
     <div class="share-reconn-status" id="reconnStatus">${authorized ? `${icon("check", 12)} Google Drive authorized` : `${icon("shield", 12)} Not authorized`}</div>
-    ${authorized ? "" : `<div class="dock-foot"><button class="btn-mini ok" data-reconn-auth>${icon("share", 12)} Authorize Google Drive</button></div>`}
+    ${authorized ? "" : `<div class="dock-foot"><button class="btn-mini ok" data-reconn-auth>${icon("shield", 12)} Authorize Google Drive</button></div>`}
     <label class="share-lbl">PIN (optional - encrypts the codes at rest)</label>
     <div class="share-field"><input class="share-link-input" id="reconnPin" type="password" placeholder="blank = no encryption" spellcheck="false" autocomplete="off" inputmode="numeric" /></div>
     ${active ? `<div class="dock-foot"><button class="btn-mini ok" data-reconn-save${authorized ? "" : " disabled"}>${icon("link", 12)} Save a reconnect code now</button></div>` : ""}
     <label class="share-lbl">Share the codes file with a teammate</label>
-    <div class="share-linkrow"><input class="share-link-input" id="reconnShareEmail" type="email" placeholder="teammate@example.com" spellcheck="false" /><button class="btn-mini" data-reconn-share${authorized ? "" : " disabled"}>${icon("share", 12)} Share</button></div>`;
+    <div class="share-linkrow"><input class="share-link-input" id="reconnShareEmail" type="email" placeholder="teammate@example.com" spellcheck="false" /><button class="btn-mini" data-reconn-share${authorized ? "" : " disabled"}>${icon("link", 12)} Share</button></div>`;
   return dockSec("sec-reconnect", "Reconnect (Google Drive)", false, inner, collapsed);
 }
 
@@ -17060,7 +17066,7 @@ function openSharePanel(): void {
   const dockState: DockState = loadDockState(dockStorage(), window.innerWidth, window.innerHeight);
   const ov = el(`<div id="shareModal" class="share-dock side-${dockState.side}" role="dialog" aria-label="Session Share">
     <div class="share-dock-head" data-dock-drag>
-      <span class="share-dock-grip">${icon("share", 14)}</span>
+      <span class="share-dock-grip">${icon("shareLive", 14)}</span>
       <span class="share-dock-title">Session Share</span>
       <span class="share-dock-updating" id="shareUpdating" hidden>${icon("refresh", 11)} updating\u2026</span>
       <button class="share-dock-count" data-dock-people aria-haspopup="true" aria-expanded="false" data-tip="Connected participants"><span class="sd-live-dot"></span><span id="shareDockCount">0</span></button>
@@ -17396,6 +17402,19 @@ function openSharePanel(): void {
       return;
     }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
+    // P-SHARE.ICON1 (ADR-0613): the first-party hosted relay was reachable only through a provisioning script
+    // (desktop/scripts/configure_remote_relay.ts), so a fresh install never offered Sign in with Google. The engine
+    // marks this URL gated and points phone invites at the LUCID web app (dev.ts effectiveRelay).
+    if (t.closest("[data-share-relay-hosted]")) {
+      const r = await bridge.collabSetRelay({ url: LUCID_HOSTED_RELAY, publicOptIn: false });
+      if (r?.relay?.wsBase !== LUCID_HOSTED_RELAY) {
+        const err = $("#shareRelayErr", ov) as HTMLElement | null;
+        if (err) { err.textContent = "The LUCID relay was not saved (your organization may allow only its own relays)."; err.hidden = false; }
+        return;
+      }
+      await draw();
+      return;
+    }
     if (t.closest("[data-share-relay-save]")) {
       const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";
       const pub = ($("#shareRelayPublic", ov) as HTMLInputElement | null)?.checked ?? false;
