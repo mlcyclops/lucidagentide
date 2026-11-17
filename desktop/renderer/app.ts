@@ -506,7 +506,7 @@ function buildShell(): void {
         <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
         <div class="sess-find">
           <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
-          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom"><span class="sess-spokes-l">Spokes</span><span class="sess-spokes-n" hidden></span></button>
+          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" aria-label="Show spoke sessions" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom">${icon("share", 14)}<span class="sess-spokes-n" hidden></span></button>
         </div>
         <div class="side-list" id="sessList"></div>
         <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
@@ -818,6 +818,7 @@ function paintSpokesToggle(hidden: number | undefined): void {
   const b = $("#sessSpokes") as HTMLElement | null;
   if (!b) return;
   b.setAttribute("aria-pressed", String(showSpokes));
+  b.setAttribute("aria-label", showSpokes ? "Hide spoke sessions" : "Show spoke sessions");
   b.classList.toggle("on", showSpokes);
   const n = $(".sess-spokes-n", b) as HTMLElement | null;
   if (n) { n.textContent = String(hidden ?? 0); n.hidden = showSpokes || !hidden; }

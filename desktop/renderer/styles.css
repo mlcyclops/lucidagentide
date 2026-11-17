@@ -1182,7 +1182,9 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .side-head{display:flex;align-items:center;justify-content:space-between;
   padding:13px 14px 8px;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--txt-3)}
 .side-new{-webkit-app-region:no-drag;border:0;background:var(--bg-3);color:var(--txt-2);width:24px;height:24px;
-  border-radius:7px;display:grid;place-items:center;cursor:pointer;
+  /* padding:0, or the browser's own button padding (1px 6px) squeezes the 24px box to a 12px content area and the
+     15px glyph sits 6px from the left and 3px from the right (measured in the app). */
+  padding:0;border-radius:7px;display:grid;place-items:center;cursor:pointer;
   box-shadow:inset 0 1px 0 color-mix(in srgb,var(--txt) 6%,transparent);
   transition:background var(--t) var(--ease),color var(--t) var(--ease),
     transform var(--t-fast) var(--ease-out),box-shadow var(--t) var(--ease)}
@@ -1259,12 +1261,17 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-search input{flex:1;min-width:0;padding:6px 0;border:0;outline:none;background:transparent;color:var(--txt);font-size:12px}
 .sess-search input::placeholder{color:var(--txt-4)}
 .sess-search:focus-within{border-color:var(--accent-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent-2) 18%,transparent)}
-.sess-spokes{flex:none;display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;
-  background:transparent;color:var(--txt-3);font-size:11.5px;font-weight:600;white-space:nowrap;cursor:pointer;
+/* P-FLEET.HEAD1 (ADR-0612): the spokes filter is a square icon button the height of the search field; its state is
+   its color plus the tooltip, and the hidden count is a small badge on its corner. */
+.sess-spokes{position:relative;flex:none;display:grid;place-items:center;width:28px;height:28px;padding:0;
+  border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--txt-3);cursor:pointer;
   transition:background var(--t) var(--ease),color var(--t) var(--ease),border-color var(--t) var(--ease)}
+.sess-spokes .ic{display:block}
 .sess-spokes:hover{background:var(--bg-2);color:var(--txt)}
 .sess-spokes.on{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
-.sess-spokes-n{padding:0 6px;border-radius:10px;background:var(--bg-2);color:var(--txt-3);font-size:10.5px}
+.sess-spokes-n{position:absolute;top:-6px;right:-6px;min-width:15px;height:15px;padding:0 4px;border-radius:8px;
+  background:var(--bg-3);border:1px solid var(--line);color:var(--txt-2);font-size:9.5px;font-weight:700;line-height:13px;
+  text-align:center;white-space:nowrap}
 .sess-count{flex:none;padding:2px 11px 4px;font-size:11px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sess .sess-snip{font-size:11.5px;line-height:1.45;color:var(--txt-3);overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
@@ -5815,8 +5822,11 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    against the 10px gap it adds, so a full tile row never wraps while a card is being dragged across it. */
 .fleet-grid.autofit .fleet-drop-slot{flex:0 0 4px;margin-right:-14px;align-self:stretch;min-height:0;border:0;border-radius:2px;
   background:var(--accent)}
-/* P-FLEET-BOARDS.1 (ADR-0601): the header's Layout control (it replaced the Autofit toggle). One text child, nowrap (invariant 11). */
-.fleet-fit-btn span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-FLEET.HEAD1 (ADR-0612): the header's More button; its chevron points down, and up while the menu is open. */
+.fleet-more-btn{display:inline-flex;align-items:center;gap:3px}
+.fleet-more-chev{display:inline-grid;place-items:center;transform:rotate(90deg);transition:transform var(--t) var(--ease)}
+.fleet-more-btn.on .fleet-more-chev{transform:rotate(-90deg)}
+.fleet-more-chev .ic{display:block}
 .fleet-out-empty{display:flex;align-items:center;min-width:0;color:var(--txt-4);font-size:11px}
 .fleet-out-empty span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fleet-turn-user{flex:none;color:var(--accent-2);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

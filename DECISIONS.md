@@ -27821,3 +27821,20 @@ It stays catastrophic (fail-closed) when the interpreter is bare, takes `-` or (
 **Proof.** `desktop/fleet_lanes.test.ts`: auto-mode answers the fake agent's `rm -rf /` ask with no permission event; a session grant on an ordinary command still stops at the floor for `rm -rf`, and turning auto on answers that open ask. `desktop/exec_policy.test.ts`: `execManagedDeny` clears catastrophic commands the org does not deny, and keeps a managed-denied program (catastrophic or not, pinned or not). `make demo-P-FLEET.AUTO2`.
 
 **Invariants.** #3 untouched: the scanner gate still fails closed. #4: the in-process gate is the control that stays; this ADR removes only a human approval step the owner opted out of.
+
+## ADR-0612 -- P-FLEET.HEAD1: the Fleet header keeps only the essentials; everything else is in a More menu (2026-11-17)
+
+**Status:** Accepted. Builds on #622 (P-FLEET-BOARDS.1, ADR-0601).
+
+**Context.** With boards, the Fleet grid header carried thirteen controls on two wrapped rows (headroom, Next that needs you, Orbit, By repo, Default, Classic hub, Layout, Ask, + Lane, minimize, close) plus a board tab row that showed even with no boards. The owner, after a live demo: "too many options that only power users will want." Two smaller things from the same review: the sidebar's "+" (New session) and "<<" (Collapse) glyphs sat off center, and the "Spokes" text toggle beside Search sessions took a third of the row.
+
+**Decision.**
+- **Header:** title, the CPU and memory headroom, Next that needs you (only when something needs you), Ask, + Lane, More, minimize, close.
+- **More menu** (a chevron button): Orbit view; the four layouts (Side by side, Grid of four, Focus one, Free) with a check on the shown board's; Group by repo (checked when on); New board; Open the grid first (checked when the grid is the default view); Classic hub in a terminal. It is the composer "+" menu (`mountPlusMenu`, now taking its own aria label), so it looks, moves by keyboard and closes the same way. It is an anchored popover: it opens below the button, flips above it when the dock sits low on the screen, and caps its height to the room it has. It is built on each open, so the checks are current. The old Layout button and its ctx menu, the By repo and Default buttons, and their painters are removed.
+- **Board tabs** are hidden until the first board exists (More > New board makes it; the tab row then carries its own + Board).
+- **Sidebar:** `.side-new` sets `padding:0`. The browser's own button padding (1px 6px) had squeezed the 24px box to a 12px content area, so the 15px glyph sat 6px from the left and 3px from the right (measured in the app); now 4px on every side.
+- **Spokes filter** becomes a 28px square icon button (the share icon) beside the search field: green when spoke sessions are shown, a small corner badge with the hidden count, and the existing tooltip states which. Its aria-label says what a click does.
+
+**Consequences.** One click more for Orbit, layouts, By repo, the default view and the classic hub; none of them was used per turn. The Orbit header is unchanged (+ Spoke stays there).
+
+**Proof.** A LUCID built from this branch, run beside the installed app (LUCID_PORT=5390): the served `/app.js` and `/styles.css` carry the More menu and the `.side-new` padding and no longer carry the Layout button (`data-fleet-layout-name`) or `.fleet-fit-btn`. Measured in the running window: the New session, Collapse and spokes glyphs are centered (4, 4, 4, 4 and 7, 7, 7, 7 px). More opens below its button with the nine rows and the two checks; Escape closes it. `bun test desktop/renderer`: 2,075 pass, 1 timing failure in `ndjson_stream.test.ts` under a CPU held at 100% that passes alone (33/33) with and without this change; typecheck clean.

@@ -28,8 +28,8 @@ import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, setTip, showToast } from "./ui.ts"; // P-FLEET.L18: the per-card group menu; P-PUSH.PAR1: the parallel-push notice; P-TIP.1: setTip
-import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips, never a native title
-import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, missingFilesNote, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFileMeta, sentMetaEl, syncPlusButton, type AttachBridge, type AttachTray, type SentFileMeta } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
+import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): premium tooltips, never a native title
+import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, missingFilesNote, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFileMeta, sentMetaEl, syncPlusButton, type AttachBridge, type AttachTray, type PlusItem, type SentFileMeta } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): files on the lane bars
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
@@ -241,21 +241,37 @@ function persistGroups(): void {
   storage().set(FLEET_GROUPS_KEY, saveGroups(groups));
 }
 
-/** P-HUB-PICK.1 (ADR-0516): the grid header's By repo toggle. */
-function paintByRepo(): void {
-  const b = dock ? ($("[data-fleet-byrepo]", dock) as HTMLElement | null) : null;
-  if (!b) return;
-  b.classList.toggle("on", groupByRepo);
-  b.setAttribute("aria-pressed", String(groupByRepo));
+/** P-FLEET.HEAD1 (ADR-0612): the header keeps only what most people use (Next that needs you, Ask, + Lane, minimize,
+ *  close); the rest moved into this More menu, built fresh on each open so its checkmarks are current. It is the
+ *  "+" menu's anchored popover (attach_ui mountPlusMenu), which opens below the button, flips above it when the
+ *  dock sits low on the screen, and caps its height to the room it has. */
+function moreMenuItems(): PlusItem[] {
+  const mode = boardLayoutOf(boards, currentBoard).layout;
+  const check = (on: boolean): string => (on ? "\u2713" : "");
+  return [
+    { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the hub-and-spoke map. Same lanes, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
+    ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
+    { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each lane works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
+    { id: "board", label: "New board", icon: icon("plus", 15), tip: tipValue("New board", "A named set of lanes with its own layout. Board tabs appear once you have one."), run: () => { void addBoard(); } },
+    { id: "home", label: "Open the grid first", icon: icon("star", 15), kbd: check(fleetHome() === "grid"), tip: tipValue("Open the grid first", "Make the grid what the Fleet button opens. The orbit has the same setting."), run: () => setFleetHome("grid") },
+    { id: "hub", label: "Classic hub in a terminal", icon: icon("terminal", 15), tip: tipValue("Classic hub", "Opens the classic hub in a new terminal window: your lanes and boards as panes, linked to this app. You can also type lucid hub in any terminal."), run: (a) => { if (a instanceof HTMLButtonElement) void openHubFrom(a, () => deps?.hubOpen()); } },
+  ];
 }
 
-/** P-FLEET.L18: the grid header's default-view pin (fleet_orbit owns the one storage key). */
-function paintGridPin(): void {
-  const pin = dock ? ($("[data-fleet-pin]", dock) as HTMLElement | null) : null;
-  if (!pin) return;
-  const on = fleetHome() === "grid";
-  pin.classList.toggle("on", on);
-  pin.innerHTML = `${icon("star", 12)}${on ? " Default" : ""}`;
+const LAYOUT_TIPS: Record<BoardLayout, string> = {
+  side: "The lanes on this board fill the panel. Drag an edge to resize; double-click an edge for equal sizes.",
+  grid4: "Two by two.",
+  focus: "One lane large, the rest in a strip. Click a strip card to bring it up.",
+  free: "You size each card.",
+};
+
+/** P-HUB-PICK.1 (ADR-0516): group the cards by repo, or back to the named groups. */
+function toggleByRepo(): void {
+  groupByRepo = !groupByRepo;
+  storage().set(FLEET_BY_REPO_KEY, groupByRepo ? "1" : "0");
+  lastGroupSig = "";
+  const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
+  if (grid) applyOrder(grid);
 }
 
 /** Wide and shallow: a grid of cards wants width first. Clamped to the viewport on load. */
@@ -295,13 +311,9 @@ export function openFleetGrid(): void {
       <span class="share-dock-title">LUCID Fleet</span>
       <span class="fleet-headroom" id="fleetHeadroom" data-tip="Local headroom|Live CPU and memory. Spokes are UNLIMITED - a new one is refused only while a metric stays at or above the tick for 30 seconds straight, so a burst never blocks you."></span>
       <button class="btn-mini fleet-add-btn fleet-next" data-fleet-next hidden data-tip="Next that needs you|Jumps to the next agent waiting for your approval or likely stuck: this board first, then your other boards, then Everything. Press again for the one after."></button>
-      <button class="btn-mini fleet-add-btn" data-fleet-orbit data-tip="Orbit|Back to the hub-and-spoke map. Same spokes, same colors - the grid and the orbit are two faces of one fleet.">${icon("share", 12)} Orbit</button>
-      <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-byrepo aria-pressed="false" data-tip="Group by repo|Section the cards by the codebase each spoke works on, in the same colors as the orbit. Your named groups are kept and come back when this is off.">${icon("git", 12)} By repo</button>
-      <button class="btn-mini fleet-add-btn fleet-pin" data-fleet-pin data-tip="Default view|Make the GRID what the Fleet button opens. The orbit header has the same pin."></button>
-      <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Classic hub</button>
-      <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-layout aria-haspopup="menu" data-tip="Layout|How the agents on this board share the panel. Side by side: they fill it, drag an edge to resize, double-click an edge for equal sizes. Grid of four: two by two. Focus one: one agent large, the rest in a strip; click a strip card to bring it up. Free: you size each card.">${icon("layout", 12)}<span data-fleet-layout-name>Side by side</span></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
       <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New lane|Spawn a new local lane in this grid. The Orbit map calls the same thing + Spoke.">${icon("plus", 12)} Lane</button>
+      <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
@@ -317,8 +329,8 @@ export function openFleetGrid(): void {
     <div class="share-dock-rz sw" data-dock-rz="sw" aria-hidden="true"></div>
   </div>`);
   document.body.appendChild(dock);
-  paintGridPin();
-  paintByRepo();
+  const more = $("[data-fleet-more]", dock) as HTMLElement | null;
+  if (more) mountPlusMenu(more, moreMenuItems, "Fleet options");
   applyShape();
   wireDrag();
   wireResize();
@@ -330,7 +342,6 @@ export function openFleetGrid(): void {
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
   dock.addEventListener("dblclick", onDockDblClick); // P-FLEET.FIT1: a card edge = equal shares again; P-FLEET-BOARDS.1: a board tab = rename
   paintTabs();
-  paintLayoutBtn();
   wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
@@ -600,26 +611,10 @@ function unwireAutofit(): void {
   fitPlan = null;
 }
 
-/** P-FLEET-BOARDS.1: the header's Layout control names the shown board's layout. */
-function paintLayoutBtn(): void {
-  const name = dock ? $("[data-fleet-layout-name]", dock) : null;
-  if (!name) return;
-  const mode = boardLayoutOf(boards, currentBoard).layout;
-  const label = BOARD_LAYOUTS.find((l) => l.id === mode)?.label ?? "";
-  if (name.textContent !== label) name.textContent = label;
-}
-
-/** P-FLEET-BOARDS.1: the Layout menu, the four presets for the shown board. The old Autofit toggle is its Side by side
- *  (on) and Free (off); the side-by-side shares and the Free sizes stay in lane_layout, so switching back
- *  restores them. */
-function openLayoutMenu(btn: HTMLElement): void {
-  const mode = boardLayoutOf(boards, currentBoard).layout;
-  const r = btn.getBoundingClientRect();
-  openCtxMenu(r.left, r.bottom + 4, BOARD_LAYOUTS.map((l) => ({ label: l.label, kbd: l.id === mode ? "\u2713" : "", run: () => setBoardLayout(l.id) })), { returnFocus: btn });
-}
-
-/** Set the shown board's layout (and, for Focus one, which agent is large). Applied at once, then stored with
- *  the engine, whose answer replaces the guess. The engine's layout write SETS the focus, so the current one is
+/** Set the shown board's layout (and, for Focus one, which agent is large): the More menu's four presets (P-FLEET.HEAD1).
+ *  The old Autofit toggle is Side by side (on) and Free (off); the side-by-side shares and the Free sizes stay in
+ *  lane_layout, so switching back restores them. Applied at once, then stored with the engine, whose answer replaces
+ *  the guess. The engine's layout write SETS the focus, so the current one is
  *  passed along when only the layout changes. */
 function setBoardLayout(mode: BoardLayout, focus?: string): void {
   if (!deps) return;
@@ -632,7 +627,6 @@ function setBoardLayout(mode: BoardLayout, focus?: string): void {
       : { ...boards, boards: boards.boards.map((b) => (b.id === id ? { ...b, ...pick } : b)) };
   }
   fitPlan = null;
-  paintLayoutBtn();
   applySizes();
   void boardChange(deps.fleetBoardLayout(id, mode, f), "The layout was not saved");
 }
@@ -1171,10 +1165,9 @@ async function boardChange(req: Promise<BoardsView | null>, fail: string): Promi
   return b;
 }
 
-/** Everything a board change can move: the tabs, the Layout name, which cards show, and their layout. */
+/** Everything a board change can move: the tabs, which cards show, and their layout. */
 function repaintBoards(): void {
   paintTabs();
-  paintLayoutBtn();
   const grid = dock ? $("#fleetGrid", dock) : null;
   if (grid) applyOrder(grid);
   paintRemoteSection();
@@ -1198,6 +1191,10 @@ function paintTabs(): void {
   const row = dock ? $("[data-fleet-boards]", dock) : null;
   if (!row) return;
   const list = boards?.boards ?? [];
+  // P-FLEET.HEAD1 (ADR-0612): boards are for people who arrange many lanes, so the tab row stays out of the way
+  // until one exists (More > New board makes the first; the row then carries its own + Board).
+  const hide = list.length === 0;
+  if (row.hidden !== hide) row.hidden = hide;
   const full = list.length >= BOARDS_MAX;
   const sig = JSON.stringify([list.map((b) => [b.id, b.name]), full]);
   if (sig !== tabsSig && renamingBoard === null) {
@@ -2990,11 +2987,8 @@ function onClick(ev: Event): void {
   const t = ev.target as HTMLElement;
   if (t.closest("[data-fleet-close]")) { closeFleetGrid(); return; }
   if (t.closest("[data-dock-min]")) { minimize(); return; }
-  // P-FLEET.L18: back to the map, and the default-view pin.
-  if (t.closest("[data-fleet-orbit]")) { openFleetOrbit(); return; }
-  // P-FLEET-BOARDS.1: the Layout menu, Next that needs you, and the board tabs.
-  const layBtn = t.closest<HTMLElement>("[data-fleet-layout]");
-  if (layBtn) { openLayoutMenu(layBtn); return; }
+  // P-FLEET-BOARDS.1: Next that needs you, and the board tabs. Orbit, layouts, By repo, the default view and the
+  // classic hub live in the More menu (P-FLEET.HEAD1), which handles its own clicks.
   if (t.closest("[data-fleet-next]")) { jumpNext(); return; }
   const boardTab = t.closest<HTMLElement>("[data-board-tab]");
   if (boardTab) { showBoard(boardTab.dataset.boardTab ?? EVERYTHING); return; }
@@ -3015,19 +3009,7 @@ function onClick(ev: Event): void {
     const key = stripCard.dataset.lane ?? stripCard.dataset.rsLane;
     if (key) { setBoardLayout("focus", key); return; }
   }
-  // P-TUI.2: the terminal hub. A refusal names why on the button's tooltip line (this module has no toasts).
-  const hubBtn = t.closest("[data-fleet-hub]") as HTMLButtonElement | null;
-  if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
-  if (t.closest("[data-fleet-pin]")) { setFleetHome("grid"); paintGridPin(); return; }
-  if (t.closest("[data-fleet-byrepo]")) { // P-HUB-PICK.1 (ADR-0516)
-    groupByRepo = !groupByRepo;
-    storage().set(FLEET_BY_REPO_KEY, groupByRepo ? "1" : "0");
-    paintByRepo();
-    lastGroupSig = "";
-    const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null;
-    if (grid) applyOrder(grid);
-    return;
-  }
+
   // P-FLEET.L18: group divider controls + the per-card group chip.
   const gt = t.closest("[data-grp-toggle]") as HTMLElement | null;
   if (gt) {

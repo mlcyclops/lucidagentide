@@ -6313,3 +6313,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** a lane in full auto-mode answers every ask except a program the org's managed policy denies; the #612 catastrophic floor (rm -rf, sudo, pipe into an interpreter, force-push and the rest) no longer stops it, and turning auto on answers an open catastrophic ask. Session grants keep the floor. PR #618 closed unmerged.
 - **stubbed:** the P-FLEET.L6 risk modal text is unchanged (it already says every approval is granted); no per-lane opt-back-in to the floor.
 - **next:** in the installed app, run a full auto-mode lane through a task that deletes a build folder and confirm it never asks.
+## Fleet header: essentials up top, the rest in More; centered sidebar buttons; spokes filter as an icon (P-FLEET.HEAD1, ADR-0612)
+- **shipped (2026-11-17):** the Fleet grid header shows headroom, Next that needs you, Ask, + Lane, More, minimize and close; Orbit, the four layouts, Group by repo, New board, Open the grid first and Classic hub moved into the More menu (the "+" menu's anchored popover, which flips above when the dock sits low). Board tabs show once a board exists. The sidebar's + and << glyphs are centered (`.side-new` padding:0) and the Spokes text toggle is a small icon button with a count badge.
+- **stubbed:** nothing; the Orbit header was not changed.
+- **next:** use the trimmed header with real lanes for a day and move anything missed back out of More.
