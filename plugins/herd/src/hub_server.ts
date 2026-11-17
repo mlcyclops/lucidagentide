@@ -386,7 +386,7 @@ async function serveLocked(env: Env, data: string, name: string): Promise<number
   const engineEnv = { ...env };
   if (env.LUCID_HUB_FORCED_COLOR === "1") { delete engineEnv.FORCE_COLOR; delete engineEnv.LUCID_HUB_FORCED_COLOR; }
   const attached = await attachOrSpawnEngine(engineEnv, env.LUCID_HERD_REPO || null);
-  if (!attached) return fail({ error: "no_engine", message: env.LUCID_HERD_REPO ? "none running, and spawning one failed (port busy or missing deps); try `bun desktop/dev.ts` to see why" : "no LUCID engine is running; open the IDE, or start Herd with `lucid herd`" });
+  if (!attached) return fail({ error: "no_engine", message: env.LUCID_HERD_REPO ? "none running, and spawning one failed (port busy or missing deps); try `bun desktop/dev.ts` to see why" : "the LUCID IDE is not running. Open the LUCID IDE, then try again." });
   const hub = startHubServer({ data, classic: discoveryDir(env), name, attached });
   const quit = () => hub.stop();
   for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(sig, quit);

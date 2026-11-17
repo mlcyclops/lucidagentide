@@ -295,15 +295,15 @@ export const FREE_PLUGINS: FreePlugin[] = [
     // ADR-0541: P-HERD ships as this optional add-on. The classic `lucid hub` stays the default; nothing of Herd
     // installs or runs until the user presses Install here.
     id: "herd", name: "Herd", rank: 19, status: "add-on",
-    desc: "A Herdr-style terminal fleet: a hub server that outlives the terminal, with attach, detach, and named hubs.",
+    desc: "See and run your agents from a terminal window. Your boards keep running when you close the window.",
     category: "Terminal", downloads: null, glyph: "terminal", tone: "cyan",
-    lucid: "Run lucid herd in any terminal to attach to your agents' hub. Close the terminal and the hub keeps running; attach again later, or run more than one hub by name. Open shows a live, read-only view of the main hub's tabs and panes here. The classic lucid hub stays as it is.",
+    lucid: "Type lucid herd in any terminal to see your agents and their boards. Close the window and the boards keep running; open it again later and pick up where you left off. You can keep more than one set of boards, each with its own name. Open shows a live view of your main boards here. The classic terminal view stays as it is.",
     page: true,
     howTo: [
-      { command: "lucid herd", what: "Attach to the hub named main, or start it." },
-      { command: "lucid herd --name work", what: "Attach to a second hub named work." },
-      { command: "lucid herd server list", what: "List the hubs that are running." },
-      { command: "lucid herd server stop", what: "Stop the hub. Pressing Q in a terminal only detaches." },
+      { command: "lucid herd", what: "Show your main boards, or start them if they are not running." },
+      { command: "lucid herd --name work", what: "Show a second set of boards named work." },
+      { command: "lucid herd server list", what: "List the sets of boards that are running." },
+      { command: "lucid herd server stop", what: "Stop the boards. Pressing Q in the terminal only closes the window; the boards keep running." },
     ],
   },
 ];

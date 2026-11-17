@@ -27136,6 +27136,97 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** `rd /s /q build` and `Remove-Item -Recurse` now always ask, as `rm -rf build` does; remote lanes refuse them outright. A command quoted as an argument is not read as one. Left as designed: a remote agent connection with `permissionPolicy: "allow"` (ADR-0149, a per-connection opt-in for a trusted gateway) answers its own asks without this floor.
 
+## ADR-0572 -- P-RS-APPROVE-UX: an unlocked password hub approves without retyping, and a parked spoke shows its parked actions on its own (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0507 (its password amendment) and ADR-0551. Pairs with Remote Spokes plugin ADR-A105. Proof: `bun test desktop/renderer/remote_spokes_model.test.ts desktop/remote_spokes.test.ts`; desktop typecheck.
+
+**Context.** The owner approves parked actions from the Orbit "Remote spokes" view. Two complaints: a `password` hub asked for its presence password on every Approve, and a spoke with a parked action showed nothing under Parked actions until Check was pressed. Plugin ADR-A105 lets the hub hold its presence key unlocked for a window after the password is typed once, and reports it as `hub.presenceUnlocked` on `/host/spokes`.
+
+**Decision.**
+1. `mapHubSnapshot` maps `hub.presenceUnlocked` to a boolean (exactly `true` is true; missing or anything else is false, so an older plugin keeps asking).
+2. The engine's decide route refuses a password-less allow on a `password` hub only while the hub is not unlocked; while unlocked it forwards the allow without a password and the plugin signs it with the held key. A typed password still passes through once, as before.
+3. The approval card shows the password field only on a `password` hub that is not unlocked; otherwise Approve is the two-click path.
+4. The per-spoke panel reads its parked actions once on its own when the spoke has a task awaiting approval and the viewer has recall, and again when the set of awaiting tasks changes; it resets when nothing is parked. Check stays a manual refresh; approvals are not polled per tick.
+
+**Consequences.** While the hub is unlocked, anyone at the IDE can approve without the password; the window and its lock live in the plugin (ADR-A105). Approvals are read once per new park, not per poll.
+
+## ADR-0573 -- P-RS-SESSION.1: a remote task shows a live session screen, like a local lane's, with no Refresh (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0506 and ADR-0551. Pairs with Remote Spokes plugin ADR-A106. Proof: `bun test desktop/remote_spokes.test.ts desktop/renderer/remote_spokes_model.test.ts`.
+
+**Context.** The owner: "when i click on a remote spoke, i don't get a omp screen to see the last entries or to see the status. I also have to click refresh status, why are we not using the same experience as a regular spoke?" A local lane's card and the composer show its transcript live; a remote spoke's panel showed task rows, a "Whole journal" recall button and parked actions behind Check, and its status came from the hub's 15 s summary.
+
+**Decision.**
+1. `desktop/renderer/remote_session.ts` keeps a remote task's session on screen: the prompts, the model's turns, state changes, parked and decided actions, refusals and cut-off turns, read from the spoke's scanned journal (`sessionRows` in remote_spokes_model.ts leaves out audit, CRL, custody and model records). It uses the local lane output's look (`.fleet-out`, `.fleet-turn-user`, `.fleet-md`, `.fleet-errline`).
+2. Live without a button: while a session is on screen the spoke's own `status` is read every 3 s while the task works or waits for approval (20 s otherwise), one read per spoke however many of its sessions are open; the journal is read again only when the task's state, turn count or last change moved, and only after the last seq shown (recall `since`). A session whose element left the document stops.
+3. The per-spoke panel opens on a Session section: the task that works or waits on you, else the newest open one, else the newest; clicking a task row shows that task's session. Each Fleet grid remote lane card shows its task's session too.
+4. Engine: `GET /api/remote-spokes/status?node=` (recall scope; tasks validated by `mapTasks`, as the hub snapshot's rows) and `since` on `POST /api/remote-spokes/recall` (a whole non-negative number, else the body is refused).
+5. Prompts: the journal keeps a prompt as its hash and length only. A prompt sent from this window is remembered in memory under that hash, so its text shows; any other shows its size.
+6. Untrusted text rule kept: a turn is text with its line breaks (pre-wrap), not markdown; a quarantined entry shows only that it was withheld.
+
+**Consequences.** No Refresh or Check is needed to follow a remote task. A watched working task costs a status read every 3 s (each journaled by the spoke as an audit entry under no task) and one recall per change (journaled under the task, left out of the session). Tool calls are not in the journal, so a remote session shows the model's words and the state, not tool chips. The Whole journal recall stays for the full record.
+
+## ADR-0574 -- P-HOLDER.2: held lanes run from a per-version copy of the runtime, and an update asks about the lanes first (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0534 (lane holders) and the updater (ADR-A009 channels unchanged). Proof: `bun test desktop/lane_runtime.test.ts desktop/update_lanes.test.ts desktop/lane_holder.test.ts desktop/fleet_lanes.test.ts desktop/controller/lane_lifecycle.test.ts`; a live run on Windows with the packaged binaries (below).
+
+**Context.** A held lane outlives the IDE by design, but its processes (lucid-holder, omp, bun, the scanner's Python) ran from the install folder. Found live 2026-11-13: two idle lanes from the night before kept a local install-on-close update waiting for hours, and an installer cannot replace files a running process holds. The owner: lanes that run should not block an update; the IDE should offer to stop lanes it thinks are stuck or doing nothing, and remind about the ones that work.
+
+**Decision.**
+1. `desktop/lane_runtime.ts`: on a packaged install the engine copies what a held lane executes into `<data root>/lane-runtime/<key>/` (`repo/` without `repo/bin` except the holder, `runtimes/bun`, `runtimes/python-<os>-<arch>`; about 650 MB, 15,000 files), in the background when the engine starts, under a partial name renamed when complete. The key is the app version plus a hash of the size and time of the files a lane runs, so two builds with one version number get two copies. A source checkout makes none; `LUCID_LANE_RUNTIME=install` turns it off.
+2. `HolderPool.launch` starts the holder from the copy and rewrites the lane's command, arguments and every path-list environment entry under the install's `resources` to the copy, only where the copy has the file. The record keeps the copy's key (`runtime`, optional, so older records still load); a copy is deleted only when it is not current and no record names it. No copy (it failed): the lane runs from the install folder as before, and the log says so.
+3. `LaneView.heldRuntime`: `current`, `previous` (an earlier version's copy: it keeps running across an update) or `install`.
+4. `desktop/update_lanes.ts` sorts the lanes an update meets: stuck (`displayStatus` likely-stuck), idle (waiting for input, done, failed) and working (starting, in a turn, waiting on an approval). Engine `GET /api/fleet/update-check` and `POST /api/fleet/stop-for-update` (stops only the chosen lanes still idle or stuck at the click; transcript kept, Respawn allowed).
+5. The updater's prompt (`updatePrompt`) names the lanes and offers "Stop N idle or stuck lanes and restart", "Restart and keep every lane" and "Later"; working held lanes are named as keeping the previous version, working child lanes as ending with the IDE. A lane that runs from the install folder never gets an install over it: a working one leaves only "Later", an idle or stuck one only the stop path, and the install is checked again after the stop. `autoInstallOnAppQuit` is off: no silent install on quit with no look at the lanes.
+6. After a restart, a one-time toast names the lanes still on the previous version (stop and respawn them when idle to use the new one).
+7. An update never installs over a lane LUCID could not fully read (review, PR #621). `parseUpdateCheck` is all or nothing: one row or required field it cannot read (`held` and `blocksInstall` must be real booleans) makes the answer unreadable, so only "Later". Every install choice goes through `decideInstall`: `POST /api/fleet/commit-install` (from then on `HolderPool.launch` refuses a held lane that would run from the install folder, and the answer counts such starts still in progress), then one final update-check right before `quitAndInstall()`; a failed commit or check, a start in progress, or any `blocksInstall` lane lifts the commit and shows "Update waits". Runtime cleanup skips its pass when any holder record cannot be read. A lane that falls back to the install folder logs why.
+
+**Live proof (2026-11-13, Windows, `release/win-unpacked`):** copy made in 7 s (14,957 files, 651 MB); `omp --version` from the copy printed omp/18.18.6; a held lane launched through `HolderPool` ran its holder and child from the copy; the install folder's `lucid-holder.exe` and `bun.exe` could then be replaced while it ran; the copy's own `bun.exe` could not be deleted while in use (why cleanup honors the records).
+
+**Consequences.** Each app version costs one copy on disk while a lane uses it, and the first held lane after an update waits for the copy if the background one has not finished. Lanes held before this change still run from the install folder; the prompt names them, and the first update after this change is the last that has to wait for them. Lanes keep running the version they started on until they are started again.
+
+## ADR-0575 -- P-RS-PAST.1: a spoke's finished tasks fold under Past tasks (2026-11-13)
+
+**Status:** Accepted. Amends ADR-0509 (the per-spoke panel's task list) and ADR-0573 (which task the Session section picks).
+
+**Context.** A spoke keeps every task it ever ran in its `status` answer, and the per-spoke panel listed all of them. On the workstation hub, spoke-01 showed 27 rows: 2 open, 8 closed and 17 `stopped` (their lanes ended when the spoke's engine restarted). Stopped rows offer no Close, so they could never be tidied, and the Session section ranked a stopped task like an idle one when picking which task to show.
+
+**Decision.**
+1. `taskEnded(t)` (closed or stopped) is the one rule for "nothing more runs here". The orbit, the Fleet grid's remote lanes and the task buttons read it.
+2. The panel lists open tasks. Ended tasks fold into one collapsed **Past tasks (N)** row, newest first, dimmed. Each one is still a click away from its session and its Recall, so history stays readable. A repaint keeps the fold open or shut as the user left it.
+3. With no task chosen, the Session section picks a working or waiting task first, then an open one, then an ended one.
+
+**Consequences.** Nothing is deleted. The spoke still sends every task in each `status` answer, so the answer grows with the spoke's history. Trimming that is the add-on's call (a retention window for ended tasks), and recall reads the journal by task id either way.
+
+## ADR-0576 -- P-FLEET-UX: the Fleet window is the front door for everyone, the engine owns boards, and Herd is the terminal face (2026-11-13)
+
+**Status:** Accepted (owner, 2026-11-13: "1) A, 2) Ok"). Amends ADR-0489 to ADR-0497 and ADR-0541 (where Herd's spaces live). Relates to issue #610. Proposal and mockup: `deliverables/herd-gui-2026-11/` in the workspace.
+
+**Context.** The IDE is for non-technical users too. Herd (ADR-0541) gave terminal users tabs, layouts, attention and machines. The IDE got only a read-only mirror of it, with "Not in this build", `--dir <absolute discovery folder>` and an error that points back at the failing command on the way. The Fleet window already had cards, groups, sizes, remote lanes and in-card approvals, but no boards, presets or "next that needs you".
+
+**Decision.**
+1. **The Fleet window is the front door.** Boards, layout presets, "Next that needs you", "+ New agent" (where: This PC or a computer you added), Computers, and one card for local and remote agents all live there. No add-on and no terminal is needed for any of it.
+2. **The engine owns boards** (option A of the proposal): the spaces model (boards, their agents, layout, attention) moves under the engine, behind engine routes. The Fleet window and Herd's terminal are both clients of it. Herd stays an optional add-on for the terminal face (ADR-0541 holds). "Open in terminal" replaces the Fleet window's Terminal button once Herd reads the engine's boards. Until then the button says it opens the classic hub.
+3. **Words in the UI:** *agent* (one AI helper on one job), *board* (a set of agents), *computer* (This PC, or one you added). *Hub* names only the machine whose boards start the work, and *spoke* only appears in admin and setup screens.
+4. **Hub and spoke:** boards live on the hub only. A board holds `spoke:task` references, and a spoke never learns about boards. A Windows or Mac spoke shows its own person what runs there ("This computer is helping <hub>") with Pause, Stop all and per-task Stop. Approvals stay the hub's signed decisions.
+
+**Consequences.** Phases: (1) plain-language setup and errors, a one-confirm Stop and an always-on reply box on remote cards; (2) engine-owned boards, layout presets and Next; (3) New agent, Computers and pairing by check code, plus the spoke's own view; (4) Herd reads the engine's boards; (5) the spoke's ended-task retention. The Remote Spokes add-on carries the spoke-side pieces (queued follow-up, a local view and stop, pairing by code, retention).
+
+## ADR-0577 -- P-FLEET-UX.1: plain-language Herd setup, one-confirm Stop and an always-on reply box on remote agents (2026-11-13)
+
+**Status:** Accepted. Implements phase 1 of ADR-0576. Amends ADR-0541 (the Herd card), ADR-0509 (task buttons) and ADR-0551 (remote lane cards). Proof: `bun test desktop/renderer/remote_spokes_model.test.ts plugins/herd` and the typecheck.
+
+**Context.** A non-technical user met Herd as "A Herdr-style terminal fleet: a hub server...", a disabled "Not in this build" with no reason or way forward, and, with the IDE closed, an error that told them to run the very command that had just failed. On remote agents, Stop was an archive icon that needed two clicks, unlike a local lane's ✕, and the reply box vanished whenever the agent was working.
+
+**Decision.**
+1. **Herd card in plain words** (`plugin_catalog.ts`): it says what you get (your agents in a terminal, boards that keep running when you close the window). The commands are unchanged; their notes are plain.
+2. **Not in this build says why and what next** (`plugins_flyout.ts`): this copy of LUCID does not include the signed Herd package, and the card offers the Installed tab's own Install from file (the same review sheet and install path). Without the desktop app, it says installing from a file needs it.
+3. **No circular error** (`plugins/herd/src/hub_server.ts`): when no IDE engine runs, Herd says to open the LUCID IDE and try again.
+4. **Terminal button** (`fleet_grid.ts`, `fleet_orbit.ts`): it reads "Classic hub" (the full "Open in terminal (classic hub)" made the Fleet header overflow a narrow dock and pushed Minimize and Close off the edge; the header now wraps), and its tooltip, headed "Open in terminal (classic hub)", says it opens the classic hub in a terminal window.
+5. **One-confirm Stop on remote agents** (`orbit_remote.ts`): a remote lane card has a ✕ Stop in its header with the local lane's class and look, and the per-spoke panel's task rows have a Stop. Both ask once, through the IDE's toast with actions: `Stop "<name>" on <computer>? What it did so far is kept under Past tasks.` Stop still sends `close` through the same path.
+6. **Always-on reply box** (`remote_spokes_model.ts`, `orbit_remote.ts`): `taskButtons` offers a follow-up for any open task when the hub may drive; Resume keeps its meaning (idle or error, and interrupted). While the task works, the placeholder says the note waits for its next step. An answer with `queued: true` shows "Queued: it reads this after its current step."; a refusal shows the spoke's own words.
+
+**Consequences.** A new spoke (Remote Spokes add-on) queues up to 8 notes per task and gives them as one follow-up turn when the current turn ends; `cancel` and `close` drop the queue. An older spoke still refuses a note while the task works ("task is still working; one turn at a time"), and the IDE shows that text as is. Local lane Stop is unchanged.
 ## ADR-0578 -- P-CTX.2a: a tool result omp spilled to an artifact is scanned whole, recorded with its trust label, and fenced when read back; the result window is omp's own setting (2026-11-14)
 
 **Status:** Accepted. This is "ADR-A" of `docs/specs/longcapharness-review-pdr.md`, amended after its seam was confirmed against omp 18.18.6 (the numbers 0571 to 0577 are taken on unmerged branches). Amends ADR-0152 (the MCP result gate). Proof: `make demo-P-CTX.2a`, and `bun test harness/omp/mcp_spill_gate.test.ts harness/security/large_scan.test.ts harness/security/spill_provenance.test.ts`.
@@ -27580,6 +27671,21 @@ Relates to ADR-0334 (superseded), ADR-0427, ADR-0530, ADR-0549 (the Herd close-o
 
 **Consequences.** With On, the agent may pick a model per subagent from the models omp can already route to (omp's own approval rules: no globs, roles or partial ids). The agent still cannot enable it; only the user can, through LUCID. Org policy can never be widened by this setting. Not done: mapping a managed allow-list onto omp's `task.perCallModelAllow` (would need expanding substrings against the live model catalog); a per-lane override.
 
+## ADR-0606 -- P-HOLDER.3: a held lane's Python kernel runs on the lane runtime copy's Python, not the install folder's (2026-11-17)
+
+**Status:** Accepted. Amends ADR-0574 (P-HOLDER.2: held lanes run from a per-version copy of the runtime). Fixes issue #633. Proof: `bun test desktop/lane_runtime.test.ts desktop/lane_holder.test.ts`.
+
+**Context.** ADR-0574 moved a held lane's holder, omp, bun and the scanner's Python onto `<data root>/lane-runtime/<key>/`, yet on 2026-11-15 an update still could not install: four held lanes each had an omp Python kernel (the eval runner, `~/.omp/python-env/Scripts/python.exe -u .../omp-python-runner/runner-*.py`) whose child was the install folder's `resources/runtimes/python-win32-x64/python.exe`. omp picks the kernel's interpreter itself (`eval/py/runtime.ts enumeratePythonRuntimes`): VIRTUAL_ENV, then CONDA_PREFIX, then `<cwd>/.venv` or `<cwd>/venv`, then its managed `~/.omp/python-env`, then `python` on PATH. That managed venv had been built on the install folder's Python, so every kernel a lane started pinned the install folder, wherever the lane itself ran from. ADR-0574 rewrote only paths LUCID hands the lane; this one omp derives on its own.
+
+**Decision.**
+1. omp's seam, used as is (omp is not patched): the `python.interpreter` setting makes omp skip discovery and run the kernel on that interpreter, and omp loads every file listed in the `PI_CONFIG_FILES` environment variable as a `--config` overlay. omp's managed venv path has no override on Windows (`getPythonEnvDir` honours XDG only on Linux), so an interpreter, not a venv location, is what LUCID sets.
+2. Each lane runtime copy carries `lane-python.yml`, written with the copy before it is marked complete: `python.interpreter` set to the copy's own interpreter (`runtimes/python-<os>-<arch>/python.exe`, or `bin/python3` on POSIX) at the copy's final path. omp's runner needs no packages beyond the standard library, so no venv is built: the kernel runs on the copy's interpreter directly.
+3. `LaneRuntime.map` (now given the lane's `cwd`) appends that overlay to the held lane's `PI_CONFIG_FILES`, keeping any list already there. It does not when omp would first pick a venv of the lane's own (the same order omp uses: VIRTUAL_ENV, CONDA_PREFIX, `<cwd>/.venv`, `<cwd>/venv`, with its interpreter present) that neither lives in the install folder nor is built on its Python (`pyvenv.cfg` `home`). A venv built on the install folder's Python counts as pinning it, and the copy's interpreter is used instead.
+4. A copy without the overlay (made by a build before this one) adds nothing; such copies have another key, since every build has its own.
+
+**Why not the fallback** (the update prompt listing lanes with a live kernel and offering to end idle lanes' kernels): omp offers the seam above, so a held lane's kernel no longer touches the install folder at all, and nothing has to be stopped.
+
+**Consequences.** A held lane's eval kernel runs on the bundled Python copy even when the person set `python.interpreter` in a project's omp config, because a `--config` overlay ranks above project settings; a project `.venv` or an active VIRTUAL_ENV in the lane's working folder is still honoured. Packages someone installed into `~/.omp/python-env` are not seen by a held lane's kernel, and a `pip` install from that kernel goes into the copy, which is per version, so it does not carry over to the next version's copy. Child lanes and the main session are unchanged (they end with the IDE). Not done: a live run on a packaged Windows install with a held lane's kernel alive during an update.
 ## ADR-0604 -- P-SCANLIVE.2: a stale LUCID_SCANNER_DIR no longer wins over the probed scanner sidecar, and an unusable one is named (2026-11-17)
 
 **Status:** Accepted. Amends ADR-0368 (the probed sidecar fallback) and ADR-0571 (the scan-unavailable reason). Invariant #3 is unchanged. Proof: `bun test ./harness/security/scanner_client.test.ts` (a stale override with a valid probe uses the probe and scans; a valid override wins; with neither usable nothing is spawned and every scan throws naming the directories) and `make test-failclosed`. Fixes #631.

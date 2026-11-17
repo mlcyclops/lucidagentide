@@ -157,7 +157,7 @@ export async function verifyRemoteSpokes(page, shotDir = tmpdir()) {
     // Open the parked spoke: recall + approve scopes only, so no drive control exists anywhere in its panel.
     await page.click(`#remoteSpokes .rsv-row[data-rs-open="${NODE("1")}"]`);
     await page.waitForSelector("#remoteSpokes [data-rs-title]", { visible: true });
-    const drive = await page.$$eval("#remoteSpokes [data-rsv-detail] :is([data-rs-new],[data-rs-follow-open],[data-rs-cancel],[data-rs-close])", (els) => els.length);
+    const drive = await page.$$eval("#remoteSpokes [data-rsv-detail] :is([data-rs-new],[data-rs-follow-open],[data-rs-cancel],[data-rs-stop])", (els) => els.length);
     assert(drive === 0, `a hub without the drive scope was offered ${drive} drive control(s)`);
 
     await page.click("#remoteSpokes [data-rs-approvals]");

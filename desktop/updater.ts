@@ -21,8 +21,9 @@
 import { app, BrowserWindow, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 import { updatePolicy } from "./managed_config.ts";
+import { decideInstall, updatePrompt, type UpdateLaneDeps } from "./update_lanes.ts";
 
-export function initAutoUpdate(getWindow: () => BrowserWindow | null): void {
+export function initAutoUpdate(getWindow: () => BrowserWindow | null, lanes?: UpdateLaneDeps): void {
   if (!app.isPackaged) return; // dev: no feed, would throw on missing config
 
   // ADR-A009 (#74): the managed-config update channel. "managed" disables the in-app check entirely so
@@ -34,25 +35,35 @@ export function initAutoUpdate(getWindow: () => BrowserWindow | null): void {
   }
 
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // P-HOLDER.2 (ADR-0574): never a silent install on quit. It ran with no look at the lanes, and a silent install
+  // over files a running process holds can fail halfway (a local install on 2026-11-10 removed the old version and
+  // left none). The update installs from the prompt below; "Later" leaves it for the prompt at a later launch.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.logger = { info: console.log, warn: console.warn, error: console.error, debug: () => {} } as never;
 
   autoUpdater.on("error", (err) => console.warn("[updater] ", err?.message ?? err));
 
   autoUpdater.on("update-downloaded", async (info) => {
     const win = getWindow();
+    // A fleet that cannot be read is "unavailable", never "no lanes" (fail-closed: the update waits).
+    const p = updatePrompt(info.version, lanes ? ((await lanes.check().catch(() => null)) ?? "unavailable") : null);
     const { response } = await dialog.showMessageBox(win ?? undefined!, {
       type: "info",
-      buttons: ["Restart now", "Later"],
+      buttons: p.choices.map((c) => c.label),
       defaultId: 0,
-      cancelId: 1,
+      cancelId: p.choices.length - 1,
       title: "Update ready",
       message: `LucidAgentIDE ${info.version} is ready to install.`,
-      detail: "Restart to apply the update. Your session and credentials are kept.",
+      detail: p.detail,
     });
-    if (response === 0) {
-      setImmediate(() => autoUpdater.quitAndInstall());
+    // Every install choice reads the lanes one final time (a lane may have started while the prompt was open), with
+    // new held lanes kept off the install folder from then on; any doubt, and the update waits.
+    const d = await decideInstall(p.choices[response], p.stop, lanes);
+    if (!d.install) {
+      if (d.waits) await dialog.showMessageBox(win ?? undefined!, { type: "warning", buttons: ["OK"], title: "Update waits", message: "The update did not install.", detail: d.waits });
+      return;
     }
+    setImmediate(() => autoUpdater.quitAndInstall());
   });
 
   // ADR-A009 (#74): "feed" points electron-updater's GENERIC provider at the customer-hosted mirror;
