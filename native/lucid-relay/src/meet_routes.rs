@@ -501,6 +501,14 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = connector_body(c)?;
             c.relay.hub.bridge_c_unlink(&who, b.get("link"), b.get("by_name"))
         },
+        "/v1/bridge/c/mode" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_mode(&who, b.get("link"), b.get("mode"), b.get("by_name"))
+        },
+        "/v1/bridge/c/notice" => |c: &mut Ctx| {
+            let (who, b) = connector_body(c)?;
+            c.relay.hub.bridge_c_notice(&who, b.get("link"), b.get("kind"), b.get("start"), b.get("end"))
+        },
         "/v1/bridge/c/ack" => |c: &mut Ctx| {
             let (who, b) = connector_body(c)?;
             c.relay.hub.bridge_c_ack(&who, b.get("link"), b.get("seq"), b.get("ok"), b.get("ext"), b.get("reason"), b.get("state"))

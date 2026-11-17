@@ -19,7 +19,7 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ScannerClient } from "../security/scanner_client.ts";
+import { sharedScanner } from "./shared_scanner.ts";
 import { scanAndDecide, type GatePolicy } from "../security/gate.ts";
 import { buildNotification, summarizeNotification } from "../security/notification.ts";
 import { writeHarnessMirror } from "../memory/obs_mirror.ts"; // fs-only (no DuckDB addon), safe to load statically
@@ -30,15 +30,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DB_PATH = join(HERE, "..", "..", "agent_obs.duckdb");
 const LIVE_RUN = "omp-live";
 
-// P-SCANLIVE.1 (ADR-0571): a sidecar that dies is respawned by the next tool call's scan; until then
-// calls fail closed. The exit is written to stderr (the desktop keeps it in lucid-acp.log), because the
-// scanner's own exit code and stderr are otherwise the only record of WHY it died.
-const scanner = new ScannerClient({
-  onExit: (e) => writeStderrNotice(
-    `\n🛡️  [LucidAgentIDE] scanner sidecar exited (${e.reason}); tool calls fail closed until the first scan after ${e.restartInMs}ms restarts it${e.stderrTail ? `. stderr: ${e.stderrTail.slice(-500).replace(/\s*\n\s*/g, " | ")}` : ""}\n`,
-  ),
-});
-scanner.start();
+// P-SCANLIVE.3 (ADR-0605): the process's one scanner client, shared with mcp_result_gate.ts. omp evaluates
+// this module again for every session it loads, so a client made here started a sidecar per session that
+// nothing stopped (issue #632). The shared client still respawns a dead sidecar on the next tool call's
+// scan, fails closed until then and writes the exit to stderr (P-SCANLIVE.1, ADR-0571); it is stopped when
+// the process exits.
+const scanner = sharedScanner();
 
 // The gate scans the model's OWN tool args (the bash command it wrote, the file content it
 // authored, custom-tool inputs). A homoglyph-only hit there is not an injection against the
@@ -94,8 +91,9 @@ function touchMirror(): void {
   mirrorTimer.unref?.(); // a pending mirror write must never hold the omp child alive
 }
 
+// The shared scanner is stopped by shared_scanner.ts when the process exits; this closes only what this
+// evaluation of the module opened.
 function shutdown(): void {
-  scanner.stop();
   try {
     dbHandle?.close();
   } catch {

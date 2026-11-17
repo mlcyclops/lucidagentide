@@ -14,6 +14,7 @@ import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Age
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
+import { newStageId, STAGE_ATTEMPT_MS } from "./queue_model.ts"; // P-FLEET.STAGE1 (ADR-0609): idempotent, timed staging
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
@@ -389,6 +390,8 @@ export type LaneEvent =
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string }
+  /** P-FLEET.STAGE1 (ADR-0609): a prompt sent with a stage id found the lane busy and was staged instead. */
+  | { type: "staged"; queued: number }
   /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
    *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
   | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
@@ -1171,10 +1174,13 @@ export interface LucidBridge {
   fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; code?: "no-repo"; worktree?: { path: string; branch: string } } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat.
    *  P-ATTACH.1 (ADR-0598): `attachments` are staged file ids, as for sendPrompt. */
-  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[], attachments?: string[]): Promise<void>;
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[], attachments?: string[], stageId?: string): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt.
-   *  P-ATTACH.1: staged file ids stay with the item; their text is built and scanned when it drains. */
-  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[], attachments?: string[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
+   *  P-ATTACH.1: staged file ids stay with the item; their text is built and scanned when it drains.
+   *  P-FLEET.STAGE1 (ADR-0609): every request carries a stage id (the caller's, else one minted here) and is
+   *  retried on a timeout with that same id, so a slow engine never hangs the composer and never stages twice.
+   *  Null after the last attempt: the engine did not answer. */
+  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[], attachments?: string[], stageId?: string): Promise<{ ok: boolean; queued?: number; reason?: string; duplicate?: boolean } | null>;
   /** P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) makes a late remove fail closed instead of
    *  deleting whichever prompt slid into `index` meanwhile. */
   fleetQueueRemove(laneId: string, index: number, expect?: string): Promise<{ ok: boolean } | null>;
@@ -2122,14 +2128,21 @@ export const bridge: LucidBridge = {
   hubOpen: () => post("/api/hub/open", {}),
   timelineList: (limit = 100, offset = 0, includeSelfTest = false, kind) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}${kind ? `&kind=${kind}` : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
-  fleetPrompt: (laneId, text, onEvent, images, attachments) => {
+  fleetPrompt: (laneId, text, onEvent, images, attachments, stageId) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
     // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
     // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
     const sink = onEvent as (e: ChatEvent) => void;
-    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }, sink);
+    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), ...(stageId ? { stageId } : {}) }, sink);
   },
-  fleetQueueAdd: (laneId, text, images, attachments) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  fleetQueueAdd: async (laneId, text, images, attachments, stageId) => {
+    const body = { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), stageId: stageId ?? newStageId() };
+    for (const ms of STAGE_ATTEMPT_MS) {
+      const r = await postTimed("/api/fleet/queue", body, ms) as { ok: boolean; queued?: number; reason?: string; duplicate?: boolean } | null;
+      if (r) return r;
+    }
+    return null;
+  },
   // P-ATTACH.1 (ADR-0598): staging, removal and the policy; the path comes from the preload (Electron only).
   attachmentStage: (f) => post("/api/attachments", f),
   attachmentRemove: async (id) => (await post("/api/attachments/remove", { id }))?.removed === true,

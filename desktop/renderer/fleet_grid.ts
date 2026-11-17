@@ -28,7 +28,7 @@ import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderD
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
-import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, type PushSource } from "./queue_model.ts";
+import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, stageKeyFor, stageSignature, type PushSource } from "./queue_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
@@ -152,6 +152,12 @@ interface LaneRun {
   progressAt: number;
   /** P-WAIT.1: one of the lane's writes waits for a file another worker's running turn is editing. */
   waiting: WaitView | null;
+  /** P-FLEET.STAGE1 (ADR-0609): a stage request for this lane is in flight. A second press is refused with a
+   *  note instead of staging the same draft again while a slow engine answers the first. */
+  staging: boolean;
+  /** P-FLEET.STAGE1: the stage id of the last draft that was NOT confirmed staged, with its signature. Pressing
+   *  Stage again on the same draft reuses the id, so an earlier attempt that did land is not staged twice. */
+  stageKey: { id: string; sig: string } | null;
 }
 
 function newRun(view: LaneView): LaneRun {
@@ -160,6 +166,7 @@ function newRun(view: LaneView): LaneRun {
     streaming: false, collapsed: false, card: null, attached: [], files: null,
     seq: 0, meter: newMeter(Date.now()), follow: null,
     progress: null, progressAt: 0, waiting: null,
+    staging: false, stageKey: null,
   };
 }
 
@@ -256,7 +263,7 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn" data-fleet-hub data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents and their boards as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 12)} Classic hub</button>
       <button class="btn-mini fleet-add-btn fleet-fit-btn" data-fleet-fit aria-pressed="true" data-tip="Autofit|Lanes tile the whole panel at equal sizes and refit as it resizes. Drag a card edge to resize it, its neighbors share the rest; double-click an edge to reset to equal. Off: free layout.">${icon("layout", 12)}<span>Autofit</span></button>
       <button class="btn-mini fleet-add-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything in this panel. He can read what is on your screen and every spoke, and he opens on top of this panel.">${icon("spark", 12)} Ask</button>
-      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="Start a new agent on this computer">${icon("plus", 12)} Agent</button>
+      <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New lane|Spawn a new local lane in this grid. The Orbit map calls the same thing + Spoke.">${icon("plus", 12)} Lane</button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (spokes keep running)">${UP_ARROW}</button>
       <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (spokes keep running)">${icon("close", 15)}</button>
     </div>
@@ -1036,7 +1043,7 @@ function paintEmpty(): void {
   const grid = $("#fleetGrid", dock) as HTMLElement | null; if (!grid) return;
   const empty = $(".fleet-empty", grid);
   const need = runs.size === 0 && !$(".fleet-spawn-card", grid) && remoteCards(grid).length === 0; // P-RS-LANES.1
-  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No agents yet. Start one with + Agent: an AI helper working on one job in one folder.</span></div>`));
+  if (need && !empty) grid.append(el(`<div class="fleet-empty">${icon("info", 13)}<span>No lanes yet - spawn one with + Lane. Each lane is a headless LUCID engine working its own folder.</span></div>`));
   else if (!need && empty) empty.remove();
 }
 
@@ -1376,8 +1383,12 @@ function paintFrame(run: LaneRun): void {
     // P-FLEET.L3: a busy lane's Send becomes STAGE - never disabled mid-turn, because parking the next
     // thought is exactly what the user wants to do while a compact card streams.
     const staging = run.streaming || v.status === "working" || v.status === "needs-approval";
-    send.disabled = v.status === "stopped";
-    if (staging) setTip(send, "Stage for later", "Runs in order when this spoke goes idle");
+    // P-FLEET.STAGE1 (ADR-0609): while a stage request is in flight the button waits, so a second press
+    // cannot stage the same draft twice; the request itself gives up within STAGE_ATTEMPT_MS.
+    send.disabled = v.status === "stopped" || run.staging;
+    send.setAttribute("aria-busy", run.staging ? "true" : "false");
+    if (run.staging) setTip(send, "Staging\u2026", "Waiting for the engine to confirm");
+    else if (staging) setTip(send, "Stage for later", "Runs in order when this spoke goes idle");
     else setTip(send, "Send");
     send.classList.toggle("staging", staging);
   }
@@ -1720,7 +1731,13 @@ async function copyOut(btn: HTMLElement, text: string): Promise<void> {
 
 /** Send or STAGE: a busy lane cannot take a second turn (one turn per lane, the ADR-0268 lesson), so the
  *  same button stages the prompt into the manager-owned queue instead - it runs, in order, when the lane
- *  goes idle. Pasted images ride either path. */
+ *  goes idle. Pasted images ride either path.
+ *  P-FLEET.STAGE1 (ADR-0609): under sustained CPU load the old stage path failed in three ways. A second
+ *  press while a slow request was in flight staged the draft twice; a request that never answered left
+ *  the composer waiting forever; and a failed stage was painted as a LANE error, which flipped a working
+ *  lane to "error". Now one request per lane is in flight, every request carries a stage id the engine
+ *  dedups (a retry or a re-press of the same draft stages once), the bridge gives up within
+ *  STAGE_ATTEMPT_MS, and a failure is a card note that keeps the draft. */
 function sendPrompt(run: LaneRun): void {
   if (!deps) return;
   const input = run.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
@@ -1730,6 +1747,7 @@ function sendPrompt(run: LaneRun): void {
   // the bar, as sending, until the engine takes the prompt; a refused or failed send puts them back.
   const tray = run.files;
   if (!text && !images.length && !tray?.ids().length) return;
+  if (run.staging) { setLaneNote(run, "Still staging your last prompt. It stays in the box until the engine confirms it."); return; }
   if (tray?.pending()) { setLaneNote(run, "Files are still being copied and scanned. Send again in a moment."); return; }
   const held = tray?.hold() ?? [];
   const fileIds = held.map((a) => a.id);
@@ -1737,21 +1755,38 @@ function sendPrompt(run: LaneRun): void {
   let filesSettled = false;
   const settleFiles = (accepted: boolean): void => { if (!filesSettled) { filesSettled = true; tray?.settle(fileIds, accepted); } };
   const id = run.view.id;
+  const key = stageKeyFor(run.stageKey, stageSignature(text, images, fileIds));
+  run.stageKey = key;
+  const chip = { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length, ...(fileIds.length ? { files: fileIds.length } : {}) };
   if (run.streaming || run.view.status === "working" || run.view.status === "needs-approval") {
-    void deps.fleetQueueAdd(id, text, images, withFiles).catch(() => null).then((r) => {
+    run.staging = true;
+    paintFrame(run);
+    void deps.fleetQueueAdd(id, text, images, withFiles, key.id).catch(() => null).then((r) => {
+      run.staging = false;
       settleFiles(!!r?.ok);
-      if (!r?.ok) { onLaneEvent(id, { type: "error", message: r?.reason ?? "could not stage the prompt" }); return; }
-      if (input) { input.value = ""; input.style.height = ""; }
-      run.attached = [];
-      run.view.queued = [...run.view.queued, { text: text.length > 140 ? `${text.slice(0, 140)}\u2026` : text, images: images.length, ...(fileIds.length ? { files: fileIds.length } : {}) }];
+      if (!r?.ok) {
+        // Not a lane error: the lane is fine, only this request failed. The draft stays in the box and the
+        // next press reuses this stage id, so an attempt that did land is not staged a second time.
+        setLaneNote(run, r?.reason
+          ? `Not staged: ${r.reason}. Your prompt is still in the box.`
+          : "Not staged: the engine did not answer in time. Your prompt is still in the box; press Stage again and it is staged once.");
+        paintFrame(run);
+        return;
+      }
+      run.stageKey = null;
+      // Clear only what was staged: text typed or images pasted while the request was in flight stay.
+      if (input && input.value.trim() === text) { input.value = ""; input.style.height = ""; }
+      run.attached = run.attached.filter((im) => !images.includes(im));
+      if (!r.duplicate) run.view.queued = [...run.view.queued, chip];
       paintFrame(run); paintAttach(run);
     });
     return;
   }
   if (input) { input.value = ""; input.style.height = ""; }
   run.attached = [];
+  const turnId = nextId(run, "t");
   run.turns.push({
-    id: nextId(run, "t"), role: "user", text, tools: [],
+    id: turnId, role: "user", text, tools: [],
     ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}),
     ...(held.length ? { files: sentFileMeta(held) } : {}), // P-ATTACH.1 (ADR-0598): chips under the turn
   });
@@ -1759,7 +1794,22 @@ function sendPrompt(run: LaneRun): void {
   run.streaming = true;
   run.view.status = "working"; // optimistic; the stream's status events correct it
   paintFrame(run); paintOutput(run); paintAttach(run); paintPill();
-  void deps.fleetPrompt(id, text, (e) => { if (e.type !== "error") settleFiles(true); onLaneEvent(id, e); }, images, withFiles)
+  // P-FLEET.STAGE1: the stage id lets the engine stage this prompt if the lane turned out to be busy (this
+  // card's view of it lags under load) instead of refusing it and losing the words to an error.
+  const sink = (e: LaneEvent): void => {
+    if (e.type === "staged") {
+      settleFiles(true);
+      run.stageKey = null;
+      run.turns = run.turns.filter((t) => t.id !== turnId);
+      run.view.queued = [...run.view.queued, chip];
+      setLaneNote(run, "This spoke was still busy, so your prompt was staged. It runs when the current turn ends.");
+      paintOutput(run); paintFrame(run);
+      return;
+    }
+    if (e.type !== "error") { settleFiles(true); run.stageKey = null; }
+    onLaneEvent(id, e);
+  };
+  void deps.fleetPrompt(id, text, sink, images, withFiles, key.id)
     .catch((err: unknown) => onLaneEvent(id, { type: "error", message: err instanceof Error ? err.message : String(err) }))
     .finally(() => { settleFiles(false); run.streaming = false; foldPending(run); paintFrame(run); paintOutput(run); paintPill(); maybeDrain(run); });
 }

@@ -55,19 +55,37 @@
 //     per-model gate.
 //   - scaleway: Scaleway (France, EU) serverless inference (default `glm-5.3`). Allied host; its GLM /
 //     Qwen / DeepSeek ids sit behind the ACKNOWLEDGE through `isChinaModel`.
+//
+// 18.18.6 -> 18.21.0 (issue #634, ADR-0608) ADDED five, removed none, reviewed 2026-11-17:
+//   - antigravity-cli: Google's own Antigravity CLI (`agy acp`, base `antigravity.google`) run as a local
+//     ACP subprocess under the user's Google login. Its roster is Gemini 4 / 3.8, Claude Opus and Sonnet
+//     5.5 and GPT-OSS 120B. Allied first-party route, the same posture as google-antigravity: no gate.
+//   - chutes: Chutes serverless open-weight host (`llm.chutes.ai`, API key, discovered roster). Its
+//     default `deepseek-ai/DeepSeek-V4-Flash-0731-TEE` and every DeepSeek / Qwen / GLM / Kimi id it
+//     serves match `isChinaModel`, so they sit behind the ACKNOWLEDGE; gated per MODEL like every host.
+//   - liquid: Liquid AI judge models (`d1.1`, `d1-ultra`, base `api.liquid.ai`). Every model is
+//     `kind "judge"` with tools off: reachable only from a judge role chain the user points at it with
+//     LIQUID_API_KEY. Not in omp's default judge chain and never a chat model. No gate.
+//   - modal: Modal proxy-token gateway to the user's OWN deployments (`MODAL_PROXY_TOKEN`, discovered
+//     endpoint ids `<workspace>--<app>.<region>.modal.direct`). The default id serves Kimi and matches
+//     `isChinaModel`. Same posture as otari: listed, per-model gate, which reads the endpoint name, so a
+//     deployment that hides its model family in its name is the residual the managed allowlist covers.
+//   - nace: Nace Drex judge models (`drex-max-v1.1`, `drex-max-finance`, `drex-v2.0`, base
+//     `console.nace.ai`). Judge-only like liquid (tools off, NACE_API_KEY, not in the default chain).
+//     No gate.
 
 import { expect, test } from "bun:test";
 import { DEFAULT_MODEL_PER_PROVIDER } from "@oh-my-pi/pi-catalog";
 
-// Pinned universe at @oh-my-pi/pi-catalog 18.18.6 (the exact version package.json pins). Sorted, 92 ids.
+// Pinned universe at @oh-my-pi/pi-catalog 18.21.0 (the exact version package.json pins). Sorted, 97 ids.
 const PINNED_PROVIDER_IDS = [
 	"abliteration", "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "amazon-bedrock",
-	"anthropic", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "cline-pass",
+	"anthropic", "antigravity-cli", "apple", "azure", "baseten", "bedrock-mantle", "cerebras", "charm-hyper", "chutes", "cline-pass",
 	"cloudflare-ai-gateway", "cloudflare-workers-ai", "commandcode", "coralbricks", "coreweave", "cursor", "deepinfra", "deepseek", "devin",
 	"factory-droid", "firepass", "fireworks", "github-copilot", "gitlab-duo", "gitlab-duo-agent", "gmi-cloud", "google",
 	"google-antigravity", "google-gemini-cli", "google-vertex", "groq", "helmcode", "huggingface", "inception", "kilo",
-	"kimi-code", "litellm", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn",
-	"mistral", "modular", "moonshot", "muse-code", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai",
+	"kimi-code", "liquid", "litellm", "lm-studio", "local", "meta", "minimax", "minimax-code", "minimax-code-cn",
+	"mistral", "modal", "modular", "moonshot", "muse-code", "nace", "nanogpt", "novita", "nvidia", "ollama", "ollama-cloud", "openai",
 	"openai-codex", "opencode-go", "opencode-zen", "openrouter", "otari", "qianfan", "qwen-portal", "sakana",
 	"sambanova", "scaleway", "siliconflow", "siliconflow-cn", "singularityapi-dev", "singularityapi-tech", "snowflake", "stepfun", "synthetic", "together",
 	"typesafe", "umans", "venice", "vercel-ai-gateway", "vllm", "wafer-serverless", "web", "xai",

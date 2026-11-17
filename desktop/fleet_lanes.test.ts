@@ -468,6 +468,41 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   await hangTurn;
 }, TIMEOUT);
 
+// P-FLEET.STAGE1 (ADR-0609): under sustained CPU load a stage request could time out after the engine took
+// it, and the retry (or a second press) staged the prompt twice; a prompt sent to a lane the renderer
+// believed idle was refused as busy and lost.
+test("a stage id stages once, even after its item drained; a busy lane stages a stage-id prompt instead of refusing it", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const first = live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa");
+  expect(first).toEqual({ ok: true, queued: 1 });
+  // The retry of a request whose answer was lost: same id, nothing new staged.
+  expect(live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa")).toEqual({ ok: true, queued: 1, duplicate: true });
+  // A different draft, or the same words staged on purpose again, gets its own id and is staged.
+  expect(live.enqueue(id, "stage me once", [], [], "stage-bbbbbbbb").ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["stage me once", "stage me once"]);
+  // Drained, the id is still remembered: a very late retry does not come back as a second run.
+  await live.drain(id, () => {});
+  await live.drain(id, () => {});
+  expect(live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa").duplicate).toBe(true);
+  expect((await live.status()).lanes[0]!.queued).toEqual([]);
+  // Idle lane: stageIfBusy declines, so the caller sends the prompt as a turn.
+  expect(live.stageIfBusy(id, "go now", [], [], "stage-cccccccc")).toBeNull();
+  // Busy lane: the prompt is staged, with its file ids kept for the drain, and only once.
+  process.env.FAKE_ACP_MODE = "hang";
+  const busy = await live.spawn({ cwd: import.meta.dir, name: "busy" });
+  // Wait on the real signal (the turn's first event means #openTurn marked the lane busy), not a guessed delay.
+  const turnOpen = Promise.withResolvers<void>();
+  const hangTurn = live.prompt(busy.lane!.id, "long", () => turnOpen.resolve());
+  await turnOpen.promise;
+  expect(live.stageIfBusy(busy.lane!.id, "while you work", [], ["att-1"], "stage-dddddddd")).toEqual({ ok: true, queued: 1 });
+  expect(live.stageIfBusy(busy.lane!.id, "while you work", [], ["att-1"], "stage-dddddddd")?.duplicate).toBe(true);
+  expect(live.queuePeek(busy.lane!.id, 0).item).toEqual({ text: "while you work", images: [], attachments: ["att-1"] });
+  live.cancel(busy.lane!.id);
+  await hangTurn;
+}, TIMEOUT);
+
 // P-QUEUE-IMG.1 (ADR-0469): a staged lane prompt carries its OWN images through the manager queue: the
 // drain sends them with that prompt and not the next, and Update (queueTake) hands back the full text and
 // the actual images, not the clipped preview and count the status view carries.
@@ -675,39 +710,38 @@ test("turning auto ON with an ask open resolves the pending ask as an ALLOW - it
   expect(text).toContain("selected"); // the human granted everything; the open ask went with it
 }, TIMEOUT);
 
-// #612: the exec floor. A poisoned repo instruction that gets `rm -rf /` asked in an auto-mode lane still reaches
-// the human, the same floor the main chat keeps under danger mode.
-test("auto mode never answers a catastrophic command: the ask reaches the human, and a deny stops it", async () => {
+// P-FLEET.AUTO2 (ADR-0611): full auto-mode means no human in the loop. The #612 floor kept catastrophic commands
+// asking even then, and a lane under it stopped for approval all day; the owner turned it off for auto-mode.
+test("full auto-mode answers a catastrophic command too: no ask reaches the human", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const id = r.lane!.id;
   expect(live.setAuto(id, true).ok).toBe(true);
   const events: LaneEvent[] = [];
-  const turn = live.prompt(id, "do it", (e) => events.push(e)); // the fake's default ask: rm -rf /
-  let pending: { summary: string; kind: string } | undefined;
-  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
-  expect(pending?.summary).toContain("always asks: recursive force-delete (rm -rf)");
-  expect(live.answer(id, false).ok).toBe(true);
-  await turn;
-  expect(events.some((e) => e.type === "auto-approved")).toBe(false);
+  await live.prompt(id, "do it", (e) => events.push(e)); // the fake's default ask: rm -rf /
+  expect(events.some((e) => e.type === "permission")).toBe(false);
+  expect(events.some((e) => e.type === "auto-approved")).toBe(true);
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
-  expect(text).toContain('"cancelled"');
+  expect(text).toContain("selected");
 }, TIMEOUT);
 
-test("turning auto ON does not answer an open catastrophic ask; only the human's answer settles it", async () => {
+test("turning auto ON answers an open catastrophic ask; a session grant still stops at the #612 floor", async () => {
   live = manager({ mode: "permission" });
   const r = await live.spawn({ cwd: import.meta.dir });
   const id = r.lane!.id;
+  // A session grant for the `execute` kind (given on an ordinary command) does not carry a catastrophic one.
+  const granted = live.prompt(id, RISKY, () => {});
+  let pending: { summary: string; kind: string } | undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(live.answer(id, true, "session").ok).toBe(true);
+  await granted;
   const events: LaneEvent[] = [];
   const turn = live.prompt(id, "do it", (e) => events.push(e));
-  let pending = false;
-  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = !!(await live.status()).lanes[0]!.pendingApproval; }
-  expect(pending).toBe(true);
-  live.setAutoAll(true);
+  pending = undefined;
+  for (let i = 0; i < 40 && !pending; i++) { await Bun.sleep(100); pending = (await live.status()).lanes[0]!.pendingApproval; }
+  expect(pending?.summary).toContain("always asks: recursive force-delete (rm -rf)");
+  // Auto ON while that ask is open: the human just granted everything, so it rides along.
   expect(live.setAuto(id, true).ok).toBe(true);
-  // setAuto resolves an open ask synchronously, so the ask still being open right after it is the proof.
-  expect((await live.status()).lanes[0]!.pendingApproval).toBeDefined();
-  expect(live.answer(id, true).ok).toBe(true); // an explicit yes still works
   await turn;
   const text = events.flatMap((e) => (e.type === "token" ? [e.text] : [])).join("");
   expect(text).toContain("selected");
