@@ -165,7 +165,10 @@ export type LaneEvent =
   | { type: "health"; action: "probe" | "recover"; reason: string; /** P-HEALTH.3: the run did not continue on its own, so the user has to act. Only then does the chat keep a note. */ needsUser?: boolean }
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** P-FLEET.STAGE1 (ADR-0609): a prompt sent with a stage id found the lane busy and was staged instead of
+   *  refused; `queued` is the lane's queue length after it. */
+  | { type: "staged"; queued: number };
 
 export interface FleetStatusData {
   lanes: LaneView[];
@@ -219,6 +222,16 @@ const TRANSCRIPT_MAX_TOOLS = 64;
 export const LANE_ID_RE = /^lane-[0-9a-f]{8}$/;
 /** P-FLEET.L3: staged prompts per lane. Mirrors P-FLEET.1's job-queue cap - past it, refuse loudly. */
 const QUEUE_MAX = 8;
+/** P-FLEET.STAGE1 (ADR-0609): how many recent stage ids a lane remembers. Far above QUEUE_MAX, so an id is
+ *  still known after its item drained and a late retry of it cannot stage the prompt a second time. */
+const STAGE_IDS_KEPT = 64;
+/** P-FLEET.STAGE1: the shape a client-minted stage id must have; anything else is ignored (no dedup). */
+const STAGE_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+/** P-FLEET.STAGE1 (ADR-0609): a well-formed stage id from an untrusted request body, else undefined. */
+export function parseStageId(raw: unknown): string | undefined {
+  return typeof raw === "string" && STAGE_ID_RE.test(raw) ? raw : undefined;
+}
 /** P-FLEET.L3: cap on authored code carried per tool event. Lane cards are compact; the master's chat
  *  uses 64K, a mini window needs enough for the diff chip and its expansion, not a whole novel. */
 const CODE_CAP = 16 * 1024;
@@ -436,6 +449,9 @@ interface Lane {
   respawns: number;
   /** P-FLEET.L3: staged prompts, drained FIFO when the lane goes idle. One turn at a time stands. */
   queue: StagedLanePrompt[];
+  /** P-FLEET.STAGE1 (ADR-0609): the stage ids this lane already accepted, newest last, at most STAGE_IDS_KEPT.
+   *  A retried stage request (a timeout under load, a double press) carries the same id and stages nothing. */
+  stageIds: string[];
   // -- P-PROGRESS.1 progress state ------------------------------------------------------------------
   /** Epoch ms the current turn started; null when idle. */
   turnStartedAt: number | null;
@@ -581,6 +597,7 @@ export class FleetLaneManager {
       resumeContext: null,
       respawns: 0,
       queue: [],
+      stageIds: [],
       held: null,
     };
     // The recorded conversation, clamped like anything #record keeps: oldest turns fall off first.
@@ -656,7 +673,7 @@ export class FleetLaneManager {
       sessionAllow: new Set(), busy: false, openCalls: new Map(), health: newEpisode(t), lastHealth: null, lastUsage: null,
       promoted: false, transcript: [], liveText: "", stepText: new StepTextJoiner(), liveTools: [], liveThinking: "",
       liveToolRecords: [], lastPrompt: null, lastImages: [], turnStartedAt: null, stepsDone: 0, waiting: null,
-      pulse: new PulseTracker(), canLoadSession: rec.canLoadSession, resumeContext: null, respawns: 0, queue: [],
+      pulse: new PulseTracker(), canLoadSession: rec.canLoadSession, resumeContext: null, respawns: 0, queue: [], stageIds: [],
       held: {
         holderId: rec.holderId, endpoint: rec.endpoint, token: rec.token, channel: rec.channel, inFlight: rec.inFlight,
         // LH-07: sampled while the connection the holder just answered (and proved itself on) is open.
@@ -883,15 +900,35 @@ export class FleetLaneManager {
   // ── P-FLEET.L3: the staged-prompt queue (manager-owned; survives dock close and renderer reloads) ──
 
   /** Stage a prompt for when the lane goes idle. Staging onto an error lane is fine - the drain recovers
-   *  it. The cap mirrors P-FLEET.1's job queue: past it, refuse loudly rather than buffer unbounded. */
-  enqueue(laneId: string, text: string, images: LaneImage[] = [], attachments: string[] = []): { ok: boolean; queued?: number; reason?: string } {
+   *  it. The cap mirrors P-FLEET.1's job queue: past it, refuse loudly rather than buffer unbounded.
+   *  P-FLEET.STAGE1 (ADR-0609): `stageId` (client-minted, parseStageId shape) makes the call idempotent. Under
+   *  sustained CPU load a stage request can time out after the engine took it, and the retry, or a second
+   *  press while the first was in flight, staged the same prompt twice. An id this lane already accepted
+   *  answers ok with `duplicate: true` and stages nothing, even after that item drained. */
+  enqueue(laneId: string, text: string, images: LaneImage[] = [], attachments: string[] = [], stageId?: string): { ok: boolean; queued?: number; reason?: string; duplicate?: boolean } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (stageId && lane.stageIds.includes(stageId)) return { ok: true, queued: lane.queue.length, duplicate: true };
     const t = text.trim();
     if (!t && !images.length && !attachments.length) return { ok: false, reason: "nothing to stage" };
     if (lane.queue.length >= QUEUE_MAX) return { ok: false, reason: `queue is full (${QUEUE_MAX}) - let the lane drain first` };
     lane.queue.push({ text: t, images, ...(attachments.length ? { attachments: attachments.slice() } : {}) });
+    if (stageId) {
+      lane.stageIds.push(stageId);
+      if (lane.stageIds.length > STAGE_IDS_KEPT) lane.stageIds.splice(0, lane.stageIds.length - STAGE_IDS_KEPT);
+    }
     return { ok: true, queued: lane.queue.length };
+  }
+
+  /** P-FLEET.STAGE1 (ADR-0609): the renderer picks Send or Stage from its last poll, which lags while the CPU
+   *  is pegged, so a prompt it believed was going to an idle lane could reach a busy one and be refused
+   *  ("one turn at a time"), losing the user's words to an error. A prompt that carries a stage id is staged
+   *  instead when the lane is busy right now. Null means the lane is not busy: send it as a prompt.
+   *  Synchronous, so the caller can hand off to prompt() with no await between this check and prompt()'s own. */
+  stageIfBusy(laneId: string, text: string, images: LaneImage[], attachments: string[], stageId: string): { ok: boolean; queued?: number; reason?: string; duplicate?: boolean } | null {
+    const lane = this.#lanes.get(laneId);
+    if (!lane?.busy) return null;
+    return this.enqueue(laneId, text, images, attachments, stageId);
   }
 
   /** P-PUSH.PAR1 (ADR-pending): `expect` is the item's full text as the caller last read it. A push to a

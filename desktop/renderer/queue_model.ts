@@ -200,3 +200,29 @@ export function canSteer(ctx: { hold: boolean; running: boolean; images: number 
 export function laneDrainReady(ctx: { streaming: boolean; queued: number; status: string; pushing: boolean }): boolean {
   return !ctx.streaming && ctx.queued > 0 && !ctx.pushing && (ctx.status === "awaiting-input" || ctx.status === "done");
 }
+
+/** P-FLEET.STAGE1 (ADR-0609): one stage request's time budget per attempt. Each retry carries the SAME stage
+ *  id, which the engine dedups, so a retry is safe even when the first attempt landed and only its answer was
+ *  late. About a minute in all: under a pegged CPU the engine still answers within it, and the composer never
+ *  waits forever on a request that will not come back. */
+export const STAGE_ATTEMPT_MS: readonly number[] = [10_000, 20_000, 30_000];
+
+/** P-FLEET.STAGE1: a fresh stage id in the engine's accepted shape (16 random bytes as hex). getRandomValues,
+ *  not randomUUID, because it is available in every renderer context the engine page is served in. */
+export function newStageId(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** P-FLEET.STAGE1: what a lane composer is about to stage. Images are compared by their bytes' length and
+ *  type, file ids exactly; enough to tell "the same draft again" from "a different draft". */
+export function stageSignature(text: string, images: readonly { data: string; mimeType: string }[], fileIds: readonly string[]): string {
+  return JSON.stringify([text, images.map((im) => `${im.mimeType}:${im.data.length}`), fileIds]);
+}
+
+/** P-FLEET.STAGE1: the stage id for this attempt. Retrying the SAME draft after a failure reuses the earlier
+ *  id, so if that failure was only a lost answer the engine stages nothing new; a changed draft gets a new id. */
+export function stageKeyFor(prev: { id: string; sig: string } | null, sig: string, mint: () => string = newStageId): { id: string; sig: string } {
+  return prev && prev.sig === sig ? prev : { id: mint(), sig };
+}
