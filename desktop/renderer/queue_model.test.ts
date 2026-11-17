@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Attachment } from "./composer_attachments.ts";
-import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts";
+import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, stageKeyFor, stageSignature, type PushSource, type QueuedItem } from "./queue_model.ts";
 
 const hold = (text: string): QueuedItem => ({ text, mode: "hold" });
 const push = (text: string): QueuedItem => ({ text, mode: "push" });
@@ -296,5 +296,24 @@ describe("laneDrainReady (P-PUSH.PAR1)", () => {
     expect(laneDrainReady({ ...idle, status: "needs-approval" })).toBe(false);
     expect(laneDrainReady({ ...idle, streaming: true })).toBe(false);
     expect(laneDrainReady({ ...idle, queued: 0 })).toBe(false);
+  });
+});
+
+// P-FLEET.STAGE1 (ADR-0609): pressing Stage again after a failed attempt must reuse that attempt's id when the
+// draft is unchanged (the attempt may have landed and only its answer was lost), and must not when it changed.
+describe("lane stage ids", () => {
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  let n = 0;
+  const mint = (): string => `id-${++n}`;
+  test("the same draft keeps its id; a new draft, image or file gets a new one", () => {
+    const first = stageKeyFor(null, stageSignature("fix the build", [png], ["att-1"]), mint);
+    expect(stageKeyFor(first, stageSignature("fix the build", [png], ["att-1"]), mint)).toBe(first);
+    expect(stageKeyFor(first, stageSignature("fix the build!", [png], ["att-1"]), mint).id).not.toBe(first.id);
+    expect(stageKeyFor(first, stageSignature("fix the build", [], ["att-1"]), mint).id).not.toBe(first.id);
+    expect(stageKeyFor(first, stageSignature("fix the build", [png], ["att-2"]), mint).id).not.toBe(first.id);
+  });
+  test("after a confirmed stage (no previous key) the same words get a fresh id, so staging them twice on purpose works", () => {
+    const sig = stageSignature("continue", [], []);
+    expect(stageKeyFor(null, sig, mint).id).not.toBe(stageKeyFor(null, sig, mint).id);
   });
 });

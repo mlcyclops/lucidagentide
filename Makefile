@@ -623,6 +623,10 @@ demo-P-FLEET.L2: ## P-FLEET.L2 (ADR-0273): UNLIMITED lanes gated only by SUSTAIN
 demo-P-FLEET.L3: ## P-FLEET.L3 (ADR-0274): lane FIDELITY - a write/edit tool call's authored code crosses the lane wire as a structured payload (P-CHAT.1 rawInput contract, path resolved against the LANE's cwd) so cards render real diff chips; pasted images ride as ACP image blocks exactly like the master chat (replay memory keeps the COUNT, never the base64); and staged prompts wait in a capped manager-owned FIFO per lane (reorder/remove, drained in order when idle, refused loudly at 8, never crossed into a busy lane)
 	$(BUN) run harness/scripts/demo_pfleetl3.ts
 
+.PHONY: demo-P-FLEET.STAGE1
+demo-P-FLEET.STAGE1: ## P-FLEET.STAGE1 (ADR-0609): a lane prompt stages ONCE under load - a stage id the engine dedups (a retry or a second press stages nothing new, even after the item drained), a prompt that meets a busy lane is staged instead of refused, and re-pressing the same draft reuses its id while any change mints a new one
+	$(BUN) test $(TEST_IGNORES) desktop/fleet_lanes.test.ts desktop/renderer/queue_model.test.ts
+
 .PHONY: demo-P-FLEET.L4
 demo-P-FLEET.L4: ## P-FLEET.L4 (ADR-0274): lanes that SURVIVE - no lane turn clock (a mid-turn child crash lands error in milliseconds, event-driven, never a 600s deadline), error is a recoverable state (Retry re-sends the last prompt, Respawn revives IN PLACE on the same lane id with the transcript carried - capability-gated session/load when the agent offers it, delimited-transcript preamble otherwise), fail-closed survives recovery (an ask open at death dies as a DENY and the revived lane RE-ASKS a human), and a user-stopped lane is refused by prompt but revived by explicit respawn with memory intact
 	$(BUN) run harness/scripts/demo_pfleetl4.ts

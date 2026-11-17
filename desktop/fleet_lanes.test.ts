@@ -468,6 +468,41 @@ test("staged prompts run FIFO when the lane goes idle; reorder and remove work; 
   await hangTurn;
 }, TIMEOUT);
 
+// P-FLEET.STAGE1 (ADR-0609): under sustained CPU load a stage request could time out after the engine took
+// it, and the retry (or a second press) staged the prompt twice; a prompt sent to a lane the renderer
+// believed idle was refused as busy and lost.
+test("a stage id stages once, even after its item drained; a busy lane stages a stage-id prompt instead of refusing it", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const id = r.lane!.id;
+  const first = live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa");
+  expect(first).toEqual({ ok: true, queued: 1 });
+  // The retry of a request whose answer was lost: same id, nothing new staged.
+  expect(live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa")).toEqual({ ok: true, queued: 1, duplicate: true });
+  // A different draft, or the same words staged on purpose again, gets its own id and is staged.
+  expect(live.enqueue(id, "stage me once", [], [], "stage-bbbbbbbb").ok).toBe(true);
+  expect((await live.status()).lanes[0]!.queued.map((q) => q.text)).toEqual(["stage me once", "stage me once"]);
+  // Drained, the id is still remembered: a very late retry does not come back as a second run.
+  await live.drain(id, () => {});
+  await live.drain(id, () => {});
+  expect(live.enqueue(id, "stage me once", [], [], "stage-aaaaaaaa").duplicate).toBe(true);
+  expect((await live.status()).lanes[0]!.queued).toEqual([]);
+  // Idle lane: stageIfBusy declines, so the caller sends the prompt as a turn.
+  expect(live.stageIfBusy(id, "go now", [], [], "stage-cccccccc")).toBeNull();
+  // Busy lane: the prompt is staged, with its file ids kept for the drain, and only once.
+  process.env.FAKE_ACP_MODE = "hang";
+  const busy = await live.spawn({ cwd: import.meta.dir, name: "busy" });
+  // Wait on the real signal (the turn's first event means #openTurn marked the lane busy), not a guessed delay.
+  const turnOpen = Promise.withResolvers<void>();
+  const hangTurn = live.prompt(busy.lane!.id, "long", () => turnOpen.resolve());
+  await turnOpen.promise;
+  expect(live.stageIfBusy(busy.lane!.id, "while you work", [], ["att-1"], "stage-dddddddd")).toEqual({ ok: true, queued: 1 });
+  expect(live.stageIfBusy(busy.lane!.id, "while you work", [], ["att-1"], "stage-dddddddd")?.duplicate).toBe(true);
+  expect(live.queuePeek(busy.lane!.id, 0).item).toEqual({ text: "while you work", images: [], attachments: ["att-1"] });
+  live.cancel(busy.lane!.id);
+  await hangTurn;
+}, TIMEOUT);
+
 // P-QUEUE-IMG.1 (ADR-0469): a staged lane prompt carries its OWN images through the manager queue: the
 // drain sends them with that prompt and not the next, and Update (queueTake) hands back the full text and
 // the actual images, not the clipped preview and count the status view carries.
