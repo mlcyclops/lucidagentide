@@ -706,6 +706,10 @@ demo-P-CAP.1a: ## P-CAP.1a (ADR-0589): find, lookup, count and slice over a stor
 demo-P-CAP.1b: ## P-CAP.1b (ADR-0590): state tracking, and a derived fact never trusted more than its sources - real omp sessions with the real scanner, gate and tools, and a real DuckDB: artifact_track returning the final state of three variables from 6,000 ordered events in one fenced call; a clean session's memory write reaching the engine labeled untrusted; a session shown a suspicious tool result refused a memory write before any request, both when it read the content and when it derived an answer through the artifact tools; and the promotion gate blocking a fact with one suspicious, quarantined or unknown source among several, with review per source
 	$(BUN) run harness/scripts/demo_pcap1b.ts
 
+.PHONY: demo-P-SCANLIVE.3
+demo-P-SCANLIVE.3: ## P-SCANLIVE.3 (ADR-0605, issue #632): one scanner sidecar per omp process - a stand-in sidecar records every spawn: the MCP gate's factory run 8 times starts one; 3 session imports and 3 subagent rebinds of both extensions through omp's own loader start one; a re-evaluated module graph finds the same client and its scan errors still match instanceof; with the shared sidecar dead every binding withholds its MCP result (fail-closed), the exit reaches stderr and one respawn serves them all
+	$(BUN) test ./harness/omp/shared_scanner.test.ts
+
 .PHONY: demo-P-BENCH.2a
 demo-P-BENCH.2a: ## P-BENCH.2a (ADR-0591): the long-context dev set - 24 generated tasks (needle, count, track, rank at 8,000, 64,000 and 512,000 characters) matching a checked-in manifest, scored through real omp sessions with the real scanner: a reader that answers only from what it is shown is right at 8,000 characters and wrong beyond, a user of the artifact tools is right at every length, the same run works behind an OpenAI-compatible endpoint (a loopback stand-in), and a model with an 8K window needs the tools even at 8,000 characters
 	$(BUN) run harness/scripts/demo_pbench2a.ts

@@ -35,7 +35,7 @@ import type { createAgentSession } from "@oh-my-pi/pi-coding-agent";
 import type { TrustLabel } from "../contracts.ts";
 import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../security/gate.ts";
 import { scanAndDecideLarge } from "../security/large_scan.ts";
-import { ScannerClient } from "../security/scanner_client.ts";
+import type { ScannerClient } from "../security/scanner_client.ts";
 import {
   PURGED_NOTICE,
   artifactRefs,
@@ -51,6 +51,7 @@ import { neutralizeDelimiters } from "../prompt/untrusted.ts";
 import { gateArtifactReentry, reentryBlockNotice } from "./artifact_reentry.ts";
 import { taintFor } from "../security/trust_propagation.ts"; // P-CAP.1b (ADR-0590)
 import { writeStderrNotice } from "./stderr_notice.ts";
+import { sharedScanner } from "./shared_scanner.ts";
 
 type SessionOpts = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type ExtensionFactory = NonNullable<SessionOpts["extensions"]>[number];
@@ -266,12 +267,12 @@ export async function handleToolResult(scanner: ScannerClient, event: ToolResult
   }
 }
 
-// Default export: the live extension omp loads via `-e`. Creates + starts the scanner lazily so importing
-// the pure core / factory for tests is side-effect-free.
+// Default export: the live extension omp loads via `-e`. omp runs this factory for every session it binds
+// (each ACP session and each subagent), so it takes the process's one shared client instead of starting a
+// sidecar per run, which leaked one sidecar per subagent (P-SCANLIVE.3, ADR-0605, issue #632). Still lazy:
+// importing the pure core / factory for tests starts nothing.
 const mcpResultGate: ExtensionFactory = (pi) => {
-  const scanner = new ScannerClient();
-  scanner.start();
-  createMcpResultGate(scanner)(pi);
+  createMcpResultGate(sharedScanner())(pi);
 };
 
 export default mcpResultGate;
