@@ -28,8 +28,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /** Where the Python sidecar lives on disk.
  *
  *  LUCID_SCANNER_DIR is the explicit override the standalone launcher sets (`lucid_acp.ts`), and it
- *  wins. Read LAZILY, never as a module-level const: the launcher sets it in main() AFTER this module
- *  is imported, so a const would capture the stale value.
+ *  wins when it holds `server.py`. Read LAZILY, never as a module-level const: the launcher sets it in
+ *  main() AFTER this module is imported, so a const would capture the stale value.
  *
  *  P-PACKSCAN.1 (ADR-0368): the FALLBACK is now the PROBED repo root, not `join(HERE, "..", "..")`.
  *  This is the third appearance of the ADR-0356 bug. `HERE` comes from `import.meta.url`, which a
@@ -42,11 +42,49 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  *  (scanner not running)`, which reads like a malicious pack and was in fact a missing directory.
  *
  *  Still fail-closed either way: an unresolvable dir makes the scan THROW, never pass. The probe only
- *  changes whether a correct install can find a sidecar that is sitting right there. */
-export function sidecarDir(): string {
-  const explicit = (process.env.LUCID_SCANNER_DIR ?? "").trim();
-  if (explicit) return explicit;
-  return repoAsset("scanner-sidecar");
+ *  changes whether a correct install can find a sidecar that is sitting right there.
+ *
+ *  P-SCANLIVE.2 (ADR-0604): the override wins only when it holds `server.py`. See chooseSidecarDir. */
+export function resolveSidecarDir(): SidecarDir {
+  return chooseSidecarDir(process.env.LUCID_SCANNER_DIR, repoAsset("scanner-sidecar"), (d) => existsSync(join(d, "server.py")));
+}
+
+/** Which directory the sidecar is spawned from, where that came from, and whether it can run at all. */
+export interface SidecarDir {
+  dir: string;
+  /** `env`: LUCID_SCANNER_DIR. `probe`: the probed repo root's `scanner-sidecar`. */
+  source: "env" | "probe";
+  /** False when `dir` has no `server.py`: nothing is spawned and every scan fails closed. */
+  usable: boolean;
+  /** Why the other candidate lost or why nothing is usable; empty when the plain choice won. */
+  note: string;
+}
+
+/** P-SCANLIVE.2 (ADR-0604): pick the sidecar directory. Pure apart from the injected `hasServer`.
+ *
+ *  LUCID_SCANNER_DIR used to win whenever it was set. A user-level value left over from an older
+ *  install or a deleted worktree then pointed every engine and lane at a directory with no sidecar,
+ *  the spawn died, and every tool call was blocked with nothing saying why (#631). Now:
+ *  1. an override that holds `server.py` wins (the launcher sets it for its own child, `lucid_acp.ts`
+ *     resolveScannerEnv, and that value always names a real sidecar);
+ *  2. an override without `server.py` cannot run, so the probed directory wins if IT holds one, and
+ *     `note` says the override was ignored;
+ *  3. with neither usable the result is `usable: false` and `note` names every directory tried. The
+ *     client then spawns nothing and every scan THROWS with that note: still fail-closed, now with a
+ *     reason. */
+export function chooseSidecarDir(override: string | undefined, probed: string, hasServer: (dir: string) => boolean): SidecarDir {
+  const explicit = (override ?? "").trim();
+  if (explicit && hasServer(explicit)) return { dir: explicit, source: "env", usable: true, note: "" };
+  const probeOk = hasServer(probed);
+  if (!explicit) {
+    return probeOk
+      ? { dir: probed, source: "probe", usable: true, note: "" }
+      : { dir: probed, source: "probe", usable: false, note: `no server.py in the probed ${probed} (LUCID_SCANNER_DIR is not set)` };
+  }
+  if (probeOk) {
+    return { dir: probed, source: "probe", usable: true, note: `LUCID_SCANNER_DIR ${explicit} has no server.py, ignored; using the probed ${probed}` };
+  }
+  return { dir: explicit, source: "env", usable: false, note: `no server.py in LUCID_SCANNER_DIR ${explicit} nor in the probed ${probed}` };
 }
 
 export interface ScanResponse {
@@ -78,10 +116,10 @@ export class ScanUnavailableError extends Error {
   }
 }
 
-function resolvePython(): string {
+function resolvePython(dir: string): string {
   if (process.env.SCANNER_PYTHON) return process.env.SCANNER_PYTHON;
-  const win = join(sidecarDir(), ".venv", "Scripts", "python.exe");
-  const posix = join(sidecarDir(), ".venv", "bin", "python");
+  const win = join(dir, ".venv", "Scripts", "python.exe");
+  const posix = join(dir, ".venv", "bin", "python");
   if (existsSync(win)) return win;
   if (existsSync(posix)) return posix;
   // Last resort, and on POSIX it used to be the bare name `python`, which modern Linux does not ship:
@@ -133,14 +171,23 @@ export class ScannerClient {
   #stderrTail = "";
   /** Why this client is about to kill its own sidecar (a hung scan), reported instead of the signal. */
   #killReason = "";
+  #resolveDir: () => SidecarDir;
+  #sidecar: SidecarDir | undefined;
 
-  constructor(opts: { timeoutMs?: number; onExit?: (e: ScannerExit) => void } = {}) {
+  /** `resolveDir` defaults to resolveSidecarDir; injectable so a test can make no directory usable. */
+  constructor(opts: { timeoutMs?: number; onExit?: (e: ScannerExit) => void; resolveDir?: () => SidecarDir } = {}) {
     this.#timeoutMs = opts.timeoutMs ?? 5000;
     this.#onExit = opts.onExit;
+    this.#resolveDir = opts.resolveDir ?? resolveSidecarDir;
   }
 
   get alive(): boolean {
     return this.#alive;
+  }
+
+  /** The directory the last start() chose, its source and any note; undefined before the first start. */
+  get sidecar(): SidecarDir | undefined {
+    return this.#sidecar;
   }
 
   /** The running sidecar's pid, for diagnostics; undefined when none is running. */
@@ -154,9 +201,18 @@ export class ScannerClient {
     this.#buf = "";
     this.#stderrTail = "";
     this.#killReason = "";
-    const py = resolvePython();
+    const sidecar = this.#resolveDir();
+    this.#sidecar = sidecar;
+    // P-SCANLIVE.2 (ADR-0604): no server.py anywhere means nothing to spawn. Fail closed exactly like a
+    // sidecar that died on start (a later scan retries after the backoff), but with the directories
+    // named, so the block and the onExit notice say why instead of a bare exit code.
+    if (!sidecar.usable) {
+      this.#crash(`not started: ${sidecar.note}`);
+      return;
+    }
+    const py = resolvePython(sidecar.dir);
     const proc = spawn(py, ["server.py"], {
-      cwd: sidecarDir(),
+      cwd: sidecar.dir,
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.#proc = proc;
@@ -182,23 +238,28 @@ export class ScannerClient {
       // Close our end: on Windows a venv python.exe is a launcher, and a killed launcher can leave the
       // real interpreter running on the inherited pipe until it reads EOF.
       proc.stdin?.destroy();
-      const reason = this.#killReason || why;
-      const err = new ScanUnavailableError(`scanner sidecar unavailable: ${reason}`);
-      for (const [, p] of this.#pending) {
-        clearTimeout(p.timer);
-        p.reject(err);
-      }
-      this.#pending.clear();
-      this.#crashed = true;
-      this.#lastExit = reason;
-      this.#backoffMs = Math.min(Math.max(this.#backoffMs * 2, RESPAWN_BACKOFF_MIN_MS), RESPAWN_BACKOFF_MAX_MS);
-      this.#restartAt = Date.now() + this.#backoffMs;
-      try {
-        this.#onExit?.({ reason, stderrTail: this.#stderrTail.trim(), restartInMs: this.#backoffMs });
-      } catch { /* a reporting failure never changes the outcome: the requests are already rejected */ }
+      this.#crash(this.#killReason || why);
     };
     proc.on("exit", (code, signal) => die(`exited code=${code} signal=${signal}`));
     proc.on("error", (e) => die(`spawn error: ${String(e)}`));
+  }
+
+  /** No sidecar is running: reject everything in flight, record why, schedule the respawn backoff and
+   *  report it through onExit. */
+  #crash(reason: string): void {
+    const err = new ScanUnavailableError(`scanner sidecar unavailable: ${reason}`);
+    for (const [, p] of this.#pending) {
+      clearTimeout(p.timer);
+      p.reject(err);
+    }
+    this.#pending.clear();
+    this.#crashed = true;
+    this.#lastExit = reason;
+    this.#backoffMs = Math.min(Math.max(this.#backoffMs * 2, RESPAWN_BACKOFF_MIN_MS), RESPAWN_BACKOFF_MAX_MS);
+    this.#restartAt = Date.now() + this.#backoffMs;
+    try {
+      this.#onExit?.({ reason, stderrTail: this.#stderrTail.trim(), restartInMs: this.#backoffMs });
+    } catch { /* a reporting failure never changes the outcome: the requests are already rejected */ }
   }
 
   #onData(chunk: string): void {

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import mcpResultGate, { type GatedResult, type ToolResultInput } from "./mcp_result_gate.ts";
 import { _resetSharedScannerForTest, sharedScanner } from "./shared_scanner.ts";
 import type * as SharedScannerModule from "./shared_scanner.ts";
-import { ScanUnavailableError, sidecarDir } from "../security/scanner_client.ts";
+import { ScanUnavailableError, resolveSidecarDir } from "../security/scanner_client.ts";
 import type * as ScannerClientModule from "../security/scanner_client.ts";
 
 const HERE = import.meta.dir;
@@ -88,7 +88,7 @@ beforeAll(() => {
     "",
   ].join("\n"));
   // The real sidecar's interpreter, resolved before LUCID_SCANNER_DIR is pointed at the stand-in.
-  const realVenv = join(sidecarDir(), ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  const realVenv = join(resolveSidecarDir().dir, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
   process.env.SCANNER_PYTHON = saved.py ?? (existsSync(realVenv) ? realVenv : process.platform === "win32" ? "python" : "python3");
   process.env.LUCID_SCANNER_DIR = dir;
 });
