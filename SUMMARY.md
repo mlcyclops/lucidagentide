@@ -1,6 +1,6 @@
 # mlcyclops/lucidagentide usage metrics
 
-Last collected 2026-11-17T13:36:50.101Z by the repo-metrics workflow (P-METRICS.1, ADR-0561).
+Last collected 2026-11-18T13:12:04.992Z by the repo-metrics workflow (P-METRICS.1, ADR-0561).
 
 All counts are downloads, not people. GitHub does not record who downloaded a file, so one person can count many times.
 
@@ -10,12 +10,14 @@ Change appears once a snapshot at least 7 days old exists.
 
 | Release | Product | Published | Installers | Change | Windows | Mac | Linux | Update checks |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| v2.5.4-beta.5 (pre) | Agent | 2026-11-15 | 2 | - | 1 | 0 | 1 | 2 |
-| v2.5.4-beta.4 (pre) | Agent | 2026-11-13 | 17 | - | 7 | 5 | 5 | 7 |
+| v2.5.4-beta.7 (pre) | Agent | 2026-11-18 | 3 | - | 2 | 0 | 1 | 3 |
+| v2.5.4-beta.6 (pre) | Agent | 2026-11-18 | 15 | - | 6 | 4 | 5 | 6 |
+| v2.5.4-beta.5 (pre) | Agent | 2026-11-15 | 16 | - | 6 | 5 | 5 | 9 |
+| v2.5.4-beta.4 (pre) | Agent | 2026-11-13 | 18 | - | 8 | 5 | 5 | 7 |
 | v2.5.4-beta.3 (pre) | Agent | 2026-11-13 | 16 | - | 5 | 7 | 4 | 4 |
 | v2.5.4-beta.2 (pre) | Agent | 2026-11-13 | 12 | - | 4 | 4 | 4 | 4 |
 | v2.5.4-beta.1 (pre) | Agent | 2026-11-13 | 13 | - | 4 | 5 | 4 | 4 |
-| v2.5.3 | Agent | 2026-11-11 | 59 | - | 21 | 17 | 21 | 147 |
+| v2.5.3 | Agent | 2026-11-11 | 62 | - | 22 | 18 | 22 | 152 |
 | v2.5.3-beta.4 (pre) | Agent | 2026-11-11 | 14 | - | 6 | 4 | 4 | 4 |
 | v2.5.3-beta.3 (pre) | Agent | 2026-11-10 | 16 | - | 8 | 4 | 4 | 7 |
 | v2.5.3-beta.2 (pre) | Agent | 2026-11-10 | 12 | - | 4 | 4 | 4 | 4 |
@@ -23,16 +25,14 @@ Change appears once a snapshot at least 7 days old exists.
 | v2.5.2 | Agent | 2026-11-07 | 46 | - | 19 | 14 | 13 | 56 |
 | v2.5.1 | Agent | 2026-11-06 | 27 | - | 17 | 4 | 6 | 33 |
 | v2.5.1-beta.1 (pre) | Agent | 2026-11-05 | 14 | - | 6 | 4 | 4 | 6 |
-| v2.5.0 | Agent | 2026-11-02 | 84 | - | 28 | 24 | 32 | 237 |
-| v2.5.0-beta.4 (pre) | Agent | 2026-11-01 | 16 | - | 0 | 8 | 8 | 5 |
 
-79 older releases are in the snapshot files.
+81 older releases are in the snapshot files.
 
 Installers include every file someone can install from, so a Windows app that updates itself adds to Setup.exe. Update checks count reads of the latest*.yml files that installed apps poll.
 
 ## Clones and views
 
-Traffic was not collected on 2026-11-17: METRICS_TRAFFIC_TOKEN is not set
+Traffic was not collected on 2026-11-18: METRICS_TRAFFIC_TOKEN is not set
 
 No daily clone history yet.
 
