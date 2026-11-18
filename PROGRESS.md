@@ -6313,3 +6313,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** a lane in full auto-mode answers every ask except a program the org's managed policy denies; the #612 catastrophic floor (rm -rf, sudo, pipe into an interpreter, force-push and the rest) no longer stops it, and turning auto on answers an open catastrophic ask. Session grants keep the floor. PR #618 closed unmerged.
 - **stubbed:** the P-FLEET.L6 risk modal text is unchanged (it already says every approval is granted); no per-lane opt-back-in to the floor.
 - **next:** in the installed app, run a full auto-mode lane through a task that deletes a build folder and confirm it never asks.
+## Release cut: v2.5.4-beta.6 (prerelease): scanner sharing, Fleet staging and auto-mode, remote spokes UX, omp 18.21.0
+- **shipped (2026-11-17):** version 2.5.4-beta.6 over beta.5 plus #627, #635 (ADR-0607), #638 (ADR-0608), #639 (ADR-0605), #636 (ADR-0604), #640 (ADR-0609), #641 (ADR-0610), #642 (ADR-0611) and #621 (ADR-0571..0575). Release checks: master CI and CodeQL green on the merge commit 6b5a639.
+- **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
+- **next:** merge the release pull request once CI is green, dispatch build-desktop.yml with beta_release on, and retest the issues seen on beta.5 in the installed app.

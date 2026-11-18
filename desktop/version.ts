@@ -789,4 +789,12 @@
 //            subagent per-call model choice as a LUCID setting (#628, ADR-0602); the titlebar fits a narrow
 //            window (#629, ADR-0603). PRERELEASE: never marked Latest; the Homebrew cask and stable installs
 //            stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.5";
+// v2.5.4-beta.6 = 2.5.4-beta.5 plus: lucid-relay parity wave D (#627); the GLM preset advertises reasoning
+//            effort (#635, ADR-0607); omp 18.21.0 (#638, ADR-0608); held lanes share one scanner per omp process
+//            and no longer leak sidecars (#639, ADR-0605); a stale LUCID_SCANNER_DIR no longer wins over the probed
+//            sidecar (#636, ADR-0604); a Fleet lane prompt stages once and never hangs under load (#640,
+//            ADR-0609); Fleet full auto-mode passes data pipes and answers every ask except the managed denylist
+//            (#641, #642, ADR-0610, ADR-0611); remote spokes approve without retyping, held lanes run off the
+//            install folder (#621, ADR-0571..0575). PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.6";
