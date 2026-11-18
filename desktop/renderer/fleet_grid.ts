@@ -310,8 +310,9 @@ export function initFleetGrid(d: FleetGridDeps): void {
 /** P-FLEET-UNLOCK.1 (ADR-0616): when the Unlocked button was first clicked; a second click within ARM_MS locks. */
 let lockArmedAt: number | null = null;
 
-/** ADR-0616: the header's approvals lock: "Unlock approvals" while the hub's password presence key is locked,
- *  "Approvals unlocked" while it is not, nothing for a hub that does not approve with a password. */
+/** ADR-0616: the header's approvals lock: an amber shield while the hub's password presence key is locked, a green
+ *  one while it is not ("Lock?" while armed), nothing for a hub that does not approve with a password. Icon only so
+ *  it fits beside Helping in the essentials header (ADR-0612) at the default 760 px; its tip and label say the rest. */
 function paintUnlockBtn(): void {
   const btn = dock ? ($("[data-fleet-unlock]", dock) as HTMLElement | null) : null;
   if (!btn) return;
@@ -320,7 +321,8 @@ function paintUnlockBtn(): void {
   if (lock === null) return;
   btn.classList.toggle("on", lock === "unlocked");
   const armed = lock === "unlocked" && lockArmedAt !== null && Date.now() - lockArmedAt <= ARM_MS;
-  btn.innerHTML = lock === "locked" ? `${icon("shield", 12)} Unlock approvals` : `${icon("shield", 12)} ${armed ? "Click again to lock" : "Approvals unlocked"}`;
+  btn.innerHTML = `${icon("shield", 12)}${armed ? " Lock?" : ""}`;
+  btn.setAttribute("aria-label", lock === "locked" ? "Unlock approvals" : armed ? "Click again to lock approvals" : "Approvals unlocked; click twice to lock");
   btn.dataset.tip = lock === "locked"
     ? "Approvals are locked|Type this hub's presence password once; approving a computer's waiting action then takes one click until it locks again."
     : "Approvals are unlocked|Approving takes one click until the hub's remember window ends. Click twice to lock now.";
@@ -337,13 +339,15 @@ function onUnlockClick(): void {
   if (step.act === "arm") window.setTimeout(paintUnlockBtn, ARM_MS + 50);
 }
 
-/** ADR-0615: the header's Helping button, only while this computer helps a hub, with how many tasks run here. */
+/** ADR-0615: the header's Helping button, only while this computer helps a hub: its icon with how many tasks run
+ *  here (words only when paused), kept short for the essentials header (ADR-0612); its tip and label say the rest. */
 function paintHelpingBtn(): void {
   const btn = dock ? ($("[data-fleet-helping]", dock) as HTMLElement | null) : null;
   if (!btn) return;
   const b = helpingBadge();
   btn.hidden = !b.show;
-  btn.innerHTML = `${icon("share", 12)} Helping${b.count ? ` <b>${b.count}</b>` : ""}${b.paused ? " (paused)" : ""}`;
+  btn.innerHTML = `${icon("share", 12)}${b.count ? ` <b>${b.count}</b>` : ""}${b.paused ? " Paused" : ""}`;
+  btn.setAttribute("aria-label", `This computer is helping a hub${b.count ? `: ${b.count} task${b.count === 1 ? "" : "s"} here` : ""}${b.paused ? ", new work paused" : ""}`);
 }
 
 export function toggleFleetGrid(): void {
