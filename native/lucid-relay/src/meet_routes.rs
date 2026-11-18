@@ -666,7 +666,8 @@ fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
     if words.is_empty() && !s.enclave_networks.is_empty() && matches!(kind.as_str(), "app" | "archive" | "sso" | "connector") && !pc::inside(&ctx.address, &s.enclave_networks) {
         words = pc::ENCLAVE_NETS.to_string();
     }
-    if words.is_empty() && s.enclave && (ctx.path.starts_with(bridge::C_PREFIX) || (method == "POST" && pc::ENCLAVE_BRIDGE_ROUTES.contains(&ctx.path.as_str()))) {
+    // BR-2 section 3.2: with `enclave_bridges` the routes go on to the handlers, which check the platform
+    if words.is_empty() && s.enclave && s.enclave_bridges.is_empty() && (ctx.path.starts_with(bridge::C_PREFIX) || (method == "POST" && pc::ENCLAVE_BRIDGE_ROUTES.contains(&ctx.path.as_str()))) {
         return Some(m::E::Held(pc::ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
     }
     if words.is_empty() {
@@ -971,6 +972,11 @@ fn connector(c: &Ctx) -> R<m::Identity> {
     let who = c.who(false)?;
     if !who.connector {
         return m::forbidden(bridge::CONNECTORS_ONLY);
+    }
+    // BR-2 section 3.2: in an enclave, every route but hello needs the platform of the connector's last hello to be
+    // in `enclave_bridges` (hello checks the platform it declares; claim and claim-dm check after their body)
+    if !matches!(c.path.as_str(), "/v1/bridge/c/hello" | "/v1/bridge/c/claim" | "/v1/bridge/c/claim-dm") {
+        c.relay.hub.bridge_c_platform_ok(&who)?;
     }
     Ok(who)
 }

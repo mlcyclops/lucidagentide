@@ -15,7 +15,8 @@
 // plaintext conversation `bdm:<link id>` with that person as its only member and a link with `dm` and `peer`),
 // history backfill both ways (imported `post` ops when a link is made; /v1/bridge/c/backfill once, within 10 minutes)
 // and files kept for Google Chat file links (`file_link_hours` after the op). In an enclave every /v1/bridge/c/* route
-// is refused before routing.
+// is refused before routing, unless relay.json `enclave_bridges` lists self-hosted platforms (BR-2: xmpp, irc); then
+// only those platforms' connectors, codes and links work.
 
 use super::*;
 use crate::meet_guest_port::hide;
@@ -32,7 +33,7 @@ const BACKFILL_MAX: i64 = 500;
 const BACKFILL_WINDOW: f64 = 10.0 * 60.0;
 /// The body of `POST /v1/bridge/c/backfill` (500 messages).
 pub const BACKFILL_BODY: usize = 8 * 1024 * 1024;
-const PLATFORMS: [&str; 3] = ["slack", "teams", "gchat"];
+pub(crate) const PLATFORMS: [&str; 5] = ["slack", "teams", "gchat", "xmpp", "irc"];
 const TARGET_KINDS: [&str; 3] = ["channel", "chat", "dm"];
 const OPS: [&str; 7] = ["post", "edit", "delete", "react", "call", "notice", "unlinked"];
 const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -111,6 +112,8 @@ fn platform_name(p: &str) -> &'static str {
     match p {
         "slack" => "Slack",
         "gchat" => "Google Chat",
+        "xmpp" => "XMPP",
+        "irc" => "IRC",
         _ => "Teams",
     }
 }
@@ -354,7 +357,7 @@ fn optional(v: Option<&Value>, what: &str) -> R<Option<String>> {
 fn platform(v: Option<&Value>) -> R<String> {
     match v {
         Some(Value::String(s)) if PLATFORMS.contains(&s.as_str()) => Ok(s.clone()),
-        _ => bad("platform must be slack, teams or gchat"),
+        _ => bad("platform must be slack, teams, gchat, xmpp or irc"),
     }
 }
 
@@ -600,6 +603,8 @@ fn gap_line(platform: &str, start: i128, end: i128) -> String {
     let name = match platform {
         "slack" => "Slack",
         "teams" => "Microsoft Teams",
+        "xmpp" => "XMPP",
+        "irc" => "IRC",
         _ => "Google Chat",
     };
     format!("Some messages from {name} between {} UTC and {} UTC may be missing.", when(start), when(end))
@@ -808,6 +813,10 @@ impl State {
     /// copied out) the lowest of the member orgs' `backfill_send` and the connector's `backfill_receive`. Both are 0 on
     /// a bridged DM.
     fn bridge_effective(&mut self, link: &Obj) -> Eff {
+        // BR-2 section 3.2: in an enclave only the `enclave_bridges` platforms
+        if !self.pc_bridge_allowed(&pj::text_of(link, "platform")) {
+            return off_eff(pc::ENCLAVE_BRIDGES.into());
+        }
         let cid = pj::text_of(link, "channel");
         if self.channel(&cid).is_none() {
             return off_eff("the conversation is no longer kept".into());
@@ -1771,6 +1780,19 @@ impl State {
         self.member_channel(&cid, &who.principal, writing)
     }
 
+    /// BR-2 section 3.2: in an enclave, the platform of `principal`'s last hello must be in `enclave_bridges` (no
+    /// hello yet: refused).
+    fn bridge_c_declared_ok(&mut self, principal: &str) -> R<()> {
+        if !self.pc_enclave() {
+            return Ok(());
+        }
+        let declared = self.br_part("connectors").get(principal).and_then(Value::as_object).map(|r| pj::text_of(r, "platform")).unwrap_or_default();
+        if declared.is_empty() {
+            return Err(E::Held(pc::ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
+        }
+        self.pc_refuse_platform(&declared)
+    }
+
     fn bridge_codes_in(&mut self, cid: &str) -> usize {
         self.br_part("codes").values().filter(|r| r.as_object().map(|r| pj::text_of(r, "channel") == cid).unwrap_or(false)).count()
     }
@@ -1782,6 +1804,8 @@ impl Hub {
     /// `POST /v1/bridge/code {channel, platform}` -> `{code, expires}`: a member whose org's policy is on gets a
     /// single-use code for 15 minutes (5 open per conversation).
     pub fn bridge_code(&self, session: &str, who: &Identity, channel: Body, platform_v: Body) -> R<Obj> {
+        // BR-2: in an enclave the raw value is checked first (a missing or unknown platform is 403 there)
+        self.st.lock().pc_refuse_platform(platform_v.and_then(Value::as_str).unwrap_or(""))?;
         let platform = platform(platform_v)?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
@@ -1825,10 +1849,10 @@ impl Hub {
     /// person types as `/lucid dm <code>` in a direct message with `org_label`'s bot. Nothing is made until the code
     /// is claimed.
     pub fn bridge_dm_code(&self, session: &str, who: &Identity, platform_v: Body) -> R<Obj> {
+        self.st.lock().pc_refuse_platform(platform_v.and_then(Value::as_str).unwrap_or(""))?;
         let platform = platform(platform_v)?;
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
-            st.pc_refuse_enclave()?;
             st.session(session, who)?;
             if pj::s(&st.ce_hello(), "chat_e2ee") == "required" {
                 return Err(E::Conflict(DM_REQUIRED.into()));
@@ -1998,8 +2022,14 @@ impl Hub {
 
     // ── connector routes (connector certificates, no session) ────────────────────────────────────────────────
 
-    /// `POST /v1/bridge/c/hello {platform, policy, version}` -> `{org, relay_orgs, links, enclave}`: the connector's declared
-    /// policy is kept and its links re-evaluated.
+    /// BR-2 section 3.2: in an enclave, a connector's route other than hello needs the platform of its last hello in
+    /// `enclave_bridges` (no hello yet: refused too). Outside an enclave nothing is checked.
+    pub fn bridge_c_platform_ok(&self, who: &Identity) -> R<()> {
+        self.st.lock().bridge_c_declared_ok(&who.principal)
+    }
+
+    /// `POST /v1/bridge/c/hello {platform, policy, version}` -> `{org, relay_orgs, links, enclave, enclave_bridges}`:
+    /// the connector's declared policy is kept and its links re-evaluated.
     pub fn bridge_c_hello(&self, who: &Identity, platform_v: Body, policy_v: Body, version: Body) -> R<Obj> {
         let platform = platform(platform_v)?;
         let declared = policy(policy_v.unwrap_or(&Value::Null)).map_err(E::Bad)?;
@@ -2011,13 +2041,15 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<Obj> {
             let org = st.bridge_c_enter(who)?;
+            st.pc_refuse_platform(&platform)?;
             let row = obj([("platform", Value::from(platform.clone())), ("policy", Value::Object(declared.clone())), ("version", Value::from(version.clone())), ("ts", f(pj::now()))]);
             st.br_part("connectors").insert(who.principal.clone(), Value::Object(row));
             st.dirty = true;
             st.bridge_recheck(&who.principal, None, Some(&who.principal));
             let links: Vec<Value> = st.br_part("links").values().filter_map(Value::as_object).filter(|l| pj::text_of(l, "connector") == who.principal && pj::text_of(l, "state") == "active").map(|l| Value::Object(c_view(l))).collect();
-            // `enclave` is always there (PC-1 invariant 4; an enclave relay refuses this route before it runs)
-            Ok(obj([("org", Value::Object(org)), ("relay_orgs", Value::Array(st.bridge_orgs())), ("links", Value::Array(links)), ("enclave", Value::Bool(st.pc_enclave()))]))
+            // `enclave` and `enclave_bridges` are always there (PC-1 invariant 4, BR-2 section 3.2)
+            let inside = strings_value(st.pc_enclave_bridges());
+            Ok(obj([("org", Value::Object(org)), ("relay_orgs", Value::Array(st.bridge_orgs())), ("links", Value::Array(links)), ("enclave", Value::Bool(st.pc_enclave())), ("enclave_bridges", inside)]))
         })();
         drop(st);
         self.wake();
@@ -2037,6 +2069,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
             let org = st.bridge_c_enter(who)?;
+            st.bridge_c_declared_ok(&who.principal)?;
+            st.pc_refuse_platform(&platform)?;
             let (oid, olabel) = (pj::text_of(&org, "id"), pj::text_of(&org, "label"));
             let now = pj::now();
             st.bridge_expire_codes(now);
@@ -2122,7 +2156,8 @@ impl Hub {
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, String)> {
             let org = st.bridge_c_enter(who)?;
-            st.pc_refuse_enclave()?;
+            st.bridge_c_declared_ok(&who.principal)?;
+            st.pc_refuse_platform(&platform)?;
             let (coid, clabel) = (pj::text_of(&org, "id"), pj::text_of(&org, "label"));
             let now = pj::now();
             st.bridge_expire_codes(now);
@@ -3046,5 +3081,49 @@ mod tests {
         assert_eq!(field(Some(&json!(" a  b ")), "msg", 10).unwrap(), "a b");
         assert!(stored_link("l1", &json!({"id": "l1", "channel": "c", "connector": "x", "platform": "slack", "state": "off", "org": {"id": "o", "label": "O"}, "target": {"id": "t", "label": "T", "kind": "dm"}, "send": [], "receive": [], "reason": "", "notice": "", "by": "", "claimed_by": ""})));
         assert!(!stored_link("l2", &json!({"id": "l1"})));
+    }
+
+    #[test]
+    fn xmpp_and_irc_are_platforms_and_enclave_bridges_load_as_python() {
+        assert_eq!(platform(Some(&json!("xmpp"))).ok().as_deref(), Some("xmpp"));
+        assert_eq!(platform(Some(&json!("irc"))).ok().as_deref(), Some("irc"));
+        match platform(Some(&json!("matrix"))) {
+            Err(E::Bad(m)) => assert_eq!(m, "platform must be slack, teams, gchat, xmpp or irc"),
+            _ => panic!("matrix accepted"),
+        }
+        assert_eq!((platform_name("xmpp"), platform_name("irc")), ("XMPP", "IRC"));
+        assert!(gap_line("irc", 0, 60).starts_with("Some messages from IRC "));
+        let nets = vec!["10.0.0.0/8".to_string()];
+        assert_eq!(pc::enclave_bridges(None, false, &[]).unwrap(), Vec::<String>::new());
+        assert_eq!(pc::enclave_bridges(Some(&json!([])), false, &[]).unwrap(), Vec::<String>::new());
+        assert_eq!(pc::enclave_bridges(Some(&json!(["irc", "xmpp", "irc"])), true, &nets).unwrap(), vec!["irc".to_string(), "xmpp".to_string()]);
+        assert_eq!(pc::enclave_bridges(Some(&json!("xmpp")), true, &nets).unwrap_err(), "enclave_bridges must be a list of xmpp and irc");
+        assert_eq!(pc::enclave_bridges(Some(&json!(["xmpp", "matrix"])), true, &nets).unwrap_err(), "enclave_bridges must be a list of xmpp and irc");
+        assert_eq!(pc::enclave_bridges(Some(&json!(["xmpp", "slack"])), true, &nets).unwrap_err(), "only xmpp and irc can be bridged inside an enclave");
+        assert_eq!(pc::enclave_bridges(Some(&json!(["xmpp"])), false, &[]).unwrap_err(), "enclave_bridges needs enclave: true");
+        assert_eq!(pc::enclave_bridges(Some(&json!(["xmpp"])), true, &[]).unwrap_err(), "enclave_bridges needs enclave_networks");
+    }
+
+    #[test]
+    fn an_enclave_bridges_only_its_listed_platforms() {
+        let h = hub();
+        let mut s = m::Settings::default();
+        s.enclave = true;
+        s.enclave_networks = vec!["10.0.0.0/8".into()];
+        s.enclave_bridges = vec!["xmpp".into()];
+        h.pc_configure(&s);
+        let who = Identity { principal: "bridge@b".into(), connector: true, ..Identity::default() };
+        assert!(matches!(h.bridge_c_platform_ok(&who), Err(E::Held(m, _)) if m == pc::ENCLAVE_BRIDGES));
+        {
+            let mut st = h.st.lock();
+            assert!(st.pc_bridge_allowed("xmpp") && !st.pc_bridge_allowed("irc") && !st.pc_bridge_allowed("slack"));
+            assert!(matches!(st.pc_refuse_platform("slack"), Err(E::Held(m, info)) if m == pc::ENCLAVE_BRIDGES && info.get("enclave") == Some(&Value::Bool(true))));
+            let link = json!({"id": "l1", "channel": "c-1", "platform": "slack", "connector": "bridge@b"}).as_object().unwrap().clone();
+            assert_eq!(st.bridge_effective(&link).reason, pc::ENCLAVE_BRIDGES);
+            st.br_part("connectors").insert("bridge@b".into(), json!({"platform": "slack", "policy": {}, "version": "", "ts": 0.0}));
+        }
+        assert!(h.bridge_c_platform_ok(&who).is_err());
+        h.st.lock().br_part("connectors").insert("bridge@b".into(), json!({"platform": "xmpp", "policy": {}, "version": "", "ts": 0.0}));
+        assert!(h.bridge_c_platform_ok(&who).is_ok());
     }
 }

@@ -264,6 +264,8 @@ pub struct Settings {
     /// resolve into ([] = not limited); and legal holds (PC-1 section 3), off unless set.
     pub enclave_networks: Vec<String>,
     pub legal_holds: bool,
+    /// BR-2 section 3.1: the platforms (xmpp, irc) that may be bridged while `enclave` is true ([] = none).
+    pub enclave_bridges: Vec<String>,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -284,11 +286,12 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 49] = [
+const SETTINGS_FIELDS: [&str; 50] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds",
+    "enclave_bridges",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -358,6 +361,7 @@ impl Default for Settings {
             enclave: false,
             enclave_networks: Vec::new(),
             legal_holds: false,
+            enclave_bridges: Vec::new(),
         }
     }
 }
@@ -419,6 +423,7 @@ fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
     }
     // parity wave C: enclave_networks (only with enclave) and legal_holds
     s.enclave_networks = pc::networks(raw.get("enclave_networks"), s.enclave)?;
+    s.enclave_bridges = pc::enclave_bridges(raw.get("enclave_bridges"), s.enclave, &s.enclave_networks)?;
     match raw.get("legal_holds") {
         None => {}
         Some(Value::Bool(b)) => s.legal_holds = *b,
@@ -1089,7 +1094,11 @@ fn pc_enclave_start(s: &Settings) {
             die(&format!("enclave: the signer {host} resolves outside enclave_networks ({})", outside.join(", ")));
         }
     }
-    let mut line = String::from("enclave: on; refused: bridges, bridgeable conversations, push");
+    let mut line = if s.enclave_bridges.is_empty() {
+        String::from("enclave: on; refused: bridges, bridgeable conversations, push")
+    } else {
+        format!("enclave: on; refused: bridges except {}, bridgeable conversations except for them, push", s.enclave_bridges.join(", "))
+    };
     if !nets.is_empty() {
         line.push_str("; service connections limited to ");
         line.push_str(&nets.join(", "));

@@ -221,6 +221,48 @@ fn masked(ip: IpAddr, bits: u8) -> IpAddr {
     }
 }
 
+/// BR-2 section 3: the platforms that may be bridged inside an enclave (self-hosted chat servers) and the ones that
+/// may not.
+pub(crate) const ENCLAVE_PLATFORMS: [&str; 2] = ["xmpp", "irc"];
+const OUTSIDE_PLATFORMS: [&str; 3] = ["slack", "teams", "gchat"];
+
+/// relay.json `enclave_bridges` (BR-2 section 3.1): a list of xmpp and irc, only with `enclave` and
+/// `enclave_networks` when not empty ([] when absent).
+pub(crate) fn enclave_bridges(v: Option<&Value>, enclave: bool, networks: &[String]) -> Result<Vec<String>, String> {
+    const SHAPE: &str = "enclave_bridges must be a list of xmpp and irc";
+    let list = match v {
+        None => return Ok(Vec::new()),
+        Some(Value::Array(a)) => a,
+        Some(_) => return Err(SHAPE.into()),
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut outside = false;
+    for v in list {
+        match v.as_str() {
+            Some(p) if ENCLAVE_PLATFORMS.contains(&p) => {
+                if !out.iter().any(|o| o == p) {
+                    out.push(p.to_string());
+                }
+            }
+            Some(p) if OUTSIDE_PLATFORMS.contains(&p) => outside = true,
+            _ => return Err(SHAPE.into()),
+        }
+    }
+    if outside {
+        return Err("only xmpp and irc can be bridged inside an enclave".into());
+    }
+    if out.is_empty() {
+        return Ok(out);
+    }
+    if !enclave {
+        return Err("enclave_bridges needs enclave: true".into());
+    }
+    if networks.is_empty() {
+        return Err("enclave_bridges needs enclave_networks".into());
+    }
+    Ok(out)
+}
+
 /// _pc_networks: relay.json `enclave_networks`, CIDR networks only with `enclave` true ([] when absent).
 pub(crate) fn networks(v: Option<&Value>, enclave: bool) -> Result<Vec<String>, String> {
     let list = match v {
@@ -424,6 +466,8 @@ struct SsoOut {
 /// or a new root or signer policy), the SSO service's pending answers and app icons without a state folder.
 pub struct Pc {
     enclave: bool,
+    /// BR-2: relay.json `enclave_bridges`, the platforms bridged in spite of `enclave`.
+    bridges: Vec<String>,
     holds: bool,
     /// The root org policies are checked against (relay.json client_ca).
     ca_file: String,
@@ -444,6 +488,7 @@ impl Pc {
     pub fn new(state_dir: Option<&Path>) -> Pc {
         Pc {
             enclave: false,
+            bridges: Vec::new(),
             holds: false,
             ca_file: String::new(),
             crl_files: Vec::new(),
@@ -465,6 +510,7 @@ impl Hub {
     pub fn pc_configure(&self, s: &m::Settings) {
         let mut st = self.st.lock();
         st.pc.enclave = s.enclave;
+        st.pc.bridges = s.enclave_bridges.clone();
         st.pc.holds = s.legal_holds;
         st.pc.ca_file = s.client_ca.clone();
         let root_part = crl_parts(s).map(|(root, _)| root);
@@ -487,10 +533,22 @@ impl State {
         self.pc.enclave
     }
 
-    /// _pc_refuse_enclave: 403 with the enclave words for anything that makes a bridge.
-    pub(crate) fn pc_refuse_enclave(&self) -> R<()> {
-        if self.pc.enclave {
-            return forbidden(ENCLAVE_BRIDGES);
+    /// BR-2: relay.json `enclave_bridges` (only ever not empty with `enclave`).
+    pub(crate) fn pc_enclave_bridges(&self) -> &[String] {
+        &self.pc.bridges
+    }
+
+    /// BR-2 section 3.2: whether `platform` may be bridged on this relay (always outside an enclave; in one only the
+    /// `enclave_bridges` platforms).
+    pub(crate) fn pc_bridge_allowed(&self, platform: &str) -> bool {
+        !self.pc.enclave || self.pc.bridges.iter().any(|p| p == platform)
+    }
+
+    /// BR-2 section 3.2: 403 with the enclave words (and `enclave: true`) for a platform not bridged in this
+    /// enclave.
+    pub(crate) fn pc_refuse_platform(&self, platform: &str) -> R<()> {
+        if !self.pc_bridge_allowed(platform) {
+            return Err(E::Held(ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
         }
         Ok(())
     }
@@ -702,7 +760,9 @@ impl State {
     pub(crate) fn pc_hello(&mut self) -> Obj {
         let policies = self.pc_store().map(|s| s.current()).unwrap_or_default();
         let signer_policy = self.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
-        obj([("signer_policy", signer_policy), ("org_policies", Value::Array(policies)), ("holds", Value::Bool(self.pc.holds)), ("enclave", Value::Bool(self.pc.enclave))])
+        // BR-2 section 3.2: the platforms codes may be made for here
+        let platforms: Vec<Value> = if self.pc.enclave { self.pc.bridges.iter().cloned().map(Value::from).collect() } else { bridge::PLATFORMS.iter().map(|p| Value::from(*p)).collect() };
+        obj([("signer_policy", signer_policy), ("org_policies", Value::Array(policies)), ("holds", Value::Bool(self.pc.holds)), ("enclave", Value::Bool(self.pc.enclave)), ("bridge_platforms", Value::Array(platforms))])
     }
 
     // ── app and archive sessions ──

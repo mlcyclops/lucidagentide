@@ -728,8 +728,8 @@ impl State {
     /// _ce_bridgeable_ok: a new bridgeable conversation: not under "required", and the creator's organization has an
     /// enabled bridge policy.
     pub(super) fn ce_bridgeable_ok(&mut self, who: &Identity) -> R<()> {
-        // never in an enclave (PC-1, N15)
-        if self.pc_enclave() {
+        // never in an enclave (PC-1, N15) unless it bridges some platforms (BR-2 section 3.2)
+        if self.pc_enclave() && self.pc_enclave_bridges().is_empty() {
             return forbidden(pc::ENCLAVE_BRIDGEABLE);
         }
         if self.ce_required() {
