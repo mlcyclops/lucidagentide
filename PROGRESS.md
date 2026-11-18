@@ -6329,3 +6329,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** a new `shareLive` glyph (a screen casting from its corner) on the Share session rail button, dock grip, Start sharing and Sign in with Google; it animates while a share is live. Relay setup now offers "Use the LUCID relay" first, which makes the engine gate the relay and show Sign in with Google and phone invites; self-hosted and public stay as alternatives.
 - **stubbed:** nothing; the hosted relay, sign-in page and phone web app are the existing P-REMOTE services.
 - **next:** in the installed app, Share > Use the LUCID relay > Sign in with Google > Start sharing, then open the invite on a phone.
+## Release cut: v2.5.4-beta.7 (prerelease): Fleet boards, the trimmed Fleet header, the Share glyph
+- **shipped (2026-11-17):** version 2.5.4-beta.7 over beta.6 plus #622 (Fleet boards, ADR-0576, ADR-0601), #643 (Fleet header essentials and More menu, ADR-0612; "agent" wording, ADR-0614) and #644 (Share session glyph and the LUCID relay in Relay setup, ADR-0613).
+- **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
+- **next:** merge the release pull request once CI is green, dispatch build-desktop.yml with beta_release on, and check the Fleet header and the Share rail glyph in the installed app.
