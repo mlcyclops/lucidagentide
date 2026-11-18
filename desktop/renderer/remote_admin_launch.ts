@@ -38,7 +38,7 @@ export async function launchRemoteAdmin(d: RemoteAdminLaunchDeps): Promise<strin
 /** The view's Admin tab: what the panel holds and the one button that opens it. */
 export function adminLauncherHtml(): string {
   return `<div class="rsv-launch">
-      <p class="rs-note">The hub's own admin panel: add, approve and remove spokes, presence, custody, models, relays and licenses. It opens in a window of its own.</p>
+      <p class="rs-note">The hub's own admin panel: add, approve and remove remote agents, presence, custody, models, relays and licenses. It opens in a window of its own.</p>
       <button class="btn-mini" data-rsv-admin-open>${icon("link", 12)} Open the admin panel</button>
     </div>`;
 }

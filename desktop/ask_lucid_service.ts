@@ -196,7 +196,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     const f = fleetContext(fleetRaw, deps.now());
     fleetText = f.text;
     seen.lanes = f.lanes;
-  } catch { fleetText = "The fleet lanes could not be read just now."; }
+  } catch { fleetText = "The fleet agents could not be read just now."; }
   blocks.push({ name: "fleet", text: fleetText });
 
   // P-ASKLUCID.4 (ADR-0585): what each lane was last asked and last answered. Agent-written, so it is its

@@ -162,7 +162,7 @@ function capRows(rows: DiffRow[]): DiffRow[] {
   if (rows.length <= LANE_DIFF_ROWS_CAP) return rows;
   const kept = rows.slice(0, LANE_DIFF_ROWS_CAP - 1);
   const hidden = rows.length - kept.length;
-  kept.push({ type: "ctx", text: `[truncated: ${hidden} more rows not shown, a lane card caps a diff at ${LANE_DIFF_ROWS_CAP} rows]` });
+  kept.push({ type: "ctx", text: `[truncated: ${hidden} more rows not shown, an agent card caps a diff at ${LANE_DIFF_ROWS_CAP} rows]` });
   return kept;
 }
 
@@ -172,7 +172,7 @@ function capInput(input: string): string {
   const v = input.trim();
   if (v.length <= LANE_INPUT_CAP) return v;
   const hidden = v.length - LANE_INPUT_CAP;
-  return `${v.slice(0, LANE_INPUT_CAP)}\n[truncated: ${hidden} more characters not shown, a lane card caps an input at ${LANE_INPUT_CAP} characters]`;
+  return `${v.slice(0, LANE_INPUT_CAP)}\n[truncated: ${hidden} more characters not shown, an agent card caps an input at ${LANE_INPUT_CAP} characters]`;
 }
 
 export function laneChipBody(t: LaneToolRow): LaneChipBody | null {

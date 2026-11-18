@@ -90,11 +90,11 @@ export function normalizeJobSpec(raw: unknown): { ok: true; spec: Required<JobSp
   const name = String(o.name ?? "").trim().slice(0, 80);
   if (!name) return { ok: false, reason: "a job needs a name" };
   const prompt = String(o.prompt ?? "").trim();
-  if (!prompt) return { ok: false, reason: "a job needs the prompt it sends to the lane" };
+  if (!prompt) return { ok: false, reason: "a job needs the prompt it sends to the agent" };
   if (prompt.length > 8000) return { ok: false, reason: "the prompt is longer than 8000 characters" };
   const t = (o.target && typeof o.target === "object" ? o.target : {}) as Record<string, unknown>;
   const cwd = String(t.cwd ?? "").trim();
-  if (!cwd) return { ok: false, reason: "a job needs the lane's folder" };
+  if (!cwd) return { ok: false, reason: "a job needs the agent's folder" };
   const target: JobTarget = {
     name: String(t.name ?? "").trim().slice(0, 80) || cwd.split(/[\\/]/).filter(Boolean).pop() || "lane",
     cwd,

@@ -84,8 +84,8 @@ describe("the fallback suggestion", () => {
   const recs: Rec[] = unusedFeatures(NEW_USER).map((f) => ({ id: `feature:${f.id}`, kind: "feature", label: `Try: ${f.title}`, question: featureQuestion(f) }));
   test("with nothing going on, features fill the row instead of an empty one", () => {
     const r = rank(QUIET, NO_MEMORY, { fallback: recs });
-    expect(r.map((x) => x.label)).toEqual(["Try: Fleet lanes", "Try: The knowledge graph", "Try: The Preview panel"]);
-    expect(r[0]!.question).toBe("Tell me about Fleet lanes: what it would do for what I am working on. If it makes sense, propose opening it or setting it up.");
+    expect(r.map((x) => x.label)).toEqual(["Try: Fleet agents", "Try: The knowledge graph", "Try: The Preview panel"]);
+    expect(r[0]!.question).toBe("Tell me about Fleet agents: what it would do for what I am working on. If it makes sense, propose opening it or setting it up.");
   });
   test("a feature the user passed over is not offered again in that run", () => {
     const r = rank(QUIET, { ...NO_MEMORY, misses: 1, missedIds: ["feature:fleet", "feature:knowledge", "feature:preview"] }, { fallback: recs });

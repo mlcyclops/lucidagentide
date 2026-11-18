@@ -97,6 +97,8 @@ export interface RemoteSpokeView {
   /** From `capabilities`; null when the spoke did not answer it. */
   lanes: { live: number; max: number; free: number } | null;
   tasks: RemoteTaskView[];
+  /** True when the row carried a task list; false when it did not (`tasks` is then an empty stand-in, not "none"). */
+  tasksRead: boolean;
   checkedAt: number | null;
   /** ADR-0508: the round trip of the hub's last `capabilities` request, including the spoke's mailbox poll. */
   latencyMs: number | null;
@@ -313,6 +315,7 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
     state: spokeState(reachable, tasks, silentSince, deactivated !== null),
     lanes: max !== null && live !== null && free !== null ? { live, max, free } : null,
     tasks: (tasks ?? []).sort((a, b) => b.updatedAt - a.updatedAt),
+    tasksRead: tasks !== null,
     checkedAt: count(r.checkedAt),
     latencyMs: count(r.latencyMs),
     via: viaKind === "lan" || viaKind === "relay" ? viaKind : null,
@@ -336,11 +339,11 @@ export function mapSpokeRow(raw: unknown): RemoteSpokeView | null {
 /** The plugin's /host/spokes answer as the IDE's view. `plugin` is the runtime's state for the hub plugin. */
 export function mapHubSnapshot(raw: unknown): RemoteHubView {
   const r = record(raw);
-  if (!r) return { available: false, plugin: "running", reason: "The Remote Spokes plugin sent an answer the IDE cannot read." };
+  if (!r) return { available: false, plugin: "running", reason: "The Remote Agents plugin sent an answer the IDE cannot read." };
   const hub = record(r.hub);
   if (!hub || typeof hub.node !== "string" || !NODE_RE.test(hub.node)) {
     const why = clip(r.error, 300);
-    return { available: false, plugin: "running", reason: why ? `The Remote Spokes hub did not open: ${why}` : "This hub is not set up yet. Finish setup in the Remote Spokes panel." };
+    return { available: false, plugin: "running", reason: why ? `The Remote Agents hub did not open: ${why}` : "This hub is not set up yet. Finish setup in the Remote Agents panel." };
   }
   const granted: unknown[] = Array.isArray(hub.scopes) ? hub.scopes : [];
   const scopes = HUB_SCOPES.filter((s) => granted.includes(s));
@@ -473,7 +476,7 @@ export const LANE_LIMIT_LABEL: Readonly<Record<RemoteLaneLimit, string>> = {
 
 /** ADR-0509: the spoke's lane policy in words: "up to 4 lanes, limited by memory: <the spoke's why>". */
 export function lanePolicyLabel(p: RemoteLanePolicyView): string {
-  return `up to ${p.max} ${p.max === 1 ? "lane" : "lanes"}, limited by ${LANE_LIMIT_LABEL[p.limitedBy]}${p.why ? `: ${p.why}` : ""}`;
+  return `up to ${p.max} ${p.max === 1 ? "agent" : "agents"}, limited by ${LANE_LIMIT_LABEL[p.limitedBy]}${p.why ? `: ${p.why}` : ""}`;
 }
 
 /** ADR-0509: one line of the IDE's alert list: a spoke that went silent, or an alert its hub kept. `key` is stable
@@ -481,14 +484,14 @@ export function lanePolicyLabel(p: RemoteLanePolicyView): string {
 export interface RemoteAlertItem { key: string; node: string; label: string; kind: RemoteAlertKind | "silent"; at: number; text: string; tasks: { id: string; name: string }[] }
 
 const ALERT_LABEL: Readonly<Record<RemoteAlertKind, string>> = {
-  "engine-restarted": "engine restarted", "agent-restarted": "spoke agent restarted", crashed: "crashed", "turn-interrupted": "turn interrupted",
+  "engine-restarted": "engine restarted", "agent-restarted": "agent process restarted", crashed: "crashed", "turn-interrupted": "turn interrupted",
   "crl-stale": "revocation list out of date", "cert-expiring": "certificate expiring",
 };
 
 /** What the owner does about an alert, when there is one thing to do (ADR-0510 for the CRL and the certificate). */
 const ALERT_ACTION: Readonly<Partial<Record<RemoteAlertKind, string>>> = {
-  "turn-interrupted": "Resume it from the spoke's panel",
-  "crl-stale": "Publish a fresh one from the root (root crl-refresh); until then the spoke refuses drive and approve",
+  "turn-interrupted": "Resume it from the agent's panel",
+  "crl-stale": "Publish a fresh one from the root (root crl-refresh); until then the agent refuses drive and approve",
   "cert-expiring": "Renew it (root renew, then hub renew-spoke)",
 };
 
@@ -532,7 +535,7 @@ export function latencyLabel(ms: number | null): string {
  *  its last lanes and answer time are stale. */
 export function remoteGlance(s: RemoteSpokeView, now = Date.now()): string {
   if (s.deactivated) return stateLabel(s, now);
-  const lanes = s.lanes ? ` \u00b7 ${s.lanes.live}/${s.lanes.max} lanes` : "";
+  const lanes = s.lanes ? ` \u00b7 ${s.lanes.live}/${s.lanes.max} agents` : "";
   const answers = s.latencyMs !== null ? ` \u00b7 ${seconds(s.latencyMs)} s${s.via ? ` ${VIA_LABEL[s.via]}` : ""}` : "";
   const open = s.tasks.filter((t) => t.state === "working" || t.state === "awaiting_approval").length;
   return `${stateLabel(s, now)}${lanes}${answers}${open ? ` \u00b7 ${open} open` : ""}`;
@@ -565,7 +568,7 @@ function deployBlock(s: RemoteSpokeView, a: HubActions): string | null {
   // An offline row the hub could say more about (a revoked certificate, a refusal) gives that reason: "offline"
   // alone would suggest waiting, when the spoke will never answer this hub again.
   if (s.state === "offline") return s.error ? `offline: ${s.error.slice(0, 120)}` : "offline";
-  if (s.lanes && s.lanes.free === 0) return "no free lane: close an idle task on it to free one";
+  if (s.lanes && s.lanes.free === 0) return "no free agent slot: close an idle task on it to free one";
   return null;
 }
 
@@ -598,7 +601,7 @@ export function taskButtons(t: RemoteTaskView, a: HubActions): { recall: boolean
 
 /** ADR-0509: the one follow-up Resume sends. The human clicks it (twice); an interrupted turn is never re-run on
  *  its own, and the model is told to check what already happened before it repeats anything. */
-export const RESUME_TEXT = "Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.";
+export const RESUME_TEXT = "Continue this task. The previous turn was interrupted when the remote agent restarted: check what was already done before you repeat anything.";
 
 /** A parked action's buttons: an allow needs approve and an action the scanner passed; a deny needs drive or
  *  approve and is always offered then (refusing is safe). */
@@ -643,7 +646,7 @@ export type SessionRow =
   | { seq: number; ts: number; kind: "event" | "error" | "withheld"; text: string };
 
 const TASK_STATE_WORDS: Record<RemoteTaskState, string> = {
-  working: "Working", awaiting_approval: "Waiting for your approval", idle: "Idle: waiting for a follow-up", error: "Stopped with an error", stopped: "Lane stopped", closed: "Closed",
+  working: "Working", awaiting_approval: "Waiting for your approval", idle: "Idle: waiting for a follow-up", error: "Stopped with an error", stopped: "Agent stopped", closed: "Closed",
 };
 
 /** The session rows for `entries` (seq order), skipping what a person does not read in a session (audit, CRL,
@@ -672,8 +675,8 @@ export function sessionRows(entries: readonly RecallEntryView[], prompts: Readon
       }
       case "approval.requested": out.push({ ...base, kind: "event", text: `Parked for approval: ${s("tier", 8)} ${s("kind", 40)}: ${s("title")}` }); break;
       case "approval.decided": out.push({ ...base, kind: "event", text: `${d?.allow === true ? "Approved" : "Denied"}${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
-      case "task.refused": out.push({ ...base, kind: "error", text: `The spoke refused the prompt: ${s("reason") || "no reason given"}` }); break;
-      case "task.interrupted": out.push({ ...base, kind: "error", text: "A spoke restart cut this turn off; Resume asks the task to continue." }); break;
+      case "task.refused": out.push({ ...base, kind: "error", text: `The agent refused the prompt: ${s("reason") || "no reason given"}` }); break;
+      case "task.interrupted": out.push({ ...base, kind: "error", text: "An agent restart cut this turn off; Resume asks the task to continue." }); break;
       case "task.cancelled": out.push({ ...base, kind: "event", text: `Canceled${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
       case "task.closed": out.push({ ...base, kind: "event", text: `Closed${s("byLabel") ? ` by ${s("byLabel")}` : ""}` }); break;
       case "task.handoff": out.push({ ...base, kind: "event", text: `Handoff note committed on ${s("branch", 128)}` }); break;

@@ -6317,3 +6317,11 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** version 2.5.4-beta.6 over beta.5 plus #627, #635 (ADR-0607), #638 (ADR-0608), #639 (ADR-0605), #636 (ADR-0604), #640 (ADR-0609), #641 (ADR-0610), #642 (ADR-0611) and #621 (ADR-0571..0575). Release checks: master CI and CodeQL green on the merge commit 6b5a639.
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** merge the release pull request once CI is green, dispatch build-desktop.yml with beta_release on, and retest the issues seen on beta.5 in the installed app.
+## Fleet header: essentials up top, the rest in More; centered sidebar buttons; spokes filter as an icon (P-FLEET.HEAD1, ADR-0612)
+- **shipped (2026-11-17):** the Fleet grid header shows headroom, Next that needs you, Ask, + Lane, More, minimize and close; Orbit, the four layouts, Group by repo, New board, Open the grid first and Classic hub moved into the More menu (the "+" menu's anchored popover, which flips above when the dock sits low). Board tabs sit behind a thin 12px handle with one small arrow under the header (dot when another board needs you); shut by default, remembered per machine. The sidebar's + and << glyphs are centered (`.side-new` padding:0) and the Spokes text toggle is a small icon button with a count badge.
+- **stubbed:** nothing; the Orbit header was not changed.
+- **next:** use the trimmed header with real lanes for a day and move anything missed back out of More.
+## One word for fleet workers: "agent" (P-WORDS.1, ADR-0614)
+- **shipped (2026-11-17):** every user-facing "lane" and "spoke" in the desktop app and the engine messages it shows now says "agent" (+ Agent in grid and Orbit, "N agents", "Prompt this agent...", "Remote agents", Ask Lucid's views and cards); identifiers, routes, storage keys and wire values unchanged.
+- **stubbed:** docs, README, the terminal hub and the add-on UI still say lane or spoke; the controller API error strings stay as an external contract.
+- **next:** rename the wording in docs/README and `lucid hub` to match.

@@ -84,7 +84,7 @@ export class JobScheduler {
     const target = job.target;
     const exists = this.deps.exists ?? existsSync;
     if (!exists(target.cwd)) {
-      this.#patch(job.id, (j) => ({ ...withRun(j, { startedAt: now, endedAt: now, outcome: "suspended", note: `folder not found: ${target.cwd}` }, fireAt), armed: false, suspended: `the lane's folder no longer exists: ${target.cwd}` }));
+      this.#patch(job.id, (j) => ({ ...withRun(j, { startedAt: now, endedAt: now, outcome: "suspended", note: `folder not found: ${target.cwd}` }, fireAt), armed: false, suspended: `the agent's folder no longer exists: ${target.cwd}` }));
       this.deps.audit({ jobId: job.id, name: job.name, outcome: "suspended", note: `folder not found: ${target.cwd}` });
       return;
     }
@@ -95,7 +95,7 @@ export class JobScheduler {
       // Never preempt: leave the fire owed and try again next tick. Recorded once per fire so the sheet
       // shows "waiting for the lane", without consuming the fire (lastFireAt is not advanced).
       if (job.lastOutcome !== "waiting" || manual) {
-        this.#patch(job.id, (j) => ({ ...j, lastOutcome: "waiting", history: [{ startedAt: now, endedAt: now, outcome: "waiting" as const, laneId: lane!.id, note: "the lane is busy; the run starts when it is idle" }, ...j.history].slice(0, 50) }));
+        this.#patch(job.id, (j) => ({ ...j, lastOutcome: "waiting", history: [{ startedAt: now, endedAt: now, outcome: "waiting" as const, laneId: lane!.id, note: "the agent is busy; the run starts when it is idle" }, ...j.history].slice(0, 50) }));
       }
       return;
     }

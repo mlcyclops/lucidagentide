@@ -11,7 +11,7 @@
 import { externalHttpUrl } from "./navigation_policy.ts";
 import { pluginOrigin } from "./plugins/ports.ts";
 
-export const ADMIN_WINDOW_TITLE = "Remote Spokes admin";
+export const ADMIN_WINDOW_TITLE = "Remote Agents admin";
 /** The window's own session. No `persist:` prefix, so it lives in memory and its cookie never mixes with the app's. */
 export const ADMIN_PARTITION = "lucid-remote-spokes-admin";
 export const ADMIN_BOUNDS_FILE = "remote-spokes-admin-window.json";

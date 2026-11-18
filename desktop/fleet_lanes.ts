@@ -526,9 +526,9 @@ export class FleetLaneManager {
   async spawn(opts: { cwd: string; id?: string; model?: string; name?: string; supervised?: boolean; remote?: { approvalHours: number; offTask: boolean }; resume?: { sessionId: string; transcript: LaneTurnRecord[]; turns: number } }): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const cwd = (opts.cwd ?? "").trim();
     if (!cwd) return { ok: false, reason: `not a directory: ""` };
-    if (opts.id !== undefined && (!LANE_ID_RE.test(opts.id) || this.#lanes.has(opts.id))) return { ok: false, reason: `lane id "${opts.id}" is malformed or in use` };
+    if (opts.id !== undefined && (!LANE_ID_RE.test(opts.id) || this.#lanes.has(opts.id))) return { ok: false, reason: `agent id "${opts.id}" is malformed or in use` };
     const unreached = opts.id === undefined ? undefined : this.#unreached.get(opts.id);
-    if (unreached !== undefined) return { ok: false, reason: `lane "${opts.id}" still runs under a holder that did not answer (${unreached}); it is not started again over it` };
+    if (unreached !== undefined) return { ok: false, reason: `agent "${opts.id}" still runs under a holder that did not answer (${unreached}); it is not started again over it` };
     const claim = this.#claimRefusal(opts.resume?.sessionId ?? null);
     if (claim) return { ok: false, reason: claim };
     // P-FLEET.L16 (the frozen "Spawning\u2026" button): this used to be a bare statSync. On a cloud-backed
@@ -553,7 +553,7 @@ export class FleetLaneManager {
     if (!admission.ok) return { ok: false, reason: admission.reason };
 
     // Checked again after the awaits above: a second spawn naming the same id may have taken it meanwhile.
-    if (opts.id !== undefined && this.#lanes.has(opts.id)) return { ok: false, reason: `lane id "${opts.id}" is in use` };
+    if (opts.id !== undefined && this.#lanes.has(opts.id)) return { ok: false, reason: `agent id "${opts.id}" is in use` };
     let id = opts.id ?? `lane-${randomUUID().slice(0, 8)}`;
     while (this.#lanes.has(id)) id = `lane-${randomUUID().slice(0, 8)}`;
     const t = this.#deps.now();
@@ -628,7 +628,7 @@ export class FleetLaneManager {
       lane.sinks.clear();
       for (const obs of this.#observers) obs.sinks.delete(id);
       this.#lanes.delete(id);
-      return { ok: false, reason: `lane failed to start: ${why}` };
+      return { ok: false, reason: `agent failed to start: ${why}` };
     }
   }
 
@@ -639,8 +639,8 @@ export class FleetLaneManager {
    *  that cannot be reached, or whose agent ended while idle, is forgotten. */
   async reattach(rec: HeldLaneRecord): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const pool = this.#holders;
-    if (!pool) return { ok: false, reason: "lane holders are off in this engine" };
-    if (!LANE_ID_RE.test(rec.laneId) || this.#lanes.has(rec.laneId)) return { ok: false, reason: `lane id "${rec.laneId}" is malformed or in use` };
+    if (!pool) return { ok: false, reason: "agent holders are off in this engine" };
+    if (!LANE_ID_RE.test(rec.laneId) || this.#lanes.has(rec.laneId)) return { ok: false, reason: `agent id "${rec.laneId}" is malformed or in use` };
     const forget = (reason: string) => { try { pool.remove(rec.laneId); } catch { /* best effort */ } return { ok: false, reason }; };
     let link: HolderLink;
     try { link = await HolderLink.connect(rec.endpoint, rec.token, rec.inFlight?.offset ?? rec.consumed); }
@@ -653,7 +653,7 @@ export class FleetLaneManager {
       // folder, so this engine never starts the lane over it (spawn refuses the id).
       if (!why.startsWith("holder refused the attach") && holderProcessAlive(rec.pid, rec.start)) {
         this.#unreached.set(rec.laneId, why);
-        return { ok: false, reason: `its holder did not answer (${why}); its record is kept for the next start, and the lane is not started again over it` };
+        return { ok: false, reason: `its holder did not answer (${why}); its record is kept for the next start, and the agent is not started again over it` };
       }
       this.#unreached.delete(rec.laneId);
       return forget(`its holder is gone (${why})`);
@@ -731,12 +731,12 @@ export class FleetLaneManager {
    *  would burn the whole budget on one screenshot. */
   async prompt(laneId: string, text: string, sink: (e: LaneEvent) => void, images: LaneImage[] = []): Promise<void> {
     const lane = this.#lanes.get(laneId);
-    if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
-    if (lane.busy) { sink({ type: "error", message: "lane is busy - one turn at a time per lane" }); return; }
-    if (lane.status === "stopped") { sink({ type: "error", message: "lane is stopped - respawn it to continue" }); return; }
+    if (!lane) { sink({ type: "error", message: `unknown agent "${laneId}"` }); return; }
+    if (lane.busy) { sink({ type: "error", message: "agent is busy - one turn at a time per agent" }); return; }
+    if (lane.status === "stopped") { sink({ type: "error", message: "agent is stopped - respawn it to continue" }); return; }
     if (lane.status === "error" || lane.client.isDead || !lane.sessionId) {
       const r = await this.#recover(lane);
-      if (!r.ok) { sink({ type: "error", message: r.reason ?? "lane recovery failed" }); return; }
+      if (!r.ok) { sink({ type: "error", message: r.reason ?? "agent recovery failed" }); return; }
       this.#emit(lane, { type: "status", status: lane.status });
     }
     this.#openTurn(lane, text, images, sink, true);
@@ -877,7 +877,7 @@ export class FleetLaneManager {
     const lane = this.#lanes.get(laneId);
     const pid = lane?.client.pid;
     const oldest = lane ? oldestCallStart(lane.openCalls) : null;
-    if (!lane || !lane.busy || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in this lane." };
+    if (!lane || !lane.busy || pid == null || oldest === null) return { ok: false, stopped: [], reason: "No tool call is running in this agent." };
     const now = this.#deps.now();
     const label = pendingSnapshot(lane.openCalls, now)[0]?.label ?? "the running call";
     const ev = lane.pulse.evidence;
@@ -893,8 +893,8 @@ export class FleetLaneManager {
    *  prompt is a quiet, explained refusal, not a crash. */
   async retry(laneId: string, sink: (e: LaneEvent) => void): Promise<void> {
     const lane = this.#lanes.get(laneId);
-    if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
-    if (!lane.lastPrompt) { sink({ type: "error", message: "nothing to retry - this lane has not been prompted yet" }); return; }
+    if (!lane) { sink({ type: "error", message: `unknown agent "${laneId}"` }); return; }
+    if (!lane.lastPrompt) { sink({ type: "error", message: "nothing to retry - this agent has not been prompted yet" }); return; }
     // The failed attempt's user turn is already in the transcript; drop it so the retry does not read as
     // the user asking twice.
     const last = lane.transcript[lane.transcript.length - 1];
@@ -912,11 +912,11 @@ export class FleetLaneManager {
    *  answers ok with `duplicate: true` and stages nothing, even after that item drained. */
   enqueue(laneId: string, text: string, images: LaneImage[] = [], attachments: string[] = [], stageId?: string): { ok: boolean; queued?: number; reason?: string; duplicate?: boolean } {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
     if (stageId && lane.stageIds.includes(stageId)) return { ok: true, queued: lane.queue.length, duplicate: true };
     const t = text.trim();
     if (!t && !images.length && !attachments.length) return { ok: false, reason: "nothing to stage" };
-    if (lane.queue.length >= QUEUE_MAX) return { ok: false, reason: `queue is full (${QUEUE_MAX}) - let the lane drain first` };
+    if (lane.queue.length >= QUEUE_MAX) return { ok: false, reason: `queue is full (${QUEUE_MAX}) - let the agent drain first` };
     lane.queue.push({ text: t, images, ...(attachments.length ? { attachments: attachments.slice() } : {}) });
     if (stageId) {
       lane.stageIds.push(stageId);
@@ -955,7 +955,7 @@ export class FleetLaneManager {
    *  keeps the item staged until the parallel lane accepted it. Out-of-range is a refusal. */
   queuePeek(laneId: string, index: number): { ok: boolean; item?: StagedLanePrompt; reason?: string } {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
     if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
     const item = lane.queue[index]!;
     return { ok: true, item: { text: item.text, images: item.images.slice(), ...(item.attachments ? { attachments: item.attachments.slice() } : {}) } };
@@ -966,7 +966,7 @@ export class FleetLaneManager {
    *  load exactly what was staged for editing. Out-of-range is a refusal, never a different item. */
   queueTake(laneId: string, index: number): { ok: boolean; item?: StagedLanePrompt; reason?: string } {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
     if (!Number.isInteger(index) || index < 0 || index >= lane.queue.length) return { ok: false, reason: "that staged prompt already ran or was removed" };
     const [item] = lane.queue.splice(index, 1);
     return { ok: true, item: { text: item!.text, images: item!.images.slice(), ...(item!.attachments ? { attachments: item!.attachments.slice() } : {}) } };
@@ -991,8 +991,8 @@ export class FleetLaneManager {
    *  without the files, never retried in a loop). */
   async drain(laneId: string, sink: (e: LaneEvent) => void, expand?: LaneAttachmentExpander): Promise<void> {
     const lane = this.#lanes.get(laneId);
-    if (!lane) { sink({ type: "error", message: `unknown lane "${laneId}"` }); return; }
-    if (lane.busy) { sink({ type: "error", message: "lane is busy - the queue drains when the turn ends" }); return; }
+    if (!lane) { sink({ type: "error", message: `unknown agent "${laneId}"` }); return; }
+    if (lane.busy) { sink({ type: "error", message: "agent is busy - the queue drains when the turn ends" }); return; }
     const next = lane.queue.shift();
     if (!next) { sink({ type: "error", message: "queue is empty" }); return; }
     let text = next.text;
@@ -1007,8 +1007,8 @@ export class FleetLaneManager {
   /** Explicit revive: works on error AND stopped lanes (the button, not the automatic path). */
   async respawn(laneId: string): Promise<{ ok: boolean; lane?: LaneView; reason?: string }> {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
-    if (lane.busy) return { ok: false, reason: "lane is mid-turn - cancel it first" };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
+    if (lane.busy) return { ok: false, reason: "agent is mid-turn - cancel it first" };
     const r = await this.#recover(lane);
     return r.ok ? { ok: true, lane: this.#view(lane) } : { ok: false, reason: r.reason };
   }
@@ -1050,8 +1050,8 @@ export class FleetLaneManager {
    *  (invariant 4) still scans every tool call in auto mode; only the human approval step goes away. */
   setAuto(laneId: string, on: boolean): { ok: boolean; lane?: LaneView; reason?: string } {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
-    if (on && lane.supervised) return { ok: false, reason: "a controller lane stays supervised - auto needs the controller consent (P-CTRL.4)" };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
+    if (on && lane.supervised) return { ok: false, reason: "a controller agent stays supervised - auto needs the controller consent (P-CTRL.4)" };
     lane.autoApprove = on;
     this.#saveHeld(lane);
     if (on && !lane.pending?.managedDeny) lane.pending?.resolve(true);
@@ -1086,7 +1086,7 @@ export class FleetLaneManager {
 
   setModel(laneId: string, model: string): Promise<{ ok: boolean; model?: string; reason?: string }> {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return Promise.resolve({ ok: false, reason: "unknown lane" });
+    if (!lane) return Promise.resolve({ ok: false, reason: "unknown agent" });
     return this.#setModel(lane, model).then(
       () => ({ ok: true, model: lane.model }),
       (e) => ({ ok: false, reason: e instanceof Error ? e.message : String(e) }),
@@ -1122,7 +1122,7 @@ export class FleetLaneManager {
   remove(laneId: string, force = false): { ok: boolean; reason?: string; ended?: Promise<void> } {
     const lane = this.#lanes.get(laneId);
     if (!lane) return { ok: true }; // already gone: a double click is not an error
-    if (lane.busy && !force) return { ok: false, reason: "lane is mid-turn - stop it first, then dismiss it" };
+    if (lane.busy && !force) return { ok: false, reason: "agent is mid-turn - stop it first, then dismiss it" };
     if (lane.promoted) this.#setPromoted(lane, false);
     lane.pending?.resolve(false); // an open ask dies as a DENY, never dangles
     if (lane.busy && lane.sessionId) { try { lane.client.notify("session/cancel", { sessionId: lane.sessionId }); } catch { /* dead */ } }
@@ -1203,7 +1203,7 @@ export class FleetLaneManager {
     if (!sessionId) return null;
     if (this.#deps.masterSessionId?.() === sessionId) return "its session is open in the main composer. Open it there, or switch Main to another session first.";
     const holder = [...this.#lanes.values()].find((l) => l.id !== except && l.sessionId === sessionId && laneHoldsSession(l.status));
-    return holder ? `its session is already running in spoke "${holder.name}".` : null;
+    return holder ? `its session is already running in agent "${holder.name}".` : null;
   }
 
   // ── P-PWA-FOCUS.1: watching a lane's CONVERSATION, not just its status ────────────────────────────
@@ -1267,8 +1267,8 @@ export class FleetLaneManager {
    *  to a lane five minutes into a task landed on the bare prompt and read as "the spoke stopped". */
   promote(laneId: string): { ok: boolean; lane?: LaneView; transcript?: LaneTurnRecord[]; live?: LaneLiveTurn; reason?: string } {
     const lane = this.#lanes.get(laneId);
-    if (!lane) return { ok: false, reason: `unknown lane "${laneId}"` };
-    if (lane.status === "stopped") return { ok: false, reason: "lane is stopped - respawn it before promoting" };
+    if (!lane) return { ok: false, reason: `unknown agent "${laneId}"` };
+    if (lane.status === "stopped") return { ok: false, reason: "agent is stopped - respawn it before promoting" };
     for (const other of this.#lanes.values()) if (other !== lane && other.promoted) this.#setPromoted(other, false);
     this.#setPromoted(lane, true);
     const live: LaneLiveTurn | undefined = lane.busy ? { text: lane.liveText, tools: lane.liveTools.slice() } : undefined;
@@ -1411,7 +1411,7 @@ export class FleetLaneManager {
     const now = this.#deps.now();
     return [...this.#lanes.values()].map((lane) => {
       if (lane.status === "stopped") {
-        return { laneId: lane.id, action: "ok", silentMs: 0, reason: "You stopped this lane, so the harness leaves it alone. Respawn it to continue.", openCalls: [] };
+        return { laneId: lane.id, action: "ok", silentMs: 0, reason: "You stopped this agent, so the harness leaves it alone. Respawn it to continue.", openCalls: [] };
       }
       const v = healthVerdict({
         busy: lane.busy && !lane.waiting, dead: lane.client.isDead, lastActivityAt: lane.lastActivityAt, now,
@@ -1518,7 +1518,7 @@ export class FleetLaneManager {
     } else {
       const s = await lane.client.request<{ sessionId?: string; id?: string }>("session/new", { cwd: lane.cwd, mcpServers: [] }, { timeoutMs: HANDSHAKE_MS });
       lane.sessionId = typeof s?.sessionId === "string" ? s.sessionId : typeof s?.id === "string" ? s.id : null;
-      if (!lane.sessionId) throw new Error("lane agent returned no session id");
+      if (!lane.sessionId) throw new Error("agent returned no session id");
       // FALLBACK resume: a fresh session gets the recorded transcript prepended to the NEXT prompt.
       lane.resumeContext = resume && lane.transcript.length ? this.#resumePreamble(lane) : null;
     }
@@ -1539,7 +1539,7 @@ export class FleetLaneManager {
     // P-SWITCH.2: a stopped or crashed lane let go of its session, so Main (or a Recover) may have opened
     // it since. Reviving it here would load it a second time.
     const claim = this.#claimRefusal(lane.sessionId, lane.id);
-    if (claim) return { ok: false, reason: `this lane cannot come back: ${claim}` };
+    if (claim) return { ok: false, reason: `this agent cannot come back: ${claim}` };
     lane.pending?.resolve(false);
     try { lane.client.stop(); } catch { /* already dead */ }
     // P-GATE-PATH.1 (ADR-0356): a revive is a fresh spawn, so it re-asks for the gated argv and refuses
@@ -1558,7 +1558,7 @@ export class FleetLaneManager {
       const why = e instanceof Error ? e.message : String(e);
       void this.#forgetHeld(lane, this.#stopClient(lane));
       this.#setStatus(lane, "error");
-      return { ok: false, reason: `lane recovery failed: ${why}` };
+      return { ok: false, reason: `agent recovery failed: ${why}` };
     }
   }
 

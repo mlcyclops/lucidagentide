@@ -472,7 +472,7 @@ export class HolderPool {
         : !copy ? "the lane runtime copy could not be prepared"
         : `the lane runtime copy ${copy} has no lane holder`;
       // An install the person committed to may be replacing these files right now: no new lane starts from them.
-      if (this.#installCommitted) throw new Error(`lane "${laneId}" did not start: an update is installing, and ${why}, so it would run from the install folder`);
+      if (this.#installCommitted) throw new Error(`agent "${laneId}" did not start: an update is installing, and ${why}, so it would run from the install folder`);
       console.warn(`[lane-holder] lane "${laneId}" runs from the install folder, so an update cannot install while it runs: ${why}`);
       this.#installLaunches++;
     }

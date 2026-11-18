@@ -68,7 +68,7 @@ export function goalButtonHtml(now: number): string {
 export function goalButtonTip(now: number): string {
   const live = goalLiveness(now);
   const beat = snap && live ? `The engine's heartbeat #${snap.heartbeat.seq}, ${humanSeconds((now - snap.heartbeat.ts) / 1000)} ago, ${live}.` : "No heartbeat from the engine yet.";
-  if (!snap?.goal) return `Fleet goal|No goal set. One standing goal with success criteria and a budget that every spoke works toward (AOS-1). ${beat}`;
+  if (!snap?.goal) return `Fleet goal|No goal set. One standing goal with success criteria and a budget that every agent works toward (AOS-1). ${beat}`;
   const g = snap.goal;
   return `Fleet goal|${g.title}. ${g.status}${g.blockedReason ? `: ${g.blockedReason}` : ""}. ${beat}`;
 }
@@ -101,7 +101,7 @@ export function goalPanelHtml(now: number, closeBtn: string): string {
   const g = snap.goal;
   if (!g) {
     return `${head}${beat}
-      <p class="orbit-goal-lede">One standing goal every spoke works toward. You verify each criterion; the heartbeat watches the budget and marks spokes that went silent mid-turn as stalled.</p>
+      <p class="orbit-goal-lede">One standing goal every agent works toward. You verify each criterion; the heartbeat watches the budget and marks agents that went silent mid-turn as stalled.</p>
       <label class="orbit-spawn-l">goal<input type="text" data-goal-title maxlength="200" placeholder="what the fleet is trying to get done"></label>
       <label class="orbit-spawn-l">success criteria <i>one per line</i><textarea data-goal-criteria rows="4" placeholder="Every test passes on CI&#10;The release notes name each change"></textarea></label>
       <div class="orbit-goal-caps">
@@ -117,13 +117,13 @@ export function goalPanelHtml(now: number, closeBtn: string): string {
   const crit = g.criteria.map((c) => `<label class="orbit-goal-crit${c.met ? " met" : ""}" data-tip="${esc(tipEsc(c.text))}"><input type="checkbox" data-goal-crit="${esc(c.id)}"${c.met ? " checked" : ""}${terminal ? " disabled" : ""}><span>${esc(c.text)}</span></label>`).join("");
   const roster = snap.agents.length
     ? snap.agents.map((a) => `<div class="orbit-goal-agent" data-agent="${a.status}" data-tip="${esc(tipEsc(a.name))}"><i></i><b>${esc(a.name)}</b><small>${AGENT_WORD[a.status]}</small></div>`).join("")
-    : `<div class="orbit-ghosts-empty">No spokes yet. Spokes you spawn work toward this goal.</div>`;
+    : `<div class="orbit-ghosts-empty">No agents yet. Agents you start work toward this goal.</div>`;
   const controls = terminal
     ? `<button class="btn-mini orbit-btn" data-goal-control="dismiss">${icon("close", 12)} Dismiss</button>`
     : `${paused
         ? `<button class="btn-mini orbit-btn" data-goal-control="resume">${icon("bolt", 12)} Resume</button>`
         : `<button class="btn-mini orbit-btn" data-goal-control="pause">${icon("minus", 12)} Pause</button>`}
-       <button class="btn-mini orbit-btn orbit-deny" data-goal-control="cancel" data-tip="Cancel the goal|Ends it for good (AOS-1 terminal state). Spokes keep running; only the goal stops.">${icon("stopBadge", 12)} Cancel goal</button>`;
+       <button class="btn-mini orbit-btn orbit-deny" data-goal-control="cancel" data-tip="Cancel the goal|Ends it for good (AOS-1 terminal state). Agents keep running; only the goal stops.">${icon("stopBadge", 12)} Cancel goal</button>`;
   return `${head}${beat}
     <div class="orbit-goal-title" data-goal-status="${g.status}"><b data-tip="${esc(tipEsc(g.title))}">${esc(g.title)}</b><span class="orbit-goal-pill">${esc(paused && !terminal ? "paused" : g.status)}</span></div>
     ${g.blockedReason ? `<p class="orbit-goal-why">Blocked, ${esc(g.blockedReason)}. Tick the criteria that are done, or cancel and set a new goal with a larger budget.</p>` : ""}
@@ -131,7 +131,7 @@ export function goalPanelHtml(now: number, closeBtn: string): string {
     <div class="orbit-goal-sub">${p.met} of ${p.total} criteria met</div>
     <div class="orbit-goal-list">${crit}</div>
     <div class="orbit-goal-budget"><span>spend</span><b>${esc(p.spend)}</b><span>time</span><b>${esc(p.time)}</b></div>
-    <div class="orbit-panel-h orbit-goal-h2">${icon("share", 13)}<b>Spokes</b><span>${snap.agents.length}</span></div>
+    <div class="orbit-panel-h orbit-goal-h2">${icon("share", 13)}<b>Agents</b><span>${snap.agents.length}</span></div>
     <div class="orbit-goal-roster">${roster}</div>
     ${taskBoardHtml(g.tasks)}
     <div class="orbit-spawn-row orbit-goal-ctl">${controls}</div>
@@ -194,7 +194,7 @@ const BOARD: readonly AosTaskStatus[] = ["needs_review", "running", "ready", "pe
 const STATUS_WORD: Record<AosTaskStatus, string> = { pending: "waiting on a dependency", ready: "ready", running: "running", needs_review: "needs your review", done: "done", failed: "failed", cancelled: "canceled" };
 
 function laneName(id: string): string {
-  return snap?.agents.find((a) => a.laneId === id)?.name ?? "a spoke that is gone";
+  return snap?.agents.find((a) => a.laneId === id)?.name ?? "an agent that is gone";
 }
 
 function taskRowHtml(t: AosTask): string {
@@ -219,7 +219,7 @@ function taskRowHtml(t: AosTask): string {
 /** The task board (AOS-1 section 8), grouped by status. */
 export function taskBoardHtml(tasks: readonly AosTask[]): string {
   const head = `<div class="orbit-panel-h orbit-goal-h2">${icon("checkBadge", 13)}<b>Tasks</b><span>${tasks.filter((t) => t.status === "done").length}/${tasks.length} done</span></div>`;
-  if (!tasks.length) return `${head}<div class="orbit-ghosts-empty">No tasks yet. Give a spoke a task below: what to do, what to deliver, and how you will know it is right.</div>`;
+  if (!tasks.length) return `${head}<div class="orbit-ghosts-empty">No tasks yet. Give an agent a task below: what to do, what to deliver, and how you will know it is right.</div>`;
   return head + BOARD.map((st) => tasks.filter((t) => t.status === st).map(taskRowHtml).join("")).join("");
 }
 
@@ -230,14 +230,14 @@ export function taskFormHtml(): string {
   const lanes = snap?.agents ?? [];
   const spokes = lanes.length
     ? lanes.map((a) => `<option value="${esc(a.laneId)}">${esc(a.name)}</option>`).join("")
-    : `<option value="">spawn a spoke first</option>`;
+    : `<option value="">start an agent first</option>`;
   const deps = g.tasks.filter((t) => t.status !== "failed" && t.status !== "cancelled")
     .map((t) => `<label class="orbit-task-dep" data-tip="${esc(tipEsc(t.title))}"><input type="checkbox" data-task-dep value="${esc(t.id)}"><span>${esc(t.id)} ${esc(t.title)}</span></label>`).join("");
   return `<details class="orbit-spawn-more orbit-task-new">
       <summary>Add a task</summary>
       <label class="orbit-spawn-l">task<input type="text" data-task-title maxlength="200" placeholder="a short name for the work"></label>
-      <label class="orbit-spawn-l">spoke<select data-task-assignee>${spokes}</select></label>
-      <label class="orbit-spawn-l">instructions<textarea data-task-prompt rows="4" placeholder="what the spoke should do"></textarea></label>
+      <label class="orbit-spawn-l">agent<select data-task-assignee>${spokes}</select></label>
+      <label class="orbit-spawn-l">instructions<textarea data-task-prompt rows="4" placeholder="what the agent should do"></textarea></label>
       <label class="orbit-spawn-l">deliver<input type="text" data-task-contract maxlength="1000" placeholder="what it must hand back, e.g. a passing PR branch"></label>
       <label class="orbit-spawn-l">acceptance checks <i>one per line; "$ " runs a command</i><textarea data-task-checks rows="3" placeholder="$ bun test desktop/timeline.test.ts&#10;The dock shows rows within a few seconds"></textarea></label>
       ${deps ? `<div class="orbit-spawn-l">runs after<div class="orbit-task-deps">${deps}</div></div>` : ""}

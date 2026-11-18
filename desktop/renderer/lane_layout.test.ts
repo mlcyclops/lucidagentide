@@ -12,7 +12,7 @@ import { clampToViewport } from "./share_dock.ts";
 import {
   widthFromDrag, maxCardW, defaultCardW, heightFromDrag, clampSize, snapSlot, reorder, reconcile, loadLayout, saveLayout,
   resizeShape,
-  autofitGrid, autofitSections, autofitPlan, distribute, shareResize, sharesOf, isAutofit,
+  autofitGrid, autofitSections, autofitPlan, distribute, shareResize, sharesOf, gridFourPlan, focusPlan, FOCUS_STRIP_W,
   CARD_COL_W, CARD_GAP, CARD_MIN_H, CARD_MAX_H, CARD_MIN_W, CARD_MAX_W, CARD_DEF_W,
   FIT_MIN_W, FIT_MIN_H, FIT_WEIGHT_MAX,
   type CardRect, type FitPlan, type LaneLayout,
@@ -627,26 +627,19 @@ describe("shareResize / sharesOf (P-FLEET.FIT1: auto fit and equally resize)", (
 });
 
 describe("autofit persistence (P-FLEET.FIT1)", () => {
-  it("a layout saved before autofit loads as autofit ON with equal shares", () => {
-    const l = loadLayout('{"order":["a"],"size":{"a":{"w":610,"h":300}}}');
-    expect(isAutofit(l)).toBe(true);
-    expect(l.autofit).toBeUndefined();
-    expect(l.fit).toBeUndefined();
-    expect(isAutofit(loadLayout(null))).toBe(true);
-    expect(isAutofit(loadLayout("not json"))).toBe(true);
+  it("a layout saved before autofit loads with equal shares", () => {
+    expect(loadLayout('{"order":["a"],"size":{"a":{"w":610,"h":300}}}').fit).toBeUndefined();
   });
 
   it("a default layout still serializes to the exact pre-autofit bytes", () => {
     expect(saveLayout({ order: ["a"], size: {} })).toBe('{"order":["a"],"size":{}}');
-    expect(saveLayout({ order: ["a"], size: {}, autofit: true, fit: { a: { fw: 1, fh: 1 } } })).toBe('{"order":["a"],"size":{}}');
+    expect(saveLayout({ order: ["a"], size: {}, fit: { a: { fw: 1, fh: 1 } } })).toBe('{"order":["a"],"size":{}}');
   });
 
-  it("only an explicit boolean false turns autofit off, and it round-trips", () => {
-    const raw = saveLayout({ order: ["a"], size: {}, autofit: false });
-    expect(raw).toBe('{"order":["a"],"size":{},"autofit":false}');
-    expect(isAutofit(loadLayout(raw))).toBe(false);
-    expect(isAutofit(loadLayout('{"order":["a"],"size":{},"autofit":"false"}'))).toBe(true);
-    expect(isAutofit(loadLayout('{"order":["a"],"size":{},"autofit":0}'))).toBe(true);
+  it("P-FLEET-BOARDS.1: the layout choice moved to the engine's boards, so a stored autofit:false is dropped, sizes kept", () => {
+    const l = loadLayout('{"order":["a"],"size":{"a":{"w":610,"h":300}},"autofit":false}');
+    expect(l).toEqual({ order: ["a"], size: { a: { w: 610, h: 300 } } });
+    expect(saveLayout(l)).toBe('{"order":["a"],"size":{"a":{"w":610,"h":300}}}');
   });
 
   it("shares round-trip byte-identically, equal entries are dropped, junk is clamped or ignored", () => {
@@ -663,10 +656,74 @@ describe("autofit persistence (P-FLEET.FIT1)", () => {
     expect(junk.fit).toBeUndefined();
   });
 
-  it("reconcile keeps the mode and releases a vanished lane's share", () => {
-    const r = reconcile({ order: ["a", "b"], size: {}, autofit: false, fit: { a: { fw: 2, fh: 1 }, b: { fw: 0.5, fh: 1 } } }, ["a", "c"]);
-    expect(r.autofit).toBe(false);
+  it("reconcile releases a vanished lane's share", () => {
+    const r = reconcile({ order: ["a", "b"], size: {}, fit: { a: { fw: 2, fh: 1 }, b: { fw: 0.5, fh: 1 } } }, ["a", "c"]);
     expect(r.fit).toEqual({ a: { fw: 2, fh: 1 } });
-    expect(isAutofit(reconcile({ order: [], size: {} }, ["a"]))).toBe(true);
+  });
+});
+
+// P-FLEET-BOARDS.1: the two fixed board layouts. Grid of four is always two columns of the panel by two rows of it,
+// whatever the count; Focus one is one large card and a strip, never without a large card.
+describe("gridFourPlan (P-FLEET-BOARDS.1)", () => {
+  it("four agents tile the panel exactly, 2 by 2", () => {
+    const p = expectFills(gridFourPlan([ids(4)], 1200, 800), 1200, 800);
+    expect(p.rows).toEqual([["l1", "l2"], ["l3", "l4"]]);
+    for (const id of ids(4)) expect(p.cells[id]).toMatchObject({ w: 595, h: 395 });
+  });
+
+  it("fewer than four keep the quarter size: a lone card does not stretch", () => {
+    const p = gridFourPlan([ids(3)], 1200, 800)!;
+    expect(p.cells.l3).toMatchObject({ w: 595, h: 395, row: 1 });
+    expect(p.grid.scroll).toBe(false);
+    expect(gridFourPlan([ids(1)], 1200, 800)!.cells.l1).toMatchObject({ w: 595, h: 395 });
+  });
+
+  it("a fifth agent starts a third row at the same size and the body scrolls", () => {
+    const p = gridFourPlan([ids(5)], 1200, 800)!;
+    expect(p.rows.length).toBe(3);
+    expect(p.cells.l5).toMatchObject({ w: 595, h: 395, row: 2 });
+    expect(p.grid.scroll).toBe(true);
+  });
+
+  it("sections start their own rows; tiles never go under the card minimum; a narrow panel gets one column", () => {
+    expect(gridFourPlan([["a"], ["b", "c"]], 1200, 800)!.rows).toEqual([["a"], ["b", "c"]]);
+    expect(gridFourPlan([ids(4)], 1200, 200)!.cells.l1!.h).toBe(CARD_MIN_H);
+    const narrowW = 2 * CARD_MIN_W + CARD_GAP - 1;
+    const narrow = gridFourPlan([ids(2)], narrowW, 800)!;
+    expect(narrow.grid.cols).toBe(1);
+    expect(narrow.cells.l1!.w).toBe(narrowW);
+  });
+
+  it("is null with nothing to tile or an unmeasured body; junk and repeats are skipped", () => {
+    expect(gridFourPlan([], 1200, 800)).toBeNull();
+    expect(gridFourPlan([ids(2)], 0, 800)).toBeNull();
+    expect(gridFourPlan([ids(2)], 1200, Number.NaN)).toBeNull();
+    expect(gridFourPlan([["a", "a", ""], ["a", "b"]], 1200, 800)!.rows).toEqual([["a"], ["b"]]);
+  });
+});
+
+describe("focusPlan (P-FLEET-BOARDS.1)", () => {
+  it("the focused agent fills the height beside a strip of the rest, in order", () => {
+    expect(focusPlan(["a", "b", "c"], "b", 1200, 700)).toEqual({
+      focus: "b", strip: ["a", "c"], mainW: 1200 - CARD_GAP - FOCUS_STRIP_W, mainH: 700, stripW: FOCUS_STRIP_W, oneColumn: false,
+    });
+  });
+
+  it("a stale or missing focus falls back to the first agent", () => {
+    expect(focusPlan(["a", "b"], "gone", 1200, 700)?.focus).toBe("a");
+    expect(focusPlan(["a", "b"], undefined, 1200, 700)?.focus).toBe("a");
+  });
+
+  it("one agent, or a panel too narrow for a card beside the strip, is one column", () => {
+    expect(focusPlan(["a"], "a", 1200, 700)).toMatchObject({ strip: [], mainW: 1200, oneColumn: true });
+    const narrow = focusPlan(["a", "b"], "a", CARD_MIN_W + CARD_GAP + FOCUS_STRIP_W - 1, 700)!;
+    expect(narrow.oneColumn).toBe(true);
+    expect(narrow.mainW).toBe(narrow.stripW);
+    expect(focusPlan(["a", "b"], "a", 1200, 40)!.mainH).toBe(CARD_MIN_H);
+  });
+
+  it("is null with nothing to show or an unmeasured body", () => {
+    expect(focusPlan([], "a", 1200, 700)).toBeNull();
+    expect(focusPlan(["a"], "a", 0, 700)).toBeNull();
   });
 });

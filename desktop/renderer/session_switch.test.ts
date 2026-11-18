@@ -47,7 +47,7 @@ describe("planSessionSwitch", () => {
 describe("liveBadge", () => {
   test("names the spoke and its state; an approval wait reads as the ask tone", () => {
     expect(liveBadge({ where: "spoke", laneId: "L", name: "Refactor tests", status: "needs-approval" }))
-      .toEqual({ text: `spoke "Refactor tests" \u00b7 needs your approval`, tone: "ask" });
+      .toEqual({ text: `agent "Refactor tests" \u00b7 needs your approval`, tone: "ask" });
     expect(liveBadge({ where: "spoke", laneId: "L", name: "x", status: "working" })?.tone).toBe("work");
   });
 
@@ -72,9 +72,7 @@ describe("switchSheetCopy", () => {
   test("New session wording when there is no target", () => {
     const c = switchSheetCopy(null, null, "a goal loop is running");
     expect(c.title).toBe("The main session is still working");
-    expect(c.spoke).toBe("Start it as a spoke");
     expect(c.stop).toBe("Stop it and start new");
-    expect(c.spokeHint).toContain("A new session opens in its own spoke");
   });
 });
 

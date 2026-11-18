@@ -144,6 +144,7 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
+import { addAgents, createBoard, dropAgents, moveBoard, openBoards, parseAgentsBody, parsePruneBody, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards
 import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
@@ -1835,6 +1836,9 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-FLEET-BOARDS.1 (ADR-0601): boards live in the engine, in fleet-boards.json under the data root, so every
+// window of this engine shows the same boards.
+const fleetBoards = openBoards(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"));
 // P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
 // sees it age past 1.5x / 3x the interval is looking at a frozen or dead engine.
 const fleetGoal = new FleetGoal({
@@ -2276,7 +2280,7 @@ const switchRefused = (busy: string, sessionId: string | null) =>
 /** P-SWITCH.2 (ADR-0404): the 409 for a session a live spoke holds. `heldBy` lets a client attach to that
  *  spoke instead; no flag overrides it, because two processes on one session corrupt its history. */
 const sessionHeld = (lane: SessionLiveSpoke) =>
-  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in spoke "${lane.name}". Attach to that spoke instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
+  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in agent "${lane.name}". Attach to that agent instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
 
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
@@ -5372,7 +5376,7 @@ return Bun.serve({
       if (p === "/api/session/archive" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id ?? "");
-        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or a spoke. Switch away from it (or stop the spoke) first." } });
+        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or an agent. Switch away from it (or stop the agent) first." } });
         if (otherEnginesSessions().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in another LUCID window. Switch away from it there first." } });
         return json({ ok: true, data: archiveSession(sid, { cwd: currentWorkspace() }) });
       }
@@ -5402,7 +5406,7 @@ return Bun.serve({
         const sid = String(id);
         // P-SWITCH.2: deleting the file under a running spoke would leave it appending to nothing.
         const held = spokeHolding(sid);
-        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in spoke "${held.name}". Stop that spoke first, then delete it.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in agent "${held.name}". Stop that agent first, then delete it.` } });
         // If it's the live session, close it first so omp releases the file handle (Windows
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
@@ -6590,6 +6594,47 @@ return Bun.serve({
         const b = await readBody<{ taskId?: unknown }>(req);
         return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
       }
+      // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards. UI token only (never AGENT_ROUTES). Each change
+      // answers the whole Boards, or the refusal in plain words; removing a board never stops its agents.
+      if (p === "/api/fleet/boards" && req.method === "GET") return json({ ok: true, data: fleetBoards.read() });
+      if (p === "/api/fleet/boards/create" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json(fleetBoards.update((s) => createBoard(s, typeof b.name === "string" ? b.name : "")));
+      }
+      if (p === "/api/fleet/boards/rename" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; name?: unknown }>(req);
+        return json(fleetBoards.update((s) => renameBoard(s, String(b.id ?? ""), typeof b.name === "string" ? b.name : "")));
+      }
+      if (p === "/api/fleet/boards/remove" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json(fleetBoards.update((s) => removeBoard(s, String(b.id ?? ""))));
+      }
+      if (p === "/api/fleet/boards/move" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; to?: unknown }>(req);
+        return json(fleetBoards.update((s) => moveBoard(s, String(b.id ?? ""), typeof b.to === "number" ? b.to : Number.NaN)));
+      }
+      // Drops apply before adds, so a swap near the 200-agent cap fits.
+      if (p === "/api/fleet/boards/agents" && req.method === "POST") {
+        // Validated in full first: a bad id, list or key refuses the whole request before the store is read.
+        const b = parseAgentsBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, add, drop } = b.value;
+        return json(fleetBoards.update((s) => {
+          const dropped = dropAgents(s, id, drop);
+          return dropped.ok ? addAgents(dropped.data, id, add) : dropped;
+        }));
+      }
+      if (p === "/api/fleet/boards/layout" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; layout?: unknown; focus?: unknown }>(req);
+        return json(fleetBoards.update((s) => setLayout(s, String(b.id ?? ""), typeof b.layout === "string" ? b.layout : "", typeof b.focus === "string" ? b.focus : undefined)));
+      }
+      if (p === "/api/fleet/boards/prune" && req.method === "POST") {
+        // A missing or malformed `live` is refused with no write: pruning against it would empty every board.
+        const b = parsePruneBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { live } = b.value;
+        return json(fleetBoards.update((s) => ({ ok: true, data: pruneBoards(s, live) })));
+      }
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
       if (p === "/api/hub/open" && req.method === "POST") return json({ ok: true, data: await openHubWindow(resolvedRepo().root, process.env.LUCID_RESOURCES ?? "") });
@@ -6853,7 +6898,7 @@ return Bun.serve({
         const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
         if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
         const held = spokeHolding(b.value.sessionId); // P-SWITCH.2 (ADR-0404)
-        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in spoke "${held.name}", so it was not reopened in Main.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in agent "${held.name}", so it was not reopened in Main.` } });
         return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
       }
       if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
