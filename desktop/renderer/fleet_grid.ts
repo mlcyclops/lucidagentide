@@ -3218,7 +3218,6 @@ function onClick(ev: Event): void {
     return;
   }
   if (t.closest("[data-fleet-unlock]")) { onUnlockClick(); return; } // P-FLEET-UNLOCK.1
-  if (t.closest("[data-fleet-computers]")) { openComputers(); return; } // P-FLEET-COMPUTERS.1
   if (t.closest("[data-fleet-helping]")) { openHelping(); return; }
   if (t.closest("[data-fleet-add]")) { toggleSpawnForm(); return; }
   if (t.closest("[data-spawn-go]")) { void submitSpawn(); return; }
