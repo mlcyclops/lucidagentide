@@ -28,14 +28,14 @@ describe("mapSpokeRow: one spoke as the orbit shows it", () => {
   test("label, lanes, model and tasks come from the spoke's own capabilities and status", () => {
     const v = mapSpokeRow({ node: NODE, label: "azure-eastus", checkedAt: 5, reachable: true, caps, tasks: [task({ state: "working", updatedAt: 200 }), task({ id: "t_fedcba9876543210", name: "old", updatedAt: 50 })] });
     expect(v).toEqual({
-      node: NODE, label: "azure-eastus", state: "busy", lanes: { live: 1, max: 2, free: 1 }, checkedAt: 5, ...UNKNOWN,
+      node: NODE, label: "azure-eastus", state: "busy", lanes: { live: 1, max: 2, free: 1 }, tasksRead: true, checkedAt: 5, ...UNKNOWN,
       models: { default: "azure-openai/gpt-5.1", local: [], frontier: [] },
       tasks: [
         { id: "t_0123456789abcdef", name: "triage", state: "working", turns: 3, updatedAt: 200 },
         { id: "t_fedcba9876543210", name: "old", state: "idle", turns: 3, updatedAt: 50 },
       ],
     });
-    expect(remoteGlance(v!)).toBe("online, busy \u00b7 1/2 lanes \u00b7 1 open");
+    expect(remoteGlance(v!)).toBe("online, busy \u00b7 1/2 agents \u00b7 1 open");
   });
 
   test("online / idle / busy / parked-approval / offline / checking, by reachability and task states", () => {
@@ -49,7 +49,7 @@ describe("mapSpokeRow: one spoke as the orbit shows it", () => {
     expect(at([task()], false)).toBe("offline");
     expect(at([task()], null)).toBe("checking");
     // Reachable, but its status read was refused (no tasks at all): an error, never a quiet "idle".
-    expect(mapSpokeRow({ node: NODE, label: "x", reachable: true, error: "this hub's certificate does not carry the recall scope" })).toMatchObject({ state: "error", error: "this hub's certificate does not carry the recall scope", tasks: [], lanes: null });
+    expect(mapSpokeRow({ node: NODE, label: "x", reachable: true, error: "this hub's certificate does not carry the recall scope" })).toMatchObject({ state: "error", error: "this hub's certificate does not carry the recall scope", tasks: [], tasksRead: false, lanes: null });
   });
 
   test("the closed-lane fields from the spoke's close op survive: review branch, restart interruption", () => {
@@ -97,7 +97,7 @@ describe("ADR-0508: answer time, route, certificate and models", () => {
       frontier: [{ provider: "anthropic", name: "Anthropic", account: "ops@contoso", models: ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-1"] }],
     });
     expect(modelCount(v!)).toBe(5);
-    expect(remoteGlance(v!)).toBe("online, idle \u00b7 1/2 lanes \u00b7 1.4 s LAN");
+    expect(remoteGlance(v!)).toBe("online, idle \u00b7 1/2 agents \u00b7 1.4 s LAN");
     // Without a capabilities answer the models answer's default stands.
     expect(mapSpokeRow({ node: NODE, label: "x", models })?.models.default).toBe("anthropic/claude-sonnet-4-5");
     expect(mapSpokeRow({ node: NODE, label: "x", reachable: true, tasks: [], latencyMs: 2000, via: { kind: "relay", host: "relay.example:443" } })?.via).toBe("relay");
@@ -135,7 +135,7 @@ describe("ADR-0508: answer time, route, certificate and models", () => {
     expect(v).toMatchObject(UNKNOWN);
     expect(v?.models).toEqual({ default: "azure-openai/gpt-5.1", local: ["ollama/llama3"], frontier: [{ provider: "anthropic", name: "anthropic", account: null, models: [] }] });
     expect(modelCount(v!)).toBe(2);
-    expect(remoteGlance(v!)).toBe("online, idle \u00b7 1/2 lanes");
+    expect(remoteGlance(v!)).toBe("online, idle \u00b7 1/2 agents");
   });
 
   test("latencyLabel says how fast the spoke answers, never a ping", () => {
@@ -149,7 +149,7 @@ describe("ADR-0508: answer time, route, certificate and models", () => {
 describe("ADR-0508: the Start-a-task selector's rows", () => {
   const drive = hubActions(["recall", "drive"]);
   const spoke = (label: string, over: Partial<RemoteSpokeView> = {}): RemoteSpokeView => ({
-    node: NODE, label, state: "idle", lanes: { live: 0, max: 2, free: 2 }, tasks: [], checkedAt: 1, ...UNKNOWN, models: { default: null, local: [], frontier: [] }, ...over,
+    node: NODE, label, state: "idle", lanes: { live: 0, max: 2, free: 2 }, tasks: [], tasksRead: true, checkedAt: 1, ...UNKNOWN, models: { default: null, local: [], frontier: [] }, ...over,
   });
   const spokes = [
     spoke("slow", { latencyMs: 3000 }),
@@ -172,7 +172,7 @@ describe("ADR-0508: the Start-a-task selector's rows", () => {
       ["slow", true, null],
       ["alpha", true, null],
       ["unmeasured", true, null],
-      ["full", false, "no free lane: close an idle task on it to free one"],
+      ["full", false, "no free agent slot: close an idle task on it to free one"],
       ["gone", false, "offline"],
       ["new", false, "still checking"],
       ["revoked", false, "offline: this hub no longer accepts the spoke's certificate: certificate revoked"],
@@ -208,7 +208,7 @@ describe("ADR-0509: the spoke's machine, its lane policy, silence, alerts and Re
     expect(v?.lanes).toEqual({ live: 1, max: 4, free: 3 });
     expect([v?.lastSeen, v?.silentSince, v?.state]).toEqual([1_000, null, "idle"]);
     expect(hostLabel(v!.host)).toBe("8 CPUs \u00b7 32 GiB memory \u00b7 NVIDIA A10 24 GiB \u00b7 iGPU");
-    expect(lanePolicyLabel(v!.lanePolicy!)).toBe("up to 4 lanes, limited by memory: 32 GiB fits 4 engines with room for the model");
+    expect(lanePolicyLabel(v!.lanePolicy!)).toBe("up to 4 agents, limited by memory: 32 GiB fits 4 engines with room for the model");
     expect([mibLabel(512), mibLabel(15_872), mibLabel(1024)]).toEqual(["512 MiB", "15.5 GiB", "1 GiB"]);
     expect(hostLabel(null)).toBe("");
   });
@@ -247,7 +247,7 @@ describe("ADR-0509: the spoke's machine, its lane policy, silence, alerts and Re
     expect(v.state).toBe("silent");
     expect(REMOTE_TONE[v.state]).toBe("stuck");
     expect(stateLabel(v, NOW)).toBe("silent since 14:05");
-    expect(remoteGlance(v, NOW)).toBe("silent since 14:05 \u00b7 1/2 lanes");
+    expect(remoteGlance(v, NOW)).toBe("silent since 14:05 \u00b7 1/2 agents");
     // the same row without silentSince is the plain idle spoke (an older plugin, or a spoke that polls)
     expect(mapSpokeRow({ node: NODE, label: "vm", reachable: true, tasks: [task()], caps, lastSeen: since })?.state).toBe("idle");
     // silence wins over whatever the spoke said last: it is stale
@@ -272,14 +272,14 @@ describe("ADR-0509: the spoke's machine, its lane policy, silence, alerts and Re
     })!;
     expect(spokeAlerts(v, NOW).map((a) => [a.key, a.kind, a.text])).toEqual([
       [`${NODE}|silent|${at(14, 5)}`, "silent", "silent since 14:05: no word from it for 25 min while its relay answers"],
-      [`${NODE}|turn-interrupted|${at(14, 6)}`, "turn-interrupted", "turn interrupted at 14:06 (triage). Resume it from the spoke's panel"],
+      [`${NODE}|turn-interrupted|${at(14, 6)}`, "turn-interrupted", "turn interrupted at 14:06 (triage). Resume it from the agent's panel"],
       [`${NODE}|crashed|${at(14, 4)}`, "crashed", "crashed at 14:04: the engine exited with code 137"],
     ]);
     expect(spokeAlerts({ ...v, silentSince: null, alerts: [] }, NOW)).toEqual([]);
   });
 
   test("Resume sends exactly the contract text, and only a human click sends it", () => {
-    expect(RESUME_TEXT).toBe("Continue this task. The previous turn was interrupted when the spoke restarted: check what was already done before you repeat anything.");
+    expect(RESUME_TEXT).toBe("Continue this task. The previous turn was interrupted when the remote agent restarted: check what was already done before you repeat anything.");
     // the first click only arms (the same two-click rule as Approve and Close)
     expect(armClick(null, 5).act).toBe("arm");
   });
@@ -300,7 +300,7 @@ describe("ADR-0510: a stale revocation list, an expiring certificate and a lapto
     expect(v.alerts.map((a) => a.kind)).toEqual(["cert-expiring", "crl-stale"]);
     expect(spokeAlerts(v, NOW).map((a) => [a.key, a.text])).toEqual([
       [`${NODE}|cert-expiring|${at(10, 0)}`, "certificate expiring at 10:00: 12 days left. Renew it (root renew, then hub renew-spoke)"],
-      [`${NODE}|crl-stale|${at(9, 0)}`, "revocation list out of date at 09:00: the revocation list v4 passed its next update 3 days ago. Publish a fresh one from the root (root crl-refresh); until then the spoke refuses drive and approve"],
+      [`${NODE}|crl-stale|${at(9, 0)}`, "revocation list out of date at 09:00: the revocation list v4 passed its next update 3 days ago. Publish a fresh one from the root (root crl-refresh); until then the agent refuses drive and approve"],
     ]);
   });
 
@@ -308,7 +308,7 @@ describe("ADR-0510: a stale revocation list, an expiring certificate and a lapto
     const why = "laptop: 2 lanes so the owner's own apps keep their memory";
     const p = mapSpokeRow({ node: NODE, label: "mac", caps: { lanePolicy: { max: 2, limitedBy: "laptop", why } } })?.lanePolicy;
     expect(p).toEqual({ max: 2, limitedBy: "laptop", why });
-    expect(lanePolicyLabel(p!)).toBe(`up to 2 lanes, limited by a laptop: ${why}`);
+    expect(lanePolicyLabel(p!)).toBe(`up to 2 agents, limited by a laptop: ${why}`);
   });
 });
 
@@ -318,7 +318,7 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
     expect(v).toEqual({
       available: true, hub: { node: HUB, label: "workstation", scopes: ["recall", "drive"], presence: null, presenceUnlocked: false },
       actions: { recall: true, drive: true, approve: false, deny: true },
-      spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
+      spokes: [{ node: NODE, label: "vm-218", state: "idle", lanes: null, tasks: [], tasksRead: true, checkedAt: null, ...UNKNOWN, models: { default: null, local: [], frontier: [] } }],
     });
   });
 
@@ -347,8 +347,8 @@ describe("mapHubSnapshot: the hub, its scopes and every spoke", () => {
   });
 
   test("no hub yet is the setup state, with the plugin's own error when the hub failed to open", () => {
-    expect(mapHubSnapshot({ hub: null, spokes: [] })).toEqual({ available: false, plugin: "running", reason: "This hub is not set up yet. Finish setup in the Remote Spokes panel." });
-    expect(mapHubSnapshot({ hub: null, error: "certificate expired", spokes: [] })).toMatchObject({ available: false, reason: "The Remote Spokes hub did not open: certificate expired" });
+    expect(mapHubSnapshot({ hub: null, spokes: [] })).toEqual({ available: false, plugin: "running", reason: "This hub is not set up yet. Finish setup in the Remote Agents panel." });
+    expect(mapHubSnapshot({ hub: null, error: "certificate expired", spokes: [] })).toMatchObject({ available: false, reason: "The Remote Agents hub did not open: certificate expired" });
     expect(mapHubSnapshot("garbage")).toMatchObject({ available: false });
   });
 });
@@ -577,8 +577,8 @@ describe("P-RS-SESSION.1 (ADR-0573): a remote task's session rows from its scann
     ], new Map());
     expect(rows.map((r) => [r.kind, "text" in r ? r.text : null])).toEqual([
       ["withheld", "Withheld by the scanner: flagged"],
-      ["error", "The spoke refused the prompt: the scanner blocked the prompt"],
-      ["error", "A spoke restart cut this turn off; Resume asks the task to continue."],
+      ["error", "The agent refused the prompt: the scanner blocked the prompt"],
+      ["error", "An agent restart cut this turn off; Resume asks the task to continue."],
       ["event", "Parked for approval: T3 execute: bun test"],
       ["event", "Approved by FASTPC workstation"],
       ["error", "Stopped with an error: lane gone"],

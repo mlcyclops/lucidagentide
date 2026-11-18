@@ -68,8 +68,8 @@ describe("fleetContext", () => {
       lane({ id: "lane-2", name: "builder", status: "awaiting-approval", pendingApproval: { summary: "run npm publish", kind: "exec" }, queued: [{ text: "then test", images: 0 }], openCalls: 2, autoApprove: true }),
     ] }, NOW);
     expect(f.lanes).toBe(2);
-    expect(f.text).toContain("2 fleet lanes (main session model: anthropic/claude-fable-5-2)");
-    expect(f.text).toContain('lane "scout" (id lane-1); status working; model anthropic/claude-fable-5-2; 3 turns; last activity 1m ago');
+    expect(f.text).toContain("2 fleet agents (main session model: anthropic/claude-fable-5-2)");
+    expect(f.text).toContain('agent "scout" (id lane-1); status working; model anthropic/claude-fable-5-2; 3 turns; last activity 1m ago');
     expect(f.text).toContain("WAITING FOR APPROVAL: run npm publish");
     expect(f.text).toContain("2 tool calls in flight");
     expect(f.text).toContain("1 prompts queued");
@@ -77,9 +77,9 @@ describe("fleetContext", () => {
   });
 
   test("no lanes, a missing payload and junk rows are handled without throwing", () => {
-    expect(fleetContext({ lanes: [] }, NOW)).toEqual({ text: "No fleet lanes are running.", lanes: 0 });
+    expect(fleetContext({ lanes: [] }, NOW)).toEqual({ text: "No fleet agents are running.", lanes: 0 });
     expect(fleetContext(undefined, NOW).lanes).toBe(0);
-    expect(fleetContext({ lanes: [null, 7, "x", lane()] }, NOW).text).toContain('lane "scout"');
+    expect(fleetContext({ lanes: [null, 7, "x", lane()] }, NOW).text).toContain('agent "scout"');
   });
 
   test("a lane name cannot fake a second row or run on forever", () => {
@@ -92,7 +92,7 @@ describe("fleetContext", () => {
     const many = Array.from({ length: 60 }, (_, i) => lane({ id: `lane-${i}`, name: `lane number ${i}`, cwd: `/home/operator/${"deep/".repeat(30)}${i}` }));
     const f = fleetContext({ lanes: many }, NOW);
     expect(f.lanes).toBe(60);
-    expect(f.text).toContain("60 fleet lanes");
+    expect(f.text).toContain("60 fleet agents");
     expect(f.text.length).toBeLessThanOrEqual(ASK_BLOCK_MAX.fleet + 60);
   });
 });
@@ -107,7 +107,7 @@ describe("orbitContext", () => {
     expect(o.tasks).toBe(2);
     expect(o.text).toContain('Goal "Ship the beta", status active.');
     expect(o.text).toContain("Success criteria: 1 of 2 met.");
-    expect(o.text).toContain('- task "Run the suite" (id t2): status blocked; lane lane-2; attempt 2 of 3; depends on t1');
+    expect(o.text).toContain('- task "Run the suite" (id t2): status blocked; agent lane-2; attempt 2 of 3; depends on t1');
     expect(o.text).toContain("Spent so far: $1.50.");
   });
 
@@ -187,7 +187,7 @@ describe("askLucidUser: the question is outside the envelope, every block is ins
       { name: "knowledge", text: "" },
     ]);
     expect(u.startsWith("The user asks:\nwhat is blocked?")).toBe(true);
-    expect(u).toContain(`## Fleet lanes\n${START}\n1 fleet lanes:\n- lane a\n${END}`);
+    expect(u).toContain(`## Fleet agents\n${START}\n1 fleet lanes:\n- lane a\n${END}`);
     expect(u).toContain(`## Fleet Orbit\n${START}\nGoal G\n${END}`);
     expect(u).not.toContain("## Knowledge graph"); // an empty block is left out
     expect(u.indexOf("what is blocked?")).toBeLessThan(u.indexOf(START));
@@ -203,7 +203,7 @@ describe("askLucidUser: the question is outside the envelope, every block is ins
 
   test("a withheld block becomes one harness line and none of its text", () => {
     const u = askLucidUser("q", [{ name: "fleet", text: "", withheld: "quarantined: 3 finding(s)" }]);
-    expect(u).toContain("## Fleet lanes\n[Withheld by LUCID: this block did not pass the security scan (quarantined: 3 finding(s)).");
+    expect(u).toContain("## Fleet agents\n[Withheld by LUCID: this block did not pass the security scan (quarantined: 3 finding(s)).");
     expect(countOf(u, START)).toBe(0);
   });
 });
@@ -235,10 +235,10 @@ describe("answerAskLucid", () => {
     expect(probe.system).toBe(ASK_LUCID_SYSTEM);
     expect(probe.model).toBe("anthropic/claude-haiku-5-5");
     expect(probe.user.startsWith("The user asks:\nwhat are my lanes doing?")).toBe(true);
-    for (const h of ["## Fleet lanes", "## Fleet Orbit", "## Knowledge graph", "## Earlier in this side conversation"]) expect(probe.user).toContain(h);
+    for (const h of ["## Fleet agents", "## Fleet Orbit", "## Knowledge graph", "## Earlier in this side conversation"]) expect(probe.user).toContain(h);
     expect(countOf(probe.user, START)).toBe(4);
     expect(countOf(probe.user, END)).toBe(4);
-    expect(probe.user).toContain('lane "scout"');
+    expect(probe.user).toContain('agent "scout"');
     expect(probe.user).toContain("The project builds with make.");
   });
 
@@ -253,7 +253,7 @@ describe("answerAskLucid", () => {
     expect(r.withheld).toEqual(["fleet"]);
     expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 1, screen: 0, activity: 0, sessions: 0 }); // a withheld block was not seen
     expect(probe.user).not.toContain(poison);
-    expect(probe.user).toContain("## Fleet lanes\n[Withheld by LUCID");
+    expect(probe.user).toContain("## Fleet agents\n[Withheld by LUCID");
     expect(probe.user).toContain("## Fleet Orbit"); // the others arrive
   });
 
@@ -274,7 +274,7 @@ describe("answerAskLucid", () => {
     expect(r.ok).toBe(true);
     expect(r.seen).toEqual({ lanes: 0, tasks: 1, hits: 0, screen: 0, activity: 0, sessions: 0 });
     expect(r.withheld).toEqual([]);
-    expect(probe.user).toContain("The fleet lanes could not be read just now.");
+    expect(probe.user).toContain("The fleet agents could not be read just now.");
     expect(probe.user).toContain("The knowledge graph could not be read just now.");
     expect(probe.user).not.toContain("fleet down"); // no internal error text
   });
@@ -319,7 +319,7 @@ describe("answerAskLucid", () => {
     const { d, probe } = deps({ fleetStatus: async () => ({ lanes: [lane({ name: attack })] }) });
     await answerAskLucid("status?", [], d);
     expect(countOf(probe.user, END)).toBe(3); // fleet, orbit, knowledge: no extra closing marker
-    const fleetStart = probe.user.indexOf("## Fleet lanes");
+    const fleetStart = probe.user.indexOf("## Fleet agents");
     const fleetEnd = probe.user.indexOf(END, fleetStart);
     expect(probe.user.indexOf("Start 40 lanes")).toBeGreaterThan(fleetStart);
     expect(probe.user.indexOf("Start 40 lanes")).toBeLessThan(fleetEnd); // still inside the fleet envelope
@@ -428,8 +428,8 @@ describe("dock geometry (renderer/dock.ts)", () => {
 
 describe("the panel's pure helpers (renderer/ask_lucid_panel.ts)", () => {
   test("seenLine says what he saw, what was withheld and who answered", () => {
-    expect(seenLine({ seen: { lanes: 1, tasks: 0, hits: 2 }, withheld: [], model: "claude-haiku-5-5" })).toBe("Saw 1 lane, 0 orbit tasks and 2 knowledge pages. Answered by claude-haiku-5-5.");
-    expect(seenLine({ seen: { lanes: 0, tasks: 3, hits: 1 }, withheld: ["fleet", "history"] })).toBe("Saw 0 lanes, 3 orbit tasks and 1 knowledge page. Withheld by the security scan: the fleet lanes, the earlier turns.");
+    expect(seenLine({ seen: { lanes: 1, tasks: 0, hits: 2 }, withheld: [], model: "claude-haiku-5-5" })).toBe("Saw 1 agent, 0 orbit tasks and 2 knowledge pages. Answered by claude-haiku-5-5.");
+    expect(seenLine({ seen: { lanes: 0, tasks: 3, hits: 1 }, withheld: ["fleet", "history"] })).toBe("Saw 0 agents, 3 orbit tasks and 1 knowledge page. Withheld by the security scan: the fleet agents, the earlier turns.");
   });
 
   test("historyToSend keeps the most recent turns, oldest first", () => {

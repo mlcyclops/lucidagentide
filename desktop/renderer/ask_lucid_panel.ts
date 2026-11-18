@@ -89,7 +89,7 @@ export const ASK_DOCK_KEY = "lucid.asklucid.dock.v1";
 export const ASK_HISTORY_TURNS = 12;
 
 export const ASK_SUGGESTIONS: readonly string[] = [
-  "What are my fleet lanes doing right now?",
+  "What are my fleet agents doing right now?",
   "Is anything waiting on me?",
   "Where does the Fleet Orbit goal stand?",
   "What does the knowledge graph say about this project?",
@@ -105,8 +105,8 @@ export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model" | "
   // P-ASKLUCID.4 (ADR-0585): lane conversations and sessions are named only when some were shown.
   const talk = (r.seen.activity ?? 0) > 0 ? ` (${plural(r.seen.activity ?? 0, "conversation", "conversations")} read)` : "";
   const sessions = (r.seen.sessions ?? 0) > 0 ? `${plural(r.seen.sessions ?? 0, "session", "sessions")}, ` : "";
-  const saw = `Saw ${screen}${plural(r.seen.lanes, "lane", "lanes")}${talk}, ${sessions}${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
-  const names: Record<string, string> = { screen: "your screen", activity: "the lane conversations", sessions: "the sessions", fleet: "the fleet lanes", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
+  const saw = `Saw ${screen}${plural(r.seen.lanes, "agent", "agents")}${talk}, ${sessions}${plural(r.seen.tasks, "orbit task", "orbit tasks")} and ${plural(r.seen.hits, "knowledge page", "knowledge pages")}.`;
+  const names: Record<string, string> = { screen: "your screen", activity: "the agent conversations", sessions: "the sessions", fleet: "the fleet agents", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
   const kept = r.withheld.map((w) => names[w] ?? w);
   const held = kept.length ? ` Withheld by the security scan: ${kept.join(", ")}.` : "";
   return `${saw}${held}${r.model ? ` Answered by ${r.model}.` : ""}`;
@@ -222,7 +222,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   const welcome = el("div", "al-welcome");
   welcome.append(
     el("div", "al-welcome-h", "Ask Lucid"),
-    el("div", "al-welcome-d", "A side conversation that does not interrupt your session. Lucid can see what is on your screen, every fleet lane and what it last did, your recent sessions, the Fleet Orbit and the knowledge graph. He can propose things, and nothing changes until you confirm it."),
+    el("div", "al-welcome-d", "A side conversation that does not interrupt your session. Lucid can see what is on your screen, every fleet agent and what it last did, your recent sessions, the Fleet Orbit and the knowledge graph. He can propose things, and nothing changes until you confirm it."),
   );
   const sugs = el("div", "al-sugs");
   const fillWelcome = (recs: readonly Rec[]): void => {

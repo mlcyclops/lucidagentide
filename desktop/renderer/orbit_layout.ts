@@ -123,8 +123,8 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
 export type SpokeClose = { act: "stop" | "dismiss"; label: string; tip: string };
 export function spokeClose(status: LaneStatus): SpokeClose {
   return status === "stopped"
-    ? { act: "dismiss", label: "Dismiss this spoke", tip: "Dismiss|Take this stopped spoke off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
-    : { act: "stop", label: "Stop this spoke", tip: "Stop|Stop this spoke. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
+    ? { act: "dismiss", label: "Dismiss this agent", tip: "Dismiss|Take this stopped agent off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
+    : { act: "stop", label: "Stop this agent", tip: "Stop|Stop this agent. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
 }
 
 /** P-FLEET.L17: motion vs Lite. The orbit is decorative physics on top of plain data; a machine that

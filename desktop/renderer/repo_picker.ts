@@ -45,7 +45,7 @@ export function githubPickNote(pick: RepoPick, parent: string): string | null {
 type Row = { kind: "local"; c: LocalRepoChoice } | { kind: "github"; c: RemoteRepoChoice };
 
 const SOURCE_LABEL: Record<LocalRepoChoice["source"], string> = {
-  workspace: "workspace", lane: "a spoke works here", recent: "recent", report: "in reports", nearby: "in the workspace", clone: "LUCID clone",
+  workspace: "workspace", lane: "an agent works here", recent: "recent", report: "in reports", nearby: "in the workspace", clone: "LUCID clone",
 };
 
 /** Where the two "Find repos" checkboxes persist. Their state only chooses what the Search button runs. */
@@ -85,7 +85,7 @@ export function repoPickerHtml(): string {
   return `<div class="repo-pick" data-repo-pick>
     <div class="repo-pick-find">
       <div class="repo-pick-find-h"><span class="repo-pick-find-t">Find repos</span><button type="button" class="btn-mini repo-pick-go" data-repo-go disabled data-tip="Search the checked sources">${icon("search", 11)} Search</button></div>
-      <label class="repo-pick-src" data-tip="Git checkouts in the workspace, recent workspaces and live spokes' folders"><input type="checkbox" data-repo-find="local"><span>On this machine</span></label>
+      <label class="repo-pick-src" data-tip="Git checkouts in the workspace, recent workspaces and live agents' folders"><input type="checkbox" data-repo-find="local"><span>On this machine</span></label>
       <label class="repo-pick-src" data-tip="Your repositories, listed with the GitHub CLI sign-in (or a saved GitHub token)"><input type="checkbox" data-repo-find="github"><span>On GitHub (GitHub CLI)</span></label>
     </div>
     <div class="repo-pick-search" data-repo-search hidden>${icon("search", 12)}<input type="text" data-repo-q spellcheck="false" autocomplete="off" placeholder="Filter repositories" aria-label="Filter repositories"></div>

@@ -31,10 +31,10 @@ export interface AskFeature {
 }
 
 export const ASK_FEATURES: readonly AskFeature[] = [
-  { id: "fleet", title: "Fleet lanes", pitch: "Run several agents side by side, each in its own lane with its own task, and watch them all from one grid.", surfaces: ["Fleet grid", "Fleet Orbit map"], view: "fleet" },
+  { id: "fleet", title: "Fleet agents", pitch: "Run several agents side by side, each with its own task, and watch them all from one grid.", surfaces: ["Fleet grid", "Fleet Orbit map"], view: "fleet" },
   { id: "knowledge", title: "The knowledge graph", pitch: "Import chat history or notes so the agent and Lucid can draw on what you already know. It is private and encrypted.", surfaces: ["Knowledge graph"], view: "knowledge" },
   { id: "preview", title: "The Preview panel", pitch: "See an HTML page beside the chat. The agent can inspect it and take a screenshot of it, so it can check its own work.", surfaces: ["Preview panel"], view: "preview" },
-  { id: "orbit-goal", title: "A Fleet Orbit goal", pitch: "Give the fleet one standing goal with tasks and success criteria. Lanes pick up the tasks and you tick off the criteria.", surfaces: [], view: "orbit" },
+  { id: "orbit-goal", title: "A Fleet Orbit goal", pitch: "Give the fleet one standing goal with tasks and success criteria. Agents pick up the tasks and you tick off the criteria.", surfaces: [], view: "orbit" },
   { id: "skills", title: "Skills", pitch: "Reusable instructions the agent loads for a kind of task, so you do not repeat yourself.", surfaces: ["Skills"], view: "skills" },
   { id: "local-models", title: "Local models", pitch: "Connect a self-hosted model such as Ollama, llama.cpp or vLLM. LUCID sizes tool output to its context window.", surfaces: [], view: "local-models" },
   { id: "voice", title: "Voice input", pitch: "Talk instead of typing: Ctrl or Cmd+D toggles the microphone, and Ctrl or Cmd+G starts a hands-free conversation.", surfaces: [], view: "voice" },

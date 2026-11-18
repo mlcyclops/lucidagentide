@@ -79,8 +79,8 @@ function surfaceRec(s: RecSurface): Rec {
 export function candidates(sig: RecSignals, close = false): Rec[] {
   const out: Rec[] = [];
   for (const l of sig.lanes) {
-    if (l.waiting) out.push(rec("approval", l.name, `What is ${l.name} waiting on?`, `What is lane "${l.name}" waiting for, and should I approve it?`));
-    else if (failed(l.status)) out.push(rec("failure", l.name, `Why did ${l.name} fail?`, `Why did lane "${l.name}" fail, and what would you do about it?`));
+    if (l.waiting) out.push(rec("approval", l.name, `What is ${l.name} waiting on?`, `What is agent "${l.name}" waiting for, and should I approve it?`));
+    else if (failed(l.status)) out.push(rec("failure", l.name, `Why did ${l.name} fail?`, `Why did agent "${l.name}" fail, and what would you do about it?`));
   }
   const surfaces = sig.surfaces.filter((s) => !CHROME.has(s.kind));
   for (const s of close ? surfaces : surfaces.slice(0, 1)) out.push(surfaceRec(s));
@@ -91,7 +91,7 @@ export function candidates(sig: RecSignals, close = false): Rec[] {
       : rec("orbit", sig.orbit.title, "Where does the orbit goal stand?", `Where does the Fleet Orbit goal "${sig.orbit.title}" stand, and which task should move next?`));
   }
   const busy = sig.lanes.filter((l) => working(l.status)).length;
-  if (busy > 0) out.push(rec("lane", "working", busy === 1 ? "What is my lane working on?" : `What are my ${busy} lanes working on?`, "What is each working lane doing right now, in one line each?"));
+  if (busy > 0) out.push(rec("lane", "working", busy === 1 ? "What is my agent working on?" : `What are my ${busy} agents working on?`, "What is each working agent doing right now, in one line each?"));
   if (sig.streaming) out.push(rec("session", "streaming", "What is the main session doing?", "What is the main session working on right now, judging by what is on my screen?"));
   else if (sig.sessionTitle) out.push(rec("session", sig.sessionTitle, `Where does "${sig.sessionTitle}" stand?`, `Summarize where the session "${sig.sessionTitle}" stands and what the next step is.`));
   if (sig.otherSessions > 0) out.push(rec("sessions", "others", "Catch me up on my other sessions", "Catch me up on my other recent sessions: what each was about and where it stopped."));

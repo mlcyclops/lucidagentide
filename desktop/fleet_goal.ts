@@ -172,7 +172,7 @@ export class FleetGoal {
   async #run(d: AosDispatch): Promise<void> {
     const goalId = this.#goal?.id;
     let outcome: AosTurnOutcome;
-    if (!this.#dispatch) outcome = { ok: false, error: "this engine cannot prompt spokes" };
+    if (!this.#dispatch) outcome = { ok: false, error: "this engine cannot prompt agents" };
     else {
       try { outcome = await this.#dispatch(d.laneId, d.text); } catch (e) { outcome = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
     }

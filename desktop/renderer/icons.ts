@@ -165,6 +165,12 @@ const RAW: Record<string, string> = {
   // P-COLLAB (ADR-0192): live session share — three nodes linked (broadcast to guests)
   share: "<circle cx='6' cy='12' r='2.4'/><circle cx='18' cy='6' r='2.4'/><circle cx='18' cy='18' r='2.4'/>"
     + P("M8.1 10.9 15.9 7.1") + P("M8.1 13.1 15.9 16.9"),
+  // P-SHARE.ICON1 (ADR-0613): Share session gets its own glyph, a screen casting from its corner, because `share`
+  // (three linked nodes) also marks the Fleet orbit and hubs. The two arcs and the dot carry classes so CSS can
+  // pulse them outward while a share is live (styles.css `.sharing .sl-*`); still, it is a plain line icon.
+  shareLive: P("M4 9V7.2A1.7 1.7 0 0 1 5.7 5.5h12.6A1.7 1.7 0 0 1 20 7.2v9.6a1.7 1.7 0 0 1-1.7 1.7H14.2")
+    + `<path class="sl-a1" d="M4 14.6a3.9 3.9 0 0 1 3.9 3.9"/><path class="sl-a2" d="M4 11.4a7.1 7.1 0 0 1 7.1 7.1"/>`
+    + `<circle class="sl-dot" cx="4.6" cy="17.9" r="1.1" fill="currentColor" stroke="none"/>`,
   // horizontal ellipsis (overflow menu)
   more: P("M6 12h.01") + P("M12 12h.01") + P("M18 12h.01"),
   // four-way move arrows (pan)

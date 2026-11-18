@@ -797,4 +797,9 @@
 //            (#641, #642, ADR-0610, ADR-0611); remote spokes approve without retyping, held lanes run off the
 //            install folder (#621, ADR-0571..0575). PRERELEASE: never marked Latest; the Homebrew cask and stable
 //            installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.6";
+// v2.5.4-beta.7 = 2.5.4-beta.6 plus: Fleet boards live in the engine, with board tabs and layout presets
+//            (#622, ADR-0576, ADR-0601); the Fleet header keeps the essentials and the rest moves into More
+//            (#643, ADR-0612); "agent" is the one word for a fleet worker (#643, ADR-0614); Share session gets its
+//            own animated glyph and Relay setup offers the LUCID relay (#644, ADR-0613). PRERELEASE: never marked
+//            Latest; the Homebrew cask and stable installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.7";

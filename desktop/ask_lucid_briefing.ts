@@ -41,13 +41,13 @@ export const BRIEF_QUESTION = "Brief me on what is going on: what needs me, what
 
 /** Added to the brief: how a briefing is laid out. */
 export const ASK_BRIEFING_RULES = [
-  "You can also see what each fleet lane was last asked and last answered, and the recent sessions in this workspace with the last exchange of the most recent ones.",
+  "You can also see what each fleet agent was last asked and last answered, and the recent sessions in this workspace with the last exchange of the most recent ones.",
   "When the user asks for a briefing, a status or a catch-up, answer in this order and skip a part that is empty:",
   "1. Needs you: approvals waiting, failed or blocked work, questions an agent asked.",
   "2. Running now: who is working on what.",
   "3. Finished: what was completed since, in one line each.",
   "4. Next: one concrete step you would take, as a proposal when it is something you can propose.",
-  "Keep each item to one or two lines and name lanes, tasks and sessions by the names you were shown.",
+  "Keep each item to one or two lines and name agents, tasks and sessions by the names you were shown.",
 ].join("\n");
 
 function rec(v: unknown): Record<string, unknown> | null {
@@ -119,7 +119,7 @@ export function laneActivityContext(status: unknown, transcriptOf: (laneId: stri
   for (const lane of ordered.slice(0, lim.lanes)) {
     let turns: unknown[] = [];
     try { const t = transcriptOf(str(lane.id)); turns = Array.isArray(t) ? t : []; } catch { turns = []; }
-    const name = `lane "${line(lane.name, 80) || "unnamed"}"`;
+    const name = `agent "${line(lane.name, 80) || "unnamed"}"`;
     const users = turns.map(rec).filter((t) => t?.role === "user");
     const answers = turns.map(rec).filter((t) => t?.role === "assistant");
     const lastUser = users[users.length - 1];
@@ -140,7 +140,7 @@ export function laneActivityContext(status: unknown, transcriptOf: (laneId: stri
     } else out.push("  it has not answered yet.");
     rows.push(out.join("\n"));
   }
-  if (all.length > lim.lanes) rows.push(`(${all.length - lim.lanes} more lanes not shown)`);
+  if (all.length > lim.lanes) rows.push(`(${all.length - lim.lanes} more agents not shown)`);
   return { text: clip(rows.join("\n"), lim.activity), lanes: shown };
 }
 
@@ -163,7 +163,7 @@ export function sessionsContext(rows: unknown, tailOf: (id: string) => unknown, 
   let tails = 0;
   for (const s of sorted.slice(0, lim.sessionRows)) {
     const id = str(s.id);
-    const where = id === opts.currentId ? "; open in the main chat now" : str(s.spoke) ? `; run by lane "${line(s.spoke, 60)}"` : "";
+    const where = id === opts.currentId ? "; open in the main chat now" : str(s.spoke) ? `; run by agent "${line(s.spoke, 60)}"` : "";
     const head = `- "${line(s.title, 120) || "untitled"}": ${Math.max(0, Math.round(num(s.turns)))} turns; last activity ${ago(num(s.updatedAt), opts.now)}${where}`;
     if (tails >= lim.sessionTails) { out.push(head); continue; }
     let messages: unknown[] = [];

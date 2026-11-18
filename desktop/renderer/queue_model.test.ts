@@ -226,7 +226,7 @@ describe("parallel push: what the new agent and the user are told", () => {
     const text = "add a retry to the uploader\nwith backoff";
     const out = parallelPushPrompt(laneSrc, { branch: "lucid/api-push-1-ab12cd", path: "C:\\work\\repo.lucid-worktrees\\api-push-1-ab12cd" }, text);
     expect(out.endsWith(`\n\n${text}`)).toBe(true);
-    expect(out).toContain(`lane "api"`);
+    expect(out).toContain(`agent "api"`);
     expect(out).toContain("still working on its own task in C:\\work\\repo\\desktop");
     expect(out).toContain("own git worktree");
     expect(out).toContain("branch lucid/api-push-1-ab12cd");
@@ -238,10 +238,10 @@ describe("parallel push: what the new agent and the user are told", () => {
 
   test("the user hears it at once, then again with the branch; a not-busy source is never called busy", () => {
     const now = parallelPushNotice(laneSrc, "api-push-1", { busy: true });
-    expect(now.desc).toBe("api is still working on its current task. Your request is being actioned in parallel by a new lane, api-push-1, in its own worktree.");
+    expect(now.desc).toBe("api is still working on its current task. Your request is being actioned in parallel by a new agent, api-push-1, in its own worktree.");
     const later = parallelPushNotice(masterSrc, "main-push-1", { busy: true, branch: "lucid/main-push-1-ff" });
     expect(later.title).toBe("Running in parallel: main-push-1");
-    expect(later.desc).toBe("The main agent is still working on its current task. Your request is being actioned in parallel by a new lane, main-push-1, in its own worktree (branch lucid/main-push-1-ff).");
+    expect(later.desc).toBe("The main agent is still working on its current task. Your request is being actioned in parallel by a new agent, main-push-1, in its own worktree (branch lucid/main-push-1-ff).");
     expect(parallelPushNotice(laneSrc, "api-push-1", { busy: false }).desc).not.toContain("still working");
   });
 });

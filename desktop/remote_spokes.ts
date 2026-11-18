@@ -67,7 +67,7 @@ type PluginReply = { ok: true; status: number; data: unknown } | { ok: false; er
 
 async function callPlugin(deps: RemoteSpokesDeps, method: "GET" | "POST", path: string, body: Record<string, unknown> | undefined, timeoutMs: number): Promise<PluginReply> {
   const ep = deps.endpoint();
-  if (!ep) return { ok: false, error: deps.installed() ? "The Remote Spokes plugin is not running." : "The Remote Spokes plugin is not installed." };
+  if (!ep) return { ok: false, error: deps.installed() ? "The Remote Agents plugin is not running." : "The Remote Agents plugin is not installed." };
   try {
     const res = await (deps.fetch ?? fetch)(`${ep.url}${path}`, {
       method,
@@ -78,21 +78,21 @@ async function callPlugin(deps: RemoteSpokesDeps, method: "GET" | "POST", path: 
     const data: unknown = await res.json().catch(() => null);
     return { ok: true, status: res.status, data };
   } catch (e) {
-    return { ok: false, error: `The Remote Spokes plugin did not answer: ${(e as Error).message}` };
+    return { ok: false, error: `The Remote Agents plugin did not answer: ${(e as Error).message}` };
   }
 }
 
 /** The plugin's error text from a non-2xx reply. */
 function pluginError(r: { status: number; data: unknown }): string {
-  return field(asRecord(r.data), "error", 500) || `the Remote Spokes plugin answered ${r.status}`;
+  return field(asRecord(r.data), "error", 500) || `the Remote Agents plugin answered ${r.status}`;
 }
 
 /** The hub as the IDE shows it. Never throws: every failure is an unavailable view with the reason. */
 export async function loadHub(deps: RemoteSpokesDeps): Promise<RemoteHubView> {
   if (!deps.endpoint()) {
     return deps.installed()
-      ? { available: false, plugin: "stopped", reason: "The Remote Spokes plugin is not running. Start it to see your remote spokes here." }
-      : { available: false, plugin: "missing", reason: "Install the Remote Spokes plugin to see remote spokes here." };
+      ? { available: false, plugin: "stopped", reason: "The Remote Agents plugin is not running. Start it to see your remote agents here." }
+      : { available: false, plugin: "missing", reason: "Install the Remote Agents plugin to see remote agents here." };
   }
   const r = await callPlugin(deps, "GET", "/host/spokes", undefined, SUMMARY_TIMEOUT_MS);
   if (!r.ok) return { available: false, plugin: "running", reason: r.error };
@@ -107,12 +107,12 @@ export async function loadHub(deps: RemoteSpokesDeps): Promise<RemoteHubView> {
  *  so nothing frames it, and frame-ancestors still keeps any other page from framing it. */
 export async function remoteSpokesPanelUrl(deps: RemoteSpokesDeps, ideOrigin: string): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
   const ep = deps.endpoint();
-  if (!ep) return { ok: false, error: deps.installed() ? "The Remote Spokes plugin is not running." : "The Remote Spokes plugin is not installed." };
+  if (!ep) return { ok: false, error: deps.installed() ? "The Remote Agents plugin is not running." : "The Remote Agents plugin is not installed." };
   const r = await callPlugin(deps, "POST", "/host/panel/bootstrap", { origin: ideOrigin }, SUMMARY_TIMEOUT_MS);
   if (!r.ok) return r;
   if (r.status !== 200) return { ok: false, error: pluginError(r) };
   const secret = asRecord(r.data)?.secret;
-  if (typeof secret !== "string" || !/^[0-9a-f]{64}$/.test(secret)) return { ok: false, error: "The Remote Spokes plugin did not give a panel secret; update the plugin." };
+  if (typeof secret !== "string" || !/^[0-9a-f]{64}$/.test(secret)) return { ok: false, error: "The Remote Agents plugin did not give a panel secret; update the plugin." };
   return { ok: true, url: `${ep.url}/#bootstrap=${secret}` };
 }
 
@@ -320,7 +320,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     if (item.quarantined) return refuse(`the scanner flagged this action, so it can only be denied: ${item.quarantined}`);
     // The digest is what the decision signs. It must be the digest of what was shown and scanned here, not a
     // value the spoke reports beside it (the hub plugin makes the same check before it signs).
-    if (askDigest(item.ask.kind, item.ask.title, item.ask.input) !== item.ask.digest) return refuse("the spoke reported an action whose digest does not match what it shows; nothing was signed");
+    if (askDigest(item.ask.kind, item.ask.title, item.ask.input) !== item.ask.digest) return refuse("the agent reported an action whose digest does not match what it shows; nothing was signed");
   }
 
   const forward: Record<string, unknown> = { ...b };
@@ -339,8 +339,8 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
 function checkHub(hub: RemoteHubView, node: string, scope: "recall" | "drive" | "approve" | "deny"): string | null {
   if (!hub.available) return hub.reason;
   const spoke = NODE_RE.test(node) ? hub.spokes.find((s) => s.node === node) : undefined;
-  if (!spoke) return "this hub does not know that spoke";
-  if (spoke.deactivated) return `${spoke.label}: ${deactivatedLabel(spoke.deactivated)}. Nothing is sent to a deactivated spoke; reactivate it on the hub first (hub reactivate --spoke ${node})`;
+  if (!spoke) return "this hub does not know that agent";
+  if (spoke.deactivated) return `${spoke.label}: ${deactivatedLabel(spoke.deactivated)}. Nothing is sent to a deactivated agent; reactivate it on the hub first (hub reactivate --spoke ${node})`;
   if (!hub.actions[scope]) return scope === "deny" ? "this hub's certificate carries neither the drive nor the approve scope" : `this hub's certificate does not carry the ${scope} scope`;
   return null;
 }
