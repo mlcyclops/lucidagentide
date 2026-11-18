@@ -19,11 +19,11 @@
 //   POST /api/remote-spokes/followup    {node, task, text}       drive
 //   POST /api/remote-spokes/cancel      {node, task}             drive
 //   POST /api/remote-spokes/close       {node, task}             drive
-//   POST /api/remote-spokes/unlock      {password, minutes?}     unlock this hub's password presence key (ADR-0579);
+//   POST /api/remote-spokes/unlock      {password, minutes?}     unlock this hub's password presence key (ADR-0616);
 //   POST /api/remote-spokes/lock                                 lock it again; both answer {unlockedUntil}
-//   POST /api/remote-spokes/add         {cert}                   + Add a computer (ADR-0578): a connection card or a
+//   POST /api/remote-spokes/add         {cert}                   + Add a computer (ADR-0615): a connection card or a
 //                                       spoke certificate; the hub plugin checks and adds it
-//   GET  /api/remote-spokes/this-pc     this computer's helper (ADR-0578); GET this-pc/tasks: the work hubs run here
+//   GET  /api/remote-spokes/this-pc     this computer's helper (ADR-0615); GET this-pc/tasks: the work hubs run here
 //   POST /api/remote-spokes/this-pc/{pause,resume,on,off}, this-pc/stop-task {task}, this-pc/stop-all {confirm}
 //
 // Scopes come from the hub's certificate as the plugin reports it, re-read on every action, so a button the
@@ -242,7 +242,7 @@ const ACTION_BODIES: Record<string, { allowed: Record<string, "string" | "boolea
 /** The longest presence password the hub accepts (add-on presence.ts). */
 const MAX_PASSWORD = 1024;
 
-/** ADR-0578: the This PC controls the engine forwards, and the one body each takes ("none", a task id, or the
+/** ADR-0615: the This PC controls the engine forwards, and the one body each takes ("none", a task id, or the
  *  stop-all confirmation). Setup, activate, update and remove are not here: they stay in the Remote Spokes panel. */
 const THIS_PC_OPS: Readonly<Record<string, "none" | "task" | "confirm">> = {
   "this-pc/pause": "none", "this-pc/resume": "none", "this-pc/on": "none", "this-pc/off": "none",
@@ -297,7 +297,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     return reply(out);
   }
 
-  // P-FLEET-UNLOCK.1 (ADR-0579): unlock or lock this hub's password presence key from the Fleet window (add-on
+  // P-FLEET-UNLOCK.1 (ADR-0616): unlock or lock this hub's password presence key from the Fleet window (add-on
   // ADR-A112). The password goes to the plugin once, as an approval's does (ADR-0507 amendment): never stored, logged,
   // echoed or put in model context. Only whether, and until when, the key is unlocked comes back.
   if (op === "unlock" || op === "lock") {
@@ -318,7 +318,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     return reply(out);
   }
 
-  // P-FLEET-COMPUTERS.1 (ADR-0578): this computer's own helper (add-on ADR-A109; its host routes, ADR-A110). The
+  // P-FLEET-COMPUTERS.1 (ADR-0615): this computer's own helper (add-on ADR-A109; its host routes, ADR-A110). The
   // person at this computer may always see and stop the work hubs run here. Nothing here approves, answers or denies
   // an ask, and nothing sets up, activates or removes the helper: those stay in the Remote Spokes panel.
   if (op === "this-pc" || op === "this-pc/tasks") {
@@ -348,7 +348,7 @@ export async function handleRemoteSpokes(req: Request, path: string, deps: Remot
     const out: ThisPcAnswer | LocalWorkAnswer = op === "this-pc/on" || op === "this-pc/off" ? { ok: true, thisPc: mapThisPc(r.data) } : { ok: true, work: mapLocalWork(r.data) };
     return reply(out);
   }
-  // ADR-0578: + Add a computer's last step, the panel's Add a spoke. The hub plugin checks the card's certificate (root-
+  // ADR-0615: + Add a computer's last step, the panel's Add a spoke. The hub plugin checks the card's certificate (root-
   // or delegate-signed, not revoked) and adds the computer and its LAN mailbox; this only bounds what is forwarded.
   if (op === "add") {
     if (req.method !== "POST") return new Response("method not allowed", { status: 405 });

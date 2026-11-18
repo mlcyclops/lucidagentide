@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/fleet_computers.ts - P-FLEET-COMPUTERS.1 (ADR-0578): phase 3 of ADR-0575, the pure half.
+// desktop/renderer/fleet_computers.ts - P-FLEET-COMPUTERS.1 (ADR-0615): phase 3 of ADR-0575, the pure half.
 //
 // The Fleet window's Computers drawer, the "Where should it run?" choices of + New agent, the pasted connection card
 // of + Add a computer, and the spoke side's "This computer is helping" view are all words over data the engine
@@ -121,7 +121,7 @@ export function placeChoices(hub: RemoteHubView, now: number): PlaceChoice[] {
   return [self, ...others];
 }
 
-/** P-FLEET-UNLOCK.1 (ADR-0579): the Fleet header's approvals lock, or null when it has no place there: only a hub that
+/** P-FLEET-UNLOCK.1 (ADR-0616): the Fleet header's approvals lock, or null when it has no place there: only a hub that
  *  approves with a typed presence password (add-on ADR-A105) and whose certificate may approve at all. */
 export function approvalsLock(hub: RemoteHubView | null): "locked" | "unlocked" | null {
   if (!hub?.available || hub.hub.presence !== "password" || !hub.actions.approve) return null;
@@ -238,7 +238,7 @@ export function showsHelping(pc: ThisPcView | null): boolean {
   return pc !== null && pc.supported && (pc.state === "on" || pc.state === "off");
 }
 
-/** What the engine's This PC routes answer (ADR-0578). A refusal is the plugin's words, or the engine's when the
+/** What the engine's This PC routes answer (ADR-0615). A refusal is the plugin's words, or the engine's when the
  *  plugin is missing, stopped, or older than these routes. */
 export type ThisPcAnswer = { ok: true; thisPc: ThisPcView | null } | { ok: false; error: string };
 export type LocalWorkAnswer = { ok: true; work: LocalWorkView } | { ok: false; error: string };

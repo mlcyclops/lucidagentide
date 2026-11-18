@@ -27867,6 +27867,7 @@ Unchanged on purpose: code identifiers, file names, `data-*` attributes, CSS cla
 
 **Proof.** Typecheck clean; `bun test desktop/renderer` 2,043 pass. Against an engine built from this branch: POST `/api/collab/relay` with the LUCID relay answered `wsBase: "wss://relay.aiworkshopapps.com"`, and `/api/collab/status` then reported `gated: true, pwaBase: "https://lucid-agent.web.app/remote"` (the sign-in condition). The glyph was rendered at 15 and 20 px, idle and live, beside the old one. Not observed: the share dock painting the new button in a live window, because the workstation's CPU was pinned at 100% and the renderer's own requests queued past 15 s.
 ## ADR-0578 -- P-FLEET-COMPUTERS.1: + Agent picks a computer, the Computers drawer, + Add a computer, and "This computer is helping" (2026-11-13)
+## ADR-0615 -- P-FLEET-COMPUTERS.1: + Agent picks a computer, the Computers drawer, + Add a computer, and "This computer is helping" (2026-11-13)
 
 **Status:** Accepted. Implements phase 3 of ADR-0575, with pairing as guided copy-paste (owner, 2026-11-13: option (a)). Needs Remote Spokes 0.10.3 (add-on ADR-A110) for Add and the Helping view; an older plugin is told apart and the rest works. Proof: `bun test desktop/renderer/fleet_computers.test.ts desktop/remote_spokes.test.ts` and the typecheck.
 
@@ -27881,7 +27882,7 @@ Unchanged on purpose: code identifiers, file names, `data-*` attributes, CSS cla
 
 **Consequences.** The Fleet window polls This PC at most every 10 s (every 3 s while the Helping drawer is open). The Helping view names hubs only from tasks it has seen, so a computer that helps a hub with no task yet reads "This computer is ready to help". "Stop helping" is the plugin's Off, which stops helping every hub, not one: the plugin has no per-hub switch. A Linux server still pairs with the installer command. Phase 4 (Herd reads the engine's boards) is next.
 
-## ADR-0579 -- P-FLEET-UNLOCK.1: approvals unlock from the Fleet header (2026-11-14)
+## ADR-0616 -- P-FLEET-UNLOCK.1: approvals unlock from the Fleet header (2026-11-14)
 
 **Status:** Accepted. Needs Remote Spokes 0.10.4 (add-on ADR-A112); an older plugin answers "This needs Remote Spokes 0.10.4 or later". Proof: `bun test desktop/remote_spokes.test.ts desktop/renderer/fleet_computers.test.ts` and the typecheck.
 

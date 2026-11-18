@@ -388,11 +388,11 @@ describe("ADR-0514: the hub panel opens with a one-time bootstrap secret the plu
   });
 });
 
-// P-FLEET-COMPUTERS.1 (ADR-0578): this computer's own helper and + Add a computer, through the plugin's host routes
+// P-FLEET-COMPUTERS.1 (ADR-0615): this computer's own helper and + Add a computer, through the plugin's host routes
 // (add-on ADR-A110). What must hold: only the listed controls are forwarded (never setup, activate or remove); a stop
 // needs its task id and Stop all its confirmation before anything reaches the plugin; only a card or a certificate is
 // forwarded as a new computer; what comes back is validated; an older plugin reads as "update", not as a refusal.
-describe("ADR-0578: this computer and + Add a computer", () => {
+describe("ADR-0615: this computer and + Add a computer", () => {
   const CARD = "lucid-spoke-card:eyJub2RlIjoibl9hYmMifQ";
   const WORK = { paused: false, since: 0, tasks: [{ id: TASK, name: "photos", hub: "workstation", hubNode: HUB, state: "working", stateText: "Working", updatedAt: 5 }], ended: [] };
   const PC = { supported: true, state: "on", os: "win32", label: "ws-spoke-test", running: true, request: "REQ", card: CARD, checkCode: "X94X4-DTC3C" };
@@ -454,7 +454,7 @@ describe("ADR-0578: this computer and + Add a computer", () => {
     expect((await busy.call("POST", "/api/remote-spokes/this-pc/pause", {})).data).toEqual({ ok: false, error: "Another This PC job is still running." });
   });
 
-  test("ADR-0579: Unlock sends the password once and answers only until when; Lock needs nothing; a refusal is the plugin's", async () => {
+  test("ADR-0616: Unlock sends the password once and answers only until when; Lock needs nothing; a refusal is the plugin's", async () => {
     const UNTIL = 1_800_000_000_000;
     const r = pcRig({
       "/host/presence/unlock": { body: { presence: { kind: "password", unlockedUntil: UNTIL, checkCode: "SECRET-ISH" }, approvals: { rememberMinutes: 480 } } },

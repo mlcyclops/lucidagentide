@@ -41,7 +41,7 @@ import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
 // per-spoke panel's own actions, through its one write path); this file only places them and counts them in the pill.
 import { onRemoteChange, onRemoteLaneClick, paintRemoteLanes, refreshRemote, remoteAnsweredAt, remoteCounts, remoteSnapshot, sendAct } from "./orbit_remote.ts";
 import { ARM_MS, armClick, remoteLanes, taskModelChoices, type RemoteSpokeState } from "./remote_spokes_model.ts";
-// P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer, + Add a computer and the Helping view; + Agent's place choices.
+// P-FLEET-COMPUTERS.1 (ADR-0615): the Computers drawer, + Add a computer and the Helping view; + Agent's place choices.
 import { helpingBadge, initFleetComputers, lockApprovals, onThisPcChange, openComputers, openHelping, openUnlock, refreshThisPc } from "./fleet_computers_ui.ts";
 import { approvalsLock, placeChoices } from "./fleet_computers.ts";
 // P-FLEET-BOARDS.1: boards are the ENGINE's (/api/fleet/boards/*); the rules this grid asks of them are pure, in fleet_boards_view.
@@ -80,8 +80,8 @@ import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
 type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
   | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune" // P-FLEET-BOARDS.1
-  | "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct" // P-FLEET-COMPUTERS.1 (ADR-0578)
-  | "hubUnlock" | "hubLock">; // P-FLEET-UNLOCK.1 (ADR-0579)
+  | "addComputer" | "thisPc" | "thisPcWork" | "thisPcAct" // P-FLEET-COMPUTERS.1 (ADR-0615)
+  | "hubUnlock" | "hubLock">; // P-FLEET-UNLOCK.1 (ADR-0616)
 type FleetResources = FleetStatusView["resources"];
 
 export interface FleetGridDeps extends FleetFns {
@@ -121,7 +121,7 @@ export interface FleetGridDeps extends FleetFns {
   openKnowledge?: (anchor: HTMLElement) => void;
   openSkills?: (anchor: HTMLElement) => void;
   openConnectors?: () => void;
-  /** P-FLEET-COMPUTERS.1 (ADR-0578): open the Remote Spokes panel's window, where + Add a computer's other steps
+  /** P-FLEET-COMPUTERS.1 (ADR-0615): open the Remote Spokes panel's window, where + Add a computer's other steps
    *  happen. Optional like openUrl; absent, the drawer only lists the steps. */
   openRemoteAdmin?: () => void;
 }
@@ -260,7 +260,7 @@ function moreMenuItems(): PlusItem[] {
   const mode = boardLayoutOf(boards, currentBoard).layout;
   const check = (on: boolean): string => (on ? "\u2713" : "");
   return [
-    // P-FLEET-COMPUTERS.1 (ADR-0578): Computers lives here since P-FLEET.HEAD1 kept the header to the essentials.
+    // P-FLEET-COMPUTERS.1 (ADR-0615): Computers lives here since P-FLEET.HEAD1 kept the header to the essentials.
     { id: "computers", label: "Computers", icon: icon("gauge", 15), tip: tipValue("Computers", "This PC and the computers you added, how much room each has, and + Add a computer."), run: () => openComputers() },
     { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the map of the hub and its agents. Same agents, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
     ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
@@ -298,7 +298,7 @@ const fleetFallback = (vw: number, vh: number): DockShape => {
 export function initFleetGrid(d: FleetGridDeps): void {
   deps = d;
   onRemoteChange(onRemoteSnapshot); // P-RS-LANES.1 (ADR-0551)
-  // P-FLEET-COMPUTERS.1 (ADR-0578): the Computers drawer and this computer's own Helping view.
+  // P-FLEET-COMPUTERS.1 (ADR-0615): the Computers drawer and this computer's own Helping view.
   initFleetComputers({
     addComputer: d.addComputer, thisPc: d.thisPc, thisPcWork: d.thisPcWork, thisPcAct: d.thisPcAct, hubUnlock: d.hubUnlock, hubLock: d.hubLock,
     localRunning: () => [...runs.values()].filter((r) => r.view.status !== "stopped").length,
@@ -307,10 +307,10 @@ export function initFleetGrid(d: FleetGridDeps): void {
   onThisPcChange(paintHelpingBtn);
 }
 
-/** P-FLEET-UNLOCK.1 (ADR-0579): when the Unlocked button was first clicked; a second click within ARM_MS locks. */
+/** P-FLEET-UNLOCK.1 (ADR-0616): when the Unlocked button was first clicked; a second click within ARM_MS locks. */
 let lockArmedAt: number | null = null;
 
-/** ADR-0579: the header's approvals lock: "Unlock approvals" while the hub's password presence key is locked,
+/** ADR-0616: the header's approvals lock: "Unlock approvals" while the hub's password presence key is locked,
  *  "Approvals unlocked" while it is not, nothing for a hub that does not approve with a password. */
 function paintUnlockBtn(): void {
   const btn = dock ? ($("[data-fleet-unlock]", dock) as HTMLElement | null) : null;
@@ -337,7 +337,7 @@ function onUnlockClick(): void {
   if (step.act === "arm") window.setTimeout(paintUnlockBtn, ARM_MS + 50);
 }
 
-/** ADR-0578: the header's Helping button, only while this computer helps a hub, with how many tasks run here. */
+/** ADR-0615: the header's Helping button, only while this computer helps a hub, with how many tasks run here. */
 function paintHelpingBtn(): void {
   const btn = dock ? ($("[data-fleet-helping]", dock) as HTMLElement | null) : null;
   if (!btn) return;
@@ -404,8 +404,8 @@ export function openFleetGrid(): void {
   dock.addEventListener("pointerdown", onDockPointerDown); // P-FLEET.L9: per-card resize + drag-to-reorder
   dock.addEventListener("dblclick", onDockDblClick); // P-FLEET.FIT1: a card edge = equal shares again; P-FLEET-BOARDS.1: a board tab = rename
   paintTabs();
-  paintHelpingBtn(); // ADR-0578: from the last This PC read; the first poll refreshes it
-  paintUnlockBtn(); // ADR-0579: from the last hub read
+  paintHelpingBtn(); // ADR-0615: from the last This PC read; the first poll refreshes it
+  paintUnlockBtn(); // ADR-0616: from the last hub read
   wireAutofit();
   // P-FLEET.L13: catch-up buttons + their visibility. Both are DELEGATED on the dock: lane cards are
   // built and destroyed on every poll, so per-card listeners would leak with them (the same reason
@@ -912,7 +912,7 @@ function paintRemoteSection(): void {
 /** P-RS-LANES.1 (ADR-0551): told after every answered hub read, whoever asked (this grid's poll, the orbit, the
  *  Remote spokes view): the Remote section and the minimized pill's remote attention. */
 function onRemoteSnapshot(): void {
-  paintUnlockBtn(); // P-FLEET-UNLOCK.1 (ADR-0579)
+  paintUnlockBtn(); // P-FLEET-UNLOCK.1 (ADR-0616)
   paintRemoteSection();
   paintPill();
   paintNeeds(); // P-FLEET-BOARDS.1: a remote approval moves the Next count and the tab dots
@@ -2870,7 +2870,7 @@ function toggleSpawnForm(): void {
   const pick = spawnModelDefault(options, rememberedSpokeModel(), deps.getMasterModel());
   const all = fleetModelOptions(options.some((o) => o.value === pick) || !pick ? options : [{ value: pick, label: pick }, ...options]);
   const opts = all.map((o) => `<option value="${esc(o.value)}"${o.value === pick ? " selected" : ""}>${esc(o.label)}</option>`).join("");
-  // P-FLEET-COMPUTERS.1 (ADR-0578): where it runs. Only This PC when this hub added no computer (the form then looks
+  // P-FLEET-COMPUTERS.1 (ADR-0615): where it runs. Only This PC when this hub added no computer (the form then looks
   // as it always did); a computer that cannot take an agent now is shown with why, and cannot be picked.
   const places = placeChoices(remoteSnapshot() ?? { available: false, plugin: "running", reason: "" }, Date.now());
   const where = places.length < 2 ? "" : `<label class="fleet-spawn-lbl">Where should it run?</label>
@@ -2942,7 +2942,7 @@ function toggleSpawnForm(): void {
   ($("[data-spawn-task]", form) as HTMLTextAreaElement | null)?.focus();
 }
 
-/** ADR-0578: pick where the new agent runs. Another computer hides This PC's folder, repo and worktree fields (the
+/** ADR-0615: pick where the new agent runs. Another computer hides This PC's folder, repo and worktree fields (the
  *  agent works in that computer's own folder), offers the models that computer reports, and needs a task to start
  *  with. A choice that cannot take an agent now only says why. */
 function pickSpawnPlace(form: HTMLElement, btn: HTMLElement): void {
@@ -3089,7 +3089,7 @@ async function submitSpawn(): Promise<void> {
     const laneId = "lane" in r ? r.lane?.id : undefined;
     if (laneId) addToShownBoard(laneId); // P-FLEET-BOARDS.1: a new agent joins the board it was started on
     await refresh();
-    // ADR-0578: what it should work on is its first prompt, sent through the card like a typed one (so it streams
+    // ADR-0615: what it should work on is its first prompt, sent through the card like a typed one (so it streams
     // there, or waits in the card's queue while the agent is still busy starting).
     const run = laneId ? runs.get(laneId) : undefined;
     const input = run?.card ? ($("[data-fleet-input]", run.card) as HTMLTextAreaElement | null) : null;
@@ -3102,7 +3102,7 @@ async function submitSpawn(): Promise<void> {
   fail([warn, r?.reason || "The engine refused the agent."].filter(Boolean).join(" "));
 }
 
-/** ADR-0578: + Agent on a computer this hub added. The same submit the Remote spokes view uses (orbit_remote
+/** ADR-0615: + Agent on a computer this hub added. The same submit the Remote spokes view uses (orbit_remote
  *  sendAct), so the hub certificate's scopes and the computer's own checks apply; the new agent joins the shown
  *  board as `rs:<node>:<task>` (ADR-0577's key). */
 async function startRemoteAgent(form: HTMLElement, node: string, task: string, name: string, model: string): Promise<void> {

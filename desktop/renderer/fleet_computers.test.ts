@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// P-FLEET-COMPUTERS.1 (ADR-0578): the words of the Computers drawer, + Agent's "Where should it run?", + Add a
+// P-FLEET-COMPUTERS.1 (ADR-0615): the words of the Computers drawer, + Agent's "Where should it run?", + Add a
 // computer's pasted card, and the spoke side's "This computer is helping". What must hold: a computer's state reads
 // the most urgent fact first; nothing offers a computer the hub cannot start work on, or one taken out of service;
 // the wrong thing pasted is caught with words that say what to copy; this computer's work list keeps only rows it
@@ -113,7 +113,7 @@ describe("placeChoices: where + Agent may start", () => {
   });
 });
 
-describe("approvalsLock: the Fleet header's Unlock shows only where a typed password signs approvals (ADR-0579)", () => {
+describe("approvalsLock: the Fleet header's Unlock shows only where a typed password signs approvals (ADR-0616)", () => {
   const withPresence = (presence: string | null, unlocked: boolean, scopes: ("recall" | "drive" | "approve")[] = ["recall", "drive", "approve"]): RemoteHubView => {
     const h = hub([], scopes);
     return h.available ? { ...h, hub: { ...h.hub, presence: presence as never, presenceUnlocked: unlocked } } : h;

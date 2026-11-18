@@ -681,7 +681,7 @@ type RemoteOp = "submit" | "followup" | "cancel" | "close";
  *  buttons, the Start-a-task selector and the Fleet grid's remote lanes (P-RS-LANES.1) all go through here.
  *  `error` is null when the spoke accepted it, else the refusal in words (an older spoke's own text included).
  *  `queued` (ADR-0577): the spoke took a follow-up while the task works and gives it after the current step.
- *  `task` (ADR-0578): the id a submit's answer names, so + New agent can put the new agent on the shown board. */
+ *  `task` (ADR-0615): the id a submit's answer names, so + New agent can put the new agent on the shown board. */
 export async function sendAct(node: string, op: RemoteOp, input: { task?: string; text?: string; name?: string; model?: string }): Promise<{ error: string | null; queued: boolean; task: string | null }> {
   if (!deps) return { error: "The fleet is not ready.", queued: false, task: null };
   // P-RS-SESSION.1: the spoke journals a prompt as its hash only; remembered here, its session shows the text.

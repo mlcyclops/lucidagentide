@@ -1,7 +1,7 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/fleet_computers_ui.ts - P-FLEET-COMPUTERS.1 (ADR-0578): phase 3 of ADR-0575 in the Fleet window.
+// desktop/renderer/fleet_computers_ui.ts - P-FLEET-COMPUTERS.1 (ADR-0615): phase 3 of ADR-0575 in the Fleet window.
 //
 // Two drawers the Fleet header opens:
 //   Computers: This PC and every computer this hub added, with room and state in words, and + Add a computer, a
@@ -193,7 +193,7 @@ async function addComputer(ov: HTMLElement): Promise<void> {
 
 // --------------------------------------------------------------------------------------------- Unlock approvals
 
-/** P-FLEET-UNLOCK.1 (ADR-0579): type the hub's presence password once; approvals then sign with one click for the
+/** P-FLEET-UNLOCK.1 (ADR-0616): type the hub's presence password once; approvals then sign with one click for the
  *  hub's remember window (Remote Spokes, Admin, Approvals). The field is cleared at once and the password is kept
  *  nowhere here. */
 export function openUnlock(): void {

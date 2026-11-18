@@ -18541,13 +18541,13 @@ function wire(): void {
     fleetBoardAgents: bridge.fleetBoardAgents,
     fleetBoardLayout: bridge.fleetBoardLayout,
     fleetBoardsPrune: bridge.fleetBoardsPrune,
-    // P-FLEET-COMPUTERS.1 (ADR-0578): Computers, + Add a computer and this computer's Helping view.
+    // P-FLEET-COMPUTERS.1 (ADR-0615): Computers, + Add a computer and this computer's Helping view.
     addComputer: bridge.addComputer,
     thisPc: bridge.thisPc,
     thisPcWork: bridge.thisPcWork,
     thisPcAct: bridge.thisPcAct,
     openRemoteAdmin: () => void openRemoteAdmin(),
-    hubUnlock: bridge.hubUnlock, // P-FLEET-UNLOCK.1 (ADR-0579): approvals unlock from the Fleet header
+    hubUnlock: bridge.hubUnlock, // P-FLEET-UNLOCK.1 (ADR-0616): approvals unlock from the Fleet header
     hubLock: bridge.hubLock,
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
