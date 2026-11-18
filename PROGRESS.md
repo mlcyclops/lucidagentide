@@ -6325,3 +6325,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-17):** every user-facing "lane" and "spoke" in the desktop app and the engine messages it shows now says "agent" (+ Agent in grid and Orbit, "N agents", "Prompt this agent...", "Remote agents", Ask Lucid's views and cards); identifiers, routes, storage keys and wire values unchanged.
 - **stubbed:** docs, README, the terminal hub and the add-on UI still say lane or spoke; the controller API error strings stay as an external contract.
 - **next:** rename the wording in docs/README and `lucid hub` to match.
+## Share session: its own animated glyph, and the LUCID relay in Relay setup (P-SHARE.ICON1, ADR-0613)
+- **shipped (2026-11-17):** a new `shareLive` glyph (a screen casting from its corner) on the Share session rail button, dock grip, Start sharing and Sign in with Google; it animates while a share is live. Relay setup now offers "Use the LUCID relay" first, which makes the engine gate the relay and show Sign in with Google and phone invites; self-hosted and public stay as alternatives.
+- **stubbed:** nothing; the hosted relay, sign-in page and phone web app are the existing P-REMOTE services.
+- **next:** in the installed app, Share > Use the LUCID relay > Sign in with Google > Start sharing, then open the invite on a phone.

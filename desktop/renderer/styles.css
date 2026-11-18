@@ -5482,6 +5482,14 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-dock .share-dock-head{flex-wrap:wrap;row-gap:6px}
 .fleet-dock .share-dock-title{flex:1 0 auto}
 .share-dock-grip{display:inline-flex;color:var(--accent-2)}
+/* P-SHARE.ICON1 (ADR-0613): while a share is live the Share session glyph casts: its two arcs brighten outward in
+   turn and the dot breathes. Still everywhere else, and still under reduced motion. */
+#railShare.sharing .sl-a1{animation:sl-wave 1.8s ease-in-out infinite}
+#railShare.sharing .sl-a2{animation:sl-wave 1.8s ease-in-out .3s infinite}
+#railShare.sharing .sl-dot{animation:sl-dot 1.8s ease-in-out infinite}
+@keyframes sl-wave{0%,100%{opacity:.25}35%{opacity:1}}
+@keyframes sl-dot{0%,100%{opacity:.7}20%{opacity:1}}
+@media (prefers-reduced-motion:reduce){#railShare.sharing .sl-a1,#railShare.sharing .sl-a2,#railShare.sharing .sl-dot{animation:none}}
 .share-dock-title{flex:1;font-size:12.5px;font-weight:700;color:var(--txt);letter-spacing:.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* P-SHARE.2 (ADR-0234): the cold-boot "updating\2026" chip (mirrors the Settings model-list indicator) shown
    while the cached first-paint revalidates in the background. */
