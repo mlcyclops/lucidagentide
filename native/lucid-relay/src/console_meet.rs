@@ -86,7 +86,7 @@ pub static ROUTES: [RouteSpec; 26] = [
 pub static FLEET_ROUTES: [RouteSpec; 1] = [RouteSpec { method: "GET", path: "meet/counts", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 }];
 
 /// AC-2a 8.2 `services` of a Meeting Hub relay row, from its latest `read-health` answers of `meet/servers`
-/// (`{signer: {healthy, days_left}, files: null or {state, since}}`) and `meet/push` (`{enabled, failed24h, ...}`):
+/// (`{signer: null or {healthy, days_left}, files: null or {state, since}}`; null signer: none configured) and `meet/push` (`{enabled, failed24h, ...}`):
 /// flags, days, the files state word and counts only. A part whose answer is missing is null.
 pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value {
     let signer = servers.and_then(|s| s.get("signer")).map(|h| json!({ "healthy": h.get("healthy").and_then(Value::as_bool), "daysLeft": h.get("days_left").and_then(Value::as_i64) }));
@@ -790,7 +790,10 @@ impl MeetSection {
         } else {
             Value::Null
         };
-        json!({"ok": true, "signer": {"healthy": headline.get("healthy"), "days_left": headline.get("days_left")}, "files": files})
+        // A relay with no certificate server (`signer_url` empty: the issuer's PC signs) has no signer to be unhealthy,
+        // as its own Overview card says; null keeps the fleet console from calling it a problem.
+        let signer = if pj::truthy(headline.get("configured")) { json!({"healthy": headline.get("healthy"), "days_left": headline.get("days_left")}) } else { Value::Null };
+        json!({"ok": true, "signer": signer, "files": files})
     }
 
     // ── the writes ──
@@ -2160,6 +2163,8 @@ mod tests {
         assert_eq!(read("meet/enrollments", "", true)["waiting"], json!([]));
         assert_eq!(read("meet/push", "", true)["enabled"], false);
         assert!(read("meet/servers", "", true)["files"].is_null());
+        // No certificate server configured: no signer to call unhealthy (the fleet health would read it as a problem).
+        assert!(read("meet/servers", "", true)["signer"].is_null());
         assert_eq!(read("meet/organizations", "", true)["organizations"], json!([]));
         let calls = read("meet/calls", "", false);
         assert!(!calls.to_string().contains('@'), "viewers see no principals");
