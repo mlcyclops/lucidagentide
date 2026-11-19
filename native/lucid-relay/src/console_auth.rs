@@ -1817,8 +1817,10 @@ impl Console {
         })
     }
 
-    /// What the profile asks of a role at join (4.2 `join`).
-    fn join_methods(s: &Settings, role: PersonRole, break_glass: bool) -> Vec<&'static str> {
+    /// What the profile asks of a role at join (4.2 `join`). Only console invites may start with a password: hub,
+    /// device and setup invites register a WebAuthn method only (`join_person` refuses the password steps for them).
+    fn join_methods(s: &Settings, role: PersonRole, source: InviteSource) -> Vec<&'static str> {
+        let break_glass = source == InviteSource::Operator;
         if s.high() {
             if role.privileged() || break_glass {
                 vec!["security-key"]
@@ -1827,8 +1829,10 @@ impl Console {
             }
         } else if break_glass {
             vec!["password-totp"]
-        } else {
+        } else if source == InviteSource::Console {
             vec!["passkey", "password-totp", "password-passkey"]
+        } else {
+            vec!["passkey"]
         }
     }
 
@@ -1842,7 +1846,7 @@ impl Console {
         let password = if break_glass { "required" } else { s.password_field() };
         Ok(Out::ok(json!({
             "ok": true, "email": i.email, "role": i.role.as_str(), "expires": i.expires, "reset": i.kind == InviteKind::ResetSignIn,
-            "methods": Self::join_methods(s, i.role, break_glass), "password": password,
+            "methods": Self::join_methods(s, i.role, i.source), "password": password,
             "minLength": crate::console_password::min_len(s.high()),
         })))
     }

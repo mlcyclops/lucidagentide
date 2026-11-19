@@ -597,6 +597,23 @@ fn logged(b: &Built, event: &str) -> bool {
 // ── Kept from the control panel, with AC-1's changes ────────────────────────────────────────────────────────
 
 #[test]
+fn only_console_invites_offer_a_password_at_join() {
+    // Hub, device and setup invites register a WebAuthn method only: offering a password there ended in a refusal.
+    let b = build("join-methods");
+    let c = &b.c;
+    let methods = |token: &str| json_of(&send(c, call("POST", "/console/api/join", json!({ "token": token }), ""), T0 + 1))["methods"].clone();
+    let hub = c.invite(ALICE, HUB_NODE, HUB_SERIAL, &dialed(HOST), T0).unwrap();
+    assert_eq!(methods(&token_of(&hub.link)), json!(["passkey"]));
+    let (setup, _) = {
+        let mut inner = c.inner.lock();
+        c.mint_setup_invite(&mut inner, BOB, T0).unwrap()
+    };
+    assert_eq!(methods(&setup), json!(["passkey"]));
+    let (link, _) = c.mint_console_token("new@acme.example", PersonRole::Viewer, ALICE, InviteKind::Join, false, T0).unwrap();
+    assert_eq!(methods(&token_of(&link)), json!(["passkey", "password-totp", "password-passkey"]));
+}
+
+#[test]
 fn an_invite_is_a_link_good_once_for_24_hours() {
     let b = build("invite");
     let c = &b.c;
