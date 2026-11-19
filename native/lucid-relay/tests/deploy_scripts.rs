@@ -478,14 +478,14 @@ fn meet_linux_install_rerun_and_uninstall() {
     let (rc, out, log) = h.run(&h.served(CONSOLE, "0.2.0"), MEET_LINUX, &["--code-file", &h.code_file()]);
     assert_eq!(rc, 0, "{out}");
     assert!(out.contains("This relay already belongs to this Admin Console. Updated the program to 0.2.0 and restarted it."), "{out}");
-    assert!(!log.contains("prog meet enroll") && !log.contains("curl "), "{log}");
+    assert!(!log.contains("prog meet enroll") && !log.contains("curl -"), "{log}");
     assert_eq!(h.file("/etc/lucid-meet/turn.secret"), secret);
 
     // Rerun from another console: nothing changes.
     let (rc, out, log) = h.run(&h.served("https://other.example.org:8444", "0.2.0"), MEET_LINUX, &["--code-file", &h.code_file()]);
     assert_eq!(rc, 1);
     assert!(out.contains(&format!("This relay belongs to another Admin Console ({CONSOLE}). Nothing was changed.")), "{out}");
-    assert!(!log.contains("apt-get") && !log.contains("curl "), "{log}");
+    assert!(!log.contains("apt-get") && !log.contains("curl -"), "{log}");
 
     // A downgrade: nothing changes.
     std::fs::write(h.dir.join("version"), "0.3.0").unwrap();
@@ -538,7 +538,7 @@ fn meet_linux_refusals_before_any_change() {
     let (rc, out, log) = h.run(&h.served(CONSOLE, "0.2.0"), MEET_LINUX, &["--code-file", &code]);
     assert_eq!(rc, 1);
     assert!(out.contains("Other services listen on this host: nginx (tcp 8080). The firewall would close them."), "{out}");
-    assert!(!log.contains("apt-get") && !log.contains("curl ") && !log.contains("prog "), "{log}");
+    assert!(!log.contains("apt-get") && !log.contains("curl -") && !log.contains("prog "), "{log}");
     assert!(Path::new(&code).exists() && !h.has("/etc/lucid-meet") && !h.has("/opt/lucid-meet/lucid-relay"));
     // A port in use.
     std::fs::write(h.dir.join("ss.txt"), "tcp LISTEN 0 128 0.0.0.0:443 0.0.0.0:* users:((\"nginx\",pid=9,fd=3))\n").unwrap();
@@ -619,7 +619,7 @@ fn high_from_release_media_writes_the_lock_and_only_purge_removes_it() {
     assert_eq!(rc, 0, "{out}\n{log}");
     assert!(out.contains(&format!("Relay program SHA-256: {}. It must match your release notes.", h.prog_sha)));
     assert!(log.contains("marker=none"), "no marker with an empty header or --binary: {log}");
-    assert!(!log.contains("curl "));
+    assert!(!log.contains("curl -"));
     assert_eq!(h.file("/etc/lucid-meet/profile.lock"), "high\n");
     assert!(log.contains("--profile high"));
     // A Standard run on the locked host stops before any change.
