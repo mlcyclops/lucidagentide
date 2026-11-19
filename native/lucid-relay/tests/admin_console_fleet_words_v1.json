@@ -1,7 +1,7 @@
 {
  "version": 1,
- "contract": "AC-2a revision 3.4",
- "about": "Section 13 words. <name> marks a value filled in at run time; \"\\n\" in cli and mail is a line break. nav is 12.4's left navigation in order, the reserved places carrying phase 4 and 5 (not rendered in AC-2a). cef maps an audit action to its CEF name (13.1); actions not in it use the action. metrics_help holds the # HELP words of every 10.1 family. key-record.* are the app loopback page's words quoted in 3.9.",
+ "contract": "AC-2a revision 3.4.1 and AC-2b-D revision 6",
+ "about": "Section 13 words of AC-2a and AC-2b-D. <name> marks a value filled in at run time; \"\\n\" in cli and mail is a line break. nav is 12.4's left navigation in order, the reserved places carrying phase 4 and 5 (not rendered in AC-2a). cef maps an audit action to its CEF name (AC-2a 13.1, AC-2b-D 13.6); actions not in it use the action. metrics_help holds the # HELP words of every 10.1 family. key-record.* are the app loopback page's words quoted in 3.9. script is AC-2b-D 13.6, the install scripts' words.",
  "placeholder": "<[^<>]+>",
  "page": {
   "nav.overview": "Overview",
@@ -52,7 +52,7 @@
   "scope.config": "Configuration",
   "scope.license": "License",
   "scope.upgrade": "Upgrades (coming later)",
-  "enroll.title": "Add a relay",
+  "enroll.title": "Deploy a relay",
   "enroll.product": "Product",
   "enroll.name": "Name",
   "enroll.site": "Site or cloud region",
@@ -122,7 +122,7 @@
   "setup.gov": "Is this a government deployment?",
   "setup.gov-yes": "Yes, use the High security profile",
   "setup.gov-no": "No, use the Standard security profile",
-  "setup.gov-help": "High is for government and other regulated organizations: everyone signs in with phishing-resistant methods, and admins need approved security keys. Standard suits most companies: passkeys, Windows Hello and authenticator apps all work.",
+  "setup.gov-help": "High is for government and other regulated organizations: everyone signs in with phishing-resistant methods, and admins need approved security keys. Standard suits most companies: passkeys, Windows Hello and authenticator apps all work. This cannot be changed later.",
   "setup.gov-fixed": "This console was started with the <profile> profile by its operator.",
   "setup.first-admin": "First admin",
   "setup.email-field": "Your email",
@@ -134,7 +134,7 @@
   "setup.relay": "First relay",
   "setup.this-host": "Run a relay on this host",
   "setup.this-host-help": "Restart the relay with --with-console <folder> (Remote Spokes) or set with_console in relay.json (Meeting Hub). It joins this console at its next start.",
-  "setup.other-host": "Add a relay on another host",
+  "setup.other-host": "Deploy a relay on another host",
   "setup.step": "Step <n> of 6",
   "setup.save": "Save and continue",
   "setup.skip": "Skip for now",
@@ -208,7 +208,134 @@
   "attention.relay-license-grace": "The license of <relay> has ended. Service stops on <date and time> unless a new license is installed.",
   "attention.relay-license-expiring": "The license of <relay> ends in <days> days.",
   "key-record.done": "Key recorded. You can close this tab.",
-  "key-record.used": "This link was already used."
+  "key-record.used": "This link was already used.",
+  "deploy.title": "Deploy a relay",
+  "deploy.step": "Step <n> of 4",
+  "deploy.continue": "Continue",
+  "deploy.product-h": "Which product will this relay serve?",
+  "deploy.product-meet-help": "Calls, chat and files for your people's Hub apps.",
+  "deploy.product-spokes-help": "A mailbox relay for your Remote Spokes hubs and spokes.",
+  "deploy.product-none": "Choose a product to continue.",
+  "deploy.where-h": "Where will it run?",
+  "deploy.env-linux": "Linux server or VM",
+  "deploy.env-linux-help": "Debian 12 or 13, or Ubuntu 22.04 or 24.04, with systemd. One command installs everything.",
+  "deploy.env-proxmox": "Proxmox",
+  "deploy.env-proxmox-help": "Create a Debian 13 VM from the cloud image, then run the Linux command inside it.",
+  "deploy.env-docker": "Docker",
+  "deploy.env-docker-help": "Builds a local image from this console's relay program and runs it with Docker Compose.",
+  "deploy.env-installed": "Already installed",
+  "deploy.env-installed-help": "The relay program is already on the host. Join it to this console with a code.",
+  "deploy.env-next": "Coming next",
+  "deploy.env-azure": "Azure",
+  "deploy.env-aws": "AWS",
+  "deploy.env-gcp": "Google Cloud",
+  "deploy.env-windows": "Windows Server",
+  "deploy.env-docker-high": "Not offered under the High profile: a container cannot seal the relay's key with a provider High allows.",
+  "deploy.env-os-mismatch": "This console cannot hand out the Linux relay program (<why>). Install the relay from your release media and use Already installed.",
+  "deploy.needs": "Before you start",
+  "deploy.need-os": "Debian 12 or 13, or Ubuntu 22.04 or 24.04, on <arch>",
+  "deploy.need-size-meet": "2 CPU cores, 2 GB of memory, 20 GB of disk",
+  "deploy.need-size-spokes": "1 CPU core, 1 GB of memory, 10 GB of disk",
+  "deploy.need-dns-meet": "A DNS name your people's Hub apps reach, pointing at this host (for example meet.example.org)",
+  "deploy.need-dns-spokes": "A DNS name or IP address your hubs and spokes reach",
+  "deploy.need-ports-meet": "Open to your people: TCP 443, UDP and TCP 3478, TCP 5349, UDP 49160 to 49260",
+  "deploy.need-ports-spokes": "Open to your hubs and spokes: TCP 8443",
+  "deploy.need-console": "Outbound from the host to this console's management port: <host>:<port> (TCP)",
+  "deploy.need-tls-meet": "No public TLS certificate: this console issues the relay's certificate from your organization's CA.",
+  "deploy.need-tls-meet-own": "The relay's certificate, key, CA certificate and revocation list from your organization's signer, in one folder on the host (ca.crt, relay.crt, relay.key, crl.pem)",
+  "deploy.need-tls-spokes": "No public TLS certificate: the script makes one, and your hubs pin it.",
+  "deploy.need-root-spokes": "Your organization root's public key (root.pub) on the host",
+  "deploy.need-signer": "The certificate server at <url> lets this host connect (add its address to the server's allowed relays)",
+  "deploy.need-sudo": "A user who can run sudo, and curl",
+  "deploy.need-docker": "Docker Engine with the Compose plugin on a Linux host",
+  "deploy.need-proxmox": "Proxmox VE 7.2 or later, a storage, a network bridge, and an SSH public key for the VM",
+  "deploy.details-h": "About this relay",
+  "deploy.host": "Relay DNS name",
+  "deploy.host-help": "The name people's apps use to reach this relay.",
+  "deploy.turn-host": "TURN name or address (calls through firewalls)",
+  "deploy.turn-host-help": "Leave empty to use the relay DNS name.",
+  "deploy.admins-note": "The script asks for the relay admins' emails on the host.",
+  "deploy.clients": "Networks that may reach the relay",
+  "deploy.clients-help": "Addresses with a prefix, separated by commas. 0.0.0.0/0, ::/0 means everyone.",
+  "deploy.pki": "Relay certificate",
+  "deploy.pki-console": "Issue it from the organization CA in this console",
+  "deploy.pki-own": "I bring it from our own signer",
+  "deploy.pki-ca-missing": "This console holds no Meeting Hub organization CA. Import one under License, or bring the certificate yourself.",
+  "deploy.license": "License",
+  "deploy.license-help": "The relay installs it when it joins.",
+  "deploy.license-none": "No license yet: the relay starts stopped until you install one.",
+  "deploy.make": "Make code and command",
+  "deploy.install-h": "Install",
+  "deploy.install-linux": "On the host, run this command. When it asks for the enrollment code, paste the code from above.",
+  "deploy.install-docker": "On the Docker host, run this command. When it asks for the enrollment code, paste the code from above.",
+  "deploy.install-high": "Under the High profile, install from your verified release media. Check the program's SHA-256 against your release notes, then run:",
+  "deploy.install-proxmox": "On the Proxmox host shell, create the VM:",
+  "deploy.install-proxmox-then": "Then sign in to the VM and run the Linux command:",
+  "deploy.pin-note": "The command trusts only this console's management keys, so it works without a public certificate.",
+  "deploy.binary": "Relay program <version> for <arch>, SHA-256 <sha256>",
+  "deploy.uninstall": "To remove it later:",
+  "deploy.uninstall-offline": "Or, without this console:",
+  "deploy.anchor-note": "The script asks for admin key fingerprints. Each admin reads theirs from Your account, Key fingerprints for relays, and gives them to the operator. Admins can also endorse their key from the IDE or Hub app after the relay joins.",
+  "deploy.offered-key": "The script also offers your key (<hint>) as the relay's first admin key. The operator types yes to trust it.",
+  "deploy.wait-h": "Join and confirm",
+  "deploy.wait-code": "Waiting for the script to use the code.",
+  "deploy.wait-start": "The code was used. Waiting for the relay to start and connect.",
+  "deploy.wait-connected": "<name> connected.",
+  "deploy.compare": "Compare this fingerprint with the one the script printed:",
+  "deploy.confirmed": "Confirmed. <name> is part of this console.",
+  "deploy.anchors": "Admin keys the relay trusts: <n>",
+  "deploy.anchor-none": "The relay trusts no admin key yet. Endorse your key from your IDE or Hub app.",
+  "deploy.service-on": "Serving people.",
+  "deploy.expired": "The code ended before the relay joined. Make a new one.",
+  "deploy.new-code": "Make a new code",
+  "deploy.done": "Done",
+  "meet-ca.title": "Meeting Hub organization CA",
+  "meet-ca.none": "This console holds no organization CA.",
+  "meet-ca.warn": "This console will hold your organization's Meeting Hub CA in its sealed storage. Anyone who breaks into this console could then make certificates for any person in your organization and act as them on every Meeting Hub relay that trusts this CA. Any High relay that trusts this CA loses its High protection; such relays cannot join this console.",
+  "meet-ca.high": "Under the High profile the organization CA stays on its own signer. This console does not hold it.",
+  "meet-ca.create-next": "Create a new CA (coming next, with device certificates issued here)",
+  "meet-ca.import": "Import our CA",
+  "meet-ca.import-help": "Upload ca.crt and ca.key from your CA folder, and issued.json and crl.pem so revocations are kept. From now on, only this console signs this CA's revocation lists: stop signing them on the PC and on a certificate server in root mode.",
+  "meet-ca.signer": "Certificate server address",
+  "meet-ca.signer-help": "If a certificate server signs your people's devices, enter its address (https://...). Relays then fetch its revocation list; without it they refuse those devices.",
+  "meet-ca.id": "CA id",
+  "meet-ca.ends": "Ends",
+  "meet-ca.crl": "Revocation list <number>, next by <date>",
+  "meet-ca.issued": "Relay certificates issued: <n>",
+  "meet-ca.revoke": "Revoke a certificate",
+  "meet-ca.remove": "Remove the CA from this console",
+  "meet-ca.remove-elsewhere": "I will sign this CA's revocation lists elsewhere before <date>.",
+  "meet-ca.diverged": "<relay> holds a revocation list of this CA that another signer made. Its revocations were added here. Stop the other signer.",
+  "meet-ca.lost": "The CA key cannot be opened (sealing lost). Import it again before <date>, when relays that trust it stop accepting anyone.",
+  "meet-ca.unreadable": "The CA records do not read back. Nothing is issued until they do.",
+  "spokes-root.title": "Remote Spokes organization root",
+  "spokes-root.help": "The root's public key, root.pub. Relays this console installs check it against your license before they trust it. Never upload the private key.",
+  "spokes-root.set": "Save root public key",
+  "attention.meet-ca-expiring": "The Meeting Hub organization CA ends in <days> days.",
+  "attention.meet-ca-lost": "The Meeting Hub organization CA key cannot be opened. Relays that trust it stop accepting anyone after <date>.",
+  "attention.meet-ca-unreadable": "The Meeting Hub organization CA records do not read back.",
+  "attention.meet-crl-failing": "The Meeting Hub organization CA's revocation list could not be renewed. It ends <date>.",
+  "attention.meet-crl-diverged": "Another signer is making revocation lists for the Meeting Hub organization CA (seen on <relay>).",
+  "attention.meet-crl-future": "A revocation list for the Meeting Hub organization CA is dated in the future (<date>, seen on <where>). Its revocations were added here; fix that signer's clock.",
+  "relay.fleet-ca-held": "The Admin Console at <origin> holds the CA this High relay trusts, so it takes no changes from that console. Move this relay to a CA the console does not hold.",
+  "meet-ca.confirm-no-high": "No High Meeting Hub relay anywhere, in this console or not, trusts this CA.",
+  "meet-ca.crl-number-ceiling": "That revocation list's number is too high to follow, so this console did not sign a newer one. Decide which signer stays.",
+  "deploy.remove-signer-note": "This relay can still reach the certificate server at <url> until its certificate there ends (<date>), because that server is not marked as checking revocation. Remove the host's address from the server's allowed relays now.",
+  "attention.profile-lock-refused": "<relay> refused to start on <date> because its configuration said <configured> while the host is locked to the High profile.",
+  "meet-ca.crl-not-pushed": "<relay> trusts this CA but does not take revocation lists from this console (<why>).",
+  "meet-ca.crl-fixed": "its crl setting names a fixed file",
+  "meet-ca.crl-none": "it checks no revocation list yet; turning one on would change who it accepts",
+  "attention.relay-meet-cert-expiring": "The TLS certificate of <relay> ends in <days> days and has not renewed.",
+  "attention.relay-signer-cert-expiring": "The certificate <relay> uses with the certificate server ends in <days> days and has not renewed. When it ends, people whose devices come from that server stop being accepted on <relay> within 7 days.",
+  "attention.signer-crl-mismatch": "<relay> says the certificate server at <url> does not check revocation, so relays using that server get 30-day certificates until it agrees or you turn the setting off.",
+  "attention.meet-crl-size": "The organization CA's revocation list is <size> KB, half of what relays accept. Remove entries that no longer matter on the CA page.",
+  "meet-ca.signer-enforced": "This certificate server checks revocation of relay certificates",
+  "meet-ca.signer-enforced-help": "Turn on only after the server runs a version that checks revoked relay certificates. Relays using it then get 90-day certificates, as long as every one of them confirms.",
+  "meet-ca.prune": "Remove from the list",
+  "meet-ca.prune-help": "Upload the certificate itself. It is removed only if this CA signed it and it has already ended. Entries older than <days> days leave the list on their own.",
+  "meet-ca.max-lifetime": "Longest lifetime of any certificate this CA has issued (days)",
+  "attention.signer-crl-stale": "The certificate server at <url> still holds revocation list <number>, older than this console's. Relays it refuses are not refused there yet.",
+  "deploy.docker-turn-note": "On Docker this installer writes no host firewall, so calls between two people who both need TURN do not work until you open UDP 49160 to 49260 toward this host's own address in your firewall."
  },
  "nav": [
   {
@@ -263,7 +390,7 @@
     "Relays",
     "Locations",
     "Health",
-    "Add a relay"
+    "Deploy a relay"
    ],
    "label": "Relays and locations"
   },
@@ -451,6 +578,26 @@
    "title": "Leave the Admin Console at <origin>?",
    "body": "This relay stops sending health and stops taking changes from it. Its own console stays.",
    "button": "Leave"
+  },
+  "meet-ca-import": {
+   "title": "Import the CA <id> into this console?",
+   "body": "This console then holds the key that vouches for every person in your organization, and only it signs this CA's revocation lists. Any High relay that trusts this CA would lose its High protection.",
+   "button": "Import CA"
+  },
+  "meet-ca-revoke": {
+   "title": "Revoke certificate <serial>?",
+   "body": "Relays refuse it once they get the new revocation list.",
+   "button": "Revoke"
+  },
+  "meet-ca-remove": {
+   "title": "Remove the CA from this console?",
+   "body": "The sealed key is wiped. The last revocation list is valid until <date>; after that, relays that trust this CA refuse everyone unless another signer renews it.",
+   "button": "Remove CA"
+  },
+  "spokes-root": {
+   "title": "Use root <id> for new Remote Spokes relays?",
+   "body": "Relays this console installs trust it only when it matches their license.",
+   "button": "Save"
   }
  },
  "refusals": {
@@ -629,6 +776,114 @@
   "fips-needed": {
    "status": 409,
    "words": "The High profile needs the FIPS build for this."
+  },
+  "deploy-product": {
+   "status": 400,
+   "words": "Choose Meeting Hub or Remote Spokes."
+  },
+  "deploy-env": {
+   "status": 400,
+   "words": "Choose where the relay runs."
+  },
+  "deploy-host": {
+   "status": 400,
+   "words": "Enter a DNS name of letters, digits, dots and dashes, or an IP address where allowed."
+  },
+  "deploy-host-taken": {
+   "status": 409,
+   "words": "<relay> already holds a certificate for <host>. Use Replace <relay>."
+  },
+  "deploy-clients": {
+   "status": 400,
+   "words": "Enter networks as addresses with a prefix, such as 203.0.113.0/24."
+  },
+  "deploy-high": {
+   "status": 403,
+   "words": "Under the High profile this console does not hand out the relay program. Install it from your verified release media."
+  },
+  "deploy-unavailable": {
+   "status": 404,
+   "words": "This console cannot hand out the Linux relay program."
+  },
+  "deploy-rate": {
+   "status": 429,
+   "words": "Too many downloads from this address. Try again in <minutes> minutes."
+  },
+  "deploy-busy": {
+   "status": 503,
+   "words": "The console is sending the relay program to other hosts. Try again in a minute."
+  },
+  "deploy-ca-needed": {
+   "status": 409,
+   "words": "Import the Meeting Hub organization CA first, or bring the relay's certificate yourself."
+  },
+  "deploy-license-product": {
+   "status": 409,
+   "words": "That license is for <product>."
+  },
+  "deploy-license-root": {
+   "status": 409,
+   "words": "That license is for root <root>, not <id>."
+  },
+  "deploy-csr": {
+   "status": 400,
+   "words": "The relay's certificate request is not for <names>."
+  },
+  "meet-cert-wait": {
+   "status": 429,
+   "words": "This relay renewed its certificate less than a day ago."
+  },
+  "fleet-ca-held": {
+   "status": 409,
+   "words": "This console holds the organization CA this High relay trusts, so the relay cannot join it."
+  },
+  "meet-ca-high": {
+   "status": 409,
+   "words": "Under the High profile the organization CA stays on its own signer. This console does not hold it."
+  },
+  "meet-ca-high-relay": {
+   "status": 409,
+   "words": "A High Meeting Hub relay trusts this CA, may trust it (it has not reported which CAs it trusts), or is still joining, so this console cannot hold it."
+  },
+  "meet-ca-confirm": {
+   "status": 400,
+   "words": "Confirm that no High Meeting Hub relay anywhere trusts this CA."
+  },
+  "meet-ca-seal": {
+   "status": 409,
+   "words": "Holding the organization CA needs a sealing provider bound to this host (systemd credential or Windows service account). Run lucid-relay console seal-setup --role console."
+  },
+  "meet-ca-exists": {
+   "status": 409,
+   "words": "This console already holds an organization CA. Remove it first."
+  },
+  "meet-ca-key": {
+   "status": 400,
+   "words": "That key does not belong to that CA certificate, or it is not a P-256 CA valid for 120 more days."
+  },
+  "meet-ca-signer": {
+   "status": 400,
+   "words": "Enter the certificate server as https:// and its host name."
+  },
+  "meet-ca-in-use": {
+   "status": 409,
+   "words": "<n> relays still use certificates from this CA. Confirm that you will sign its revocation lists elsewhere."
+  },
+  "meet-ca-lost": {
+   "status": 503,
+   "words": "The CA key cannot be opened. Import it again."
+  },
+  "meet-ca-prune": {
+   "status": 409,
+   "words": "That certificate was not issued by this CA, is not on the list, or has not ended yet. A revocation stays while its certificate can still be used."
+  },
+  "spokes-root-key": {
+   "status": 400,
+   "words": "That is not a P-256 public key. Upload root.pub, never the private key."
+  },
+  "spokes-root-license": {
+   "status": 409,
+   "words": "No license in the library names root <id>."
   }
  },
  "cli": {
@@ -664,7 +919,81 @@
   "cli.connect-server-expired": "The console's certificate has ended.",
   "cli.connect-certificate-refused": "The console refused this relay's certificate. It may have been removed from the console, or its certificate ended.",
   "cli.connect-upgrade-refused": "The console answered but did not open the channel.",
-  "cli.connect-closed": "The connection closed before the channel opened."
+  "cli.connect-closed": "The connection closed before the channel opened.",
+  "cli.deploy-preview": "Relay DNS name: <host>\nTURN: <turnHost>\nRelay admins: <admins>\nProfile on this host: <profile>\nCertificate: <certificate source>\nOrganization root: <id> (<root source>)\nLicense: <license line>",
+  "cli.deploy-source-console-ca": "from the organization CA held by this console",
+  "cli.deploy-source-placed": "placed on this host",
+  "cli.deploy-source-delivered": "delivered by this console",
+  "cli.deploy-license-line": "<org>, <edition>, <users> users, ends <date>",
+  "cli.deploy-license-none": "none: the relay starts stopped until a license is installed",
+  "cli.deploy-ask-admins": "Relay admins: their email addresses, separated by commas: ",
+  "cli.deploy-admins-needed": "Without a terminal, give the relay admins with --admins.",
+  "cli.deploy-ask-fingerprints": "Admin key fingerprints, one per line, as each admin read them from Your account, Key fingerprints for relays (an empty line ends; none is fine): ",
+  "cli.deploy-offered-key": "The console offers the key of <email> (<hint>), who made this code, as this relay's first admin key. This console's installer put this relay's program here for this code, so trusting its key adds nothing it could not already do.\nFingerprint: <fingerprint>\nType yes to trust it (anything else skips it): ",
+  "cli.deploy-not-offered": "The console offered an admin key, but this relay does not take it (no installer mark from this console for this code, it is High, it already has state, or that admin is not in this relay's admins). Use fingerprints or endorse from the IDE plugin or the Hub app.",
+  "cli.deploy-ask-host": "This relay's DNS name: ",
+  "cli.deploy-ask-turn-host": "TURN name or address (Enter for the DNS name): ",
+  "cli.deploy-ask-clients": "Networks that may reach this relay (addresses with a prefix, separated by commas): ",
+  "cli.deploy-host-differs": "The console's code says <field> is <console value>, but this host says <host value>. Nothing was saved.",
+  "cli.deploy-root-id": "Organization root: <id>. Check it against your own records.",
+  "cli.deploy-root-differs": "The console names root <id>, but the root placed on this host is <placed id>. Nothing was saved.",
+  "cli.deploy-anchor": "This relay does not take an organization root from the console (High, or its program did not come from the console). Place it with --root or --pki-dir. Nothing was saved.",
+  "cli.deploy-profile": "This relay is Standard and that console is High. A High console takes only High relays.",
+  "cli.deploy-profile-changed": "This host was installed with the <profile> profile. Uninstall with --purge to change it.",
+  "cli.deploy-pki": "The code says the certificate comes from <source>, but this host was set up for <other>.",
+  "cli.deploy-high-preview": "This High relay was offered a certificate, root or admin key by the console. A High relay takes none of these from the console. Nothing was saved.",
+  "cli.deploy-next": "Saved. The installer now starts the relay; it joins the console and prints its fingerprint.",
+  "cli.deploy-fingerprint": "Relay fingerprint: <fingerprint>\nIn the Admin Console, check that it shows the same fingerprint, then press Confirm relay.",
+  "cli.deploy-not-deploy": "This code was made for a relay that is already installed. Run the command without --deploy.",
+  "cli.deploy-needs-deploy": "This code was made for a new install. Run the install command from the Admin Console, or ask for a code for an already installed relay.",
+  "cli.deploy-env": "This code was made for <env>, not <this env>.",
+  "cli.deploy-pki-high": "Under the High profile a relay does not take its certificate from the Admin Console. Set fleet_pki to false and place the certificate files.",
+  "cli.deploy-no-cert": "This relay has no certificate yet. Run the install command again with a new code, or place its certificate files.",
+  "cli.deploy-no-root": "This relay has no organization root yet. Run the install command again with --root <file>.",
+  "cli.deploy-marker-other": "This installer was fetched for a different code (<marker enrollment>), so it does not count as installed by the console for this one. Run the command shown with this code.",
+  "cli.profile-locked": "This host is locked to the High profile (<lock path>), but the relay's configuration says <configured>. Set the profile to high; the relay does not start otherwise."
+ },
+ "script": {
+  "script.usage": "Usage: install (the default) or uninstall [--purge]. Options: --profile high or standard, --admins <emails>, --host <name>, --turn-host <name>, --clients <CIDRs>, --pki-dir <folder>, --ca <file>, --root <file>, --code-file <path>, --external-ip <public>[/<private>], --allow-peer <CIDR>, --ssh-from <CIDR>, --no-firewall, --firewall-force, --binary <path>, --console <url>, --pins <pins>.",
+  "script.need-root": "Run this as root (sudo).",
+  "script.os": "This installer supports Debian 12 or 13 and Ubuntu 22.04 or 24.04. This host is <os>.",
+  "script.systemd": "This installer needs systemd.",
+  "script.arch": "This console hands out the relay program for <arch>; this host is <host arch>.",
+  "script.no-tty": "No terminal to read the enrollment code from. Run the command in an interactive shell, or pass --code-file <path> (owned by root, mode 600) and --admins.",
+  "script.disk": "At least 2 GB must be free under /opt and /var/lib.",
+  "script.port-busy": "Port <port> is already in use by <process>. Free it and run the command again.",
+  "script.hand-installed": "This host already runs a relay that was installed by hand. Use Already installed in the Admin Console to join it.",
+  "script.ask-government": "Is this a government deployment? A yes uses the High security profile, which cannot be changed later. (yes or no) [yes]: ",
+  "script.ca-file": "The CA file must be a self-signed P-256 CA certificate (ca.crt), never its key.",
+  "script.profile-header": "This console serves Standard relays only. Install a High relay from your release media.",
+  "script.checksum": "The downloaded relay program does not match SHA-256 <sha256>. Nothing was installed.",
+  "script.binary-digest": "Relay program SHA-256: <sha256>. It must match your release notes.",
+  "script.runs": "The relay program does not run on this host: <why>",
+  "script.high-binary": "Pass --binary <path> with the verified lucid-relay from your release media.",
+  "script.pki-dir": "The folder must hold ca.crt, relay.crt and a matching relay.key, and relay.crt must come from ca.crt.",
+  "script.ca-id": "Organization CA on this host: <id>.",
+  "script.root-file": "The root file must be a P-256 public key (root.pub), never the private key.",
+  "script.root-id": "Organization root on this host: <id>.",
+  "script.root-needed": "Pass --root <file> with your organization root's public key.",
+  "script.firewall-exists": "This host already has a firewall (<kind>). Open these ports in it: <ports>.",
+  "script.firewall-other": "Other services listen on this host: <list>. The firewall would close them. Run again with --firewall-force to close them, or --no-firewall and open <ports> yourself.",
+  "script.firewall-applied": "Firewall: SSH (<ports>) from <from>; relay ports <ports>; everything else closed. Local connections to this host's own public or LAN addresses follow the same rules; use 127.0.0.1 for other local services.",
+  "script.firewall-no-ssh": "No SSH service found; the firewall allows no SSH.",
+  "script.firewall-changed": "The firewall on this host changed while installing, so no firewall table was written. Resolve it and run the command again; if the enrollment code was already used, make a new one in the Admin Console.",
+  "script.turn-self": "This installer did not write a firewall here, so TURN may not relay to this host's own addresses. Calls between two people who both need TURN fail until you open UDP 49160 to 49260 toward <addresses> in your firewall and run again with --allow-peer for those addresses.",
+  "script.busy": "Another run of this installer is in progress. Wait for it to finish.",
+  "script.docker-needed": "Install Docker Engine and its Compose plugin first.",
+  "script.docker-high": "Docker is not offered under the High profile.",
+  "script.waiting": "Starting the relay and joining the console...",
+  "script.join-timeout": "The relay did not join within 2 minutes. Last log lines:",
+  "script.updated": "This relay already belongs to this Admin Console. Updated the program to <version> and restarted it.",
+  "script.other-console": "This relay belongs to another Admin Console (<url>). Nothing was changed.",
+  "script.downgrade": "This host runs version <installed>, newer than <version>. Nothing was changed.",
+  "script.done-meet": "Done. Relay https://<host> on TCP 443; TURN <turnHost> on UDP and TCP 3478, TCP 5349 and UDP 49160 to 49260.",
+  "script.done-spokes": "Done. Relay https://<host>:8443. Add this entry to your hubs' relay directory:",
+  "script.left": "The relay left the Admin Console.",
+  "script.left-offline": "The console was not reached; the relay removed its link here. Remove it in the Admin Console too.",
+  "script.uninstall-done": "Removed the relay program and its services. Kept <folders>; add --purge to delete them."
  },
  "mail": {
   "mail.fleet-invite-waiting": {
@@ -702,7 +1031,16 @@
   "fleet.server-revoke": "Replace the management certificate now",
   "fleet.ca.rollover": "Start management CA <generation>",
   "fleet.roster.cancel": "Cancel <hint> on <relay>",
-  "fleet.left": "Leave the Admin Console at <origin>"
+  "fleet.left": "Leave the Admin Console at <origin>",
+  "fleet.meet-ca.import": "Import the Meeting Hub organization CA <id>",
+  "fleet.meet-ca.revoke": "Revoke certificate <serial>",
+  "fleet.meet-ca.remove": "Remove the Meeting Hub organization CA",
+  "fleet.meet-ca.crl": "Sign revocation list <number>",
+  "fleet.meet-ca.crl-merged": "Add revocations seen on <relay>",
+  "fleet.meet-cert.issue": "Issue a certificate for <relay>",
+  "fleet.spokes-root.set": "Set the Remote Spokes organization root <id>",
+  "fleet.meet-ca.prune": "Remove certificate <serial> from the revocation list",
+  "fleet.meet-ca.signer-enforced": "Mark the certificate server <url> as <checking or not checking> revocation"
  },
  "metrics_help": {
   "lucid_console_info": "Version, security profile and FIPS mode of this Lucid Admin Console.",

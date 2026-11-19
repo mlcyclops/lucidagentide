@@ -55,7 +55,7 @@ const FIPS_BUILD: bool = cfg!(feature = "fips");
 
 /// The `cef.<action>` names (13.1, the words vector's `cef`): the 13.2 dialog title without its question mark for
 /// each AC-2a action with exactly one dialog. Other actions use the action itself.
-pub const CEF_NAMES: [(&str, &str); 18] = [
+pub const CEF_NAMES: [(&str, &str); 27] = [
     ("fleet.enroll.code", "Make an enrollment code for <name>"),
     ("fleet.relay.confirm", "Confirm <name>"),
     ("fleet.relay.label", "Rename <name>"),
@@ -74,6 +74,16 @@ pub const CEF_NAMES: [(&str, &str); 18] = [
     ("fleet.ca.rollover", "Start management CA <generation>"),
     ("fleet.roster.cancel", "Cancel <hint> on <relay>"),
     ("fleet.left", "Leave the Admin Console at <origin>"),
+    // AC-2b-D 13
+    ("fleet.meet-ca.import", "Import the Meeting Hub organization CA <id>"),
+    ("fleet.meet-ca.revoke", "Revoke certificate <serial>"),
+    ("fleet.meet-ca.remove", "Remove the Meeting Hub organization CA"),
+    ("fleet.meet-ca.crl", "Sign revocation list <number>"),
+    ("fleet.meet-ca.crl-merged", "Add revocations seen on <relay>"),
+    ("fleet.meet-cert.issue", "Issue a certificate for <relay>"),
+    ("fleet.spokes-root.set", "Set the Remote Spokes organization root <id>"),
+    ("fleet.meet-ca.prune", "Remove certificate <serial> from the revocation list"),
+    ("fleet.meet-ca.signer-enforced", "Mark the certificate server <url> as <checking or not checking> revocation"),
 ];
 
 pub fn cef_name(action: &str) -> &str {

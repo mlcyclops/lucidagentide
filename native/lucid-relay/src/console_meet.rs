@@ -1147,7 +1147,7 @@ impl ProductSection for MeetSection {
     fn attention(&self, admin: bool, t: i64) -> Vec<Value> {
         let Ok(relay) = self.relay() else { return Vec::new() };
         let item = |kind: &str, severity: &str, args: Value, go: &str| json!({"kind": kind, "severity": severity, "args": args, "go": go});
-        let mut out = Vec::new();
+        let mut out = relay.deploy_attention();
         let headline = crate::meet_console::Console::signer_headline(&relay);
         if pj::truthy(headline.get("configured")) && !pj::truthy(headline.get("healthy")) {
             out.push(item("signer-unhealthy", "bad", json!({}), "#/meet/signer"));

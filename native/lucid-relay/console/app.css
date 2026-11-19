@@ -743,6 +743,26 @@ ul.plain { list-style: none; padding: 0; }
 .checklist .words { flex: 1 1 200px; }
 .fingerprint { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
 
+/* ---- Deploy a relay (AC-2b-D 3): cards as radio buttons, prerequisites, the fingerprint to compare ---- */
+.deploy-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; border: 0; padding: 0; margin: 0 0 12px; }
+.deploy-cards legend { font-weight: 700; font-size: 16px; margin-bottom: 8px; padding: 0; }
+.deploy-card {
+  display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border-radius: 10px; cursor: pointer;
+  background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary);
+}
+.deploy-card:hover { border-color: var(--ac-border); }
+.deploy-card:focus-within { outline: 2px solid var(--ac-border); outline-offset: 2px; }
+.deploy-card.is-picked { border-color: var(--text-primary); border-width: 2px; }
+.deploy-card.is-disabled { cursor: default; border-style: dashed; }
+.deploy-card.is-disabled:hover { border-color: var(--border); }
+.deploy-card .card-title { font-weight: 700; font-size: 15px; }
+.deploy-card .card-line { color: var(--text-secondary); font-size: 13px; }
+.deploy-card .card-why { color: var(--ac-warn); font-size: 13px; font-weight: 600; }
+.deploy-card .card-needs ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
+.deploy-card .card-needs ul.plain { list-style: disc; }
+.fingerprint-big { display: block; font-size: 20px; font-weight: 700; letter-spacing: 1px; padding: 8px 0; }
+.deploy-wait { min-height: 48px; }
+
 /* ---- Dialogs ---- */
 dialog {
   width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 20px;

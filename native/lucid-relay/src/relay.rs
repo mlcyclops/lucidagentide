@@ -1518,7 +1518,8 @@ impl State {
 
     /// The 7.3 attention items of this product; viewers get only `crl-stale` and `spokes-silent`.
     pub fn spokes_attention(&self, admin: bool, t: i64) -> Vec<Value> {
-        let mut out = Vec::new();
+        // AC-2b-D 6.4: a refused start under the profile lock, until dismissed.
+        let mut out: Vec<Value> = self.state_dir.as_deref().and_then(crate::server::profile_lock_attention).into_iter().collect();
         let item = |kind: &str, severity: &str, args: Value, go: &str| json!({ "kind": kind, "severity": severity, "args": args, "go": go });
         if self.crl_stale(t) {
             out.push(item("crl-stale", "bad", json!({}), "#/spokes/relays"));

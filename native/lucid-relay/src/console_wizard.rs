@@ -183,7 +183,16 @@ impl Console {
             (None, Some(p)) => p,
             (None, None) => return Err(ApiError::with("invalid", "profile is high or standard.")),
         };
+        // AC-2b 2.5, 2.6 (R3-M2): a government console (recorded, or on a host with `profile.lock`) stays High; the
+        // High answer ("Yes, use the High security profile") records `government: true`, which nothing clears.
+        if profile == Profile::Standard && inner.book.settings.government_now() {
+            return Err(ApiError::of("profile-government"));
+        }
+        let government = profile == Profile::High && !inner.book.settings.government;
         inner.book.settings.profile = profile;
+        if profile == Profile::High {
+            inner.book.settings.government = true;
+        }
         inner.book.settings.downgraded = false;
         inner.book.first_admin = Some(email.clone());
         inner.setup = None;
@@ -196,6 +205,11 @@ impl Console {
         r.target = Some(email.clone());
         r.detail = json!({ "profile": profile.as_str(), "pinned": self.cfg.first_admin.is_some() });
         self.record(r, t);
+        if government {
+            let mut g = Record::new(&email, "setup.government", "ok");
+            g.detail = json!({ "government": true });
+            self.record(g, t);
+        }
         Ok(Done::plain(Out::ok(json!({ "ok": true, "join": token, "expires": expires }))))
     }
 

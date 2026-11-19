@@ -6,7 +6,7 @@
 use crate::meet::{self as m, bad, kv, log_error, log_info, log_warn, Identity, Relay, E, R};
 use crate::meet_hub::{pc, SIGNER_DOWN};
 use crate::meet_json::{self as pj, obj, Obj};
-use crate::meet_tls::{crl_parts, crl_path, read_bytes, tls_config, write_atomic, SignerErr};
+use crate::meet_tls::{adopt_pending_crl, cert_serial, crl_parts, crl_path, pending_crl_due, place_root_crl_changed, read_bytes, rebuild_bundle_files, self_signed_roots, tls_config, write_atomic, Placed, SignerErr};
 use crate::meet_x509::{pem_blocks, Cert, Crl};
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -32,6 +32,19 @@ const UPDATE_LINK_DAYS: i64 = 2;
 const UPDATE_LOG_EVERY: f64 = 600.0;
 const IOS_CHANNELS: [&str; 2] = ["TestFlight", "App Store"];
 const NO_SIGNER: &str = "this relay has no certificate server (signer_url)";
+
+/// AC-2b-D 8.5: what `/v1/admin/crl` answers on a `fleet_pki` relay for a root CRL of its CA (a Meeting Hub relay
+/// word, like the relay's other refusals).
+pub const ROOT_CRL_CONSOLE_ONLY: &str = "this relay takes its CA's revocation lists only from its Admin Console";
+/// AC-2b-D 8.4 (R5-M1): a superseded `pki/<serial>/` folder is kept this long (ms) after the newer pair was reported.
+pub const SUPERSEDED_KEEP_MS: i64 = 7 * 86_400_000;
+/// When `hello` first reported each serial in `pki/current` (relay-owned, under `pki/`).
+pub const PKI_REPORTED_FILE: &str = "reported.json";
+
+/// AC-2b-D 10: `fleet.meet-crl-refused` (security, warn) with its `why`.
+pub fn crl_refused(why: &str) {
+    crate::console_meet::logger().security("fleet.meet-crl-refused", &crate::log::Fields::new().with("why", why), crate::log::Level::Warn);
+}
 
 fn down_or(e: SignerErr) -> E {
     match e {
@@ -198,22 +211,14 @@ impl Relay {
 
     /// crl.pem = the root's CRL + the signer's CRLs (caller holds `files`); new connections use it at once.
     fn rebuild_bundle(&self) {
-        let Some((root_part, signer_part)) = crl_parts(&self.settings) else { return };
-        let root = read_bytes(&root_part);
-        let root = String::from_utf8_lossy(&root).trim_matches(|c: char| c.is_ascii_whitespace()).as_bytes().to_vec();
-        if root.is_empty() {
+        if crl_parts(&self.settings).is_none() {
             return;
         }
-        let mut data = root;
-        data.push(b'\n');
-        data.extend(read_bytes(&signer_part));
-        if let Some(path) = crl_path(&self.settings) {
-            if let Err(e) = write_atomic(&path, &data) {
-                log_warn(&format!("cannot write {}: {e}", path.display()));
-                return;
-            }
+        match rebuild_bundle_files(Path::new(&self.settings.state_dir)) {
+            Ok(true) => self.reload_tls(),
+            Ok(false) => {}
+            Err(e) => log_warn(&format!("cannot write {}: {e}", crl_path(&self.settings).unwrap_or_default().display())),
         }
-        self.reload_tls();
     }
 
     /// The signer's current and previous intermediates, each issued directly by the root.
@@ -280,6 +285,11 @@ impl Relay {
         };
         if crl.issuer != ca.subject || !crl.signature_valid(&ca.spki) {
             log_warn("the signer's root CRL did not verify against the root");
+            return false;
+        }
+        // AC-2b-D 8.5: a fleet_pki relay takes its CA's root CRLs only from the Admin Console (R2-L8)
+        if self.settings.fleet_pki {
+            crl_refused("path");
             return false;
         }
         if crl.next_update.map(|n| (n as f64) <= pj::now()).unwrap_or(false) {
@@ -427,6 +437,10 @@ impl Relay {
                 if now - *relay.last_check.lock() >= CHECK_EVERY {
                     relay.check_expiry();
                 }
+                // AC-2b-D 8.5 (R3-M1): a pending root CRL whose thisUpdate passed (the timer's backstop, and the first
+                // tick after a restart); 8.4 (R5-M1): superseded key folders past their 7 days
+                relay.adopt_pending();
+                relay.prune_pki();
                 relay.pc_upkeep();
                 relay.refusals.flush();
             }));
@@ -435,6 +449,140 @@ impl Relay {
             }
             std::thread::sleep(Duration::from_secs_f64(UPKEEP_TICK));
         });
+    }
+
+    /// AC-2b-D 8.5, 9.3 `meet-crl`: a root CRL the Admin Console pushed, taken under `place_root_crl`'s rules into the
+    /// bundle (only when the relay's CRL source is the bundle, else `why: "fixed"`); once current it is applied as a
+    /// pushed CRL, before that it waits as pending with a timer. Err is the `why` of `fleet.meet-crl-refused` (the
+    /// channel side logs it).
+    pub fn adopt_root_crl(self: &Arc<Self>, pem: &[u8]) -> Result<Placed, String> {
+        if crl_parts(&self.settings).is_none() {
+            return Err("fixed".into());
+        }
+        let (placed, changed) = {
+            let _g = self.files.lock();
+            place_root_crl_changed(Path::new(&self.settings.state_dir), Path::new(&self.settings.client_ca), pem, pj::now() as i64)?
+        };
+        if changed {
+            match placed {
+                Placed::Current => {
+                    if let Some((crl, der)) = pem_blocks(pem, "X509 CRL").into_iter().next().and_then(|(_, der)| Crl::from_der(&der).map(|c| (c, der))) {
+                        self.root_crl_in_force(&crl, &der);
+                    }
+                }
+                Placed::Pending => self.pending_timer(),
+            }
+        }
+        Ok(placed)
+    }
+
+    /// A root CRL just put in force from the Admin Console: new connections check it, live sessions of the serials it
+    /// lists are dropped (as `/v1/admin/crl` does), `fleet.meet-crl` is audited, and a `fleet_pki` relay with a
+    /// certificate server forwards it there (`root_crl`, R3-M3).
+    fn root_crl_in_force(&self, crl: &Crl, der: &[u8]) {
+        self.reload_tls();
+        let mut serials = crl.serials.clone();
+        serials.sort();
+        serials.dedup();
+        let dropped = self.hub.drop_serials(&serials);
+        self.hub.console_revoked(&serials);
+        self.fleet_audit("fleet.meet-crl", serde_json::json!({"thisUpdate": crl.this_update * 1000}));
+        log_info(&format!("root CRL from the Admin Console in force: {} revoked, {dropped} dropped, CRL check: {}", serials.len(), self.crl_check()));
+        if !self.settings.fleet_pki {
+            return;
+        }
+        if let Some(signer) = self.hub.signer.clone() {
+            let der = der.to_vec();
+            let _ = std::thread::Builder::new().name("relay-root-crl".into()).spawn(move || {
+                if let Err(e) = signer.forward_root_crl(&der) {
+                    log_warn(&format!("the certificate server did not take the root CRL: {e}"));
+                }
+            });
+        }
+    }
+
+    /// An audit entry from the relay itself (actor "relay") in the book of its fleet link, else its own console.
+    pub fn fleet_audit(&self, action: &str, detail: Value) {
+        if let Some(f) = self.fleet.get() {
+            f.book.audit_relay(action, "", detail);
+        } else if let Some(c) = self.admin_console.get() {
+            c.audit_relay(action, "", detail);
+        }
+    }
+
+    /// R3-M1: adopt the pending list the moment its thisUpdate passes (one second after, on this relay's clock).
+    fn pending_timer(self: &Arc<Self>) {
+        let Some(due) = pending_crl_due(Path::new(&self.settings.state_dir)) else { return };
+        let wait = (due as f64 - pj::now()).max(0.0) + 1.0;
+        let weak = Arc::downgrade(self);
+        let _ = std::thread::Builder::new().name("relay-crl-pending".into()).spawn(move || {
+            std::thread::sleep(Duration::from_secs_f64(wait));
+            if let Some(r) = weak.upgrade() {
+                r.adopt_pending();
+            }
+        });
+    }
+
+    /// The pending root CRL becomes the one in force once its thisUpdate has passed (R3-M1); nothing before.
+    pub fn adopt_pending(&self) {
+        if crl_parts(&self.settings).is_none() {
+            return;
+        }
+        let adopted = {
+            let _g = self.files.lock();
+            adopt_pending_crl(Path::new(&self.settings.state_dir), Path::new(&self.settings.client_ca), pj::now() as i64)
+        };
+        if let Some((crl, der)) = adopted {
+            self.root_crl_in_force(&crl, &der);
+        }
+    }
+
+    /// AC-2b-D 9.3 `meetPki` (null unless `fleet_pki`): the CA id, the server certificate in `pki/current`, and the
+    /// certificate server's view: the signer client serial last used in a successful call, whether it enforces
+    /// revocation, and the list it holds. Building it notes when each serial in `pki/current` was first reported
+    /// (R5-M1).
+    pub fn meet_pki_report(&self) -> Value {
+        if !self.settings.fleet_pki || self.settings.state_dir.is_empty() {
+            return Value::Null;
+        }
+        let dir = Path::new(&self.settings.state_dir);
+        let cert = Cert::from_pem(&String::from_utf8_lossy(&read_bytes(&crate::fleet_agent::pki_current(dir).join("relay.crt"))));
+        let ca_id = self_signed_roots(Path::new(&self.settings.client_ca)).first().map(|c| crate::license::meet_root_id(&c.spki));
+        let signer = self.hub.signer.as_ref();
+        let signer_serial = signer.and_then(|s| s.last_ok()).map(|(s, _)| s);
+        let (enforced, held) = signer.map(|s| s.held()).unwrap_or((false, Value::Null));
+        let cert_serial = cert.as_ref().map(|c| c.serial.clone()).unwrap_or_default();
+        note_reported(dir, &cert_serial, signer_serial.as_deref(), crate::codec::now_ms());
+        serde_json::json!({
+            "caId": ca_id,
+            "certSerial": cert.as_ref().map(|c| c.serial.clone()),
+            "certNotAfter": cert.as_ref().map(|c| c.not_after * 1000),
+            "signerSerial": signer_serial,
+            "signerCrlEnforced": enforced,
+            "signerHeld": held,
+        })
+    }
+
+    /// AC-2b-D 8.4 (R2-M4): after `pki/current` switched to a renewed pair, new connections use the new certificate
+    /// and the certificate server client presents the new signer client pair from its next call (no restart).
+    pub fn pki_switched(&self) {
+        self.reload_tls();
+        if let Some(signer) = &self.hub.signer {
+            if let Err(e) = signer.reload() {
+                log_error(&format!("the certificate server client cannot use the new files: {e}"));
+            }
+        }
+        log_info("the renewed certificates are in use");
+    }
+
+    /// AC-2b-D 8.4 (R5-M1): superseded key folders of a `fleet_pki` relay, 7 days after the newer pair was reported.
+    pub fn prune_pki(&self) {
+        if !self.settings.fleet_pki || self.settings.state_dir.is_empty() {
+            return;
+        }
+        for name in prune_superseded(Path::new(&self.settings.state_dir), crate::codec::now_ms()) {
+            log_info(&format!("superseded key folder pki/{name} overwritten and deleted"));
+        }
     }
 
     /// push_crl: a new CRL from the issuer: the root's or one of the signer's intermediates'.
@@ -449,6 +597,11 @@ impl Relay {
         let ca = self.client_ca().ok_or_else(|| E::Internal("the client CA cannot be read".into()))?;
         let parts = crl_parts(&self.settings);
         if crl.issuer == ca.subject && crl.signature_valid(&ca.spki) {
+            // AC-2b-D 8.5: on a fleet_pki relay the Admin Console is the only source of the root's CRL
+            if self.settings.fleet_pki {
+                crl_refused("path");
+                return m::forbidden(ROOT_CRL_CONSOLE_ONLY);
+            }
             let _g = self.files.lock();
             match &parts {
                 Some((root_part, _)) => {
@@ -1113,6 +1266,97 @@ impl Relay {
     }
 }
 
+// ── AC-2b-D 8.4 (R5-M1): superseded key folders under pki/ ─────────────────────────────────────────────────
+
+/// Note when `hello` first reported the server certificate serial and the signer client serial (last used in a
+/// successful certificate server call) now in use, in `pki/reported.json` `{certSerial, certAt, signerSerial,
+/// signerAt}` (ms); written only when one changed.
+pub fn note_reported(state_dir: &Path, cert_serial: &str, signer_serial: Option<&str>, now_ms: i64) {
+    let path = state_dir.join("pki").join(PKI_REPORTED_FILE);
+    let mut v = serde_json::from_slice::<Value>(&read_bytes(&path)).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    let mut changed = false;
+    if !cert_serial.is_empty() && v.get("certSerial").and_then(Value::as_str) != Some(cert_serial) {
+        v.insert("certSerial".into(), Value::from(cert_serial));
+        v.insert("certAt".into(), Value::from(now_ms));
+        changed = true;
+    }
+    if let Some(s) = signer_serial.filter(|s| !s.is_empty()) {
+        if v.get("signerSerial").and_then(Value::as_str) != Some(s) {
+            v.insert("signerSerial".into(), Value::from(s));
+            v.insert("signerAt".into(), Value::from(now_ms));
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = write_atomic(&path, pj::dumps(&Value::Object(v)).as_bytes()) {
+            log_warn(&format!("cannot write {}: {e}", path.display()));
+        }
+    }
+}
+
+/// Overwrite every file of a folder with zeros, then remove the folder.
+fn shred_dir(dir: &Path) -> std::io::Result<()> {
+    use std::io::Write;
+    for entry in std::fs::read_dir(dir)? {
+        let p = entry?.path();
+        let meta = std::fs::symlink_metadata(&p)?;
+        if meta.is_file() {
+            let mut f = std::fs::OpenOptions::new().write(true).open(&p)?;
+            f.write_all(&vec![0u8; meta.len() as usize])?;
+            f.sync_all()?;
+        }
+    }
+    std::fs::remove_dir_all(dir)
+}
+
+/// R5-M1: every `pki/<serial>/` folder other than the one `pki/current` links to (and other than an unfinished
+/// `new-` folder) is overwritten and deleted once the pair that replaced it was reported in `hello` 7 days ago: the
+/// server pair by `certSerial`, a signer client pair by `signerSerial` (which only a successful certificate server
+/// call sets). Never earlier, never without `pki/current` as a link. The folders deleted.
+pub fn prune_superseded(state_dir: &Path, now_ms: i64) -> Vec<String> {
+    let pki = state_dir.join("pki");
+    let Ok(target) = std::fs::read_link(crate::fleet_agent::pki_current(state_dir)) else { return Vec::new() };
+    let Some(current) = target.file_name().map(|n| n.to_os_string()) else { return Vec::new() };
+    let serial_in = |dir: &Path, file: &str| cert_serial(&dir.join(file).to_string_lossy());
+    let (cur_cert, cur_signer) = (serial_in(&pki.join(&current), "relay.crt"), serial_in(&pki.join(&current), "signer-client.crt"));
+    if cur_cert.is_empty() {
+        return Vec::new();
+    }
+    let rep = serde_json::from_slice::<Value>(&read_bytes(&pki.join(PKI_REPORTED_FILE))).unwrap_or(Value::Null);
+    let at = |serial_key: &str, at_key: &str, serial: &str| (!serial.is_empty() && rep.get(serial_key).and_then(Value::as_str) == Some(serial)).then(|| rep.get(at_key).and_then(Value::as_i64)).flatten();
+    let (cert_at, signer_at) = (at("certSerial", "certAt", &cur_cert), at("signerSerial", "signerAt", &cur_signer));
+    let mut gone = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&pki) else { return gone };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == current || name.to_string_lossy().starts_with("new-") {
+            continue;
+        }
+        let dir = entry.path();
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        let (old_cert, old_signer) = (serial_in(&dir, "relay.crt"), serial_in(&dir, "signer-client.crt"));
+        let needs_signer = !old_signer.is_empty() && !cur_signer.is_empty() && old_signer != cur_signer;
+        let needs_cert = old_cert != cur_cert || !needs_signer;
+        let mut due = Some(0i64);
+        for (needed, when) in [(needs_cert, cert_at), (needs_signer, signer_at)] {
+            if needed {
+                due = due.zip(when).map(|(a, b)| a.max(b));
+            }
+        }
+        let Some(due) = due else { continue };
+        if now_ms - due < SUPERSEDED_KEEP_MS {
+            continue;
+        }
+        match shred_dir(&dir) {
+            Ok(()) => gone.push(name.to_string_lossy().into_owned()),
+            Err(e) => log_warn(&format!("cannot delete {}: {e}", dir.display())),
+        }
+    }
+    gone
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1137,5 +1381,107 @@ mod tests {
         assert_eq!(release_manifest(bad.as_object().unwrap()).unwrap_err().message(), "version must look like 0.92.0");
         let none = json!({"version": "1.0"});
         assert_eq!(release_manifest(none.as_object().unwrap()).unwrap_err().message(), "files must describe the windows and/or macos installer");
+    }
+
+    // ── AC-2b-D (16.1 d-relay) ──
+
+    use crate::meet_tls::testpki::{dir, pem, Ca, Key};
+    use crate::meet_tls::{ROOT_CRL, ROOT_CRL_PENDING};
+
+    const DAY_MS: i64 = 86_400_000;
+
+    fn fleet_pki_relay(ca: &Ca, fleet_pki: bool) -> (Arc<Relay>, std::path::PathBuf) {
+        let state = dir("ops");
+        std::fs::create_dir_all(state.join("pki")).unwrap();
+        std::fs::write(state.join("pki").join("ca.crt"), ca.pem()).unwrap();
+        let s = m::Settings { state_dir: state.to_string_lossy().into_owned(), client_ca: state.join("pki").join("ca.crt").to_string_lossy().into_owned(), fleet_pki, ..m::Settings::default() };
+        (crate::meet::test_relay(s), state)
+    }
+
+    /// 8.5 (R2-L8, D9): a fleet_pki relay takes its CA's root CRL only from the Admin Console: one from the certificate
+    /// server is refused (`why: "path"`) and leaves nothing; a relay without fleet_pki keeps taking it.
+    #[test]
+    fn ac2b_fleet_pki_takes_root_crls_only_from_the_console() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = pj::now() as i64;
+        let list = Value::from(ca.crl_pem(t - 300, t + 120 * 86_400, &[&[0x44]], Some(&[1])));
+        let (managed, state) = fleet_pki_relay(&ca, true);
+        assert!(!managed.store_root_crl(Some(&list)));
+        assert!(!state.join(ROOT_CRL).exists());
+        let (plain, plain_state) = fleet_pki_relay(&ca, false);
+        assert!(plain.store_root_crl(Some(&list)));
+        assert!(plain_state.join(ROOT_CRL).exists());
+        // the channel's list is taken on the fleet_pki relay, a later one waits while not yet current
+        assert_eq!(managed.adopt_root_crl(list.as_str().unwrap().as_bytes()), Ok(Placed::Current));
+        assert!(state.join(ROOT_CRL).exists() && state.join("crl.pem").exists());
+        assert_eq!(managed.adopt_root_crl(ca.crl_pem(t + 120, t + 120 * 86_400, &[], Some(&[2])).as_bytes()), Ok(Placed::Pending));
+        assert!(state.join(ROOT_CRL_PENDING).exists());
+        assert_eq!(managed.adopt_root_crl(ca.crl_pem(t + 600, t + 120 * 86_400, &[], Some(&[3])).as_bytes()).unwrap_err(), "future");
+        // with a fixed `crl` file the relay takes no pushed list
+        let fixed = crate::meet::test_relay(m::Settings { crl: state.join("fixed.pem").to_string_lossy().into_owned(), ..managed.settings.clone() });
+        assert_eq!(fixed.adopt_root_crl(list.as_str().unwrap().as_bytes()).unwrap_err(), "fixed");
+    }
+
+    /// 9.3 `meetPki` and R5-M1: the certificate in `pki/current` is reported, and its first report is noted.
+    #[test]
+    fn ac2b_meet_pki_reports_the_current_pair() {
+        let ca = Ca::new("Lucid Meet CA");
+        let (relay, state) = fleet_pki_relay(&ca, true);
+        let current = crate::fleet_agent::pki_current(&state);
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("relay.crt"), pem("CERTIFICATE", &ca.leaf(&[0x2b], "relay.example.org", None, &[], &Key::new(), false))).unwrap();
+        let r = relay.meet_pki_report();
+        let id = crate::license::meet_root_id(&Cert::from_der(&ca.der).unwrap().spki);
+        assert_eq!((r["caId"].as_str(), r["certSerial"].as_str()), (Some(id.as_str()), Some("2b")));
+        assert_eq!((r["signerSerial"].clone(), r["signerCrlEnforced"].clone(), r["signerHeld"].clone()), (Value::Null, Value::Bool(false), Value::Null));
+        let noted: Value = serde_json::from_slice(&std::fs::read(state.join("pki").join(PKI_REPORTED_FILE)).unwrap()).unwrap();
+        assert_eq!(noted["certSerial"], "2b");
+    }
+
+    /// R5-M1, D19: a superseded `pki/<serial>/` folder is overwritten and deleted 7 days after the newer pair was
+    /// reported (a signer client pair: after a successful certificate server call with the new one was reported),
+    /// never earlier, never the folder `current` links to, never an unfinished `new-` folder.
+    #[cfg(unix)]
+    #[test]
+    fn ac2b_superseded_key_folders_go_seven_days_after_the_report() {
+        let ca = Ca::new("Lucid Meet CA");
+        let state = dir("prune");
+        let pki = state.join("pki");
+        let folder = |name: &str, server: &[u8], signer: Option<&[u8]>| {
+            let d = pki.join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("relay.crt"), pem("CERTIFICATE", &ca.leaf(server, "relay.example.org", None, &[], &Key::new(), false))).unwrap();
+            std::fs::write(d.join("relay.key"), "key").unwrap();
+            if let Some(s) = signer {
+                std::fs::write(d.join("signer-client.crt"), pem("CERTIFICATE", &ca.leaf(s, "Lucid Meet Relay", None, &[m::RELAY_URI], &Key::new(), true))).unwrap();
+                std::fs::write(d.join("signer-client.key"), "key").unwrap();
+            }
+        };
+        let switch = |name: &str| {
+            let tmp = pki.join("current.next");
+            std::os::unix::fs::symlink(name, &tmp).unwrap();
+            std::fs::rename(&tmp, crate::fleet_agent::pki_current(&state)).unwrap();
+        };
+        folder("1a", &[0x1a], Some(&[0x5a]));
+        folder("2b", &[0x2b], Some(&[0x5a]));
+        switch("2b");
+        let t0 = 1_900_000_000_000i64;
+        assert!(prune_superseded(&state, t0 + 30 * DAY_MS).is_empty(), "nothing before the newer pair was reported");
+        note_reported(&state, "2b", None, t0);
+        assert!(prune_superseded(&state, t0 + SUPERSEDED_KEEP_MS - 1).is_empty());
+        assert_eq!(prune_superseded(&state, t0 + SUPERSEDED_KEEP_MS), vec!["1a".to_string()]);
+        assert!(!pki.join("1a").exists() && pki.join("2b").join("relay.crt").exists());
+        // a signer client renewal: the server pair copied; the old folder waits for the new signer serial's report
+        folder("2b-6b", &[0x2b], Some(&[0x6b]));
+        switch("2b-6b");
+        note_reported(&state, "2b", Some("5a"), t0 + 8 * DAY_MS);
+        assert!(prune_superseded(&state, t0 + 100 * DAY_MS).is_empty(), "the old signer pair stays until the new one was used");
+        let t1 = t0 + 101 * DAY_MS;
+        note_reported(&state, "2b", Some("6b"), t1);
+        assert!(prune_superseded(&state, t1 + SUPERSEDED_KEEP_MS - 1).is_empty());
+        folder("new-x", &[0x01], None);
+        assert_eq!(prune_superseded(&state, t1 + SUPERSEDED_KEEP_MS), vec!["2b".to_string()]);
+        assert!(pki.join("2b-6b").join("relay.crt").exists() && pki.join("new-x").exists());
+        assert!(prune_superseded(&state, t1 + 1000 * DAY_MS).is_empty(), "never the folder current links to");
     }
 }

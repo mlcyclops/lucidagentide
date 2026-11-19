@@ -1264,6 +1264,40 @@ fn a_high_flag_before_bootstrap_gives_high_and_a_downgrade_stays_flagged() {
 }
 
 #[test]
+fn a_government_console_stays_high_through_settings_and_reset() {
+    // AC-2b 2.5, 2.6 (R3-M2, R4-L2): government recorded at setup; Settings refuses Standard; reset keeps it.
+    let b = build_high("profile-government");
+    let dir = b.dir.clone();
+    let c = &b.c;
+    let mut a = Authenticator::new(5);
+    let sid = enrol_first_high(c, &mut a, T0);
+    add_break_glass(c, &Authenticator::new(40), BG, BG_PASSWORD);
+    {
+        let mut inner = c.inner.lock();
+        inner.book.settings.government = true;
+        inner.book.settings.downgraded = true;
+        c.save_book(&mut inner).unwrap();
+    }
+    assert_eq!(json_of(&send(c, get("/console/api/settings", &sid), T0 + 1))["government"], json!(true));
+    let path = "/console/api/settings/profile";
+    let r = post_su(c, &sid, &mut a, path, "settings.profile", "-", json!({ "profile": "standard", "reason": "Pilot" }), T0 + 2);
+    assert_eq!((r.status, code(&r).as_str()), (409, "profile-government"));
+    assert_eq!(json_of(&r)["error"], "This console was set up as a government deployment. Its profile stays High.");
+    assert_eq!(c.settings_now().profile, Profile::High);
+    drop(b);
+    // reset --first-admin keeps `government`; the next start without a flag stays High and keeps `downgraded`.
+    let ok = |_: &str, _: &str| -> Result<(), String> { Ok(()) };
+    run_offline(&dir, Offline::Reset { first_admin: ALICE.into(), typed_host: RP.into() }, RP, &ok).unwrap();
+    let book = crate::console_auth::Book::read(&dir.join(CONSOLE_FILE), T0).unwrap();
+    assert!(book.settings.government && !book.bootstrapped);
+    let b = open_in(dir.clone(), Some(ALICE), "0.0.0.0/0,::/0", "", false, None).unwrap();
+    assert_eq!((b.c.settings_now().profile, b.c.settings_now().downgraded, b.c.settings_now().government), (Profile::High, true, true));
+    drop(b);
+    let b = open_in(dir, Some(ALICE), "0.0.0.0/0,::/0", "", false, Some(Profile::Standard)).unwrap();
+    assert_eq!(b.c.settings_now().profile, Profile::High);
+}
+
+#[test]
 fn offline_commands_wait_for_the_relay_to_stop() {
     let b = build("offline");
     let c = b.c.clone();

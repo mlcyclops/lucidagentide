@@ -731,6 +731,10 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
 /// (the answer says `enclave: true`).
 fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
     let uris = m::cert_uris(ctx.der);
+    // AC-2b-D 8.4 (R2-L10, D16): a relay or signer client certificate is accepted on no route of the main port
+    if uris.iter().any(|u| u == m::RELAY_URI) {
+        return Some(m::E::Forbidden(m::RELAY_NOT_PERSON.into()));
+    }
     let (kind, mut words) = match pc::cert_kind(&uris) {
         Ok((kind, _)) => {
             let words = pc::service_confined(&kind, method, &ctx.path).to_string();

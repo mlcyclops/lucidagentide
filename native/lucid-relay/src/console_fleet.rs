@@ -210,6 +210,11 @@ pub struct RelayRecord {
     pub scope_stale: bool,
     /// The relay's clock is more than 5 minutes off (`relay-clock`, from metrics).
     pub clock_off: bool,
+    /// AC-2b-D 6.1: the enrollment's `deploy` (the names recorded at mint, `pki`), kept for renewals (8.4).
+    pub deploy: Option<Value>,
+    /// AC-2b-D 8.4: `{keep, at, done}`: the server serial the relay reported in use, and when the older server
+    /// serials are revoked (7 days after the relay reported it).
+    pub meet_revoke: Option<Value>,
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -384,7 +389,7 @@ impl RelayRecord {
             "pendingScopes": self.pending_scopes, "confirmed": self.confirmed, "leftAt": self.left_at, "report": self.report,
             "attention": self.attention, "counts": self.counts, "servers": self.servers, "push": self.push, "waiting": self.waiting,
             "unknown": self.unknown, "replacements": self.replacements, "flappingAt": self.flapping_at, "behindSince": self.behind_since,
-            "scopeStale": self.scope_stale, "clockOff": self.clock_off,
+            "scopeStale": self.scope_stale, "clockOff": self.clock_off, "deploy": self.deploy, "meetRevoke": self.meet_revoke,
         })
     }
 
@@ -425,6 +430,8 @@ impl RelayRecord {
             behind_since: v.get("behindSince").and_then(Value::as_i64),
             scope_stale: v.get("scopeStale").and_then(Value::as_bool).unwrap_or(false),
             clock_off: v.get("clockOff").and_then(Value::as_bool).unwrap_or(false),
+            deploy: v.get("deploy").filter(|d| d.is_object()).cloned(),
+            meet_revoke: v.get("meetRevoke").filter(|d| d.is_object()).cloned(),
         })
     }
 
@@ -473,6 +480,11 @@ pub struct Enrollment {
     pub state: String,
     pub fails: u32,
     pub relay: Option<String>,
+    /// AC-2b-D 6.1: `linux`, `proxmox`, `docker` or `installed` (the AC-2a path).
+    pub env: String,
+    /// AC-2b-D 6.1 `{env, host, turnHost, clients, pki, license, binarySha256, offered, licenseSha256}`; None for
+    /// `installed`.
+    pub deploy: Option<Value>,
 }
 
 impl Enrollment {
@@ -480,7 +492,7 @@ impl Enrollment {
         json!({
             "id": self.id, "product": product_str(self.product), "name": self.name, "site": self.site, "scopes": self.scopes,
             "replaces": self.replaces, "createdBy": self.created_by, "createdAt": self.created_at, "expires": self.expires,
-            "state": self.state, "fails": self.fails, "relay": self.relay,
+            "state": self.state, "fails": self.fails, "relay": self.relay, "env": self.env, "deploy": self.deploy,
         })
     }
 
@@ -499,6 +511,9 @@ impl Enrollment {
             state: s("state")?,
             fails: u32::try_from(v.get("fails")?.as_u64()?).ok()?,
             relay: s("relay"),
+            // absent in a registry from before AC-2b-D
+            env: s("env").unwrap_or_else(|| "installed".into()),
+            deploy: v.get("deploy").filter(|d| d.is_object()).cloned(),
         })
     }
 
@@ -583,6 +598,11 @@ pub struct FleetBook {
     pub approvals: Map<String, Value>,
     /// AC-2a 8.1 `licenseReminders`: `{relay id: sealed reminder record}` (license_reminders.rs, R7-L2).
     pub license_reminders: Map<String, Value>,
+    /// AC-2b-D 2.4 `fleet.spokesRoot`: `{pem, id}`, the Remote Spokes organization root's public key (3.8).
+    pub spokes_root: Option<Value>,
+    /// AC-2b-D 10 attention kept across restarts until dismissed: `crlFuture {date, where, ceiling}`,
+    /// `signerStale {since, number}`.
+    pub meet_alerts: Map<String, Value>,
 }
 
 fn hash_hex(h: &[u8; 32]) -> String {
@@ -605,7 +625,7 @@ impl FleetBook {
     fn new(policy: Value) -> Result<FleetBook, ApiError> {
         let console_id = format!("c_{}", hex(&random_bytes(8)?));
         let policy_hash = crate::fleet_trust::policy_hash(&console_id, 1, &[0u8; 32], &policy).ok_or_else(|| ApiError::of("write-failed"))?;
-        Ok(FleetBook { console_id, policy, policy_seq: 1, policy_hash, roster_seq: 0, roster_hash: [0u8; 32], roster: Vec::new(), roster_log: Vec::new(), policy_log: Vec::new(), library: Vec::new(), approvals: Map::new(), license_reminders: Map::new() })
+        Ok(FleetBook { console_id, policy, policy_seq: 1, policy_hash, roster_seq: 0, roster_hash: [0u8; 32], roster: Vec::new(), roster_log: Vec::new(), policy_log: Vec::new(), library: Vec::new(), approvals: Map::new(), license_reminders: Map::new(), spokes_root: None, meet_alerts: Map::new() })
     }
 
     pub fn to_value(&self) -> Value {
@@ -613,6 +633,7 @@ impl FleetBook {
             "consoleId": self.console_id, "policy": self.policy, "policySeq": self.policy_seq, "policyHash": hash_hex(&self.policy_hash),
             "rosterSeq": self.roster_seq, "rosterHash": hash_hex(&self.roster_hash), "roster": self.roster, "rosterLog": self.roster_log,
             "policyLog": self.policy_log, "library": self.library, "approvals": self.approvals, "licenseReminders": self.license_reminders,
+            "spokesRoot": self.spokes_root, "meetAlerts": self.meet_alerts,
         })
     }
 
@@ -635,6 +656,15 @@ impl FleetBook {
             approvals: v.get("approvals")?.as_object()?.clone(),
             // absent in a book from before revision 3.4
             license_reminders: match v.get("licenseReminders") {
+                None => Map::new(),
+                Some(r) => r.as_object()?.clone(),
+            },
+            // absent in a book from before AC-2b-D
+            spokes_root: match v.get("spokesRoot") {
+                None | Some(Value::Null) => None,
+                Some(r) => Some(r.as_object().filter(|o| str_of(o.get("pem")).is_some() && str_of(o.get("id")).is_some())?.clone().into()),
+            },
+            meet_alerts: match v.get("meetAlerts") {
                 None => Map::new(),
                 Some(r) => r.as_object()?.clone(),
             },
@@ -675,6 +705,8 @@ pub struct FleetOpen {
     pub metrics_sources_text: String,
     /// All-in-one (2.2): the in-process relay's id once enrolled same-process.
     pub all_in_one: bool,
+    /// AC-2b-D 4.2 `--fleet-serve-dev`: a `dev-license` build hands out its program too (default off).
+    pub serve_dev: bool,
 }
 
 /// (email, relay) of a counted read.
@@ -702,6 +734,13 @@ pub struct Fleet {
     reads: Mutex<HashMap<ReadKey, ReadCount>>,
     /// Codes minted per admin in the last hour (3.1 `enroll-limit`).
     minted: Mutex<HashMap<String, Vec<i64>>>,
+    /// AC-2b-D 8: the Meeting Hub organization CA this console holds (None: none imported). Lock order: the
+    /// registry, then this, then the console's seal.
+    meet: Mutex<Option<crate::meet_ca::MeetCa>>,
+    /// AC-2b-D 8.5: the last re-sign failed (`meet-crl-failing`).
+    crl_failing: Mutex<bool>,
+    /// AC-2b-D 8.5 divergence: the reported root CRL (sha256) each relay was last asked for with `meet-crl-get`.
+    diverge_seen: Mutex<HashMap<String, String>>,
 }
 
 /// A request as the fleet section sees it (console.rs builds it after the role, origin and size checks).
@@ -805,7 +844,7 @@ fn ac1_kind(kind: &str) -> bool {
 /// A relay's pushed attention item, cleaned (AC-1 0): its kind, severity, numeric or cleaned text args; None for an
 /// unknown kind.
 fn clean_item(v: &Value) -> Option<Value> {
-    let kind = str_of(v.get("kind")).filter(|k| ac1_kind(k))?;
+    let kind = str_of(v.get("kind")).filter(|k| ac1_kind(k) || RELAY_DEPLOY_KINDS.contains(k))?;
     let severity = str_of(v.get("severity")).filter(|s| matches!(*s, "bad" | "warn" | "info")).unwrap_or("info");
     let mut args = Map::new();
     if let Some(o) = v.get("args").and_then(Value::as_object) {
@@ -838,9 +877,21 @@ const fn g(path: &'static str, role: Role) -> RouteSpec {
 /// The fleet routes of 5.3. Rows with a fleet step-up (4.6) list `stepup` among their keys and verify it in their
 /// handler; rows with an AC-1 step-up have `stepup: true`. `fleet/relays/<id>` and its proxy `.../p/<path>` are
 /// matched by prefix (PROXY_GET, PROXY_POST, RELAY_DETAIL).
-pub static FLEET_ROUTES: [RouteSpec; 36] = [
+pub static FLEET_ROUTES: [RouteSpec; 47] = [
     g("fleet/relays", Role::Viewer),
-    r("POST", "fleet/enroll", Role::Admin, "fleet.enroll.code", "name", true, &["product", "name", "site", "scopes", "replaces"]),
+    r("POST", "fleet/enroll", Role::Admin, "fleet.enroll.code", "name", true, &["product", "name", "site", "scopes", "replaces", "env", "deploy"]),
+    // AC-2b-D 9.1
+    g("fleet/deploy/options", Role::Admin),
+    g("fleet/meet-ca", Role::Admin),
+    RouteSpec { method: "POST", path: "fleet/meet-ca/import", role: Role::Admin, action: "fleet.meet-ca.import", target: "-", stepup: false, need: Need::Any, security: false, keys: &["caPem", "keyPem", "issuedJson", "crlPem", "signerUrl", "noHighRelay", "maxLifetimeDays", "reason", "stepup"], body_max: MEET_CA_IMPORT_MAX },
+    r("POST", "fleet/meet-ca/revoke", Role::Admin, "fleet.meet-ca.revoke", "serial", true, &["serial", "reason"]),
+    r("POST", "fleet/meet-ca/remove", Role::Admin, "fleet.meet-ca.remove", "-", true, &["elsewhere", "reason"]),
+    r("POST", "fleet/meet-ca/dismiss-diverged", Role::Admin, "", "-", false, &[]),
+    r("POST", "fleet/meet-ca/prune", Role::Admin, "fleet.meet-ca.prune", "-", true, &["certPem", "reason"]),
+    r("POST", "fleet/meet-ca/max-lifetime", Role::Admin, "fleet.meet-ca.max-lifetime", "-", true, &["days", "reason"]),
+    r("POST", "fleet/meet-ca/signer-enforced", Role::Admin, "fleet.meet-ca.signer-enforced", "-", true, &["on", "reason"]),
+    g("fleet/spokes-root", Role::Admin),
+    r("POST", "fleet/spokes-root", Role::Admin, "fleet.spokes-root.set", "-", true, &["pem"]),
     g("fleet/enrollments", Role::Admin),
     r("POST", "fleet/enrollments/cancel", Role::Admin, "fleet.enroll.cancel", "id", false, &["id"]),
     r("POST", "fleet/relays/confirm", Role::Admin, "fleet.relay.confirm", "relay", true, &["relay", "fingerprint"]),
@@ -879,6 +930,15 @@ pub static FLEET_ROUTES: [RouteSpec; 36] = [
 
 /// `GET fleet/relays/<id>` (matched by prefix).
 pub static RELAY_DETAIL: RouteSpec = g("fleet/relays/<id>", Role::Viewer);
+/// `GET fleet/enrollments/<id>` (AC-2b-D 3.6, 9.1; matched by prefix).
+pub static ENROLLMENT_DETAIL: RouteSpec = g("fleet/enrollments/<id>", Role::Admin);
+/// `POST fleet/meet-ca/import`: at most 1 MiB (AC-2b-D 8.2).
+pub const MEET_CA_IMPORT_MAX: usize = 1024 * 1024;
+
+/// An enrollment id (`en_` and 16 lowercase hex; public, AC-2b-D L5).
+pub fn enrollment_id_ok(id: &str) -> bool {
+    id.len() == 19 && id.starts_with("en_") && id[3..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
 /// `GET|POST fleet/relays/<id>/p/<path>` (5.4): the phase 1 role is checked by the handler; the relay checks the
 /// exact keys; a write carries its fleet step-up as `stepup`.
 pub static PROXY_GET: RouteSpec = RouteSpec { method: "GET", path: "fleet/relays/<id>/p/<path>", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 };
@@ -889,6 +949,9 @@ pub static PROXY_POST: RouteSpec = RouteSpec { method: "POST", path: "fleet/rela
 pub fn fleet_route(method: &str, path: &str) -> Option<(&'static RouteSpec, Option<(String, String)>)> {
     if let Some(s) = FLEET_ROUTES.iter().chain(crate::console_wizard::WIZARD_ROUTES.iter()).find(|s| s.method == method && s.path == path) {
         return Some((s, None));
+    }
+    if let Some(id) = path.strip_prefix("fleet/enrollments/") {
+        return (method == "GET" && enrollment_id_ok(id)).then(|| (&ENROLLMENT_DETAIL, Some((id.to_owned(), String::new()))));
     }
     let rest = path.strip_prefix("fleet/relays/")?;
     let (id, tail) = match rest.split_once('/') {
@@ -980,6 +1043,9 @@ impl Fleet {
             siem.configure(crate::fleet_syslog::SiemSettings::from_json(&saved).map(|s| (s, key)));
         }
         let console_id = book.console_id.clone();
+        // AC-2b-D 8.3: the CA's files and its sealed key; a CA whose key does not unseal opens `lost`.
+        let meet = with_vault(console, |v| crate::meet_ca::MeetCa::open(&state_dir, &*v));
+        let _ = t;
         let fleet = Arc::new_cyclic(|weak: &Weak<Fleet>| {
             let bridge: Arc<dyn crate::fleet_people::PeopleHost> = Arc::new(PeopleBridge { fleet: weak.clone() });
             let people = Arc::new(crate::fleet_people::People::new(bridge));
@@ -999,10 +1065,12 @@ impl Fleet {
                 people,
                 reads: Mutex::new(HashMap::new()),
                 minted: Mutex::new(HashMap::new()),
+                meet: Mutex::new(meet),
+                crl_failing: Mutex::new(false),
+                diverge_seen: Mutex::new(HashMap::new()),
             }
         });
         console.attach_fleet(fleet.clone());
-        let _ = t;
         Ok(fleet)
     }
 
@@ -1345,10 +1413,25 @@ impl Fleet {
             let (id, sub) = at.unwrap_or_default();
             return self.proxy(c, r, &id, &sub);
         }
+        if std::ptr::eq(spec, &ENROLLMENT_DETAIL) {
+            let (id, _) = at.unwrap_or_default();
+            return plain(self.enrollment_detail(&id, r.t)?);
+        }
         let t = r.t;
         match (spec.method, spec.path) {
             ("GET", "fleet/relays") => plain(self.relays_list(r, t)?),
             ("POST", "fleet/enroll") => self.enroll_mint(c, r),
+            ("GET", "fleet/deploy/options") => plain(self.deploy_options(c, t)),
+            ("GET", "fleet/meet-ca") => plain(self.meet_ca_view(c, t)),
+            ("POST", "fleet/meet-ca/import") => self.meet_ca_import(c, r),
+            ("POST", "fleet/meet-ca/revoke") => self.meet_ca_revoke(c, r),
+            ("POST", "fleet/meet-ca/remove") => self.meet_ca_remove(c, r),
+            ("POST", "fleet/meet-ca/dismiss-diverged") => self.meet_ca_dismiss(c),
+            ("POST", "fleet/meet-ca/prune") => self.meet_ca_prune(c, r),
+            ("POST", "fleet/meet-ca/max-lifetime") => self.meet_ca_max_lifetime(c, r),
+            ("POST", "fleet/meet-ca/signer-enforced") => self.meet_ca_signer_enforced(c, r),
+            ("GET", "fleet/spokes-root") => plain(self.spokes_root_view()),
+            ("POST", "fleet/spokes-root") => self.spokes_root_set(c, r),
             ("GET", "fleet/enrollments") => plain(self.enrollments_list(r, t)),
             ("POST", "fleet/enrollments/cancel") => self.enroll_cancel(c, r),
             ("POST", "fleet/relays/confirm") => self.relay_confirm(c, r),
@@ -1511,6 +1594,9 @@ impl Fleet {
             v["sourceAddress"] = json!(rec.source_address);
             v["serials"] = json!(rec.serials.iter().map(|s| json!({ "serial": s.serial, "notAfter": s.not_after, "generation": s.generation, "current": s.current })).collect::<Vec<_>>());
             v["roster"] = json!({ "seq": rec.report_u64("rosterSeq"), "policySeq": rec.report_u64("policySeq"), "consoleSeq": self.book.lock().roster_seq });
+            // AC-2b-D 8.4: what the CA issued to it, and for the removal dialog the certificate server
+            // (`deploy.remove-signer-note`) while that server is not marked as checking revocation.
+            v["meet"] = self.meet_relay_view(&rec.id, t);
         }
         let _ = c;
         Ok(json!({ "ok": true, "relay": v }))
@@ -1542,13 +1628,14 @@ impl Fleet {
         format!("https://{host}:{}", self.cfg.fleet_port)
     }
 
-    /// POST fleet/enroll {product, name, site, scopes, replaces, stepup} (3.1): the code only in this answer, the
-    /// commands never containing it.
+    /// POST fleet/enroll {product, name, site, scopes, replaces, env, deploy, stepup} (3.1, AC-2b-D 6.1): the code only
+    /// in this answer, the commands never containing it.
     fn enroll_mint(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
         let who = r.who()?;
         let t = r.t;
         let p = r.params;
-        let product = str_of(p.get("product")).and_then(product_of).ok_or_else(|| ApiError::with("invalid", "product is spokes or meet."))?;
+        // AC-2b-D 3.2: no product is ever assumed.
+        let product = str_of(p.get("product")).and_then(product_of).ok_or_else(|| ApiError::of("deploy-product"))?;
         let name = str_of(p.get("name")).unwrap_or("").to_owned();
         let site = str_of(p.get("site")).unwrap_or("").to_owned();
         if !label_ok(&name, false) || !label_ok(&site, true) {
@@ -1576,6 +1663,12 @@ impl Fleet {
                 return Err(ApiError::of("enroll-limit"));
             }
         }
+        // AC-2b-D 6.1, after AC-2a's checks: env, the fields, deploy-host-taken, the CA, the license.
+        let env = match p.get("env") {
+            None | Some(Value::Null) => "installed".to_owned(),
+            Some(v) => str_of(Some(v)).filter(|e| DEPLOY_ENVS.contains(e)).ok_or_else(|| ApiError::of("deploy-env"))?.to_owned(),
+        };
+        let deploy = self.mint_deploy(c, who, product, &env, p.get("deploy"), replaces.as_deref(), t)?;
         {
             let mut minted = self.minted.lock();
             let mine = minted.entry(who.email.clone()).or_default();
@@ -1590,7 +1683,7 @@ impl Fleet {
         let id = format!("en_{}", hex(&id_bytes));
         c.seal_put(&format!("fleet-code-{id}"), &secret)?;
         let code = crate::fleet_wire::code_encode(product, &id_bytes, &secret, &pin);
-        let e = Enrollment { id: id.clone(), product, name: name.clone(), site: site.clone(), scopes: scopes.clone(), replaces: replaces.clone(), created_by: who.email.clone(), created_at: t, expires: t + CODE_MS, state: "open".into(), fails: 0, relay: None };
+        let e = Enrollment { id: id.clone(), product, name: name.clone(), site: site.clone(), scopes: scopes.clone(), replaces: replaces.clone(), created_by: who.email.clone(), created_at: t, expires: t + CODE_MS, state: "open".into(), fails: 0, relay: None, env: env.clone(), deploy: deploy.clone() };
         {
             let mut reg = self.registry.lock();
             reg.enrollments.insert(id.clone(), e);
@@ -1609,8 +1702,17 @@ impl Fleet {
             "meet": format!("lucid-relay meet enroll {url} --config <relay.json>"),
             "local": url,
         });
-        let out = Out::ok(json!({ "ok": true, "id": id, "code": code, "expires": t + CODE_MS, "commands": commands, "bootstrapRosterHash": bootstrap }));
-        Ok(Done::ok(out, Some(name.clone()), json!({ "id": id, "product": product_str(product), "name": name, "site": site, "scopes": scopes, "replaces": replaces })))
+        let install = self.install_of(c, product, &env, deploy.as_ref(), &id, &name, t);
+        let d = deploy.as_ref();
+        let offered: Vec<Value> = d.and_then(|d| d.get("offered")).and_then(Value::as_array).map(|l| l.iter().filter_map(|k| k.get("hint").cloned()).collect()).unwrap_or_default();
+        let shown_offered: Vec<Value> = offered.iter().map(|h| json!({ "hint": h })).collect();
+        let out = Out::ok(json!({ "ok": true, "id": id, "code": code, "expires": t + CODE_MS, "commands": commands, "bootstrapRosterHash": bootstrap, "install": install, "deploy": deploy, "offered": shown_offered }));
+        let detail = json!({
+            "id": id, "product": product_str(product), "name": name, "site": site, "scopes": scopes, "replaces": replaces,
+            "env": env, "host": d.and_then(|d| d.get("host")).cloned(), "turnHost": d.and_then(|d| d.get("turnHost")).cloned(),
+            "pki": d.and_then(|d| d.get("pki")).cloned(), "license": d.and_then(|d| d.get("license")).cloned(), "offered": offered,
+        });
+        Ok(Done::ok(out, Some(name.clone()), detail))
     }
 
     fn enroll_cancel(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
@@ -1634,8 +1736,13 @@ impl Fleet {
     fn relay_confirm(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
         let id = str_of(r.params.get("relay")).unwrap_or("").to_owned();
         let fp = str_of(r.params.get("fingerprint")).unwrap_or("").to_owned();
+        let ca_id = self.meet_ca_id();
         let mut reg = self.registry.lock();
         let rec = reg.relays.get_mut(&id).filter(|x| x.state.live()).ok_or_else(not_found_relay)?;
+        // AC-2b-D 8.7: a High Meeting Hub relay that trusts (or may trust) the CA this console holds.
+        if rec.product == Product::Meet && !c.profile_high() && ca_held_refuses(ca_id.as_deref(), &rec.profile, rec.report.get("meetRoots")) {
+            return Err(ApiError::of("fleet-ca-held"));
+        }
         if !fingerprint_eq(&rec.fingerprint, &fp) {
             return Err(ApiError::of("fingerprint"));
         }
@@ -1727,6 +1834,8 @@ impl Fleet {
             }
         }
         self.people.wipe_relay(&id);
+        // AC-2b-D 8.4 (L10, R5-M1): every unexpired serial the CA issued to it, of both kinds.
+        self.meet_revoke_relay(c, &id, r.t);
         Ok(Done::ok(Out::ok(json!({ "ok": true })), Some(id), json!({ "reason": reason })))
     }
 
@@ -2470,12 +2579,15 @@ impl Fleet {
             return Err(ApiError::of("fleet-roster-duplicate"));
         }
         let hash = crate::fleet_trust::bootstrap_roster_hash(&book.console_id, id, &book.policy, &book.roster).ok_or_else(|| ApiError::of("invalid"))?;
+        let (policy, roster, spokes_root, library) = (book.policy.clone(), book.roster.clone(), book.spokes_root.clone(), book.library.clone());
+        drop(book);
         let mut console = self.console_view(&c);
         console["host"] = Value::from(host);
+        let deploy = self.preview_deploy(&c, &e, spokes_root.as_ref(), &library)?;
         Ok(json!({
             "console": console,
             "enrollment": { "product": product_str(e.product), "name": e.name, "site": e.site, "scopes": e.scopes, "expires": e.expires },
-            "policy": book.policy, "roster": book.roster, "bootstrapRosterHash": hash,
+            "policy": policy, "roster": roster, "bootstrapRosterHash": hash, "deploy": deploy,
         }))
     }
 
@@ -2524,6 +2636,32 @@ impl Fleet {
         }
         if e.replaces.is_none() && self.registry.lock().live_count() >= RELAYS_MAX {
             return Err(ApiError::of("fleet-limit"));
+        }
+        // AC-2b-D 8.7 (H4): a Standard console holding the CA refuses a High Meeting Hub relay that trusts it, or
+        // whose roots are unknown.
+        if e.product == Product::Meet && !c.profile_high() && ca_held_refuses(self.meet_ca_id().as_deref(), str_of(relay.get("profile")).unwrap_or(""), relay.get("meetRoots")) {
+            self.record(&c, &format!("relay {}", e.replaces.clone().unwrap_or_else(|| id.to_owned())), "fleet.relay.refused", Some(id.to_owned()), json!({ "code": "fleet-ca-held", "profile": relay.get("profile") }), t);
+            return Err(ApiError::of("fleet-ca-held"));
+        }
+        // AC-2b-D 6.5: the requests read, are signed by their own P-256 keys, and use two different keys; their names
+        // are checked against the mint when the CA issues (`enroll_done`). A refusal burns one of the code's tries.
+        if let Some(names) = meet_names(e.deploy.as_ref()) {
+            let signer = {
+                let meet = self.meet.lock();
+                let ca = meet.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok).ok_or_else(|| ApiError::of("deploy-ca-needed"))?;
+                ca.signer_url().is_some()
+            };
+            let server = csr_of(relay.get("meetCsr"));
+            let signer_csr = csr_of(relay.get("meetSignerCsr"));
+            let ok = match (&server, &signer_csr, signer) {
+                (Some(_), None, false) => relay.get("meetSignerCsr").is_none_or(Value::is_null),
+                (Some(s), Some(g), true) => s.1 != g.1,
+                _ => false,
+            };
+            if !ok {
+                self.enroll_failed(id, t);
+                return Err(deploy_csr_error(&names));
+            }
         }
         Ok(())
     }
@@ -2591,15 +2729,31 @@ impl Fleet {
             behind_since: None,
             scope_stale: false,
             clock_off: false,
+            deploy: None,
+            meet_revoke: None,
         }
     }
 
     /// 3.3 after the checks and the certificate: the code used and its secret wiped, the record `pending` (a Replace
     /// keeps the old id, name, site, scopes and metrics, and denies every old serial), `fleet.enroll` audited. The
-    /// answer's console part (fleet_port adds cert, caCert, trust and fleetUrl).
+    /// answer's console part (fleet_port adds cert, caCert, trust and fleetUrl). AC-2b-D 6.5: with `pki: console` the
+    /// CA issues the relay's certificates from its requests in the same step as the registry write, and the answer
+    /// gains `meet: {cert, signerCert, caCert, crl}`; a Replace revokes what the CA issued to the replaced relay.
     pub fn enroll_done(&self, id: &str, done: EnrollDone, t: i64) -> Result<Value, ApiError> {
         let c = self.console()?;
-        let (rec, old_serials) = {
+        match self.enroll_commit(&c, id, &done, t) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                if e.code == "deploy-csr" {
+                    self.enroll_failed(id, t);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn enroll_commit(&self, c: &Console, id: &str, done: &EnrollDone, t: i64) -> Result<Value, ApiError> {
+        let (rec, old_serials, meet, issued, revoked) = {
             let mut reg = self.registry.lock();
             let e = reg.enrollments.get(id).cloned().filter(|e| e.open(t)).ok_or_else(|| ApiError::of("fleet-code-expired"))?;
             let relay_id = done.relay_id.clone().unwrap_or_else(|| e.replaces.clone().unwrap_or_default());
@@ -2615,26 +2769,76 @@ impl Fleet {
                 Some(o) => (o.name.clone(), o.site.clone(), o.scopes.clone()),
                 None => (e.name.clone(), e.site.clone(), e.scopes.clone()),
             };
-            let rec = self.new_record(&relay_id, &name, &site, e.product, scopes, &done, "code", &e.created_by, id, bootstrap, t);
-            let old_serials = old.map(|o| o.all_serials()).unwrap_or_default();
+            let mut rec = self.new_record(&relay_id, &name, &site, e.product, scopes, done, "code", &e.created_by, id, bootstrap, t);
+            rec.deploy = e.deploy.clone();
+            let old_serials = old.as_ref().map(RelayRecord::all_serials).unwrap_or_default();
+            let confirmed = signer_confirmed_in(&reg, &relay_id);
+            let mut issued: Vec<(crate::meet_ca::CertKind, crate::meet_ca::Issued)> = Vec::new();
+            let mut meet = Value::Null;
+            let mut revoked = false;
+            {
+                let mut g = self.meet.lock();
+                if let Some(names) = meet_names(e.deploy.as_ref()) {
+                    let ca = g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok).ok_or_else(|| ApiError::of("deploy-ca-needed"))?;
+                    let (server_der, server_spki) = csr_of(done.relay.get("meetCsr")).ok_or_else(|| deploy_csr_error(&names))?;
+                    let signer = csr_of(done.relay.get("meetSignerCsr"));
+                    // 6.5: keys different from each other and from the management key.
+                    if server_spki == done.spki || signer.as_ref().is_some_and(|(_, s)| *s == done.spki || *s == server_spki) || ca.signer_url().is_some() != signer.is_some() {
+                        return Err(deploy_csr_error(&names));
+                    }
+                    if let Some((holder, name)) = ca.name_holder(&names, t).filter(|(h, _)| *h != relay_id) {
+                        return Err(host_taken_error(&reg, &holder, &name));
+                    }
+                    let s = with_vault(c, |v| ca.issue(&*v, &relay_id, crate::meet_ca::CertKind::Server, &server_der, &names, confirmed, false, t))?;
+                    let g2 = match &signer {
+                        Some((der, _)) => Some(with_vault(c, |v| ca.issue(&*v, &relay_id, crate::meet_ca::CertKind::SignerClient, der, &[], confirmed, false, t))?),
+                        None => None,
+                    };
+                    meet = json!({ "cert": s.pem, "signerCert": g2.as_ref().map(|x| x.pem.clone()), "caCert": ca.ca_pem(), "crl": null });
+                    issued.push((crate::meet_ca::CertKind::Server, s));
+                    if let Some(x) = g2 {
+                        issued.push((crate::meet_ca::CertKind::SignerClient, x));
+                    }
+                }
+                // A Replace keeps the relay id: what the CA issued to the replaced relay is revoked (8.4, L10).
+                if old.is_some() {
+                    if let Some(ca) = g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok) {
+                        let keep: Vec<&str> = issued.iter().map(|(_, x)| x.serial.as_str()).collect();
+                        revoked = with_vault(c, |v| ca.revoke_relay(&*v, &relay_id, None, &keep, t)).map(|l| !l.is_empty()).unwrap_or(false);
+                    }
+                }
+                if !meet.is_null() {
+                    meet["crl"] = g.as_ref().and_then(|ca| ca.crl()).map(|(pem, _)| Value::from(pem)).unwrap_or(Value::Null);
+                }
+            }
             if let Some(x) = reg.enrollments.get_mut(id) {
                 x.state = "used".into();
                 x.relay = Some(relay_id.clone());
             }
             reg.relays.insert(relay_id.clone(), rec.clone());
             self.save_registry(&reg)?;
-            (rec, old_serials)
+            (rec, old_serials, meet, issued, revoked)
         };
-        self.wipe_code(&c, id);
+        self.wipe_code(c, id);
         if !old_serials.is_empty() {
             if let Some(pki) = self.pki.get() {
                 let _ = pki.deny(&old_serials, t);
             }
         }
         self.people.wipe_relay(&rec.id);
-        self.record(&c, &format!("relay {}", rec.id), "fleet.enroll", Some(rec.id.clone()), json!({ "id": id, "relay": rec.id, "fingerprint": rec.fingerprint, "version": rec.version, "fips": rec.fips, "profile": rec.profile, "os": rec.os, "via": "code" }), t);
+        self.record(c, &format!("relay {}", rec.id), "fleet.enroll", Some(rec.id.clone()), json!({ "id": id, "relay": rec.id, "fingerprint": rec.fingerprint, "version": rec.version, "fips": rec.fips, "profile": rec.profile, "os": rec.os, "via": "code" }), t);
+        for (kind, x) in &issued {
+            self.record(c, &format!("relay {}", rec.id), "fleet.meet-cert.issue", Some(rec.id.clone()), json!({ "serial": x.serial, "kind": kind.as_str(), "names": x.names, "notAfter": x.not_after }), t);
+        }
+        if revoked {
+            self.crl_signed(c, t);
+        }
         c.setup_done("relay");
-        Ok(self.enrolled_answer(&c, &rec))
+        let mut answer = self.enrolled_answer(c, &rec);
+        if !meet.is_null() {
+            answer["meet"] = meet;
+        }
+        Ok(answer)
     }
 
     /// Same-process enrollment (2.2, Standard only): no code, every scope but `upgrade`, active at once, no
@@ -2761,6 +2965,8 @@ impl Fleet {
             }
             for (id, _) in &gone {
                 self.record(&c, "console", "fleet.relay.expired", Some(id.clone()), json!({}), t);
+                // AC-2b-D 11: an enroll answer lost after the console committed: its certificates revoked too.
+                self.meet_revoke_relay(&c, id, t);
             }
         }
         serials
@@ -2771,7 +2977,8 @@ impl Fleet {
     /// Take a relay's report fields into its record (untrusted, kept as reported; shown cleaned). A frame whose
     /// `license` is not the exact 5.6 shape (3.4.1) is refused whole with `fleet-op`: nothing of it is taken.
     fn take_report(rec: &mut RelayRecord, body: &Value) -> Result<(), ApiError> {
-        const KEYS: [&str; 22] = ["version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "scopeRequest", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter", "held", "unattested", "license", "waiting", "anchors", "trustTimeAhead"];
+        // AC-2b-D 9.3: `meetRoots`, `meetCrl` and `meetPki` (Meeting Hub relays).
+        const KEYS: [&str; 25] = ["version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "scopeRequest", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter", "held", "unattested", "license", "waiting", "anchors", "trustTimeAhead", "meetRoots", "meetCrl", "meetPki"];
         let Some(o) = body.as_object() else { return Err(ApiError::of("fleet-op")) };
         let license = match o.get("license") {
             Some(v) => Some(license_report(v).ok_or_else(|| ApiError::of("fleet-op"))?),
@@ -2838,8 +3045,10 @@ impl Fleet {
         }
         self.note_bootstrap(&c, relay, before_bootstrap, after_bootstrap, t);
         let book = self.book.lock();
-        let welcome = json!({ "consoleId": self.console_id, "time": t, "policySeq": book.policy_seq, "rosterSeq": book.roster_seq, "trustSeq": body.get("trustSeq").cloned().unwrap_or(Value::Null) });
+        let (policy_seq, roster_seq) = (book.policy_seq, book.roster_seq);
         drop(book);
+        // AC-2b-D 8.7: `meetCaId`, null when this console holds no CA.
+        let welcome = json!({ "consoleId": self.console_id, "time": t, "policySeq": policy_seq, "rosterSeq": roster_seq, "trustSeq": body.get("trustSeq").cloned().unwrap_or(Value::Null), "meetCaId": self.meet_ca_id() });
         // Scopes narrowed while the relay was offline go first (4.1).
         let (ours, theirs) = {
             let reg = self.registry.lock();
@@ -2854,6 +3063,7 @@ impl Fleet {
             }
         }
         self.catch_up(relay);
+        self.meet_report(&c, relay, t);
         Ok(welcome)
     }
 
@@ -2920,6 +3130,9 @@ impl Fleet {
                 }
                 self.note_bootstrap(&c, relay, before, after, t);
                 self.note_pins(&c, relay, pins.0, pins.1, t);
+                if body.get("meetCrl").is_some() || body.get("meetPki").is_some() {
+                    self.meet_report(&c, relay, t);
+                }
             }
             "attention" => {
                 let items: Vec<Value> = body.get("items").and_then(Value::as_array).map(|l| l.iter().take(50).filter_map(clean_item).collect()).unwrap_or_default();
@@ -2972,6 +3185,7 @@ impl Fleet {
                 }
                 self.people.wipe_relay(relay);
                 self.record(&c, &format!("relay {relay}"), "fleet.relay.left", Some(relay.to_owned()), json!({}), t);
+                self.meet_revoke_relay(&c, relay, t);
             }
             "metrics" => {
                 if let Ok(rcv) = self.metrics.receive(relay, product, body, t) {
@@ -3024,6 +3238,7 @@ impl Fleet {
         self.people.tick(t);
         self.refresh_counts();
         self.license_reminders(c, t);
+        self.meet_tick(c, t);
         let (roster_seq, policy_seq) = {
             let b = self.book.lock();
             (b.roster_seq, b.policy_seq)
@@ -3165,6 +3380,7 @@ impl Fleet {
         if c.profile_high() && !cfg!(feature = "fips") {
             out.push(item("fips-needed", "bad", json!({}), "#/security/settings".into()));
         }
+        out.extend(self.meet_attention(t));
         let book_seq = self.book.lock().roster_seq;
         let _ = book_seq;
         let eligible = self.eligible_entries(c);
@@ -3386,6 +3602,1196 @@ impl Fleet {
     }
 }
 
+// ── AC-2b-D: deploy a relay, the Meeting Hub organization CA (6.1, 6.2, 6.5, 8, 9.1, 9.3, 10) ───────────────
+
+/// AC-2b-D 6.1 `env`.
+pub const DEPLOY_ENVS: [&str; 4] = ["linux", "proxmox", "docker", "installed"];
+/// AC-2b-D 3.3: the cards shown disabled with "Coming next".
+pub const DEPLOY_ENVS_NEXT: [&str; 4] = ["azure", "aws", "gcp", "windows"];
+/// AC-2b-D 3.4 `deploy.clients` when none are given, and the most allowed.
+pub const CLIENTS_DEFAULT: [&str; 2] = ["0.0.0.0/0", "::/0"];
+pub const CLIENTS_MAX: usize = 16;
+/// AC-2b-D 6.4: the relay attention kinds a relay may push besides AC-1's.
+pub const RELAY_DEPLOY_KINDS: [&str; 1] = ["profile-lock-refused"];
+const DAY_MS: i64 = 86_400_000;
+/// AC-2b-D 10: `relay-meet-cert-expiring` at 14 days left, `relay-signer-cert-expiring` at 3, `meet-ca-expiring` 365
+/// days before the CA ends.
+const MEET_CERT_WARN_DAYS: i64 = 14;
+const SIGNER_CERT_WARN_DAYS: i64 = 3;
+const MEET_CA_EXPIRING_DAYS: i64 = 365;
+/// AC-2b-D 8.4: the old server serial is revoked 7 days after the relay reports the new one in `hello`.
+const SERVER_GRACE_MS: i64 = 7 * DAY_MS;
+/// AC-2b-D 8.5 `signer-crl-stale`: the certificate server's held list older than the console's for 6 hours.
+const SIGNER_STALE_MS: i64 = 6 * 3_600_000;
+/// The sealed name holding an import until it runs (a second admin may approve it later): the key is never in an
+/// approval row, an audit entry or `console.json` (8.3, D5).
+const MEET_IMPORT_STASH: &str = "meet-ca-import-pending";
+
+/// Run `f` with the console's sealed store, or with one that holds nothing when it did not read back.
+fn with_vault<R>(c: &Console, f: impl FnOnce(&mut dyn crate::fleet_ca::Vault) -> R) -> R {
+    let mut seal = c.seal.lock();
+    match seal.as_mut() {
+        Some(s) => f(s),
+        None => f(&mut crate::fleet_ca::NoVault),
+    }
+}
+
+/// AC-2b-D 3.4: a relay DNS name: 1 to 253 characters, labels of `a-z 0-9 -` (lower-cased by the caller), not an
+/// address.
+pub fn deploy_dns_ok(h: &str) -> bool {
+    (1..=253).contains(&h.len())
+        && h.parse::<std::net::IpAddr>().is_err()
+        && h.split('.').all(|l| (1..=63).contains(&l.len()) && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        && !h.rsplit('.').next().unwrap_or_default().bytes().all(|b| b.is_ascii_digit())
+}
+
+fn deploy_ip_ok(h: &str) -> bool {
+    h.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// The fields of a mint's `deploy` (AC-2b-D 3.4), checked, and the server certificate's names.
+#[derive(Debug)]
+struct DeployFields {
+    host: String,
+    turn: Option<String>,
+    clients: Value,
+    pki: Option<String>,
+    names: Vec<String>,
+}
+
+/// AC-2b-D 3.4: the relay DNS name (Remote Spokes also an address), the TURN name (Meeting Hub), the client networks
+/// (Remote Spokes, 1 to 16 CIDRs, default everyone) and the certificate source (Meeting Hub).
+fn deploy_fields(product: Product, o: &Map<String, Value>) -> Result<DeployFields, ApiError> {
+    if !crate::codec::exact_keys(o, &["host", "turnHost", "clients", "pki", "license"], &["host"]) {
+        return Err(ApiError::with("invalid", "deploy holds host, turnHost, clients, pki and license."));
+    }
+    let host = str_of(o.get("host")).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let host_ok = match product {
+        Product::Meet => deploy_dns_ok(&host),
+        Product::Spokes => deploy_dns_ok(&host) || deploy_ip_ok(&host),
+    };
+    if !host_ok {
+        return Err(ApiError::of("deploy-host"));
+    }
+    let turn = match o.get("turnHost") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s.trim().is_empty() => None,
+        Some(Value::String(s)) => Some(s.trim().to_lowercase()),
+        Some(_) => return Err(ApiError::of("deploy-host")),
+    };
+    if let Some(x) = &turn {
+        if product == Product::Spokes || !(deploy_dns_ok(x) || deploy_ip_ok(x)) {
+            return Err(ApiError::of("deploy-host"));
+        }
+    }
+    let clients = match product {
+        Product::Meet => {
+            if !o.get("clients").is_none_or(Value::is_null) {
+                return Err(ApiError::of("deploy-clients"));
+            }
+            Value::Null
+        }
+        Product::Spokes => {
+            let items: Vec<String> = match o.get("clients") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::String(s)) => s.split(',').map(|x| x.trim().to_owned()).filter(|x| !x.is_empty()).collect(),
+                Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(|s| s.trim().to_owned())).collect::<Option<Vec<_>>>().ok_or_else(|| ApiError::of("deploy-clients"))?,
+                Some(_) => return Err(ApiError::of("deploy-clients")),
+            };
+            let items = if items.is_empty() { CLIENTS_DEFAULT.iter().map(|s| (*s).to_owned()).collect() } else { items };
+            if items.len() > CLIENTS_MAX || items.iter().any(|x| !x.contains('/') || crate::console_source::parse_cidr(x).is_err()) {
+                return Err(ApiError::of("deploy-clients"));
+            }
+            json!(items)
+        }
+    };
+    let pki = match (product, o.get("pki")) {
+        (Product::Meet, Some(Value::String(p))) if p == "console" || p == "own" => Some(p.clone()),
+        (Product::Meet, _) => return Err(ApiError::with("invalid", "pki is console or own.")),
+        (Product::Spokes, None | Some(Value::Null)) => None,
+        (Product::Spokes, Some(_)) => return Err(ApiError::with("invalid", "pki is for Meeting Hub relays only.")),
+    };
+    let mut names = vec![host.clone()];
+    if let Some(x) = turn.as_ref().filter(|x| **x != host) {
+        names.push(x.clone());
+    }
+    Ok(DeployFields { host, turn, clients, pki, names })
+}
+
+/// The server certificate's names recorded at mint (`host`, and `turnHost` when it differs), when the enrollment's
+/// `pki` is `console` (6.5, D10).
+fn meet_names(deploy: Option<&Value>) -> Option<Vec<String>> {
+    let d = deploy?;
+    if str_of(d.get("pki")) != Some("console") {
+        return None;
+    }
+    let host = str_of(d.get("host"))?.to_owned();
+    let mut names = vec![host.clone()];
+    if let Some(turn) = str_of(d.get("turnHost")).filter(|x| !x.is_empty() && *x != host) {
+        names.push(turn.to_owned());
+    }
+    Some(names)
+}
+
+/// A relay's certificate request (base64url DER, 6.5): (DER, its key's SubjectPublicKeyInfo) when it reads, its own
+/// signature verifies and its key is P-256.
+fn csr_of(v: Option<&Value>) -> Option<(Vec<u8>, Vec<u8>)> {
+    let der = unb64u(str_of(v)?)?;
+    let csr = crate::meet_x509::Csr::from_der(&der)?;
+    (csr.signature_valid() && crate::fleet_x509::is_p256_spki(&csr.spki)).then_some((der, csr.spki))
+}
+
+fn deploy_csr_error(names: &[String]) -> ApiError {
+    ApiError::with("deploy-csr", format!("The relay's certificate request is not for {}.", names.join(", ")))
+}
+
+fn host_taken_error(reg: &Registry, holder: &str, name: &str) -> ApiError {
+    let relay = reg.relays.get(holder).map(|r| clean(&r.name)).unwrap_or_else(|| holder.to_owned());
+    ApiError::with("deploy-host-taken", format!("{relay} already holds a certificate for {name}. Use Replace {relay}."))
+}
+
+fn no_ca() -> ApiError {
+    ApiError::with("not-found", "This console holds no organization CA.")
+}
+
+/// AC-2b-D 8.7 (H4): a High Meeting Hub relay whose `meetRoots` include the CA this console holds, or are unknown.
+fn ca_held_refuses(ca_id: Option<&str>, profile: &str, roots: Option<&Value>) -> bool {
+    let Some(id) = ca_id else { return false };
+    if profile != "high" {
+        return false;
+    }
+    let roots = strings(roots);
+    roots.is_empty() || roots.iter().any(|r| r == id)
+}
+
+fn ca_state_str(s: crate::meet_ca::CaState) -> &'static str {
+    match s {
+        crate::meet_ca::CaState::Ok => "ok",
+        crate::meet_ca::CaState::Lost => "lost",
+        crate::meet_ca::CaState::Unreadable => "unreadable",
+    }
+}
+
+/// The relays that use the CA's certificate server: live Meeting Hub relays enrolled with `pki: console` (6.3 step 9).
+fn signer_users(reg: &Registry) -> impl Iterator<Item = &RelayRecord> {
+    reg.relays.values().filter(|r| r.state.live() && r.product == Product::Meet && meet_names(r.deploy.as_ref()).is_some())
+}
+
+/// What a relay last reported of its certificate server's enforcement (`meetPki.signerCrlEnforced`).
+fn signer_enforced_report(r: &RelayRecord) -> Option<bool> {
+    r.report.get("meetPki").and_then(|p| p.get("signerCrlEnforced")).and_then(Value::as_bool)
+}
+
+/// AC-2b-D 8.4 Lifetime (R4-M1): every relay of the certificate server, `relay` among them, reports enforcement.
+fn signer_confirmed_in(reg: &Registry, relay: &str) -> bool {
+    reg.relays.contains_key(relay) && signer_users(reg).all(|r| signer_enforced_report(r) == Some(true))
+}
+
+/// A license token's body (its first part).
+fn token_body(token: &str) -> Option<Value> {
+    token.split('.').next().and_then(unb64u).and_then(|b| crate::codec::parse_json(&String::from_utf8_lossy(&b)))
+}
+
+fn pem_of(label: &str, der: &[u8]) -> String {
+    let b = crate::meet_json::b64(der);
+    let lines: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap_or_default()).collect();
+    format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", lines.join("\n"))
+}
+
+/// AC-2b-D 5.4: the Proxmox host shell lines (`<vmid>`, `<storage>`, `<bridge>` and `<keys>` are filled in by the
+/// page), the VM named after the relay.
+fn proxmox_steps(name: &str, arch: &str) -> Vec<String> {
+    let img = if arch == "aarch64" { "debian-13-genericcloud-arm64.qcow2" } else { "debian-13-genericcloud-amd64.qcow2" };
+    let mut vm: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    vm = vm.trim_matches('-').chars().take(63).collect();
+    if vm.is_empty() {
+        vm = "lucid-relay".into();
+    }
+    vec![
+        format!("cd /var/tmp && wget -N https://cloud.debian.org/images/cloud/trixie/latest/{img} https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS"),
+        format!("grep ' {img}$' SHA512SUMS | sha512sum -c -"),
+        format!("qm create <vmid> --name {vm} --memory 2048 --cores 2 --cpu host --net0 virtio,bridge=<bridge> --agent enabled=1 --ostype l26 --scsihw virtio-scsi-single --serial0 socket --vga serial0"),
+        format!("qm set <vmid> --scsi0 <storage>:0,import-from=/var/tmp/{img} --boot order=scsi0 --ide2 <storage>:cloudinit"),
+        "qm set <vmid> --ciuser lucid --sshkeys <keys> --ipconfig0 ip=dhcp".to_owned(),
+        "qm resize <vmid> scsi0 20G".to_owned(),
+        "qm start <vmid>".to_owned(),
+    ]
+}
+
+/// AC-2b-D 8.5 delivery: a relay takes the console's list when it trusts the CA, reads the bundle, and holds an older
+/// list by the 8.5 order (and not this one as pending).
+fn wants_crl(r: &RelayRecord, ca_id: &str, info: &crate::meet_ca::CrlInfo) -> bool {
+    if r.product != Product::Meet || !strings(r.report.get("meetRoots")).iter().any(|x| x == ca_id) {
+        return false;
+    }
+    let Some(crl) = r.report.get("meetCrl") else { return false };
+    if str_of(crl.get("source")) != Some("bundle") {
+        return false;
+    }
+    if crl.get("pending").and_then(|p| str_of(p.get("sha256"))) == Some(info.sha256.as_str()) {
+        return false;
+    }
+    let Some(theirs) = crl.get("thisUpdate").and_then(Value::as_i64) else { return true };
+    let number = crl.get("number").and_then(crate::meet_ca::CrlNumber::from_json);
+    crate::meet_ca::later((info.this_update, Some(&info.number)), (theirs, number.as_ref())) == std::cmp::Ordering::Greater
+}
+
+impl Fleet {
+    /// The id of the CA this console holds, in any state (`welcome.meetCaId`, 8.7); None when it holds none.
+    pub fn meet_ca_id(&self) -> Option<String> {
+        self.meet.lock().as_ref().map(|m| m.id().to_owned())
+    }
+
+    /// AC-2b-D 4.3: `sha256//<b64 current>;sha256//<b64 next>` from the current signed trust manifest.
+    pub fn curl_pins(&self, t: i64) -> String {
+        if let Some(port) = crate::fleet_port::global() {
+            return port.curl_pins();
+        }
+        let v = self.pki.get().map(|p| p.trust_view(t)).unwrap_or(Value::Null);
+        crate::fleet_port::curl_pins_of(&v["manifest"])
+    }
+
+    /// AC-2b-D 4.4: a program download named for an enrollment that is open, or used within its hour, is not counted.
+    pub fn download_enrollment_ok(&self, id: &str, t: i64) -> bool {
+        self.registry.lock().enrollments.get(id).is_some_and(|e| e.env != "installed" && (e.open(t) || (e.state == "used" && e.expires > t)))
+    }
+
+    /// AC-2b-D 7.3 (C-prime, Standard only): every working key of the minting admin as a first-roster admin entry, with
+    /// its ceremony B fingerprint.
+    fn offered_keys(&self, c: &Console, who: &Who) -> Vec<Value> {
+        if c.profile_high() || !who.admin {
+            return Vec::new();
+        }
+        self.eligible_entries(c)
+            .into_iter()
+            .filter(|e| e["email"] == who.email.as_str() && e["role"] == "admin")
+            .filter_map(|e| {
+                let id = str_of(e.get("credentialId"))?.to_owned();
+                let fp = crate::fleet_trust::admin_key_fingerprint(&unb64u(&id)?, &unb64u(str_of(e.get("cose"))?)?, &who.email, "admin");
+                Some(json!({ "credentialId": id, "email": who.email, "role": "admin", "hint": hint_of(&id), "fingerprint": fp }))
+            })
+            .collect()
+    }
+
+    /// AC-2b-D 6.1: the `deploy` record of a mint, checked in order: env offered, the fields, `deploy-host-taken`, the
+    /// CA, the license. None for `installed`.
+    #[allow(clippy::too_many_arguments)]
+    fn mint_deploy(&self, c: &Console, who: &Who, product: Product, env: &str, v: Option<&Value>, replaces: Option<&str>, t: i64) -> Result<Option<Value>, ApiError> {
+        let high = c.profile_high();
+        match env {
+            "installed" => return if v.is_none_or(Value::is_null) { Ok(None) } else { Err(ApiError::of("deploy-env")) },
+            "docker" if high => return Err(ApiError::of("deploy-high")),
+            _ => {}
+        }
+        // Standard installs from this console's own program (4.2); High from release media (4.5).
+        let binary = if high { None } else { Some(crate::fleet_port::served_binary().map_err(|_| ApiError::of("deploy-unavailable"))?) };
+        let o = v.and_then(Value::as_object).ok_or_else(|| ApiError::of("deploy-host"))?;
+        let DeployFields { host, turn, clients, pki, names } = deploy_fields(product, o)?;
+        if product == Product::Meet {
+            let holder = self.meet.lock().as_ref().and_then(|m| m.name_holder(&names, t));
+            if let Some((h, name)) = holder.filter(|(h, _)| replaces != Some(h.as_str())) {
+                return Err(host_taken_error(&self.registry.lock(), &h, &name));
+            }
+        }
+        let ca_id = if pki.as_deref() == Some("console") {
+            if high {
+                return Err(ApiError::of("meet-ca-high"));
+            }
+            let g = self.meet.lock();
+            Some(g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok).map(|m| m.id().to_owned()).ok_or_else(|| ApiError::of("deploy-ca-needed"))?)
+        } else {
+            None
+        };
+        let (license, license_sha) = match o.get("license") {
+            None | Some(Value::Null) => (Value::Null, Value::Null),
+            Some(l) => {
+                let lid = l.as_str().ok_or_else(|| ApiError::with("invalid", "license is a library license id."))?;
+                let (entry, spokes_root) = {
+                    let b = self.book.lock();
+                    (b.library.iter().find(|x| str_of(x.get("id")) == Some(lid)).cloned(), b.spokes_root.clone())
+                };
+                let entry = entry.ok_or_else(|| ApiError::with("not-found", "There is no such license in the library."))?;
+                let lp = str_of(entry.get("product")).and_then(product_of);
+                if lp != Some(product) {
+                    let n = lp.map(|p| p.name()).unwrap_or("another product");
+                    return Err(ApiError::with("deploy-license-product", format!("That license is for {n}.")));
+                }
+                if entry.get("exp").and_then(Value::as_i64).is_some_and(|exp| exp <= t / 1000) {
+                    return Err(ApiError::of("license-ended"));
+                }
+                let root = str_of(entry.get("root")).unwrap_or("").to_owned();
+                let want = match product {
+                    Product::Meet => ca_id.clone(),
+                    Product::Spokes if !high => spokes_root.as_ref().and_then(|r| str_of(r.get("id")).map(str::to_owned)),
+                    Product::Spokes => None,
+                };
+                if let Some(w) = want.filter(|w| *w != root) {
+                    return Err(ApiError::with("deploy-license-root", format!("That license is for root {root}, not {w}.")));
+                }
+                (Value::from(lid), Value::from(sha256_hex(str_of(entry.get("token")).unwrap_or("").as_bytes())))
+            }
+        };
+        let offered = self.offered_keys(c, who);
+        Ok(Some(json!({
+            "env": env, "host": host, "turnHost": turn, "clients": clients, "pki": pki, "license": license,
+            "binarySha256": binary.map(|b| b.sha256), "offered": offered, "licenseSha256": license_sha,
+        })))
+    }
+
+    /// AC-2b-D 3.5: the mint answer's `install` object.
+    #[allow(clippy::too_many_arguments)]
+    fn install_of(&self, c: &Console, product: Product, env: &str, deploy: Option<&Value>, enrollment: &str, name: &str, t: i64) -> Value {
+        let url = self.fleet_url(c);
+        let pins = self.curl_pins(t);
+        let p = product_str(product);
+        let offline = match product {
+            Product::Meet => "sudo /opt/lucid-meet/lucid-relay deploy script meet-linux | sudo bash -s -- uninstall",
+            Product::Spokes => "sudo /opt/lucid-relay/bin/lucid-relay deploy script spokes-linux | sudo bash -s -- uninstall",
+        };
+        if env == "installed" {
+            return json!({ "env": env, "command": null, "steps": null, "uninstall": null, "offlineUninstall": offline, "scriptUrl": null, "pins": pins, "binary": null });
+        }
+        let high = c.profile_high();
+        let binary = if high { None } else { crate::fleet_port::served_binary().ok() };
+        let arch = binary.as_ref().map(|b| b.arch.clone()).unwrap_or_else(|| std::env::consts::ARCH.to_owned());
+        let proxmox = (env == "proxmox").then(|| proxmox_steps(name, &arch));
+        let linux = format!("{p}-linux");
+        if high {
+            let place = match product {
+                Product::Meet => "--pki-dir <folder>",
+                Product::Spokes => "--root <path to root.pub>",
+            };
+            let mut steps = proxmox.unwrap_or_default();
+            steps.push(format!("./lucid-relay deploy script {linux} > lucid-deploy.sh"));
+            steps.push(format!("sudo bash lucid-deploy.sh --binary ./lucid-relay --console '{url}' --pins '{pins}' --profile high {place}"));
+            return json!({ "env": env, "command": null, "steps": steps, "uninstall": null, "offlineUninstall": offline, "scriptUrl": null, "pins": pins, "binary": null });
+        }
+        let pki = deploy.and_then(|d| str_of(d.get("pki")));
+        let root_saved = self.book.lock().spokes_root.is_some();
+        let extra = match product {
+            Product::Meet if pki == Some("own") => " -s -- --pki-dir <folder>",
+            Product::Spokes if !root_saved => " -s -- --root <path to root.pub>",
+            _ => "",
+        };
+        let script = if env == "docker" { format!("{p}-docker") } else { linux };
+        let script_url = format!("{url}/fleet/v1/install/{script}.sh?e={enrollment}");
+        let command = format!("curl -fsS --proto =https -k --pinnedpubkey '{pins}' '{script_url}' | sudo bash{extra}");
+        let uninstall = format!("curl -fsS --proto =https -k --pinnedpubkey '{pins}' {url}/fleet/v1/install/{script}.sh | sudo bash -s -- uninstall");
+        json!({
+            "env": env, "command": command, "steps": proxmox, "uninstall": uninstall, "offlineUninstall": offline, "scriptUrl": script_url, "pins": pins,
+            "binary": binary.map(|b| json!({ "version": b.version, "arch": b.arch, "sha256": b.sha256, "size": b.size })),
+        })
+    }
+
+    /// GET fleet/deploy/options (AC-2b-D 9.1): the cards of 3.3 and what the page needs to fill them. `why` is a reason
+    /// id: `not-linux`, `arch`, `dev-license`, `copy-failed`, `not-started` (fleet_port), `high` or `next`.
+    fn deploy_options(&self, c: &Console, t: i64) -> Value {
+        let high = c.profile_high();
+        let served = crate::fleet_port::served_binary();
+        let linux_why: Option<&str> = if high { None } else { served.as_ref().err().copied() };
+        let row = |id: &str, why: Option<&str>| json!({ "id": id, "products": ["meet", "spokes"], "offered": why.is_none(), "why": why });
+        let mut envs = vec![row("linux", linux_why), row("proxmox", linux_why), row("docker", if high { Some("high") } else { linux_why }), row("installed", None)];
+        envs.extend(DEPLOY_ENVS_NEXT.iter().map(|id| row(*id, Some("next"))));
+        let binary = if high { None } else { served.ok().map(|b| json!({ "version": b.version, "arch": b.arch, "sha256": b.sha256, "size": b.size, "fips": b.fips })) };
+        let meet_ca = self.meet.lock().as_ref().map(|m| json!({ "id": m.id(), "state": ca_state_str(m.state()), "signerUrl": m.signer_url() }));
+        let (spokes_root, library) = {
+            let b = self.book.lock();
+            let lib: Vec<Value> = b.library.iter().map(|l| { let mut l = l.clone(); if let Some(o) = l.as_object_mut() { o.remove("token"); } l }).collect();
+            (b.spokes_root.as_ref().filter(|_| !high).map(|r| json!({ "id": r.get("id") })), lib)
+        };
+        json!({
+            "ok": true, "profile": if high { "high" } else { "standard" },
+            "console": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
+            "binary": binary, "fleetUrl": self.fleet_url(c), "pins": self.curl_pins(t), "envs": envs,
+            "meetCa": meet_ca, "spokesRoot": spokes_root, "library": library,
+        })
+    }
+
+    /// AC-2b-D 6.2: the preview's `deploy` object (null for `installed`).
+    fn preview_deploy(&self, c: &Console, e: &Enrollment, spokes_root: Option<&Value>, library: &[Value]) -> Result<Value, ApiError> {
+        let Some(d) = &e.deploy else { return Ok(Value::Null) };
+        let high = c.profile_high();
+        let (ca, signer) = if str_of(d.get("pki")) == Some("console") {
+            if high {
+                return Err(ApiError::of("meet-ca-high"));
+            }
+            let g = self.meet.lock();
+            let m = g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok).ok_or_else(|| ApiError::of("deploy-ca-needed"))?;
+            (json!({ "pem": m.ca_pem(), "id": m.id() }), m.signer_url().map(|u| json!({ "url": u })).unwrap_or(Value::Null))
+        } else {
+            (Value::Null, Value::Null)
+        };
+        let spokes_root = match spokes_root {
+            Some(r) if e.product == Product::Spokes && !high => json!({ "pem": r.get("pem"), "id": r.get("id") }),
+            _ => Value::Null,
+        };
+        // The library license chosen at mint, unchanged since (its token's digest).
+        let license = str_of(d.get("license"))
+            .and_then(|id| library.iter().find(|l| str_of(l.get("id")) == Some(id)))
+            .filter(|l| str_of(d.get("licenseSha256")) == Some(sha256_hex(str_of(l.get("token")).unwrap_or("").as_bytes()).as_str()))
+            .map(|l| {
+                let token = str_of(l.get("token")).unwrap_or("");
+                let org = token_body(token).and_then(|b| b.get("org").cloned()).unwrap_or(Value::Null);
+                json!({ "id": l.get("id"), "org": org, "edition": l.get("edition"), "users": l.get("users"), "relays": l.get("relays"), "exp": l.get("exp"), "root": l.get("root"), "token": token })
+            })
+            .unwrap_or(Value::Null);
+        let offered = if high { json!([]) } else { d.get("offered").cloned().unwrap_or_else(|| json!([])) };
+        Ok(json!({
+            "env": d.get("env"), "host": d.get("host"), "turnHost": d.get("turnHost"), "clients": d.get("clients"), "pki": d.get("pki"),
+            "binarySha256": d.get("binarySha256"), "ca": ca, "signer": signer, "spokesRoot": spokes_root, "license": license, "offered": offered,
+        }))
+    }
+
+    /// GET fleet/enrollments/<id> (AC-2b-D 3.6, 9.1); the relay's fingerprint only from `unconfirmed` on.
+    fn enrollment_detail(&self, id: &str, t: i64) -> Result<Value, ApiError> {
+        let reg = self.registry.lock();
+        let e = reg.enrollments.get(id).ok_or_else(|| ApiError::with("not-found", "There is no such enrollment code."))?;
+        let state = if e.state == "open" && e.expires <= t { "expired" } else { e.state.as_str() };
+        let relay = e.relay.as_ref().and_then(|rid| reg.relays.get(rid)).map(|r| {
+            let mut bootstrap = r.report.get("bootstrap").cloned().filter(Value::is_object).unwrap_or_else(|| json!({ "state": "pending", "entries": [] }));
+            if let Some(o) = bootstrap.as_object_mut() {
+                if !o.contains_key("anchored") {
+                    let n = o.get("entries").and_then(Value::as_array).map(|l| l.iter().filter(|x| !x["via"].is_null()).count()).unwrap_or(0);
+                    o.insert("anchored".into(), Value::from(n));
+                }
+            }
+            let shown = matches!(r.state, RelayState::Unconfirmed | RelayState::Active);
+            let lic = r.report.get("license").cloned().unwrap_or(Value::Null);
+            json!({ "id": r.id, "name": r.name, "state": r.state.as_str(), "fingerprint": shown.then(|| r.fingerprint.clone()), "bootstrap": bootstrap, "license": { "service": service_state_of(&lic) } })
+        });
+        Ok(json!({ "ok": true, "enrollment": { "id": e.id, "state": state, "product": product_str(e.product), "env": e.env, "expires": e.expires, "deploy": e.deploy, "relay": relay } }))
+    }
+
+    /// Every enrolled Meeting Hub relay with profile High, for the import's 8.2 refusal (H4, R2-M2).
+    fn high_relays(&self) -> Vec<crate::meet_ca::HighRelay> {
+        self.registry
+            .lock()
+            .relays
+            .values()
+            .filter(|r| r.state.live() && r.product == Product::Meet && r.profile == "high")
+            .map(|r| crate::meet_ca::HighRelay {
+                relay_id: r.id.clone(),
+                pending: r.state == RelayState::Pending,
+                meet_roots: r.report.get("meetRoots").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()),
+            })
+            .collect()
+    }
+
+    /// `meet-crl-future` (8.5): kept in `console.json` until an admin dismisses it.
+    fn set_crl_future(&self, c: &Console, date: Option<i64>, seen: &str, ceiling: bool, t: i64) {
+        let mut book = self.book.lock();
+        book.meet_alerts.insert("crlFuture".into(), json!({ "date": date, "where": clean(seen), "ceiling": ceiling, "at": t }));
+        if let Err(e) = self.save_book(c, &book) {
+            c.logger.ops("console.write-failed", &Fields::new().with("reason", e.message), Level::Error);
+        }
+    }
+
+    /// The CA's newest list to every relay that takes it (8.5 delivery), off any lock.
+    fn push_crl_all(&self) {
+        let Some((pem, info, id)) = self.meet.lock().as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok).and_then(|m| m.crl().map(|(p, i)| (p, i, m.id().to_owned()))) else { return };
+        let targets: Vec<String> = self.registry.lock().relays.values().filter(|r| r.state.live() && wants_crl(r, &id, &info)).map(|r| r.id.clone()).collect();
+        for relay in targets {
+            self.event(&relay, "meet-crl", json!({ "crl": pem }));
+        }
+    }
+
+    /// The console signed a new list: `fleet.meet-ca.crl` (actor `console`), then the push.
+    fn crl_signed(&self, c: &Console, t: i64) {
+        let info = self.meet.lock().as_ref().and_then(|m| m.crl()).map(|(_, i)| i);
+        if let Some(i) = info {
+            self.record(c, "console", "fleet.meet-ca.crl", Some(i.number.to_string()), json!({ "number": i.number.to_json(), "revoked": i.revoked }), t);
+        }
+        self.push_crl_all();
+    }
+
+    /// AC-2b-D 8.4 (L10, R5-M1): a removed, replaced or leaving relay: every unexpired serial the CA issued to it.
+    fn meet_revoke_relay(&self, c: &Console, relay: &str, t: i64) {
+        let revoked = {
+            let mut g = self.meet.lock();
+            match g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok) {
+                Some(ca) => with_vault(c, |v| ca.revoke_relay(&*v, relay, None, &[], t)),
+                None => return,
+            }
+        };
+        match revoked {
+            Ok(l) if !l.is_empty() => self.crl_signed(c, t),
+            Ok(_) => {}
+            Err(e) => c.logger.ops("fleet.meet-ca-revoke-failed", &Fields::new().with("relay", relay).with("why", e.message), Level::Error),
+        }
+    }
+
+    /// What a Meeting Hub relay's `hello` or `state` says of the CA (9.3): the certificate server's held number, the
+    /// server serial in use (its older ones are revoked 7 days later), the list push, and divergence.
+    fn meet_report(&self, c: &Console, relay: &str, t: i64) {
+        let Some((product, crl, pki, roots, revoke)) = self.registry.lock().relays.get(relay).map(|r| (r.product, r.report.get("meetCrl").cloned().unwrap_or(Value::Null), r.report.get("meetPki").cloned().unwrap_or(Value::Null), strings(r.report.get("meetRoots")), r.meet_revoke.clone())) else { return };
+        if product != Product::Meet {
+            return;
+        }
+        let (id, diverged) = {
+            let mut g = self.meet.lock();
+            let Some(ca) = g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok) else { return };
+            // R5-L2: numbering continues above what the certificate server holds.
+            if let Some(n) = pki.get("signerHeld").and_then(|h| h.get("number")).and_then(crate::meet_ca::CrlNumber::from_json) {
+                if let Err(e) = ca.note_signer_held(&n) {
+                    c.logger.ops("console.write-failed", &Fields::new().with("reason", e), Level::Error);
+                }
+            }
+            let number = crl.get("number").and_then(crate::meet_ca::CrlNumber::from_json);
+            let sha = str_of(crl.get("sha256")).map(str::to_owned);
+            let foreign = str_of(crl.get("issuer")) == Some(ca.id()) && sha.as_deref().is_some_and(|s| !ca.signed_by_me(s, number.as_ref()));
+            (ca.id().to_owned(), if foreign { sha } else { None })
+        };
+        if let Some(serial) = str_of(pki.get("certSerial")) {
+            if revoke.as_ref().and_then(|v| str_of(v.get("keep"))) != Some(serial) {
+                let mut reg = self.registry.lock();
+                if let Some(r) = reg.relays.get_mut(relay) {
+                    r.meet_revoke = Some(json!({ "keep": serial, "at": t + SERVER_GRACE_MS, "done": false }));
+                    let _ = self.save_registry(&reg);
+                }
+            }
+        }
+        if roots.iter().any(|x| *x == id) {
+            let push = self.meet.lock().as_ref().and_then(|m| m.crl());
+            let rec = self.registry.lock().relays.get(relay).cloned();
+            if let (Some((pem, info)), Some(rec)) = (push, rec) {
+                if wants_crl(&rec, &id, &info) {
+                    self.event(relay, "meet-crl", json!({ "crl": pem }));
+                }
+            }
+        }
+        // 8.5 divergence (H5, R3-L3): a list of this CA the console did not sign; asked for once per list.
+        if let Some(sha) = diverged {
+            if self.diverge_seen.lock().insert(relay.to_owned(), sha.clone()).as_deref() == Some(sha.as_str()) {
+                return;
+            }
+            let (Some(fleet), Some(console)) = (c.fleet(), self.console.upgrade()) else { return };
+            let relay = relay.to_owned();
+            let this_update = crl.get("thisUpdate").and_then(Value::as_i64).unwrap_or(t);
+            let _ = std::thread::Builder::new().name("fleet-meet-crl".into()).spawn(move || fleet.meet_diverged(&console, &relay, this_update, crate::codec::now_ms()));
+        }
+    }
+
+    /// AC-2b-D 8.5 divergence: the relay's list, verified against the CA and merged; the console re-signs at its own
+    /// dates and pushes; `meet-crl-diverged` (and `meet-crl-future` for a list dated ahead) until dismissed.
+    fn meet_diverged(&self, c: &Console, relay: &str, this_update: i64, t: i64) {
+        let answer = match self.send(relay, "meet-crl-get", json!({}), CALL_MS) {
+            Ok(a) => a,
+            Err(_) => {
+                self.diverge_seen.lock().remove(relay);
+                return;
+            }
+        };
+        let Some(der) = str_of(answer.get("crl")).and_then(|pem| crate::meet_x509::pem_blocks(pem.as_bytes(), "X509 CRL").into_iter().next()).map(|(_, d)| d) else { return };
+        let name = self.name_of(relay);
+        let merged = {
+            let mut g = self.meet.lock();
+            let Some(ca) = g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok) else { return };
+            let m = with_vault(c, |v| ca.merge(&*v, &der, &format!("relay {relay}"), t));
+            if m.is_ok() {
+                if let Err(e) = ca.note_diverged(relay, this_update, t) {
+                    c.logger.ops("console.write-failed", &Fields::new().with("reason", e), Level::Error);
+                }
+            }
+            m
+        };
+        let m = match merged {
+            Ok(m) => m,
+            Err(e) => {
+                c.logger.security("fleet.meet-crl-refused", &Fields::new().with("relay", relay).with("why", e.message), Level::Warn);
+                return;
+            }
+        };
+        self.record(c, "console", "fleet.meet-ca.crl-merged", Some(relay.to_owned()), json!({ "relayId": relay, "added": m.added }), t);
+        if m.future.is_some() || m.ceiling {
+            self.set_crl_future(c, m.future, &name, m.ceiling, t);
+        }
+        if m.signed.is_some() {
+            self.crl_signed(c, t);
+        } else {
+            self.push_crl_all();
+        }
+    }
+
+    /// The `meet-cert` request (AC-2b-D 8.4, 9.3): a `fleet_pki` relay's renewal. `{cert, signerCert}` (PEM, null for the
+    /// one not asked for, or not issued when the other was); `deploy-csr`, `meet-cert-wait`, `meet-ca-lost`.
+    pub fn meet_cert(&self, relay: &str, body: &Value, t: i64) -> Result<Value, ApiError> {
+        let c = self.console()?;
+        let o = body.as_object().filter(|o| crate::codec::exact_keys(o, &["csr", "signerCsr"], &[])).ok_or_else(|| ApiError::of("fleet-op"))?;
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let (deploy, profile, product, mgmt, in_use, names_by_id) = {
+            let reg = self.registry.lock();
+            let r = reg.relays.get(relay).filter(|r| r.state.live()).ok_or_else(not_found_relay)?;
+            let mgmt: Vec<Vec<u8>> = r.serials.iter().filter_map(|s| unb64u(&s.spki)).collect();
+            let in_use = r.report.get("meetPki").and_then(|p| str_of(p.get("certSerial"))).map(str::to_owned);
+            let names: HashMap<String, String> = reg.relays.values().map(|x| (x.id.clone(), clean(&x.name))).collect();
+            (r.deploy.clone(), r.profile.clone(), r.product, mgmt, in_use, names)
+        };
+        if product != Product::Meet {
+            return Err(ApiError::of("fleet-op"));
+        }
+        if profile == "high" {
+            return Err(ApiError::of("fleet-ca-held"));
+        }
+        let names = meet_names(deploy.as_ref()).ok_or_else(|| ApiError::of("deploy-ca-needed"))?;
+        let take = |k: &str| -> Result<Option<(Vec<u8>, Vec<u8>)>, ApiError> {
+            match o.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                v => csr_of(v).map(Some).ok_or_else(|| deploy_csr_error(&names)),
+            }
+        };
+        let (server, signer) = (take("csr")?, take("signerCsr")?);
+        let clash = |spki: &[u8]| mgmt.iter().any(|m| m.as_slice() == spki);
+        if (server.is_none() && signer.is_none()) || server.as_ref().is_some_and(|(_, s)| clash(s)) || signer.as_ref().is_some_and(|(_, s)| clash(s) || server.as_ref().is_some_and(|(_, x)| x == s)) {
+            return Err(deploy_csr_error(&names));
+        }
+        let confirmed = signer_confirmed_in(&self.registry.lock(), relay);
+        let mut issued: Vec<(crate::meet_ca::CertKind, crate::meet_ca::Issued)> = Vec::new();
+        let mut first_error: Option<ApiError> = None;
+        let mut revoked = false;
+        {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(|| ApiError::of("deploy-ca-needed"))?;
+            if let Some((der, _)) = &server {
+                if let Some((h, name)) = ca.name_holder(&names, t).filter(|(h, _)| h != relay) {
+                    let n = names_by_id.get(&h).cloned().unwrap_or(h);
+                    return Err(ApiError::with("deploy-host-taken", format!("{n} already holds a certificate for {name}. Use Replace {n}.")));
+                }
+                match with_vault(&c, |v| ca.issue(&*v, relay, crate::meet_ca::CertKind::Server, der, &names, confirmed, true, t)) {
+                    Ok(x) => {
+                        // 8.4: older outstanding server serials of this relay go, except the one in use.
+                        let mut keep: Vec<&str> = vec![x.serial.as_str()];
+                        if let Some(u) = &in_use {
+                            keep.push(u.as_str());
+                        }
+                        revoked = with_vault(&c, |v| ca.revoke_relay(&*v, relay, Some(crate::meet_ca::CertKind::Server), &keep, t)).map(|l| !l.is_empty()).unwrap_or(false);
+                        issued.push((crate::meet_ca::CertKind::Server, x));
+                    }
+                    Err(e) => first_error = Some(e),
+                }
+            }
+            if let Some((der, _)) = &signer {
+                if ca.signer_url().is_none() {
+                    first_error.get_or_insert_with(|| deploy_csr_error(&names));
+                } else {
+                    // R4-H1: a superseded signer client certificate is never revoked.
+                    match with_vault(&c, |v| ca.issue(&*v, relay, crate::meet_ca::CertKind::SignerClient, der, &[], confirmed, true, t)) {
+                        Ok(x) => issued.push((crate::meet_ca::CertKind::SignerClient, x)),
+                        Err(e) => {
+                            first_error.get_or_insert(e);
+                        }
+                    }
+                }
+            }
+        }
+        if issued.is_empty() {
+            return Err(first_error.unwrap_or_else(|| deploy_csr_error(&names)));
+        }
+        let mut answer = json!({ "cert": null, "signerCert": null });
+        for (kind, x) in &issued {
+            let key = if matches!(kind, crate::meet_ca::CertKind::Server) { "cert" } else { "signerCert" };
+            answer[key] = Value::from(x.pem.clone());
+            self.record(&c, &format!("relay {relay}"), "fleet.meet-cert.issue", Some(relay.to_owned()), json!({ "serial": x.serial, "kind": kind.as_str(), "names": x.names, "notAfter": x.not_after }), t);
+        }
+        if revoked {
+            self.crl_signed(&c, t);
+        }
+        Ok(answer)
+    }
+
+    /// The fleet's minute for the CA: the 8.5 re-sign (and `meet-crl-failing`), the 8.4 revocation of server serials
+    /// 7 days after the relay reported the new one, and `signer-crl-stale`.
+    fn meet_tick(&self, c: &Console, t: i64) {
+        let signed = {
+            let mut g = self.meet.lock();
+            match g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok) {
+                Some(ca) => with_vault(c, |v| ca.resign(&*v, t)),
+                None => return,
+            }
+        };
+        match signed {
+            Ok(s) => {
+                *self.crl_failing.lock() = false;
+                if s.is_some() {
+                    self.crl_signed(c, t);
+                }
+            }
+            Err(e) => {
+                let mut failing = self.crl_failing.lock();
+                if !*failing {
+                    c.logger.ops("fleet.meet-crl-failing", &Fields::new().with("why", e), Level::Error);
+                }
+                *failing = true;
+            }
+        }
+        let due: Vec<(String, String)> = {
+            let mut reg = self.registry.lock();
+            let mut due = Vec::new();
+            for r in reg.relays.values_mut().filter(|r| r.state.live()) {
+                let Some(v) = r.meet_revoke.as_mut() else { continue };
+                if v["done"] == true || v.get("at").and_then(Value::as_i64).is_none_or(|at| at > t) {
+                    continue;
+                }
+                if let Some(keep) = str_of(v.get("keep")) {
+                    due.push((r.id.clone(), keep.to_owned()));
+                }
+                v["done"] = Value::Bool(true);
+            }
+            if !due.is_empty() {
+                let _ = self.save_registry(&reg);
+            }
+            due
+        };
+        for (relay, keep) in due {
+            let revoked = {
+                let mut g = self.meet.lock();
+                let Some(ca) = g.as_mut() else { break };
+                // The serial in use and any server certificate issued after it stay.
+                let since = ca.rows().iter().find(|x| x.serial == keep).map(|x| x.not_before).unwrap_or(i64::MAX);
+                let kept: Vec<String> = ca.rows().iter().filter(|x| x.relay_id == relay && x.kind.as_str() == "server" && (x.serial == keep || x.not_before >= since)).map(|x| x.serial.clone()).collect();
+                let kept: Vec<&str> = kept.iter().map(String::as_str).collect();
+                with_vault(c, |v| ca.revoke_relay(&*v, &relay, Some(crate::meet_ca::CertKind::Server), &kept, t)).map(|l| !l.is_empty()).unwrap_or(false)
+            };
+            if revoked {
+                self.crl_signed(c, t);
+            }
+        }
+        self.signer_stale_note(c, t);
+    }
+
+    /// AC-2b-D 8.5 (R5-L2): since when the certificate server's held list (as relays report it) is older than the
+    /// console's newest.
+    fn signer_stale_note(&self, c: &Console, t: i64) {
+        let newest = {
+            let g = self.meet.lock();
+            g.as_ref().filter(|m| m.signer_url().is_some()).and_then(|m| m.crl().map(|(_, i)| (i.number, m.signer_url().unwrap_or_default().to_owned())))
+        };
+        let held: Vec<crate::meet_ca::CrlNumber> = {
+            let reg = self.registry.lock();
+            signer_users(&reg).filter_map(|r| r.report.get("meetPki").and_then(|p| p.get("signerHeld")).and_then(|h| h.get("number")).and_then(crate::meet_ca::CrlNumber::from_json)).collect()
+        };
+        let behind = newest.as_ref().and_then(|(n, url)| held.into_iter().filter(|h| h < n).min().map(|h| (h, url.clone())));
+        let mut book = self.book.lock();
+        let before = book.meet_alerts.get("signerStale").cloned();
+        match behind {
+            Some((h, url)) => {
+                let since = before.as_ref().and_then(|b| b.get("since")).and_then(Value::as_i64).unwrap_or(t);
+                book.meet_alerts.insert("signerStale".into(), json!({ "since": since, "number": h.to_json(), "url": url }));
+            }
+            None => {
+                book.meet_alerts.remove("signerStale");
+            }
+        }
+        if book.meet_alerts.get("signerStale") != before.as_ref() {
+            if let Err(e) = self.save_book(c, &book) {
+                c.logger.ops("console.write-failed", &Fields::new().with("reason", e.message), Level::Error);
+            }
+        }
+    }
+
+    /// The AC-2b-D 10 attention items of the CA and of the relays it issued to.
+    fn meet_attention(&self, t: i64) -> Vec<Value> {
+        let item = |kind: &str, severity: &str, args: Value, go: String| json!({ "kind": kind, "severity": severity, "args": args, "go": go });
+        let page = || "#/license/meet-ca".to_owned();
+        let mut out = Vec::new();
+        let relays: Vec<(String, String, bool, Option<bool>)> = {
+            let reg = self.registry.lock();
+            let users: HashSet<String> = signer_users(&reg).map(|r| r.id.clone()).collect();
+            reg.relays.values().filter(|r| r.state.live()).map(|r| (r.id.clone(), clean(&r.name), users.contains(&r.id), signer_enforced_report(r))).collect()
+        };
+        let alerts = self.book.lock().meet_alerts.clone();
+        let g = self.meet.lock();
+        let Some(ca) = g.as_ref() else { return out };
+        let crl = ca.crl().map(|(_, i)| i);
+        let ends = crl.as_ref().map(|i| i.next_update);
+        match ca.state() {
+            crate::meet_ca::CaState::Lost => out.push(item("meet-ca-lost", "bad", json!({ "date": ends }), page())),
+            crate::meet_ca::CaState::Unreadable => {
+                out.push(item("meet-ca-unreadable", "bad", json!({}), page()));
+                return out;
+            }
+            crate::meet_ca::CaState::Ok => {
+                let days = ca.ca_days_left(t);
+                if days <= MEET_CA_EXPIRING_DAYS {
+                    out.push(item("meet-ca-expiring", "warn", json!({ "days": days }), page()));
+                }
+            }
+        }
+        if *self.crl_failing.lock() {
+            out.push(item("meet-crl-failing", "bad", json!({ "date": ends }), page()));
+        }
+        if ca.size_warning() {
+            out.push(item("meet-crl-size", "warn", json!({ "size": crl.as_ref().map(|i| i.size / 1024) }), page()));
+        }
+        let diverged = ca.view(t).get("diverged").cloned().unwrap_or(Value::Null);
+        if let Some(rid) = str_of(diverged.get("relayId")) {
+            let name = relays.iter().find(|r| r.0 == rid).map(|r| r.1.clone()).unwrap_or_else(|| rid.to_owned());
+            out.push(item("meet-crl-diverged", "bad", json!({ "relay": name }), page()));
+        }
+        for (id, name, user, enforced) in &relays {
+            let go = format!("#/relays/{id}");
+            let latest = |kind: &str| ca.rows().iter().filter(|x| x.relay_id == *id && x.kind.as_str() == kind && x.revoked_at.is_none()).map(|x| x.not_after).max();
+            if let Some(na) = latest("server") {
+                let days = (na - t).div_euclid(DAY_MS);
+                if days <= MEET_CERT_WARN_DAYS {
+                    out.push(item("relay-meet-cert-expiring", "warn", json!({ "relay": name, "days": days }), go.clone()));
+                }
+            }
+            if let Some(na) = latest("signer-client") {
+                let days = (na - t).div_euclid(DAY_MS);
+                if days <= SIGNER_CERT_WARN_DAYS {
+                    out.push(item("relay-signer-cert-expiring", "warn", json!({ "relay": name, "days": days }), go.clone()));
+                }
+            }
+            // R4-M1: while the setting is on, a relay that reports false (or has not reported).
+            if *user && ca.signer_enforced() && *enforced != Some(true) {
+                out.push(item("signer-crl-mismatch", "warn", json!({ "relay": name, "url": ca.signer_url() }), go.clone()));
+            }
+        }
+        drop(g);
+        if let Some(f) = alerts.get("crlFuture") {
+            out.push(item("meet-crl-future", "warn", json!({ "date": f.get("date"), "where": f.get("where"), "ceiling": f.get("ceiling") }), page()));
+        }
+        if let Some(s) = alerts.get("signerStale").filter(|s| s.get("since").and_then(Value::as_i64).is_some_and(|at| t - at >= SIGNER_STALE_MS)) {
+            out.push(item("signer-crl-stale", "warn", json!({ "url": s.get("url"), "number": s.get("number") }), page()));
+        }
+        out
+    }
+
+    /// A relay's certificates from the CA for its detail page (admins).
+    fn meet_relay_view(&self, relay: &str, _t: i64) -> Value {
+        let g = self.meet.lock();
+        let Some(ca) = g.as_ref() else { return Value::Null };
+        let certs: Vec<Value> = ca
+            .rows()
+            .iter()
+            .filter(|x| x.relay_id == relay)
+            .map(|x| json!({ "serial": x.serial, "kind": x.kind.as_str(), "names": x.names, "notBefore": x.not_before, "notAfter": x.not_after, "revokedAt": x.revoked_at }))
+            .collect();
+        json!({ "caId": ca.id(), "signerUrl": ca.signer_url(), "signerEnforced": ca.signer_enforced(), "certs": certs })
+    }
+
+    /// (confirmedBy, mismatch): the relays of the certificate server that report enforcement, and the others (8.4).
+    fn signer_reports(&self) -> (Vec<String>, Vec<String>) {
+        let reg = self.registry.lock();
+        let (mut yes, mut no) = (Vec::new(), Vec::new());
+        for r in signer_users(&reg) {
+            if signer_enforced_report(r) == Some(true) { yes.push(clean(&r.name)) } else { no.push(clean(&r.name)) }
+        }
+        (yes, no)
+    }
+
+    /// GET fleet/meet-ca (AC-2b-D 3.7, 9.1).
+    fn meet_ca_view(&self, c: &Console, t: i64) -> Value {
+        let high = c.profile_high();
+        let provider_ok = c.seal.lock().as_ref().is_some_and(|s| matches!(s.provider(), crate::console_seal::Provider::SystemdCredential | crate::console_seal::Provider::DpapiService));
+        let id = self.meet_ca_id();
+        // R2-L7: relays that trust the CA but take no pushed list.
+        let not_pushed: Vec<Value> = match &id {
+            Some(id) => self
+                .registry
+                .lock()
+                .relays
+                .values()
+                .filter(|r| r.state.live() && r.product == Product::Meet && strings(r.report.get("meetRoots")).iter().any(|x| x == id))
+                .filter_map(|r| match r.report.get("meetCrl").and_then(|m| str_of(m.get("source"))) {
+                    Some(w @ ("fixed" | "none")) => Some(json!({ "relay": clean(&r.name), "relayId": r.id, "why": w })),
+                    _ => None,
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let (confirmed, mismatch) = self.signer_reports();
+        let ca = self.meet.lock().as_ref().filter(|_| !high).map(|m| {
+            let mut v = m.view(t);
+            if let Some(o) = v.as_object_mut() {
+                o.insert("signerEnforced".into(), Value::Bool(m.signer_enforced()));
+                o.insert("confirmedBy".into(), json!(if m.signer_url().is_some() { confirmed.clone() } else { Vec::new() }));
+                o.insert("mismatch".into(), json!(if m.signer_url().is_some() { mismatch.clone() } else { Vec::new() }));
+                o.insert("notPushed".into(), json!(not_pushed));
+            }
+            v
+        });
+        let why = if high {
+            Some("meet-ca-high")
+        } else if !provider_ok {
+            Some("meet-ca-seal")
+        } else if id.is_some() {
+            Some("meet-ca-exists")
+        } else {
+            None
+        };
+        json!({ "ok": true, "ca": ca, "allowed": why.is_none(), "why": why })
+    }
+
+    /// POST fleet/meet-ca/import (AC-2b-D 8.2): step-up bound to `{signerUrl, noHighRelay, maxLifetimeDays}` (the key
+    /// never goes to the step-up), a second admin when two-person is on. The whole request waits sealed; the approval
+    /// and the audit entry carry only the certificate's digest.
+    fn meet_ca_import(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        let who = r.who()?;
+        let t = r.t;
+        let p = r.params;
+        let bind = json!({
+            "signerUrl": p.get("signerUrl").cloned().unwrap_or(Value::Null), "noHighRelay": p.get("noHighRelay").cloned().unwrap_or(Value::Null),
+            "maxLifetimeDays": p.get("maxLifetimeDays").cloned().unwrap_or(Value::Null),
+        });
+        c.verify_stepup(who, r.body.get("stepup"), crate::console_auth::Bind { action: "fleet.meet-ca.import", target: "-", params: &bind }, r.origin, t)?;
+        // The first refusals of 8.2 before any approval is made; MeetCa::import checks every one again, in order.
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        if !c.seal.lock().as_ref().is_some_and(|s| matches!(s.provider(), crate::console_seal::Provider::SystemdCredential | crate::console_seal::Provider::DpapiService)) {
+            return Err(ApiError::of("meet-ca-seal"));
+        }
+        if self.meet.lock().is_some() {
+            return Err(ApiError::of("meet-ca-exists"));
+        }
+        let ca_pem = str_of(p.get("caPem")).unwrap_or("").to_owned();
+        {
+            let stash = json!({
+                "caPem": ca_pem, "keyPem": str_of(p.get("keyPem")).unwrap_or(""), "issuedJson": p.get("issuedJson"), "crlPem": p.get("crlPem"),
+                "signerUrl": p.get("signerUrl"), "noHighRelay": p.get("noHighRelay"), "maxLifetimeDays": p.get("maxLifetimeDays"),
+            });
+            c.seal_put(MEET_IMPORT_STASH, stringify(&stash).as_bytes())?;
+        }
+        let params = json!({ "caSha256": sha256_hex(ca_pem.as_bytes()), "signerUrl": bind["signerUrl"], "noHighRelay": bind["noHighRelay"], "maxLifetimeDays": bind["maxLifetimeDays"] });
+        let email = who.email.clone();
+        let mut d = c.second_or_run(who, "fleet.meet-ca.import", "-", &params, t, || self.meet_import_run(c, &email, &params, t))?;
+        if d.result == "ok" {
+            let b = &d.out.body;
+            d.detail = json!({ "id": b["ca"]["id"], "revokedKept": b["revokedKept"], "signerUrl": b["ca"]["signerUrl"] });
+        }
+        Ok(d)
+    }
+
+    /// The import itself (sole-admin path, or approved): the sealed request, every 8.2 refusal (MeetCa), the key sealed
+    /// as `meet-org-ca-key`, the request's copy wiped.
+    fn meet_import_run(&self, c: &Console, by: &str, params: &Value, t: i64) -> Result<Value, ApiError> {
+        let raw = c.seal_get(MEET_IMPORT_STASH).ok_or_else(|| ApiError::of("gone"))?;
+        let s = std::str::from_utf8(&raw).ok().and_then(crate::codec::parse_json).ok_or_else(|| ApiError::of("gone"))?;
+        drop(raw);
+        let ca_pem = str_of(s.get("caPem")).unwrap_or("").to_owned();
+        if Some(sha256_hex(ca_pem.as_bytes()).as_str()) != str_of(params.get("caSha256")) {
+            return Err(ApiError::of("gone"));
+        }
+        let opt = |k: &str| str_of(s.get(k)).filter(|x| !x.trim().is_empty()).map(str::to_owned);
+        let req = crate::meet_ca::ImportReq {
+            ca_pem,
+            key_pem: crate::fleet_wire::Redacted::new(str_of(s.get("keyPem")).unwrap_or("").to_owned()),
+            issued_json: opt("issuedJson"),
+            crl_pem: opt("crlPem"),
+            signer_url: opt("signerUrl"),
+            no_high_relay: s.get("noHighRelay").and_then(Value::as_bool) == Some(true),
+            max_lifetime_days: s.get("maxLifetimeDays").and_then(Value::as_i64),
+        };
+        drop(s);
+        let high_relays = self.high_relays();
+        let provider = c.seal.lock().as_ref().map(|x| x.provider());
+        let ctx = crate::meet_ca::ImportCtx { high: c.profile_high(), provider, high_relays: &high_relays };
+        let result = {
+            let mut g = self.meet.lock();
+            if g.is_some() {
+                Err(ApiError::of("meet-ca-exists"))
+            } else {
+                with_vault(c, |v| crate::meet_ca::MeetCa::import(&self.state_dir, v, &ctx, req, by, t)).map(|(ca, imp)| {
+                    let view = ca.view(t);
+                    *g = Some(ca);
+                    (view, imp)
+                })
+            }
+        };
+        if let Some(seal) = c.seal.lock().as_mut() {
+            let _ = seal.remove(MEET_IMPORT_STASH);
+        }
+        let (view, imp) = result?;
+        if imp.future.is_some() || imp.ceiling {
+            self.set_crl_future(c, imp.future, "the imported list", imp.ceiling, t);
+        }
+        self.push_crl_all();
+        Ok(json!({ "ok": true, "ca": view, "revokedKept": imp.revoked_kept }))
+    }
+
+    /// POST fleet/meet-ca/revoke {serial, reason, stepup} (8.5).
+    fn meet_ca_revoke(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        let who = r.who()?;
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let serial = str_of(r.params.get("serial")).map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::with("invalid", "serial is the certificate's serial number."))?;
+        let reason = crate::console_auth::reason_of(r.params.get("reason"))?;
+        let info = {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(no_ca)?;
+            with_vault(c, |v| ca.revoke(&*v, &serial, &who.email, r.t))?
+        };
+        self.crl_signed(c, r.t);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "crl": { "number": info.number.to_json(), "thisUpdate": info.this_update } })), Some(serial.clone()), json!({ "serial": serial, "reason": reason })))
+    }
+
+    /// POST fleet/meet-ca/remove {elsewhere, reason, stepup} (8.6): `meet-ca-in-use` unless `elsewhere`; a second admin
+    /// when two-person is on.
+    fn meet_ca_remove(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        let who = r.who()?;
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let elsewhere = r.params.get("elsewhere").and_then(Value::as_bool) == Some(true);
+        let reason = crate::console_auth::reason_of(r.params.get("reason"))?;
+        let n = self.meet.lock().as_ref().map(|m| m.in_use(r.t)).ok_or_else(no_ca)?;
+        if n > 0 && !elsewhere {
+            return Err(ApiError::with("meet-ca-in-use", format!("{n} relays still use certificates from this CA. Confirm that you will sign its revocation lists elsewhere.")));
+        }
+        let params = json!({ "elsewhere": elsewhere, "reason": reason });
+        let mut d = c.second_or_run(who, "fleet.meet-ca.remove", "-", &params, r.t, || self.meet_remove_run(c, elsewhere, r.t))?;
+        if d.result == "ok" {
+            d.detail = json!({ "finalCrlEnds": d.out.body["finalCrlEnds"], "reason": reason });
+        }
+        Ok(d)
+    }
+
+    /// The removal: the final list signed and pushed, the key wiped, the files kept renamed (MeetCa), no more issuing.
+    fn meet_remove_run(&self, c: &Console, elsewhere: bool, t: i64) -> Result<Value, ApiError> {
+        let (removed, id) = {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(no_ca)?;
+            let id = ca.id().to_owned();
+            let removed = with_vault(c, |v| ca.remove(v, elsewhere, t))?;
+            *g = None;
+            (removed, id)
+        };
+        let targets: Vec<String> = self
+            .registry
+            .lock()
+            .relays
+            .values()
+            .filter(|r| r.state.live() && strings(r.report.get("meetRoots")).iter().any(|x| *x == id) && r.report.get("meetCrl").and_then(|m| str_of(m.get("source"))) == Some("bundle"))
+            .map(|r| r.id.clone())
+            .collect();
+        for relay in targets {
+            self.event(&relay, "meet-crl", json!({ "crl": removed.crl_pem }));
+        }
+        Ok(json!({ "ok": true, "finalCrlEnds": removed.ends }))
+    }
+
+    /// POST fleet/meet-ca/dismiss-diverged {} (9.1): `meet-crl-diverged` and `meet-crl-future` cleared.
+    fn meet_ca_dismiss(&self, c: &Console) -> Result<Done, ApiError> {
+        {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(no_ca)?;
+            ca.dismiss_diverged().map_err(|e| ApiError::with("write-failed", e))?;
+        }
+        {
+            let mut book = self.book.lock();
+            if book.meet_alerts.remove("crlFuture").is_some() {
+                self.save_book(c, &book)?;
+            }
+        }
+        plain(json!({ "ok": true }))
+    }
+
+    /// POST fleet/meet-ca/prune {certPem, reason, stepup} (8.5, R5-M2): a second admin when two-person is on.
+    fn meet_ca_prune(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        let who = r.who()?;
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let reason = crate::console_auth::reason_of(r.params.get("reason"))?;
+        let cert = str_of(r.params.get("certPem")).unwrap_or("").to_owned();
+        if self.meet.lock().is_none() {
+            return Err(no_ca());
+        }
+        let params = json!({ "certPem": cert, "reason": reason });
+        let email = who.email.clone();
+        let mut d = c.second_or_run(who, "fleet.meet-ca.prune", "-", &params, r.t, || self.meet_prune_run(c, &email, &params, r.t))?;
+        if d.result == "ok" {
+            d.detail = json!({ "crl": d.out.body["crl"], "reason": reason });
+        }
+        Ok(d)
+    }
+
+    fn meet_prune_run(&self, c: &Console, by: &str, params: &Value, t: i64) -> Result<Value, ApiError> {
+        let cert = str_of(params.get("certPem")).unwrap_or("");
+        let info = {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(no_ca)?;
+            with_vault(c, |v| ca.prune(&*v, cert, by, t))?
+        };
+        self.crl_signed(c, t);
+        Ok(json!({ "ok": true, "crl": { "number": info.number.to_json(), "thisUpdate": info.this_update } }))
+    }
+
+    /// POST fleet/meet-ca/max-lifetime {days, reason, stepup} (8.2, R5-M2): a second admin when two-person is on.
+    fn meet_ca_max_lifetime(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        let who = r.who()?;
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let reason = crate::console_auth::reason_of(r.params.get("reason"))?;
+        let days = r.params.get("days").and_then(Value::as_i64).ok_or_else(|| ApiError::with("invalid", "days is 1 to 3650."))?;
+        if self.meet.lock().is_none() {
+            return Err(no_ca());
+        }
+        let params = json!({ "days": days, "reason": reason });
+        c.second_or_run(who, "fleet.meet-ca.max-lifetime", "-", &params, r.t, || self.meet_max_lifetime_run(&params))
+    }
+
+    fn meet_max_lifetime_run(&self, params: &Value) -> Result<Value, ApiError> {
+        let days = params.get("days").and_then(Value::as_i64).ok_or_else(|| ApiError::of("invalid"))?;
+        let mut g = self.meet.lock();
+        g.as_mut().ok_or_else(no_ca)?.set_max_lifetime(days)?;
+        Ok(json!({ "ok": true, "maxLifetimeDays": days }))
+    }
+
+    /// POST fleet/meet-ca/signer-enforced {on, reason, stepup} (8.4, R4-M1).
+    fn meet_ca_signer_enforced(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        if c.profile_high() {
+            return Err(ApiError::of("meet-ca-high"));
+        }
+        let on = r.params.get("on").and_then(Value::as_bool).ok_or_else(|| ApiError::with("invalid", "on is true or false."))?;
+        let reason = crate::console_auth::reason_of(r.params.get("reason"))?;
+        let url = {
+            let mut g = self.meet.lock();
+            let ca = g.as_mut().ok_or_else(no_ca)?;
+            ca.set_signer_enforced(on)?;
+            ca.signer_url().map(str::to_owned)
+        };
+        let (confirmed, mismatch) = self.signer_reports();
+        let out = Out::ok(json!({ "ok": true, "signerEnforced": on, "confirmedBy": confirmed, "mismatch": mismatch }));
+        Ok(Done::ok(out, Some(url.clone().unwrap_or_else(|| "-".into())), json!({ "url": url, "on": on, "reason": reason })))
+    }
+
+    /// GET fleet/spokes-root (AC-2b-D 3.8, 9.1).
+    fn spokes_root_view(&self) -> Value {
+        let root = self.book.lock().spokes_root.as_ref().map(|r| json!({ "id": r.get("id") }));
+        json!({ "ok": true, "root": root })
+    }
+
+    /// POST fleet/spokes-root {pem, stepup} (AC-2b-D 3.8): Standard only; a P-256 public key named by an in-date library
+    /// license; audit `fleet.spokes-root.set`.
+    fn spokes_root_set(&self, c: &Console, r: &FleetReq) -> Result<Done, ApiError> {
+        if c.profile_high() {
+            return Err(ApiError::of("profile-high"));
+        }
+        let text = str_of(r.params.get("pem")).unwrap_or("");
+        if text.contains("PRIVATE KEY") {
+            return Err(ApiError::of("spokes-root-key"));
+        }
+        let der = crate::der::pem_blocks(text, "PUBLIC KEY").into_iter().next().filter(|d| crate::fleet_x509::is_p256_spki(d)).ok_or_else(|| ApiError::of("spokes-root-key"))?;
+        let id = crate::identity::node_id_of(&der);
+        let t = r.t;
+        let mut book = self.book.lock();
+        let named = book.library.iter().any(|l| str_of(l.get("product")) == Some("spokes") && str_of(l.get("root")) == Some(id.as_str()) && l.get("exp").and_then(Value::as_i64).is_some_and(|exp| exp > t / 1000));
+        if !named {
+            return Err(ApiError::with("spokes-root-license", format!("No license in the library names root {id}.")));
+        }
+        book.spokes_root = Some(json!({ "pem": pem_of("PUBLIC KEY", &der), "id": id }));
+        self.save_book(c, &book)?;
+        drop(book);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "root": { "id": id } })), Some(id.clone()), json!({ "id": id })))
+    }
+}
+
 // ── The fleet as the console's product section (I9) ─────────────────────────────────────────────────────────
 
 impl ProductSection for Fleet {
@@ -3444,6 +4850,11 @@ impl ProductSection for Fleet {
                 Ok(json!({ "ok": true, "generation": generation, "fingerprint": fingerprint }))
             }
             "exports.siem" => c.run_siem_off(),
+            // AC-2b-D 8.2, 8.5, 8.6: the CA actions a second admin approved.
+            "fleet.meet-ca.import" => self.meet_import_run(&c, run.requested_by, run.params, run.t),
+            "fleet.meet-ca.remove" => self.meet_remove_run(&c, run.params.get("elsewhere").and_then(Value::as_bool) == Some(true), run.t),
+            "fleet.meet-ca.prune" => self.meet_prune_run(&c, run.requested_by, run.params, run.t),
+            "fleet.meet-ca.max-lifetime" => self.meet_max_lifetime_run(run.params),
             _ => Err(ApiError::with("not-found", "There is no such action.")),
         }
     }
@@ -3590,7 +5001,8 @@ impl crate::fleet_people::PeopleHost for PeopleBridge {
 
 pub const SERVE_FILE: &str = "console-serve.json";
 /// The 5.2 flags; each also `LUCID_CONSOLE_<NAME>` and a key of `console-serve.json`.
-pub const SERVE_FLAGS: [&str; 15] = ["state", "host", "port", "public", "tls-cert", "tls-key", "sources", "trusted-fronts", "first-admin", "profile", "fleet-host", "fleet-port", "fleet-names", "fleet-sources", "metrics-sources"];
+/// `fleet-serve-dev` (AC-2b-D 4.2) is `1` or `0`; `--fleet-serve-dev` alone means `1` (main.rs).
+pub const SERVE_FLAGS: [&str; 16] = ["state", "host", "port", "public", "tls-cert", "tls-key", "sources", "trusted-fronts", "first-admin", "profile", "fleet-host", "fleet-port", "fleet-names", "fleet-sources", "metrics-sources", "fleet-serve-dev"];
 pub const STATE_NEEDED: &str = "the console needs --state <folder>";
 /// 13.4 `cli.console-needs-public`.
 pub const PUBLIC_NEEDED: &str = "the console needs --public <host name> (passkeys need a DNS name)";
@@ -3746,6 +5158,14 @@ pub fn serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Optio
     let metrics_text = get("metrics-sources").unwrap_or_else(|| sources_text.clone());
     let metrics_sources = crate::console_source::parse_cidr_list(&metrics_text, crate::console_source::SOURCES_MAX).map_err(|e| format!("--metrics-sources: {e}"))?;
     saved.insert("metrics-sources".into(), Value::from(metrics_text.as_str()));
+    let serve_dev = match get("fleet-serve-dev").as_deref() {
+        None | Some("0") => false,
+        Some("1") => true,
+        Some(v) => return Err(format!("--fleet-serve-dev {v} is 1 or 0")),
+    };
+    if serve_dev {
+        saved.insert("fleet-serve-dev".into(), Value::from("1"));
+    }
     Ok(ServeConfig {
         state,
         host,
@@ -3758,7 +5178,7 @@ pub fn serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Optio
         trusted_fronts,
         first_admin,
         profile,
-        fleet: FleetOpen { fleet_host, fleet_port, fleet_names, metrics_sources, metrics_sources_text: metrics_text, all_in_one: false },
+        fleet: FleetOpen { fleet_host, fleet_port, fleet_names, metrics_sources, metrics_sources_text: metrics_text, all_in_one: false, serve_dev },
         fleet_sources,
         saved,
     })
@@ -4046,7 +5466,7 @@ pub fn start_with_console(dir: &Path, relay_product: Product, relay_hosts: &[Str
     let relay_state = relay_state_dir.map(Path::to_path_buf);
     let run = move || -> Result<(), String> {
         serve_browser(console.clone(), &cfg)?;
-        let port = crate::fleet_port::PortConfig { host: cfg.fleet.fleet_host.clone(), port: cfg.fleet.fleet_port, names: cfg.fleet.fleet_names.clone(), sources: cfg.fleet_sources.clone(), public_host: cfg.public.clone() };
+        let port = crate::fleet_port::PortConfig { host: cfg.fleet.fleet_host.clone(), port: cfg.fleet.fleet_port, names: cfg.fleet.fleet_names.clone(), sources: cfg.fleet_sources.clone(), public_host: cfg.public.clone(), serve_dev: cfg.fleet.serve_dev };
         crate::fleet_port::start(console.clone(), port, logger.clone())?;
         if let Some(state) = &relay_state {
             crate::fleet_agent::same_process(console.clone(), state, relay_product, logger.clone())?;
@@ -4421,7 +5841,7 @@ mod tests {
             let id = format!("en_{}", hex(&crate::console_auth::random(8).unwrap()));
             {
                 let mut reg = self.f.registry();
-                reg.enrollments.insert(id.clone(), Enrollment { id: id.clone(), product, name: "Relay A".into(), site: "Lab".into(), scopes: vec!["read-health".into()], replaces: None, created_by: ADMIN.into(), created_at: t, expires: t + CODE_MS, state: "open".into(), fails: 0, relay: None });
+                reg.enrollments.insert(id.clone(), Enrollment { id: id.clone(), product, name: "Relay A".into(), site: "Lab".into(), scopes: vec!["read-health".into()], replaces: None, created_by: ADMIN.into(), created_at: t, expires: t + CODE_MS, state: "open".into(), fails: 0, relay: None, env: "installed".into(), deploy: None });
             }
             let relay_id = self.f.draw_relay_id(&id);
             let spki = vec![0x30, 0x59, 1, 2, 3, relay_id.len() as u8];
@@ -4939,5 +6359,563 @@ mod tests {
         let k = &p.passkeys[0];
         assert_eq!(fp, crate::fleet_trust::admin_key_fingerprint(&unb64u(&k.id).unwrap(), &unb64u(&k.cose).unwrap(), ADMIN, "admin"));
         assert_ne!(fp, crate::fleet_trust::admin_key_fingerprint(&unb64u(&k.id).unwrap(), &unb64u(&k.cose).unwrap(), ADMIN, "user-manager"));
+    }
+
+    // ── AC-2b-D (16.1 d-console) ────────────────────────────────────────────────────────────────────────
+
+    const MEET_HOST: &str = "meet.example.org";
+    const SIGNER_URL: &str = "https://signer.example.org";
+    const HOUR: i64 = 3_600_000;
+
+    /// The harness console holding a fixed organization CA (meet_ca's test CA): its id.
+    fn with_ca(h: &H, signer: Option<&str>) -> String {
+        let t = crate::codec::now_ms();
+        let ca = with_vault(&h.c, |v| crate::meet_ca::test_ca(&h.d, v, signer, t));
+        let id = ca.id().to_owned();
+        *h.f.meet.lock() = Some(ca);
+        id
+    }
+
+    fn meet_deploy(host: &str) -> Value {
+        json!({ "env": "linux", "host": host, "turnHost": null, "clients": null, "pki": "console", "license": null, "binarySha256": null, "offered": [], "licenseSha256": null })
+    }
+
+    fn p256() -> crate::fleet_x509::Key {
+        crate::fleet_x509::Key::generate(crate::fleet_x509::Curve::P256).unwrap()
+    }
+
+    /// A server request for `host` (base64url DER), signed by a fresh key.
+    fn server_csr(host: &str) -> String {
+        b64u(&crate::fleet_x509::csr(&p256(), host, &[host.to_owned()], &[], &[]).unwrap())
+    }
+
+    fn signer_csr() -> String {
+        b64u(&crate::fleet_x509::csr(&p256(), "Lucid Meet Relay", &[], &[], &["urn:lucid-meet:relay".to_owned()]).unwrap())
+    }
+
+    impl H {
+        /// An open enrollment with `deploy` (6.1).
+        fn open_deploy(&self, product: Product, deploy: Option<Value>, replaces: Option<&str>) -> String {
+            let t = crate::codec::now_ms();
+            let id = format!("en_{}", hex(&crate::console_auth::random(8).unwrap()));
+            let env = if deploy.is_some() { "linux" } else { "installed" };
+            let e = Enrollment { id: id.clone(), product, name: "Relay A".into(), site: "Lab".into(), scopes: vec!["read-health".into()], replaces: replaces.map(str::to_owned), created_by: ADMIN.into(), created_at: t, expires: t + CODE_MS, state: "open".into(), fails: 0, relay: None, env: env.into(), deploy };
+            self.f.registry().enrollments.insert(id.clone(), e);
+            id
+        }
+
+        /// A Meeting Hub relay through the F15 calls as fleet_port makes them (3.3 step 3, then the commit).
+        fn enroll_meet(&self, id: &str, csr: &str, signer: Option<&str>, profile: &str, roots: &[&str], t: i64) -> Result<(String, Value), ApiError> {
+            let relay_id = self.f.draw_relay_id(id);
+            let relay = json!({ "product": "meet", "version": "1.0", "fips": false, "profile": profile, "host": MEET_HOST, "os": "linux", "localConsole": false, "meetCsr": csr, "meetSignerCsr": signer, "meetRoots": roots });
+            self.f.enroll_check(id, &relay, t)?;
+            let done = EnrollDone { relay_id: Some(relay_id.clone()), serial: "0a0c".into(), spki: p256().spki(), not_after: t + 90 * DAY_MS, generation: 1, relay, source: "10.0.0.9".into() };
+            self.f.enroll_done(id, done, t).map(|a| (relay_id, a))
+        }
+
+        /// The CA's rows for a relay: (serial, kind, notBefore, notAfter, revokedAt).
+        fn rows(&self, relay: &str) -> Vec<(String, String, i64, i64, Option<i64>)> {
+            let g = self.f.meet.lock();
+            g.as_ref().unwrap().rows().iter().filter(|x| x.relay_id == relay).map(|x| (x.serial.clone(), x.kind.as_str().to_owned(), x.not_before, x.not_after, x.revoked_at)).collect()
+        }
+
+        fn report(&self, relay: &str, key: &str, v: Value) {
+            self.f.registry().relays.get_mut(relay).unwrap().report.insert(key.to_owned(), v);
+        }
+    }
+
+    #[test]
+    fn deploy_fields_follow_3_4() {
+        let f = |p: Product, v: Value| deploy_fields(p, v.as_object().unwrap());
+        let code = |p: Product, v: Value| f(p, v).unwrap_err().code;
+        let d = f(Product::Meet, json!({ "host": " Meet.Example.ORG ", "pki": "console" })).unwrap();
+        assert_eq!((d.host.as_str(), d.names.clone(), d.clients.clone()), ("meet.example.org", vec!["meet.example.org".to_owned()], Value::Null));
+        let long = format!("{}.example.org", "a".repeat(250));
+        for bad in ["10.0.0.5", "-a.example.org", "a_b.example.org", "", "a..example.org", "example.123", long.as_str()] {
+            assert_eq!(code(Product::Meet, json!({ "host": bad, "pki": "own" })), "deploy-host", "{bad}");
+        }
+        let s = f(Product::Spokes, json!({ "host": "203.0.113.7" })).unwrap();
+        assert_eq!(s.clients, json!(["0.0.0.0/0", "::/0"]), "the default is everyone");
+        assert!(f(Product::Spokes, json!({ "host": "2001:db8::1", "clients": "203.0.113.0/24, 2001:db8::/32" })).is_ok());
+        let t = f(Product::Meet, json!({ "host": MEET_HOST, "turnHost": "TURN.example.org", "pki": "own" })).unwrap();
+        assert_eq!(t.names, vec![MEET_HOST.to_owned(), "turn.example.org".to_owned()]);
+        assert_eq!(f(Product::Meet, json!({ "host": MEET_HOST, "turnHost": "", "pki": "own" })).unwrap().turn, None, "empty is the DNS name");
+        assert_eq!(f(Product::Meet, json!({ "host": MEET_HOST, "turnHost": MEET_HOST, "pki": "own" })).unwrap().names.len(), 1);
+        assert!(f(Product::Meet, json!({ "host": MEET_HOST, "turnHost": "198.51.100.4", "pki": "own" })).is_ok());
+        assert_eq!(code(Product::Spokes, json!({ "host": "relay.example.org", "turnHost": "turn.example.org" })), "deploy-host");
+        let many: Vec<String> = (0..17).map(|i| format!("10.{i}.0.0/16")).collect();
+        for bad in [json!("203.0.113.7"), json!(many), json!([1]), json!("not a range/8")] {
+            assert_eq!(code(Product::Spokes, json!({ "host": "relay.example.org", "clients": bad })), "deploy-clients", "{bad}");
+        }
+        assert_eq!(code(Product::Meet, json!({ "host": MEET_HOST, "pki": "own", "clients": "0.0.0.0/0" })), "deploy-clients");
+        assert_eq!(code(Product::Meet, json!({ "host": MEET_HOST })), "invalid", "Meeting Hub names its certificate source");
+        assert_eq!(code(Product::Meet, json!({ "host": MEET_HOST, "pki": "own", "admins": ["a@b.org"] })), "invalid", "admins are set on the host (H1)");
+        assert_eq!(code(Product::Spokes, json!({ "host": "relay.example.org", "pki": "own" })), "invalid");
+    }
+
+    #[test]
+    fn mint_refuses_in_order_and_the_installed_path_keeps_ac2a() {
+        let mut h = boot("deploy-mint");
+        let mint = |h: &mut H, body: Value| {
+            let su = h.stepup("fleet.enroll.code", body["name"].as_str().unwrap_or("-"), &body);
+            let mut b = body;
+            b["stepup"] = su;
+            h.post("/console/api/fleet/enroll", b)
+        };
+        let base = json!({ "name": "Relay A", "site": "Lab", "scopes": ["read-health"], "replaces": null });
+        let with = |extra: Value| {
+            let mut b = base.clone();
+            for (k, v) in extra.as_object().unwrap() {
+                b[k] = v.clone();
+            }
+            b
+        };
+        let (s, v) = mint(&mut h, base.clone());
+        assert_eq!((s, v["code"].as_str()), (400, Some("deploy-product")), "no product is ever assumed");
+        let (s, v) = mint(&mut h, with(json!({ "product": "meet", "env": "cloud" })));
+        assert_eq!((s, v["code"].as_str()), (400, Some("deploy-env")));
+        let (_, v) = mint(&mut h, with(json!({ "product": "spokes", "env": "installed", "deploy": { "host": "relay.example.org" } })));
+        assert_eq!(v["code"], "deploy-env");
+        let (s, v) = mint(&mut h, with(json!({ "product": "meet", "env": "linux", "deploy": { "host": MEET_HOST, "pki": "console" } })));
+        match crate::fleet_port::served_binary() {
+            Err(_) => assert_eq!((s, v["code"].as_str()), (404, Some("deploy-unavailable")), "{v}"),
+            Ok(_) => assert_eq!((s, v["code"].as_str()), (409, Some("deploy-ca-needed")), "{v}"),
+        }
+        let (s, v) = mint(&mut h, with(json!({ "product": "spokes" })));
+        assert_eq!(s, 200, "{v}");
+        assert!(v["install"]["command"].is_null() && v["deploy"].is_null());
+        assert_eq!(v["install"]["offlineUninstall"], "sudo /opt/lucid-relay/bin/lucid-relay deploy script spokes-linux | sudo bash -s -- uninstall");
+        let id = v["id"].as_str().unwrap();
+        assert_eq!(h.f.registry().enrollments[id].env, "installed");
+        assert!(!h.f.download_enrollment_ok(id, crate::codec::now_ms()), "the installed path downloads nothing");
+    }
+
+    #[test]
+    fn the_install_object_follows_3_5_per_env_and_profile() {
+        let h = boot("deploy-install");
+        let t = crate::codec::now_ms();
+        let e = "en_0123456789abcdef";
+        let url = h.f.fleet_url(&h.c);
+        let i = h.f.install_of(&h.c, Product::Meet, "linux", Some(&json!({ "pki": "own" })), e, "Relay A", t);
+        let cmd = i["command"].as_str().unwrap();
+        assert!(cmd.starts_with("curl -fsS --proto =https -k --pinnedpubkey '"), "{cmd}");
+        assert!(cmd.ends_with(&format!("'{url}/fleet/v1/install/meet-linux.sh?e={e}' | sudo bash -s -- --pki-dir <folder>")), "{cmd}");
+        assert!(i["uninstall"].as_str().unwrap().ends_with(&format!(" {url}/fleet/v1/install/meet-linux.sh | sudo bash -s -- uninstall")));
+        assert_eq!(i["scriptUrl"], format!("{url}/fleet/v1/install/meet-linux.sh?e={e}"));
+        assert_eq!(i["offlineUninstall"], "sudo /opt/lucid-meet/lucid-relay deploy script meet-linux | sudo bash -s -- uninstall");
+        assert!(i["steps"].is_null());
+        let i = h.f.install_of(&h.c, Product::Meet, "linux", Some(&json!({ "pki": "console" })), e, "Relay A", t);
+        assert!(i["command"].as_str().unwrap().ends_with("' | sudo bash"));
+        let i = h.f.install_of(&h.c, Product::Spokes, "docker", None, e, "Relay A", t);
+        let cmd = i["command"].as_str().unwrap();
+        assert!(cmd.contains(&format!("/fleet/v1/install/spokes-docker.sh?e={e}'")) && cmd.ends_with(" -s -- --root <path to root.pub>"), "{cmd}");
+        let i = h.f.install_of(&h.c, Product::Meet, "proxmox", Some(&json!({ "pki": "console" })), e, "Relay A", t);
+        let steps: Vec<&str> = i["steps"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+        assert_eq!(steps.len(), 7);
+        assert!(steps[0].starts_with("cd /var/tmp && wget -N https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-"));
+        assert!(steps[2].contains("--name relay-a "));
+        assert!(i["command"].as_str().unwrap().contains("/meet-linux.sh?e="));
+        let i = h.f.install_of(&h.c, Product::Meet, "installed", None, e, "Relay A", t);
+        assert!(i["command"].is_null() && i["scriptUrl"].is_null() && i["binary"].is_null());
+        h.c.inner.lock().book.settings.profile = crate::console_settings::Profile::High;
+        let i = h.f.install_of(&h.c, Product::Meet, "linux", Some(&json!({ "pki": "own" })), e, "Relay A", t);
+        assert!(i["command"].is_null() && i["uninstall"].is_null() && i["binary"].is_null());
+        let steps = i["steps"].as_array().unwrap();
+        assert_eq!(steps[0], "./lucid-relay deploy script meet-linux > lucid-deploy.sh");
+        let second = steps[1].as_str().unwrap();
+        assert!(second.starts_with(&format!("sudo bash lucid-deploy.sh --binary ./lucid-relay --console '{url}' --pins '")) && second.ends_with("' --profile high --pki-dir <folder>"), "{second}");
+        let i = h.f.install_of(&h.c, Product::Spokes, "linux", None, e, "Relay A", t);
+        assert!(i["steps"][1].as_str().unwrap().ends_with("--profile high --root <path to root.pub>"));
+        // D1: nothing of a code anywhere.
+        assert!(!stringify(&i).contains("LCE1-"));
+        let o = h.f.deploy_options(&h.c, t);
+        let docker = o["envs"].as_array().unwrap().iter().find(|x| x["id"] == "docker").unwrap().clone();
+        assert_eq!((docker["offered"].as_bool(), docker["why"].as_str()), (Some(false), Some("high")));
+        assert!(o["envs"].as_array().unwrap().iter().any(|x| x["id"] == "linux" && x["offered"] == true), "High installs from release media");
+        assert!(o["binary"].is_null());
+        assert_eq!(o["envs"].as_array().unwrap().len(), 8);
+    }
+
+    #[test]
+    fn the_preview_carries_deploy_and_changes_with_any_field() {
+        let h = boot("deploy-preview");
+        let ca_id = with_ca(&h, Some(SIGNER_URL));
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let p = h.f.enroll_preview(&id, "console.example.org", t).unwrap();
+        let d = &p["deploy"];
+        assert_eq!((d["host"].as_str(), d["pki"].as_str(), d["ca"]["id"].as_str(), d["signer"]["url"].as_str()), (Some(MEET_HOST), Some("console"), Some(ca_id.as_str()), Some(SIGNER_URL)));
+        assert!(d["ca"]["pem"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
+        assert!(d["spokesRoot"].is_null() && d["license"].is_null() && d.get("admins").is_none());
+        let before = stringify(&p);
+        h.f.registry().enrollments.get_mut(&id).unwrap().deploy.as_mut().unwrap()["turnHost"] = json!("turn.example.org");
+        assert_ne!(stringify(&h.f.enroll_preview(&id, "console.example.org", t).unwrap()), before, "the hashed answer binds every deploy field");
+        let plain_id = h.open_deploy(Product::Meet, None, None);
+        assert!(h.f.enroll_preview(&plain_id, "console.example.org", t).unwrap()["deploy"].is_null());
+        // A CA lost or removed after the mint: the preview refuses.
+        *h.f.meet.lock() = None;
+        assert_eq!(h.f.enroll_preview(&id, "console.example.org", t).unwrap_err().code, "deploy-ca-needed");
+    }
+
+    #[test]
+    fn a_console_ca_enrollment_issues_from_the_requests_in_one_step() {
+        let h = boot("deploy-issue");
+        let ca_id = with_ca(&h, None);
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, a) = h.enroll_meet(&id, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap();
+        assert!(a["meet"]["cert"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
+        assert!(a["meet"]["signerCert"].is_null());
+        assert_eq!(a["meet"]["caCert"].as_str(), h.f.meet.lock().as_ref().map(|m| m.ca_pem()).as_deref());
+        assert!(a["meet"]["crl"].as_str().unwrap().contains("BEGIN X509 CRL"));
+        let rows = h.rows(&relay);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "server");
+        assert_eq!(h.f.registry().relays[&relay].deploy.as_ref().unwrap()["pki"], "console");
+        let audit = h.c.audit.lock().entries().iter().map(|e| stringify(&Value::Object(e.clone()))).collect::<String>();
+        assert!(audit.contains("fleet.meet-cert.issue"));
+        // D5: the CA key is in no audit entry and no file but the sealed store.
+        assert!(!audit.contains("PRIVATE KEY"));
+        for e in std::fs::read_dir(&h.d).unwrap().filter_map(Result::ok) {
+            let text = std::fs::read_to_string(e.path()).unwrap_or_default();
+            assert!(!text.contains("PRIVATE KEY"), "{}", e.path().display());
+        }
+        // 4.4: the enrollment's program download counts as named for the next hour only.
+        assert!(h.f.download_enrollment_ok(&id, t + 1000));
+        assert!(!h.f.download_enrollment_ok(&id, t + CODE_MS + 1));
+    }
+
+    #[test]
+    fn a_request_for_other_names_burns_a_try_and_writes_nothing() {
+        let h = boot("deploy-csr");
+        let ca_id = with_ca(&h, Some(SIGNER_URL));
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let err = h.enroll_meet(&id, &server_csr("other.example.org"), Some(&signer_csr()), "standard", &[&ca_id], t).unwrap_err();
+        assert_eq!(err.code, "deploy-csr");
+        assert!(err.message.contains(MEET_HOST), "{}", err.message);
+        assert_eq!(h.f.registry().enrollments[&id].fails, 1);
+        assert!(!h.f.registry().relays.values().any(|r| r.enrollment == id), "issuing and the registry write are one step");
+        assert!(h.f.meet.lock().as_ref().unwrap().rows().is_empty());
+        // A request that does not read, and a missing signer request with a certificate server, burn one each.
+        assert_eq!(h.enroll_meet(&id, "AAAA", Some(&signer_csr()), "standard", &[&ca_id], t).unwrap_err().code, "deploy-csr");
+        assert_eq!(h.enroll_meet(&id, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap_err().code, "deploy-csr");
+        assert_eq!(h.f.registry().enrollments[&id].fails, 3);
+        // The same key for both requests.
+        let k = p256();
+        let same = b64u(&crate::fleet_x509::csr(&k, MEET_HOST, &[MEET_HOST.to_owned()], &[], &[]).unwrap());
+        let same_signer = b64u(&crate::fleet_x509::csr(&k, "Lucid Meet Relay", &[], &[], &["urn:lucid-meet:relay".to_owned()]).unwrap());
+        assert_eq!(h.enroll_meet(&id, &same, Some(&same_signer), "standard", &[&ca_id], t).unwrap_err().code, "deploy-csr");
+        assert_eq!(h.f.registry().enrollments[&id].fails, 4);
+        assert!(h.enroll_meet(&id, &server_csr(MEET_HOST), Some(&signer_csr()), "standard", &[&ca_id], t).is_ok(), "four wrong proofs leave the code open");
+    }
+
+    #[test]
+    fn a_name_held_by_another_relay_is_refused_unless_it_is_replaced() {
+        let h = boot("deploy-taken");
+        let ca_id = with_ca(&h, None);
+        let t = crate::codec::now_ms();
+        let first = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, _) = h.enroll_meet(&first, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap();
+        let old = h.rows(&relay)[0].0.clone();
+        let second = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let err = h.enroll_meet(&second, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap_err();
+        assert_eq!(err.code, "deploy-host-taken");
+        assert_eq!(err.message, format!("Relay A already holds a certificate for {MEET_HOST}. Use Replace Relay A."));
+        // A day later (meet_ca keeps one issue per relay id and kind per 24 hours, and a Replace keeps the id).
+        let later = t + 25 * HOUR;
+        let replace = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), Some(&relay));
+        h.f.registry().enrollments.get_mut(&replace).unwrap().expires = later + CODE_MS;
+        let (same, _) = h.enroll_meet(&replace, &server_csr(MEET_HOST), None, "standard", &[&ca_id], later).unwrap();
+        assert_eq!(same, relay, "a Replace keeps the relay id");
+        let rows = h.rows(&relay);
+        assert!(rows.iter().any(|r| r.0 == old && r.4.is_some()), "the replaced relay's certificate is revoked (L10)");
+        assert!(rows.iter().any(|r| r.0 != old && r.4.is_none()));
+    }
+
+    #[test]
+    fn renewal_waits_a_day_and_revokes_older_server_serials_but_the_one_in_use() {
+        let h = boot("deploy-renew");
+        let ca_id = with_ca(&h, None);
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, _) = h.enroll_meet(&id, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap();
+        let first = h.rows(&relay)[0].0.clone();
+        let ask = |at: i64| h.f.meet_cert(&relay, &json!({ "csr": server_csr(MEET_HOST), "signerCsr": null }), at);
+        assert_eq!(ask(t + HOUR).unwrap_err().code, "meet-cert-wait");
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "certSerial": first }));
+        let a = ask(t + 25 * HOUR).unwrap();
+        assert!(a["cert"].as_str().unwrap().contains("BEGIN CERTIFICATE") && a["signerCert"].is_null());
+        let rows = h.rows(&relay);
+        let second = rows.iter().find(|r| r.0 != first).unwrap().0.clone();
+        assert!(rows.iter().all(|r| r.4.is_none()), "the serial in use stays until the relay moves");
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "certSerial": second }));
+        ask(t + 50 * HOUR).unwrap();
+        let rows = h.rows(&relay);
+        assert!(rows.iter().any(|r| r.0 == first && r.4.is_some()), "older outstanding server serials are revoked");
+        assert!(rows.iter().any(|r| r.0 == second && r.4.is_none()));
+        // Another relay's names, and an unexpected body.
+        assert_eq!(h.f.meet_cert(&relay, &json!({ "csr": server_csr("other.example.org"), "signerCsr": null }), t + 80 * HOUR).unwrap_err().code, "deploy-csr");
+        assert_eq!(h.f.meet_cert(&relay, &json!({ "csr": null, "signerCsr": null, "x": 1 }), t + 80 * HOUR).unwrap_err().code, "fleet-op");
+        assert_eq!(h.f.meet_cert(&relay, &json!({ "csr": null, "signerCsr": null }), t + 80 * HOUR).unwrap_err().code, "deploy-csr");
+    }
+
+    #[test]
+    fn the_server_serial_in_use_is_revoked_7_days_after_the_relay_reports_the_new_one() {
+        let h = boot("deploy-grace");
+        let ca_id = with_ca(&h, None);
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, _) = h.enroll_meet(&id, &server_csr(MEET_HOST), None, "standard", &[&ca_id], t).unwrap();
+        let first = h.rows(&relay)[0].0.clone();
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "certSerial": first }));
+        h.f.meet_cert(&relay, &json!({ "csr": server_csr(MEET_HOST), "signerCsr": null }), t + 25 * HOUR).unwrap();
+        let second = h.rows(&relay).iter().find(|r| r.0 != first).unwrap().0.clone();
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "certSerial": second }));
+        h.f.meet_report(&h.c, &relay, t + 26 * HOUR);
+        h.f.meet_tick(&h.c, t + 26 * HOUR + SERVER_GRACE_MS - 1);
+        assert!(h.rows(&relay).iter().all(|r| r.4.is_none()), "not before 7 days");
+        h.f.meet_tick(&h.c, t + 26 * HOUR + SERVER_GRACE_MS);
+        assert!(h.rows(&relay).iter().any(|r| r.0 == first && r.4.is_some()));
+        assert!(h.rows(&relay).iter().any(|r| r.0 == second && r.4.is_none()));
+    }
+
+    #[test]
+    fn signer_client_certificates_are_30_days_unless_every_relay_confirms() {
+        let h = boot("deploy-signer");
+        let ca_id = with_ca(&h, Some(SIGNER_URL));
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, a) = h.enroll_meet(&id, &server_csr(MEET_HOST), Some(&signer_csr()), "standard", &[&ca_id], t).unwrap();
+        assert!(a["meet"]["signerCert"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
+        let days = |h: &H| h.rows(&relay).iter().filter(|r| r.1 == "signer-client").max_by_key(|r| r.2).map(|r| (r.3 - r.2).div_euclid(DAY_MS)).unwrap();
+        assert!((29..=30).contains(&days(&h)), "{}", days(&h));
+        let renew = |at: i64| h.f.meet_cert(&relay, &json!({ "csr": null, "signerCsr": signer_csr() }), at).unwrap();
+        // The setting on, the relay reporting false: still 30 days, and `signer-crl-mismatch` names it.
+        h.f.meet.lock().as_mut().unwrap().set_signer_enforced(true).unwrap();
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "signerCrlEnforced": false }));
+        renew(t + 25 * HOUR);
+        assert!((29..=30).contains(&days(&h)));
+        assert!(h.f.meet_attention(t).iter().any(|a| a["kind"] == "signer-crl-mismatch" && a["args"]["relay"] == "Relay A"));
+        // Every relay of the server confirms: 90 days.
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "signerCrlEnforced": true }));
+        renew(t + 50 * HOUR);
+        assert!((89..=90).contains(&days(&h)), "{}", days(&h));
+        assert!(!h.f.meet_attention(t).iter().any(|a| a["kind"] == "signer-crl-mismatch"));
+        // A relay claiming true while the setting is off never yields 90 days.
+        h.f.meet.lock().as_mut().unwrap().set_signer_enforced(false).unwrap();
+        renew(t + 75 * HOUR);
+        assert!((29..=30).contains(&days(&h)));
+        // R4-H1: superseded signer client certificates are never revoked.
+        assert!(h.rows(&relay).iter().filter(|r| r.1 == "signer-client").all(|r| r.4.is_none()));
+        // R4-M3: 3 days before the newest ends.
+        let ends = h.rows(&relay).iter().filter(|r| r.1 == "signer-client").map(|r| r.3).max().unwrap();
+        assert!(!h.f.meet_attention(ends - 4 * DAY_MS).iter().any(|a| a["kind"] == "relay-signer-cert-expiring"));
+        assert!(h.f.meet_attention(ends - 3 * DAY_MS).iter().any(|a| a["kind"] == "relay-signer-cert-expiring"));
+    }
+
+    #[test]
+    fn removing_or_leaving_revokes_every_unexpired_serial_of_both_kinds() {
+        let h = boot("deploy-remove");
+        let ca_id = with_ca(&h, Some(SIGNER_URL));
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, _) = h.enroll_meet(&id, &server_csr(MEET_HOST), Some(&signer_csr()), "standard", &[&ca_id], t).unwrap();
+        let first = h.rows(&relay)[0].0.clone();
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "certSerial": first }));
+        // A server certificate in its 7-day grace and a superseded signer client certificate still in date (R5-M1).
+        h.f.meet_cert(&relay, &json!({ "csr": server_csr(MEET_HOST), "signerCsr": signer_csr() }), t + 25 * HOUR).unwrap();
+        assert_eq!(h.rows(&relay).len(), 4);
+        h.f.meet_revoke_relay(&h.c, &relay, t + 26 * HOUR);
+        assert!(h.rows(&relay).iter().all(|r| r.4.is_some()), "{:?}", h.rows(&relay));
+        // A relay that leaves (AC-2a 3.5 `relay-left`).
+        let other = h.open_deploy(Product::Meet, Some(meet_deploy("meet2.example.org")), None);
+        let relay2 = h.f.draw_relay_id(&other);
+        let body = json!({ "product": "meet", "version": "1.0", "fips": false, "profile": "standard", "host": "meet2.example.org", "os": "linux", "localConsole": false, "meetCsr": server_csr("meet2.example.org"), "meetSignerCsr": signer_csr(), "meetRoots": [ca_id] });
+        h.f.enroll_check(&other, &body, t).unwrap();
+        h.f.enroll_done(&other, EnrollDone { relay_id: Some(relay2.clone()), serial: "0a0d".into(), spki: p256().spki(), not_after: t + 90 * DAY_MS, generation: 1, relay: body, source: String::new() }, t).unwrap();
+        h.f.on_event(&relay2, "bye", &json!({ "reason": "left" }), t + HOUR);
+        assert!(h.rows(&relay2).iter().all(|r| r.4.is_some()));
+    }
+
+    #[test]
+    fn welcome_names_the_ca_and_a_high_relay_that_trusts_it_is_refused() {
+        let mut h = boot("deploy-held");
+        let t = crate::codec::now_ms();
+        let spokes = h.seed(Product::Spokes);
+        h.link.up.lock().insert(spokes.clone());
+        let hello = json!({ "relayId": spokes, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": ["read-health"], "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": { "state": "pending" }, "policySeq": 1, "rosterSeq": 0, "trustSeq": 1, "pins": [], "certNotAfter": null });
+        assert!(h.f.on_hello(&spokes, &hello, "10.0.0.9", t).unwrap()["meetCaId"].is_null());
+        let ca_id = with_ca(&h, None);
+        assert_eq!(h.f.on_hello(&spokes, &hello, "10.0.0.9", t).unwrap()["meetCaId"], ca_id.as_str());
+        // 8.7: a High Meeting Hub relay whose roots include the CA, or are unknown.
+        let id = h.open_deploy(Product::Meet, None, None);
+        let relay = |profile: &str, roots: Value| json!({ "product": "meet", "version": "1.0", "fips": false, "profile": profile, "host": MEET_HOST, "os": "linux", "localConsole": false, "meetRoots": roots });
+        assert_eq!(h.f.enroll_check(&id, &relay("high", json!([])), t).unwrap_err().code, "fleet-ca-held");
+        assert_eq!(h.f.enroll_check(&id, &relay("high", json!([ca_id])), t).unwrap_err().code, "fleet-ca-held");
+        assert!(h.f.enroll_check(&id, &relay("high", json!(["m_0123456789abcdef0123456789abcdef"])), t).is_ok());
+        assert!(h.f.enroll_check(&id, &relay("standard", json!([ca_id])), t).is_ok());
+        // "Confirm relay" for such a relay.
+        let meet = h.seed(Product::Meet);
+        let fp = {
+            let mut reg = h.f.registry();
+            let r = reg.relays.get_mut(&meet).unwrap();
+            r.profile = "high".into();
+            r.fingerprint.clone()
+        };
+        let params = json!({ "relay": meet, "fingerprint": fp });
+        let su = h.stepup("fleet.relay.confirm", &meet, &params);
+        let mut b = params.clone();
+        b["stepup"] = su;
+        let (s, v) = h.post("/console/api/fleet/relays/confirm", b);
+        assert_eq!((s, v["code"].as_str()), (409, Some("fleet-ca-held")), "{v}");
+        // The import's High relay list: pending and unknown roots count (H4, R2-M2).
+        let high = h.f.high_relays();
+        assert!(high.iter().any(|x| x.relay_id == meet && x.meet_roots.is_none()));
+    }
+
+    #[test]
+    fn the_list_goes_only_to_relays_that_take_it_from_the_bundle() {
+        let h = boot("deploy-push");
+        let ca_id = with_ca(&h, None);
+        let t = crate::codec::now_ms();
+        let (a, b, c) = (h.seed(Product::Meet), h.seed(Product::Meet), h.seed(Product::Meet));
+        for r in [&a, &b, &c] {
+            h.link.up.lock().insert(r.clone());
+        }
+        let crl = |source: &str| json!({ "source": source, "thisUpdate": 0, "number": null, "issuer": ca_id, "sha256": "00", "pending": null });
+        h.report(&a, "meetRoots", json!([ca_id]));
+        h.report(&a, "meetCrl", crl("bundle"));
+        h.report(&b, "meetRoots", json!([ca_id]));
+        h.report(&b, "meetCrl", crl("fixed"));
+        h.report(&c, "meetRoots", json!(["m_0123456789abcdef0123456789abcdef"]));
+        h.report(&c, "meetCrl", crl("bundle"));
+        h.f.push_crl_all();
+        let to: Vec<String> = h.link.sent.lock().iter().filter(|(_, op, _)| op == "meet-crl").map(|(r, _, _)| r.clone()).collect();
+        assert_eq!(to, vec![a.clone()], "only the bundle relay that trusts the CA");
+        let view = h.f.meet_ca_view(&h.c, t);
+        let not_pushed = view["ca"]["notPushed"].as_array().unwrap();
+        assert_eq!(not_pushed.len(), 1);
+        assert_eq!((not_pushed[0]["relayId"].as_str(), not_pushed[0]["why"].as_str()), (Some(b.as_str()), Some("fixed")));
+        // The relay holding the console's newest list gets nothing more.
+        let info = h.f.meet.lock().as_ref().unwrap().crl().unwrap().1;
+        h.report(&a, "meetCrl", json!({ "source": "bundle", "thisUpdate": info.this_update, "number": info.number.to_json(), "issuer": ca_id, "sha256": info.sha256, "pending": null }));
+        h.link.sent.lock().clear();
+        h.f.push_crl_all();
+        assert!(h.sent("meet-crl").is_empty());
+        // R3-L3: its own list is not divergence; a list of the CA it did not sign is.
+        h.f.meet_report(&h.c, &a, t);
+        assert!(!h.f.diverge_seen.lock().contains_key(&a));
+        h.report(&a, "meetCrl", json!({ "source": "bundle", "thisUpdate": info.this_update, "number": null, "issuer": ca_id, "sha256": "ab".repeat(32), "pending": null }));
+        h.f.meet_report(&h.c, &a, t);
+        assert!(h.f.diverge_seen.lock().contains_key(&a), "the console asks the relay for that list once");
+    }
+
+    #[test]
+    fn import_is_refused_without_a_bound_seal_and_keeps_nothing() {
+        let mut h = boot("deploy-import");
+        let bind = json!({ "signerUrl": null, "noHighRelay": true, "maxLifetimeDays": null });
+        let su = h.stepup("fleet.meet-ca.import", "-", &bind);
+        let key = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg\n-----END PRIVATE KEY-----\n";
+        let (s, v) = h.post("/console/api/fleet/meet-ca/import", json!({ "caPem": PEM, "keyPem": key, "noHighRelay": true, "stepup": su }));
+        let bound = h.c.seal.lock().as_ref().is_some_and(|s| matches!(s.provider(), crate::console_seal::Provider::SystemdCredential | crate::console_seal::Provider::DpapiService));
+        if bound {
+            assert_eq!(v["code"], "meet-ca-key", "{v}");
+        } else {
+            assert_eq!((s, v["code"].as_str()), (409, Some("meet-ca-seal")), "{v}");
+            assert!(h.c.seal_get(MEET_IMPORT_STASH).is_none(), "a refusal stashes nothing");
+        }
+        let audit = h.c.audit.lock().entries().iter().map(|e| stringify(&Value::Object(e.clone()))).collect::<String>();
+        assert!(!audit.contains("PRIVATE KEY"));
+        for e in std::fs::read_dir(&h.d).unwrap().filter_map(Result::ok) {
+            assert!(!std::fs::read_to_string(e.path()).unwrap_or_default().contains("PRIVATE KEY"), "{}", e.path().display());
+        }
+        // Under High the page shows only meet-ca.high.
+        h.c.inner.lock().book.settings.profile = crate::console_settings::Profile::High;
+        let view = h.f.meet_ca_view(&h.c, crate::codec::now_ms());
+        assert!(view["ca"].is_null());
+        assert_eq!((view["allowed"].as_bool(), view["why"].as_str()), (Some(false), Some("meet-ca-high")));
+    }
+
+    #[test]
+    fn ca_attention_follows_10() {
+        let h = boot("deploy-attention");
+        let ca_id = with_ca(&h, Some(SIGNER_URL));
+        let t = crate::codec::now_ms();
+        let id = h.open_deploy(Product::Meet, Some(meet_deploy(MEET_HOST)), None);
+        let (relay, _) = h.enroll_meet(&id, &server_csr(MEET_HOST), Some(&signer_csr()), "standard", &[&ca_id], t).unwrap();
+        let kinds = |at: i64| h.f.meet_attention(at).iter().map(|a| a["kind"].as_str().unwrap_or("").to_owned()).collect::<Vec<_>>();
+        assert!(!kinds(t).contains(&"relay-meet-cert-expiring".to_owned()));
+        assert!(kinds(t + 77 * DAY_MS).contains(&"relay-meet-cert-expiring".to_owned()), "14 days left, not renewed");
+        // signer-crl-stale: the server's held list behind the console's for 6 hours (R5-L2).
+        h.report(&relay, "meetPki", json!({ "caId": ca_id, "signerHeld": { "number": 0, "thisUpdate": 0 } }));
+        h.f.signer_stale_note(&h.c, t);
+        assert!(!kinds(t + HOUR).contains(&"signer-crl-stale".to_owned()));
+        assert!(kinds(t + 7 * HOUR).contains(&"signer-crl-stale".to_owned()));
+        // meet-crl-future until dismissed.
+        h.f.set_crl_future(&h.c, Some(t + DAY_MS), "Relay A", false, t);
+        assert!(kinds(t).contains(&"meet-crl-future".to_owned()));
+        assert_eq!(h.post("/console/api/fleet/meet-ca/dismiss-diverged", json!({})).0, 200);
+        assert!(!kinds(t).contains(&"meet-crl-future".to_owned()));
+        // A relay's own `profile-lock-refused` reaches Overview (6.4).
+        h.f.on_event(&relay, "attention", &json!({ "items": [{ "kind": "profile-lock-refused", "severity": "bad", "args": { "date": t, "configured": "standard" } }] }), t);
+        assert!(h.f.attention_items(&h.c, t).iter().any(|a| a["kind"] == "profile-lock-refused" && a["relay"] == "Relay A"));
+    }
+
+    #[test]
+    fn deploy_routes_are_admin_only_and_the_enrollment_reads_back() {
+        let role = |m: &str, p: &str| fleet_route(m, p).unwrap().0.role;
+        for p in ["fleet/meet-ca/import", "fleet/meet-ca/revoke", "fleet/meet-ca/remove", "fleet/meet-ca/dismiss-diverged", "fleet/meet-ca/prune", "fleet/meet-ca/max-lifetime", "fleet/meet-ca/signer-enforced", "fleet/spokes-root"] {
+            assert_eq!(role("POST", p), Role::Admin, "{p}");
+        }
+        for p in ["fleet/deploy/options", "fleet/meet-ca", "fleet/spokes-root", "fleet/enrollments/en_0123456789abcdef"] {
+            assert_eq!(role("GET", p), Role::Admin, "{p}");
+        }
+        assert!(fleet_route("GET", "fleet/enrollments/en_XYZ").is_none());
+        assert_eq!(fleet_route("POST", "fleet/enrollments/cancel").unwrap().0.action, "fleet.enroll.cancel", "the exact row wins over the prefix");
+        assert_eq!(fleet_route("POST", "fleet/meet-ca/import").unwrap().0.body_max, MEET_CA_IMPORT_MAX);
+        let h = boot("deploy-detail");
+        let relay = h.seed(Product::Spokes);
+        let id = h.f.registry().relays[&relay].enrollment.clone();
+        let (s, v) = h.get(&format!("/console/api/fleet/enrollments/{id}"));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!((v["enrollment"]["state"].as_str(), v["enrollment"]["relay"]["state"].as_str()), (Some("used"), Some("pending")));
+        assert!(v["enrollment"]["relay"]["fingerprint"].is_null(), "the fingerprint only once the relay connected");
+        h.hello(&relay, "pending", &["read-health"]);
+        let (_, v) = h.get(&format!("/console/api/fleet/enrollments/{id}"));
+        assert_eq!(v["enrollment"]["relay"]["state"], "unconfirmed");
+        assert_eq!(v["enrollment"]["relay"]["fingerprint"].as_str(), Some(h.f.registry().relays[&relay].fingerprint.as_str()));
+        assert_eq!(v["enrollment"]["relay"]["bootstrap"]["anchored"], 0);
+        assert_eq!(h.get("/console/api/fleet/enrollments/en_00000000000000ff").0, 404);
+        let (s, v) = h.get("/console/api/fleet/deploy/options");
+        assert_eq!(s, 200, "{v}");
+        assert!(v["envs"].as_array().unwrap().iter().any(|x| x["id"] == "installed" && x["offered"] == true));
+        assert!(v["envs"].as_array().unwrap().iter().filter(|x| x["why"] == "next").count() == 4);
+    }
+
+    #[test]
+    fn the_spokes_root_is_a_p256_key_named_by_a_library_license() {
+        let mut h = boot("deploy-root");
+        let set = |h: &mut H, pem: &str| {
+            let params = json!({ "pem": pem });
+            let su = h.stepup("fleet.spokes-root.set", "-", &params);
+            h.post("/console/api/fleet/spokes-root", json!({ "pem": pem, "stepup": su }))
+        };
+        let (s, v) = set(&mut h, PEM);
+        assert_eq!((s, v["code"].as_str()), (400, Some("spokes-root-key")), "{v}");
+        let (_, v) = set(&mut h, "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n");
+        assert_eq!(v["code"], "spokes-root-key", "never the private key");
+        let spki = p256().spki();
+        let pem = pem_of("PUBLIC KEY", &spki);
+        let (s, v) = set(&mut h, &pem);
+        assert_eq!((s, v["code"].as_str()), (409, Some("spokes-root-license")), "{v}");
+        let id = crate::identity::node_id_of(&spki);
+        assert!(stringify(&v).contains(&id), "the words name the root: {v}");
+        let far = crate::codec::now_ms() / 1000 + 86_400 * 365;
+        h.f.book.lock().library.push(json!({ "id": "lic_1", "product": "spokes", "edition": "standard", "users": 10, "relays": 1, "exp": far, "root": id, "token": "x" }));
+        let (s, v) = set(&mut h, &pem);
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["root"]["id"], id.as_str());
+        assert_eq!(h.get("/console/api/fleet/spokes-root").1["root"]["id"], id.as_str());
     }
 }

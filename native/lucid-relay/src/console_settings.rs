@@ -63,6 +63,22 @@ pub enum ProfileAtStart {
     Ignored(bool),
 }
 
+static PROFILE_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set once by the relay at start, before the console opens, when its 6.4 check finds `profile.lock` present
+/// (AC-2b 6.4, R3-M2): the relay's own console then treats `government` as true.
+pub fn set_profile_locked(locked: bool) {
+    PROFILE_LOCKED.store(locked, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether the host holds `profile.lock` (as set by `set_profile_locked`).
+pub fn profile_locked() -> bool {
+    PROFILE_LOCKED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// AC-2b 2.5 `profile-government` (409): Settings refuses any move to Standard on a government console.
+pub const PROFILE_GOVERNMENT: &str = "This console was set up as a government deployment. Its profile stays High.";
+
 /// The `<flag>` of `cli.profile-ignored`: the product's name for the setting.
 pub fn profile_flag(product: crate::license::Product) -> &'static str {
     match product {
@@ -112,6 +128,9 @@ pub struct Settings {
     /// Latched by a move from High to Standard in Settings, cleared by Standard to High (R41-3); the only trigger of the
     /// standing `profile-standard` item. A profile written from the flag or field before bootstrap never sets it.
     pub downgraded: bool,
+    /// Recorded at setup by the government answer (AC-2b 2.5, 2.6, R3-M2): the console is High for good. Settings
+    /// refuses any move to Standard (`profile-government`) and no offline command clears it.
+    pub government: bool,
     pub two_person: bool,
     pub require_password: bool,
     /// Standard only; High uses 15 minutes and 12 hours.
@@ -244,6 +263,7 @@ impl Default for Settings {
         Settings {
             profile: Profile::Standard,
             downgraded: false,
+            government: false,
             two_person: false,
             require_password: false,
             idle_minutes: HIGH_IDLE_MINUTES,
@@ -271,10 +291,32 @@ impl Settings {
         !self.high() && self.downgraded
     }
 
+    /// Whether this console is a government deployment now (AC-2b 2.5, 6.4): `government` recorded at setup, or the
+    /// host holds `profile.lock` (the relay's own console).
+    pub fn government_now(&self) -> bool {
+        self.government || profile_locked()
+    }
+
     /// The profile at start (3.3 "Which profile a console starts in", R41-3). `given` is `--console-profile` or
     /// `console_profile` (None when not given: Standard). Not bootstrapped (or the upgrade start of a book from before
     /// AC-1): the profile is written from it and `downgraded` cleared, never a downgrade. Bootstrapped: ignored.
+    /// Government (AC-2b 2.5, 6.4, R3-M2, R4-L2): while `government` is true or the host holds `profile.lock`
+    /// (`profile_locked()`), the profile is High whatever `given` says or omits, including after `reset` clears
+    /// `bootstrapped`, and `downgraded` is never cleared.
     pub fn profile_at_start(&mut self, given: Option<Profile>, bootstrapped: bool) -> ProfileAtStart {
+        self.profile_at_start_locked(given, bootstrapped, profile_locked())
+    }
+
+    /// `profile_at_start` with `locked` (the host holds `profile.lock`) given rather than read.
+    pub fn profile_at_start_locked(&mut self, given: Option<Profile>, bootstrapped: bool, locked: bool) -> ProfileAtStart {
+        if self.government || locked {
+            let changed = self.profile != Profile::High;
+            self.profile = Profile::High;
+            if bootstrapped {
+                return ProfileAtStart::Ignored(given.is_some_and(|p| p != Profile::High));
+            }
+            return ProfileAtStart::Written(changed);
+        }
         if bootstrapped {
             return ProfileAtStart::Ignored(given.is_some_and(|p| p != self.profile));
         }
@@ -333,6 +375,10 @@ impl Settings {
 
     pub fn to_value(&self) -> Value {
         let mut v = self.to_value_ac1();
+        // Only when true, so a book that never answered yes keeps its exact shape (AC-2b 2.5).
+        if self.government {
+            v["government"] = Value::Bool(true);
+        }
         // A fleet console's exports (AC-2a 10): only when any is set, so an AC-1 book keeps its exact shape.
         if !self.tokens.is_empty() || !self.siem.is_null() || self.metrics_sources.is_some() {
             v["exports"] = json!({ "tokens": self.tokens, "siem": self.siem, "metricsSources": self.metrics_sources });
@@ -362,6 +408,10 @@ impl Settings {
             profile: Profile::parse(str_of(o.get("profile"))?)?,
             // A book written before revision 4.1 has no `downgraded`: never latched.
             downgraded: match o.get("downgraded") {
+                None => false,
+                Some(v) => v.as_bool()?,
+            },
+            government: match o.get("government") {
                 None => false,
                 Some(v) => v.as_bool()?,
             },
@@ -514,7 +564,7 @@ impl Console {
         };
         let _ = t;
         Out::ok(json!({
-            "ok": true, "links": s.links_value(), "profile": s.profile.as_str(), "twoPerson": if s.two_person { "on" } else { "off" },
+            "ok": true, "links": s.links_value(), "profile": s.profile.as_str(), "government": s.government_now(), "twoPerson": if s.two_person { "on" } else { "off" },
             "signIn": { "requirePassword": s.require_password, "idleMinutes": s.idle_minutes_now(), "maxHours": s.max_hours_now() },
             "banner": s.banner, "aaguids": s.aaguids.iter().map(|(a, d)| json!({ "aaguid": a, "description": d })).collect::<Vec<_>>(),
             "mds": mds, "email": email, "licenseRequestTo": s.license_request_to(), "breakGlass": break_glass, "seal": seal,
@@ -548,7 +598,14 @@ impl Console {
     pub(crate) fn settings_profile(&self, who: &Who, params: &Value, t: i64) -> Result<Done, ApiError> {
         let profile = str_of(params.get("profile")).and_then(Profile::parse).ok_or_else(|| ApiError::with("invalid", "profile is high or standard."))?;
         let reason = reason_of(params.get("reason"))?;
-        let now = self.inner.lock().book.settings.profile;
+        let (now, government) = {
+            let inner = self.inner.lock();
+            (inner.book.settings.profile, inner.book.settings.government_now())
+        };
+        // AC-2b 2.5 (R3-M2): a government console is High for good.
+        if government && profile == Profile::Standard {
+            return Err(ApiError::of("profile-government"));
+        }
         if now == profile {
             return Err(ApiError::with("stale", format!("Nothing was changed: the profile is already {}.", profile.as_str())));
         }
@@ -590,6 +647,10 @@ impl Console {
         }
         {
             let mut inner = self.inner.lock();
+            // An approval waiting from before can never carry a government console to Standard (AC-2b 2.5).
+            if profile == Profile::Standard && inner.book.settings.government_now() {
+                return Err(ApiError::of("profile-government"));
+            }
             // High to Standard latches `downgraded`; Standard to High clears it (R41-3).
             if inner.book.settings.profile != profile {
                 inner.book.settings.downgraded = profile == Profile::Standard;
@@ -1112,6 +1173,28 @@ mod tests {
         // `downgraded` survives the book.
         let d = Settings { profile: Profile::Standard, downgraded: true, ..Settings::default() };
         assert!(Settings::from_value(&d.to_value()).unwrap().profile_standard_item());
+    }
+
+    #[test]
+    fn a_government_or_locked_console_never_lowers_its_profile_at_start() {
+        // AC-2b 2.5, 6.4 (R3-M2, R4-L2): `government` true, after a reset (not bootstrapped) and no flag.
+        let mut s = Settings { profile: Profile::High, downgraded: true, government: true, ..Settings::default() };
+        assert_eq!(s.profile_at_start_locked(None, false, false), ProfileAtStart::Written(false));
+        assert_eq!(s.profile_at_start_locked(Some(Profile::Standard), false, false), ProfileAtStart::Written(false));
+        assert_eq!((s.profile, s.downgraded), (Profile::High, true));
+        assert_eq!(s.profile_at_start_locked(Some(Profile::Standard), true, false), ProfileAtStart::Ignored(true));
+        assert_eq!(s.profile, Profile::High);
+        // `profile.lock` present: a Standard book is raised to High, `downgraded` kept, the flag never lowers it.
+        let mut l = Settings { downgraded: true, ..Settings::default() };
+        assert_eq!(l.profile_at_start_locked(None, false, true), ProfileAtStart::Written(true));
+        assert_eq!((l.profile, l.downgraded), (Profile::High, true));
+        assert_eq!(l.profile_at_start_locked(Some(Profile::Standard), true, true), ProfileAtStart::Ignored(true));
+        assert_eq!(l.profile, Profile::High);
+        // `government` is kept by the book, and a book that never answered yes keeps its exact shape.
+        assert!(Settings::default().to_value().get("government").is_none());
+        let g = Settings::from_value(&s.to_value()).unwrap();
+        assert!(g.government && g.high());
+        assert_eq!(PROFILE_GOVERNMENT, "This console was set up as a government deployment. Its profile stays High.");
     }
 
     /// R6-M3: the approved publisher mailbox (tests/release_request_to.rs compares the build's address with it) is

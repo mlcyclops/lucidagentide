@@ -37,6 +37,11 @@ pub const SEED_URI_PREFIX: &str = "urn:lucid-meet:enroll:";
 pub const CONSOLE_URI: &str = "urn:lucid-meet:console";
 /// SAN URI of a bridge connector's certificate (contract BR-1): the /v1/bridge/c/* routes only, never a person.
 pub const CONNECTOR_URI: &str = "urn:lucid-meet:connector";
+/// AC-2b-D 8.4 (R2-L10): SAN URI of a relay's signer client certificate (`meet_pki.issue_relay_client`): Identity
+/// kind `relay`, never a person on the main or guest ports.
+pub const RELAY_URI: &str = "urn:lucid-meet:relay";
+/// AC-2b-D 8.4 (R2-L10): what a relay or signer client certificate is told on every person route.
+pub const RELAY_NOT_PERSON: &str = "relay certificates are not people";
 pub const LEGACY_PREFIX: &str = "legacy-";
 pub const CLIENT_FIELD_MAX: usize = 40;
 pub const GATED_APPS: [&str; 2] = ["hub", "ios"];
@@ -231,6 +236,10 @@ pub struct Settings {
     pub with_console: String,
     /// AC-2a 3.6: the HTTP CONNECT proxy the management channel dials through ("" = none).
     pub fleet_proxy: String,
+    /// AC-2b-D 2.4, 6.3: true when the certificate, key, `client_ca`, root CRL and (with a certificate server) the
+    /// signer client pair are managed through the Admin Console under `state_dir/pki/` (written by `--pki console`;
+    /// never under High, 8.7).
+    pub fleet_pki: bool,
     pub license: String,
     pub files_power: Obj,
     pub min_client: Obj,
@@ -305,13 +314,13 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 59] = [
+const SETTINGS_FIELDS: [&str; 60] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
-    "with_console", "fleet_proxy",
+    "with_console", "fleet_proxy", "fleet_pki",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -363,6 +372,7 @@ impl Default for Settings {
             console_profile: String::new(),
             with_console: String::new(),
             fleet_proxy: String::new(),
+            fleet_pki: false,
             license: String::new(),
             files_power: Obj::new(),
             min_client: Obj::new(),
@@ -581,6 +591,11 @@ impl Settings {
         }
         text("with_console", &mut s.with_console)?;
         text("fleet_proxy", &mut s.fleet_proxy)?;
+        match raw.get("fleet_pki") {
+            None | Some(Value::Null) => {}
+            Some(Value::Bool(b)) => s.fleet_pki = *b,
+            Some(_) => return Err("relay settings: fleet_pki must be true or false".into()),
+        }
         match raw.get("files_power") {
             None | Some(Value::Null) => {}
             Some(Value::Object(o)) => s.files_power = o.clone(),
@@ -716,6 +731,10 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     let cn = cert.names.cns().last().cloned().unwrap_or_default();
     let ou = cert.names.ous().first().map(|o| pj::clip(o.trim(), LABEL_MAX)).unwrap_or_default();
     let uris = &cert.names.uris;
+    // AC-2b-D 8.4 (R2-L10): a relay certificate (kind `relay`) is accepted nowhere on these ports
+    if uris.iter().any(|u| u == RELAY_URI) {
+        return forbidden(RELAY_NOT_PERSON);
+    }
     let (kind, orgs) = pc::cert_kind(uris)?;
     if kind == CONSOLE_KIND {
         return forbidden(CONSOLE_RETIRED);
@@ -1186,15 +1205,29 @@ fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
 fn fleet_cli(argv: &[String]) -> ! {
     let (config, rest) = split_config(&argv[1..]);
     let config = config.unwrap_or_else(|| usage("the following arguments are required: --config"));
-    let settings = Settings::load(&config).unwrap_or_else(|e| die(&e));
+    // AC-2b-D 6.3 step 9: `meet enroll --deploy` writes relay.json when it is absent, so until then the state folder is
+    // the default one
+    let deploying = argv[0] == "enroll" && rest.iter().any(|a| a == "--deploy" || a.starts_with("--deploy="));
+    let settings = match Settings::load(&config) {
+        Ok(s) => s,
+        Err(_) if deploying && !Path::new(&config).exists() => Settings::default(),
+        Err(e) => die(&e),
+    };
     if settings.state_dir.is_empty() {
         die("relay settings: state_dir is required to join a Lucid Admin Console");
     }
     let dir = PathBuf::from(&settings.state_dir);
     let product = crate::license::Product::Meet;
+    // AC-2b-D 9.4: `meet fleet status --fingerprint` prints only the management fingerprint once enrolled (exit 0)
+    if argv[0] == "fleet" && rest.first().map(String::as_str) == Some("status") && rest.iter().any(|a| a == "--fingerprint") {
+        if let Some(fp) = crate::fleet_agent::status_fingerprint(&dir) {
+            println!("{fp}");
+        }
+        std::process::exit(0);
+    }
     if argv[0] == "enroll" {
         let lock = crate::server::fleet_lock(&dir).unwrap_or_else(|e| die(&e));
-        let r = crate::fleet_agent::enroll_cli(product, &dir, &rest);
+        let r = crate::fleet_agent::enroll_cli_with(product, &dir, Some(Path::new(&config)), &rest);
         drop(lock);
         match r {
             Ok(text) => {
@@ -1231,6 +1264,15 @@ fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>,
     crate::fleet_probe::set_product_source(Box::new(move |_| weak.upgrade().map(|r| crate::meet_console::fleet_metrics(&r)).unwrap_or_default()));
     let Some(dir) = dir else { return Ok(None) };
     let logger = crate::console_meet::logger();
+    // AC-2b-D 9.3, 8.7: the Meeting Hub fields and frames of the link (meetRoots, meetCrl, meetPki, meet-crl,
+    // welcome.meetCaId, renewals)
+    let fleet = Arc::new(MeetFleet { relay: Arc::downgrade(relay), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()) });
+    {
+        let mut all = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner());
+        all.retain(|(d, _)| *d != dir);
+        all.push((dir.clone(), fleet.clone()));
+    }
+    crate::fleet_agent::set_meet_hooks(&dir, fleet);
     if !s.with_console.trim().is_empty() {
         let hosts: Vec<String> = [s.host.clone(), s.turn_host_public.clone(), s.console_public.clone(), s.guest_public.clone()].into_iter().filter(|h| !h.is_empty()).collect();
         crate::console_fleet::start_with_console(Path::new(s.with_console.trim()), crate::license::Product::Meet, &hosts, Some(&dir), logger.clone())?;
@@ -1293,7 +1335,142 @@ fn pc_enclave_start(s: &Settings) {
     log_info(&line);
 }
 
+// ── AC-2b-D: the Meeting Hub side of the fleet link (9.3 frames, 8.4 renewal, 8.7 a console holding the CA) ─────
+
+/// What the agent asks of this relay over the link (`fleet_agent::MeetHooks`), and the 8.7 state it keeps.
+pub struct MeetFleet {
+    relay: std::sync::Weak<Relay>,
+    /// 8.7 (R2-M2, D6): this High relay's `client_ca` holds the CA the console says it holds (`welcome.meetCaId`):
+    /// the console is read only (`fleet-ca-held` on every write frame).
+    ca_held: AtomicBool,
+    /// The console's origin while `ca_held` (the `<origin>` of `relay.fleet-ca-held`).
+    origin: Mutex<String>,
+}
+
+/// The link of each running Meeting Hub relay by state folder (one per process; tests run several).
+static MEET_FLEETS: std::sync::Mutex<Vec<(PathBuf, Arc<MeetFleet>)>> = std::sync::Mutex::new(Vec::new());
+
+/// 13.1 `relay.fleet-ca-held`.
+pub const RELAY_FLEET_CA_HELD: &str = "The Admin Console at <origin> holds the CA this High relay trusts, so it takes no changes from that console. Move this relay to a CA the console does not hold.";
+
+impl MeetFleet {
+    /// 8.7: whether this relay runs the High profile (its book, `console_profile`, or `profile.lock`).
+    fn high(r: &Relay) -> bool {
+        crate::console_settings::profile_locked() || r.settings.console_profile.trim() == "high" || r.fleet.get().is_some_and(|f| f.book.profile_high()) || r.admin_console.get().is_some_and(|c| c.profile_high())
+    }
+
+    /// 8.7: `welcome.meetCaId` on a High relay whose `client_ca` holds a self-signed certificate with that id makes the
+    /// console read only and logs `fleet.ca-held` (security, error); any other `meetCaId` (or none) clears it.
+    pub fn welcome_ca(&self, r: &Relay, meet_ca_id: Option<&str>) {
+        let held = Self::high(r) && meet_ca_id.is_some_and(|id| crate::meet_tls::meet_root_ids(Path::new(&r.settings.client_ca)).iter().any(|m| m == id));
+        let was = self.ca_held.swap(held, Ordering::SeqCst);
+        if !held {
+            self.origin.lock().clear();
+            return;
+        }
+        let origin = r.fleet.get().and_then(|f| (f.managed_by)()).unwrap_or_default();
+        *self.origin.lock() = origin.clone();
+        if !was {
+            let words = RELAY_FLEET_CA_HELD.replace("<origin>", &origin);
+            let f = crate::log::Fields::new().with("origin", origin).with("caId", meet_ca_id.unwrap_or_default()).with("words", words);
+            crate::console_meet::logger().security("fleet.ca-held", &f, crate::log::Level::Error);
+        }
+    }
+}
+
+impl crate::fleet_agent::MeetHooks for MeetFleet {
+    fn meet_roots(&self) -> Vec<String> {
+        self.relay.upgrade().map(|r| crate::meet_tls::meet_root_ids(Path::new(&r.settings.client_ca))).unwrap_or_default()
+    }
+
+    fn meet_crl(&self) -> Value {
+        self.relay.upgrade().map(|r| crate::meet_tls::meet_crl_report(&r.settings)).unwrap_or(Value::Null)
+    }
+
+    fn meet_pki(&self) -> Value {
+        self.relay.upgrade().map(|r| r.meet_pki_report()).unwrap_or(Value::Null)
+    }
+
+    fn adopt_crl(&self, pem: &str) -> Result<(), String> {
+        let r = self.relay.upgrade().ok_or("stopping")?;
+        r.adopt_root_crl(pem.as_bytes()).map(|_| ())
+    }
+
+    fn welcome(&self, meet_ca_id: Option<&str>) {
+        if let Some(r) = self.relay.upgrade() {
+            self.welcome_ca(&r, meet_ca_id);
+        }
+    }
+
+    fn ca_held(&self) -> bool {
+        self.ca_held.load(Ordering::SeqCst)
+    }
+
+    fn pki_switched(&self) {
+        if let Some(r) = self.relay.upgrade() {
+            r.pki_switched();
+        }
+    }
+}
+
+impl Relay {
+    /// AC-2b-D attention items on the relay's own console (and so in its `attention` frame): `profile-lock-refused`
+    /// (6.4) until dismissed, and `fleet-ca-held` `{origin}` (8.7) while the console holds this High relay's CA.
+    pub fn deploy_attention(&self) -> Vec<Value> {
+        let mut out = Vec::new();
+        if self.settings.state_dir.is_empty() {
+            return out;
+        }
+        let dir = PathBuf::from(&self.settings.state_dir);
+        out.extend(crate::server::profile_lock_attention(&dir));
+        let fleet = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| *d == dir).map(|(_, f)| f.clone());
+        if let Some(f) = fleet.filter(|f| f.ca_held.load(Ordering::SeqCst)) {
+            let origin = f.origin.lock().clone();
+            out.push(serde_json::json!({"kind": "fleet-ca-held", "severity": "bad", "args": {"origin": origin}, "go": "#/overview"}));
+        }
+        out
+    }
+}
+
+/// AC-2b-D 6.4, 8.7: the start before anything is read or opened: `profile.lock` first (refused: exit 78), a High
+/// relay never with `fleet_pki` (`cli.deploy-pki-high`, exit 78), the 2.2 start checks, then `fleet.lock` and a waiting
+/// handoff applied before the TLS files, `client_ca`, CRL or license are read; a `fleet_pki` relay with no
+/// `pki/current/relay.crt` after that exits 78 (`cli.deploy-no-cert`).
+pub fn deploy_start(s: &Settings, lock: &Path) -> Result<(), crate::server::StartRefused> {
+    use crate::server::StartRefused;
+    let dir = (!s.state_dir.is_empty()).then(|| PathBuf::from(&s.state_dir));
+    let logger = crate::console_meet::logger();
+    let configured = Some(s.console_profile.trim()).filter(|p| !p.is_empty());
+    let locked = crate::server::profile_lock_start(lock, configured, dir.as_deref(), &logger, crate::codec::now_ms())?;
+    let high = locked || configured == Some("high");
+    if high && s.fleet_pki {
+        return Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-pki-high")));
+    }
+    fleet_start_checks(s).map_err(|words| StartRefused { status: 1, words })?;
+    let Some(dir) = dir else {
+        return if s.fleet_pki { Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-cert"))) } else { Ok(()) };
+    };
+    let license = if s.license.trim().is_empty() { dir.join(crate::meet_license::LICENSE_FILE) } else { PathBuf::from(s.license.trim()) };
+    let local = crate::fleet_agent::LocalDeploy {
+        high,
+        fleet_pki: s.fleet_pki,
+        client_ca: Some(PathBuf::from(&s.client_ca)),
+        root_path: None,
+        // 6.6: an enrollment license only when none is installed (`service.why` would be `none`)
+        license_in_force: std::fs::metadata(&license).is_ok_and(|m| m.len() > 0),
+        license_path: Some(license),
+        admins: s.admins.clone(),
+    };
+    let proxy = (!s.fleet_proxy.trim().is_empty()).then(|| s.fleet_proxy.trim().to_string());
+    crate::server::apply_before_listeners(crate::server::BeforeListeners { product: crate::license::Product::Meet, state_dir: &dir, logger, proxy, local }).map_err(|words| StartRefused { status: 1, words })?;
+    if s.fleet_pki && !crate::fleet_agent::pki_current(&dir).join("relay.crt").exists() {
+        return Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-cert")));
+    }
+    Ok(())
+}
+
 fn serve(settings: Settings) -> ! {
+    deploy_start(&settings, Path::new(crate::server::MEET_PROFILE_LOCK)).unwrap_or_else(|r| r.exit());
     let secret = match std::fs::read(&settings.turn_secret_file) {
         Ok(b) => {
             let t = String::from_utf8_lossy(&b).trim_matches(|c: char| c.is_ascii_whitespace()).as_bytes().to_vec();
@@ -1305,7 +1482,6 @@ fn serve(settings: Settings) -> ! {
         die("the TURN secret is missing or shorter than 16 bytes");
     }
     pc_enclave_start(&settings);
-    fleet_start_checks(&settings).unwrap_or_else(|e| die(&e));
     let signer = if settings.signer_url.is_empty() {
         None
     } else {
@@ -2199,4 +2375,147 @@ mod tests {
         assert_eq!(parse_query("a=1&b=&c=x+y%21"), vec![("a".to_string(), "1".to_string()), ("c".to_string(), "x y!".to_string())]);
         assert_eq!(asctime(0.5), "1970-01-01 00:00:00,500");
     }
+
+    // ── AC-2b-D (16.1 d-relay) ──
+
+    use crate::meet_tls::testpki::{dir, Ca, Key};
+    use crate::fleet_wire::cli_words;
+    use crate::server::StartRefused;
+
+    fn path(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn ac2b_fleet_pki_setting() {
+        let d = dir("settings");
+        let file = d.join("relay.json");
+        std::fs::write(&file, r#"{"fleet_pki": true}"#).unwrap();
+        assert!(Settings::load(&path(&file)).unwrap().fleet_pki);
+        assert!(!Settings::default().fleet_pki);
+        std::fs::write(&file, r#"{"fleet_pki": "yes"}"#).unwrap();
+        assert_eq!(Settings::load(&path(&file)).unwrap_err(), "relay settings: fleet_pki must be true or false");
+    }
+
+    /// R2-L10, D16: a relay or signer client certificate is never a person, even one that also names a person.
+    #[test]
+    fn ac2b_relay_certificates_are_not_people() {
+        let ca = Ca::new("Lucid Meet CA");
+        let k = Key::new();
+        let relay = ca.leaf(&[0x31], "Lucid Meet Relay", None, &[RELAY_URI], &k, true);
+        assert_eq!(identity_from_cert(Some(&relay)).unwrap_err().message(), RELAY_NOT_PERSON);
+        let posing = ca.leaf(&[0x32], "Ann", Some("ann@x.org"), &[RELAY_URI, "urn:lucid-meet:device:0123456789abcdef"], &k, true);
+        assert_eq!(identity_from_cert(Some(&posing)).unwrap_err().message(), RELAY_NOT_PERSON);
+        let ann = ca.leaf(&[0x33], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &k, true);
+        let who = identity_from_cert(Some(&ann)).unwrap();
+        assert_eq!((who.principal.as_str(), who.device.as_str(), who.kind.as_str()), ("ann@x.org", "0123456789abcdef", "person"));
+    }
+
+    /// R3-M2, D15: with `profile.lock` present (here owned by this user, not root, and writable by it: it still
+    /// counts), a standard or missing profile is refused with exit 78, audited in the relay's own chain, recorded in
+    /// its own file (not fleet-local.json), and raised as attention at the next start that passes until dismissed.
+    #[test]
+    fn ac2b_profile_lock_refuses_anything_but_high() {
+        let lock = dir("lock").join("profile.lock");
+        std::fs::write(&lock, "high\n").unwrap();
+        assert!(crate::server::profile_lock_present(&lock));
+        assert!(!crate::server::profile_lock_present(&lock.with_file_name("absent.lock")));
+        for (profile, configured) in [("standard", "standard"), ("", "missing")] {
+            let state = dir("lock-state");
+            let s = Settings { state_dir: path(&state), console_profile: profile.into(), ..Settings::default() };
+            let r = deploy_start(&s, &lock).unwrap_err();
+            assert_eq!(r, StartRefused::config(cli_words("cli.profile-locked").replace("<lock path>", &lock.display().to_string()).replace("<configured>", configured)));
+            assert_eq!(r.status, 78);
+            let (audit, _) = crate::console_audit::Audit::open(&state, crate::codec::now_ms());
+            assert!(audit.entries().iter().any(|e| e.get("action").and_then(Value::as_str) == Some("fleet.profile-locked") && e.get("detail").and_then(|d| d.get("configured")).and_then(Value::as_str) == Some(configured)));
+            assert!(!state.join("fleet-local.json").exists());
+            let item = crate::server::profile_lock_attention(&state).unwrap();
+            assert_eq!((item["kind"].as_str(), item["args"]["configured"].as_str()), (Some("profile-lock-refused"), Some(configured)));
+            assert!(crate::server::dismiss_profile_lock_refused(&state));
+            assert!(crate::server::profile_lock_attention(&state).is_none());
+        }
+        #[cfg(unix)]
+        {
+            // a lock that is a link to nowhere is present too
+            let link = dir("lock-link").join("profile.lock");
+            std::os::unix::fs::symlink("/nonexistent/profile.lock", &link).unwrap();
+            assert!(crate::server::profile_lock_present(&link));
+        }
+    }
+
+    /// 6.4, 8.7: a `fleet_pki` relay without `pki/current/relay.crt` after the apply exits 78; a High one never starts.
+    #[test]
+    fn ac2b_fleet_pki_needs_its_certificate_and_never_runs_under_high() {
+        let absent = dir("nolock").join("profile.lock");
+        let state = dir("pki");
+        let s = Settings { state_dir: path(&state), fleet_pki: true, ..Settings::default() };
+        assert_eq!(deploy_start(&s, &absent).unwrap_err(), StartRefused::config(cli_words("cli.deploy-no-cert")));
+        let high = Settings { console_profile: "high".into(), ..s.clone() };
+        assert_eq!(deploy_start(&high, &absent).unwrap_err(), StartRefused::config(cli_words("cli.deploy-pki-high")));
+        let current = crate::fleet_agent::pki_current(&state);
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("relay.crt"), "placed").unwrap();
+        assert_eq!(deploy_start(&s, &absent), Ok(()));
+        let none = Settings { state_dir: String::new(), fleet_pki: true, ..Settings::default() };
+        assert_eq!(deploy_start(&none, &absent).unwrap_err().status, 78);
+    }
+
+    /// 8.7 (R2-M2, D6): a High relay whose client_ca holds the CA the console says it holds treats that console as read
+    /// only and raises `fleet-ca-held`; another id, no id, or a Standard relay changes nothing.
+    #[test]
+    fn ac2b_a_high_relay_takes_no_writes_from_a_console_holding_its_ca() {
+        use crate::fleet_agent::MeetHooks;
+        let ca = Ca::new("Lucid Meet CA");
+        let id = crate::license::meet_root_id(&Cert::from_der(&ca.der).unwrap().spki);
+        let relay_with = |profile: &str| {
+            let state = dir("held");
+            std::fs::write(state.join("ca.crt"), ca.pem()).unwrap();
+            let r = test_relay(Settings { state_dir: path(&state), client_ca: path(&state.join("ca.crt")), console_profile: profile.into(), ..Settings::default() });
+            let f = Arc::new(MeetFleet { relay: Arc::downgrade(&r), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()) });
+            MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).push((state, f.clone()));
+            (r, f)
+        };
+        let (high, f) = relay_with("high");
+        assert_eq!(f.meet_roots(), vec![id.clone()]);
+        f.welcome(Some("m_00000000000000000000000000000000"));
+        assert!(!f.ca_held());
+        f.welcome(Some(&id));
+        assert!(f.ca_held());
+        assert!(high.deploy_attention().iter().any(|a| a["kind"] == "fleet-ca-held"));
+        f.welcome(None);
+        assert!(!f.ca_held());
+        assert!(!high.deploy_attention().iter().any(|a| a["kind"] == "fleet-ca-held"));
+        let (_standard, g) = relay_with("standard");
+        g.welcome(Some(&id));
+        assert!(!g.ca_held());
+        assert!(g.meet_pki().is_null(), "meetPki is null without fleet_pki");
+    }
+}
+
+/// A Meeting Hub relay for tests: no listener, no signer, no gate; `s` as given plus a console certificate.
+#[cfg(test)]
+pub(crate) fn test_relay(s: Settings) -> Arc<Relay> {
+    use crate::meet_console_port::tests::{self_signed, temp};
+    let (cert, key) = self_signed("relay.example.org");
+    let s = Settings { console_cert: temp("c.crt", &cert), console_key: temp("c.key", &key), ..s };
+    let tls = crate::meet_tls::console_tls_config(&s).unwrap();
+    let links = Arc::new(LinkStats::new());
+    let dir = (!s.state_dir.is_empty()).then(|| PathBuf::from(&s.state_dir));
+    let hub = Arc::new(Hub::new(dir, &s.admins, 168.0, 30.0, 365.0, None, links.clone()));
+    let console = Console::new(&s, links).unwrap();
+    Arc::new(Relay {
+        settings: s,
+        hub,
+        tls: RwLock::new(tls),
+        files: Mutex::new(()),
+        refusals: RefusalLog::new(),
+        outdated_logged: Mutex::new(HashMap::new()),
+        console,
+        turn_secret: vec![7; 16],
+        last_fetch: Mutex::new(-1e9),
+        last_check: Mutex::new(-1e9),
+        pc_last_crl_check: Mutex::new(-1e9),
+        admin_console: OnceLock::new(),
+        fleet: OnceLock::new(),
+    })
 }

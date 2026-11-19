@@ -26,6 +26,10 @@
 //               relay's process (Standard only, AC-2a 2.2).
 //   lucid-relay enroll <console URL> [--code-file f | --code-fd n] [--fleet-admin-key <fingerprint>]... [--yes]
 //   lucid-relay fleet <command>   [--state <dir>]   the relay's link to a Lucid Admin Console (AC-2a 5.7).
+//   lucid-relay deploy script <meet-linux | spokes-linux | meet-docker | spokes-docker>   the embedded install script
+//               with an empty header, as a High deployment runs it from release media (AC-2b-D 3.5, 5.1, 9.4).
+//   lucid-relay console serve ... [--fleet-serve-dev]   a `dev-license` build hands out its own program too (AC-2b-D
+//               4.2; default off).
 
 mod codec;
 mod collab;
@@ -49,6 +53,7 @@ mod console_webauthn;
 mod console_wizard;
 mod license_reminders;
 mod der;
+mod deploy_scripts;
 mod fleet_agent;
 mod fleet_ca;
 mod fleet_exec;
@@ -67,6 +72,7 @@ mod identity;
 mod license;
 mod log;
 mod meet;
+mod meet_ca;
 mod meet_console;
 mod meet_console_identity;
 mod meet_console_port;
@@ -471,9 +477,42 @@ fn book_high(dir: &Path, given: Option<console_settings::Profile>) -> bool {
     }
 }
 
+/// AC-2b-D 4.2: `--fleet-serve-dev` alone is `--fleet-serve-dev=1` (every other `console serve` flag takes a value).
+fn serve_dev_flag(args: &[String]) -> Vec<String> {
+    args.iter().map(|a| if a == "--fleet-serve-dev" { "--fleet-serve-dev=1".to_owned() } else { a.clone() }).collect()
+}
+
+const DEPLOY_USAGE: &str = "usage: lucid-relay deploy script <meet-linux | spokes-linux | meet-docker | spokes-docker>";
+
+/// `lucid-relay deploy script <name>` (AC-2b-D 9.4): the embedded script body after the 10 header lines with empty
+/// values (5.1), the same bytes the console serves after its header.
+fn deploy_script_text(args: &[String]) -> Result<String, &'static str> {
+    match args {
+        [cmd, name] if cmd == "script" => {
+            let bare = name.strip_suffix(".sh").unwrap_or(name);
+            if !deploy_scripts::NAMES.contains(&bare) {
+                return Err(DEPLOY_USAGE);
+            }
+            let body = deploy_scripts::by_name(bare).ok_or(DEPLOY_USAGE)?;
+            Ok(format!("{}{body}", deploy_scripts::empty_header()))
+        }
+        _ => Err(DEPLOY_USAGE),
+    }
+}
+
+fn deploy_cli(args: &[String]) -> ! {
+    use std::io::Write;
+    let text = deploy_script_text(args).unwrap_or_else(|e| die(e));
+    let mut out = std::io::stdout().lock();
+    if out.write_all(text.as_bytes()).and_then(|_| out.flush()).is_err() {
+        std::process::exit(1);
+    }
+    std::process::exit(0)
+}
+
 /// `lucid-relay console serve` (AC-2a 5.2): the Lucid Admin Console as its own service, holding `console.lock`.
 fn console_serve(args: &[String]) -> ! {
-    let flags = parse_named(args, &console_fleet::SERVE_FLAGS).unwrap_or_else(|e| die(&e));
+    let flags = parse_named(&serve_dev_flag(args), &console_fleet::SERVE_FLAGS).unwrap_or_else(|e| die(&e));
     let cfg = console_fleet::serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
     // 2.2 start checks under High: the console's own identity and a state folder open to it and administrators only.
     if book_high(&cfg.state, cfg.profile) {
@@ -488,7 +527,7 @@ fn console_serve(args: &[String]) -> ! {
             fleet_people::make_non_dumpable().unwrap_or_else(|e| die(&e));
         }
         console_fleet::serve_browser(console.clone(), &cfg).unwrap_or_else(|e| die(&e));
-        let port = fleet_port::PortConfig { host: cfg.fleet.fleet_host.clone(), port: cfg.fleet.fleet_port, names: cfg.fleet.fleet_names.clone(), sources: cfg.fleet_sources.clone(), public_host: cfg.public.clone() };
+        let port = fleet_port::PortConfig { host: cfg.fleet.fleet_host.clone(), port: cfg.fleet.fleet_port, names: cfg.fleet.fleet_names.clone(), sources: cfg.fleet_sources.clone(), public_host: cfg.public.clone(), serve_dev: cfg.fleet.serve_dev };
         fleet_port::start(console.clone(), port, logger.clone()).unwrap_or_else(|e| die(&e));
         let signal = stop_signal().await;
         logger.ops("stopping", &Fields::new().with("signal", signal), Level::Info);
@@ -535,6 +574,14 @@ fn enroll_cli(args: &[String]) -> ! {
 /// `lucid-relay fleet <command>` (AC-2a 5.7, Remote Spokes): f-trust's commands, which take `fleet.lock` where needed.
 fn fleet_cli(args: &[String]) -> ! {
     let (dir, rest) = state_and_rest(args);
+    // AC-2b-D 9.4: only the relay's management fingerprint once enrolled, else nothing; exit 0 either way, also while
+    // the relay runs.
+    if rest.len() == 2 && rest[0] == "status" && rest[1] == "--fingerprint" {
+        if let Some(fp) = fleet_agent::status_fingerprint(Path::new(&dir)) {
+            println!("{fp}");
+        }
+        std::process::exit(0);
+    }
     let stdin = std::io::stdin();
     let code = fleet_local::cli(license::Product::Spokes, Path::new(&dir), &rest, &mut stdin.lock(), &mut std::io::stdout());
     std::process::exit(code)
@@ -591,11 +638,28 @@ fn main() {
     if args.first().map(String::as_str) == Some("fleet") {
         fleet_cli(&args[1..]);
     }
+    // AC-2b-D 9.4: the embedded install script with an empty header (release media, offline uninstall).
+    if args.first().map(String::as_str) == Some("deploy") {
+        deploy_cli(&args[1..]);
+    }
     // AC-1 2.4 "The license clock" (R7-M1): the offline recovery from a false forward jump (Remote Spokes).
     if args.first().map(String::as_str) == Some("license-time") {
         license_time_cli(&args[1..]);
     }
     let flags = parse_args(&args).unwrap_or_else(|e| die(&e));
+    // AC-2b-D 6.4: the profile lock first, then a waiting handoff applied before the relay reads its TLS files, root
+    // or license (exit 78 on `cli.profile-locked` or `cli.deploy-no-root`).
+    let raw = |flag: &str, var: &str| flags.get(flag).filter(|v| !v.is_empty()).cloned().or_else(|| std::env::var(var).ok().filter(|v| !v.is_empty()));
+    let (start_state, start_profile, start_root, start_license) = (raw("state", "LUCID_RELAY_STATE"), raw("console-profile", "LUCID_RELAY_CONSOLE_PROFILE"), raw("root", "LUCID_RELAY_ROOT_PUB"), raw("license", "LUCID_RELAY_LICENSE"));
+    let locked = server::spokes_start(server::SpokesStart {
+        state_dir: start_state.as_deref().map(Path::new),
+        profile: start_profile.as_deref(),
+        root: start_root.as_deref(),
+        license: start_license.as_deref(),
+        logger: Arc::new(Logger::new("relay")),
+        lock_path: Path::new(server::SPOKES_PROFILE_LOCK),
+    })
+    .unwrap_or_else(|r| r.exit());
     let c = relay_serve_config(&flags, |k| std::env::var(k).ok()).unwrap_or_else(|e| die(&e));
     // AC-2a 2.2: the console role in this process, refused next to the relay's own console and under High.
     let with_console = flags.get("with-console").filter(|v| !v.is_empty()).cloned().or_else(|| std::env::var("LUCID_RELAY_WITH_CONSOLE").ok().filter(|v| !v.is_empty()));
@@ -605,7 +669,7 @@ fn main() {
         die("--with-console needs the relay's state folder (--state) and is not for a LAN mailbox");
     }
     let given_profile = flags.get("console-profile").cloned().or_else(|| std::env::var("LUCID_RELAY_CONSOLE_PROFILE").ok()).and_then(|p| console_settings::Profile::parse(&p));
-    let relay_high = c.state.as_deref().is_some_and(|d| Path::new(d).join(console::CONSOLE_FILE).exists() && book_high(Path::new(d), given_profile)) || given_profile == Some(console_settings::Profile::High);
+    let relay_high = c.state.as_deref().is_some_and(|d| Path::new(d).join(console::CONSOLE_FILE).exists() && book_high(Path::new(d), given_profile)) || given_profile == Some(console_settings::Profile::High) || locked;
     server::high_start_checks(c.state.as_deref().map(Path::new), relay_high, with_console.is_some()).unwrap_or_else(|e| die(&e));
     // A shared relay serves people only under the org's relay license; a spoke's LAN mailbox needs none. With no
     // --license it reads `<state>/license.lic` and, with none there either, starts stopped (R42-1) so an admin can
@@ -788,6 +852,37 @@ mod tests {
         assert_eq!((f["state"].as_str(), f["public"].as_str()), ("/x", "console.example.org"));
         assert!(parse_named(&["--code".to_string(), "x".to_string()], &console_fleet::SERVE_FLAGS).is_err(), "no code on a command line (A1-M1)");
         assert!(parse_named(&["stray".to_string()], &console_fleet::SERVE_FLAGS).is_err());
+    }
+
+    /// AC-2b-D 4.2: `--fleet-serve-dev` alone turns it on; `=0` keeps it off; default off.
+    #[test]
+    fn fleet_serve_dev_is_a_switch_that_defaults_off() {
+        let a: Vec<String> = ["--state", "/x", "--fleet-serve-dev", "--public", "console.example.org"].iter().map(|s| s.to_string()).collect();
+        let f = parse_named(&serve_dev_flag(&a), &console_fleet::SERVE_FLAGS).unwrap();
+        assert_eq!((f["fleet-serve-dev"].as_str(), f["public"].as_str()), ("1", "console.example.org"));
+        let off: Vec<String> = ["--fleet-serve-dev=0"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(parse_named(&serve_dev_flag(&off), &console_fleet::SERVE_FLAGS).unwrap()["fleet-serve-dev"], "0");
+        assert!(parse_named(&serve_dev_flag(&[]), &console_fleet::SERVE_FLAGS).unwrap().get("fleet-serve-dev").is_none());
+    }
+
+    /// AC-2b-D 9.4, 5.1, D11: `deploy script <name>` prints the 10 empty header lines, then the body that ends with
+    /// `{ main "$@"; exit $?; }`; other names are refused.
+    #[test]
+    fn deploy_script_prints_the_empty_header_and_the_body() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        for name in deploy_scripts::NAMES {
+            let text = deploy_script_text(&args(&["script", name])).unwrap();
+            let header = deploy_scripts::empty_header();
+            assert_eq!(header.lines().count(), deploy_scripts::HEADER_LINES, "{name}");
+            assert!(text.starts_with(&header), "{name}");
+            assert_eq!(&text[header.len()..], deploy_scripts::by_name(name).unwrap(), "{name}");
+            assert_eq!(text.trim_end().lines().last(), Some("{ main \"$@\"; exit $?; }"), "{name}");
+            assert!(text.contains("LUCID_ENROLLMENT=''"), "{name}: the header's values are empty");
+            assert_eq!(deploy_script_text(&args(&["script", &format!("{name}.sh")])).unwrap(), text);
+        }
+        for bad in [&["script"][..], &["script", "windows"], &["script", "../meet-linux"], &["print", "meet-linux"], &[]] {
+            assert_eq!(deploy_script_text(&args(bad)).unwrap_err(), DEPLOY_USAGE);
+        }
     }
 
     #[test]

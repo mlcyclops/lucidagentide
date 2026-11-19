@@ -17,6 +17,11 @@
 // shows is the vector's; the key record navigation is the one loopback URL; and, in the DOM double, the setup screens
 // render each step and resume, and Relays, People and the charts work at phone width.
 //   tests/admin_console_fleet_words_v1.json   tools/make_admin_console_fleet_vectors.py
+//
+// Contract AC-2b-D section 16.1, slice d-ui: Deploy a relay. In the DOM double no product is preselected and Continue
+// stays disabled until one is picked; disabled cards name their reasons; the details have no admins field; the code
+// and the command are separate and the command never carries the code; step 4 renders the fingerprint; the CA page
+// never shows a key and shows Create disabled. The 13.1 to 13.3 words the page shows are the vector's.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -131,7 +136,9 @@ fn no_outside_url() {
                 // The inline SVG namespace: the icon files, qr.js (the QR code) and charts.js (AC-2a 9.6), which draw with
                 // createElementNS.
                 let namespace = (name.ends_with(".svg") || name == "qr.js" || name == "charts.js") && rest.starts_with(SVG_NS);
-                let words = name == "app.js" && text[..at + scheme.len()].ends_with("start with https://");
+                // The words that name the scheme: 8.3 `bad-url`, and AC-2b-D 13.1 `meet-ca.signer-help` and 13.3 `meet-ca-signer`.
+                let words = name == "app.js"
+                    && (text[..at + scheme.len()].ends_with("start with https://") || rest.starts_with("https://...).") || rest.starts_with("https:// and its host name."));
                 // AC-2a 3.9: the key record's top-level navigation to the IDE plugin's or Hub app's loopback page.
                 let loopback = name == "app.js" && rest.starts_with(KEY_RECORD_URL);
                 assert!(namespace || words || loopback, "{name}: an outside URL at byte {at}: {}", rest.chars().take(60).collect::<String>());
@@ -727,7 +734,9 @@ fn every_fleet_page_and_dialog_string_comes_from_the_vector() {
         n += 1;
     }
     // The refusals the page shows before asking (13.3) are the vector's words.
-    for code in ["fleet-scope-needs-people", "fleet-scope-required", "csv-limit"] {
+    // AC-2b-D 13.3: the deploy, CA import and org root refusals the page checks before posting.
+    for code in ["fleet-scope-needs-people", "fleet-scope-required", "csv-limit", "deploy-product", "deploy-env", "deploy-host", "deploy-clients", "meet-ca-confirm",
+        "meet-ca-key", "meet-ca-signer", "spokes-root-key"] {
         let line = format!("\"{code}\": {}", serde_json::to_string(&words["refusals"][code]["words"]).unwrap());
         if !APP_JS.contains(&line) {
             missing.push(line);
@@ -1353,6 +1362,20 @@ async function fleetMain(v) {
       { kind: "console", id: "bob@acme.example", name: null, role: "viewer", state: "active", source: "invite", relay: null },
       { kind: "meet", relay: r2, id: "carol@acme.example", name: "=Carol+1", role: "member", state: "active", source: "app", devices: 2, seated: true, asOf: t0 }] },
     "GET admins": { ok: true, people: [], waiting: [], invites: [] },
+    // AC-2b-D 9.1: Deploy a relay, its enrollment, the CA page and the Remote Spokes root.
+    "GET fleet/deploy/options": { ok: true, profile: "standard", console: { os: "linux", arch: "x86_64" }, binary: { version: "2.6.0", arch: "x86_64", sha256: "ab".repeat(32), size: 1, fips: true },
+      fleetUrl: "https://console.acme.example:8444", pins: "sha256//AAAA", meetCa: { id: "m_0123", state: "ok", signerUrl: null }, spokesRoot: null, library: [],
+      envs: [{ id: "linux", products: ["meet", "spokes"], offered: true, why: null }, { id: "proxmox", products: ["meet", "spokes"], offered: true, why: null },
+        { id: "docker", products: ["meet", "spokes"], offered: false, why: "no Docker build for this console" }, { id: "installed", products: ["meet", "spokes"], offered: true, why: null }] },
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+    "POST fleet/enroll": { ok: true, id: "en_0123456789abcdef", code: "LCE1-SECRETSECRETSECRET", expires: t0 + 3600000, commands: { spokes: "a", meet: "b", local: "c" },
+      install: { env: "linux", command: "curl -fsS --proto =https -k --pinnedpubkey 'sha256//AAAA' 'https:" + "//console.acme.example:8444/fleet/v1/install/meet-linux.sh?e=en_0123456789abcdef' | sudo bash",
+        steps: null, uninstall: "uninstall-command", offlineUninstall: "offline-uninstall-command", scriptUrl: null, pins: "sha256//AAAA", binary: { version: "2.6.0", arch: "x86_64", sha256: "ab".repeat(32), size: 1 } },
+      offered: [] },
+    "GET fleet/enrollments/en_0123456789abcdef": { ok: true, enrollment: { id: "en_0123456789abcdef", state: "used", product: "meet", env: "linux", expires: t0 + 3600000, deploy: {},
+      relay: { id: "r_0000000000000003", state: "unconfirmed", fingerprint: "1a2b 3c4d 5e6f 7a8b 9c0d 1e2f 3a4b 5c6d 7e8f 9a0b", bootstrap: null, license: { service: null } } } },
+    "GET fleet/meet-ca": { ok: true, ca: null, allowed: true, why: null },
+    "GET fleet/spokes-root": { ok: true, root: null },
   };
   boot(answers, { hash: "#/overview" });
   for (let i = 0; i < 4; i++) await settle();
@@ -1380,7 +1403,9 @@ async function fleetMain(v) {
     if (!find("button", id === "relay" ? W["setup.finish"] : W["setup.save"])) fail("step " + id + " has no " + (id === "relay" ? "Finish" : "Save and continue"));
   }
   const relayStep = view();
-  for (const w of [W["setup.this-host"], W["setup.this-host-standard"], W["setup.other-host"], W["enroll.product"], W["enroll.scopes"]]) {
+  // AC-2b-D 12: "Another host" opens Deploy a relay at step 1 inside the wizard frame.
+  for (const w of [W["setup.this-host"], W["setup.this-host-standard"], W["setup.other-host"], "Step 1 of 4", W["deploy.product-h"], W["deploy.product-meet-help"],
+    W["deploy.product-spokes-help"], W["deploy.product-none"]]) {
     if (!relayStep.includes(w)) fail("the first relay step lacks " + w);
   }
   await go("#/setup/email");
@@ -1415,6 +1440,105 @@ async function fleetMain(v) {
   const pv = view();
   for (const w of ["Some relays did not answer: Dallas east.", "=Carol+1", W["people.invite"], W["people.import"], W["people.import-check"], W["people.kind-meet"]]) {
     if (!pv.includes(w)) fail("the people page lacks " + w);
+  }
+
+  // AC-2b-D 3 (16.1 d-ui): Deploy a relay.
+  await go("#/relays/add");
+  const radios = () => doc.getElementById("view").querySelectorAll('input[type="radio"]');
+  const pick = async (value) => {
+    const r = radios().find((x) => x.getAttribute("value") === value);
+    if (!r) fail("no card " + value);
+    r.checked = true;
+    r.dispatchEvent(new FEvent("change"));
+    await settle();
+    return r;
+  };
+  const fieldOf = (label) => {
+    const l = doc.getElementById("view").querySelectorAll("label").find((x) => x.textContent === label);
+    return l ? doc.getElementById(l.getAttribute("for")) : null;
+  };
+  const cont = () => find("button", W["deploy.continue"]);
+  inOrder(view(), [W["deploy.title"], "Step 1 of 4", W["deploy.product-h"], W["deploy.product-meet-help"], W["deploy.product-spokes-help"], W["deploy.product-none"]], "deploy step 1");
+  // 3.2: no product preselected; Continue disabled until one is picked.
+  if (radios().length !== 2 || radios().some((r) => r.checked)) fail("a product is preselected or the two product cards are missing");
+  if (!cont() || !cont().disabled) fail("Continue is enabled before a product is picked");
+  cont().click();
+  await settle();
+  if (loc.hash !== "#/relays/add" || !view().includes("Step 1 of 4")) fail("Continue moved on without a product");
+  await pick("meet");
+  if (cont().disabled) fail("Continue stays disabled after a product is picked");
+  cont().click();
+  for (let i = 0; i < 4; i++) await settle();
+  // 3.3: every card names its prerequisites; a card not offered is disabled with its reason; the clouds come next.
+  const where = view();
+  inOrder(where, ["Step 2 of 4", W["deploy.where-h"], W["deploy.env-linux"], W["deploy.needs"], "Debian 12 or 13, or Ubuntu 22.04 or 24.04, on x86_64", W["deploy.need-size-meet"],
+    W["deploy.need-dns-meet"], W["deploy.need-ports-meet"], "console.acme.example:8444 (TCP)", W["deploy.need-tls-meet"], W["deploy.need-sudo"], W["deploy.env-proxmox"], W["deploy.need-proxmox"],
+    W["deploy.env-docker"], W["deploy.need-docker"], W["deploy.docker-turn-note"], "This console cannot hand out the Linux relay program (no Docker build for this console).",
+    W["deploy.env-installed"], W["deploy.env-installed-help"], W["deploy.env-azure"], W["deploy.env-next"], W["deploy.env-aws"], W["deploy.env-gcp"], W["deploy.env-windows"]], "deploy step 2");
+  for (const v of ["docker", "azure", "aws", "gcp", "windows"]) {
+    const r = radios().find((x) => x.getAttribute("value") === v);
+    if (!r || !r.disabled) fail("the " + v + " card is not disabled");
+    const why = doc.getElementById(r.getAttribute("aria-describedby") || "");
+    if (!why || !why.textContent) fail("the disabled " + v + " card does not name its reason");
+  }
+  if (!cont().disabled) fail("Continue is enabled before a place is picked");
+  await pick("linux");
+  cont().click();
+  for (let i = 0; i < 4; i++) await settle();
+  // 3.4: the details; no admins field (the script asks on the host).
+  const det = view();
+  inOrder(det, ["Step 3 of 4", W["deploy.details-h"], W["enroll.name"], W["deploy.host"], W["deploy.turn-host"], W["deploy.pki"], W["deploy.pki-console"], W["deploy.pki-own"],
+    W["deploy.license"], W["deploy.license-none"], W["deploy.admins-note"], W["deploy.make"]], "deploy step 3");
+  if (doc.getElementById("view").querySelectorAll("label").some((l) => /admin/i.test(l.textContent) && l.getAttribute("for"))) fail("the details have an admins field");
+  if (radios().some((r) => r.checked)) fail("a relay certificate source is preselected");
+  fieldOf(W["enroll.name"]).value = "Hub east";
+  fieldOf(W["deploy.host"]).value = "Meet.Acme.Example";
+  await pick("console");
+  find("button", W["deploy.make"]).click();
+  await settle();
+  if (!doc.getElementById("confirm").open) fail("Make code and command does not open the enroll dialog");
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 4; i++) await settle();
+  doc.getElementById("code-input").value = "123456";
+  doc.getElementById("code-go").click();
+  for (let i = 0; i < 6; i++) await settle();
+  const mint = calls.find((c) => c.route === "POST fleet/enroll");
+  if (!mint) fail("no mint was posted");
+  const mb = mint.body;
+  if (mb.product !== "meet" || mb.env !== "linux" || !mb.deploy || mb.deploy.host !== "meet.acme.example" || mb.deploy.pki !== "console" || mb.deploy.turnHost !== null
+    || "admins" in mb || "admins" in mb.deploy) fail("the mint body is not 6.1's: " + JSON.stringify(mb));
+  // The code and the command are separate, and the command never carries the code (A1-M1).
+  const once = doc.querySelectorAll("code.code-once");
+  if (once.length !== 1 || once[0].textContent !== "LCE1-SECRETSECRETSECRET") fail("the code is not shown once in its own block");
+  const cmds = doc.querySelectorAll("code.cmd");
+  if (!cmds.some((c) => c.textContent.includes("meet-linux.sh?e=en_0123456789abcdef"))) fail("the install command is not shown");
+  if (cmds.some((c) => c.textContent.includes("LCE1-"))) fail("a command carries the code");
+  inOrder(view(), [W["enroll.code-title"], W["enroll.code-once"], W["deploy.install-h"], W["deploy.install-linux"], W["deploy.pin-note"], "Relay program 2.6.0 for x86_64, SHA-256 ",
+    W["deploy.uninstall"], W["deploy.uninstall-offline"], W["deploy.anchor-note"], W["deploy.continue"]], "deploy code");
+  // 3.6: step 4 reopens from the server, without the code, and renders the fingerprint to compare.
+  cont().click();
+  for (let i = 0; i < 6; i++) await settle();
+  if (loc.hash !== "#/relays/add/en_0123456789abcdef") fail("step 4 is not at its enrollment hash: " + loc.hash);
+  const wait = view();
+  inOrder(wait, ["Step 4 of 4", W["deploy.wait-h"], "Hub east connected.", W["deploy.compare"], "1a2b 3c4d 5e6f 7a8b 9c0d 1e2f 3a4b 5c6d 7e8f 9a0b", W["enroll.confirm-help"], "Confirm relay",
+    W["deploy.done"]], "deploy step 4");
+  if (snapshot().includes("LCE1-SECRET")) fail("the code stays on the page at step 4");
+  if (!doc.querySelectorAll("code.fingerprint-big").length) fail("the fingerprint is not in large type");
+
+  // 3.7: the CA page never shows a key and shows Create disabled as coming next; 3.8 and 12: the License sections.
+  await go("#/license/meet-ca");
+  const cav = view();
+  inOrder(cav, [W["meet-ca.title"], W["meet-ca.warn"], W["meet-ca.none"], W["meet-ca.import"], W["meet-ca.import-help"], W["meet-ca.signer"], W["meet-ca.signer-help"],
+    W["meet-ca.confirm-no-high"], W["meet-ca.create-next"], W["deploy.env-next"]], "CA page");
+  const create = find("button", W["meet-ca.create-next"]);
+  if (!create || create.getAttribute("aria-disabled") !== "true") fail("Create a new CA is not disabled");
+  if (doc.getElementById("view").querySelectorAll("textarea").length) fail("the CA page has a text area a key could be shown in");
+  const files = doc.getElementById("view").querySelectorAll('input[type="file"]');
+  if (files.length !== 4) fail("the import takes " + files.length + " files, not ca.crt, ca.key, issued.json and crl.pem");
+  await go("#/license");
+  const lic2 = view();
+  for (const w of [W["meet-ca.title"], W["spokes-root.title"], W["spokes-root.help"], W["spokes-root.set"]]) {
+    if (!lic2.includes(w)) fail("the license page lacks " + w);
   }
 
   // AC-1 7.2 phone widths: tables become stacked cards with folded filters, charts draw narrow, still with their tables.

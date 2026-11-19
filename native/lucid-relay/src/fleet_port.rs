@@ -9,6 +9,10 @@
 // replacements an hour raise `relay-flapping`), renewal (3.4), the per-relay limits of 3.8, and the PKI's minute
 // tick (fleet_ca.rs). The registry, the preview's content and every relay event's meaning are f-console's
 // (`console_fleet::Fleet`, reached through the `Desk` seam below so the port is tested without a whole console).
+//
+// AC-2b-D 4 (d-port): the seven download paths under `/fleet/v1/install/` (the four install scripts behind their
+// 10-line header, the program from a sealed in-memory copy of the running image, `SHA256SUMS`, `meta`), their limits
+// and sources, `deploy-high` under High; and the relay's `meet-cert` request (9.3), answered by f-console.
 
 use crate::codec::{b64u, hex, now_ms, parse_json, sha256, stringify};
 use crate::console_source::Cidr;
@@ -17,9 +21,9 @@ use crate::fleet_wire::{self as w, Frame, In, LocalEnd, Refusal, Side, Wire};
 use crate::fleet_x509 as x509;
 use crate::log::{Fields, Level, Logger};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use http_body_util::{BodyExt, Either, Full, Limited};
 use hyper::body::Incoming;
-use hyper::header::{CONNECTION, HOST, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL, UPGRADE};
+use hyper::header::{ACCEPT_RANGES, CACHE_CONTROL, CONNECTION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, HOST, RETRY_AFTER, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_PROTOCOL, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -36,11 +40,14 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::path::Path;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, OnceLock};
-use std::time::Duration;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Notify, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
 use tokio_tungstenite::tungstenite::protocol::Role as WsRole;
@@ -104,6 +111,12 @@ pub trait Desk: Send + Sync {
     fn serials_of_generation(&self, generation: u64) -> Vec<(String, i64)>;
     /// An entry in the console's audit chain.
     fn audit(&self, actor: &str, action: &str, detail: Value, t: i64);
+    /// The console's profile is High (AC-2b-D 4.5: every download route answers `deploy-high`).
+    fn high(&self) -> bool;
+    /// AC-2b-D 4.4: the enrollment `id` is `open`, or `used` within its hour (its program downloads are not counted).
+    fn download_enrollment_ok(&self, id: &str, t: i64) -> bool;
+    /// AC-2b-D 8.4 `meet-cert {csr, signerCsr}` from a connected relay: `{cert, signerCert}` or a refusal.
+    fn meet_cert(&self, relay: &str, body: &Value, t: i64) -> Result<Value, Refusal>;
 }
 
 /// A certificate the port issued (enrollment, renewal, recovery).
@@ -195,6 +208,15 @@ impl Desk for FleetDesk {
         r.detail = detail;
         self.console.record(r, t);
     }
+    fn high(&self) -> bool {
+        self.console.high_profile()
+    }
+    fn download_enrollment_ok(&self, id: &str, t: i64) -> bool {
+        self.fleet.download_enrollment_ok(id, t)
+    }
+    fn meet_cert(&self, relay: &str, body: &Value, t: i64) -> Result<Value, Refusal> {
+        self.fleet.meet_cert(relay, body, t).map_err(refusal)
+    }
 }
 
 // ── Settings and state ──────────────────────────────────────────────────────────────────────────────────────
@@ -209,15 +231,22 @@ pub struct PortConfig {
     pub sources: Vec<Cidr>,
     /// The console's `public` host (and port when not 443): the CA's `O`, the server leaf's first name.
     pub public_host: String,
+    /// `--fleet-serve-dev` (AC-2b-D 4.2): a `dev-license` build serves its program only with it.
+    pub serve_dev: bool,
 }
 
 impl PortConfig {
     fn hostname(&self) -> String {
         crate::server::dialed_of(&self.public_host, true).hostname
     }
-    /// `fleetUrl` (3.3, 3.6).
+    /// `fleetUrl` (3.3, 3.6); an IPv6 literal in brackets (AC-2b-D 3.5).
     pub fn fleet_url(&self) -> String {
-        format!("https://{}:{}", self.hostname(), self.port)
+        let h = self.hostname();
+        if h.contains(':') && !h.starts_with('[') {
+            format!("https://[{h}]:{}", self.port)
+        } else {
+            format!("https://{h}:{}", self.port)
+        }
     }
 }
 
@@ -290,6 +319,15 @@ pub struct PortState {
     limits: Mutex<HashMap<String, (i64, u32, i64, u64)>>,
     enroll_lock: Mutex<()>,
     conn_seq: std::sync::atomic::AtomicU64,
+    /// AC-2b-D 4.2: the sealed copy of the running program, or why none is served.
+    program: Mutex<Result<Arc<Program>, &'static str>>,
+    /// AC-2b-D 4.4: script, `SHA256SUMS` and `meta` requests, and counted program downloads, per source.
+    dl_small: Mutex<HashMap<String, VecDeque<i64>>>,
+    dl_program: Mutex<HashMap<String, VecDeque<i64>>>,
+    /// Program transfers running: per source, and in all.
+    dl_active: Mutex<(HashMap<String, usize>, usize)>,
+    /// The last `deploy.download` line per (source, file).
+    dl_logged: Mutex<HashMap<(String, String), i64>>,
 }
 
 impl std::fmt::Debug for PortState {
@@ -341,6 +379,11 @@ impl PortState {
             limits: Mutex::new(HashMap::new()),
             enroll_lock: Mutex::new(()),
             conn_seq: std::sync::atomic::AtomicU64::new(1),
+            program: Mutex::new(Err("not-started")),
+            dl_small: Mutex::new(HashMap::new()),
+            dl_program: Mutex::new(HashMap::new()),
+            dl_active: Mutex::new((HashMap::new(), 0)),
+            dl_logged: Mutex::new(HashMap::new()),
         });
         s.reload_server_key();
         s
@@ -764,6 +807,16 @@ impl PortState {
                             Err(r) => w::res_err_text(id, &r),
                         });
                     }
+                    Ok(Frame::Req { id, op: "meet-cert", body }) => {
+                        // AC-2b-D 8.4: the console checks the requests as 6.5 and issues; blocking like renew.
+                        let state = self.clone();
+                        let r = relay.clone();
+                        let answer = tokio::task::spawn_blocking(move || state.desk.meet_cert(&r, &Value::Object(body), t)).await.unwrap_or_else(|_| Err(Refusal::of("fleet-op")));
+                        chan.send(match answer {
+                            Ok(b) => w::res_ok_text(id, b),
+                            Err(r) => w::res_err_text(id, &r),
+                        });
+                    }
                     Ok(Frame::Req { id, .. }) => {
                         chan.send(w::res_err_text(id, &Refusal::of("fleet-op")));
                     }
@@ -989,7 +1042,25 @@ async fn read_body(req: Request<Incoming>) -> Option<Value> {
     parse_json(std::str::from_utf8(&collected.to_bytes()).ok()?)
 }
 
-async fn handle(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>>, ip: IpAddr, mut req: Request<Incoming>) -> Response<Full<Bytes>> {
+/// What the port answers with: a whole body, or the program streamed from its sealed copy (AC-2b-D 4.2).
+pub type PortBody = Either<Full<Bytes>, Download>;
+
+/// Whether a request goes to the AC-2b-D 4.1 download routes: any peer but a recovery-only connection, which keeps its
+/// 403 for everything but `recover-cert`.
+fn to_downloads(peer: &Peer, path: &str) -> bool {
+    path.starts_with(INSTALL_PREFIX) && !matches!(peer, Peer::Recovery { .. })
+}
+
+async fn handle(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>>, ip: IpAddr, req: Request<Incoming>, cut: Arc<Notify>) -> Response<PortBody> {
+    if to_downloads(&peer, req.uri().path()) {
+        let path = req.uri().path().to_owned();
+        let query = req.uri().query().unwrap_or_default().to_owned();
+        return state.download(req.method().as_str(), &path, &query, ip, now_ms(), Some(cut));
+    }
+    handle_api(state, peer, presented, ip, req).await.map(Either::Left)
+}
+
+async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>>, ip: IpAddr, mut req: Request<Incoming>) -> Response<Full<Bytes>> {
     let path = req.uri().path().to_owned();
     let method = req.method().as_str().to_owned();
     let t = now_ms();
@@ -1056,6 +1127,485 @@ async fn handle(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>>, i
     }
 }
 
+// ── AC-2b-D 4: the download routes ──────────────────────────────────────────────────────────────────────────
+
+/// The folder of the seven download paths (AC-2b-D 4.1, invariant D2).
+pub const INSTALL_PREFIX: &str = "/fleet/v1/install/";
+/// The four install scripts: (file, product, environment) as `deploy_scripts::body` names them.
+pub const SCRIPTS: [(&str, &str, &str); 4] = [("meet-linux.sh", "meet", "linux"), ("spokes-linux.sh", "spokes", "linux"), ("meet-docker.sh", "meet", "docker"), ("spokes-docker.sh", "spokes", "docker")];
+/// 4.4: scripts, `SHA256SUMS` and `meta`, 60 per 15 minutes per source; the program 6 per hour, 1 at once per source
+/// and 4 in all.
+const SMALL_CALLS: usize = 60;
+const SMALL_WINDOW_MS: i64 = 15 * 60_000;
+const PROGRAM_CALLS: usize = 6;
+const PROGRAM_WINDOW_MS: i64 = 3_600_000;
+const PROGRAM_AT_ONCE: usize = 4;
+const PROGRAM_PER_SOURCE: usize = 1;
+/// 4.4: a transfer is cut under 256 KiB/s averaged over 20 s after its first 20 s, or past 600 s.
+const CUT_RATE: u64 = 256 * 1024;
+const CUT_WINDOW_MS: u64 = 20_000;
+const CUT_MAX_MS: u64 = 600_000;
+const CHUNK: usize = 64 * 1024;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const METHOD_WORDS: &str = "Method not allowed.";
+const BAD_ENROLLMENT: &str = "The only query is e, an enrollment id (en_ and 16 hex).";
+
+/// The sealed in-memory copy of the running program (4.2, invariant D3): every byte the port serves comes from it by
+/// positional reads, so a program replaced on disk since exec is never served.
+pub struct Program {
+    #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+    file: std::fs::File,
+    pub size: u64,
+    pub sha256: String,
+}
+
+impl std::fmt::Debug for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Program({} bytes, {})", self.size, self.sha256)
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod memfd {
+    extern "C" {
+        pub fn memfd_create(name: *const std::ffi::c_char, flags: u32) -> i32;
+        pub fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+    }
+    pub const MFD_CLOEXEC: u32 = 1;
+    pub const MFD_ALLOW_SEALING: u32 = 2;
+    pub const F_ADD_SEALS: i32 = 1033;
+    pub const F_GET_SEALS: i32 = 1034;
+    pub const F_SEAL_SEAL: i32 = 1;
+    pub const F_SEAL_SHRINK: i32 = 2;
+    pub const F_SEAL_GROW: i32 = 4;
+    pub const F_SEAL_WRITE: i32 = 8;
+}
+
+impl Program {
+    /// Copy `path` (at start `/proc/self/exe`, the running image) into a `memfd_create` file, seal it with
+    /// `F_SEAL_WRITE`, `F_SEAL_SHRINK`, `F_SEAL_GROW` and `F_SEAL_SEAL`, then hash the sealed copy (SHA-256, streamed).
+    #[cfg(target_os = "linux")]
+    pub fn sealed_copy_of(path: &Path) -> Result<Program, String> {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        let mut src = std::fs::File::open(path).map_err(|e| format!("{} could not be opened: {e}", path.display()))?;
+        // SAFETY: a NUL-terminated name and two flags; the descriptor returned is owned by the File below alone.
+        let fd = unsafe { memfd::memfd_create(c"lucid-relay".as_ptr(), memfd::MFD_CLOEXEC | memfd::MFD_ALLOW_SEALING) };
+        if fd < 0 {
+            return Err("memfd_create failed".into());
+        }
+        // SAFETY: `fd` is a new descriptor nothing else owns.
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let size = std::io::copy(&mut src, &mut file).map_err(|e| format!("the program could not be copied: {e}"))?;
+        drop(src);
+        let seals = memfd::F_SEAL_WRITE | memfd::F_SEAL_SHRINK | memfd::F_SEAL_GROW | memfd::F_SEAL_SEAL;
+        // SAFETY: fcntl on our own descriptor with one int argument.
+        if unsafe { memfd::fcntl(file.as_raw_fd(), memfd::F_ADD_SEALS, seals) } != 0 {
+            return Err("the copy could not be sealed".into());
+        }
+        // SAFETY: fcntl on our own descriptor with no argument.
+        let got = unsafe { memfd::fcntl(file.as_raw_fd(), memfd::F_GET_SEALS) };
+        if got < 0 || got & seals != seals {
+            return Err("the copy is not sealed".into());
+        }
+        Program::hashed(file, size)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn sealed_copy_of(_path: &Path) -> Result<Program, String> {
+        Err("the program is served only on Linux".into())
+    }
+
+    /// The bytes of an already open file (the sealed copy, or a test's file), hashed by positional reads.
+    #[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+    fn hashed(file: std::fs::File, size: u64) -> Result<Program, String> {
+        let mut p = Program { file, size, sha256: String::new() };
+        let mut ctx = aws_lc_rs::digest::Context::new(&aws_lc_rs::digest::SHA256);
+        let mut buf = vec![0u8; CHUNK];
+        let mut pos = 0u64;
+        while pos < size {
+            let n = p.read_at(&mut buf, pos).map_err(|e| format!("the copy could not be read: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            ctx.update(&buf[..n]);
+            pos += n as u64;
+        }
+        if pos != size {
+            return Err("the copy is shorter than the program".into());
+        }
+        p.sha256 = hex(ctx.finish().as_ref());
+        Ok(p)
+    }
+
+    /// A plain file served as the program (tests of the routes on any system).
+    #[cfg(test)]
+    pub(crate) fn of_file(path: &Path) -> Result<Program, String> {
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let size = file.metadata().map_err(|e| e.to_string())?.len();
+        Program::hashed(file, size)
+    }
+
+    fn read_at(&self, buf: &mut [u8], pos: u64) -> std::io::Result<usize> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileExt;
+            self.file.read_at(buf, pos)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::FileExt;
+            self.file.seek_read(buf, pos)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (buf, pos);
+            Err(std::io::Error::other("not served on this system"))
+        }
+    }
+}
+
+/// Whether this console serves its program (4.2), or the reason id it does not: `not-linux`, `arch` (only `x86_64`
+/// and `aarch64`), `dev-license` (a `dev-license` build without `--fleet-serve-dev`).
+pub fn program_allowed(linux: bool, arch: &str, dev_build: bool, serve_dev: bool) -> Result<(), &'static str> {
+    if !linux {
+        return Err("not-linux");
+    }
+    if !matches!(arch, "x86_64" | "aarch64") {
+        return Err("arch");
+    }
+    if dev_build && !serve_dev {
+        return Err("dev-license");
+    }
+    Ok(())
+}
+
+fn load_program(serve_dev: bool, logger: &Logger) -> Result<Arc<Program>, &'static str> {
+    program_allowed(cfg!(target_os = "linux"), std::env::consts::ARCH, cfg!(feature = "dev-license"), serve_dev)?;
+    Program::sealed_copy_of(Path::new("/proc/self/exe")).map(Arc::new).map_err(|e| {
+        logger.ops("deploy.program-copy-failed", &Fields::new().with("why", e), Level::Error);
+        "copy-failed"
+    })
+}
+
+/// The program this console serves, as the options route and the mint show it (AC-2b-D 9.1, 6.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BinaryInfo {
+    pub version: String,
+    pub arch: String,
+    pub sha256: String,
+    pub size: u64,
+    pub fips: bool,
+}
+
+/// The served program's facts, or the reason id none is served (`program_allowed`'s, `copy-failed`, or `not-started`
+/// before `start` made the sealed copy).
+pub fn served_binary() -> Result<BinaryInfo, &'static str> {
+    let state = global().ok_or("not-started")?;
+    let p = state.program.lock().clone()?;
+    Ok(BinaryInfo { version: VERSION.to_owned(), arch: std::env::consts::ARCH.to_owned(), sha256: p.sha256.clone(), size: p.size, fips: cfg!(feature = "fips") })
+}
+
+/// The curl pin string (4.3): `sha256//<base64>` of each server leaf the manifest lists (its `spkiSha256`), the
+/// current leaf first and the next one second when listed, joined by `;`.
+pub fn curl_pins_of(manifest: &Value) -> String {
+    let leaves = manifest.get("leaves").and_then(Value::as_array).cloned().unwrap_or_default();
+    let pick = |role: &str| leaves.iter().find(|l| l.get("role").and_then(Value::as_str) == Some(role)).and_then(|l| w::unhex(l.get("spkiSha256")?.as_str()?)).filter(|h| h.len() == 32).map(|h| format!("sha256//{}", crate::meet_json::b64(&h)));
+    [pick("current"), pick("next")].into_iter().flatten().collect::<Vec<_>>().join(";")
+}
+
+/// The `e` query of 4.1: empty or `en_` and 16 hex; any other key or value is refused.
+fn enrollment_of(query: &str) -> Result<Option<String>, ()> {
+    if query.is_empty() {
+        return Ok(None);
+    }
+    let mut e = None;
+    for pair in query.split('&') {
+        let (k, v) = pair.split_once('=').ok_or(())?;
+        if k != "e" || e.is_some() || !(v.is_empty() || w::is_enrollment_id(v)) {
+            return Err(());
+        }
+        e = Some(v.to_owned());
+    }
+    Ok(e.filter(|v| !v.is_empty()))
+}
+
+/// Take one call in a sliding window; Err is the milliseconds until the oldest call leaves it.
+fn take_window(map: &Mutex<HashMap<String, VecDeque<i64>>>, key: &str, n: usize, span: i64, t: i64) -> Result<(), i64> {
+    let mut m = map.lock();
+    let q = m.entry(key.to_owned()).or_default();
+    while q.front().is_some_and(|x| t - x >= span) {
+        q.pop_front();
+    }
+    if q.len() >= n {
+        return Err(q.front().map_or(span, |f| f + span - t));
+    }
+    q.push_back(t);
+    Ok(())
+}
+
+/// 429 `deploy-rate` with the minutes in the words and `Retry-After` in seconds.
+fn rate_refused(wait_ms: i64) -> Response<Full<Bytes>> {
+    let secs = ((wait_ms + 999) / 1000).max(1);
+    let minutes = ((secs + 59) / 60).max(1);
+    let mut r = refused(&Refusal::filled("deploy-rate", &[("minutes", &minutes.to_string())]));
+    r.headers_mut().insert(RETRY_AFTER, hyper::header::HeaderValue::from(secs as u64));
+    r
+}
+
+fn file_answer(content_type: &'static str, body: Bytes) -> Response<Full<Bytes>> {
+    Response::builder().status(200).header(CONTENT_TYPE, content_type).header(CACHE_CONTROL, "no-store").body(Full::new(body)).unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+/// `SHA256SUMS` (4.1): the program, then one line per script body.
+fn sums_text(p: &Program) -> String {
+    let mut s = format!("{}  lucid-relay-{VERSION}-linux-{}\n", p.sha256, std::env::consts::ARCH);
+    for (name, product, env) in SCRIPTS {
+        if let Some(b) = crate::deploy_scripts::body(product, env) {
+            s.push_str(&format!("{}  {name}\n", hex(&sha256(b.as_bytes()))));
+        }
+    }
+    s
+}
+
+/// `meta` (4.1): no origin and no build type (L4).
+fn meta_value(p: &Program) -> Value {
+    let mut scripts = serde_json::Map::new();
+    for (name, product, env) in SCRIPTS {
+        if let Some(b) = crate::deploy_scripts::body(product, env) {
+            scripts.insert(name.to_owned(), json!(hex(&sha256(b.as_bytes()))));
+        }
+    }
+    json!({ "v": 1, "version": VERSION, "arch": std::env::consts::ARCH, "fips": cfg!(feature = "fips"), "sha256": p.sha256, "size": p.size, "scripts": scripts })
+}
+
+/// AC-2b-D 4.4: cut when, after its first 20 s, the last 20 s carried less than 256 KiB/s on average, or past 600 s.
+pub fn transfer_cut(elapsed_ms: u64, sent: u64, sent_20s_ago: u64) -> bool {
+    elapsed_ms > CUT_MAX_MS || (elapsed_ms >= CUT_WINDOW_MS && sent.saturating_sub(sent_20s_ago) < CUT_RATE * (CUT_WINDOW_MS / 1000))
+}
+
+/// One program transfer's place in the 4.4 limits; released (and the transfer logged) when the body is dropped: at
+/// its end, on failure, or when cut.
+struct Slot {
+    state: Arc<PortState>,
+    source: String,
+    started: Instant,
+    sent: Arc<AtomicU64>,
+    cut: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+        {
+            let mut a = self.state.dl_active.lock();
+            let left = a.0.get_mut(&self.source).map(|n| {
+                *n = n.saturating_sub(1);
+                *n
+            });
+            if left == Some(0) {
+                a.0.remove(&self.source);
+            }
+            a.1 = a.1.saturating_sub(1);
+        }
+        let ms = self.started.elapsed().as_millis() as u64;
+        self.state.log_download("lucid-relay", &self.source, self.sent.load(Ordering::SeqCst), ms, self.cut.load(Ordering::SeqCst), now_ms());
+    }
+}
+
+/// The program's bytes, read from the sealed copy as the connection takes them.
+pub struct Download {
+    program: Arc<Program>,
+    pos: u64,
+    slot: Slot,
+}
+
+impl hyper::body::Body for Download {
+    type Data = Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Result<hyper::body::Frame<Bytes>, std::io::Error>>> {
+        let this = &mut *self;
+        if this.slot.cut.load(Ordering::SeqCst) {
+            return Poll::Ready(Some(Err(std::io::Error::other("the transfer was cut"))));
+        }
+        if this.pos >= this.program.size {
+            return Poll::Ready(None);
+        }
+        let n = ((this.program.size - this.pos) as usize).min(CHUNK);
+        let mut buf = vec![0u8; n];
+        match this.program.read_at(&mut buf, this.pos) {
+            Ok(0) => Poll::Ready(Some(Err(std::io::Error::other("the sealed copy ended early")))),
+            Ok(k) => {
+                buf.truncate(k);
+                this.pos += k as u64;
+                this.slot.sent.store(this.pos, Ordering::SeqCst);
+                Poll::Ready(Some(Ok(hyper::body::Frame::data(Bytes::from(buf)))))
+            }
+            Err(e) => Poll::Ready(Some(Err(e))),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.pos >= self.program.size
+    }
+
+    fn size_hint(&self) -> hyper::body::SizeHint {
+        hyper::body::SizeHint::with_exact(self.program.size - self.pos)
+    }
+}
+
+/// Watch one transfer every second and cut it by the 4.4 rule (the connection closes; the body stops).
+fn watch(started: Instant, sent: Arc<AtomicU64>, cut: Arc<AtomicBool>, done: Arc<AtomicBool>, conn: Option<Arc<Notify>>) {
+    let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+    rt.spawn(async move {
+        // (elapsed ms, bytes sent): from the newest mark at least 20 s old to now
+        let mut marks: VecDeque<(u64, u64)> = VecDeque::from([(0, 0)]);
+        let mut every = tokio::time::interval(Duration::from_secs(1));
+        every.tick().await;
+        loop {
+            every.tick().await;
+            if done.load(Ordering::SeqCst) {
+                return;
+            }
+            let el = started.elapsed().as_millis() as u64;
+            let now = sent.load(Ordering::SeqCst);
+            marks.push_back((el, now));
+            while marks.len() > 1 && marks[1].0 + CUT_WINDOW_MS <= el {
+                marks.pop_front();
+            }
+            if transfer_cut(el, now, marks[0].1) {
+                cut.store(true, Ordering::SeqCst);
+                if let Some(c) = &conn {
+                    c.notify_one();
+                }
+                return;
+            }
+        }
+    });
+}
+
+impl PortState {
+    /// The program this port serves (`start` makes the sealed copy; tests set their own).
+    pub fn set_program(&self, p: Result<Arc<Program>, &'static str>) {
+        *self.program.lock() = p;
+    }
+
+    /// The curl pin string of the current signed trust manifest (4.3).
+    pub fn curl_pins(&self) -> String {
+        curl_pins_of(&self.ca.lock().manifest)
+    }
+
+    /// `deploy.download` (ops, info), at most one line per source per file per minute (4.4); no audit entry.
+    fn log_download(&self, file: &str, source: &str, bytes: u64, ms: u64, cut: bool, t: i64) {
+        {
+            let mut l = self.dl_logged.lock();
+            let k = (source.to_owned(), file.to_owned());
+            if l.get(&k).is_some_and(|at| t - at < 60_000) {
+                return;
+            }
+            l.retain(|_, at| t - *at < 60_000);
+            l.insert(k, t);
+        }
+        self.logger.ops("deploy.download", &Fields::new().with("file", file).with("source", source).with("bytes", bytes).with("ms", ms).with("cut", cut), Level::Info);
+    }
+
+    /// A served script: the 10-line header of 5.1 (every value checked against the safe pattern; one that fails is
+    /// never served and is logged), then the body.
+    fn script_text(&self, product: &str, env: &str, program: &Program, enrollment: &str) -> Option<String> {
+        let body = crate::deploy_scripts::body(product, env)?;
+        let console = self.cfg.fleet_url();
+        let pins = self.curl_pins();
+        let h = crate::deploy_scripts::Header { console: &console, pins: &pins, version: VERSION, arch: std::env::consts::ARCH, sha256: &program.sha256, profile: "standard", enrollment };
+        match crate::deploy_scripts::header(&h) {
+            Some(mut text) => {
+                if !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(body);
+                Some(text)
+            }
+            None => {
+                self.logger.ops("deploy.header-refused", &Fields::new().with("console", console.as_str()), Level::Error);
+                None
+            }
+        }
+    }
+
+    /// The seven download paths (4.1 to 4.5): `GET` only (HEAD and the rest 405), any other path under the folder
+    /// 404; under High 403 `deploy-high`; without a served program 404 `deploy-unavailable`; `e` checked; the limits
+    /// of 4.4; `Cache-Control: no-store` on every answer.
+    pub fn download(self: &Arc<Self>, method: &str, path: &str, query: &str, ip: IpAddr, t: i64, cut: Option<Arc<Notify>>) -> Response<PortBody> {
+        let left = |r: Response<Full<Bytes>>| r.map(Either::Left);
+        let file = path.strip_prefix(INSTALL_PREFIX).unwrap_or_default();
+        let script = SCRIPTS.iter().find(|s| s.0 == file);
+        if script.is_none() && !matches!(file, "lucid-relay" | "SHA256SUMS" | "meta") {
+            return left(not_found());
+        }
+        if method != "GET" {
+            return left(answer(405, &json!({ "ok": false, "code": "method", "error": METHOD_WORDS }), true));
+        }
+        if self.desk.high() {
+            return left(refused(&Refusal::of("deploy-high")));
+        }
+        let program = match self.program.lock().clone() {
+            Ok(p) => p,
+            Err(_) => return left(refused(&Refusal::of("deploy-unavailable"))),
+        };
+        let Ok(e) = enrollment_of(query) else { return left(refused(&Refusal::new(400, "invalid", BAD_ENROLLMENT))) };
+        let source = ip_key(ip);
+        if file == "lucid-relay" {
+            return self.send_program(program, e.as_deref(), source, t, cut);
+        }
+        if let Err(wait) = take_window(&self.dl_small, &source, SMALL_CALLS, SMALL_WINDOW_MS, t) {
+            return left(rate_refused(wait));
+        }
+        let (body, ctype) = match script {
+            Some((_, product, env)) => match self.script_text(product, env, &program, e.as_deref().unwrap_or_default()) {
+                Some(text) => (Bytes::from(text), "text/x-shellscript; charset=utf-8"),
+                None => return left(refused(&Refusal::of("deploy-unavailable"))),
+            },
+            None if file == "SHA256SUMS" => (Bytes::from(sums_text(&program)), "text/plain"),
+            None => (Bytes::from(stringify(&meta_value(&program))), "application/json"),
+        };
+        self.log_download(file, &source, body.len() as u64, 0, false, t);
+        left(file_answer(ctype, body))
+    }
+
+    /// `GET /fleet/v1/install/lucid-relay` (4.2, 4.4): 1 at once per source and 4 in all (`deploy-busy`), 6 an hour per
+    /// source unless `e` names an enrollment open or used within its hour (`deploy-rate`), then the sealed copy.
+    fn send_program(self: &Arc<Self>, program: Arc<Program>, e: Option<&str>, source: String, t: i64, conn: Option<Arc<Notify>>) -> Response<PortBody> {
+        let counted = !e.is_some_and(|id| self.desk.download_enrollment_ok(id, t));
+        {
+            let mut a = self.dl_active.lock();
+            if a.1 >= PROGRAM_AT_ONCE || a.0.get(&source).copied().unwrap_or(0) >= PROGRAM_PER_SOURCE {
+                return refused(&Refusal::of("deploy-busy")).map(Either::Left);
+            }
+            if counted {
+                if let Err(wait) = take_window(&self.dl_program, &source, PROGRAM_CALLS, PROGRAM_WINDOW_MS, t) {
+                    return rate_refused(wait).map(Either::Left);
+                }
+            }
+            *a.0.entry(source.clone()).or_insert(0) += 1;
+            a.1 += 1;
+        }
+        let (sent, cut, done) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let started = Instant::now();
+        watch(started, sent.clone(), cut.clone(), done.clone(), conn);
+        let size = program.size;
+        let body = Download { program, pos: 0, slot: Slot { state: self.clone(), source, started, sent, cut, done } };
+        Response::builder()
+            .status(200)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .header(CONTENT_DISPOSITION, "attachment; filename=\"lucid-relay\"")
+            .header(CONTENT_LENGTH, size)
+            .header(ACCEPT_RANGES, "none")
+            .header(CACHE_CONTROL, "no-store")
+            .body(Either::Right(body))
+            .unwrap_or_else(|_| Response::new(Either::Left(Full::new(Bytes::new()))))
+    }
+}
+
 /// Counts a source's connections that have not presented a verified relay certificate (8 at once, 3.8).
 struct Unverified {
     state: Arc<PortState>,
@@ -1109,13 +1659,19 @@ async fn serve_conn(state: Arc<PortState>, acceptor: TlsAcceptor, tcp: TcpStream
         unverified.release();
     }
     let io = TokioIo::new(tls);
+    // AC-2b-D 4.4: a program transfer that falls too slow, or runs too long, closes its connection.
+    let cut = Arc::new(Notify::new());
+    let cut_conn = cut.clone();
     let svc = service_fn(move |req| {
-        let (state, peer, presented) = (state.clone(), peer.clone(), presented.clone());
-        async move { Ok::<_, Infallible>(handle(state, peer, presented, ip, req).await) }
+        let (state, peer, presented, cut) = (state.clone(), peer.clone(), presented.clone(), cut.clone());
+        async move { Ok::<_, Infallible>(handle(state, peer, presented, ip, req, cut).await) }
     });
     let mut builder = http1::Builder::new();
     builder.timer(TokioTimer::new()).header_read_timeout(w::UPGRADE_WAIT);
-    let _ = builder.serve_connection(io, svc).with_upgrades().await;
+    tokio::select! {
+        _ = builder.serve_connection(io, svc).with_upgrades() => {}
+        _ = cut_conn.notified() => {}
+    }
 }
 
 /// Accept on `listener` until the process stops (512 connections at once, the source list, 3.8).
@@ -1233,6 +1789,9 @@ pub fn start(console: Arc<crate::console::Console>, cfg: PortConfig, logger: Arc
     }
     let vault: Arc<dyn VaultLock> = console.clone();
     let state = PortState::new(desk, vault, ca, cfg.clone(), logger.clone());
+    // AC-2b-D 4.2: the sealed copy of the running image, made once at start (under High every route still answers
+    // `deploy-high`).
+    state.set_program(load_program(cfg.serve_dev, &logger));
     let _ = PORT.set(state.clone());
     fleet.attach_pki(Arc::new(PortPki(state.clone())));
     fleet.attach_link(Arc::new(PortLink(state.clone())));
@@ -1301,6 +1860,12 @@ pub(crate) mod tests {
         pub audits: Mutex<Vec<String>>,
         /// Every enrollment call that reached the console (preview, secret).
         pub calls: AtomicU32,
+        /// AC-2b-D: the console's profile, enrollments whose downloads are not counted, `meet-cert` requests seen.
+        pub high: AtomicBool,
+        pub download_ok: Mutex<HashSet<String>>,
+        pub meet_certs: Mutex<Vec<(String, Value)>>,
+        /// AC-2b-D 6.2: the preview's `deploy` object (none when null).
+        pub deploy: Mutex<Value>,
     }
 
     impl TestDesk {
@@ -1322,7 +1887,12 @@ pub(crate) mod tests {
             if state != "open" || t > *exp {
                 return Err(Refusal::of("fleet-code-expired"));
             }
-            Ok(json!({ "console": { "id": CID, "origin": format!("https://{HOST}"), "rpId": HOST, "host": host }, "enrollment": { "product": product, "name": "Edge 1", "site": "", "scopes": ["read-health"], "expires": exp }, "policy": { "profile": "standard", "twoPerson": "off" }, "roster": self.roster.lock().clone(), "bootstrapRosterHash": "00" }))
+            let mut p = json!({ "console": { "id": CID, "origin": format!("https://{HOST}"), "rpId": HOST, "host": host }, "enrollment": { "product": product, "name": "Edge 1", "site": "", "scopes": ["read-health"], "expires": exp }, "policy": { "profile": "standard", "twoPerson": "off" }, "roster": self.roster.lock().clone(), "bootstrapRosterHash": "00" });
+            let deploy = self.deploy.lock().clone();
+            if !deploy.is_null() {
+                p["deploy"] = deploy;
+            }
+            Ok(p)
         }
         fn enroll_secret(&self, id: &str) -> Option<Vec<u8>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -1392,6 +1962,16 @@ pub(crate) mod tests {
         fn audit(&self, _actor: &str, action: &str, _detail: Value, _t: i64) {
             self.audits.lock().push(action.into());
         }
+        fn high(&self) -> bool {
+            self.high.load(Ordering::SeqCst)
+        }
+        fn download_enrollment_ok(&self, id: &str, _t: i64) -> bool {
+            self.download_ok.lock().contains(id)
+        }
+        fn meet_cert(&self, relay: &str, body: &Value, _t: i64) -> Result<Value, Refusal> {
+            self.meet_certs.lock().push((relay.into(), body.clone()));
+            Ok(json!({ "cert": "-----BEGIN CERTIFICATE-----", "signerCert": null }))
+        }
     }
 
     pub(crate) fn test_port(name: &str) -> (Arc<PortState>, Arc<TestDesk>, Arc<Mutex<MemVault>>) {
@@ -1400,7 +1980,7 @@ pub(crate) mod tests {
         let ca = vault_do(&*vault, |v| FleetCa::open(&dir, v, CID, HOST, &["localhost".into()], now_ms()));
         let desk = Arc::new(TestDesk::default());
         let logger = Arc::new(Logger::capture("console", Box::new(|_, _| {})));
-        let cfg = PortConfig { host: "127.0.0.1".into(), port: 0, names: vec!["localhost".into()], sources: Vec::new(), public_host: HOST.into() };
+        let cfg = PortConfig { host: "127.0.0.1".into(), port: 0, names: vec!["localhost".into()], sources: Vec::new(), public_host: HOST.into(), serve_dev: false };
         (PortState::new(desk.clone(), vault.clone(), ca, cfg, logger), desk, vault)
     }
 
@@ -1661,6 +2241,285 @@ pub(crate) mod tests {
             vault_do(&*state.vault, |v| ca.server_identity(v)).unwrap()
         };
         assert!(!ok(try_with(port, fleet_provider(), &[&rustls::version::TLS13], Some((chain[0].clone(), server_key))).await));
+    }
+
+    // ── AC-2b-D 4: the download routes ──
+
+    fn deploy_vector() -> Value {
+        let path = format!("{}/tests/admin_console_fleet_deploy_v1.json", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e} (copy it from the Meeting Hub repository's tests/vectors/)"));
+        parse_json(&text).unwrap()
+    }
+
+    /// A port serving the bytes of a plain file as its program.
+    fn serving(name: &str, bytes: &[u8]) -> (Arc<PortState>, Arc<TestDesk>, Vec<u8>) {
+        let (state, desk, _) = test_port(name);
+        let f = crate::fleet_ca::tests_dir(name).join("lucid-relay.bin");
+        std::fs::write(&f, bytes).unwrap();
+        state.set_program(Ok(Arc::new(Program::of_file(&f).unwrap())));
+        (state, desk, bytes.to_vec())
+    }
+
+    fn ip(n: u8) -> IpAddr {
+        IpAddr::from([192, 0, 2, n])
+    }
+
+    async fn body_of(r: Response<PortBody>) -> Vec<u8> {
+        r.into_body().collect().await.map(|c| c.to_bytes().to_vec()).unwrap_or_default()
+    }
+
+    fn code_of(r: &Response<PortBody>) -> u16 {
+        r.status().as_u16()
+    }
+
+    fn header<'a>(r: &'a Response<PortBody>, k: &str) -> &'a str {
+        r.headers().get(k).and_then(|v| v.to_str().ok()).unwrap_or_default()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_seven_download_routes_answer_exactly() {
+        let program: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let (state, desk, bytes) = serving("dl-routes", &program);
+        let t = now_ms();
+        let get = |path: &str, query: &str, n: u8| state.download("GET", path, query, ip(n), t, None);
+        let sha = hex(&sha256(&bytes));
+        // the four scripts: the 10-line header, then the body, the same bytes for every console
+        for (i, (name, product, env)) in SCRIPTS.iter().enumerate() {
+            let e = "en_0123456789abcdef";
+            let r = get(&format!("{INSTALL_PREFIX}{name}"), &format!("e={e}"), 10 + i as u8);
+            assert_eq!(code_of(&r), 200, "{name}");
+            assert_eq!(header(&r, "content-type"), "text/x-shellscript; charset=utf-8");
+            assert_eq!(header(&r, "cache-control"), "no-store");
+            let text = String::from_utf8(body_of(r).await).unwrap();
+            let lines: Vec<&str> = text.splitn(11, '\n').collect();
+            assert_eq!(lines[0], "#!/usr/bin/env bash");
+            assert_eq!(lines[1], "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.");
+            assert_eq!(lines[2], format!("LUCID_CONSOLE='{}'", state.cfg.fleet_url()));
+            assert_eq!(lines[3], format!("LUCID_PINS='{}'", state.curl_pins()));
+            assert_eq!(lines[6], format!("LUCID_SHA256='{sha}'"));
+            assert_eq!(lines[7], "LUCID_PROFILE='standard'");
+            assert_eq!(lines[8], format!("LUCID_ENROLLMENT='{e}'"));
+            assert_eq!(lines[10], crate::deploy_scripts::body(product, env).unwrap());
+        }
+        // without e the enrollment line is empty
+        let text = String::from_utf8(body_of(get(&format!("{INSTALL_PREFIX}meet-linux.sh"), "", 20)).await).unwrap();
+        assert!(text.lines().nth(8) == Some("LUCID_ENROLLMENT=''"));
+        // the program: the sealed bytes, attachment, length, no ranges
+        let r = get(&format!("{INSTALL_PREFIX}lucid-relay"), "", 21);
+        assert_eq!(code_of(&r), 200);
+        assert_eq!(header(&r, "content-type"), "application/octet-stream");
+        assert_eq!(header(&r, "content-disposition"), "attachment; filename=\"lucid-relay\"");
+        assert_eq!(header(&r, "content-length"), bytes.len().to_string());
+        assert_eq!(header(&r, "cache-control"), "no-store");
+        assert_eq!(body_of(r).await, bytes);
+        // SHA256SUMS and meta
+        let r = get(&format!("{INSTALL_PREFIX}SHA256SUMS"), "", 22);
+        assert_eq!((code_of(&r), header(&r, "content-type")), (200, "text/plain"));
+        let sums = String::from_utf8(body_of(r).await).unwrap();
+        let first = format!("{sha}  lucid-relay-{VERSION}-linux-{}", std::env::consts::ARCH);
+        assert_eq!(sums.lines().next(), Some(first.as_str()));
+        for (name, product, env) in SCRIPTS {
+            assert!(sums.lines().any(|l| l == format!("{}  {name}", hex(&sha256(crate::deploy_scripts::body(product, env).unwrap().as_bytes())))));
+        }
+        let r = get(&format!("{INSTALL_PREFIX}meta"), "", 23);
+        assert_eq!((code_of(&r), header(&r, "content-type")), (200, "application/json"));
+        let meta = parse_json(&String::from_utf8(body_of(r).await).unwrap()).unwrap();
+        let keys: Vec<&str> = meta.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["v", "version", "arch", "fips", "sha256", "size", "scripts"]);
+        assert_eq!((meta["sha256"].as_str(), meta["size"].as_u64()), (Some(sha.as_str()), Some(bytes.len() as u64)));
+        assert_eq!(meta["scripts"].as_object().unwrap().len(), 4);
+        // anything else under the folder 404; a HEAD or another method 405; a bad e 400
+        assert_eq!(code_of(&get(&format!("{INSTALL_PREFIX}other.sh"), "", 24)), 404);
+        assert_eq!(code_of(&get(INSTALL_PREFIX, "", 24)), 404);
+        assert_eq!(code_of(&state.download("HEAD", &format!("{INSTALL_PREFIX}meta"), "", ip(24), t, None)), 405);
+        assert_eq!(code_of(&state.download("POST", &format!("{INSTALL_PREFIX}lucid-relay"), "", ip(24), t, None)), 405);
+        for q in ["e=LCE1-AAAA", "e=en_0123", "x=1", "e=en_0123456789abcdef&e=en_0123456789abcdef", "e"] {
+            assert_eq!(code_of(&get(&format!("{INSTALL_PREFIX}meet-linux.sh"), q, 25)), 400, "{q}");
+        }
+        // recovery-only connections keep their 403 (the download routes are not theirs); relays and anonymous peers get them
+        assert!(!to_downloads(&Peer::Recovery { relay: "r_0000000000000001".into(), serial: "1".into() }, "/fleet/v1/install/meta"));
+        assert!(to_downloads(&Peer::Anonymous, "/fleet/v1/install/meta"));
+        assert!(!to_downloads(&Peer::Anonymous, "/fleet/v1/trust"));
+        // High: every route 403 deploy-high
+        desk.high.store(true, Ordering::SeqCst);
+        for f in ["meet-linux.sh", "spokes-linux.sh", "meet-docker.sh", "spokes-docker.sh", "lucid-relay", "SHA256SUMS", "meta"] {
+            let r = get(&format!("{INSTALL_PREFIX}{f}"), "", 26);
+            assert_eq!(code_of(&r), 403, "{f}");
+            let v = parse_json(&String::from_utf8(body_of(r).await).unwrap()).unwrap();
+            assert_eq!(v["code"], "deploy-high");
+        }
+        desk.high.store(false, Ordering::SeqCst);
+        // no program served (a dev-license build without --fleet-serve-dev, another system): 404 deploy-unavailable
+        state.set_program(Err("dev-license"));
+        let r = get(&format!("{INSTALL_PREFIX}lucid-relay"), "", 27);
+        assert_eq!(code_of(&r), 404);
+        assert_eq!(parse_json(&String::from_utf8(body_of(r).await).unwrap()).unwrap()["code"], "deploy-unavailable");
+    }
+
+    #[test]
+    fn the_program_is_served_only_where_4_2_allows() {
+        assert_eq!(program_allowed(true, "x86_64", false, false), Ok(()));
+        assert_eq!(program_allowed(true, "aarch64", false, false), Ok(()));
+        assert_eq!(program_allowed(false, "x86_64", false, false), Err("not-linux"));
+        assert_eq!(program_allowed(true, "riscv64", false, false), Err("arch"));
+        assert_eq!(program_allowed(true, "x86_64", true, false), Err("dev-license"));
+        assert_eq!(program_allowed(true, "x86_64", true, true), Ok(()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn download_limits_of_4_4() {
+        let (state, desk, _) = serving("dl-limits", &[7u8; 1000]);
+        let t = now_ms();
+        // the 61st script request in 15 minutes from one source: 429 deploy-rate with Retry-After
+        for i in 0..60 {
+            assert_eq!(code_of(&state.download("GET", "/fleet/v1/install/meta", "", ip(1), t + i, None)), 200, "{i}");
+        }
+        let r = state.download("GET", "/fleet/v1/install/meet-linux.sh", "", ip(1), t + 60, None);
+        assert_eq!(code_of(&r), 429);
+        assert!(header(&r, "retry-after").parse::<u64>().unwrap() > 0);
+        assert_eq!(parse_json(&String::from_utf8(body_of(r).await).unwrap()).unwrap()["code"], "deploy-rate");
+        // another source is not limited by it; 15 minutes later the first is free again
+        assert_eq!(code_of(&state.download("GET", "/fleet/v1/install/meta", "", ip(2), t, None)), 200);
+        assert_eq!(code_of(&state.download("GET", "/fleet/v1/install/meta", "", ip(1), t + SMALL_WINDOW_MS, None)), 200);
+        // the 7th program download in an hour: 429 with Retry-After
+        let p = "/fleet/v1/install/lucid-relay";
+        for i in 0..6 {
+            let r = state.download("GET", p, "", ip(3), t + i, None);
+            assert_eq!(code_of(&r), 200, "{i}");
+            body_of(r).await;
+        }
+        let r = state.download("GET", p, "", ip(3), t + 6, None);
+        assert_eq!(code_of(&r), 429);
+        assert!(!header(&r, "retry-after").is_empty());
+        // ... unless e names an enrollment open or used within its hour (a site behind one NAT)
+        desk.download_ok.lock().insert("en_00000000000000aa".into());
+        let r = state.download("GET", p, "e=en_00000000000000aa", ip(3), t + 7, None);
+        assert_eq!(code_of(&r), 200);
+        body_of(r).await;
+        assert_eq!(code_of(&state.download("GET", p, "e=en_00000000000000bb", ip(3), t + 8, None)), 429);
+        // 1 at once per source, 4 at once in all: the 5th is 503 deploy-busy
+        let held: Vec<Response<PortBody>> = (10..14).map(|n| state.download("GET", p, "", ip(n), t, None)).collect();
+        assert!(held.iter().all(|r| code_of(r) == 200));
+        let r = state.download("GET", p, "", ip(14), t, None);
+        assert_eq!(code_of(&r), 503);
+        assert_eq!(parse_json(&String::from_utf8(body_of(r).await).unwrap()).unwrap()["code"], "deploy-busy");
+        drop(held);
+        let one = state.download("GET", p, "", ip(15), t, None);
+        assert_eq!(code_of(&one), 200);
+        assert_eq!(code_of(&state.download("GET", p, "", ip(15), t, None)), 503, "a second at once from one source");
+        drop(one);
+        assert_eq!(code_of(&state.download("GET", p, "", ip(15), t, None)), 200);
+    }
+
+    #[test]
+    fn a_slow_or_long_transfer_is_cut() {
+        let rate = CUT_RATE * 20;
+        // the first 20 s are free
+        assert!(!transfer_cut(19_999, 0, 0));
+        // after them, the last 20 s must average 256 KiB/s
+        assert!(transfer_cut(20_000, rate - 1, 0));
+        assert!(!transfer_cut(20_000, rate, 0));
+        assert!(transfer_cut(45_000, 10 * rate, 10 * rate - 1));
+        assert!(!transfer_cut(45_000, 10 * rate, 9 * rate));
+        // never past 600 s
+        assert!(transfer_cut(600_001, u64::MAX / 2, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stalled_reader_is_cut_and_the_slot_freed() {
+        // real time: the rule gives a transfer its first 20 s
+        let (state, _, _) = serving("dl-stall", &[1u8; 300_000]);
+        let conn = Arc::new(Notify::new());
+        let r = state.download("GET", "/fleet/v1/install/lucid-relay", "", ip(30), now_ms(), Some(conn.clone()));
+        assert_eq!(code_of(&r), 200);
+        // nothing is read: after the first 20 s the watch closes the connection
+        tokio::time::timeout(Duration::from_secs(30), conn.notified()).await.expect("cut");
+        let mut body = r.into_body();
+        let frame = body.frame().await;
+        assert!(matches!(frame, Some(Err(_))), "the body stops after a cut");
+        drop(body);
+        assert_eq!(state.dl_active.lock().1, 0);
+    }
+
+    /// Invariant D3: the served bytes are the sealed copy made at start, even after the file on disk is replaced.
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_sealed_copy_is_served_after_the_file_is_replaced() {
+        let (state, _, _) = test_port("dl-sealed");
+        let f = crate::fleet_ca::tests_dir("dl-sealed").join("exe");
+        let first = vec![0x5au8; 150_000];
+        std::fs::write(&f, &first).unwrap();
+        let p = Program::sealed_copy_of(&f).unwrap();
+        assert_eq!(p.sha256, hex(&sha256(&first)));
+        // the copy cannot be written, shrunk or grown
+        {
+            use std::io::Write;
+            let mut sealed = &p.file;
+            assert!(sealed.write_all(b"x").is_err());
+            assert!(p.file.set_len(1).is_err());
+        }
+        state.set_program(Ok(Arc::new(p)));
+        std::fs::write(&f, vec![0xa5u8; 90_000]).unwrap();
+        let r = state.download("GET", "/fleet/v1/install/lucid-relay", "", ip(40), now_ms(), None);
+        assert_eq!(body_of(r).await, first);
+    }
+
+    #[test]
+    fn the_curl_pins_list_current_then_next() {
+        let cur = [0x11u8; 32];
+        let next = [0x22u8; 32];
+        let m = json!({ "leaves": [{ "role": "next", "spkiSha256": hex(&next) }, { "role": "current", "spkiSha256": hex(&cur) }] });
+        assert_eq!(curl_pins_of(&m), format!("sha256//{};sha256//{}", crate::meet_json::b64(&cur), crate::meet_json::b64(&next)));
+        let only = json!({ "leaves": [{ "role": "current", "spkiSha256": hex(&cur) }] });
+        assert_eq!(curl_pins_of(&only), format!("sha256//{}", crate::meet_json::b64(&cur)));
+        // the port's own manifest gives a pin string of the safe header pattern
+        let (state, _, _) = test_port("dl-pins");
+        assert!(state.curl_pins().starts_with("sha256//") && crate::deploy_scripts::safe_value(&state.curl_pins()));
+    }
+
+    /// The deploy vector: the pin string of a fixed manifest, and header rendering (unsafe values refused, an IPv6
+    /// literal in brackets accepted).
+    #[test]
+    fn header_rendering_and_pins_of_the_deploy_vector() {
+        let v = deploy_vector();
+        assert_eq!(curl_pins_of(&v["pins"]["manifest"]), v["pins"]["pins"].as_str().unwrap());
+        let s = |x: &Value| x.as_str().unwrap_or_default().to_owned();
+        for c in v["header"]["cases"].as_array().unwrap() {
+            let i = &c["inputs"];
+            let (console, pins, version, arch, sha, profile, enrollment) = (s(&i["console"]), s(&i["pins"]), s(&i["version"]), s(&i["arch"]), s(&i["sha256"]), s(&i["profile"]), s(&i["enrollment"]));
+            let h = crate::deploy_scripts::Header { console: &console, pins: &pins, version: &version, arch: &arch, sha256: &sha, profile: &profile, enrollment: &enrollment };
+            let got = crate::deploy_scripts::header(&h);
+            match c["lines"].as_array() {
+                Some(lines) => {
+                    let want: Vec<String> = lines.iter().map(s).collect();
+                    let text = got.unwrap_or_else(|| panic!("{} refused", c["name"]));
+                    assert_eq!(text.trim_end_matches('\n').split('\n').collect::<Vec<_>>(), want, "{}", c["name"]);
+                }
+                None => assert!(got.is_none(), "{} must be refused", c["name"]),
+            }
+        }
+        let empty: Vec<String> = v["header"]["empty"]["lines"].as_array().unwrap().iter().map(s).collect();
+        assert_eq!(crate::deploy_scripts::empty_header().trim_end_matches('\n').split('\n').collect::<Vec<_>>(), empty);
+        // an IPv6 console host is bracketed in fleetUrl and LUCID_CONSOLE
+        let cfg = PortConfig { host: "::".into(), port: 7443, names: vec![], sources: vec![], public_host: "[2001:db8::1]".into(), serve_dev: false };
+        assert!(cfg.fleet_url().starts_with("https://[2001:db8::1]"), "{}", cfg.fleet_url());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn meet_cert_goes_to_the_console() {
+        let (state, desk, _) = test_port("meetcert");
+        let (relay, _, _) = enrolled(&state, &desk);
+        let (a, b) = w::local_pair();
+        let peer = Peer::Relay { relay: relay.clone(), serial: desk.serials.lock()[&relay][0].clone(), generation: 1, spki: vec![] };
+        tokio::spawn(state.clone().serve_channel(Wire::Local(a), peer, "test".into()));
+        let (mut tx, mut rx) = Wire::Local(b).split();
+        let hello = json!({"relayId": relay, "version": "1", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": [], "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": {}, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1, "pins": [], "certNotAfter": 0});
+        assert!(tx.text(w::evt_text("hello", hello)).await);
+        let In::Text(_) = rx.next().await else { panic!("welcome") };
+        assert!(tx.text(w::req_text(9, "meet-cert", json!({ "csr": "AAAA", "signerCsr": null }))).await);
+        let In::Text(t) = rx.next().await else { panic!("answer") };
+        assert!(matches!(w::parse_frame(&t, Side::Relay), Ok(Frame::Res { id: 9, answer: Ok(_) })));
+        assert_eq!(desk.meet_certs.lock()[0].0, relay);
     }
 
     #[test]

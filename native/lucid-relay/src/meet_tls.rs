@@ -7,7 +7,7 @@
 use crate::meet::{log_info, Settings, E};
 use crate::meet_json::{self as pj, Obj};
 use crate::meet_x509::{pem_blocks, Cert, Crl};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use rustls::client::danger::HandshakeSignatureValid;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
@@ -22,6 +22,11 @@ use std::time::Duration;
 
 pub const ROOT_CRL: &str = "crl-root.pem";
 pub const SIGNER_CRL: &str = "crl-signer.pem";
+/// AC-2b-D 2.4, 8.5 (R3-M1): a valid newer root CRL whose `thisUpdate` has not passed on this relay's clock yet.
+pub const ROOT_CRL_PENDING: &str = "crl-root.pending.pem";
+/// AC-2b-D 8.5: a root CRL dated at most this far ahead (seconds) waits as pending; further ahead it is future.
+pub const CRL_PENDING_AHEAD: i64 = 300;
+const OID_CRL_NUMBER: &[u8] = &[0x55, 0x1d, 0x14];
 pub const SIGNER_TIMEOUT: f64 = 10.0;
 pub const SIGNER_TTL: f64 = 60.0;
 pub const SIGNER_RETRY: f64 = 60.0;
@@ -92,6 +97,297 @@ pub fn active_crl(s: &Settings) -> Option<PathBuf> {
         return Some(PathBuf::from(&s.crl));
     }
     crl_path(s).filter(|p| p.exists())
+}
+
+// ── AC-2b-D 8.5: root CRLs from the Admin Console (order; current, pending and future lists) ─────────────────
+
+/// The CRL number of a list (RFC 5280 5.2.3; big-endian, no leading zero bytes), None when it carries none.
+pub fn crl_number(crl: &Crl) -> Option<Vec<u8>> {
+    use crate::der::tlv;
+    let tbs = tlv(&crl.signed.tbs)?;
+    let mut d = tbs.value;
+    while !d.is_empty() {
+        let field = tlv(d)?;
+        d = field.rest;
+        if field.tag != 0xa0 {
+            continue;
+        }
+        let exts = tlv(field.value)?;
+        let mut e = exts.value;
+        while !e.is_empty() {
+            let ext = tlv(e)?;
+            e = ext.rest;
+            let oid = tlv(ext.value)?;
+            if oid.tag != 0x06 || oid.value != OID_CRL_NUMBER {
+                continue;
+            }
+            let mut value = tlv(oid.rest)?;
+            if value.tag == 0x01 {
+                value = tlv(value.rest)?;
+            }
+            if value.tag != 0x04 {
+                return None;
+            }
+            let int = tlv(value.value)?;
+            if int.tag != 0x02 || int.value.is_empty() || int.value.len() > 21 {
+                return None;
+            }
+            let mut n = int.value;
+            while n.len() > 1 && n[0] == 0 {
+                n = &n[1..];
+            }
+            return Some(n.to_vec());
+        }
+    }
+    None
+}
+
+/// A CRL number (big-endian bytes) as decimal text, as `meetCrl.number` reports it.
+pub fn number_text(n: &[u8]) -> String {
+    let mut num = n.to_vec();
+    let mut digits = Vec::new();
+    while num.iter().any(|b| *b != 0) {
+        let mut rem = 0u32;
+        for b in num.iter_mut() {
+            let cur = (rem << 8) | u32::from(*b);
+            *b = (cur / 10) as u8;
+            rem = cur % 10;
+        }
+        digits.push(b'0' + rem as u8);
+    }
+    if digits.is_empty() {
+        return "0".into();
+    }
+    digits.reverse();
+    String::from_utf8(digits).unwrap_or_default()
+}
+
+fn number_cmp(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+
+/// The 8.5 order between two lists of one CA: `a` is later than `b` when its `thisUpdate` is later, or at the same
+/// `thisUpdate` when both carry a CRL number and `a`'s is higher.
+pub fn crl_later(a: &Crl, b: &Crl) -> bool {
+    if a.this_update != b.this_update {
+        return a.this_update > b.this_update;
+    }
+    matches!((crl_number(a), crl_number(b)), (Some(x), Some(y)) if number_cmp(&x, &y).is_gt())
+}
+
+/// 8.5 (R3-M1), on this relay's clock with `check_one`'s zero tolerance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CrlTime {
+    /// Its `thisUpdate` has passed: new connections count it.
+    Current,
+    /// Its `thisUpdate` is at most CRL_PENDING_AHEAD seconds ahead.
+    Pending,
+    /// Further ahead: refused (`why: "future"`).
+    Future,
+}
+
+pub fn crl_time(crl: &Crl, now: i64) -> CrlTime {
+    if crl.this_update <= now {
+        CrlTime::Current
+    } else if crl.this_update - now <= CRL_PENDING_AHEAD {
+        CrlTime::Pending
+    } else {
+        CrlTime::Future
+    }
+}
+
+/// The self-signed certificates of a CA file (the roots a Meeting Hub relay trusts).
+pub fn self_signed_roots(ca_file: &Path) -> Vec<Cert> {
+    pem_blocks(&read_bytes(ca_file), "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).filter(|c| c.subject == c.issuer && c.signed.verified_by(&c.spki)).collect()
+}
+
+/// AC-2b-D 6.5, 9.3 `meetRoots`: the `m_` ids of every self-signed certificate in a CA file (none before one exists).
+pub fn meet_root_ids(ca_file: &Path) -> Vec<String> {
+    let mut ids: Vec<String> = self_signed_roots(ca_file).iter().map(|c| crate::license::meet_root_id(&c.spki)).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// The root among `roots` that signed `crl`, None for a list of any other issuer.
+pub fn crl_root<'a>(crl: &Crl, roots: &'a [Cert]) -> Option<&'a Cert> {
+    roots.iter().find(|r| r.subject == crl.issuer && crl.signature_valid(&r.spki))
+}
+
+/// The first CRL of a PEM text: its block (re-terminated), its DER and what it says.
+fn first_crl(pem: &[u8]) -> Option<(Vec<u8>, Vec<u8>, Crl)> {
+    let (block, der) = pem_blocks(pem, "X509 CRL").into_iter().next()?;
+    let crl = Crl::from_der(&der)?;
+    Some((block, der, crl))
+}
+
+/// Whether `new` may replace `old` in crl-root.pem (8.5): later by the order; or `old` is not current (it came
+/// another way before revision 3) and the current `new` carries a higher CRL number, or `old` carries none.
+fn replaces(new: &Crl, old: Option<&Crl>, now: i64) -> bool {
+    let Some(old) = old else { return true };
+    if crl_later(new, old) {
+        return true;
+    }
+    old.this_update > now
+        && new.this_update <= now
+        && match (crl_number(new), crl_number(old)) {
+            (Some(a), Some(b)) => number_cmp(&a, &b).is_gt(),
+            (_, None) => true,
+            (None, Some(_)) => false,
+        }
+}
+
+/// Where `place_root_crl` put a list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placed {
+    /// In crl-root.pem, crl.pem rebuilt (or that very list was already there).
+    Current,
+    /// In crl-root.pending.pem, the previous list still in force until its `thisUpdate` passes.
+    Pending,
+}
+
+/// crl.pem = crl-root.pem + crl-signer.pem in `state_dir`; false (nothing written) without a root part.
+pub fn rebuild_bundle_files(state_dir: &Path) -> std::io::Result<bool> {
+    let root = read_bytes(&state_dir.join(ROOT_CRL));
+    let mut data = String::from_utf8_lossy(&root).trim_matches(|c: char| c.is_ascii_whitespace()).as_bytes().to_vec();
+    if data.is_empty() {
+        return Ok(false);
+    }
+    data.push(b'\n');
+    data.extend(read_bytes(&state_dir.join(SIGNER_CRL)));
+    write_atomic(&state_dir.join("crl.pem"), &data)?;
+    Ok(true)
+}
+
+/// AC-2b-D 8.5 (R2-H1, R3-M1, D9): a root CRL from the Admin Console (the enrollment answer or `meet-crl`) into the
+/// bundle of `state_dir`. Taken only when signed by a self-signed certificate in `client_ca`, not expired, not dated
+/// more than CRL_PENDING_AHEAD ahead, and later by the 8.5 order than the list in place and any pending one. A
+/// current list becomes crl-root.pem (crl.pem rebuilt); a list at most 5 minutes ahead waits as
+/// crl-root.pending.pem while the previous list stays in force. Err is the `why` of `fleet.meet-crl-refused`:
+/// `unreadable`, `signature`, `expired`, `future`, `older` or `write`. `now_ms` in Unix milliseconds (the enrollment
+/// apply's clock).
+pub fn place_root_crl(state_dir: &Path, client_ca: &Path, pem: &[u8], now_ms: i64) -> Result<Placed, String> {
+    place_root_crl_changed(state_dir, client_ca, pem, now_ms.div_euclid(1000)).map(|(placed, _)| placed)
+}
+
+/// `place_root_crl` with `now` in seconds, and whether a file changed (the very list already in place or pending
+/// changes nothing).
+pub fn place_root_crl_changed(state_dir: &Path, client_ca: &Path, pem: &[u8], now: i64) -> Result<(Placed, bool), String> {
+    let (block, _, crl) = first_crl(pem).ok_or("unreadable")?;
+    let roots = self_signed_roots(client_ca);
+    if crl_root(&crl, &roots).is_none() {
+        return Err("signature".into());
+    }
+    if crl.next_update.is_some_and(|n| n <= now) {
+        return Err("expired".into());
+    }
+    let time = crl_time(&crl, now);
+    if time == CrlTime::Future {
+        return Err("future".into());
+    }
+    let (root_part, pending_part) = (state_dir.join(ROOT_CRL), state_dir.join(ROOT_CRL_PENDING));
+    let old = first_crl(&read_bytes(&root_part)).map(|(_, _, c)| c);
+    if old.as_ref().is_some_and(|o| o.signed.tbs == crl.signed.tbs) {
+        return Ok((Placed::Current, false));
+    }
+    let pending = first_crl(&read_bytes(&pending_part)).map(|(_, _, c)| c).filter(|p| crl_root(p, &roots).is_some() && p.next_update.is_none_or(|n| n > now));
+    if pending.as_ref().is_some_and(|p| p.signed.tbs == crl.signed.tbs) {
+        return Ok((Placed::Pending, false));
+    }
+    if pending.as_ref().is_some_and(|p| !crl_later(&crl, p)) {
+        return Err("older".into());
+    }
+    match time {
+        CrlTime::Current => {
+            if !replaces(&crl, old.as_ref(), now) {
+                return Err("older".into());
+            }
+            write_atomic(&root_part, &block).map_err(|_| "write".to_string())?;
+            if pending_part.exists() {
+                let _ = std::fs::remove_file(&pending_part);
+            }
+            rebuild_bundle_files(state_dir).map_err(|_| "write".to_string())?;
+            Ok((Placed::Current, true))
+        }
+        _ => {
+            if old.as_ref().is_some_and(|o| !crl_later(&crl, o) && o.this_update <= now) {
+                return Err("older".into());
+            }
+            write_atomic(&pending_part, &block).map_err(|_| "write".to_string())?;
+            Ok((Placed::Pending, true))
+        }
+    }
+}
+
+/// The `thisUpdate` (seconds) of the pending root CRL in `state_dir`, None without one.
+pub fn pending_crl_due(state_dir: &Path) -> Option<i64> {
+    first_crl(&read_bytes(&state_dir.join(ROOT_CRL_PENDING))).map(|(_, _, c)| c.this_update)
+}
+
+/// The timer's step (R3-M1): a pending list whose `thisUpdate` has passed becomes crl-root.pem when it still replaces
+/// the list in place (crl.pem rebuilt); one that no longer can, or no longer verifies, is deleted. The adopted list
+/// and its DER, if any. `now` in seconds.
+pub fn adopt_pending_crl(state_dir: &Path, client_ca: &Path, now: i64) -> Option<(Crl, Vec<u8>)> {
+    let pending_part = state_dir.join(ROOT_CRL_PENDING);
+    if std::fs::symlink_metadata(&pending_part).is_err() {
+        return None;
+    }
+    let Some((block, der, crl)) = first_crl(&read_bytes(&pending_part)) else {
+        let _ = std::fs::remove_file(&pending_part);
+        return None;
+    };
+    let roots = self_signed_roots(client_ca);
+    let valid = crl_root(&crl, &roots).is_some() && crl.next_update.is_none_or(|n| n > now);
+    if valid && crl_time(&crl, now) != CrlTime::Current {
+        return None;
+    }
+    let root_part = state_dir.join(ROOT_CRL);
+    let old = first_crl(&read_bytes(&root_part)).map(|(_, _, c)| c);
+    if !valid || !replaces(&crl, old.as_ref(), now) {
+        let _ = std::fs::remove_file(&pending_part);
+        return None;
+    }
+    write_atomic(&root_part, &block).ok()?;
+    let _ = std::fs::remove_file(&pending_part);
+    rebuild_bundle_files(state_dir).ok()?;
+    Some((crl, der))
+}
+
+/// AC-2b-D 9.3 `meetCrl`: where this relay's root CRL comes from (`bundle`, `fixed` for a `crl` setting, `none`
+/// without a CRL file), the list in force (`thisUpdate` in ms, CRL number as decimal text, the `m_` id of the root
+/// that signed it, SHA-256 of its DER) and the pending one; fields null with none.
+pub fn meet_crl_report(s: &Settings) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let roots = self_signed_roots(Path::new(&s.client_ca));
+    let describe = |data: &[u8]| -> Option<Value> {
+        pem_blocks(data, "X509 CRL").into_iter().find_map(|(_, der)| {
+            let c = Crl::from_der(&der)?;
+            let root = crl_root(&c, &roots)?;
+            Some(json!({
+                "thisUpdate": c.this_update * 1000,
+                "number": crl_number(&c).map(|n| number_text(&n)),
+                "issuer": crate::license::meet_root_id(&root.spki),
+                "sha256": crate::codec::sha256_hex(&der),
+            }))
+        })
+    };
+    let (source, in_force, pending) = if !s.crl.is_empty() {
+        ("fixed", describe(&read_bytes(Path::new(&s.crl))), None)
+    } else if crl_path(s).is_some_and(|p| p.exists()) {
+        let d = Path::new(&s.state_dir);
+        ("bundle", describe(&read_bytes(&d.join(ROOT_CRL))), describe(&read_bytes(&d.join(ROOT_CRL_PENDING))))
+    } else {
+        ("none", None, None)
+    };
+    let field = |k: &str| in_force.as_ref().and_then(|v| v.get(k)).cloned().unwrap_or(Value::Null);
+    json!({
+        "source": source,
+        "thisUpdate": field("thisUpdate"),
+        "number": field("number"),
+        "issuer": field("issuer"),
+        "sha256": field("sha256"),
+        "pending": pending.map(|p| json!({"thisUpdate": p["thisUpdate"], "number": p["number"], "sha256": p["sha256"]})).unwrap_or(Value::Null),
+    })
 }
 
 fn load_certs(path: &str, what: &str) -> Result<Vec<CertificateDer<'static>>, String> {
@@ -527,9 +823,21 @@ pub struct SignerClient {
     host: String,
     port: u16,
     ca: String,
-    cfg: Arc<ClientConfig>,
+    cert: String,
+    key: String,
+    /// The client TLS and the serial of the client certificate it presents; swapped whole by `reload` (AC-2b-D 8.4,
+    /// R2-M4), so a call in flight keeps the pair it started with and the next one uses the new pair.
+    cfg: RwLock<(Arc<ClientConfig>, String)>,
+    /// AC-2b-D 9.3 `meetPki.signerSerial`: the client certificate serial last used in a successful call, and when
+    /// it first succeeded (seconds).
+    ok_serial: Mutex<Option<(String, i64)>>,
     state: Mutex<SignerState>,
     pub on_status: Mutex<Option<OnStatus>>,
+}
+
+/// The serial (lower-case hex) of the first certificate in a PEM file, "" when it does not read.
+pub fn cert_serial(path: &str) -> String {
+    Cert::from_pem(&String::from_utf8_lossy(&read_bytes(Path::new(path)))).map(|c| c.serial).unwrap_or_default()
 }
 
 impl SignerClient {
@@ -550,7 +858,68 @@ impl SignerClient {
             return Err("signer_url must be https://host:port".into());
         }
         let cfg = client_config(Some(ca), Some((cert, key)))?;
-        Ok(SignerClient { host: host.to_ascii_lowercase(), port, ca: ca.to_string(), cfg, state: Mutex::new(SignerState { status: None, error: String::new(), checked: -1e9 }), on_status: Mutex::new(None) })
+        Ok(SignerClient {
+            host: host.to_ascii_lowercase(),
+            port,
+            ca: ca.to_string(),
+            cert: cert.to_string(),
+            key: key.to_string(),
+            cfg: RwLock::new((cfg, cert_serial(cert))),
+            ok_serial: Mutex::new(None),
+            state: Mutex::new(SignerState { status: None, error: String::new(), checked: -1e9 }),
+            on_status: Mutex::new(None),
+        })
+    }
+
+    /// AC-2b-D 8.4 (R2-M4): build the client TLS again from `signer_cert` and `signer_key` (which point into
+    /// `pki/current`, just switched), without a restart; the next call presents the new pair. Err keeps the old one.
+    pub fn reload(&self) -> Result<(), String> {
+        let cfg = client_config(Some(&self.ca), Some((&self.cert, &self.key)))?;
+        *self.cfg.write() = (cfg, cert_serial(&self.cert));
+        Ok(())
+    }
+
+    /// The serial of the client certificate the next call presents.
+    pub fn serial(&self) -> String {
+        self.cfg.read().1.clone()
+    }
+
+    /// 9.3 `meetPki.signerSerial`: the client certificate serial last used in a successful call and when it first
+    /// succeeded (seconds); None before any.
+    pub fn last_ok(&self) -> Option<(String, i64)> {
+        self.ok_serial.lock().clone()
+    }
+
+    /// 9.3 `meetPki.signerCrlEnforced` and `signerHeld` from the last status: whether the server says it refuses
+    /// revoked relay certificates (`crl_enforced`, false when absent), and the list it holds `{number, thisUpdate}`
+    /// (`thisUpdate` in ms; null without one).
+    pub fn held(&self) -> (bool, serde_json::Value) {
+        use serde_json::{json, Value};
+        let Some(status) = self.snapshot() else { return (false, Value::Null) };
+        let enforced = status.get("crl_enforced").and_then(Value::as_bool).unwrap_or(false);
+        let held = match status.get("held_crl").and_then(Value::as_object) {
+            Some(h) => {
+                let number = match h.get("number") {
+                    Some(Value::String(n)) if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) => Value::from(n.clone()),
+                    Some(Value::Number(n)) if n.is_u64() => Value::from(n.to_string()),
+                    _ => Value::Null,
+                };
+                let this_update = h.get("this_update").and_then(Value::as_str).and_then(pj::from_iso).map(|t| Value::from((t * 1000.0) as i64)).unwrap_or(Value::Null);
+                json!({"number": number, "thisUpdate": this_update})
+            }
+            None => Value::Null,
+        };
+        (enforced, held)
+    }
+
+    /// AC-2b-D 6.5, 8.4 (R3-M3): forward a root CRL this relay adopted to the certificate server (`root_crl`);
+    /// "stored" and "unchanged" both count as taken.
+    pub fn forward_root_crl(&self, der: &[u8]) -> Result<(), String> {
+        match self.call("root_crl", &crate::meet_json::obj([("crl_der_b64", serde_json::Value::from(pj::b64(der)))])) {
+            Ok(_) => Ok(()),
+            Err(SignerErr::Down(m)) => Err(m),
+            Err(SignerErr::Refused(e)) => Err(e.message()),
+        }
     }
 
     fn down(&self, error: &str) {
@@ -575,7 +944,8 @@ impl SignerClient {
             }
         };
         let payload = pj::dumps(&serde_json::Value::Object(body.clone()));
-        let res = https_request(&self.cfg, &self.host, self.port, SIGNER_TIMEOUT, "POST", &format!("/v1/{op}"), &[("Content-Type", "application/json".to_string())], Some(payload.as_bytes()), &check);
+        let (cfg, serial) = self.cfg.read().clone();
+        let res = https_request(&cfg, &self.host, self.port, SIGNER_TIMEOUT, "POST", &format!("/v1/{op}"), &[("Content-Type", "application/json".to_string())], Some(payload.as_bytes()), &check);
         let resp = match res {
             Ok(r) => r,
             Err(Err(class)) => {
@@ -591,6 +961,10 @@ impl SignerClient {
         let raw = if resp.body.is_empty() { b"{}".to_vec() } else { resp.body };
         let data = serde_json::from_slice::<serde_json::Value>(&raw).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
         if resp.status == 200 {
+            let mut ok = self.ok_serial.lock();
+            if !serial.is_empty() && ok.as_ref().is_none_or(|(s, _)| *s != serial) {
+                *ok = Some((serial, pj::now() as i64));
+            }
             return Ok(data);
         }
         let error = {
@@ -650,5 +1024,362 @@ impl SignerClient {
             }
         }
         self.refresh().map(|s| pj::truthy(s.get("healthy"))).unwrap_or(false)
+    }
+}
+
+/// Test certificates and lists written by hand in DER (P-256, ecdsa-with-SHA256), as the Admin Console writes them.
+#[cfg(test)]
+pub(crate) mod testpki {
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_ASN1_SIGNING};
+
+    const ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+
+    pub fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        let n = body.len();
+        if n < 0x80 {
+            out.push(n as u8);
+        } else if n < 0x100 {
+            out.extend([0x81, n as u8]);
+        } else {
+            out.extend([0x82, (n >> 8) as u8, n as u8]);
+        }
+        out.extend_from_slice(body);
+        out
+    }
+
+    pub fn pem(label: &str, der: &[u8]) -> String {
+        let b = crate::meet_json::b64(der);
+        let lines: Vec<String> = b.as_bytes().chunks(64).map(|c| String::from_utf8_lossy(c).into_owned()).collect();
+        format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", lines.join("\n"))
+    }
+
+    fn int(b: &[u8]) -> Vec<u8> {
+        let mut v = b.to_vec();
+        if v.first().is_some_and(|x| x & 0x80 != 0) {
+            v.insert(0, 0);
+        }
+        tlv(0x02, &v)
+    }
+
+    /// UTCTime of a time in seconds.
+    pub fn time(secs: i64) -> Vec<u8> {
+        let (y, m, d) = crate::meet_json::civil(secs.div_euclid(86_400));
+        let t = secs.rem_euclid(86_400);
+        tlv(0x17, format!("{:02}{m:02}{d:02}{:02}{:02}{:02}Z", y % 100, t / 3600, t / 60 % 60, t % 60).as_bytes())
+    }
+
+    fn name(cn: &str) -> Vec<u8> {
+        tlv(0x30, &tlv(0x31, &tlv(0x30, &[tlv(0x06, &[0x55, 0x04, 0x03]), tlv(0x0c, cn.as_bytes())].concat())))
+    }
+
+    fn ext(oid: &[u8], critical: bool, value: &[u8]) -> Vec<u8> {
+        let mut body = tlv(0x06, oid);
+        if critical {
+            body.extend(tlv(0x01, &[0xff]));
+        }
+        body.extend(tlv(0x04, value));
+        tlv(0x30, &body)
+    }
+
+    fn alg() -> Vec<u8> {
+        tlv(0x30, &tlv(0x06, ECDSA_SHA256))
+    }
+
+    pub struct Key {
+        pair: EcdsaKeyPair,
+        pub pkcs8: Vec<u8>,
+        pub spki: Vec<u8>,
+    }
+
+    impl Key {
+        pub fn new() -> Key {
+            let rng = SystemRandom::new();
+            let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap().as_ref().to_vec();
+            let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &pkcs8).unwrap();
+            let spki = crate::der::p256_spki_der(&crate::der::P256Key::from_sec1(pair.public_key().as_ref()).unwrap());
+            Key { pair, pkcs8, spki }
+        }
+
+        fn signed(&self, tbs: Vec<u8>) -> Vec<u8> {
+            let sig = self.pair.sign(&SystemRandom::new(), &tbs).unwrap();
+            tlv(0x30, &[tbs, alg(), tlv(0x03, &[&[0u8][..], sig.as_ref()].concat())].concat())
+        }
+
+        pub fn key_pem(&self) -> String {
+            pem("PRIVATE KEY", &self.pkcs8)
+        }
+
+        fn id(&self) -> Vec<u8> {
+            crate::codec::sha256(&self.spki)[..20].to_vec()
+        }
+    }
+
+    /// A self-signed organization CA (CA true, keyCertSign and cRLSign, subject key identifier).
+    pub struct Ca {
+        pub key: Key,
+        pub cn: String,
+        pub der: Vec<u8>,
+    }
+
+    impl Ca {
+        pub fn new(cn: &str) -> Ca {
+            let key = Key::new();
+            let now = crate::meet_json::now() as i64;
+            let exts = [
+                ext(&[0x55, 0x1d, 0x13], true, &tlv(0x30, &tlv(0x01, &[0xff]))),
+                ext(&[0x55, 0x1d, 0x0f], true, &tlv(0x03, &[0x01, 0x06])),
+                ext(&[0x55, 0x1d, 0x0e], false, &tlv(0x04, &key.id())),
+            ]
+            .concat();
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(&[1]), alg(), name(cn), tlv(0x30, &[time(now - 86_400), time(now + 365 * 86_400)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts))].concat());
+            let der = key.signed(tbs);
+            Ca { key, cn: cn.to_string(), der }
+        }
+
+        pub fn pem(&self) -> String {
+            pem("CERTIFICATE", &self.der)
+        }
+
+        /// A leaf for `key`: `cn`, an optional email and the SAN URIs given; clientAuth when `client`, else serverAuth
+        /// with `cn` as its DNS name.
+        pub fn leaf(&self, serial: &[u8], cn: &str, email: Option<&str>, uris: &[&str], key: &Key, client: bool) -> Vec<u8> {
+            let now = crate::meet_json::now() as i64;
+            let mut san: Vec<u8> = Vec::new();
+            if let Some(e) = email {
+                san.extend(tlv(0x81, e.as_bytes()));
+            }
+            for u in uris {
+                san.extend(tlv(0x86, u.as_bytes()));
+            }
+            if !client {
+                san.extend(tlv(0x82, cn.as_bytes()));
+            }
+            let eku: &[u8] = if client { &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02] } else { &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01] };
+            let mut exts = vec![
+                ext(&[0x55, 0x1d, 0x13], true, &tlv(0x30, &[])),
+                ext(&[0x55, 0x1d, 0x0f], true, &tlv(0x03, &[0x07, 0x80])),
+                ext(&[0x55, 0x1d, 0x25], false, &tlv(0x30, &tlv(0x06, eku))),
+                ext(&[0x55, 0x1d, 0x23], false, &tlv(0x30, &tlv(0x80, &self.key.id()))),
+            ];
+            if !san.is_empty() {
+                exts.push(ext(&[0x55, 0x1d, 0x11], false, &tlv(0x30, &san)));
+            }
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(serial), alg(), name(&self.cn), tlv(0x30, &[time(now - 3600), time(now + 90 * 86_400)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts.concat()))].concat());
+            self.key.signed(tbs)
+        }
+
+        /// A v2 CRL with the serials revoked, optionally a CRL number, and always an authority key identifier.
+        pub fn crl(&self, this_update: i64, next_update: i64, serials: &[&[u8]], number: Option<&[u8]>) -> Vec<u8> {
+            let revoked: Vec<u8> = serials.iter().map(|s| tlv(0x30, &[int(s), time(this_update)].concat())).collect::<Vec<_>>().concat();
+            let mut exts = vec![ext(&[0x55, 0x1d, 0x23], false, &tlv(0x30, &tlv(0x80, &self.key.id())))];
+            if let Some(n) = number {
+                exts.push(ext(&[0x55, 0x1d, 0x14], false, &int(n)));
+            }
+            let mut parts = vec![int(&[1]), alg(), name(&self.cn), time(this_update), time(next_update)];
+            if !revoked.is_empty() {
+                parts.push(tlv(0x30, &revoked));
+            }
+            parts.push(tlv(0xa0, &tlv(0x30, &exts.concat())));
+            self.key.signed(tlv(0x30, &parts.concat()))
+        }
+
+        pub fn crl_pem(&self, this_update: i64, next_update: i64, serials: &[&[u8]], number: Option<&[u8]>) -> String {
+            pem("X509 CRL", &self.crl(this_update, next_update, serials, number))
+        }
+    }
+
+    /// A fresh folder under the temporary folder.
+    pub fn dir(name: &str) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("lucid-deploy-{name}-{}-{}-{n}", std::process::id(), crate::codec::now_ms()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testpki::{dir, pem, Ca, Key};
+    use super::*;
+
+    const DAY: i64 = 86_400;
+
+    fn now() -> i64 {
+        pj::now() as i64
+    }
+
+    /// AC-2b-D 8.5 (H5) and 16.1 d-relay: the console's list, with a CRL number and an authority key identifier, is
+    /// read by meet_tls (its number too), checked by the relay's verifier, and parsed by rustls (webpki) as well.
+    #[test]
+    fn ac2b_console_crl_with_number_and_aki_is_accepted() {
+        let ca = Ca::new("Lucid Meet CA");
+        let device = Key::new();
+        let leaf = ca.leaf(&[0x51, 0x0f], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &device, true);
+        let t = now();
+        let listed = ca.crl(t - 300, t + 120 * DAY, &[&[0x51, 0x0f]], Some(&[0x01, 0x00]));
+        let clean = ca.crl(t - 300, t + 120 * DAY, &[], Some(&[0x01, 0x01]));
+        let crl = Crl::from_der(&listed).unwrap();
+        assert_eq!((crl_number(&crl), number_text(&crl_number(&crl).unwrap())), (Some(vec![0x01, 0x00]), "256".to_string()));
+        let root = Cert::from_der(&ca.der).unwrap();
+        assert!(crl.signature_valid(&root.spki));
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(ca.der.clone())).unwrap();
+        let provider = Arc::new(crate::server::provider());
+        let roots = Arc::new(roots);
+        // rustls (webpki) parses both lists
+        let crls = vec![rustls::pki_types::CertificateRevocationListDer::from(listed.clone()), rustls::pki_types::CertificateRevocationListDer::from(clean.clone())];
+        assert!(WebPkiClientVerifier::builder_with_provider(roots.clone(), provider.clone()).with_crls(crls).build().is_ok());
+        // the relay's verifier: listed is revoked, the clean list passes
+        let inner = WebPkiClientVerifier::builder_with_provider(roots, provider).build().unwrap();
+        let verifier = |der: &[u8]| MeetVerifier { inner: inner.clone(), roots: vec![root.clone()], crls: vec![Crl::from_der(der).unwrap()], chain: false };
+        assert_eq!(verifier(&listed).revocation(&leaf, &[], t), Err(CertificateError::Revoked));
+        assert_eq!(verifier(&clean).revocation(&leaf, &[], t), Ok(()));
+        // a list whose thisUpdate has not passed does not count yet (check_one's zero tolerance)
+        let ahead = ca.crl(t + 30, t + 120 * DAY, &[], Some(&[0x02]));
+        assert_eq!(verifier(&ahead).revocation(&leaf, &[], t), Err(CertificateError::UnknownRevocationStatus));
+    }
+
+    #[test]
+    fn ac2b_crl_order_and_time() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        let read = |der: Vec<u8>| Crl::from_der(&der).unwrap();
+        let (a, b) = (read(ca.crl(t - 10, t + DAY, &[], Some(&[5]))), read(ca.crl(t - 10, t + DAY, &[], Some(&[6]))));
+        assert!(crl_later(&b, &a) && !crl_later(&a, &b), "the same thisUpdate: the higher number wins");
+        let later = read(ca.crl(t - 5, t + DAY, &[], Some(&[1])));
+        assert!(crl_later(&later, &b), "a later thisUpdate wins over a higher number");
+        let bare = read(ca.crl(t - 10, t + DAY, &[], None));
+        assert!(!crl_later(&bare, &a) && !crl_later(&a, &bare), "without a number on both, the same thisUpdate orders neither");
+        assert_eq!(crl_number(&bare), None);
+        assert_eq!(number_text(&[0x00]), "0");
+        assert_eq!(number_text(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]), "18446744073709551616");
+        let at = |d: i64| crl_time(&read(ca.crl(t + d, t + DAY, &[], Some(&[1]))), t);
+        assert_eq!((at(0), at(-1), at(1), at(300), at(301)), (CrlTime::Current, CrlTime::Current, CrlTime::Pending, CrlTime::Pending, CrlTime::Future));
+    }
+
+    /// R3-M1, R2-H1, D9: current lists go in force, lists at most 5 minutes ahead wait as pending while the previous
+    /// list stays in force, lists further ahead are refused, and the timer adopts a pending list when it is current.
+    #[test]
+    fn ac2b_root_crl_adoption_rules() {
+        let ca = Ca::new("Lucid Meet CA");
+        let d = dir("adopt");
+        let ca_file = d.join("ca.crt");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let console_now = now();
+        let place = |pem: &str, relay_now: i64| place_root_crl(&d, &ca_file, pem.as_bytes(), relay_now * 1000);
+        // the console dates its list now - 5 minutes
+        let first = ca.crl_pem(console_now - 300, console_now + 120 * DAY, &[], Some(&[1]));
+        assert_eq!(place(&first, console_now), Ok(Placed::Current));
+        let bundle = std::fs::read(d.join("crl.pem")).unwrap();
+        assert!(String::from_utf8_lossy(&bundle).contains("BEGIN X509 CRL"));
+        // a relay 30 s behind: a list dated the console's now - 5 minutes is current there too
+        let second = ca.crl_pem(console_now - 299, console_now + 120 * DAY, &[&[7]], Some(&[2]));
+        assert_eq!(place(&second, console_now - 30), Ok(Placed::Current));
+        // a relay 7 minutes behind: the next list is 2 minutes ahead on its clock and waits; the previous list stays
+        let relay_now = console_now - 420;
+        let third = ca.crl_pem(console_now - 298, console_now + 120 * DAY, &[&[7], &[8]], Some(&[3]));
+        let before = std::fs::read(d.join("crl.pem")).unwrap();
+        assert_eq!(place(&third, relay_now), Ok(Placed::Pending));
+        assert_eq!(std::fs::read(d.join("crl.pem")).unwrap(), before, "the previous list stays in force");
+        assert!(d.join(ROOT_CRL_PENDING).exists());
+        assert_eq!(pending_crl_due(&d), Some(console_now - 298));
+        assert!(adopt_pending_crl(&d, &ca_file, relay_now).is_none(), "not before its thisUpdate");
+        let (adopted, _) = adopt_pending_crl(&d, &ca_file, console_now - 298).unwrap();
+        assert_eq!(adopted.serials.len(), 2);
+        assert!(!d.join(ROOT_CRL_PENDING).exists());
+        assert_ne!(std::fs::read(d.join("crl.pem")).unwrap(), before);
+        // older lists, other signers, expired lists and lists more than 5 minutes ahead are refused
+        assert_eq!(place(&second, console_now).unwrap_err(), "older");
+        let other = Ca::new("Lucid Meet CA");
+        assert_eq!(place(&other.crl_pem(console_now, console_now + DAY, &[], Some(&[9])), console_now).unwrap_err(), "signature");
+        assert_eq!(place(&ca.crl_pem(console_now - 2 * DAY, console_now - DAY, &[], Some(&[9])), console_now).unwrap_err(), "expired");
+        assert_eq!(place(&ca.crl_pem(console_now + 360, console_now + DAY, &[], Some(&[9])), console_now).unwrap_err(), "future");
+        assert_eq!(place("not a list", console_now).unwrap_err(), "unreadable");
+        // the very list in place changes nothing
+        assert!(place_root_crl_changed(&d, &ca_file, adopted_pem(&d).as_bytes(), console_now).is_ok_and(|(p, changed)| p == Placed::Current && !changed));
+    }
+
+    fn adopted_pem(d: &Path) -> String {
+        String::from_utf8(std::fs::read(d.join(ROOT_CRL)).unwrap()).unwrap()
+    }
+
+    /// R2-H1: a list in place that is not current (it came another way) never blocks a current list with a higher CRL
+    /// number, or any current list when it has none.
+    #[test]
+    fn ac2b_a_list_in_place_that_is_not_current_is_replaced() {
+        let ca = Ca::new("Lucid Meet CA");
+        let d = dir("ahead");
+        let ca_file = d.join("ca.crt");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let t = now();
+        std::fs::write(d.join(ROOT_CRL), ca.crl_pem(t + 3600, t + 120 * DAY, &[], Some(&[10]))).unwrap();
+        let place = |pem: String| place_root_crl(&d, &ca_file, pem.as_bytes(), t * 1000);
+        assert_eq!(place(ca.crl_pem(t - 300, t + 120 * DAY, &[], Some(&[9]))).unwrap_err(), "older");
+        assert_eq!(place(ca.crl_pem(t - 300, t + 120 * DAY, &[], Some(&[11]))), Ok(Placed::Current));
+        std::fs::write(d.join(ROOT_CRL), ca.crl_pem(t + 3600, t + 120 * DAY, &[], None)).unwrap();
+        assert_eq!(place(ca.crl_pem(t - 300, t + 120 * DAY, &[], None)), Ok(Placed::Current));
+    }
+
+    /// 9.3 `meetCrl`: the source, the list in force and the pending one.
+    #[test]
+    fn ac2b_meet_crl_report() {
+        let ca = Ca::new("Lucid Meet CA");
+        let d = dir("report");
+        let ca_file = d.join("ca.crt");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let mut s = Settings { state_dir: d.to_string_lossy().into_owned(), client_ca: ca_file.to_string_lossy().into_owned(), ..Settings::default() };
+        assert_eq!(meet_crl_report(&s)["source"], "none");
+        let t = now();
+        let der = ca.crl(t - 300, t + 120 * DAY, &[], Some(&[0x2a]));
+        place_root_crl(&d, &ca_file, pem("X509 CRL", &der).as_bytes(), t * 1000).unwrap();
+        place_root_crl(&d, &ca_file, ca.crl_pem(t + 60, t + 120 * DAY, &[], Some(&[0x2b])).as_bytes(), t * 1000).unwrap();
+        let r = meet_crl_report(&s);
+        let id = crate::license::meet_root_id(&Cert::from_der(&ca.der).unwrap().spki);
+        assert_eq!((r["source"].as_str(), r["number"].as_str(), r["issuer"].as_str()), (Some("bundle"), Some("42"), Some(id.as_str())));
+        assert_eq!(r["thisUpdate"], (t - 300) * 1000);
+        assert_eq!(r["sha256"], crate::codec::sha256_hex(&der));
+        assert_eq!(r["pending"]["number"], "43");
+        assert_eq!(meet_root_ids(&ca_file), vec![id]);
+        s.crl = d.join(ROOT_CRL).to_string_lossy().into_owned();
+        assert_eq!((meet_crl_report(&s)["source"].as_str(), meet_crl_report(&s)["pending"].is_null()), (Some("fixed"), true));
+    }
+
+    /// R2-M4: a renewal rebuilds the certificate server client from `pki/current` without a restart; the next call
+    /// presents the new pair.
+    #[test]
+    fn ac2b_signer_client_reloads_the_renewed_pair() {
+        let ca = Ca::new("Lucid Meet CA");
+        let d = dir("signer");
+        let (cert, key, ca_file) = (d.join("signer-client.crt"), d.join("signer-client.key"), d.join("ca.crt"));
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let write = |serial: &[u8]| {
+            let k = Key::new();
+            std::fs::write(&cert, pem("CERTIFICATE", &ca.leaf(serial, "Lucid Meet Relay", None, &["urn:lucid-meet:relay"], &k, true))).unwrap();
+            std::fs::write(&key, k.key_pem()).unwrap();
+        };
+        write(&[0x11]);
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+        let client = SignerClient::new("https://127.0.0.1:1", &path(&cert), &path(&key), &path(&ca_file)).unwrap();
+        assert_eq!(client.serial(), "11");
+        assert_eq!(client.last_ok(), None);
+        write(&[0x22]);
+        assert_eq!(client.serial(), "11", "nothing changes until the switch");
+        client.reload().unwrap();
+        assert_eq!(client.serial(), "22");
+        // a pair that does not load keeps the one in use
+        std::fs::write(&key, "nope").unwrap();
+        assert!(client.reload().is_err());
+        assert_eq!(client.serial(), "22");
+        assert_eq!(client.held(), (false, serde_json::Value::Null));
+        // 9.3 `meetPki.signerHeld` and `signerCrlEnforced` from the server's status (R5-L2, R3-M3)
+        let status = serde_json::json!({"healthy": true, "crl_enforced": true, "held_crl": {"number": "77", "this_update": "2026-11-19T10:00:00+00:00", "next_update": null, "expired": false, "revoked": 3}});
+        client.state.lock().status = status.as_object().cloned();
+        let at = (pj::from_iso("2026-11-19T10:00:00+00:00").unwrap() * 1000.0) as i64;
+        assert_eq!(client.held(), (true, serde_json::json!({"number": "77", "thisUpdate": at})));
+        client.state.lock().status = serde_json::json!({"healthy": true}).as_object().cloned();
+        assert_eq!(client.held(), (false, serde_json::Value::Null));
     }
 }

@@ -450,6 +450,184 @@ pub fn high_start_checks(state_dir: Option<&Path>, high: bool, with_console: boo
     }
 }
 
+// ── AC-2b-D 6.4: the profile lock, then the apply before the listeners (both products) ──────────────────────
+
+/// 2.4, 6.4: the root-owned lock a High install writes (one line `high`; only `uninstall --purge` removes it).
+pub const MEET_PROFILE_LOCK: &str = "/etc/lucid-meet/profile.lock";
+pub const SPOKES_PROFILE_LOCK: &str = "/etc/lucid-relay/profile.lock";
+/// 6.4: the exit status the units' `RestartPreventExitStatus=78` (Docker: the entrypoint wrapper) stops on.
+pub const EXIT_CONFIG: i32 = 78;
+/// 2.4, 6.4 (R4-L5): the relay's own record `{at, configured}` of its last refusal under `profile.lock` (0600; never
+/// in `fleet-local.json`); deleted when the attention item is dismissed.
+pub const PROFILE_LOCK_REFUSED_FILE: &str = "profile-lock-refused.json";
+/// A start refused before any port opens: the words for stderr and the exit status.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StartRefused {
+    pub status: i32,
+    pub words: String,
+}
+
+impl StartRefused {
+    /// Refused for its configuration (6.4): exit 78, so the unit does not restart it.
+    pub fn config(words: impl Into<String>) -> StartRefused {
+        StartRefused { status: EXIT_CONFIG, words: words.into() }
+    }
+
+    pub fn exit(self) -> ! {
+        eprintln!("{}", self.words);
+        std::process::exit(self.status)
+    }
+}
+
+/// 6.4 (R3-M2): whether `profile.lock` is present. Only "not found" is absent: anything at the path, followed or not,
+/// whoever owns it, whatever it holds and whoever may write it, counts as present (a lock that is not a root-owned
+/// regular file writable by no one else holding `high` still locks).
+pub fn profile_lock_present(lock: &Path) -> bool {
+    match std::fs::symlink_metadata(lock) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// 6.4 (R3-M2, D15), first at every start: while `profile.lock` is present the relay runs only as High. `configured`
+/// is `console_profile` (Meeting Hub) or `--console-profile` (Remote Spokes), None when missing. Anything but `high`
+/// is refused: `fleet.profile-locked` `{configured: "standard" or "missing"}` in the relay's own audit chain and its
+/// security log (error), the refusal in `<state>/profile-lock-refused.json`, and `cli.profile-locked` with exit 78.
+/// Ok(true) when the lock is present and the configuration says high: the relay's console then treats `government`
+/// as true (`console_settings::set_profile_locked`, before any console opens). `t` in ms.
+pub fn profile_lock_start(lock: &Path, configured: Option<&str>, state_dir: Option<&Path>, logger: &Logger, t: i64) -> Result<bool, StartRefused> {
+    if !profile_lock_present(lock) {
+        return Ok(false);
+    }
+    let configured = match configured.map(str::trim).filter(|c| !c.is_empty()) {
+        Some("high") => {
+            crate::console_settings::set_profile_locked(true);
+            return Ok(true);
+        }
+        Some("standard") => "standard",
+        _ => "missing",
+    };
+    logger.security("fleet.profile-locked", &Fields::new().with("configured", configured), crate::log::Level::Error);
+    if let Some(dir) = state_dir {
+        let (mut audit, _) = crate::console_audit::Audit::open(dir, t);
+        let mut r = crate::console_audit::Record::new("relay", "fleet.profile-locked", "refused");
+        r.detail = json!({ "configured": configured });
+        if let Err(e) = audit.append(t, &r) {
+            logger.ops("audit.append-failed", &Fields::new().with("why", e), crate::log::Level::Error);
+        }
+        let record = json!({ "at": t, "configured": configured }).to_string();
+        if let Err(e) = crate::store::write_private(&dir.join(PROFILE_LOCK_REFUSED_FILE), record.as_bytes()) {
+            logger.ops("fleet.profile-locked", &Fields::new().with("why", e.to_string()), crate::log::Level::Error);
+        }
+    }
+    Err(StartRefused::config(crate::fleet_wire::cli_words("cli.profile-locked").replace("<lock path>", &lock.display().to_string()).replace("<configured>", configured)))
+}
+
+/// 6.4: the attention item `profile-lock-refused` (`{date (ms), configured}`), raised at every start that passes after
+/// a refusal until a relay admin or the operator dismisses it; None without a refusal on record.
+pub fn profile_lock_attention(state_dir: &Path) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(state_dir.join(PROFILE_LOCK_REFUSED_FILE)).ok()?).ok()?;
+    let at = v.get("at").and_then(serde_json::Value::as_i64)?;
+    let configured = v.get("configured").and_then(serde_json::Value::as_str).filter(|c| matches!(*c, "standard" | "missing"))?;
+    Some(json!({ "kind": "profile-lock-refused", "severity": "bad", "args": { "date": at, "configured": configured }, "go": "#/overview" }))
+}
+
+/// 6.4: dismissing `profile-lock-refused` deletes the record; false when there was none.
+pub fn dismiss_profile_lock_refused(state_dir: &Path) -> bool {
+    std::fs::remove_file(state_dir.join(PROFILE_LOCK_REFUSED_FILE)).is_ok()
+}
+
+/// `fleet.lock` taken by the start before the apply (6.4), handed to `fleet_open` for the process's life.
+static START_LOCK: std::sync::Mutex<Option<(PathBuf, FleetLock)>> = std::sync::Mutex::new(None);
+
+/// 6.4: take `fleet.lock` in `dir` now and keep it for `fleet_open`; already held for `dir` is fine.
+pub fn hold_fleet_lock(dir: &Path) -> Result<(), String> {
+    let mut held = START_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if held.as_ref().is_some_and(|(d, _)| d == dir) {
+        return Ok(());
+    }
+    *held = Some((dir.to_path_buf(), fleet_lock(dir)?));
+    Ok(())
+}
+
+/// The lock `hold_fleet_lock` took for `dir`, else a new one.
+fn take_fleet_lock(dir: &Path) -> Result<FleetLock, String> {
+    let taken = {
+        let mut held = START_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match held.take() {
+            Some((d, lock)) if d == dir => Some(lock),
+            other => {
+                *held = other;
+                None
+            }
+        }
+    };
+    match taken {
+        Some(lock) => Ok(lock),
+        None => fleet_lock(dir),
+    }
+}
+
+/// What the start applies before its listeners (6.4).
+pub struct BeforeListeners<'a> {
+    pub product: crate::license::Product,
+    pub state_dir: &'a Path,
+    pub logger: Arc<Logger>,
+    pub proxy: Option<String>,
+    pub local: crate::fleet_agent::LocalDeploy,
+}
+
+/// 6.4: `fleet.lock` (kept for `fleet_open`), then a waiting handoff applied before the relay reads its TLS files,
+/// `client_ca`, CRL, `--root` or license, under its own identity (AC-2a decision 5). The apply re-checks the local
+/// rules and has 60 s; a failed apply is logged by it (`fleet.enroll-failed`) and the start goes on. A headless
+/// console carries the apply and is closed before the relay opens its own. True when a handoff was applied.
+pub fn apply_before_listeners(b: BeforeListeners) -> Result<bool, String> {
+    hold_fleet_lock(b.state_dir)?;
+    if !crate::fleet_agent::has_handoff(b.state_dir) {
+        return Ok(false);
+    }
+    let console = crate::console::open_headless(b.product, b.state_dir, b.logger.clone())?;
+    let applied = crate::fleet_agent::apply_before_listeners(&console, b.product, b.state_dir, &b.logger, b.proxy.as_deref(), &b.local);
+    drop(console);
+    Ok(applied.unwrap_or(false))
+}
+
+/// What Remote Spokes gives `spokes_start` (main.rs, from its flags and environment as given).
+pub struct SpokesStart<'a> {
+    /// `--state` or LUCID_RELAY_STATE.
+    pub state_dir: Option<&'a Path>,
+    /// `--console-profile` or LUCID_RELAY_CONSOLE_PROFILE.
+    pub profile: Option<&'a str>,
+    /// `--root` or LUCID_RELAY_ROOT_PUB: a file or the PEM itself.
+    pub root: Option<&'a str>,
+    /// `--license` or LUCID_RELAY_LICENSE: a file or the armored text.
+    pub license: Option<&'a str>,
+    pub logger: Arc<Logger>,
+    /// SPOKES_PROFILE_LOCK (tests give another path).
+    pub lock_path: &'a Path,
+}
+
+/// 6.4 for Remote Spokes, before main.rs reads `--root`, the TLS files or the license: the profile lock first; then
+/// `fleet.lock` and a waiting handoff applied; then a `--root` that names a file must exist (else exit 78,
+/// `cli.deploy-no-root`). Ok(true) when the host holds `profile.lock` (the relay is High whatever else says).
+pub fn spokes_start(s: SpokesStart) -> Result<bool, StartRefused> {
+    let locked = profile_lock_start(s.lock_path, s.profile, s.state_dir, &s.logger, now_ms())?;
+    let high = locked || s.profile.map(str::trim) == Some("high");
+    let armored = |v: &str| v.trim_start().starts_with("-----BEGIN");
+    let root_path = s.root.filter(|r| !r.trim().is_empty() && !armored(*r)).map(PathBuf::from);
+    if let Some(dir) = s.state_dir {
+        let license_path = s.license.filter(|l| !l.trim().is_empty() && !armored(*l)).map(PathBuf::from).unwrap_or_else(|| dir.join(crate::relay::DEFAULT_LICENSE_FILE));
+        let license_in_force = s.license.is_some_and(armored) || std::fs::metadata(&license_path).is_ok_and(|m| m.len() > 0);
+        let local = crate::fleet_agent::LocalDeploy { high, fleet_pki: false, client_ca: None, root_path: root_path.clone(), license_path: Some(license_path), license_in_force, admins: Vec::new() };
+        let proxy = std::env::var("LUCID_RELAY_FLEET_PROXY").ok().filter(|p| !p.is_empty());
+        apply_before_listeners(BeforeListeners { product: crate::license::Product::Spokes, state_dir: dir, logger: s.logger.clone(), proxy, local }).map_err(|words| StartRefused { status: 1, words })?;
+    }
+    if root_path.as_ref().is_some_and(|p| !p.exists()) {
+        return Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-root")));
+    }
+    Ok(locked)
+}
+
 /// What `fleet_start` needs (main.rs, Remote Spokes).
 pub struct FleetStart {
     pub state_dir: Option<PathBuf>,
@@ -487,7 +665,8 @@ pub struct FleetOpened {
 }
 
 pub fn fleet_open(o: FleetOpen) -> Result<FleetOpened, String> {
-    let lock = fleet_lock(o.state_dir)?;
+    // 6.4: the lock the start took before its apply, else a new one
+    let lock = take_fleet_lock(o.state_dir)?;
     let link = crate::fleet_agent::read_link(o.state_dir, &o.logger);
     let handoff = crate::fleet_agent::has_handoff(o.state_dir);
     if link.is_none() && !handoff && o.console.is_none() {
@@ -637,6 +816,44 @@ mod tests {
         assert!(!attached.load(std::sync::atomic::Ordering::SeqCst));
         let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, vec![FLEET_LOCK.to_string()]);
+    }
+
+    /// AC-2b-D 6.4 (16.1 d-relay), Remote Spokes: the profile lock first (a standard or missing profile exits 78 and
+    /// is recorded), then the apply under `fleet.lock`, then a `--root` file that does not exist exits 78.
+    #[test]
+    fn ac2b_spokes_start_order_and_exit_78() {
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let d = fleet_dir("spokes-start");
+        let absent = d.join("absent.lock");
+        let root = d.join("root.pub");
+        let root_text = root.to_string_lossy().into_owned();
+        let start = |state: Option<&Path>, profile: Option<&str>, root: Option<&str>, lock: &Path| spokes_start(SpokesStart { state_dir: state, profile, root, license: None, logger: logger.clone(), lock_path: lock });
+        assert_eq!(start(None, None, Some(&root_text), &absent), Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-root"))));
+        assert_eq!(start(None, None, Some("-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----\n"), &absent), Ok(false));
+        std::fs::write(&root, "root").unwrap();
+        assert_eq!(start(Some(&d), Some("standard"), Some(&root_text), &absent), Ok(false));
+        assert!(d.join(FLEET_LOCK).exists(), "fleet.lock is taken before the apply");
+        let lock = d.join("profile.lock");
+        std::fs::write(&lock, "high\n").unwrap();
+        let refused = start(Some(&d), None, Some(&root_text), &lock).unwrap_err();
+        assert_eq!(refused.status, EXIT_CONFIG);
+        assert!(refused.words.contains("says missing") && refused.words.contains(&lock.display().to_string()));
+        assert_eq!(profile_lock_attention(&d).unwrap()["args"]["configured"], "missing");
+        assert!(dismiss_profile_lock_refused(&d) && profile_lock_attention(&d).is_none());
+    }
+
+    /// AC-2b-D 6.4: the lock the start took is the one `fleet_open` keeps; without one it takes its own.
+    #[test]
+    fn ac2b_fleet_open_takes_the_start_lock() {
+        let d = fleet_dir("start-lock");
+        hold_fleet_lock(&d).unwrap();
+        assert!(hold_fleet_lock(&d).is_ok(), "held already for this folder");
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let attach = |_: &Arc<Console>| {};
+        let opened = fleet_open(FleetOpen { product: crate::license::Product::Spokes, state_dir: &d, console: None, logger, proxy: None, attach: &attach }).unwrap();
+        assert_eq!(fleet_lock(&d).err().as_deref(), Some(CLI_FLEET_RUNNING));
+        drop(opened);
+        assert!(fleet_lock(&d).is_ok());
     }
 
     /// AC-2a 2.2: under High a relay never runs the console role in process.

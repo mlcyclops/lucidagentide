@@ -296,7 +296,6 @@ pub fn hash_of(v: Option<&Value>) -> Option<[u8; 32]> {
 }
 
 /// Bytes from hex (either case), or None.
-#[cfg(test)]
 pub fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
@@ -334,6 +333,16 @@ pub const REFUSALS: &[(&str, u16, &str)] = &[
     ("relay-offline", 503, "<relay> is not connected right now."),
     ("relay-timeout", 504, "<relay> did not answer in time."),
     ("relay-busy", 429, "<relay> is busy. Try again in a moment."),
+    // AC-2b-D 13.3: the download routes (4), the Meeting Hub certificate requests (6.5, 8.4) and 8.7.
+    ("deploy-host", 400, "Enter a DNS name of letters, digits, dots and dashes, or an IP address where allowed."),
+    ("deploy-clients", 400, "Enter networks as addresses with a prefix, such as 203.0.113.0/24."),
+    ("deploy-high", 403, "Under the High profile this console does not hand out the relay program. Install it from your verified release media."),
+    ("deploy-unavailable", 404, "This console cannot hand out the Linux relay program."),
+    ("deploy-rate", 429, "Too many downloads from this address. Try again in <minutes> minutes."),
+    ("deploy-busy", 503, "The console is sending the relay program to other hosts. Try again in a minute."),
+    ("deploy-csr", 400, "The relay's certificate request is not for <names>."),
+    ("meet-cert-wait", 429, "This relay renewed its certificate less than a day ago."),
+    ("fleet-ca-held", 409, "This console holds the organization CA this High relay trusts, so the relay cannot join it."),
 ];
 
 /// Port answers outside 13.3 (the AC-1 envelope's generic codes).
@@ -406,6 +415,39 @@ pub const CLI_WORDS: &[(&str, &str)] = &[
     ("cli.connect-certificate-refused", "The console refused this relay's certificate. It may have been removed from the console, or its certificate ended."),
     ("cli.connect-upgrade-refused", "The console answered but did not open the channel."),
     ("cli.connect-closed", "The connection closed before the channel opened."),
+    // AC-2b-D 13.4.
+    ("cli.deploy-preview", "Relay DNS name: <host>\nTURN: <turnHost>\nRelay admins: <admins>\nProfile on this host: <profile>\nCertificate: <certificate source>\nOrganization root: <id> (<root source>)\nLicense: <license line>"),
+    ("cli.deploy-source-console-ca", "from the organization CA held by this console"),
+    ("cli.deploy-source-placed", "placed on this host"),
+    ("cli.deploy-source-delivered", "delivered by this console"),
+    ("cli.deploy-license-line", "<org>, <edition>, <users> users, ends <date>"),
+    ("cli.deploy-license-none", "none: the relay starts stopped until a license is installed"),
+    ("cli.deploy-ask-admins", "Relay admins: their email addresses, separated by commas: "),
+    ("cli.deploy-admins-needed", "Without a terminal, give the relay admins with --admins."),
+    ("cli.deploy-ask-fingerprints", "Admin key fingerprints, one per line, as each admin read them from Your account, Key fingerprints for relays (an empty line ends; none is fine): "),
+    ("cli.deploy-offered-key", "The console offers the key of <email> (<hint>), who made this code, as this relay's first admin key. This console's installer put this relay's program here for this code, so trusting its key adds nothing it could not already do.\nFingerprint: <fingerprint>\nType yes to trust it (anything else skips it): "),
+    ("cli.deploy-not-offered", "The console offered an admin key, but this relay does not take it (no installer mark from this console for this code, it is High, it already has state, or that admin is not in this relay's admins). Use fingerprints or endorse from the IDE plugin or the Hub app."),
+    ("cli.deploy-ask-host", "This relay's DNS name: "),
+    ("cli.deploy-ask-turn-host", "TURN name or address (Enter for the DNS name): "),
+    ("cli.deploy-ask-clients", "Networks that may reach this relay (addresses with a prefix, separated by commas): "),
+    ("cli.deploy-host-differs", "The console's code says <field> is <console value>, but this host says <host value>. Nothing was saved."),
+    ("cli.deploy-root-id", "Organization root: <id>. Check it against your own records."),
+    ("cli.deploy-root-differs", "The console names root <id>, but the root placed on this host is <placed id>. Nothing was saved."),
+    ("cli.deploy-anchor", "This relay does not take an organization root from the console (High, or its program did not come from the console). Place it with --root or --pki-dir. Nothing was saved."),
+    ("cli.deploy-profile", "This relay is Standard and that console is High. A High console takes only High relays."),
+    ("cli.deploy-profile-changed", "This host was installed with the <profile> profile. Uninstall with --purge to change it."),
+    ("cli.deploy-pki", "The code says the certificate comes from <source>, but this host was set up for <other>."),
+    ("cli.deploy-high-preview", "This High relay was offered a certificate, root or admin key by the console. A High relay takes none of these from the console. Nothing was saved."),
+    ("cli.deploy-next", "Saved. The installer now starts the relay; it joins the console and prints its fingerprint."),
+    ("cli.deploy-fingerprint", "Relay fingerprint: <fingerprint>\nIn the Admin Console, check that it shows the same fingerprint, then press Confirm relay."),
+    ("cli.deploy-not-deploy", "This code was made for a relay that is already installed. Run the command without --deploy."),
+    ("cli.deploy-needs-deploy", "This code was made for a new install. Run the install command from the Admin Console, or ask for a code for an already installed relay."),
+    ("cli.deploy-env", "This code was made for <env>, not <this env>."),
+    ("cli.deploy-pki-high", "Under the High profile a relay does not take its certificate from the Admin Console. Set fleet_pki to false and place the certificate files."),
+    ("cli.deploy-no-cert", "This relay has no certificate yet. Run the install command again with a new code, or place its certificate files."),
+    ("cli.deploy-no-root", "This relay has no organization root yet. Run the install command again with --root <file>."),
+    ("cli.deploy-marker-other", "This installer was fetched for a different code (<marker enrollment>), so it does not count as installed by the console for this one. Run the command shown with this code."),
+    ("cli.profile-locked", "This host is locked to the High profile (<lock path>), but the relay's configuration says <configured>. Set the profile to high; the relay does not start otherwise."),
 ];
 
 pub fn cli_words(id: &str) -> &'static str {
@@ -459,35 +501,41 @@ pub enum Kind {
     Evt,
 }
 
-/// One op: its kind, which side receives it (None: either), and the exact keys of its body.
+/// One op: its kind, which side receives it (None: either), the exact keys of its body, and the keys it may carry
+/// besides them (AC-2b-D 9.3: the Meeting Hub fields of `hello` and `state`, `welcome.meetCaId`).
 pub struct OpSpec {
     pub op: &'static str,
     pub kind: Kind,
     pub to: Option<Side>,
     pub keys: &'static [&'static str],
+    pub opt: &'static [&'static str],
 }
 
 const MANIFEST_KEYS: &[&str] = &["v", "consoleId", "caGeneration", "seq", "issuedAt", "expiresAt", "leaves", "revoked", "nextCa", "sig"];
 
 pub const OPS: &[OpSpec] = &[
-    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"] },
-    OpSpec { op: "welcome", kind: Kind::Evt, to: Some(Side::Relay), keys: &["consoleId", "time", "policySeq", "rosterSeq", "trustSeq"] },
-    OpSpec { op: "trust", kind: Kind::Evt, to: Some(Side::Relay), keys: MANIFEST_KEYS },
-    OpSpec { op: "ca-distrust", kind: Kind::Evt, to: Some(Side::Relay), keys: &["generation", "sig"] },
-    OpSpec { op: "nonce", kind: Kind::Req, to: Some(Side::Relay), keys: &["n"] },
-    OpSpec { op: "call", kind: Kind::Req, to: Some(Side::Relay), keys: &["method", "path", "query", "body", "caller", "auth"] },
-    OpSpec { op: "people", kind: Kind::Req, to: Some(Side::Relay), keys: &["action", "subject", "params", "auth"] },
-    OpSpec { op: "roster", kind: Kind::Req, to: Some(Side::Relay), keys: &["seq", "prev", "change", "endorsements"] },
-    OpSpec { op: "roster-cancel", kind: Kind::Req, to: Some(Side::Relay), keys: &["hint", "auth"] },
-    OpSpec { op: "policy", kind: Kind::Req, to: Some(Side::Relay), keys: &["seq", "prev", "policy", "endorsements"] },
-    OpSpec { op: "scopes", kind: Kind::Req, to: Some(Side::Relay), keys: &["scopes", "request"] },
-    OpSpec { op: "renew", kind: Kind::Req, to: Some(Side::Console), keys: &["spki", "sigOld", "sigNew"] },
-    OpSpec { op: "bye", kind: Kind::Evt, to: None, keys: &["reason"] },
-    OpSpec { op: "metrics", kind: Kind::Evt, to: Some(Side::Console), keys: &["v", "seq", "ts", "interval", "m"] },
-    OpSpec { op: "attention", kind: Kind::Evt, to: Some(Side::Console), keys: &["items"] },
-    OpSpec { op: "audit", kind: Kind::Evt, to: Some(Side::Console), keys: &["entries"] },
-    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"] },
-    OpSpec { op: "confirm-done", kind: Kind::Evt, to: Some(Side::Console), keys: &["id", "result", "answer"] },
+    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"], opt: &["meetRoots", "meetCrl", "meetPki"] },
+    OpSpec { op: "welcome", kind: Kind::Evt, to: Some(Side::Relay), keys: &["consoleId", "time", "policySeq", "rosterSeq", "trustSeq"], opt: &["meetCaId"] },
+    OpSpec { op: "trust", kind: Kind::Evt, to: Some(Side::Relay), keys: MANIFEST_KEYS, opt: &[] },
+    OpSpec { op: "ca-distrust", kind: Kind::Evt, to: Some(Side::Relay), keys: &["generation", "sig"], opt: &[] },
+    OpSpec { op: "nonce", kind: Kind::Req, to: Some(Side::Relay), keys: &["n"], opt: &[] },
+    OpSpec { op: "call", kind: Kind::Req, to: Some(Side::Relay), keys: &["method", "path", "query", "body", "caller", "auth"], opt: &[] },
+    OpSpec { op: "people", kind: Kind::Req, to: Some(Side::Relay), keys: &["action", "subject", "params", "auth"], opt: &[] },
+    OpSpec { op: "roster", kind: Kind::Req, to: Some(Side::Relay), keys: &["seq", "prev", "change", "endorsements"], opt: &[] },
+    OpSpec { op: "roster-cancel", kind: Kind::Req, to: Some(Side::Relay), keys: &["hint", "auth"], opt: &[] },
+    OpSpec { op: "policy", kind: Kind::Req, to: Some(Side::Relay), keys: &["seq", "prev", "policy", "endorsements"], opt: &[] },
+    OpSpec { op: "scopes", kind: Kind::Req, to: Some(Side::Relay), keys: &["scopes", "request"], opt: &[] },
+    OpSpec { op: "renew", kind: Kind::Req, to: Some(Side::Console), keys: &["spki", "sigOld", "sigNew"], opt: &[] },
+    OpSpec { op: "bye", kind: Kind::Evt, to: None, keys: &["reason"], opt: &[] },
+    OpSpec { op: "metrics", kind: Kind::Evt, to: Some(Side::Console), keys: &["v", "seq", "ts", "interval", "m"], opt: &[] },
+    OpSpec { op: "attention", kind: Kind::Evt, to: Some(Side::Console), keys: &["items"], opt: &[] },
+    OpSpec { op: "audit", kind: Kind::Evt, to: Some(Side::Console), keys: &["entries"], opt: &[] },
+    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"], opt: &["meetCrl", "meetPki"] },
+    OpSpec { op: "confirm-done", kind: Kind::Evt, to: Some(Side::Console), keys: &["id", "result", "answer"], opt: &[] },
+    // AC-2b-D 9.3: Meeting Hub relay certificates and the organization CA's revocation list.
+    OpSpec { op: "meet-cert", kind: Kind::Req, to: Some(Side::Console), keys: &["csr", "signerCsr"], opt: &[] },
+    OpSpec { op: "meet-crl", kind: Kind::Evt, to: Some(Side::Relay), keys: &["crl"], opt: &[] },
+    OpSpec { op: "meet-crl-get", kind: Kind::Req, to: Some(Side::Relay), keys: &[], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
@@ -517,6 +565,11 @@ fn frame_id(v: Option<&Value>) -> Option<u32> {
 
 fn exact(o: &Map<String, Value>, keys: &[&str]) -> bool {
     o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k))
+}
+
+/// Every key of `keys`, and nothing besides them and `opt`.
+fn exact_opt(o: &Map<String, Value>, keys: &[&str], opt: &[&str]) -> bool {
+    keys.iter().all(|k| o.contains_key(*k)) && o.keys().all(|k| keys.contains(&k.as_str()) || opt.contains(&k.as_str()))
 }
 
 /// The closed value sets of the event bodies 5.6 spells out: `bye.reason` and `confirm-done.result` (revision 3.2:
@@ -559,7 +612,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
                 return bad(id, "op");
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(id, "body") };
-            if !exact(body, spec.keys) {
+            if !exact_opt(body, spec.keys, spec.opt) {
                 return bad(id, "body");
             }
             Ok(Frame::Req { id: id.unwrap_or_default(), op: spec.op, body: body.clone() })
@@ -573,7 +626,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
                 return bad(None, "op");
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(None, "body") };
-            if !exact(body, spec.keys) || !event_values_ok(spec.op, body) {
+            if !exact_opt(body, spec.keys, spec.opt) || !event_values_ok(spec.op, body) {
                 return bad(None, "body");
             }
             Ok(Frame::Evt { op: spec.op, body: body.clone() })
@@ -1138,6 +1191,36 @@ mod tests {
         for (id, words) in CLI_WORDS {
             assert_eq!(v["cli"][*id].as_str(), Some(*words), "{id}");
         }
+    }
+
+    /// AC-2b-D 9.3: the three new ops, their directions and keys, and the optional Meeting Hub fields.
+    #[test]
+    fn the_deploy_frames_of_9_3() {
+        let hello = json!({"relayId": "r_0123456789abcdef", "version": "1", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": [], "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": {}, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1, "pins": [], "certNotAfter": 0});
+        // Remote Spokes: without the Meeting Hub fields; Meeting Hub: with them
+        assert!(parse_frame(&evt_text("hello", hello.clone()), Side::Console).is_ok());
+        let mut meet = hello.clone();
+        meet["meetRoots"] = json!(["m_0123456789abcdef0123456789abcdef"]);
+        meet["meetCrl"] = json!({"source": "none", "thisUpdate": null, "number": null, "issuer": null, "sha256": null, "pending": null});
+        meet["meetPki"] = Value::Null;
+        assert!(parse_frame(&evt_text("hello", meet.clone()), Side::Console).is_ok());
+        meet["meetSomething"] = json!(1);
+        assert_eq!(parse_frame(&evt_text("hello", meet), Side::Console).err().unwrap().why, "body");
+        let welcome = json!({"consoleId": "c_0123456789abcdef", "time": 1, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1, "meetCaId": null});
+        assert!(parse_frame(&evt_text("welcome", welcome), Side::Relay).is_ok());
+        // meet-cert goes to the console only, with exactly csr and signerCsr
+        let req = req_text(5, "meet-cert", json!({"csr": "AA", "signerCsr": null}));
+        assert!(matches!(parse_frame(&req, Side::Console), Ok(Frame::Req { id: 5, op: "meet-cert", .. })));
+        assert_eq!(parse_frame(&req, Side::Relay).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(6, "meet-cert", json!({"csr": "AA"})), Side::Console).err().unwrap().why, "body");
+        // meet-crl (event) and meet-crl-get (request) go to the relay only
+        let crl = evt_text("meet-crl", json!({"crl": "-----BEGIN X509 CRL-----"}));
+        assert!(matches!(parse_frame(&crl, Side::Relay), Ok(Frame::Evt { op: "meet-crl", .. })));
+        assert_eq!(parse_frame(&crl, Side::Console).err().unwrap().why, "op");
+        assert!(matches!(parse_frame(&req_text(7, "meet-crl-get", json!({})), Side::Relay), Ok(Frame::Req { id: 7, op: "meet-crl-get", .. })));
+        assert_eq!(parse_frame(&req_text(8, "meet-crl-get", json!({"x": 1})), Side::Relay).err().unwrap().why, "body");
+        // a CRL of 320 KiB fits a frame to the relay (AC-1 3.5)
+        assert!(parse_frame(&evt_text("meet-crl", json!({"crl": "a".repeat(320 * 1024)})), Side::Relay).is_ok());
     }
 
     #[test]

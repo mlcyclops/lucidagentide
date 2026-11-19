@@ -1167,6 +1167,12 @@
     "The High security profile does not allow this."
    ]
   },
+  "profile-government": {
+   "status": 409,
+   "words": [
+    "This console was set up as a government deployment. Its profile stays High."
+   ]
+  },
   "waiting": {
    "status": 403,
    "words": [

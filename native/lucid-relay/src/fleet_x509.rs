@@ -10,6 +10,15 @@
 // extensions in the order basicConstraints, keyUsage, extendedKeyUsage, subjectAltName, subjectKeyIdentifier,
 // authorityKeyIdentifier, each present only where 3.2 names it; basicConstraints and keyUsage critical. The subject
 // key identifier is the first 20 bytes of SHA-256 of the subjectPublicKey BIT STRING contents (RFC 7093 method 1).
+//
+// AC-2b-D 6.5, 8.4, 8.5 (vector `admin_console_meet_ca_v1.json`): the Meeting Hub organization CA's objects, signed
+// ecdsa-with-SHA256 by its P-256 key. A relay server certificate (`CN=<first name>`, SAN exactly the names recorded
+// at mint, serverAuth) and a relay signer client certificate (`CN=Lucid Meet Relay, O=Lucid`, SAN URI
+// `urn:lucid-meet:relay`, clientAuth), both with basicConstraints CA false and keyUsage digitalSignature (critical),
+// then extendedKeyUsage, subjectAltName, subjectKeyIdentifier and authorityKeyIdentifier (the CA's own key
+// identifier). The relay's PKCS#10 request (subject CN only, SAN in the extension request). The v2 CRL of
+// `meet_pki.build_crl` (issuer, thisUpdate, nextUpdate, revoked entries with their dates, no entry extensions) plus
+// authorityKeyIdentifier and cRLNumber, in that order; the revoked list is left out when empty.
 
 use crate::codec::{hex, sha256};
 use crate::der::tlv;
@@ -205,6 +214,15 @@ impl Key {
     pub fn from_pkcs8(curve: Curve, pkcs8: &[u8]) -> Result<Key, String> {
         let pair = EcdsaKeyPair::from_pkcs8(curve.signing(), pkcs8).map_err(|_| "a sealed key does not read".to_owned())?;
         Ok(Key { pair, pkcs8: Redacted::new(pkcs8.to_vec()), curve })
+    }
+
+    /// A key from unencrypted PKCS#8 or SEC1 `ECPrivateKey` DER (an imported CA key, AC-2b-D 8.2), kept as PKCS#8
+    /// for sealing.
+    pub fn from_private_der(curve: Curve, der: &[u8]) -> Result<Key, String> {
+        let bad = || "the key does not read".to_owned();
+        let pair = EcdsaKeyPair::from_private_key_der(curve.signing(), der).map_err(|_| bad())?;
+        let pkcs8 = pair.to_pkcs8v1().map_err(|_| bad())?;
+        Key::from_pkcs8(curve, pkcs8.as_ref())
     }
 
     /// The PKCS#8 bytes, for the sealed store only.
@@ -559,6 +577,435 @@ pub fn serial_of_bytes(raw: &[u8]) -> String {
     int_hex(raw)
 }
 
+// ── The Meeting Hub organization CA (AC-2b-D 6.5, 8.4, 8.5) ───────────────────────────────────────────────────
+
+const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+const OID_EXT_REQ: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x0e];
+const OID_CRL_NUMBER: &[u8] = &[0x55, 0x1d, 0x14];
+/// The SAN URI of a relay signer client certificate (`meet_pki.RELAY_URI`).
+pub const MEET_RELAY_URI: &str = "urn:lucid-meet:relay";
+/// A relay signer client certificate's common name (`meet_pki.issue_relay_client`).
+pub const MEET_RELAY_CN: &str = "Lucid Meet Relay";
+const MEET_RELAY_O: &str = "Lucid";
+
+fn alg_ecdsa_sha256() -> Vec<u8> {
+    seq(&[oid(OID_ECDSA_SHA256)])
+}
+
+/// A certificate, revocation list or request around its signed part and its ecdsa-with-SHA256 signature.
+pub fn signed_p256(body: &[u8], signature: &[u8]) -> Vec<u8> {
+    seq(&[body.to_vec(), alg_ecdsa_sha256(), bit_string(signature, 0)])
+}
+
+/// The signed part (with its tag and length), the signature algorithm OID and the signature of a signed object.
+fn signed_parts(der_bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let outer = tlv(der_bytes)?;
+    let body = tlv(outer.value)?;
+    let body_raw = &outer.value[..outer.value.len() - body.rest.len()];
+    let alg = tlv(body.rest)?;
+    let sig = tlv(alg.rest)?;
+    let alg_oid = tlv(alg.value)?;
+    let (&unused, signature) = sig.value.split_first()?;
+    (outer.tag == 0x30 && alg_oid.tag == 0x06 && sig.tag == 0x03 && unused == 0 && sig.rest.is_empty()).then_some((body_raw, alg_oid.value, signature))
+}
+
+/// The magnitude of a big-endian unsigned number: its bytes without leading zeros.
+fn magnitude(b: &[u8]) -> &[u8] {
+    &b[b.iter().position(|x| *x != 0).unwrap_or(b.len())..]
+}
+
+/// A name recorded at mint as an IP address (brackets allowed around IPv6), or None for a DNS name.
+pub fn name_ip(n: &str) -> Option<std::net::IpAddr> {
+    n.strip_prefix('[').and_then(|s| s.strip_suffix(']')).unwrap_or(n).parse().ok()
+}
+
+fn ip_octets(ip: &std::net::IpAddr) -> Vec<u8> {
+    match ip {
+        std::net::IpAddr::V4(a) => a.octets().to_vec(),
+        std::net::IpAddr::V6(a) => a.octets().to_vec(),
+    }
+}
+
+/// One SAN GeneralName for a name recorded at mint: iPAddress for an IP literal, dNSName otherwise.
+pub fn san_name(n: &str) -> Vec<u8> {
+    match name_ip(n) {
+        Some(ip) => der(0x87, &ip_octets(&ip)),
+        None => der(0x82, n.as_bytes()),
+    }
+}
+
+/// Whether two names are the same relay name: IP addresses by value, DNS names ignoring case and a final dot.
+pub fn same_name(a: &str, b: &str) -> bool {
+    match (name_ip(a), name_ip(b)) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => {
+            let (x, y) = (a.trim_end_matches('.'), b.trim_end_matches('.'));
+            !x.is_empty() && x.eq_ignore_ascii_case(y)
+        }
+        _ => false,
+    }
+}
+
+/// The names of a subjectAltName: DNS names and IP addresses as text in their order, URIs, and how many others.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct San {
+    pub names: Vec<String>,
+    pub uris: Vec<String>,
+    pub other: usize,
+}
+
+fn read_san(value: &[u8]) -> Option<San> {
+    let s = tlv(value)?;
+    if s.tag != 0x30 {
+        return None;
+    }
+    let mut out = San::default();
+    for (tag, v) in children(s.value)? {
+        match tag {
+            0x82 => out.names.push(std::str::from_utf8(v).ok()?.to_owned()),
+            0x87 => out.names.push(match v.len() {
+                4 => std::net::IpAddr::from(<[u8; 4]>::try_from(v).ok()?).to_string(),
+                16 => std::net::IpAddr::from(<[u8; 16]>::try_from(v).ok()?).to_string(),
+                _ => return None,
+            }),
+            0x86 => out.uris.push(std::str::from_utf8(v).ok()?.to_owned()),
+            _ => out.other += 1,
+        }
+    }
+    Some(out)
+}
+
+/// A certificate's extensions as (OID, critical, extnValue contents).
+fn cert_exts(cert_der: &[u8]) -> Option<Vec<(&[u8], bool, &[u8])>> {
+    let outer = tlv(cert_der)?;
+    let tbs = tlv(outer.value)?;
+    let mut out = Vec::new();
+    for (tag, value) in children(tbs.value)? {
+        if tag != 0xa3 {
+            continue;
+        }
+        let exts = tlv(value)?;
+        for (_, ext) in children(exts.value)? {
+            let fields = children(ext)?;
+            let critical = fields.len() == 3 && fields[1].0 == 0x01 && fields[1].1.first() == Some(&0xff);
+            out.push((fields.first()?.1, critical, fields.last()?.1));
+        }
+    }
+    Some(out)
+}
+
+/// The subjectAltName of a certificate DER (empty without one), or None when it does not read.
+pub fn cert_san(cert_der: &[u8]) -> Option<San> {
+    match cert_exts(cert_der)?.into_iter().find(|(o, _, _)| *o == OID_SAN) {
+        Some((_, _, v)) => read_san(v),
+        None => Some(San::default()),
+    }
+}
+
+/// The key identifier a CA's subjects name as their authority: its subjectKeyIdentifier, else RFC 7093 method 1.
+pub fn authority_key_id(ca: &Cert) -> Option<Vec<u8>> {
+    ca.ski.clone().or_else(|| key_id(&ca.spki))
+}
+
+/// Which Meeting Hub relay certificate (AC-2b-D 8.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MeetProfile {
+    /// The relay's TLS server certificate: `CN=<first name>`, SAN exactly `names` (DNS names and IP addresses, in
+    /// the order recorded at mint), serverAuth.
+    Server { names: Vec<String> },
+    /// The relay's client certificate for its certificate server: `CN=Lucid Meet Relay, O=Lucid`, SAN URI
+    /// `urn:lucid-meet:relay`, clientAuth.
+    SignerClient,
+}
+
+/// What a Meeting Hub relay certificate is written from.
+pub struct MeetSpec<'a> {
+    pub profile: &'a MeetProfile,
+    pub serial: &'a [u8],
+    pub not_before_ms: i64,
+    pub not_after_ms: i64,
+    /// The relay's SubjectPublicKeyInfo DER: the only thing taken from its request (L9).
+    pub spki: &'a [u8],
+    /// The organization CA's certificate DER.
+    pub ca_der: &'a [u8],
+}
+
+/// The TBSCertificate of a Meeting Hub relay certificate (the bytes the organization CA signs).
+pub fn meet_tbs(spec: &MeetSpec) -> Result<Vec<u8>, String> {
+    let ca = Cert::from_der(spec.ca_der).ok_or("the CA certificate does not read")?;
+    let aki = authority_key_id(&ca).ok_or("the CA key is not an EC key")?;
+    let ski = key_id(spec.spki).ok_or("the relay key is not an EC key")?;
+    let (subject, purpose, san) = match spec.profile {
+        MeetProfile::Server { names } => {
+            let cn = names.first().ok_or("a server certificate needs a name")?;
+            (name(&[(OID_CN, cn.as_str())]), OID_SERVER_AUTH, names.iter().map(|n| san_name(n)).collect::<Vec<_>>())
+        }
+        MeetProfile::SignerClient => (name(&[(OID_CN, MEET_RELAY_CN), (OID_O, MEET_RELAY_O)]), OID_CLIENT_AUTH, vec![der(0x86, MEET_RELAY_URI.as_bytes())]),
+    };
+    let exts = [
+        extension(OID_BC, true, seq(&[])),
+        extension(OID_KU, true, bit_string(&[0x80], 7)),
+        extension(OID_EKU, false, seq(&[oid(purpose)])),
+        extension(OID_SAN, false, seq(&san)),
+        extension(OID_SKI, false, der(0x04, &ski)),
+        extension(OID_AKI, false, seq(&[der(0x80, &aki)])),
+    ];
+    Ok(seq(&[
+        der(0xa0, &der(0x02, &[2])),
+        integer(spec.serial),
+        alg_ecdsa_sha256(),
+        ca.subject.clone(),
+        seq(&[time(spec.not_before_ms), time(spec.not_after_ms)]),
+        subject,
+        spec.spki.to_vec(),
+        der(0xa3, &seq(&exts)),
+    ]))
+}
+
+/// Write, sign with the organization CA's P-256 key and read back: the certificate is used only when
+/// `meet_check` accepts what was written.
+pub fn meet_issue(spec: &MeetSpec, ca_key: &Key) -> Result<Vec<u8>, String> {
+    if ca_key.curve() != Curve::P256 {
+        return Err("the Meeting Hub CA key is P-256".into());
+    }
+    if !is_p256_spki(spec.spki) {
+        return Err("the relay key is not a P-256 key".into());
+    }
+    let t = meet_tbs(spec)?;
+    let cert = signed_p256(&t, &ca_key.sign(&t)?);
+    meet_check(&cert, spec.profile, spec.ca_der, spec.not_before_ms)?;
+    Ok(cert)
+}
+
+/// Check a Meeting Hub relay certificate as written: it reads (through `meet_x509::Cert`), the CA signed it
+/// directly, it is in date at `at_ms`, CA false and digitalSignature only (both critical), and its purpose, names
+/// and URI are exactly its profile's.
+pub fn meet_check(cert_der: &[u8], profile: &MeetProfile, ca_der: &[u8], at_ms: i64) -> Result<Cert, String> {
+    let bad = |why: &str| Err(format!("the written certificate is wrong: {why}"));
+    let Some(cert) = Cert::from_der(cert_der) else { return bad("it does not read") };
+    let Some(ca) = Cert::from_der(ca_der) else { return bad("the CA does not read") };
+    let (Some(u), Some(san)) = (usage(cert_der), cert_san(cert_der)) else { return bad("its extensions do not read") };
+    if !cert.issued_directly_by_root(&ca) {
+        return bad("the CA did not sign it");
+    }
+    if !in_date(&cert, at_ms) {
+        return bad("it is not in date");
+    }
+    let ok = u.leaf_ok()
+        && san.other == 0
+        && match profile {
+            MeetProfile::Server { names } => {
+                u.server_auth_only() && san.uris.is_empty() && san.names.len() == names.len() && san.names.iter().zip(names).all(|(a, b)| same_name(a, b)) && cert.names.cns().first() == names.first()
+            }
+            MeetProfile::SignerClient => u.client_auth_only() && san.names.is_empty() && san.uris == [MEET_RELAY_URI] && cert.names.cns() == [MEET_RELAY_CN],
+        };
+    if ok {
+        Ok(cert)
+    } else {
+        bad("its usages do not match its profile")
+    }
+}
+
+/// The CertificationRequestInfo of a relay's request (6.5): subject `CN=<cn>`, the key, and an extension request
+/// holding the subjectAltName (DNS names, then IP addresses, then URIs) when there is a name.
+pub fn csr_info(spki: &[u8], cn: &str, dns: &[String], ips: &[std::net::IpAddr], uris: &[String]) -> Vec<u8> {
+    let mut names: Vec<Vec<u8>> = dns.iter().map(|d| der(0x82, d.as_bytes())).collect();
+    names.extend(ips.iter().map(|ip| der(0x87, &ip_octets(ip))));
+    names.extend(uris.iter().map(|u| der(0x86, u.as_bytes())));
+    let attrs = if names.is_empty() { Vec::new() } else { seq(&[oid(OID_EXT_REQ), der(0x31, &seq(&[extension(OID_SAN, false, seq(&names))]))]) };
+    seq(&[der(0x02, &[0]), name(&[(OID_CN, cn)]), spki.to_vec(), der(0xa0, &attrs)])
+}
+
+/// A relay's PKCS#10 request (6.5), signed ECDSA P-256 SHA-256 by the new key it asks a certificate for.
+pub fn csr(key: &Key, cn: &str, dns: &[String], ips: &[std::net::IpAddr], uris: &[String]) -> Result<Vec<u8>, String> {
+    if key.curve() != Curve::P256 {
+        return Err("a relay request key is P-256".into());
+    }
+    let info = csr_info(&key.spki(), cn, dns, ips, uris);
+    Ok(signed_p256(&info, &key.sign(&info)?))
+}
+
+/// What the console reads from a relay's request. Only `spki` ever reaches a certificate; the names are compared
+/// with the ones recorded at mint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub spki: Vec<u8>,
+    pub cns: Vec<String>,
+    pub san: San,
+}
+
+/// A request signed ecdsa-with-SHA256 by its own P-256 key, or None.
+pub fn read_request(der_bytes: &[u8]) -> Option<Request> {
+    let (info, alg, signature) = signed_parts(der_bytes)?;
+    let csr = crate::meet_x509::Csr::from_der(der_bytes)?;
+    if alg != OID_ECDSA_SHA256 || !is_p256_spki(&csr.spki) || !verify_p256(&csr.spki, info, signature) {
+        return None;
+    }
+    let parts = children(tlv(info)?.value)?;
+    let mut san = San::default();
+    if let Some((_, attrs)) = parts.get(3).filter(|(t, _)| *t == 0xa0) {
+        for (_, attr) in children(attrs)? {
+            let f = children(attr)?;
+            if f.first()?.1 != OID_EXT_REQ {
+                continue;
+            }
+            for (_, exts) in children(f.get(1)?.1)? {
+                for (_, ext) in children(exts)? {
+                    let e = children(ext)?;
+                    if e.first()?.1 == OID_SAN {
+                        san = read_san(e.last()?.1)?;
+                    }
+                }
+            }
+        }
+    }
+    Some(Request { spki: csr.spki, cns: csr.names.cns(), san })
+}
+
+/// The TBSCertList of the organization CA's revocation list (8.5). `entries` are (serial INTEGER content bytes,
+/// revocation ms) in the order given; `number` is big-endian.
+pub fn crl_tbs(ca_der: &[u8], this_update_ms: i64, next_update_ms: i64, number: &[u8], entries: &[(Vec<u8>, i64)]) -> Result<Vec<u8>, String> {
+    let ca = Cert::from_der(ca_der).ok_or("the CA certificate does not read")?;
+    let aki = authority_key_id(&ca).ok_or("the CA key is not an EC key")?;
+    let mut parts = vec![der(0x02, &[1]), alg_ecdsa_sha256(), ca.subject, time(this_update_ms), time(next_update_ms)];
+    if !entries.is_empty() {
+        parts.push(seq(&entries.iter().map(|(s, at)| seq(&[integer(s), time(*at)])).collect::<Vec<_>>()));
+    }
+    parts.push(der(0xa0, &seq(&[extension(OID_AKI, false, seq(&[der(0x80, &aki)])), extension(OID_CRL_NUMBER, false, integer(number))])));
+    Ok(seq(&parts))
+}
+
+/// Write, sign with the CA key and read back the CA's revocation list: used only when it reads back through
+/// `meet_x509::Crl` and `read_crl` with its signature, issuer, dates, entries and number.
+pub fn sign_crl(ca_der: &[u8], ca_key: &Key, this_update_ms: i64, next_update_ms: i64, number: &[u8], entries: &[(Vec<u8>, i64)]) -> Result<Vec<u8>, String> {
+    if ca_key.curve() != Curve::P256 {
+        return Err("the Meeting Hub CA key is P-256".into());
+    }
+    let ca = Cert::from_der(ca_der).ok_or("the CA certificate does not read")?;
+    if spki_point(&ca_key.spki()).map(|p| p.1.to_vec()) != spki_point(&ca.spki).map(|p| p.1.to_vec()) {
+        return Err("that key is not the CA's".into());
+    }
+    let t = crl_tbs(ca_der, this_update_ms, next_update_ms, number, entries)?;
+    let crl = signed_p256(&t, &ca_key.sign(&t)?);
+    let back = crate::meet_x509::Crl::from_der(&crl).filter(|c| c.signature_valid(&ca.spki) && c.issuer == ca.subject);
+    let ok = match (back, read_crl(&crl)) {
+        (Some(c), Some(r)) => {
+            c.this_update == this_update_ms.div_euclid(1000) && c.next_update == Some(next_update_ms.div_euclid(1000)) && r.entries.len() == entries.len() && r.number.as_deref() == Some(magnitude(number))
+        }
+        _ => false,
+    };
+    if ok {
+        Ok(crl)
+    } else {
+        Err("the written revocation list is wrong".into())
+    }
+}
+
+/// A revocation list as the CA's merge reads it: its dates, its entries with their revocation dates, and the CRL
+/// number and authority key identifier `meet_x509::Crl` does not read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CrlRead {
+    pub issuer: Vec<u8>,
+    pub this_update_ms: i64,
+    pub next_update_ms: Option<i64>,
+    /// (serial hex as `meet_x509` prints it, revocation ms)
+    pub entries: Vec<(String, i64)>,
+    /// The cRLNumber, big-endian without leading zeros.
+    pub number: Option<Vec<u8>>,
+    pub aki: Option<Vec<u8>>,
+}
+
+/// A DER UTCTime or GeneralizedTime (`Z`, whole seconds) as ms.
+fn read_time(tag: u8, v: &[u8]) -> Option<i64> {
+    let s = std::str::from_utf8(v).ok()?.strip_suffix('Z')?;
+    let (y, rest) = match tag {
+        0x17 => {
+            let yy: i64 = s.get(0..2)?.parse().ok()?;
+            (if yy >= 50 { 1900 + yy } else { 2000 + yy }, s.get(2..)?)
+        }
+        0x18 => (s.get(0..4)?.parse().ok()?, s.get(4..)?),
+        _ => return None,
+    };
+    if rest.len() != 10 || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |a: usize| rest[a..a + 2].parse::<i64>().ok();
+    let (mo, d, h, mi, se) = (n(0)?, n(2)?, n(4)?, n(6)?, n(8)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    Some((crate::meet_json::days_from_civil(y, mo as u32, d as u32) * 86_400 + h * 3600 + mi * 60 + se) * 1000)
+}
+
+/// A revocation list DER read for merging, or None when it does not read (a negative CRL number does not read).
+pub fn read_crl(der_bytes: &[u8]) -> Option<CrlRead> {
+    let crl = crate::meet_x509::Crl::from_der(der_bytes)?;
+    let tbs = tlv(tlv(der_bytes)?.value)?;
+    let mut parts = children(tbs.value)?.into_iter().peekable();
+    if parts.peek()?.0 == 0x02 {
+        parts.next();
+    }
+    // the signature algorithm, the issuer and thisUpdate
+    for _ in 0..3 {
+        parts.next()?;
+    }
+    let (mut entries, mut number, mut aki) = (Vec::new(), None, None);
+    for (tag, v) in parts {
+        if tag == 0x30 {
+            for (_, e) in children(v)? {
+                let f = children(e)?;
+                let ((st, sv), (tt, tv)) = (f.first()?, f.get(1)?);
+                if *st != 0x02 {
+                    return None;
+                }
+                entries.push((int_hex(sv), read_time(*tt, tv)?));
+            }
+        } else if tag == 0xa0 {
+            for (_, ext) in children(tlv(v)?.value)? {
+                let f = children(ext)?;
+                let (o, val) = (f.first()?.1, f.last()?.1);
+                if o == OID_CRL_NUMBER {
+                    let i = tlv(val)?;
+                    if i.tag != 0x02 || !matches!(i.value.first(), Some(b) if b & 0x80 == 0) {
+                        return None;
+                    }
+                    number = Some(magnitude(i.value).to_vec());
+                } else if o == OID_AKI {
+                    aki = children(tlv(val)?.value)?.into_iter().find(|(t, _)| *t == 0x80).map(|(_, x)| x.to_vec());
+                }
+            }
+        }
+    }
+    Some(CrlRead { issuer: crl.issuer, this_update_ms: crl.this_update * 1000, next_update_ms: crl.next_update.map(|n| n * 1000), entries, number, aki })
+}
+
+/// A revocation list as PEM (`X509 CRL`, 64 columns).
+pub fn crl_pem(der_bytes: &[u8]) -> String {
+    let b = crate::meet_json::b64(der_bytes);
+    let mut out = String::from("-----BEGIN X509 CRL-----\n");
+    for chunk in b.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        out.push('\n');
+    }
+    out.push_str("-----END X509 CRL-----\n");
+    out
+}
+
+/// A self-signed P-256 organization CA in the shape `meet_pki.new_ca` writes (tests): `CN=<cn>, O=Acme`, CA true
+/// with `path_len` when given, keyCertSign and cRLSign, subjectKeyIdentifier.
+#[cfg(test)]
+pub(crate) fn meet_test_ca(key: &Key, cn: &str, path_len: Option<u8>, not_before_ms: i64, not_after_ms: i64) -> Vec<u8> {
+    let ski = key_id(&key.spki()).expect("an EC key");
+    let subject = name(&[(OID_CN, cn), (OID_O, "Acme")]);
+    let mut bc = vec![der(0x01, &[0xff])];
+    if let Some(p) = path_len {
+        bc.push(der(0x02, &[p]));
+    }
+    let exts = [extension(OID_BC, true, seq(&bc)), extension(OID_KU, true, bit_string(&[0x06], 1)), extension(OID_SKI, false, der(0x04, &ski))];
+    let tbs = seq(&[der(0xa0, &der(0x02, &[2])), integer(&[0x11]), alg_ecdsa_sha256(), subject.clone(), seq(&[time(not_before_ms), time(not_after_ms)]), subject, key.spki(), der(0xa3, &seq(&exts))]);
+    signed_p256(&tbs, &key.sign(&tbs).expect("a signature"))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -682,6 +1129,42 @@ pub(crate) mod tests {
         assert_eq!(format!("{k:?}"), "Key(P256, <redacted>)");
         assert!(same_fingerprint("AB cd", "abcd") && !same_fingerprint("", ""));
         assert_eq!(relay_fingerprint(&k.spki()).len(), 24);
+    }
+
+    /// AC-2b-D 6.5, 8.5: a relay request reads back with its IP addresses and only while its signature holds; a
+    /// list reads back with its number, entries (dates kept) and authority key identifier, and only the CA's key
+    /// signs for it.
+    #[test]
+    fn meet_requests_and_lists_read_back() {
+        let k = Key::generate(Curve::P256).unwrap();
+        let dns = vec!["meet.acme.example".to_owned()];
+        let ips: Vec<std::net::IpAddr> = vec!["198.51.100.7".parse().unwrap(), "2001:db8::7".parse().unwrap()];
+        let der = csr(&k, "meet.acme.example", &dns, &ips, &[]).unwrap();
+        let r = read_request(&der).unwrap();
+        assert_eq!((r.spki.clone(), r.cns.clone()), (k.spki(), vec!["meet.acme.example".to_owned()]));
+        assert_eq!(r.san.names, vec!["meet.acme.example".to_owned(), "198.51.100.7".to_owned(), "2001:db8::7".to_owned()]);
+        let mut broken = der.clone();
+        let n = broken.len();
+        broken[n - 1] ^= 1;
+        assert!(read_request(&broken).is_none());
+        assert!(csr(&Key::generate(Curve::P384).unwrap(), "x", &[], &[], &[]).is_err());
+        assert!(same_name("[2001:db8::7]", "2001:DB8:0::7") && same_name("Meet.Acme.Example.", "meet.acme.example"));
+        assert!(!same_name("198.51.100.7", "meet.acme.example") && !same_name("", ""));
+        assert_eq!(san_name("[2001:db8::7]")[..2], [0x87, 16]);
+
+        let ca_key = Key::generate(Curve::P256).unwrap();
+        let t = 1_800_000_000_000;
+        let ca = meet_test_ca(&ca_key, "Acme Meeting Hub CA", Some(0), t - DAY_MS, t + 400 * DAY_MS);
+        let crl = sign_crl(&ca, &ca_key, t, t + 120 * DAY_MS, &[0x01, 0x00], &[(vec![0x4a, 0x01], t - 1000), (vec![0x00, 0x80, 0x01], t - 2000)]).unwrap();
+        let back = read_crl(&crl).unwrap();
+        assert_eq!(back.number, Some(vec![0x01, 0x00]));
+        assert_eq!(back.entries, vec![("4a01".to_owned(), t - 1000), ("8001".to_owned(), t - 2000)]);
+        assert_eq!(back.aki, Cert::from_der(&ca).unwrap().ski);
+        assert_eq!((back.this_update_ms, back.next_update_ms), (t, Some(t + 120 * DAY_MS)));
+        assert!(crate::meet_x509::Crl::from_pem(crl_pem(&crl).as_bytes()).unwrap().signature_valid(&Cert::from_der(&ca).unwrap().spki));
+        let empty = sign_crl(&ca, &ca_key, t, t + DAY_MS, &[1], &[]).unwrap();
+        assert!(read_crl(&empty).unwrap().entries.is_empty());
+        assert!(sign_crl(&ca, &Key::generate(Curve::P256).unwrap(), t, t + DAY_MS, &[1], &[]).is_err());
     }
 
     #[test]

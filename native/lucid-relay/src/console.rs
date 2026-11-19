@@ -468,6 +468,35 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
         "password-wrong" => (403, "Your current password is not right. Nothing was changed."),
         "totp-wrong" => (403, "That code did not work. Use the newest code from your authenticator app."),
         "profile-high" => (409, "The High security profile does not allow this."),
+        "profile-government" => (409, crate::console_settings::PROFILE_GOVERNMENT),
+        // AC-2b-D 13.3
+        "deploy-product" => (400, "Choose Meeting Hub or Remote Spokes."),
+        "deploy-env" => (400, "Choose where the relay runs."),
+        "deploy-host" => (400, "Enter a DNS name of letters, digits, dots and dashes, or an IP address where allowed."),
+        "deploy-host-taken" => (409, "<relay> already holds a certificate for <host>. Use Replace <relay>."),
+        "deploy-clients" => (400, "Enter networks as addresses with a prefix, such as 203.0.113.0/24."),
+        "deploy-high" => (403, "Under the High profile this console does not hand out the relay program. Install it from your verified release media."),
+        "deploy-unavailable" => (404, "This console cannot hand out the Linux relay program."),
+        "deploy-rate" => (429, "Too many downloads from this address. Try again in <minutes> minutes."),
+        "deploy-busy" => (503, "The console is sending the relay program to other hosts. Try again in a minute."),
+        "deploy-ca-needed" => (409, "Import the Meeting Hub organization CA first, or bring the relay's certificate yourself."),
+        "deploy-license-product" => (409, "That license is for <product>."),
+        "deploy-license-root" => (409, "That license is for root <root>, not <id>."),
+        "deploy-csr" => (400, "The relay's certificate request is not for <names>."),
+        "meet-cert-wait" => (429, "This relay renewed its certificate less than a day ago."),
+        "fleet-ca-held" => (409, "This console holds the organization CA this High relay trusts, so the relay cannot join it."),
+        "meet-ca-high" => (409, "Under the High profile the organization CA stays on its own signer. This console does not hold it."),
+        "meet-ca-high-relay" => (409, "A High Meeting Hub relay trusts this CA, may trust it (it has not reported which CAs it trusts), or is still joining, so this console cannot hold it."),
+        "meet-ca-confirm" => (400, "Confirm that no High Meeting Hub relay anywhere trusts this CA."),
+        "meet-ca-seal" => (409, "Holding the organization CA needs a sealing provider bound to this host (systemd credential or Windows service account). Run lucid-relay console seal-setup --role console."),
+        "meet-ca-exists" => (409, "This console already holds an organization CA. Remove it first."),
+        "meet-ca-key" => (400, "That key does not belong to that CA certificate, or it is not a P-256 CA valid for 120 more days."),
+        "meet-ca-signer" => (400, "Enter the certificate server as https:// and its host name."),
+        "meet-ca-in-use" => (409, "<n> relays still use certificates from this CA. Confirm that you will sign its revocation lists elsewhere."),
+        "meet-ca-lost" => (503, "The CA key cannot be opened. Import it again."),
+        "meet-ca-prune" => (409, "That certificate was not issued by this CA, is not on the list, or has not ended yet. A revocation stays while its certificate can still be used."),
+        "spokes-root-key" => (400, "That is not a P-256 public key. Upload root.pub, never the private key."),
+        "spokes-root-license" => (409, "No license in the library names root <id>."),
         "not-manageable" => (403, "A user manager can do this only for viewers and user managers."),
         "invite-role" => (403, "A user manager can invite viewers and user managers only."),
         "last-method" => (409, "This would leave you no way to sign in. Add another method before you remove it."),
@@ -578,7 +607,7 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
 }
 
 /// Every code of the refusal table (AC-1 8.3 and AC-2a 13.3), for codes that arrive as text (a relay's answer).
-const CODES: [&str; 117] = [
+const CODES: [&str; 145] = [
     "signin-first", "signin-refused", "signin-wait", "banner-needed", "password-length", "password-weak", "password-wrong", "totp-wrong", "profile-high", "not-manageable",
     "invite-role", "last-method", "seat-protected", "not-over", "mail-off", "mail-secret-high", "mail-failed", "mds-refused", "break-glass-needed", "seal-provider-needed",
     "bad-mailbox", "clock-disagree", "license-inactive", "no-seat", "waiting", "suspended", "anchor-revoked", "role", "stepup-needed", "stepup-expired",
@@ -590,7 +619,11 @@ const CODES: [&str; 117] = [
     "fingerprint", "fleet-scope", "fleet-scope-required", "fleet-scope-unknown", "fleet-route", "fleet-read-only", "fleet-confirm", "fleet-stepup", "fleet-counter", "fleet-roster",
     "fleet-webauthn", "fleet-second", "fleet-op", "fleet-bootstrap", "fleet-roster-duplicate", "endorse-refused", "fleet-not-bootstrapping", "recovery-refused", "trust-time-refused", "fleet-scope-needs-people",
     "relay-offline", "relay-timeout", "relay-busy", "relay-unconfirmed", "csv-invalid", "csv-limit", "csv-changed", "request-limit", "token-limit", "siem-failed",
-    "siem-ca-needed", "fips-needed", "rate-limited", "csv-email", "csv-role", "csv-relay", "scope",
+    "siem-ca-needed", "fips-needed", "rate-limited", "csv-email", "csv-role", "csv-relay", "scope", "profile-government",
+    // AC-2b-D 13.3
+    "deploy-product", "deploy-env", "deploy-host", "deploy-host-taken", "deploy-clients", "deploy-high", "deploy-unavailable", "deploy-rate", "deploy-busy", "deploy-ca-needed",
+    "deploy-license-product", "deploy-license-root", "deploy-csr", "meet-cert-wait", "fleet-ca-held", "meet-ca-high", "meet-ca-high-relay", "meet-ca-confirm", "meet-ca-seal", "meet-ca-exists",
+    "meet-ca-key", "meet-ca-signer", "meet-ca-in-use", "meet-ca-lost", "meet-ca-prune", "spokes-root-key", "spokes-root-license",
 ];
 
 /// The static code for a code that arrives as text (a relay's answer, 5.1); None for a code not in the table.
@@ -1577,7 +1610,7 @@ impl Console {
         let mut v: Vec<&'static str> = self.routes().into_iter().filter(|r| r.stepup).map(|r| r.action).collect();
         v.extend(["approvals.approve", "admins.remove", "requests.cancel", "audit.export", "license.install"]);
         if self.is_fleet() {
-            v.extend(["fleet.license.library", "account.key-record"]);
+            v.extend(["fleet.license.library", "account.key-record", "fleet.meet-ca.import"]);
         } else {
             v.extend(FLEET_LINK_ROUTES.iter().filter(|r| r.stepup).map(|r| r.action));
         }

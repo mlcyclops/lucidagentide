@@ -523,7 +523,7 @@
     "scope.config": "Configuration",
     "scope.license": "License",
     "scope.upgrade": "Upgrades (coming later)",
-    "enroll.title": "Add a relay",
+    "enroll.title": "Deploy a relay",
     "enroll.product": "Product",
     "enroll.name": "Name",
     "enroll.site": "Site or cloud region",
@@ -588,7 +588,7 @@
     "setup.gov": "Is this a government deployment?",
     "setup.gov-yes": "Yes, use the High security profile",
     "setup.gov-no": "No, use the Standard security profile",
-    "setup.gov-help": "High is for government and other regulated organizations: everyone signs in with phishing-resistant methods, and admins need approved security keys. Standard suits most companies: passkeys, Windows Hello and authenticator apps all work.",
+    "setup.gov-help": "High is for government and other regulated organizations: everyone signs in with phishing-resistant methods, and admins need approved security keys. Standard suits most companies: passkeys, Windows Hello and authenticator apps all work. This cannot be changed later.",
     "setup.gov-fixed": "This console was started with the <profile> profile by its operator.",
     "setup.first-admin": "First admin",
     "setup.email-field": "Your email",
@@ -600,7 +600,7 @@
     "setup.relay": "First relay",
     "setup.this-host": "Run a relay on this host",
     "setup.this-host-help": "Restart the relay with --with-console <folder> (Remote Spokes) or set with_console in relay.json (Meeting Hub). It joins this console at its next start.",
-    "setup.other-host": "Add a relay on another host",
+    "setup.other-host": "Deploy a relay on another host",
     "setup.step": "Step <n> of 6",
     "setup.save": "Save and continue",
     "setup.skip": "Skip for now",
@@ -675,6 +675,134 @@
     "attention.relay-license-stopped": "<relay> stopped: no active license. It serves no one until a license is installed.",
     "attention.relay-license-grace": "The license of <relay> has ended. Service stops on <date and time> unless a new license is installed.",
     "attention.relay-license-expiring": "The license of <relay> ends in <days> days.",
+    // AC-2b-D 13.1: Deploy a relay, the Meeting Hub organization CA and the Remote Spokes organization root.
+    "deploy.title": "Deploy a relay",
+    "deploy.step": "Step <n> of 4",
+    "deploy.continue": "Continue",
+    "deploy.product-h": "Which product will this relay serve?",
+    "deploy.product-meet-help": "Calls, chat and files for your people's Hub apps.",
+    "deploy.product-spokes-help": "A mailbox relay for your Remote Spokes hubs and spokes.",
+    "deploy.product-none": "Choose a product to continue.",
+    "deploy.where-h": "Where will it run?",
+    "deploy.env-linux": "Linux server or VM",
+    "deploy.env-linux-help": "Debian 12 or 13, or Ubuntu 22.04 or 24.04, with systemd. One command installs everything.",
+    "deploy.env-proxmox": "Proxmox",
+    "deploy.env-proxmox-help": "Create a Debian 13 VM from the cloud image, then run the Linux command inside it.",
+    "deploy.env-docker": "Docker",
+    "deploy.env-docker-help": "Builds a local image from this console's relay program and runs it with Docker Compose.",
+    "deploy.env-installed": "Already installed",
+    "deploy.env-installed-help": "The relay program is already on the host. Join it to this console with a code.",
+    "deploy.env-next": "Coming next",
+    "deploy.env-azure": "Azure",
+    "deploy.env-aws": "AWS",
+    "deploy.env-gcp": "Google Cloud",
+    "deploy.env-windows": "Windows Server",
+    "deploy.env-docker-high": "Not offered under the High profile: a container cannot seal the relay's key with a provider High allows.",
+    "deploy.env-os-mismatch": "This console cannot hand out the Linux relay program (<why>). Install the relay from your release media and use Already installed.",
+    "deploy.needs": "Before you start",
+    "deploy.need-os": "Debian 12 or 13, or Ubuntu 22.04 or 24.04, on <arch>",
+    "deploy.need-size-meet": "2 CPU cores, 2 GB of memory, 20 GB of disk",
+    "deploy.need-size-spokes": "1 CPU core, 1 GB of memory, 10 GB of disk",
+    "deploy.need-dns-meet": "A DNS name your people's Hub apps reach, pointing at this host (for example meet.example.org)",
+    "deploy.need-dns-spokes": "A DNS name or IP address your hubs and spokes reach",
+    "deploy.need-ports-meet": "Open to your people: TCP 443, UDP and TCP 3478, TCP 5349, UDP 49160 to 49260",
+    "deploy.need-ports-spokes": "Open to your hubs and spokes: TCP 8443",
+    "deploy.need-console": "Outbound from the host to this console's management port: <host>:<port> (TCP)",
+    "deploy.need-tls-meet": "No public TLS certificate: this console issues the relay's certificate from your organization's CA.",
+    "deploy.need-tls-meet-own": "The relay's certificate, key, CA certificate and revocation list from your organization's signer, in one folder on the host (ca.crt, relay.crt, relay.key, crl.pem)",
+    "deploy.need-tls-spokes": "No public TLS certificate: the script makes one, and your hubs pin it.",
+    "deploy.need-root-spokes": "Your organization root's public key (root.pub) on the host",
+    "deploy.need-signer": "The certificate server at <url> lets this host connect (add its address to the server's allowed relays)",
+    "deploy.need-sudo": "A user who can run sudo, and curl",
+    "deploy.need-docker": "Docker Engine with the Compose plugin on a Linux host",
+    "deploy.need-proxmox": "Proxmox VE 7.2 or later, a storage, a network bridge, and an SSH public key for the VM",
+    "deploy.details-h": "About this relay",
+    "deploy.host": "Relay DNS name",
+    "deploy.host-help": "The name people's apps use to reach this relay.",
+    "deploy.turn-host": "TURN name or address (calls through firewalls)",
+    "deploy.turn-host-help": "Leave empty to use the relay DNS name.",
+    "deploy.admins-note": "The script asks for the relay admins' emails on the host.",
+    "deploy.clients": "Networks that may reach the relay",
+    "deploy.clients-help": "Addresses with a prefix, separated by commas. 0.0.0.0/0, ::/0 means everyone.",
+    "deploy.pki": "Relay certificate",
+    "deploy.pki-console": "Issue it from the organization CA in this console",
+    "deploy.pki-own": "I bring it from our own signer",
+    "deploy.pki-ca-missing": "This console holds no Meeting Hub organization CA. Import one under License, or bring the certificate yourself.",
+    "deploy.license": "License",
+    "deploy.license-help": "The relay installs it when it joins.",
+    "deploy.license-none": "No license yet: the relay starts stopped until you install one.",
+    "deploy.make": "Make code and command",
+    "deploy.install-h": "Install",
+    "deploy.install-linux": "On the host, run this command. When it asks for the enrollment code, paste the code from above.",
+    "deploy.install-docker": "On the Docker host, run this command. When it asks for the enrollment code, paste the code from above.",
+    "deploy.install-high": "Under the High profile, install from your verified release media. Check the program's SHA-256 against your release notes, then run:",
+    "deploy.install-proxmox": "On the Proxmox host shell, create the VM:",
+    "deploy.install-proxmox-then": "Then sign in to the VM and run the Linux command:",
+    "deploy.pin-note": "The command trusts only this console's management keys, so it works without a public certificate.",
+    "deploy.binary": "Relay program <version> for <arch>, SHA-256 <sha256>",
+    "deploy.uninstall": "To remove it later:",
+    "deploy.uninstall-offline": "Or, without this console:",
+    "deploy.anchor-note": "The script asks for admin key fingerprints. Each admin reads theirs from Your account, Key fingerprints for relays, and gives them to the operator. Admins can also endorse their key from the IDE or Hub app after the relay joins.",
+    "deploy.offered-key": "The script also offers your key (<hint>) as the relay's first admin key. The operator types yes to trust it.",
+    "deploy.wait-h": "Join and confirm",
+    "deploy.wait-code": "Waiting for the script to use the code.",
+    "deploy.wait-start": "The code was used. Waiting for the relay to start and connect.",
+    "deploy.wait-connected": "<name> connected.",
+    "deploy.compare": "Compare this fingerprint with the one the script printed:",
+    "deploy.confirmed": "Confirmed. <name> is part of this console.",
+    "deploy.anchors": "Admin keys the relay trusts: <n>",
+    "deploy.anchor-none": "The relay trusts no admin key yet. Endorse your key from your IDE or Hub app.",
+    "deploy.service-on": "Serving people.",
+    "deploy.expired": "The code ended before the relay joined. Make a new one.",
+    "deploy.new-code": "Make a new code",
+    "deploy.done": "Done",
+    "meet-ca.title": "Meeting Hub organization CA",
+    "meet-ca.none": "This console holds no organization CA.",
+    "meet-ca.warn": "This console will hold your organization's Meeting Hub CA in its sealed storage. Anyone who breaks into this console could then make certificates for any person in your organization and act as them on every Meeting Hub relay that trusts this CA. Any High relay that trusts this CA loses its High protection; such relays cannot join this console.",
+    "meet-ca.high": "Under the High profile the organization CA stays on its own signer. This console does not hold it.",
+    "meet-ca.create-next": "Create a new CA (coming next, with device certificates issued here)",
+    "meet-ca.import": "Import our CA",
+    "meet-ca.import-help": "Upload ca.crt and ca.key from your CA folder, and issued.json and crl.pem so revocations are kept. From now on, only this console signs this CA's revocation lists: stop signing them on the PC and on a certificate server in root mode.",
+    "meet-ca.signer": "Certificate server address",
+    "meet-ca.signer-help": "If a certificate server signs your people's devices, enter its address (https://...). Relays then fetch its revocation list; without it they refuse those devices.",
+    "meet-ca.id": "CA id",
+    "meet-ca.ends": "Ends",
+    "meet-ca.crl": "Revocation list <number>, next by <date>",
+    "meet-ca.issued": "Relay certificates issued: <n>",
+    "meet-ca.revoke": "Revoke a certificate",
+    "meet-ca.remove": "Remove the CA from this console",
+    "meet-ca.remove-elsewhere": "I will sign this CA's revocation lists elsewhere before <date>.",
+    "meet-ca.diverged": "<relay> holds a revocation list of this CA that another signer made. Its revocations were added here. Stop the other signer.",
+    "meet-ca.lost": "The CA key cannot be opened (sealing lost). Import it again before <date>, when relays that trust it stop accepting anyone.",
+    "meet-ca.unreadable": "The CA records do not read back. Nothing is issued until they do.",
+    "spokes-root.title": "Remote Spokes organization root",
+    "spokes-root.help": "The root's public key, root.pub. Relays this console installs check it against your license before they trust it. Never upload the private key.",
+    "spokes-root.set": "Save root public key",
+    "attention.meet-ca-expiring": "The Meeting Hub organization CA ends in <days> days.",
+    "attention.meet-ca-lost": "The Meeting Hub organization CA key cannot be opened. Relays that trust it stop accepting anyone after <date>.",
+    "attention.meet-ca-unreadable": "The Meeting Hub organization CA records do not read back.",
+    "attention.meet-crl-failing": "The Meeting Hub organization CA's revocation list could not be renewed. It ends <date>.",
+    "attention.meet-crl-diverged": "Another signer is making revocation lists for the Meeting Hub organization CA (seen on <relay>).",
+    "attention.meet-crl-future": "A revocation list for the Meeting Hub organization CA is dated in the future (<date>, seen on <where>). Its revocations were added here; fix that signer's clock.",
+    "relay.fleet-ca-held": "The Admin Console at <origin> holds the CA this High relay trusts, so it takes no changes from that console. Move this relay to a CA the console does not hold.",
+    "meet-ca.confirm-no-high": "No High Meeting Hub relay anywhere, in this console or not, trusts this CA.",
+    "meet-ca.crl-number-ceiling": "That revocation list's number is too high to follow, so this console did not sign a newer one. Decide which signer stays.",
+    "deploy.remove-signer-note": "This relay can still reach the certificate server at <url> until its certificate there ends (<date>), because that server is not marked as checking revocation. Remove the host's address from the server's allowed relays now.",
+    "attention.profile-lock-refused": "<relay> refused to start on <date> because its configuration said <configured> while the host is locked to the High profile.",
+    "meet-ca.crl-not-pushed": "<relay> trusts this CA but does not take revocation lists from this console (<why>).",
+    "meet-ca.crl-fixed": "its crl setting names a fixed file",
+    "meet-ca.crl-none": "it checks no revocation list yet; turning one on would change who it accepts",
+    "attention.relay-meet-cert-expiring": "The TLS certificate of <relay> ends in <days> days and has not renewed.",
+    "attention.relay-signer-cert-expiring": "The certificate <relay> uses with the certificate server ends in <days> days and has not renewed. When it ends, people whose devices come from that server stop being accepted on <relay> within 7 days.",
+    "attention.signer-crl-mismatch": "<relay> says the certificate server at <url> does not check revocation, so relays using that server get 30-day certificates until it agrees or you turn the setting off.",
+    "attention.meet-crl-size": "The organization CA's revocation list is <size> KB, half of what relays accept. Remove entries that no longer matter on the CA page.",
+    "meet-ca.signer-enforced": "This certificate server checks revocation of relay certificates",
+    "meet-ca.signer-enforced-help": "Turn on only after the server runs a version that checks revoked relay certificates. Relays using it then get 90-day certificates, as long as every one of them confirms.",
+    "meet-ca.prune": "Remove from the list",
+    "meet-ca.prune-help": "Upload the certificate itself. It is removed only if this CA signed it and it has already ended. Entries older than <days> days leave the list on their own.",
+    "meet-ca.max-lifetime": "Longest lifetime of any certificate this CA has issued (days)",
+    "attention.signer-crl-stale": "The certificate server at <url> still holds revocation list <number>, older than this console's. Relays it refuses are not refused there yet.",
+    "deploy.docker-turn-note": "On Docker this installer writes no host firewall, so calls between two people who both need TURN do not work until you open UDP 49160 to 49260 toward this host's own address in your firewall.",
   };
 
   // ---- Fleet confirmation dialogs (AC-2a 13.2, exact; the vector's "dialogs", keyed by its kebab-case action). ----
@@ -704,6 +832,11 @@
     "ca-rollover": { title: "Start management CA <generation>?", body: "Every relay's operator must confirm its fingerprint on the relay within 90 days, or that relay stops connecting.", button: "Start" },
     "roster-cancel": { title: "Cancel <hint> on <relay>?", body: "The console may fail to deliver this. Also call the relay's operator to refuse the key on the relay.", button: "Cancel key" },
     "local-leave": { title: "Leave the Admin Console at <origin>?", body: "This relay stops sending health and stops taking changes from it. Its own console stays.", button: "Leave" },
+    // AC-2b-D 13.2.
+    "meet-ca-import": { title: "Import the CA <id> into this console?", body: "This console then holds the key that vouches for every person in your organization, and only it signs this CA's revocation lists. Any High relay that trusts this CA would lose its High protection.", button: "Import CA" },
+    "meet-ca-revoke": { title: "Revoke certificate <serial>?", body: "Relays refuse it once they get the new revocation list.", button: "Revoke" },
+    "meet-ca-remove": { title: "Remove the CA from this console?", body: "The sealed key is wiped. The last revocation list is valid until <date>; after that, relays that trust this CA refuse everyone unless another signer renews it.", button: "Remove CA" },
+    "spokes-root": { title: "Use root <id> for new Remote Spokes relays?", body: "Relays this console installs trust it only when it matches their license.", button: "Save" },
   };
   // An AC-1-shaped dialog spec (title, body lines, buttons) from a fleet dialog.
   const fspec = (k) => ({ title: FD[k].title, body: [FD[k].body], button: [FD[k].button] });
@@ -714,7 +847,7 @@
     { id: "nav.people", route: "people", pages: [] },
     { id: "nav.spokes", route: "spokes", pages: [["relays", "Relays"], ["hubs", "Hubs"], ["spokes", "Spokes"], ["seats", "Seats"], ["revocation", "Relays and revocation"], ["blocks", "Blocks"], ["logs", "Logs"]] },
     { id: "nav.meet", route: "meet", pages: [["relays", "Relays"], ["people", "People and devices"], ["seats", "Seats"], ["calls", "Calls"], ["approvals", "Waiting approvals"], ["organizations", "Organizations"], ["bridges", "Bridges"], ["holds", "Legal holds"], ["release", "Release"], ["signer", "Signer and servers"], ["push", "Push"], ["logs", "Logs"]] },
-    { id: "nav.relays", route: "relays", pages: [["list", "Relays"], ["locations", "Locations"], ["health", "Health"], ["add", "Add a relay"]] },
+    { id: "nav.relays", route: "relays", pages: [["list", "Relays"], ["locations", "Locations"], ["health", "Health"], ["add", "Deploy a relay"]] },
     { id: "nav.license", route: "license", pages: [] },
     { id: "nav.sign-in", route: "sign-in", pages: [] },
     { id: "nav.email", route: "email", pages: [] },
@@ -825,6 +958,14 @@
     pick: "Pick",
     devices: "Devices",
     profileWords: { high: "High", standard: "Standard" },
+    // AC-2b-D 3: labels the contract leaves to the page.
+    deploy: {
+      confirmRelay: "Confirm relay", installLicense: "Install a license", copyInstall: "Copy the install command", caFile: "ca.crt", keyFile: "ca.key",
+      issuedFile: "issued.json (optional)", crlFile: "crl.pem (optional)", rootFile: "root.pub", subject: "Subject", serial: "Serial", names: "Names",
+      kind: { server: "Server", "signer-client": "Certificate server client" }, revokedList: "Revocation list entries", at: "Since", savedRoot: "Saved root",
+      caState: { ok: "OK", lost: "Key cannot be opened", unreadable: "Records do not read back" }, confirms: "Confirms", disagrees: "Disagrees",
+      certPem: "The ended certificate (PEM)", dismiss: "Dismiss", saveDays: "Save", open: "Open",
+    },
   };
 
   const PAGES = {
@@ -4296,6 +4437,15 @@
     "fleet-scope-needs-people": "Logs and audit name people, so they need the People scope too.",
     "fleet-scope-required": "Health and status is always given.",
     "csv-limit": "A CSV can have at most 500 rows and 256 KiB.",
+    // AC-2b-D 13.3: checked on the page before the mint, the import and the root are posted.
+    "deploy-product": "Choose Meeting Hub or Remote Spokes.",
+    "deploy-env": "Choose where the relay runs.",
+    "deploy-host": "Enter a DNS name of letters, digits, dots and dashes, or an IP address where allowed.",
+    "deploy-clients": "Enter networks as addresses with a prefix, such as 203.0.113.0/24.",
+    "meet-ca-confirm": "Confirm that no High Meeting Hub relay anywhere trusts this CA.",
+    "meet-ca-key": "That key does not belong to that CA certificate, or it is not a P-256 CA valid for 120 more days.",
+    "meet-ca-signer": "Enter the certificate server as https:// and its host name.",
+    "spokes-root-key": "That is not a P-256 public key. Upload root.pub, never the private key.",
   };
   const NAME_RE = /^[A-Za-z0-9 .\-_()]{1,64}$/;
   const SITE_RE = /^[A-Za-z0-9 .\-_()]{0,64}$/;
@@ -4357,6 +4507,8 @@
     if (!((a === "relays" && b === "add") || (a === "setup" && b === "relay"))) S.enroll = null;
     if (a === "help") return pages.help;
     if (a === "setup") return isAdmin() ? (c) => setupPage(b || "signin", c) : pages.fleetOverview;
+    // AC-2b-D 3.7: the Meeting Hub organization CA page (admin).
+    if (a === "license" && b === "meet-ca") return isAdmin() ? pages.fleetMeetCa : pages.fleetOverview;
     const href = a === "relays" && (!b || /^r_/.test(b)) ? "#/relays" : "#/" + a + (b ? "/" + b : "");
     if (!canOpen(href)) return pages.fleetOverview;
     if (a === "people") return pages.fleetPeople;
@@ -4571,7 +4723,7 @@
     });
   }
   function addLink() {
-    return isAdmin() ? el("a", { href: "#/relays/add", class: "btn primary" }, FW["fleet.add"]) : null;
+    return isAdmin() ? el("a", { href: "#/relays/add", class: "btn primary" }, FW["enroll.title"]) : null;
   }
   pages.fleetRelays = async (c) => {
     const rows = await fleetRelays(true);
@@ -4771,34 +4923,267 @@
     return panel(FMSG.tabs.pages, el("ul", { class: "links-list" }, links.map(([h, w]) => el("li", null, el("a", { href: h }, w)))));
   }
 
-  // ---- Add a relay (3.1, 8.2): the enrollment form, then the code screen with the anchor instructions (3.9) ----
-  pages.fleetAdd = async (c) => [head(FW["enroll.title"]), ...(await enrollPanel(c))];
-  async function enrollPanel(c) {
-    if (S.enroll) return [codeScreen(S.enroll)];
+  // ---- Deploy a relay (AC-2b-D 3; AC-2a 3.1, 8.2): product, where it runs, details and the code, join and confirm ----
+  // S.enroll holds the page's state in memory only: a reload before minting starts over (3.1). After minting,
+  // #/relays/add/<enrollmentId> reopens step 4 from the server. The code leaves memory when step 4 opens (shown once).
+  const DEPLOY_ENVS = ["linux", "proxmox", "docker", "installed"];
+  const NEXT_ENVS = ["azure", "aws", "gcp", "windows"];
+  const ENROLLMENT_RE = /^en_[0-9a-f]{16}$/;
+  const LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  const IPV4_RE = /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$/;
+  const dnsOk = (s) => s.length >= 1 && s.length <= 253 && s.split(".").every((l) => LABEL_RE.test(l));
+  // An IPv6 literal, checked by the URL parser's host rules (a non-special scheme, so nothing is fetched or named).
+  function ipv6Ok(s) {
+    if (!/^[0-9a-f:.]+$/.test(s) || !s.includes(":")) return false;
+    try {
+      new URL("lucid://[" + s + "]/");
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  const addressOk = (s) => IPV4_RE.test(s) || ipv6Ok(s);
+  function cidrOk(s) {
+    const m = /^([^/]+)\/([0-9]{1,3})$/.exec(s);
+    if (!m) return false;
+    const n = Number(m[2]);
+    return IPV4_RE.test(m[1]) ? n <= 32 : ipv6Ok(m[1]) ? n <= 128 : false;
+  }
+  // <host> and <port> of deploy.need-console from the console's fleetUrl (an IPv6 literal keeps its brackets).
+  function consoleHostPort(url) {
+    try {
+      const x = new URL(String(url || ""));
+      return { host: x.hostname, port: x.port || "443" };
+    } catch (e) {
+      return { host: "", port: "" };
+    }
+  }
+  const deployHigh = (opts) => (opts && opts.profile ? opts.profile === "high" : profile() === "high");
+  // `pki: console` is offered only with a usable CA under Standard (3.4, 8.7).
+  const caUsable = (opts) => !deployHigh(opts) && !!(opts && opts.meetCa && opts.meetCa.state === "ok");
+  const redrawDeploy = () => render({ keepMessages: true });
+  // deploy.binary: <sha256> is not a placeholder name the page's filler reads, so the digest goes in as <digest>.
+  const binaryLine = (b) => fill(FW["deploy.binary"].replace("<sha256>", "<digest>"), { version: b.version || "", arch: b.arch || "", digest: b.sha256 || "" });
+
+  pages.fleetAdd = async (c) => [head(FW["deploy.title"]), ...(await deployPanel(c))];
+  async function deployPanel(c) {
+    const wizard = /^#\/setup\//.test(location.hash);
+    const reopen = !wizard && c && ENROLLMENT_RE.test(c.sub || "") ? c.sub : null;
+    if (reopen && (!S.enroll || S.enroll.id !== reopen)) S.enroll = { step: 4, id: reopen, product: null, env: null, f: {} };
+    if (!S.enroll) S.enroll = { step: 1, id: null, product: null, env: null, f: {} };
+    const st = S.enroll;
+    if (st.step === 4) return [el("p", { class: "step-line" }, fillText(FW["deploy.step"], { n: 4 })), ...deployWait(st, c, wizard)];
+    const opts = await api("GET", "fleet/deploy/options", null, { direct: true });
+    // ?replaces=<relayId> preselects that relay's product, name and site: an explicit choice (3.1).
+    const wanted = c && c.q.get("replaces");
+    if (wanted && !st.replacesSeen) {
+      st.replacesSeen = true;
+      const x = (await fleetRelays()).find((y) => y.id === wanted && y.state !== "removed");
+      if (x) {
+        st.product = x.product;
+        st.f.replaces = x.id;
+        st.f.name = x.name;
+        st.f.site = x.site || "";
+      }
+    }
+    const line = el("p", { class: "step-line" }, fillText(FW["deploy.step"], { n: st.step }));
+    if (st.step === 2) return [line, ...deployWhere(st, opts)];
+    if (st.step === 3) return [line, ...(await deployDetails(st, opts, wizard))];
+    return [line, ...deployProduct(st)];
+  }
+  // "Continue" stays disabled until the step's choice is made (3.2, 3.3).
+  function setEnabled(b, on) {
+    b.disabled = !on;
+    if (on) b.removeAttribute("disabled");
+    else b.setAttribute("disabled", "");
+  }
+  // A card as a radio button; a card that is not offered is disabled and names its reason.
+  function choiceCard(group, value, checked, title, lines, why, pick) {
+    const id = uid("card");
+    const wid = why ? id + "-why" : null;
+    const r = el("input", { id, type: "radio", name: group, value, checked: checked ? true : null, disabled: why ? true : null, "aria-describedby": wid });
+    if (why) r.disabled = true;
+    r.addEventListener("change", () => {
+      if (r.checked && !why) pick(value);
+    });
+    return el("label", { class: "deploy-card" + (why ? " is-disabled" : "") + (checked ? " is-picked" : ""), for: id }, r,
+      el("span", { class: "card-title" }, title), ...lines.map((l) => (l instanceof Node ? l : el("span", { class: "card-line" }, l))),
+      why ? el("span", { class: "card-why", id: wid }, why) : null);
+  }
+  // Step 1 (3.2): two cards, none selected; no product is ever assumed.
+  function deployProduct(st) {
+    const group = uid("product");
+    const noneId = uid("none");
+    const none = el("p", { class: "note", id: noneId }, FW["deploy.product-none"]);
+    const cont = btn(FW["deploy.continue"], () => {
+      if (!st.product) {
+        fail(FR["deploy-product"]);
+        return;
+      }
+      st.step = 2;
+      redrawDeploy();
+    }, "primary", { "aria-describedby": noneId });
+    const sync = () => {
+      setEnabled(cont, !!st.product);
+      none.hidden = !!st.product;
+    };
+    const cards = ["meet", "spokes"].map((p) => choiceCard(group, p, st.product === p, productWord(p), [FW["deploy.product-" + p + "-help"]], null, (v) => {
+      if (st.product !== v) st.env = null;
+      st.product = v;
+      sync();
+    }));
+    sync();
+    return [el("fieldset", { class: "deploy-cards" }, el("legend", null, FW["deploy.product-h"]), cards), none,
+      el("div", { class: "wizard-actions" }, cont)];
+  }
+  // The prerequisites of a card (3.3), by word id.
+  function deployNeeds(st, opts, env) {
+    if (env === "installed") return [FW["deploy.env-installed-help"]];
+    const p = st.product;
+    const arch = (opts.binary && opts.binary.arch) || (opts.console && opts.console.arch) || "";
+    const out = [];
+    if (env === "proxmox") out.push(FW["deploy.need-proxmox"]);
+    if (env === "docker") out.push(FW["deploy.need-docker"]);
+    if (env !== "docker") out.push(fillText(FW["deploy.need-os"], { arch }));
+    out.push(FW["deploy.need-size-" + p], FW["deploy.need-dns-" + p], FW["deploy.need-ports-" + p], fillText(FW["deploy.need-console"], consoleHostPort(opts.fleetUrl)));
+    if (p === "meet") {
+      const own = !caUsable(opts) || st.f.pki === "own";
+      out.push(own ? FW["deploy.need-tls-meet-own"] : FW["deploy.need-tls-meet"]);
+      if (!own && opts.meetCa.signerUrl) out.push(fillText(FW["deploy.need-signer"], { url: opts.meetCa.signerUrl }));
+    } else {
+      out.push(FW["deploy.need-tls-spokes"]);
+      if (deployHigh(opts) || !opts.spokesRoot) out.push(FW["deploy.need-root-spokes"]);
+    }
+    out.push(FW["deploy.need-sudo"]);
+    if (env === "docker" && p === "meet") out.push(FW["deploy.docker-turn-note"]);
+    return out;
+  }
+  // Why a card is not offered: Docker under High, or a console that cannot hand out the Linux program (3.3).
+  function envWhy(opts, env, row) {
+    if (env === "installed") return null;
+    if (env === "docker" && deployHigh(opts)) return FW["deploy.env-docker-high"];
+    if (row && row.offered) return null;
+    if (row && (row.why === "high" || row.why === "deploy-high")) return FW["deploy.env-docker-high"];
+    return fillText(FW["deploy.env-os-mismatch"], { why: (row && row.why) || "" });
+  }
+  // Step 2 (3.3): where it runs; Azure, AWS, Google Cloud and Windows Server are shown as coming next.
+  function deployWhere(st, opts) {
+    const rows = opts.envs || [];
+    const group = uid("env");
+    const cont = btn(FW["deploy.continue"], () => {
+      if (!st.env) {
+        fail(FR["deploy-env"]);
+        return;
+      }
+      st.step = 3;
+      redrawDeploy();
+    }, "primary");
+    const cards = [];
+    for (const env of DEPLOY_ENVS) {
+      const row = rows.find((x) => x.id === env);
+      if (row && Array.isArray(row.products) && !row.products.includes(st.product)) continue;
+      const why = envWhy(opts, env, row);
+      if (why && st.env === env) st.env = null;
+      const needs = el("div", { class: "card-needs" }, el("span", { class: "card-line" }, FW["deploy.needs"]),
+        el("ul", { class: "plain" }, deployNeeds(st, opts, env).map((w) => el("li", null, w))));
+      cards.push(choiceCard(group, env, st.env === env, FW["deploy.env-" + env], [env === "installed" ? null : FW["deploy.env-" + env + "-help"], needs].filter(Boolean), why, (v) => {
+        st.env = v;
+        setEnabled(cont, true);
+      }));
+    }
+    for (const env of NEXT_ENVS) cards.push(choiceCard(group, env, false, FW["deploy.env-" + env], [], FW["deploy.env-next"], () => {}));
+    setEnabled(cont, !!st.env);
+    return [el("fieldset", { class: "deploy-cards" }, el("legend", null, FW["deploy.where-h"]), cards),
+      el("div", { class: "wizard-actions" }, btn(FW["setup.back"], () => {
+        st.step = 1;
+        redrawDeploy();
+      }), cont)];
+  }
+  // Step 3 (3.4): the relay's details, then the code and the command. No admins field: the script asks on the host.
+  async function deployDetails(st, opts, wizard) {
+    if (st.minted) return deployCode(st, opts, wizard);
+    const f = st.f;
+    const p = st.product;
+    const env = st.env;
+    const installed = env === "installed";
+    const high = deployHigh(opts);
+    const keep = (k, input) => input.addEventListener("input", () => {
+      f[k] = input.value;
+    });
     const rows = (await fleetRelays()).filter((x) => x.state !== "removed").sort(byName);
-    const pid = uid("en");
-    const prod = el("select", { id: pid }, [["spokes", productWord("spokes")], ["meet", productWord("meet")]].map(([v, w]) => el("option", { value: v }, w)));
     const name = textField(FW["enroll.name"], { maxlength: "64", required: true });
+    name.input.value = f.name || "";
+    keep("name", name.input);
     const site = textField(FW["enroll.site"], { maxlength: "64" });
+    site.input.value = f.site || "";
+    keep("site", site.input);
+    if (!f.scopes) f.scopes = SCOPES.slice();
     const boxes = SCOPES.map((s) => {
       const id = uid("sc");
       const required = s === "read-health";
-      const cb = el("input", { id, type: "checkbox", value: s, checked: true, disabled: required ? true : null, "aria-describedby": required ? id + "-n" : null });
+      const cb = el("input", { id, type: "checkbox", value: s, checked: required || f.scopes.includes(s) ? true : null, disabled: required ? true : null, "aria-describedby": required ? id + "-n" : null });
+      cb.addEventListener("change", () => {
+        f.scopes = boxes.filter((x) => x[0].checked || x[0].value === "read-health").map((x) => x[0].value);
+      });
       return [cb, el("label", { class: "inline", for: id }, cb, scopeWord(s), required ? el("span", { class: "note", id: id + "-n" }, " ", FR["fleet-scope-required"]) : null)];
     });
     const rid = uid("en");
-    const replaces = el("select", { id: rid }, el("option", { value: "" }, MSG.no), rows.map((x) => el("option", { value: x.id }, fillText(FW["enroll.replaces"], { name: x.name }))));
-    const wanted = c && c.q.get("replaces");
-    if (wanted && rows.some((x) => x.id === wanted)) {
-      replaces.value = wanted;
-      const x = rows.find((y) => y.id === wanted);
-      prod.value = x.product;
-      name.input.value = x.name;
-      site.input.value = x.site || "";
+    const replaces = el("select", { id: rid }, el("option", { value: "" }, MSG.no), rows.filter((x) => x.product === p).map((x) => el("option", { value: x.id }, fillText(FW["enroll.replaces"], { name: x.name }))));
+    replaces.value = f.replaces || "";
+    replaces.addEventListener("change", () => {
+      f.replaces = replaces.value;
+    });
+    const kids = [name.box, site.box, el("fieldset", { class: "choice" }, el("legend", null, FW["enroll.scopes"]), boxes.map((x) => x[1])),
+      el("div", { class: "field" }, el("label", { for: rid }, FMSG.replace), replaces)];
+    let host = null, turn = null, clients = null, pkiGroup = null, lic = null;
+    if (!installed) {
+      host = textField(FW["deploy.host"], { maxlength: "253", required: true, autocapitalize: "none" }, FW["deploy.host-help"]);
+      host.input.value = f.host || "";
+      keep("host", host.input);
+      kids.push(host.box);
+      if (p === "meet") {
+        turn = textField(FW["deploy.turn-host"], { maxlength: "253", autocapitalize: "none" }, FW["deploy.turn-host-help"]);
+        turn.input.value = f.turnHost || "";
+        keep("turnHost", turn.input);
+        kids.push(turn.box);
+        // The certificate: from the console's CA only with a usable CA under Standard; otherwise bring it (3.4, 8.7).
+        const ca = caUsable(opts);
+        if (!ca) f.pki = "own";
+        pkiGroup = uid("pki");
+        const choices = (ca ? ["console", "own"] : ["own"]).map((v) => {
+          const id = uid("pk");
+          const r = el("input", { id, type: "radio", name: pkiGroup, value: v, checked: f.pki === v ? true : null });
+          r.addEventListener("change", () => {
+            if (r.checked) f.pki = v;
+          });
+          return el("label", { class: "inline", for: id }, r, FW["deploy.pki-" + v]);
+        });
+        kids.push(el("fieldset", { class: "choice" }, el("legend", null, FW["deploy.pki"]), choices,
+          ca ? null : el("p", { class: "note" }, high ? FW["meet-ca.high"] : FW["deploy.pki-ca-missing"])));
+      } else {
+        clients = textField(FW["deploy.clients"], { maxlength: "1024", autocapitalize: "none" }, FW["deploy.clients-help"]);
+        clients.input.value = f.clients != null ? f.clients : "0.0.0.0/0, ::/0";
+        keep("clients", clients.input);
+        kids.push(clients.box);
+      }
+      const lid = uid("lic");
+      const library = (opts.library || []).filter((l) => l.product === p);
+      lic = el("select", { id: lid, "aria-describedby": lid + "-n" }, el("option", { value: "" }, FW["deploy.license-none"]),
+        library.map((l) => el("option", { value: l.id }, clean([l.id, l.edition, l.users != null ? l.users + " users" : "", dayAny(l.exp)].filter(Boolean).join(", ")))));
+      lic.value = f.license || "";
+      lic.addEventListener("change", () => {
+        f.license = lic.value;
+      });
+      kids.push(el("div", { class: "field" }, el("label", { for: lid }, FW["deploy.license"]), lic, el("span", { class: "note", id: lid + "-n" }, FW["deploy.license-help"])));
+      if (p === "meet") kids.push(el("p", { class: "note" }, FW["deploy.admins-note"]));
     }
-    const make = btn(FD.enroll.button, () => {
-      const body = { product: prod.value, name: name.input.value.trim(), site: site.input.value.trim(),
-        scopes: boxes.filter((x) => x[0].checked || x[0].value === "read-health").map((x) => x[0].value), replaces: replaces.value || null };
+    const make = btn(FW["deploy.make"], () => {
+      const body = { product: p, name: name.input.value.trim(), site: site.input.value.trim(),
+        scopes: boxes.filter((x) => x[0].checked || x[0].value === "read-health").map((x) => x[0].value), replaces: replaces.value || null, env };
+      if (!p) {
+        fail(FR["deploy-product"]);
+        return;
+      }
       if (!NAME_RE.test(body.name)) {
         fail(FW["enroll.name"]);
         name.input.focus();
@@ -4812,40 +5197,191 @@
         fail(FR["fleet-scope-needs-people"]);
         return;
       }
+      if (!installed) {
+        const h = host.input.value.trim().toLowerCase();
+        if (!(dnsOk(h) || (p === "spokes" && addressOk(h)))) {
+          fail(FR["deploy-host"]);
+          host.input.focus();
+          return;
+        }
+        const d = { host: h, turnHost: null, clients: null, pki: null, license: lic.value || null };
+        if (p === "meet") {
+          const t = turn.input.value.trim().toLowerCase();
+          if (t && !dnsOk(t) && !addressOk(t)) {
+            fail(FR["deploy-host"]);
+            turn.input.focus();
+            return;
+          }
+          d.turnHost = t || null;
+          if (f.pki !== "console" && f.pki !== "own") {
+            fail(FW["deploy.pki"]);
+            return;
+          }
+          d.pki = f.pki;
+        } else {
+          const list = clients.input.value.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+          if (!list.length || list.length > 16 || !list.every(cidrOk)) {
+            fail(FR["deploy-clients"]);
+            clients.input.focus();
+            return;
+          }
+          d.clients = list;
+        }
+        body.deploy = d;
+      }
+      const params = [[FW["enroll.scopes"], scopesText(body.scopes)], [FW["deploy.where-h"], FW["deploy.env-" + env]]];
+      if (body.deploy) params.push([FW["deploy.host"], body.deploy.host]);
       confirmDialog({
-        spec: fspec("enroll"), vals: { name: body.name, product: productWord(body.product) }, name: body.name, id: body.replaces || body.name,
-        params: [[FW["enroll.scopes"], scopesText(body.scopes)]],
+        spec: fspec("enroll"), vals: { name: body.name, product: productWord(p) }, name: body.name, id: body.replaces || body.name, params,
         run: () => post("fleet/enroll", body, { action: "fleet.enroll.code", target: body.name }),
         plain: true,
         done: (r) => {
-          S.enroll = Object.assign({ product: body.product, name: body.name }, r || {});
+          // The fields as minted, so step 4 names the relay and "Make a new code" keeps them (3.6).
+          Object.assign(f, { name: body.name, site: body.site, scopes: body.scopes, replaces: body.replaces || "" });
+          st.minted = r || {};
+          st.id = (r && r.id) || null;
           S.relays = null;
-          render({ keepMessages: true });
+          redrawDeploy();
         },
       });
     }, "primary");
-    return [panel(null, el("div", { class: "field" }, el("label", { for: pid }, FW["enroll.product"]), prod), name.box, site.box,
-      el("fieldset", { class: "choice" }, el("legend", null, FW["enroll.scopes"]), boxes.map((x) => x[1])),
-      el("div", { class: "field" }, el("label", { for: rid }, FMSG.replace), replaces), make)];
+    return [section("deploy-details-h", FW["deploy.details-h"], ...kids),
+      el("div", { class: "wizard-actions" }, btn(FW["setup.back"], () => {
+        st.step = 2;
+        redrawDeploy();
+      }), make)];
   }
-  // The code, shown once, next to the commands that never contain it (A1-M1), and how admins anchor their keys (3.9,
-  // revision 3: no hash to read out). "I copied the code" removes it from the page and from memory.
-  function codeScreen(e) {
-    const cmd = e.commands && typeof e.commands[e.product] === "string" ? e.commands[e.product] : "";
-    const local = e.commands && typeof e.commands.local === "string" ? e.commands.local : "";
-    return section("enroll-code-h", FW["enroll.code-title"],
+  // The answer of the mint (3.4): the code block (once, Copy, expiry), the Install block (3.5), the anchor note, and
+  // Continue. The code and the command are never on one line, and the command never contains the code (A1-M1).
+  function deployCode(st, opts, wizard) {
+    const r = st.minted;
+    const high = deployHigh(opts);
+    const ins = r.install || null;
+    const block = (words, cmd) => (cmd ? [el("p", null, words), el("code", { class: "cmd" }, clean(cmd)), el("div", null, copyButton(cmd, FMSG.commandsCopy))] : []);
+    const install = [];
+    if (st.env === "installed" || !ins) {
+      const cmd = r.commands && typeof r.commands[st.product] === "string" ? r.commands[st.product] : "";
+      const local = r.commands && typeof r.commands.local === "string" ? r.commands.local : "";
+      install.push(...block(FW["enroll.commands"], cmd), el("p", { class: "note" }, FW["enroll.no-code-in-command"]),
+        el("p", null, FW["enroll.local"]), local ? el("code", { class: "cmd" }, clean(local)) : null);
+    } else {
+      const steps = Array.isArray(ins.steps) ? ins.steps.map(String).join("\n") : "";
+      if (high) install.push(...block(FW["deploy.install-high"], steps || ins.command || ""));
+      else if (st.env === "proxmox") install.push(...block(FW["deploy.install-proxmox"], steps), ...block(FW["deploy.install-proxmox-then"], ins.command || ""));
+      else install.push(...block(st.env === "docker" ? FW["deploy.install-docker"] : FW["deploy.install-linux"], ins.command || ""));
+      install.push(el("p", { class: "note" }, FW["enroll.no-code-in-command"]));
+      if (!high && ins.command) install.push(el("p", { class: "note" }, FW["deploy.pin-note"]));
+      if (ins.binary) install.push(el("p", { class: "note" }, binaryLine(ins.binary)));
+      if (ins.uninstall) install.push(el("p", null, FW["deploy.uninstall"]), el("code", { class: "cmd" }, clean(ins.uninstall)));
+      if (ins.offlineUninstall) install.push(el("p", null, FW["deploy.uninstall-offline"]), el("code", { class: "cmd" }, clean(ins.offlineUninstall)));
+    }
+    // C-prime (7, decision 12, approved for Standard): the keys the script offers, by hint; never under High.
+    const offered = !high && Array.isArray(r.offered) ? r.offered : [];
+    return [section("enroll-code-h", FW["enroll.code-title"],
       el("p", null, FW["enroll.code-once"]),
-      el("code", { class: "code-once" }, clean(e.code)), el("div", null, copyButton(String(e.code || ""), FMSG.codeCopy)),
-      e.expires ? el("p", { class: "note" }, fill(FMSG.expires, { time: when(e.expires) })) : null,
-      el("p", null, FW["enroll.commands"]), el("code", { class: "cmd" }, clean(cmd)), el("div", null, copyButton(cmd, FMSG.commandsCopy)),
-      el("p", { class: "note" }, FW["enroll.no-code-in-command"]),
-      el("p", null, FW["enroll.local"]), local ? el("code", { class: "cmd" }, clean(local)) : null,
-      el("p", null, FW["bootstrap.how-to-anchor"]),
-      el("p", null, el("a", { href: "#/settings/account" }, FW["account.fingerprints"])),
-      el("div", { class: "wizard-actions" }, btn(FW["enroll.copied"], () => {
-        S.enroll = null;
-        go(/^#\/setup\//.test(location.hash) ? "#/setup/relay" : "#/relays");
-      }, "primary")));
+      el("code", { class: "code-once" }, clean(r.code)), el("div", null, copyButton(String(r.code || ""), FMSG.codeCopy)),
+      r.expires ? el("p", { class: "note" }, fill(FMSG.expires, { time: when(r.expires) })) : null),
+    section("deploy-install-h", FW["deploy.install-h"], ...install),
+    panel(null, el("p", null, FW["deploy.anchor-note"]), offered.map((k) => el("p", null, fill(FW["deploy.offered-key"], { hint: (k && k.hint) || "" }))),
+      el("p", null, el("a", { href: "#/settings/account" }, FW["account.fingerprints"]))),
+    el("div", { class: "wizard-actions" }, btn(FW["deploy.continue"], () => {
+      // The code leaves the page and memory here (3.1).
+      st.minted = null;
+      st.step = 4;
+      if (wizard || !st.id) redrawDeploy();
+      else go("#/relays/add/" + encodeURIComponent(st.id));
+    }, "primary"))];
+  }
+  // Step 4 (3.6): polls the enrollment every 3 s while visible and shows where the join is.
+  function deployWait(st, c, wizard) {
+    const box = el("div", { class: "deploy-wait", "aria-live": "polite" });
+    const actions = el("div", { class: "wizard-actions" });
+    let shown = "";
+    let active = false;
+    const leave = async () => {
+      S.enroll = null;
+      if (wizard) {
+        if (active) {
+          try {
+            await api("POST", "setup/step", { step: "relay", state: "done" }, { direct: true });
+          } catch (e) {
+            fail(e);
+          }
+        }
+        S.setup = null;
+        S.overview = null;
+        redrawDeploy();
+      } else go("#/relays");
+    };
+    const again = () => {
+      st.step = 3;
+      st.id = null;
+      st.minted = null;
+      if (wizard || !/^#\/relays\/add\//.test(location.hash)) redrawDeploy();
+      else go("#/relays/add");
+    };
+    const draw = (e) => {
+      const rel = (e && e.relay) || null;
+      const key = JSON.stringify([e && e.state, rel && rel.state, rel && rel.fingerprint, rel && rel.bootstrap, rel && rel.license]);
+      if (key === shown) return;
+      shown = key;
+      // The console's name for the relay: its registry row, else the enrollment's name, else the name as minted; the id last.
+      const name = (rel && (S.relays || []).some((x) => x.id === rel.id) ? relayName(rel.id) : (e && e.name) || st.f.name) || (rel && rel.id) || "";
+      const kids = [];
+      const ended = !e || e.state === "expired" || e.state === "cancelled" || (e.state !== "open" && !rel);
+      active = !!(rel && rel.state === "active");
+      if (ended) kids.push(el("p", null, FW["deploy.expired"]), el("div", null, btn(FW["deploy.new-code"], again, "primary")));
+      else if (e.state === "open") kids.push(el("p", null, FW["deploy.wait-code"]), e.expires ? el("p", { class: "note" }, fill(FMSG.expires, { time: when(e.expires) })) : null);
+      else if (rel.state === "pending") kids.push(el("p", null, FW["deploy.wait-start"]));
+      else if (rel.state === "unconfirmed") {
+        const fp = String(rel.fingerprint || "");
+        kids.push(el("p", null, fill(FW["deploy.wait-connected"], { name })), el("p", null, FW["deploy.compare"]),
+          el("p", null, el("span", { class: "card-line" }, FW["enroll.fingerprint"])), el("code", { class: "fingerprint fingerprint-big" }, clean(fp)),
+          el("p", { class: "note" }, FW["enroll.confirm-help"]),
+          el("div", null, btn(FMSG.deploy.confirmRelay, () => confirmDialog({
+            spec: fspec("confirm-relay"), vals: { name, fingerprint: fp }, name, id: rel.id,
+            run: () => post("fleet/relays/confirm", { relay: rel.id, fingerprint: fp }, { action: "fleet.relay.confirm", target: rel.id }),
+            done: () => {
+              S.relays = null;
+              S.overview = null;
+              shown = "";
+              tick();
+            },
+          }), "primary")));
+      } else if (rel.state === "active") {
+        const bRaw = rel.bootstrap || {};
+        const bs = typeof bRaw === "string" ? { state: bRaw } : bRaw;
+        const anchored = typeof bs.anchored === "number" ? bs.anchored : (bs.entries || []).filter((x) => x && (x.state === "anchored" || (x.via && x.via !== "none"))).length;
+        const svc = (rel.license && rel.license.service) || null;
+        const stopped = !!(svc && svc.state === "stopped");
+        kids.push(el("p", null, fill(FW["deploy.confirmed"], { name })), el("p", null, fillText(FW["deploy.anchors"], { n: anchored })),
+          anchored ? null : el("p", { class: "note" }, FW["deploy.anchor-none"]),
+          stopped ? el("p", null, toneChip(FW["relay.license-stopped"], "bad"), " ", el("a", { href: "#/license?relay=" + encodeURIComponent(rel.id) }, FMSG.deploy.installLicense))
+            : el("p", null, toneChip(FW["deploy.service-on"], "ok")));
+      } else kids.push(el("p", null, relayStateWord(rel.state)));
+      box.replaceChildren(...kids.filter(Boolean));
+    };
+    const tick = async () => {
+      try {
+        const d = await api("GET", "fleet/enrollments/" + encodeURIComponent(st.id), null, { direct: true, activity: false });
+        if (c && c.gen !== S.gen) return;
+        draw(d.enrollment || null);
+      } catch (e) {
+        if (e && e.status === 404) draw(null);
+        else if (e && e.status !== 401) fail(e);
+      }
+    };
+    actions.append(btn(FW["deploy.done"], leave));
+    if (!st.id) draw(null);
+    else {
+      tick();
+      clearInterval(S.timer);
+      S.timer = setInterval(() => {
+        if (document.hidden || (c && c.gen !== S.gen)) return;
+        tick();
+      }, 3000);
+    }
+    return [section("deploy-wait-h", FW["deploy.wait-h"], box), actions];
   }
 
   // ---- Health charts (9.5, 9.6) ----
@@ -5297,8 +5833,262 @@
         } }],
       // Install works on a stopped relay (11.4): the channel and the `license` scope keep working.
       actions: (x) => (admin ? [{ label: FMSG.install, run: () => go("#/license?relay=" + encodeURIComponent(x.relay)) }] : []),
-    })), libraryPanel(d.library || [])];
+    })), libraryPanel(d.library || []), ...(admin ? await orgRootPanels() : [])];
   };
+  // ---- AC-2b-D 3.7, 3.8, 12: the License page's Meeting Hub organization CA and Remote Spokes organization root ----
+  // A PEM block's DER, or null.
+  function pemDer(text, label) {
+    const m = new RegExp("-----BEGIN " + label + "-----([\\s\\S]*?)-----END " + label + "-----").exec(String(text || ""));
+    if (!m) return null;
+    try {
+      return Uint8Array.from(atob(m[1].replace(/\s+/g, "")), (ch) => ch.charCodeAt(0));
+    } catch (e) {
+      return null;
+    }
+  }
+  function derAt(der, at) {
+    let len = der[at + 1], hdr = 2;
+    if (len & 0x80) {
+      const k = len & 0x7f;
+      len = 0;
+      for (let i = 0; i < k; i++) len = len * 256 + der[at + 2 + i];
+      hdr = 2 + k;
+    }
+    if (at + hdr + len > der.length) throw new Error("short");
+    return { tag: der[at], at, start: at + hdr, end: at + hdr + len };
+  }
+  function derKids(der, node) {
+    const out = [];
+    for (let p = node.start; p < node.end;) {
+      const x = derAt(der, p);
+      out.push(x);
+      p = x.end;
+    }
+    return out;
+  }
+  // The SubjectPublicKeyInfo of a certificate (display only; the console checks the certificate itself).
+  function certSpki(der) {
+    try {
+      const tbs = derKids(der, derAt(der, 0))[0];
+      const parts = derKids(der, tbs);
+      const x = parts[parts[0].tag === 0xa0 ? 6 : 5];
+      return x && x.tag === 0x30 ? der.slice(x.at, x.end) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Whether a SubjectPublicKeyInfo names the P-256 curve (OID 1.2.840.10045.3.1.7).
+  function p256Spki(spki) {
+    const oid = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+    for (let i = 0; spki && i + oid.length <= spki.length; i++) if (oid.every((b, k) => spki[i + k] === b)) return true;
+    return false;
+  }
+  // `m_` (license::meet_root_id) or `n_` (identity::node_id_of) and the first 32 hex of the SPKI's SHA-256, for the
+  // dialog title; empty where the browser has no SubtleCrypto.
+  async function spkiId(prefix, spki) {
+    try {
+      const h = new Uint8Array(await crypto.subtle.digest("SHA-256", spki));
+      return prefix + [...h].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+    } catch (e) {
+      return "";
+    }
+  }
+  // A file field whose text stays in memory and is never shown (a CA key must never be displayed, 8.2).
+  function fileText(label, accept) {
+    const id = uid("file");
+    const input = el("input", { id, type: "file", accept });
+    const got = { text: "" };
+    input.addEventListener("change", async () => {
+      const f = input.files && input.files[0];
+      got.text = f && f.size <= 1048576 ? await f.text() : "";
+    });
+    return { box: el("div", { class: "field" }, el("label", { for: id }, label), input), got, input };
+  }
+  async function orgRootPanels() {
+    const high = profile() === "high";
+    const ca = section("meet-ca-h", FW["meet-ca.title"], el("p", null, high ? FW["meet-ca.high"] : el("a", { href: "#/license/meet-ca" }, FW["meet-ca.title"])));
+    // Under High a delivered root is never used (6.7), so the Remote Spokes root section is hidden (12).
+    return high ? [ca] : [ca, await spokesRootPanel()];
+  }
+  async function spokesRootPanel() {
+    const d = await api("GET", "fleet/spokes-root", null, { direct: true }).catch(() => ({ root: null }));
+    const file = fileText(FMSG.deploy.rootFile, ".pub,.pem");
+    const save = btn(FW["spokes-root.set"], async () => {
+      const text = file.got.text;
+      const der = /PRIVATE KEY/.test(text) ? null : pemDer(text, "PUBLIC KEY");
+      if (!der || !p256Spki(der)) {
+        fail(FR["spokes-root-key"]);
+        return;
+      }
+      const id = await spkiId("n_", der);
+      confirmDialog({
+        spec: fspec("spokes-root"), vals: { id }, name: id, id,
+        run: () => post("fleet/spokes-root", { pem: text }, { action: "fleet.spokes-root.set", target: id || "-" }),
+      });
+    }, "primary");
+    return section("spokes-root-h", FW["spokes-root.title"], el("p", null, FW["spokes-root.help"]),
+      d && d.root ? pairs([[FMSG.deploy.savedRoot, code(d.root.id)]]) : null, file.box, el("div", null, save));
+  }
+  // The latest date the final revocation list must cover (8.6): 120 days on, or the last issued certificate's end.
+  const caFinalEnds = (ca) => Math.max(Date.now() + 120 * 86400000, ...((ca.issued || []).map((x) => (x.notAfter > 1e12 ? x.notAfter : (x.notAfter || 0) * 1000))));
+  pages.fleetMeetCa = async () => {
+    const kids = [head(FW["meet-ca.title"])];
+    if (profile() === "high") return kids.concat(panel(null, el("p", null, FW["meet-ca.high"])));
+    const d = await api("GET", "fleet/meet-ca", null, { direct: true });
+    kids.push(banner("warn", MSG.sev.warn, FW["meet-ca.warn"]));
+    if (!d.ca) return kids.concat(caImportPanel(d));
+    await fleetRelays();
+    return kids.concat(caHeldPanels(d.ca));
+  };
+  // With no CA (3.7, 8.2): Import our CA, and Create shown disabled as coming next (8.1).
+  function caImportPanel(d) {
+    const crt = fileText(FMSG.deploy.caFile, ".crt,.pem");
+    const key = fileText(FMSG.deploy.keyFile, ".key,.pem");
+    const issued = fileText(FMSG.deploy.issuedFile, ".json");
+    const crl = fileText(FMSG.deploy.crlFile, ".pem,.crl");
+    const signer = textField(FW["meet-ca.signer"], { maxlength: "253", autocapitalize: "none", inputmode: "url" }, FW["meet-ca.signer-help"]);
+    const cid = uid("nohigh");
+    const noHigh = el("input", { id: cid, type: "checkbox", required: true });
+    const allowed = d.allowed !== false;
+    const importBtn = btn(FW["meet-ca.import"], async () => {
+      const caPem = crt.got.text, keyPem = key.got.text;
+      const der = pemDer(caPem, "CERTIFICATE");
+      const spki = der ? certSpki(der) : null;
+      if (!spki || !p256Spki(spki) || !/-----BEGIN (?:EC )?PRIVATE KEY-----/.test(keyPem)) {
+        fail(FR["meet-ca-key"]);
+        return;
+      }
+      const url = signer.input.value.trim();
+      if (url && !/^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[^\s]*)?$/.test(url)) {
+        fail(FR["meet-ca-signer"]);
+        signer.input.focus();
+        return;
+      }
+      if (!noHigh.checked) {
+        fail(FR["meet-ca-confirm"]);
+        noHigh.focus();
+        return;
+      }
+      const id = await spkiId("m_", spki);
+      confirmDialog({
+        spec: fspec("meet-ca-import"), vals: { id }, name: id, id, two: true, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => post("fleet/meet-ca/import", { caPem, keyPem, issuedJson: issued.got.text || null, crlPem: crl.got.text || null, signerUrl: url || null,
+          noHighRelay: true, maxLifetimeDays: 400, reason: v.reason },
+          // The key never goes into the step-up binding (8.2: no route or log ever carries it).
+          { action: "fleet.meet-ca.import", target: id || "-", params: { signerUrl: url || null, noHighRelay: true, maxLifetimeDays: 400 } }),
+      });
+    }, "primary");
+    if (!allowed) setEnabled(importBtn, false);
+    const createId = uid("next");
+    return [panel(null, el("p", null, FW["meet-ca.none"])),
+      section("meet-ca-import-h", FW["meet-ca.import"], el("p", null, FW["meet-ca.import-help"]), crt.box, key.box, issued.box, crl.box, signer.box,
+        el("label", { class: "inline", for: cid }, noHigh, FW["meet-ca.confirm-no-high"]),
+        !allowed && d.why ? el("p", { class: "note" }, u(d.why)) : null, el("div", null, importBtn)),
+      panel(null, el("button", { type: "button", "aria-disabled": "true", class: "is-disabled", "aria-describedby": createId }, FW["meet-ca.create-next"]),
+        el("p", { class: "note", id: createId }, FW["deploy.env-next"]))];
+  }
+  // A generic step-up dialog for the CA page's controls that have no 13.2 dialog of their own.
+  const caSpec = (title, body, button) => ({ title, body: [body], button: [button] });
+  function caHeldPanels(ca) {
+    const crl = ca.crl || {};
+    const issued = ca.issued || [];
+    const out = [];
+    if (ca.state === "lost") out.push(banner("bad", MSG.sev.bad, fill(FW["meet-ca.lost"], { date: dayAny(crl.nextUpdate) })));
+    if (ca.state === "unreadable") out.push(banner("bad", MSG.sev.bad, FW["meet-ca.unreadable"]));
+    if (ca.diverged) {
+      out.push(banner("warn", MSG.sev.warn, fill(FW["meet-ca.diverged"], { relay: relayName(ca.diverged.relayId) }), " ",
+        btn(FMSG.deploy.dismiss, async () => {
+          try {
+            await api("POST", "fleet/meet-ca/dismiss-diverged", {}, { direct: true });
+            render({ keepMessages: true });
+          } catch (e) {
+            fail(e);
+          }
+        })));
+    }
+    out.push(section("meet-ca-held-h", FW["meet-ca.title"], pairs([[FW["meet-ca.id"], code(ca.id)], [FMSG.deploy.subject, u(ca.subject || "")],
+      [FW["meet-ca.ends"], dayAny(ca.notAfter)], [FMSG.cols.state, FMSG.deploy.caState[ca.state] || stateWord(ca.state)],
+      [FW["meet-ca.signer"], ca.signerUrl ? u(ca.signerUrl) : undefined]]),
+      el("p", null, fill(FW["meet-ca.crl"], { number: crl.number != null ? String(crl.number) : "", date: dayAny(crl.nextUpdate) })),
+      el("p", null, fillText(FW["meet-ca.issued"], { n: issued.length })),
+      (ca.notPushed || []).map((x) => el("p", { class: "note" }, fill(FW["meet-ca.crl-not-pushed"], { relay: relayName(x.relay), why: x.why === "fixed" ? FW["meet-ca.crl-fixed"] : FW["meet-ca.crl-none"] }))),
+      dataTable({
+        caption: FW["meet-ca.issued"].replace(": <n>", ""), rows: issued, empty: MSG.noneYet, name: (x) => x.serial,
+        cols: [{ key: "relay", label: FMSG.cols.relay, cell: (x) => u(relayName(x.relay)) }, { key: "kind", label: FMSG.cols.kind, cell: (x) => FMSG.deploy.kind[x.kind] || stateWord(x.kind) },
+          { key: "names", label: FMSG.deploy.names, cell: (x) => u((x.names || []).join(", ")), sortable: false }, { key: "notAfter", label: FW["meet-ca.ends"], cell: (x) => dayAny(x.notAfter) },
+          { key: "state", label: FMSG.cols.state, cell: (x) => stateWord(x.state) }],
+        actions: (x) => (x.state !== "revoked" ? [{ label: FW["meet-ca.revoke"], run: () => caRevoke(x.serial) }] : []),
+      })));
+    // The list's entries; "Remove from the list" on those with no known end (8.5).
+    const revoked = crl.revoked || [];
+    out.push(section("meet-ca-crl-h", FMSG.deploy.revokedList, dataTable({
+      caption: FMSG.deploy.revokedList, rows: revoked, empty: MSG.noneYet, name: (x) => x.serial,
+      cols: [{ key: "serial", label: FMSG.deploy.serial, cell: (x) => code(x.serial) }, { key: "at", label: FMSG.deploy.at, cell: (x) => dayAny(x.at) },
+        { key: "notAfter", label: FW["meet-ca.ends"], cell: (x) => (x.notAfter ? dayAny(x.notAfter) : MSG.unknown) }],
+      actions: (x) => (x.notAfter ? [] : [{ label: FW["meet-ca.prune"], run: () => caPrune(x.serial, ca) }]),
+    }), el("div", null, btn(FW["meet-ca.revoke"], () => caRevoke(null)))));
+    // Longest lifetime (8.2, R5-M2), step-up and a second admin under two-person.
+    const days = textField(FW["meet-ca.max-lifetime"], { type: "number", min: "1", max: "3650", inputmode: "numeric" });
+    days.input.value = String(ca.maxLifetimeDays || 400);
+    const kids = [days.box, el("div", null, btn(FMSG.deploy.saveDays, () => {
+      const n = Number(days.input.value);
+      if (!Number.isInteger(n) || n < 1 || n > 3650) {
+        fail(FW["meet-ca.max-lifetime"]);
+        return;
+      }
+      confirmDialog({
+        spec: caSpec(FW["meet-ca.max-lifetime"], String(n), FMSG.deploy.saveDays), name: ca.id, id: ca.id, two: true, fields: [{ kind: "reason" }],
+        run: (v) => post("fleet/meet-ca/max-lifetime", { days: n, reason: v.reason }, { action: "fleet.meet-ca.max-lifetime", target: ca.id }),
+      });
+    }))];
+    // The certificate server's revocation check (8.4, R4-M1), with the relays that confirm or disagree.
+    if (ca.signerUrl) {
+      const sid = uid("enf");
+      const on = el("input", { id: sid, type: "checkbox", checked: ca.signerEnforced ? true : null, "aria-describedby": sid + "-n" });
+      on.addEventListener("change", () => {
+        const want = !!on.checked;
+        on.checked = !want;
+        confirmDialog({
+          spec: caSpec(FW["meet-ca.signer-enforced"], FW["meet-ca.signer-enforced-help"], FMSG.deploy.saveDays), name: ca.signerUrl, id: ca.id, fields: [{ kind: "reason" }],
+          run: (v) => post("fleet/meet-ca/signer-enforced", { on: want, reason: v.reason }, { action: "fleet.meet-ca.signer-enforced", target: ca.id }),
+        });
+      });
+      kids.push(el("label", { class: "inline", for: sid }, on, FW["meet-ca.signer-enforced"]), el("p", { class: "note", id: sid + "-n" }, FW["meet-ca.signer-enforced-help"]),
+        pairs([[FMSG.deploy.confirms, (ca.confirmedBy || []).map(relayName).join(", ") || MSG.noneYet], [FMSG.deploy.disagrees, (ca.mismatch || []).map(relayName).join(", ") || MSG.noneYet]]));
+    }
+    // Remove (8.6): the admin confirms signing elsewhere when relays still hold its certificates.
+    const finalEnds = caFinalEnds(ca);
+    const eid = uid("else");
+    const elsewhere = el("input", { id: eid, type: "checkbox" });
+    kids.push(el("label", { class: "inline", for: eid }, elsewhere, fillText(FW["meet-ca.remove-elsewhere"], { date: dayAny(finalEnds) })),
+      el("div", null, btn(FW["meet-ca.remove"], () => confirmDialog({
+        spec: fspec("meet-ca-remove"), vals: { date: dayAny(finalEnds) }, name: ca.id, id: ca.id, two: true, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => post("fleet/meet-ca/remove", { elsewhere: !!elsewhere.checked, reason: v.reason }, { action: "fleet.meet-ca.remove", target: ca.id }),
+      }), "danger")));
+    out.push(panel(null, ...kids));
+    return out;
+  }
+  // Revoke a certificate (8.5): the serial from the row, or typed.
+  function caRevoke(serial) {
+    confirmDialog({
+      spec: fspec("meet-ca-revoke"), vals: { serial: serial || "" }, vals2: (v) => ({ serial: serial || v.serial || "" }), name: serial || "", id: serial || "", danger: true,
+      fields: (serial ? [] : [{ kind: "text", key: "serial", label: FMSG.deploy.serial, maxlength: "64", required: true }]).concat([{ kind: "reason" }]),
+      check: (v) => (!serial && !/^[0-9a-fA-F]{2,64}$/.test(v.serial || "") ? FMSG.deploy.serial : ""),
+      run: (v) => {
+        const s = (serial || v.serial).toLowerCase();
+        return post("fleet/meet-ca/revoke", { serial: s, reason: v.reason }, { action: "fleet.meet-ca.revoke", target: s });
+      },
+    });
+  }
+  // Remove from the list (8.5): the ended certificate itself, checked by the console; a second admin under two-person.
+  function caPrune(serial, ca) {
+    confirmDialog({
+      spec: caSpec(FW["meet-ca.prune"], fillText(FW["meet-ca.prune-help"], { days: ca.maxLifetimeDays || 400 }), FW["meet-ca.prune"]), name: serial, id: serial, two: true,
+      fields: [{ kind: "textarea", key: "certPem", label: FMSG.deploy.certPem, required: true }, { kind: "reason" }],
+      check: (v) => (!pemDer(v.certPem, "CERTIFICATE") ? FMSG.deploy.certPem : ""),
+      run: (v) => post("fleet/meet-ca/prune", { certPem: v.certPem, reason: v.reason }, { action: "fleet.meet-ca.prune", target: serial }),
+    });
+  }
   // The license library (5.3): licenses kept on the console for installing on relays.
   function libraryPanel(lib) {
     const admin = isAdmin();
@@ -5649,7 +6439,7 @@
       ? [el("p", null, FW["setup.this-host-high"]), el("code", { class: "cmd" }, "lucid-relay console seal-setup --role console\nlucid-relay console seal-setup --role relay")]
       : [rows.length ? el("ul", { class: "plain" }, rows.map((x) => el("li", null, u(x.name), ": ", relayStateWord(x.state)))) : el("p", null, FW["setup.this-host-help"]),
         el("p", null, FW["setup.this-host-standard"])];
-    return [section("host-h", FW["setup.this-host"], ...here), section("other-h", FW["setup.other-host"], ...(await enrollPanel(c)))];
+    return [section("host-h", FW["setup.this-host"], ...here), section("other-h", FW["setup.other-host"], ...(await deployPanel(c)))];
   }
   // The first-run screen (12.1, step 1): the setup code and the government question, then the first admin's email
   // (step 2); setup/start answers a join token and the page continues in AC-1's join flow.
