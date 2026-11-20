@@ -46,7 +46,7 @@ main() {
 	tty_ok() { (: </dev/tty) 2>/dev/null; }
 
 	# ---- arguments (5.1) ----
-	local action=install purge=0 profile="" admins="" host="" turn_host="" pki_dir="" ca_file="" code_file=""
+	local action=install purge=0 profile="" admins="" host="" turn_host="" clients="" pki_dir="" ca_file="" code_file=""
 	local external="" ssh_from="" no_fw=0 fw_force=0 binary="" opt_console="" opt_pins=""
 	local -a allow_peers=()
 	while [ $# -gt 0 ]; do
@@ -57,6 +57,7 @@ main() {
 		--admins) need $#; admins=$2; shift 2 ;;
 		--host) need $#; host=$2; shift 2 ;;
 		--turn-host) need $#; turn_host=$2; shift 2 ;;
+		--clients) need $#; clients=$2; shift 2 ;;
 		--pki-dir) need $#; pki_dir=$2; shift 2 ;;
 		--ca) need $#; ca_file=$2; shift 2 ;;
 		--code-file) need $#; code_file=$2; shift 2 ;;
@@ -74,7 +75,7 @@ main() {
 	case "$profile" in "" | high | standard) ;; *) die "$W_USAGE" ;; esac
 	if [ "$purge" = 1 ] && [ "$action" != uninstall ]; then die "$W_USAGE"; fi
 	local v
-	for v in "$admins" "$host" "$turn_host" "$opt_console" "$opt_pins"; do safe "$v" || die "$W_USAGE"; done
+	for v in "$admins" "$host" "$turn_host" "$clients" "$opt_console" "$opt_pins"; do safe "$v" || die "$W_USAGE"; done
 	if [ -n "$external" ] && ! [[ $external =~ ^[0-9A-Fa-f.:]+(/[0-9A-Fa-f.:]+)?$ ]]; then die "$W_USAGE"; fi
 
 	[ "$(id -u)" = 0 ] || die "Run this as root (sudo)."
@@ -515,6 +516,7 @@ EOF
 		[ -n "$admins" ] && eargs+=(--admins "$admins")
 		[ -n "$host" ] && eargs+=(--host "$host")
 		[ -n "$turn_host" ] && eargs+=(--turn-host "$turn_host")
+		[ -n "$clients" ] && eargs+=(--clients "$clients")
 		rm -f "$P$RUN_ENV"
 		if [ -n "$code_file" ]; then
 			eargs+=(--code-file "$code_file")
