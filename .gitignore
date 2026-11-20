@@ -81,6 +81,8 @@ desktop/release/
 desktop/build/icon.png
 desktop/build/icon.ico
 desktop/build/icon.icns
+desktop/build/icon-creator.png
+desktop/build/icon-creator.ico
 
 # bundled runtime binaries (bun/uv) — downloaded per-OS by CI, never committed
 desktop/runtimes/*

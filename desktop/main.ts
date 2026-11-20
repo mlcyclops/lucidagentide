@@ -668,8 +668,8 @@ let rendererWatch = freshRendererWatch();
 function createWindow(): void {
   rendererWatch = freshRendererWatch();
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
-  // baked in by electron-builder; this covers the dev run and Linux.
-  const iconPath = join(app.getAppPath(), "build", "icon.png");
+  // baked in by electron-builder; this covers the dev run and Linux. Creator has its own icon (ADR-0618).
+  const iconPath = join(app.getAppPath(), "build", BUILD.creatorBuild ? "icon-creator.png" : "icon.png");
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
     frame: false, backgroundColor: "#0a0b0f", show: false, title: BUILD.displayName,

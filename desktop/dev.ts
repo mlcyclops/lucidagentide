@@ -461,7 +461,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedMcpCatalog, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
 import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
@@ -3967,8 +3967,27 @@ return Bun.serve({
       // published it to a guest as a permanent snapshot. One `stat`, no read, no inlining.
       if (p === "/api/preview/probe") {
         const target = (url.searchParams.get("path") ?? "").trim();
+        // P-PREVIEW-CURTAIN.1 (ADR-0621): a LOOPBACK dev server (the agent's `npm run dev`) is asked too, only
+        // when the curtain says so (`remote=1`), so "connection refused" or an HTTP error never reaches the
+        // screen. Loopback only: anything else is the egress gate's business, and this answers with a status
+        // and a length, never the body.
+        if (url.searchParams.get("remote") === "1" && /^https?:\/\//i.test(target)) {
+          let host = "";
+          try { host = new URL(target).hostname.toLowerCase(); } catch { /* not a URL */ }
+          if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") return json({ ok: true, data: { resolves: false, error: "not a loopback URL" } });
+          try {
+            // Redirects are NOT followed: a loopback hop to a remote host would be engine egress. A 3xx counts
+            // as answering (the frame follows it under the egress rules it always had), with no length.
+            const res = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(3000) });
+            if (res.status >= 400) return json({ ok: true, data: { resolves: false, status: res.status, error: `HTTP ${res.status}` } });
+            const bytes = res.ok ? (await res.arrayBuffer()).byteLength : undefined;
+            return json({ ok: true, data: { resolves: true, kind: "remote", status: res.status, ...(bytes === undefined ? {} : { bytes }) } });
+          } catch {
+            return json({ ok: true, data: { resolves: false, error: "connection refused or timed out" } });
+          }
+        }
         const r = probePreviewFile(target);
-        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind } : { resolves: false, error: r.error } });
+        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind, bytes: r.bytes } : { resolves: false, error: r.error } });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits
@@ -4363,8 +4382,11 @@ return Bun.serve({
       // P-TASK.5 (ADR-0180): live subagent activity for the delegation card. Reads the CURRENT
       // session's subtask transcripts (omp persists each subtask beside the parent session file) -
       // read-only, path-confined to the resolved session file, fail-quiet [] when nothing delegated.
+      // P-VIZ.4 (ADR-0625): `?laneId=` reads that LANE's session instead (lane `task` calls run in the
+      // background, so only their transcripts say when each subagent ends). Same read-only path, same gate.
       if (p === "/api/subagents") {
-        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(backend.currentSessionId())) } }); }
+        const laneId = url.searchParams.get("laneId");
+        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(laneId ? fleet.laneSessionId(laneId) : backend.currentSessionId())) } }); }
         catch { return json({ ok: true, data: { runs: [] } }); }
       }
       // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict + top processes. Read-only
@@ -5511,6 +5533,7 @@ return Bun.serve({
           attribution: mc.config?.attribution ?? null,
           asksageOnly: managedAsksageOnly(mc.config),
           locks: managedLocks(mc.config),
+          mcpCatalog: managedMcpCatalog(mc.config), // P-SETUX.1 (ADR-0616): org-authorized Quick connect list
         } });
       }
       // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgment gate. GET returns the

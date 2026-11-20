@@ -1327,8 +1327,10 @@ class Backend {
               // not the interactive allowlist — a command auto-runs iff its tier ≤ the shell dial; T4
               // always blocks. A block is recorded for the AAR. Default dial (unset) = safest (T0 only).
               if (this.goalActive && this.loopDial) {
-                if (loopVerdict(this.loopDial.shell, cls.tier) === "auto") return approveOpt();
-                this.loopBlocks.push({ iter: this.loopIter, tool: cls.key ?? "shell", tier: cls.tier, reason: cls.alwaysPrompt ? "catastrophic" : "risk-dial" });
+                // P-AUTO.FULL1 (ADR-0639): even a full-auto (T4) dial never runs a program the org's managed policy denies.
+                const managedDenied = !!cls.key && (execStore().denyPrograms ?? []).includes(cls.key);
+                if (!managedDenied && loopVerdict(this.loopDial.shell, cls.tier) === "auto") return approveOpt();
+                this.loopBlocks.push({ iter: this.loopIter, tool: cls.key ?? "shell", tier: cls.tier, reason: managedDenied ? "managed-deny" : cls.alwaysPrompt ? "catastrophic" : "risk-dial" });
                 // P-ENT.2: a loop dial/catastrophic block is a SecurityEvent (fail-safe; never throws).
                 emitSecurityEvent({ category: "loop", type: "loop_block", decision: "block", severity: cls.alwaysPrompt ? "critical" : "high", tool: cls.key ?? "shell", tier: cls.tier, reason: cls.reason, sessionId: this.sessionId ?? undefined });
                 return { outcome: { outcome: "cancelled" } }; // blocked by the dial

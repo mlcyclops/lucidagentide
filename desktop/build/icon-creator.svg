@@ -1,0 +1,61 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Lucid Creator app icon (P-SETUX.1, ADR-0618): a derivative of build/icon.svg. Same tile, lens orbit
+       and pi core, so the two products read as one family; the Creator identity is the warm studio palette
+       (amber #ffb547, coral #ff6a3d, rose #e0479e) and a four-point "creative spark" in place of the
+       travelling agent node. Colour carries the difference at 16px; the spark carries it at large sizes.
+       Source of truth; build/make-icons.ts rasterizes this to icon-creator.png/.ico. -->
+  <defs>
+    <radialGradient id="tile" cx="68%" cy="14%" r="95%">
+      <stop offset="0%" stop-color="#33190c"/>
+      <stop offset="42%" stop-color="#17110e"/>
+      <stop offset="100%" stop-color="#0b0807"/>
+    </radialGradient>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffd27a"/>
+      <stop offset="52%" stop-color="#ff6a3d"/>
+      <stop offset="100%" stop-color="#e0479e"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e0479e"/>
+      <stop offset="55%" stop-color="#ff6a3d"/>
+      <stop offset="100%" stop-color="#ffb547"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff6a3d" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#ff6a3d" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#ff6a3d" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="22%" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- tile -->
+  <rect x="96" y="96" width="832" height="832" rx="196" fill="url(#tile)"/>
+  <rect x="96" y="96" width="832" height="832" rx="196" fill="url(#sheen)"/>
+  <rect x="98.5" y="98.5" width="827" height="827" rx="193.5" fill="none" stroke="#5a2d14" stroke-opacity="0.6" stroke-width="3"/>
+
+  <!-- bloom behind the core -->
+  <circle cx="512" cy="520" r="300" fill="url(#bloom)"/>
+
+  <!-- lens orbit (same arc as the Agent icon) -->
+  <circle cx="512" cy="520" r="248" fill="none" stroke="#33201a" stroke-width="14"/>
+  <path d="M512 272
+           a248 248 0 1 1 -175.4 72.6"
+        fill="none" stroke="url(#ring)" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="512" cy="520" r="208" fill="none" stroke="#ffb547" stroke-opacity="0.18" stroke-width="3"/>
+
+  <!-- creative spark: a four-point star where the Agent icon has its travelling node -->
+  <circle cx="336.6" cy="344.6" r="40" fill="#ffd27a" opacity="0.25"/>
+  <path d="M336.6 290.6 Q344 337 390.6 344.6 Q344 352 336.6 398.6 Q329 352 282.6 344.6 Q329 337 336.6 290.6 Z" fill="#ffd27a"/>
+  <!-- a second, smaller spark on the open side of the lens -->
+  <path d="M742 236 Q745.5 258.5 768 262 Q745.5 265.5 742 288 Q738.5 265.5 716 262 Q738.5 258.5 742 236 Z" fill="#ffb547" opacity="0.85"/>
+
+  <!-- pi glyph (vector, legible at 16px; identical geometry to the Agent icon) -->
+  <g fill="url(#brand)">
+    <rect x="360" y="428" width="304" height="50" rx="22"/>
+    <rect x="416" y="478" width="50" height="152" rx="18"/>
+    <rect x="558" y="478" width="50" height="152" rx="18"/>
+  </g>
+</svg>

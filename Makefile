@@ -1696,3 +1696,53 @@ demo-P-RECOVER.4: ## P-RECOVER.4 (ADR-0481): the main window recovers its own re
 demo-P-METRICS.1: ## P-METRICS.1 (ADR-0561): long-term download and clone tracking. The real collector CLI, tokens in its env as the repo-metrics workflow passes them, against a local server that answers like api.github.com: two runs a week apart keep clone history GitHub has dropped and show each release's 7-day change; no traffic token records releases and says traffic was not collected (no invented zeros); a 403 exits 1, names the permission, keeps the release snapshot; a failed release fetch writes nothing; no token in any output or file
 	$(BUN) run tools/metrics/demo_p_metrics_1.ts
 	$(BUN) test $(TEST_IGNORES) tools/metrics/repo_metrics.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-SETUX.1
+demo-P-SETUX.1: ## P-SETUX.1 (ADR-0615..0619): Settings is a categorized window (opt-in side panel) above every panel, every UI button deep-links to its card (Workspace bar lands on Workspace), an Overview of what is connected, an official-vendor-only MCP Quick connect catalog (org list under managed policy), the UX PR gate, the Creator icon family and no em dash in either shortcut hover description
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/settings_nav.test.ts desktop/renderer/mcp_catalog.test.ts desktop/managed_config.test.ts tools/ux_pr_gate.test.ts desktop/build/electron-builder.creator.test.ts desktop/ask_lucid_features.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-PREVIEW-CURTAIN.1
+demo-P-PREVIEW-CURTAIN.1: ## P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain chip and never show the user a blank or errored page; a ready chip swings the panel out on the preview's own tab; mini chips on fleet cards and orbit spokes; a body-less page keeps the inspect bridge whole
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/preview_bridge.test.ts desktop/preview_file.test.ts desktop/renderer/preview_tabs.test.ts desktop/renderer/preview_session.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.1
+demo-P-VIZ.1: ## P-VIZ.1 (ADR-0622): Visualize, a three.js view of Main, agents and subagents with est. tok/s token flow, surges, power-down effects, 2D/3D, record and play back, throttled by the perf tier. Rendering is checked in a browser with ?vizDemo=1
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.2
+demo-P-VIZ.2: ## P-VIZ.2 (ADR-0623): Visualize nodes are mini Lucid (pixel typing in 2D, a procedural 3D ninja with eight activities, rapid bursts and power-down states in 3D) in translucent glass cubes; a camera director frames where the action is and Auto camera unchecks itself when the user grabs the camera. Rendering is checked in a browser with ?vizDemo=1
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_director.test.ts desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.3
+demo-P-VIZ.3: ## P-VIZ.3 (ADR-0624): Visualize figures are the anime LUCID mascot (option B, ninja mask) in 3D and flat 2D; emotion and effort live in a canvas-drawn eye band (focused, determined, strain, happy, calm, surprised, tired, pain, KO); keyframed activities with snappy strikes and procedural breathing. Rendering is checked in a browser with ?vizDemo=1
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_director.test.ts desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.4
+demo-P-VIZ.4: ## P-VIZ.4 (ADR-0625..0628): Visualize below the titlebar (header and window controls usable in Electron), a supervising boss, lane subagents from /api/subagents?laneId=, the node panel with output and a prompt box, stare and outburst reactions, plasma conduits and fiber-optic edges, and the professional office cast. Rendering is checked in the desktop app with ?vizDemo=1 or live agents
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_director.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VIZ.5
+demo-P-VIZ.5: ## P-VIZ.5 (ADR-0629..0631): the node panel beside its node, a self-measuring Visualize header, distinct Fleet layout icons, thin plasma with token particles, higher arcs, a thin professional line with red streaks, spaced subagents, and two alternating salt-and-pepper managers
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_panel_place.test.ts desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_anime_pose.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-ASKPLUS.1
+demo-P-ASKPLUS.1: ## P-ASKPLUS.1 (ADR-0632): the Ask Lucid "+" menu opens in front of the panel and above the bar in every dock mode; Esc closes only the menu; Visualize and Orbit give way to a docked Ask Lucid. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_askplus_1.mjs against a QA instance
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/popover_place.test.ts desktop/renderer/attach_ui.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_pvoice2.ts
+	node --check desktop/scripts/demo_p_askplus_1.mjs
+
+.PHONY: demo-P-SPACING.1
+demo-P-SPACING.1: ## P-SPACING.1 (ADR-0633): Settings spacing audit in a running QA instance (both layouts, every category, every card and disclosure open): no touching boxes, stacked fields share a width, even card rhythm. Needs LUCID_DEMO_CDP_URL=ws://... and LUCID_DEMO_URL=http://127.0.0.1:<port>/
+	$(BUN) test $(TEST_IGNORES) tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node desktop/scripts/demo_p_spacing_1.mjs
+
+.PHONY: demo-P-FLEET.HEAD2
+demo-P-FLEET.HEAD2: ## P-FLEET.HEAD2 (ADR-0634): the Fleet header keeps one window control (Minimize); pill restore; Escape closes the More menu before the panel; header spacing clean. Needs LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for a running QA instance
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	node desktop/scripts/demo_p_fleet_head_2.mjs
+
+.PHONY: demo-P-VIZ.6
+demo-P-VIZ.6: ## P-VIZ.6 (ADR-0635..0638): Visualize session ledger, throwables and Storm, a mixed cast, email and calendar connectors. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_6.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_ledger_model.test.ts desktop/renderer/viz_throw_math.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/mcp_catalog.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_6.mjs
+
+.PHONY: demo-P-AUTO.FULL1
+demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic set (danger mode, a T4 loop dial, Fleet full auto); only managed policy stops it. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_auto_full_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/exec_policy.test.ts desktop/fleet_lanes.test.ts desktop/loop_report.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_exec_1.ts
+	$(BUN) run desktop/scripts/demo_p_goal_13.ts
+	node --check desktop/scripts/demo_p_auto_full_1.mjs

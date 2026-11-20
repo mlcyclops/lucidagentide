@@ -183,6 +183,12 @@ describe("probePreviewFile", () => {
     if (r.ok) expect(r.kind).toBe("html");
   });
 
+  test("P-PREVIEW-CURTAIN.1: the size rides along, so an empty file can be called blank", () => {
+    const r = probePreviewFile("/a/empty.html", { size: () => 0 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bytes).toBe(0);
+  });
+
   test("THE BUG: a missing file does NOT resolve", () => {
     // The exact field-report case: a stale `game.html` the engine could no longer read.
     const r = probePreviewFile("/a/game.html", { size: () => { throw new Error("ENOENT"); } });

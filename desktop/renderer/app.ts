@@ -69,6 +69,8 @@ import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter ru
 import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
+// P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
+import { CURTAIN, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type CurtainDecision, type CurtainEntry, type CurtainProbe, type LaneMini, type PaintStats } from "./preview_curtain.ts";
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -82,6 +84,8 @@ import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ra
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
+import { initViz, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -135,8 +139,8 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -160,6 +164,8 @@ import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
+import { parseSettingsCat, parseSettingsLayout, resolveSettingsTarget, searchSettings, sectionsOf, SETTINGS_CAT_KEY, SETTINGS_CATEGORIES, SETTINGS_LAYOUT_KEY, settingsCategory, type SettingsCatId, type SettingsLayout, type SettingsSecId } from "./settings_nav.ts"; // P-SETUX.1 (ADR-0615)
+import { catalogEntryIsOfficial, configuredFor, MCP_CATEGORY_LABEL, MCP_COMMUNITY_CATALOG, MCP_OAUTH_HINT, normalizeOrgCatalog, type McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): Quick connect
 import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
@@ -171,7 +177,7 @@ import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancelable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyzer
-import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, EmbeddingsConfigView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -441,23 +447,29 @@ function buildShell(): void {
       </button>
       <!-- P-REPO.1 (ADR-0406): the repo the composer's session works on, and where its commits go. -->
       <button class="tb-chip repo-chip" id="tbRepo" type="button" hidden aria-label="Repository and push target"></button>
-      <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
+      <!-- AskSage Persona lives in the titlebar (full-width, so it doesn't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-      <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-      <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <!-- P-SETUX.1 (ADR-0620): shown ONLY while a skill is active, named after it. Picking a skill is in the composer "+" menu. -->
+      <button class="ctool tb-chip" id="ctSkill" data-tip="Active skill|Click to switch or clear it" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0219: AskSage RAG Datasets picker, AskSage users only (ADR-0620). Short name shown; full name on hover. -->
       <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
-      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Skills / Knowledge fold in here. -->
-      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Skills and Knowledge, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
+      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Datasets / the active skill fold in here. -->
+      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Datasets and the active skill, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
       <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
       <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
         <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
         <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
       </div>
       <div class="tb-spacer"></div>
-      <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
-        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+      <!-- P-SETUX.1 (ADR-0620): text zoom is one magnifier icon; hovering (or focusing / clicking) it drops the
+           zoom out / reset / zoom in controls down beneath it. -->
+      <div class="zoom-wrap" id="zoomWrap">
+        <button class="zoom-btn" id="zoomBtn" type="button" aria-label="Text zoom" aria-haspopup="true" aria-expanded="false" aria-controls="zoomGroup">${icon("zoom", 16)}</button>
+        <div class="zoom" id="zoomGroup" role="group" aria-label="Text zoom">
+          <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
+          <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
+          <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+        </div>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
       <label class="agent-tier-control" id="agentTierControl" hidden data-tip="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
@@ -573,6 +585,8 @@ function buildShell(): void {
             <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
             <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet agents, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <!-- P-VIZ.1 (ADR-0622): Visualize - Main, its agents and subagents in 3D with the tokens flowing between them. -->
+            <button class="ctool ctool-icon" id="ctViz" type="button" aria-label="Visualize agents and token flow" data-tip="Visualize|Main, your agents and their subagents in 2D or 3D, with estimated tokens flowing between them. Hover for the rate, click a node for its actions, record a clip.">${icon("visualize", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyzer of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -598,12 +612,20 @@ function buildShell(): void {
         </div>
       </aside>
 
-      <aside class="settings" id="settings" hidden>
+      <!-- P-SETUX.1 (ADR-0615): Settings is an overlay, never an in-flow aside, so no fixed panel (the fleet
+           dock, the IDE, the orbit) can sit on top of it. init moves both nodes to <body>. -->
+      <div class="set-scrim" id="setScrim" hidden></div>
+      <aside class="settings" id="settings" data-layout="window" aria-labelledby="setTitle" hidden>
         <div class="set-head">
-          <div class="set-title">${icon("sliders", 17)} Settings</div>
-          <button class="set-close" id="setClose" data-tip="Close settings">${icon("close", 16)}</button>
+          <div class="set-title" id="setTitle">${icon("sliders", 17)} Settings</div>
+          <label class="set-search">${icon("search", 13)}<input id="setSearch" type="search" placeholder="Search settings" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>
+          <button class="set-close" id="setLayoutBtn" type="button"></button>
+          <button class="set-close" id="setClose" type="button" aria-label="Close settings" data-tip="Close settings|Esc">${icon("close", 16)}</button>
         </div>
-        <div class="set-body" id="setBody"></div>
+        <div class="set-main">
+          <nav class="set-nav" id="setNav" aria-label="Settings categories"></nav>
+          <div class="set-body" id="setBody"></div>
+        </div>
       </aside>
 
       <aside class="settings skills-dir" id="skillsDir" hidden>
@@ -2110,7 +2132,9 @@ interface SubagentCard {
   etas: () => readonly (number | null)[];
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): SubagentCard {
+// P-VIZ.4 (ADR-0625): `laneId` = the delegation came from a lane the composer is attached to (lanes now emit
+// `subagent` too), so its runs are read from that lane's session, not Main's.
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true, laneId?: string): SubagentCard {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
@@ -2203,7 +2227,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
-    const v = await bridge.subagents().catch(() => null);
+    const v = await bridge.subagents(laneId).catch(() => null);
     // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
     // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
     // fallback keeps single-batch turns rendering even when neither yields a match).
@@ -2968,6 +2992,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
     if (!owns() || settled) return;
+    vizBus.emit(opts.laneId ?? "main", "chat", e); // P-VIZ.1 (ADR-0622): a no-op unless Visualize is open
     if (e.type === "connection") {
       rejoined = true; // the next snapshot arrives on the re-attach stream
       setPhase(e.message); paintHud();
@@ -3116,7 +3141,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
-      const card = createSubagentCard(e, () => subCards.length <= 1);
+      const card = createSubagentCard(e, () => subCards.length <= 1, opts.laneId);
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
@@ -4508,7 +4533,7 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow || fieldsRows ? `<div class="prov-grid" style="--prov-trail:2">${keyRow}${fieldsRows}</div>` : ""}${hint}${guideRow}</div></div>`;
 }
 
 // ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
@@ -4692,8 +4717,8 @@ function datasetsSection(list: string[] | null): string {
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
-// Declutter (user call, 2026-08-01): every section starts collapsed; deep links (openSettingsToVoice
-// etc.) add their card id here before opening, so guided fixes still land expanded.
+// Declutter (user call, 2026-08-01): every section starts collapsed; a deep link (openSettingsTo) adds its
+// card id here before opening, so guided fixes still land expanded.
 const SET_OPEN = new Set<string>([]);
 
 function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
@@ -4708,6 +4733,7 @@ const setSkel = (name: string, title: string, sub: string, collapsible = false):
 function fillSec(name: string, html: string): void {
   const el = document.querySelector(`#setBody [data-sec="${name}"]`);
   if (el) el.outerHTML = html;
+  if (name !== "overview") queueSetOverview(); // P-SETUX.1: every hydration that lands can change a status tile
 }
 
 const isValidEmail = (s: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -4882,7 +4908,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     </div></div>`);
   document.body.appendChild(ov);
   const err = $("#govSetupErr", ov) as HTMLElement;
-  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsToAsksage(); onDone?.(); };
+  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsTo("asksage"); onDone?.(); };
   const save = async () => {
     const plan = planGovSetup({ key: ($("#govKey", ov) as HTMLInputElement)?.value ?? "", base: ($("#govBase", ov) as HTMLInputElement)?.value ?? "" });
     if (!plan.enableLockdown) { err.textContent = "Paste your AskSage API key to turn on lockdown, or choose \u201cI'll add it later\u201d."; err.hidden = false; return; }
@@ -4906,75 +4932,6 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
   $("#govSetupLater", ov)!.addEventListener("click", () => void later());
   ($("#govKey", ov) as HTMLInputElement)?.addEventListener("input", () => { err.hidden = true; });
   setTimeout(() => ($("#govKey", ov) as HTMLInputElement)?.focus(), 30);
-}
-
-// P-GOVCUI.1: open Settings on the AskSage gov-gateway card (expanded + scrolled + briefly highlighted) so a
-// new user SEES where lockdown lives. Mirrors openPersonalizationSettings.
-function openSettingsToAsksage(): void {
-  SET_OPEN.add("asksage");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="asksage"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-LOCAL.4: jump Settings to the Local Providers card (from the Provider Hub's "Local & self-hosted" tile),
-// scrolled + flashed so the user lands on the add form (with the one-click model presets).
-function openSettingsToLocalProviders(): void {
-  SET_OPEN.add("localProviders");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ASKLUCID.9 (ADR-0600): jump Settings to the Providers card (from the Edit image card when no image model is
-// connected), scrolled and flashed like the jumps above.
-function openSettingsToProviders(): void {
-  SET_OPEN.add("providers");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="providers"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
-function openSettingsToVoice(): void {
-  SET_OPEN.add("voice");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="voice"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ATTACH.1 (ADR-0598): the "+" menu's Connectors (MCP) entry lands on the MCP connectors card, opened,
-// scrolled and flashed like the jumps above.
-function openSettingsToMcp(): void {
-  SET_OPEN.add("mcp");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="mcp"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
 }
 
 // First-run role picker - four cards in the model-card idiom. Resolves once a role is chosen (or
@@ -5101,7 +5058,7 @@ function askLucid(): AskLucidHandle {
     imageEdit: {
       models: () => bridge.imageModels(),
       store: miniStore(),
-      openProviders: openSettingsToProviders,
+      openProviders: () => openSettingsTo("providers"),
       open: showAskLucidImage,
       ...(bridge.canShowInFolder() ? { showInFolder: (path: string) => bridge.showInFolder(path) } : {}),
     },
@@ -5308,8 +5265,8 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
     else if (v === "settings") openSettings();
     else if (v === "preview") openPreview();
     else if (v === "skills") openSkills();
-    else if (v === "local-models") openSettingsToLocalProviders();
-    else openSettingsToVoice();
+    else if (v === "local-models") openSettingsTo("localProviders");
+    else openSettingsTo("voice");
     // P-ASKLUCID.6 (ADR-0587): a view Lucid opened for the user is a feature they have now found.
     markFeaturesSeen(v === "orbit" ? ["fleet"] : [v]);
     return { ok: true, message: `Opened the ${v} view.` };
@@ -5706,7 +5663,7 @@ function renderAgentGap(item: ReadyItem): void {
     // The fix surfaces live in the rails, which the stage hides - park the stage first, then deep-link.
     if (state.immersive) setImmersive(false);
     if (fix === "hub") openProviderHub();
-    else if (fix === "voice") openSettingsToVoice();
+    else if (fix === "voice") openSettingsTo("voice");
     else openKnowledge();
   });
   document.querySelector(".center")?.appendChild(card);
@@ -5816,9 +5773,9 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     <div class="role-seg-row">${chips}</div>
     ${hero}
     <div class="set-note">${icon("info", 12)} Shapes what you see first; nothing is ever locked away. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
-  return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
+  return setCard("profile", "Profile", "", `<div class="prov-grid"><div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
-      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
+      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
     ${managedLine}${idLine}
     ${roleRow}`, true);
 }
@@ -6150,17 +6107,24 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add an MCP server</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="mcpName" class="prov-key" placeholder="Name (e.g. Linear, internal-tools)" /></div>
         <div class="prov-row"><input id="mcpUrl" class="prov-key" placeholder="https://mcp.example.com/mcp (or /sse)" />
-          <select id="mcpTransport" class="prov-key" style="flex:none;width:84px"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
+          <select id="mcpTransport" class="prov-key" aria-label="Transport"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
         <div class="prov-row"><input id="mcpToken" class="prov-key" type="password" placeholder="Bearer token (optional)" />
           <button class="btn-mini ok" id="mcpAdd">${icon("check", 12)} Connect</button></div>
+        </div>
       </div></div>`;
   const note = `<div class="set-note">${icon("info", 12)} Auth + config only - <b>omp owns the MCP connection</b> (ADR-0020). The token is stored on this machine (git-ignored) and sent as an <code>Authorization: Bearer</code> header; MCP tool output is still scanned by the security gate. Enterprise IdP sign-in (Okta / Entra / GCP WIF) lands in P-MCP.2.</div>`;
   return setCard("mcp", "MCP connectors", "model context protocol", rows + form + note, true);
 }
 function hydrateMcp(): void {
-  void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
+  void bridge.mcpList().then((m) => {
+    state.mcpServers = m ?? []; setLoaded.add("mcp");
+    fillSec("mcp", secMcp(state.mcpServers));
+    // P-SETUX.1: Quick connect's "Connected" badges follow the list, unless a token is being typed there.
+    if (document.activeElement?.id !== "mcpqToken") fillSec("mcpQuick", secMcpQuick());
+  });
 }
 // P-AGENTFW.2 (ADR-0149): Remote agents (hermes/openclaw) reached THROUGH the Lucid agent-firewall.
 function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
@@ -6177,10 +6141,12 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="agentName" class="prov-key" placeholder="Name (e.g. Hermes prod)" />
-          <select id="agentKind" class="prov-key" style="flex:none;width:110px"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
+          <select id="agentKind" class="prov-key" aria-label="Agent kind"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
         <div class="prov-row"><input id="agentCommand" class="prov-key" placeholder="Command (e.g. hermes, openclaw, uvx)" /></div>
         <div class="prov-row"><input id="agentArgs" class="prov-key" placeholder="Args (e.g. acp --url wss://host:18789 --token-file /abs/path)" /></div>
+        </div>
         <div class="prov-row">
           <select id="agentPerm" class="prov-key" style="flex:none;width:160px"><option value="deny">permissions: deny</option><option value="allow">permissions: allow</option></select>
           <button class="btn-mini ok" id="agentAdd">${icon("check", 12)} Connect</button></div>
@@ -6189,7 +6155,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   return setCard("agents", "Remote agents", "hermes · openclaw · ACP firewall", rows + form + note, true);
 }
 function hydrateAgents(): void {
-  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; fillSec("agents", secAgents(state.agents)); });
+  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; setLoaded.add("agents"); fillSec("agents", secAgents(state.agents)); });
 }
 
 // P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
@@ -6258,11 +6224,13 @@ function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds
             <select id="wlAuthKind" class="prov-key" style="flex:none;width:120px"><option value="">No auth</option><option value="jwt">JWT</option><option value="oauth">OAuth</option><option value="saml">SAML</option><option value="pem">PEM</option><option value="apikey">API key</option><option value="basic">User / Pass</option></select>
             <input id="wlAuthLabel" class="prov-key" placeholder="Label (e.g. prod-gateway)" />
           </div>
+          <div class="prov-grid">
           <div class="prov-row"><input id="wlAuthUser" class="prov-key" placeholder="Username (User/Pass only, optional)" spellcheck="false" /></div>
           <div class="prov-row"><input id="wlAuthRotate" class="prov-key" type="number" min="0" placeholder="Rotate every N days (optional)" data-tip="Rotation reminder|Flags the key as due N days after it's set. Visibility only - nothing auto-rotates; use the Rotate button to replace it." /></div>
           <div class="prov-row">
             <input id="wlAuthSecret" class="prov-key" type="password" placeholder="Paste token / password / API key" />
             <button class="btn-mini" id="wlAuthFile" data-tip="Upload file|Pick a token / PEM / API-key / config file. It's read + encrypted in the vault; the secret never enters this window.">${icon("folder", 12)} Upload file</button>
+          </div>
           </div>
           <div class="set-note">${icon("shield", 12)} Secrets are stored <b>OS-encrypted</b> (Windows DPAPI / macOS Keychain / Linux libsecret). The whitelist keeps only a reference - never the secret itself.</div>
         </details>
@@ -6736,11 +6704,15 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
   const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
   const opt = (v: string, label: string) => `<option value="${v}" ${c.authKind === v ? "selected" : ""}>${label}</option>`;
   const pill = active ? `<span class="abadge ok">active</span>` : (c.enabled ? `<span class="abadge warn">needs a key / relaunch</span>` : `<span class="abadge">off</span>`);
-  return `<div class="set-sec">
+  // P-SETUX.1 (ADR-0615): through setCard, so the fill keeps the card's header, collapse and data-sec (a bare
+  // `.set-sec` replaced the collapsible card with a headerless blob that later hydrations could not find).
+  return setCard("embeddings", "Semantic search", "knowledge RAG \u00b7 your own embeddings", `
     <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
     <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
+    <div class="prov-grid">
     <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
-    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" value="${c.dim || ""}" style="max-width:90px"/></div>
+    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" aria-label="Dimension" value="${c.dim || ""}" style="width:90px"/></div>
+    </div>
     <div class="prov-row">
       <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
       <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
@@ -6748,8 +6720,7 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
       <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
     </div>
     ${active ? `<div class="prov-row"><button class="btn-mini" id="embReindex">${icon("refresh", 13)} Re-index knowledge graphs</button><span class="set-sub" style="align-self:center">Rebuild every KG's semantic index from its compiled pages.</span></div>` : ""}
-    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>
-  </div>`;
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>`, true);
 }
 async function saveEmbeddings(): Promise<void> {
   const body = $("#setBody")!;
@@ -6806,39 +6777,188 @@ async function reindexEmbeddings(): Promise<void> {
   if (r?.ok) showToast({ tone: "ok", title: "Semantic index rebuilt", desc: `${r.stored ?? 0} passage${r.stored === 1 ? "" : "s"} across ${r.kgs ?? 0} knowledge graph${r.kgs === 1 ? "" : "s"}.`, timeout: 5200 });
   else showToast({ tone: "danger", title: "Re-index didn't run", desc: r?.error ?? "Enable semantic search first.", timeout: 5200 });
 }
+// ── P-SETUX.1 (ADR-0615): the Settings window - categories, Overview, Quick connect ─────────────────────
+/** Which fetches have landed at least once. Until one has, its Overview tile says "Checking", never a guess. */
+const setLoaded = new Set<"workspace" | "local" | "mcp" | "agents">();
+let setEmbeddings: { cfg: EmbeddingsConfigView | null; active: boolean } | null = null;
+let setVoice: VoiceSettingsView | null = null;
+
+/** First paint of every card, keyed by EVERY SettingsSecId (settings_nav.ts), so no card can be rendered
+ *  outside a category: adding one there without a renderer here, or the reverse, fails the typecheck. */
+const SET_SHELL: Record<SettingsSecId, () => string> = {
+  overview: () => secOverview(),
+  workspace: () => setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
+  // Profile is just the local name we already hold in state - render it instantly (no skeleton /
+  // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
+  profile: () => secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
+  personal: () => setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+  providers: () => setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+  asksage: () => setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
+  asksageQuota: () => `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
+  localProviders: () => setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+  others: () => setSkel("others", "More providers", "", true),
+  sovereignty: () => `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
+  subagents: () => setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
+  judgment: () => setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
+  compression: () => setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
+  mcpQuick: () => secMcpQuick(), // P-SETUX.1 (ADR-0616): official MCP servers, one click each
+  mcp: () => setSkel("mcp", "MCP connectors", "model context protocol", true),
+  agents: () => setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
+  embeddings: () => setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
+  vault: () => setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
+  [VAULT_DEST_SEC]: () => setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
+  [VAULT_ENV_SEC]: () => setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
+  whitelist: () => setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
+  voice: () => setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+  theme: () => secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
+  appearance: () => secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+  chatScroll: () => secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
+  workingStatus: () => secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
+  miniLucid: () => secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
+  trivia: () => secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
+  settingsLayout: () => secSettingsLayout(),
+  developer: () => setSkel("developer", "Developer", "logs · diagnostics", true),
+};
+/** One `<section class="set-cat">` per category; only the active one is shown. Cards keep their
+ *  `[data-sec]` ids under #setBody, so every in-place fillSec hydration works across categories. */
 function settingsShell(): string {
+  const keyNote = `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+  return SETTINGS_CATEGORIES.map((c) => `<section class="set-cat" data-cat="${c.id}" aria-label="${esc(c.label)}"${c.id === setCat ? "" : " hidden"}>
+    <h2 class="set-cat-h">${esc(c.label)}</h2>${sectionsOf(c.id).map((s) => SET_SHELL[s]()).join("")}${c.id === "models" ? keyNote : ""}</section>`).join("");
+}
+
+type SetTileTone = "ok" | "off" | "warn" | "wait" | "info";
+interface SetTile { sec: SettingsSecId; icon: string; title: string; tone: SetTileTone; badge: string; detail: string }
+const SET_WAIT = { tone: "wait", badge: "Checking", detail: "Reading the current state" } as const;
+const TTS_LABEL: Record<VoiceSettingsView["ttsProvider"], string> = { elevenlabs: "ElevenLabs", "openai-tts": "OpenAI", "local-tts": "on-device", "dots-tts": "dots.tts" };
+const STT_LABEL: Record<VoiceSettingsView["sttProvider"], string> = { elevenlabs: "ElevenLabs", whisper: "Whisper", whistle: "Whistle" };
+const CUSTODY_LABEL: Record<KeyVaultStatus["custody"], string> = { dpapi: "Windows DPAPI", keychain: "macOS Keychain", libsecret: "Secret Service", "plaintext-file": "a plain file" };
+
+/** "on/total" status for a list of switchable things (MCP servers, remote agents). */
+function setCountTile(sec: SettingsSecId, ic: string, title: string, loaded: boolean, items: readonly { name: string; enabled: boolean }[], none: string): SetTile {
+  if (!loaded) return { sec, icon: ic, title, ...SET_WAIT };
+  if (!items.length) return { sec, icon: ic, title, tone: "off", badge: "None", detail: none };
+  const on = items.filter((x) => x.enabled);
+  return { sec, icon: ic, title, tone: on.length ? "ok" : "warn", badge: `${on.length}/${items.length} on`, detail: (on.length ? on : items).map((x) => x.name).join(", ") };
+}
+/** The Overview's tiles, each from data hydrateSettings already fetched. Unknown stays "Checking". */
+function overviewTiles(): SetTile[] {
+  const ws = state.workspace;
+  const a = state.auth;
+  const providers = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id) && providerConfigured(p));
+  const ask = state.asksage;
+  const vault = a?.vault;
+  const emb = setEmbeddings;
+  const voice = state.voice ?? setVoice; // the composer's live cache once loaded; the Voice card's fetch until then
   return [
-    setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
-    // Profile is just the local name we already hold in state - render it instantly (no skeleton /
-    // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
-    secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
-    setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
-    setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
-    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
-    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
-    `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
-    setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
-    setSkel("mcp", "MCP connectors", "model context protocol", true),
-    setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
-    setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
-    setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
-    setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
-    setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
-    setSkel("others", "More providers", "", true),
-    setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
-    setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
-    setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
-    secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
-    secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
-    secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
-    secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
-    secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
-    secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
-    setSkel("developer", "Developer", "logs · diagnostics", true),
-    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
-  ].join("");
+    ws ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "ok", badge: "Open", detail: ws.current }
+      : setLoaded.has("workspace") ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "off", badge: "No folder", detail: "Pick a folder to work in" }
+      : { sec: "workspace", icon: "folder", title: "Workspace", ...SET_WAIT },
+    !a ? { sec: "providers", icon: "spark", title: "Providers", ...SET_WAIT }
+      : providers.length ? { sec: "providers", icon: "spark", title: "Providers", tone: "ok", badge: `${providers.length} connected`, detail: providers.map((p) => p.name).join(", ") }
+      : { sec: "providers", icon: "spark", title: "Providers", tone: "off", badge: "Not connected", detail: "Sign in or paste a key to start chatting" },
+    !ask ? { sec: "asksage", icon: "shield", title: "AskSage gateway", ...SET_WAIT }
+      : ask.configured ? { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "ok", badge: "Connected", detail: ask.only ? "Lockdown on: every turn routes through the gateway" : "Configured, lockdown off" }
+      : { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "off", badge: "Not set up", detail: "For Government and CUI work" },
+    !setLoaded.has("local") ? { sec: "localProviders", icon: "gauge", title: "Local providers", ...SET_WAIT }
+      : state.localProviders.length ? { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "ok", badge: `${state.localProviders.length} added`, detail: state.localProviders.map((p) => p.name).join(", ") }
+      : { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "off", badge: "None", detail: "Ollama, vLLM or another self-hosted endpoint" },
+    setCountTile("mcp", "plugins", "MCP servers", setLoaded.has("mcp"), state.mcpServers, "Quick connect lists official servers"),
+    setCountTile("agents", "link", "Remote agents", setLoaded.has("agents"), state.agents, "Hermes or OpenClaw through the agent firewall"),
+    !voice ? { sec: "voice", icon: "volume", title: "Voice", ...SET_WAIT }
+      : { sec: "voice", icon: "volume", title: "Voice", tone: "info", badge: voice.ttsAutoSpeak ? "Auto-speak on" : "Selected", detail: `Read aloud: ${TTS_LABEL[voice.ttsProvider] ?? voice.ttsProvider}, dictation: ${STT_LABEL[voice.sttProvider] ?? voice.sttProvider}` },
+    !a ? { sec: "vault", icon: "shield", title: "Credential vault", ...SET_WAIT }
+      : !vault ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "info", badge: "Not reported", detail: "The engine did not report its key store" }
+      : vault.state !== "ok" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Unavailable", detail: vault.detail || `The ${CUSTODY_LABEL[vault.custody]} store could not be read` }
+      : vault.custody === "plaintext-file" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Plain file", detail: "Keys are kept in a plain file on this machine" }
+      : { sec: "vault", icon: "shield", title: "Credential vault", tone: "ok", badge: "Protected", detail: `Keys encrypted by ${CUSTODY_LABEL[vault.custody]}` },
+    !emb ? { sec: "embeddings", icon: "search", title: "Semantic search", ...SET_WAIT }
+      : emb.active ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "ok", badge: "On", detail: emb.cfg?.model || "Embedding endpoint active" }
+      : emb.cfg?.enabled ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "warn", badge: "Needs attention", detail: "Saved, but needs a key or a relaunch" }
+      : { sec: "embeddings", icon: "search", title: "Semantic search", tone: "off", badge: "Off", detail: "Lexical search only" },
+  ];
+}
+function secOverview(): string {
+  const tiles = overviewTiles().map((t) => `<button class="set-tile" type="button" data-set-jump="${t.sec}" aria-label="${esc(`${t.title}: ${t.badge}. Open its settings`)}">
+    <span class="set-tile-h">${icon(t.icon, 15)}<b class="set-tile-t">${esc(t.title)}</b><span class="set-tile-b t-${t.tone}">${esc(t.badge)}</span></span>
+    <span class="set-tile-d">${esc(t.detail)}</span></button>`).join("");
+  return setCard("overview", "What's connected", "click a tile to open its card", `<div class="set-tiles">${tiles}</div>`, false);
+}
+/** Repaint the Overview once per frame however many hydrations land in it, keeping a focused tile focused. */
+let setOverviewQueued = false;
+function queueSetOverview(): void {
+  if (!state.settingsOpen || setOverviewQueued) return;
+  setOverviewQueued = true;
+  requestAnimationFrame(() => {
+    setOverviewQueued = false;
+    const focused = (document.activeElement as HTMLElement | null)?.closest?.('[data-sec="overview"] [data-set-jump]') as HTMLElement | null;
+    fillSec("overview", secOverview());
+    if (focused) ($(`#setBody [data-sec="overview"] [data-set-jump="${focused.dataset.setJump}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
+  });
+}
+
+// ADR-0616: Quick connect. An org's managed list REPLACES the community catalog (never merges with it).
+let mcpQuickCat = "all";
+let mcpQuickTokenFor = "";
+/** Re-validated here too: the list arrives as JSON over the engine API, and only well-formed https entries
+ *  may ever reach a Connect button. An engine that predates the field sends none (community catalog). */
+function orgMcpCatalog(): McpCatalogEntry[] {
+  return normalizeOrgCatalog(state.managed?.mcpCatalog ?? []);
+}
+function mcpQuickTile(e: McpCatalogEntry): string {
+  const official = catalogEntryIsOfficial(e);
+  const conn = setLoaded.has("mcp") ? configuredFor(e, state.mcpServers) : undefined;
+  const auth = e.auth === "oauth" ? "OAuth sign-in" : e.auth === "token" ? "Token" : "No sign-in";
+  let action: string;
+  if (!official) action = `<button class="btn-mini" type="button" disabled>Not offered</button>`;
+  else if (conn) action = `<button class="btn-mini" type="button" data-set-jump="mcp">Manage</button>`;
+  else if (e.auth === "token" && mcpQuickTokenFor === e.id) action = `<input class="prov-key" id="mcpqToken" type="password" placeholder="${esc(e.name)} token" aria-label="${esc(e.name)} token" autocomplete="off" spellcheck="false" /><button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  else action = `<button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  return `<div class="mcpq-tile${official ? "" : " blocked"}">
+    <div class="mcpq-h"><b class="mcpq-name">${esc(e.name)}</b>${conn ? `<span class="abadge ok">${conn.enabled ? "Connected" : "Added, off"}</span>` : ""}</div>
+    <div class="mcpq-vendor">${esc(e.vendor)}</div>
+    <div class="mcpq-badges"><span class="abadge set">${esc(MCP_CATEGORY_LABEL[e.category] ?? e.category)}</span><span class="abadge">${auth}</span></div>
+    ${official ? (e.note ? `<div class="mcpq-note">${esc(e.note)}</div>` : "") : `<div class="mcpq-note warn">Not offered: its endpoint or docs page is not on a domain the vendor owns.</div>`}
+    <div class="mcpq-foot">${official ? `<a class="mcpq-docs" href="${esc(e.docsUrl)}" target="_blank" rel="noopener noreferrer">Official docs</a>` : ""}${action}</div>
+  </div>`;
+}
+function secMcpQuick(): string {
+  const org = orgMcpCatalog();
+  const entries = org.length ? org : MCP_COMMUNITY_CATALOG;
+  const cats = [...new Set(entries.map((e) => e.category))];
+  const cat = cats.some((c) => c === mcpQuickCat) ? mcpQuickCat : "all";
+  const chips = ["all", ...cats].map((c) => `<button class="mcpq-chip${c === cat ? " on" : ""}" type="button" data-mcpq-cat="${esc(c)}" aria-pressed="${c === cat}">${esc(c === "all" ? "All" : MCP_CATEGORY_LABEL[c as McpCatalogEntry["category"]] ?? c)}</button>`).join("");
+  const tiles = entries.filter((e) => cat === "all" || e.category === cat).map(mcpQuickTile).join("");
+  const source = org.length
+    ? `<div class="mcpq-src">${icon("shield", 13)}<span>Authorized by ${esc(state.managed?.orgName || "your organization")}</span></div>`
+    : `<div class="mcpq-src">${icon("check", 13)}<span>Community catalog: official vendor endpoints only</span></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} ${org.length ? "Your organization's policy lists these servers." : "Every entry is the vendor's own endpoint, checked against the vendor's own documentation page; look-alike servers are left out."} Connecting adds the server to <b>MCP connectors</b> below, where you can turn it off or remove it. Tool output is still scanned by the security gate.</div>`;
+  return setCard("mcpQuick", "Quick connect", "official MCP servers", `${source}<div class="mcpq-chips" role="group" aria-label="Filter by category">${chips}</div><div class="mcpq-grid">${tiles || `<div class="empty">Nothing in this category.</div>`}</div>${note}`, false);
+}
+async function mcpQuickConnect(id: string): Promise<void> {
+  const org = orgMcpCatalog();
+  const e = (org.length ? org : MCP_COMMUNITY_CATALOG).find((x) => x.id === id);
+  if (!e || !catalogEntryIsOfficial(e)) return; // never connect an entry that fails the official-domain check
+  let token: string | undefined;
+  if (e.auth === "token") {
+    if (mcpQuickTokenFor !== id) { mcpQuickTokenFor = id; fillSec("mcpQuick", secMcpQuick()); ($("#mcpqToken") as HTMLInputElement | null)?.focus(); return; }
+    token = (($("#mcpqToken") as HTMLInputElement | null)?.value ?? "").trim();
+    if (!token) { showToast({ tone: "warn", title: "Paste the token first", desc: `${e.name} needs an access token from ${e.vendor}. The official docs link shows where to create one.`, timeout: 4200 }); return; }
+  }
+  const saved = await bridge.mcpUpsert({ name: e.name, transport: e.transport, url: e.url, ...(token ? { token } : {}) }).catch(() => null);
+  if (!saved) { showToast({ tone: "danger", title: `${e.name} was not added`, desc: "The engine did not save the server. Try again, or add it by hand under MCP connectors.", timeout: 6000 }); return; }
+  mcpQuickTokenFor = "";
+  hydrateMcp();
+  showToast(e.auth === "oauth"
+    ? { title: `${e.name} added`, desc: MCP_OAUTH_HINT, meta: "omp owns the connection \u00b7 tool output is still scanned", actions: [{ label: "OK" }], timeout: 0 }
+    : { title: `${e.name} connected`, desc: "The agent picks it up on your next turn.", meta: "omp owns the connection \u00b7 tool output is still scanned", timeout: 4200 });
+}
+
+function secSettingsLayout(): string {
+  const opt = (v: SettingsLayout, label: string, d: string) => `<label class="set-toggle"><input type="radio" name="setLayout" value="${v}"${setLayout === v ? " checked" : ""}/><span><b>${label}</b> - ${d}</span></label>`;
+  return setCard("settingsLayout", "Settings window", "window or side panel",
+    opt("window", "Window", "a large window with the categories on the left (recommended)")
+    + opt("panel", "Side panel", "a full-height panel on the right, over the other panels"), true);
 }
 /** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives - no flash). */
 function hydrateSettings(): void {
@@ -6846,8 +6966,13 @@ function hydrateSettings(): void {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = ws ? workspaceSection(ws) : `<div data-sec="workspace"></div>`;
+    setLoaded.add("workspace"); queueSetOverview();
   });
-  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
+  void bridge.embeddingsConfig().then((r) => { // ADR-0221
+    const emb = { cfg: r?.config ?? null, active: !!r?.active };
+    setEmbeddings = emb;
+    fillSec("embeddings", secEmbeddings(emb.cfg, emb.active));
+  });
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -6864,7 +6989,7 @@ function hydrateSettings(): void {
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.voiceSettings().then((vset) => { setVoice = vset; fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
     void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
     void bridge.perCallModel().catch(() => null).then((v) => fillSec("subagents", secSubagents(v))); // P-MODEL.11 (ADR-0602)
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
@@ -6983,6 +7108,7 @@ async function hydrateLocalProviders(): Promise<void> {
     bridge.resultWindow().catch(() => null), // P-CTX.2b (ADR-0579): the tool-output window choice
   ]);
   state.localProviders = providers ?? [];
+  setLoaded.add("local");
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
   // The fill must be the WHOLE card. fillSec swaps the element's outerHTML, so passing the bare body (as
   // this did before ADR-0579) dropped the card's title and its data-sec, and every later refresh of the
@@ -7238,27 +7364,156 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
       ${destroy}</div>
     ${passphraseChangeHtml("cui")}</div>`;
 }
-function openSettings(): void {
-  closeKnowledge();
-  closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
-  closeSkills(); // P-SKILL.4
-  closeMeetings(); // P-MEET.1
-  closeRemoteView(); // P-RS-VIEW.1
+// ── P-SETUX.1 (ADR-0615): Settings is an OVERLAY (a centered window by default, or a right panel) ─────────
+// It floats above every fixed panel (fleet dock, IDE, orbit) the way Ask Lucid does, so opening it no longer
+// closes the other right-edge surfaces, collapses the sidebar or hides the inspector: closing it returns the
+// user to exactly what was there. Those surfaces still close Settings when THEY open (closeSettings).
+const readSetPref = (key: string): string | null => { try { return localStorage.getItem(key); } catch { return null; } };
+const writeSetPref = (key: string, v: string): void => { try { localStorage.setItem(key, v); } catch { /* private mode */ } };
+let setCat: SettingsCatId = parseSettingsCat(readSetPref(SETTINGS_CAT_KEY)) ?? "overview";
+let setLayout: SettingsLayout = parseSettingsLayout(readSetPref(SETTINGS_LAYOUT_KEY));
+let setOpener: HTMLElement | null = null; // focus goes back here on close
+let setRailBefore: HTMLElement | null = null; // the rail button that was lit before Settings took it
+/** A child overlay Settings can open (or one opened over it) owns Esc while it is up. */
+const SET_CHILD_OVERLAYS = ".popover, .modal-ov, .fb, .ctx-menu, .palette.show, .coach-card, .figma-scrim, .mkt-scrim, .goal-scrim";
+
+/** Open Settings on a category (the remembered one when none is named). */
+function openSettings(cat: SettingsCatId = setCat): void {
+  const wasOpen = state.settingsOpen;
+  if (!wasOpen) {
+    setOpener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    setRailBefore = $(".rail-btn.active") as HTMLElement | null;
+  }
   state.settingsOpen = true;
-  if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
-  $("#inspector")!.hidden = true;
+  document.body.classList.add("set-open");
+  applySettingsLayout();
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "settings"));
-  void renderSettings();
+  if (!wasOpen) renderSettings();
+  showSettingsCat(cat);
+  if (!wasOpen) requestAnimationFrame(() => ($("#setNav .set-nav-it.on") as HTMLElement | null)?.focus({ preventScroll: true }));
+}
+/** The one deep link: open Settings on the card's category, expand the card, scroll to it, flash it and
+ *  focus its header. A category id opens that category; anything unknown opens the Overview. */
+function openSettingsTo(target: string): void {
+  const { cat, sec } = resolveSettingsTarget(target);
+  if (sec) SET_OPEN.add(sec);
+  openSettings(cat);
+  if (!sec) return;
+  setTimeout(() => {
+    const card = document.querySelector<HTMLElement>(`#setBody [data-sec="${sec}"]`);
+    if (!card) return;
+    card.classList.add("open");
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.add("set-flash");
+    setTimeout(() => card.classList.remove("set-flash"), 1600);
+    (card.querySelector(".set-coll-h, [data-set-jump], button") as HTMLElement | null)?.focus({ preventScroll: true });
+  }, 140);
 }
 function closeSettings(): void {
   if (!state.settingsOpen) return;
   state.settingsOpen = false;
   seasonPreview?.dispose(); seasonPreview = null; // P-SEASON.1: no hidden canvas keeps animating
-  $("#settings")!.hidden = true;
-  $("#inspector")!.hidden = false;
+  const aside = $("#settings")!;
+  const hadFocus = aside.contains(document.activeElement);
+  aside.hidden = true;
+  $("#setScrim")!.hidden = true;
+  document.body.classList.remove("set-open");
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
-  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+  (setRailBefore?.isConnected ? setRailBefore : $('.rail-btn[data-rail="chat"]'))?.classList.add("active");
+  const back = setOpener;
+  setOpener = null; setRailBefore = null;
+  if (hadFocus && back?.isConnected) back.focus({ preventScroll: true });
+}
+function showSettingsCat(cat: SettingsCatId): void {
+  setCat = cat;
+  writeSetPref(SETTINGS_CAT_KEY, cat);
+  $$("#setBody .set-cat").forEach((s) => { (s as HTMLElement).hidden = (s as HTMLElement).dataset.cat !== cat; });
+  const body = $("#setBody");
+  if (body) body.scrollTop = 0;
+  renderSetNav();
+}
+/** The category list, or (while the search box has text) the matching cards. */
+function renderSetNav(): void {
+  const nav = $("#setNav");
+  if (!nav) return;
+  const q = (($("#setSearch") as HTMLInputElement | null)?.value ?? "").trim();
+  nav.classList.toggle("searching", !!q);
+  if (q) {
+    const hits = searchSettings(q);
+    nav.innerHTML = hits.length
+      ? hits.map((s) => `<button class="set-nav-it set-nav-hit" type="button" data-set-jump="${s.sec}"><span class="set-nav-l">${esc(s.title)}</span><span class="set-nav-s">${esc(settingsCategory(s.cat)?.label ?? "")}</span></button>`).join("")
+      : `<div class="set-nav-empty">No setting matches \u201c${esc(q)}\u201d.</div>`;
+    return;
+  }
+  nav.innerHTML = SETTINGS_CATEGORIES.map((c) => `<button class="set-nav-it${c.id === setCat ? " on" : ""}" type="button" data-set-cat="${c.id}"${c.id === setCat ? ' aria-current="page"' : ""} data-tip="${esc(`${c.label}|${c.blurb}`)}" data-tip-side="right">${icon(c.icon, 15)}<span class="set-nav-l">${esc(c.label)}</span></button>`).join("");
+}
+/** Window (modal, scrim, focus trapped) or panel (a right flyout over the other panels, nothing dimmed). */
+function applySettingsLayout(): void {
+  const aside = $("#settings")!;
+  const win = setLayout === "window";
+  aside.dataset.layout = setLayout;
+  aside.setAttribute("role", "dialog");
+  if (win) aside.setAttribute("aria-modal", "true"); else aside.removeAttribute("aria-modal");
+  $("#setScrim")!.hidden = !(win && state.settingsOpen);
+  const btn = $("#setLayoutBtn")!;
+  btn.innerHTML = icon(win ? "sidebar" : "square", 15);
+  btn.setAttribute("aria-label", win ? "Show settings as a side panel" : "Show settings as a window");
+  btn.dataset.tip = win ? "Side panel|Dock Settings on the right, over the other panels" : "Window|Show Settings as a large window with the categories on the left";
+}
+function setSettingsLayout(next: SettingsLayout): void {
+  setLayout = next;
+  writeSetPref(SETTINGS_LAYOUT_KEY, next);
+  applySettingsLayout();
+  fillSec("settingsLayout", secSettingsLayout());
+}
+/** Wires the Settings chrome once at init: nav, search, layout, scrim, Esc and the window-mode focus trap. */
+function initSettingsChrome(): void {
+  const aside = $("#settings")!;
+  const scrim = $("#setScrim")!;
+  document.body.append(scrim, aside); // fixed layers live at the top level, like Ask Lucid's dock
+  const search = $("#setSearch") as HTMLInputElement;
+  $("#setClose")!.addEventListener("click", () => closeSettings());
+  $("#setLayoutBtn")!.addEventListener("click", () => setSettingsLayout(setLayout === "window" ? "panel" : "window"));
+  scrim.addEventListener("click", () => closeSettings());
+  search.addEventListener("input", () => renderSetNav());
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = searchSettings(search.value)[0];
+    if (first) { e.preventDefault(); search.value = ""; openSettingsTo(first.sec); }
+  });
+  aside.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const cat = (t.closest("[data-set-cat]") as HTMLElement | null)?.dataset.setCat;
+    if (cat) { const c = parseSettingsCat(cat); if (c) showSettingsCat(c); return; }
+    const jump = (t.closest("[data-set-jump]") as HTMLElement | null)?.dataset.setJump;
+    if (jump) { search.value = ""; openSettingsTo(jump); return; }
+    const qcat = (t.closest("[data-mcpq-cat]") as HTMLElement | null)?.dataset.mcpqCat;
+    if (qcat) { mcpQuickCat = qcat; fillSec("mcpQuick", secMcpQuick()); return; }
+    const conn = (t.closest("[data-mcpq-connect]") as HTMLButtonElement | null);
+    if (conn) { conn.disabled = true; void mcpQuickConnect(conn.dataset.mcpqConnect!).finally(() => { conn.disabled = false; }); }
+  });
+  aside.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.target as HTMLElement).id === "mcpqToken") { e.preventDefault(); ((e.target as HTMLElement).parentElement?.querySelector("[data-mcpq-connect]") as HTMLElement | null)?.click(); return; }
+    if (e.key !== "Tab" || setLayout !== "window") return; // aria-modal: Tab stays inside the window
+    const f = [...aside.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((n) => !(n as HTMLButtonElement).disabled && n.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0]!, last = f[f.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  aside.addEventListener("change", (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.name === "setLayout" && t.checked) setSettingsLayout(parseSettingsLayout(t.value));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !state.settingsOpen || e.defaultPrevented) return;
+    // Esc inside Ask Lucid never gets here: its window capture-phase listener stops it first.
+    if (document.querySelector(SET_CHILD_OVERLAYS)) return; // an open child overlay owns this Esc
+    e.preventDefault();
+    if (document.activeElement === search && search.value) { search.value = ""; renderSetNav(); return; }
+    closeSettings();
+  });
 }
 
 // ── P-SKILL.4 (ADR-0097): the Skills directory + management fly-out ───────────────────────────────
@@ -9198,18 +9453,6 @@ async function runStudioCodify(btn: HTMLElement): Promise<void> {
   }
 }
 
-// P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view -
-// the nudge CTA, and the entry point for a brand-new user to enable + set a passphrase.
-function openPersonalizationSettings(): void {
-  SET_OPEN.add("personal");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="personal"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 120);
-}
-
 // First-run onboarding: while personalization is UNCONFIGURED, keep the Personalization settings
 // section expanded (so enable→passphrase is discoverable, not buried in a collapsed accordion), and
 // show a one-time nudge toast guiding the user to import their ChatGPT/Claude/Gemini history.
@@ -9226,7 +9469,7 @@ async function maybeOnboardPersonal(): Promise<void> {
     desc: "Import your ChatGPT, Claude, or Gemini history to tailor replies. It's encrypted on this device, scanned by the security gate, and you can forget or export anything anytime.",
     meta: "Private · on-device · opt-in",
     tone: "info",
-    actions: [{ label: "Set up personalization", kind: "ok", run: () => openPersonalizationSettings() }, { label: "Later" }],
+    actions: [{ label: "Set up personalization", kind: "ok", run: () => openSettingsTo("personal") }, { label: "Later" }],
     timeout: 0,
   }), 1500);
 }
@@ -9923,6 +10166,9 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   if (reveal === "yours" && !prevPathByLane.yours) ($("#prevPath") as HTMLInputElement | null)?.focus();
   startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
   startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
+  // P-PREVIEW-CURTAIN.1: the panel is open, so every ready invitation is now a tab in front of the user.
+  curtainEntries = curtainEntries.filter((e) => e.phase !== "ready");
+  paintCurtainChip();
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
@@ -10039,16 +10285,20 @@ function closePreview(): void {
   if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
   closeArcadeMenu?.();
   setPreviewPan(false);
-  if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
-  if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
-  ++agentPreviewRevision;
-  pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): closing no longer dismisses the agent's document or cancels its pending
+  // check. Nothing auto-opens any more, so there is no hijack to guard against, and this runs whenever ANY
+  // other right-edge surface opens: a page still loading behind the curtain must survive that. The chip's
+  // "Not now" is the dismissal.
   clearPreviewTesting();
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
-  stopPreviewInspectRelay(); // P-PREVIEW.6b
+  // P-PREVIEW.6b. P-PREVIEW-CURTAIN.1: the agent's page now lives behind the curtain with the panel closed,
+  // so its preview_inspect keeps working while the Agent tab holds one.
+  if (!prevPathByLane.agent) stopPreviewInspectRelay();
   $("#preview")!.hidden = true;
+  $("#preview")!.classList.remove("pcur-swing", "pcur-calm");
+  paintCurtainChip(); // a page still loading behind the curtain shows its chip again
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -10081,31 +10331,261 @@ function closeTrainer(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** Auto-open only a verified, current target that the user has not dismissed. */
-function onPreviewAvailable(path: string): void {
+/** An agent's previewable write (or preview_open). P-PREVIEW-CURTAIN.1 (ADR-0621): the target passes the
+ *  curtain gate first and NEVER opens the panel by itself; a page that renders loads into the Agent tab in
+ *  the background and earns the "Preview ready" chip, a blank or failed one retires quietly. `open` is for a
+ *  target the USER just asked for through this path (the Figma import): it swings out once ready, and a
+ *  failure says so. */
+function onPreviewAvailable(path: string, opts: { open?: boolean } = {}): void {
+  if (opts.open) dismissedAgentPreviews.delete(path); // asking for it opts the document back in
   if (!path || dismissedAgentPreviews.has(path)) return;
   const revision = ++agentPreviewRevision;
   const owner = turnViewEpoch;
   pendingAgentPreviewPath = path;
   state.lastPreviewablePath = "";
-  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview.
-  const ready = resolvePreview(path).kind === "remote"
-    ? bridge.previewEgressAllows(path).then((allowed) => canPreviewRemote(path, allowed))
-    : bridge.previewProbe(path);
-  void ready.catch(() => false).then((resolves) => {
+  curtainBegin("agent", path);
+  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview: the gate is.
+  curtainGate("agent", path, (r) => {
     const current = revision === agentPreviewRevision && owner === turnViewEpoch;
-    if (!current || dismissedAgentPreviews.has(path)) return;
+    if (!current || dismissedAgentPreviews.has(path)) { curtainRetire("agent", path, null); return; }
     pendingAgentPreviewPath = "";
-    if (!resolves) {
-      showToast({ tone: "warn", title: "Preview unavailable", desc: "The requested document could not be verified. Preview was not opened." });
+    if (r.verdict !== "ready") {
+      curtainRetire("agent", path, r);
+      if (opts.open) showToast({ tone: "warn", title: "Preview unavailable", desc: `It ${r.verdict === "blank" ? "rendered nothing" : "could not be shown"}: ${r.reason}.` });
       return;
     }
-    if (!previewOpen) openPreview({ reveal: "agent" });
     loadPreview(path, "agent");
+    if (previewOpen) curtainHiddenLoads.delete("agent"); else curtainHiddenLoads.add("agent");
     state.lastPreviewablePath = path;
     schedulePhoneAutoSend(path);
     kickPreviewShotSoon();
+    startPreviewInspectRelay(); // the agent can still preview_inspect its page before the user opens it
+    curtainReady("agent", path, r, opts.open === true);
   });
+}
+
+// ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain ─────────────────────────────────────────
+// Auto previews (agent and lane writes) load in a hidden PROBE frame first; preview_curtain.ts decides
+// ready / blank / error from the engine probe plus the page's own paint looks. Only `ready` earns an
+// invitation: the "Preview ready" chip at the chat column's top-right edge (and the mini chip on the lane's
+// fleet card and orbit spoke). Clicking it swings the panel out on that preview's own tab.
+type CurtainResult = { verdict: "ready" | "blank" | "error"; reason: string; title: string; thumb: string };
+let curtainEntries: CurtainEntry[] = [];
+let curtainSeq = 0;
+/** The gate in flight per tab key ("agent" / "lane:<id>"); a newer write to the same tab cancels it. */
+const curtainRuns = new Map<string, () => void>();
+/** Tabs loaded while the panel was CLOSED: their frame never laid out, so its first reveal reloads it. */
+const curtainHiddenLoads = new Set<string>();
+/** Gates waiting for a probe-frame slot (probeConcurrency: the perf tier's throttle). */
+const curtainWaiting: Array<() => void> = [];
+let curtainSlots = 0;
+const isLoopbackUrl = (u: string): boolean => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u.trim());
+const reducedMotionNow = (): boolean => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+perfWatch.onChange(() => paintCurtainChip()); // the chip's motion follows the perf tier live
+
+/** Run the gate for `path` on tab `key`. `done` is called exactly once, unless a newer gate for the same tab
+ *  (or a session reset) cancels this one first. */
+function curtainGate(key: string, path: string, done: (r: CurtainResult) => void): void {
+  curtainRuns.get(key)?.();
+  const timers: number[] = [];
+  let live = true, holdsSlot = false;
+  let frame: HTMLIFrameElement | null = null;
+  let waiter: (() => void) | null = null;
+  const cleanup = (): void => {
+    live = false;
+    for (const t of timers) window.clearTimeout(t);
+    if (frame) { frame.removeAttribute("src"); frame.remove(); frame = null; }
+    if (waiter) { const at = curtainWaiting.indexOf(waiter); if (at >= 0) curtainWaiting.splice(at, 1); waiter = null; }
+    if (holdsSlot) { holdsSlot = false; curtainSlots--; curtainWaiting.shift()?.(); }
+    if (curtainRuns.get(key) === cleanup) curtainRuns.delete(key);
+  };
+  curtainRuns.set(key, cleanup);
+  const finish = (r: CurtainResult): void => { if (!live) return; cleanup(); done(r); };
+  const remote = resolvePreview(path).kind === "remote";
+  const ask = (): Promise<CurtainProbe> => remote
+    ? bridge.previewEgressAllows(path).then((allowed): CurtainProbe | Promise<CurtainProbe> => {
+      if (!canPreviewRemote(path, allowed)) return { resolves: false, error: "the site is not approved for preview" };
+      // A loopback dev server is asked by the engine (connection refused, HTTP errors); any other approved
+      // site is cross-origin to us and only its approval can be checked.
+      return isLoopbackUrl(path) ? bridge.previewProbeInfo(path, true) : { resolves: true, kind: "remote" };
+    })
+    : bridge.previewProbeInfo(path);
+  const probe = (attempt: number): void => {
+    void ask().catch((): CurtainProbe => ({ resolves: false, error: "the engine did not answer" })).then((p) => {
+      if (!live) return;
+      // The write was announced when its tool call OPENED: give a missing or empty file time to land.
+      if (shouldReprobe(p, attempt)) { timers.push(window.setTimeout(() => probe(attempt + 1), CURTAIN.probeRetryMs)); return; }
+      const first = classifyCurtain({ probe: p, paint: null, looks: 0, loaded: false, elapsedMs: 0 });
+      if (first.verdict !== "loading") { finish({ verdict: first.verdict, reason: first.reason, title: "", thumb: "" }); return; }
+      const start = (): void => {
+        waiter = null;
+        if (!live) return;
+        holdsSlot = true; curtainSlots++;
+        frame = curtainProbeFrame(path, p, timers, () => live, (r) => finish(r));
+      };
+      if (curtainSlots < probeConcurrency(perfWatch.tier())) start();
+      else { waiter = start; curtainWaiting.push(start); }
+    });
+  };
+  probe(0);
+}
+
+/** The hidden probe frame: the same served document and sandbox as the real tab, mounted where it is laid
+ *  out and rendered (requestAnimationFrame runs, so a canvas app draws) yet invisible and inert. No
+ *  `allow` grants, so a page with audio stays silent here. Then up to two paint looks. */
+function curtainProbeFrame(path: string, p: CurtainProbe, timers: number[], isLive: () => boolean, settle: (r: CurtainResult) => void): HTMLIFrameElement {
+  const t0 = Date.now();
+  let host = $("#prevProbeHost") as HTMLElement | null;
+  if (!host) { host = el(`<div id="prevProbeHost" class="pcur-probe-host" aria-hidden="true" inert></div>`) as HTMLElement; document.body.appendChild(host); }
+  const f = document.createElement("iframe");
+  f.className = "pcur-probe";
+  f.setAttribute("sandbox", PREVIEW_SANDBOX);
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.tabIndex = -1;
+  f.title = "Preview check";
+  let loaded = false, looks = 0;
+  let paint: PaintStats | null = null;
+  const judge = () => classifyCurtain({ probe: p, paint, looks, loaded, elapsedMs: Date.now() - t0 });
+  const close = (v: CurtainDecision): void => {
+    if (v.verdict === "loading") return;
+    settle({ verdict: v.verdict, reason: v.reason, title: paint?.title ?? "", thumb: thumbFor(paint) });
+  };
+  const look = async (): Promise<void> => {
+    if (!isLive()) return;
+    const answer = parsePaint(await runInspectOnFrame(f, `pcur-${++curtainSeq}`, paintCommand(), CURTAIN.lookTimeoutMs));
+    if (!isLive()) return;
+    looks++;
+    paint = answer ?? paint; // a look that times out keeps what the previous one saw
+    const v = judge();
+    if (v.verdict === "loading") timers.push(window.setTimeout(() => void look(), CURTAIN.secondLookMs - CURTAIN.firstLookMs));
+    else close(v);
+  };
+  f.addEventListener("load", () => {
+    if (loaded || !isLive()) return;
+    loaded = true;
+    timers.push(window.setTimeout(() => void look(), CURTAIN.firstLookMs));
+  });
+  timers.push(window.setTimeout(() => { if (isLive() && !loaded) close(judge()); }, CURTAIN.loadTimeoutMs));
+  f.src = bridge.previewServeUrl(path); // set BEFORE insertion, so the first load event is the real document
+  host.appendChild(f);
+  return f;
+}
+
+/** A gate started: the chip (and the lane's mini chip) shows the loading curtain. */
+function curtainBegin(key: string, path: string): void {
+  curtainEntries = upsertCurtain(curtainEntries, { key, path, label: curtainLabel(path), seq: ++curtainSeq });
+  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "loading", label: curtainLabel(path) });
+  paintCurtainChip();
+}
+/** A blank or failed page (or a superseded one): retire quietly. One dev-log line, no toast, no panel. */
+function curtainRetire(key: string, path: string, r: CurtainResult | null): void {
+  const had = curtainEntries.some((e) => e.key === key && e.path === path);
+  curtainEntries = settleCurtain(curtainEntries, key, path, "error");
+  if (had && key.startsWith("lane:")) setLaneMini(key.slice(5), null);
+  if (r) console.info(`[preview-curtain] ${key} ${curtainLabel(path)}: ${r.verdict} (${r.reason}); not shown`);
+  paintCurtainChip();
+}
+/** A page that renders: with the panel closed the chip turns into the invitation; with it open the tab is
+ *  already there (badged), so the chip has nothing to add. `open` swings straight out. */
+function curtainReady(key: string, path: string, r: CurtainResult, open: boolean): void {
+  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "ready", label: r.title || curtainLabel(path) });
+  if (open || previewOpen) {
+    const chip = $("#prevCurtainChip") as HTMLElement | null;
+    const from = chip && !chip.closest("[hidden]") ? chip : null;
+    curtainEntries = dropCurtain(curtainEntries, key);
+    paintCurtainChip();
+    if (open) swingOutPreview(key, from);
+    return;
+  }
+  curtainEntries = settleCurtain(curtainEntries, key, path, "ready", { title: r.title, thumb: r.thumb });
+  paintCurtainChip();
+}
+function setLaneMini(laneId: string, v: LaneMini | null): void {
+  paintLanePreview(laneId, v);
+  paintSpokePreview(laneId, v);
+}
+
+/** The chip: one card at the chat column's top-right edge, nearest the panel it opens. Mounted on first use. */
+function paintCurtainChip(): void {
+  let dock = $("#prevCurtain") as HTMLElement | null;
+  const { head, more } = chipView(curtainEntries);
+  if (!dock) {
+    if (!head) return;
+    const center = document.querySelector("main.center");
+    if (!center) return;
+    dock = el(`<div class="pcur-dock" id="prevCurtain" hidden aria-live="polite">
+      <button type="button" class="pcur-chip" id="prevCurtainChip">
+        <span class="pcur-art" aria-hidden="true"><span class="pcur-page"><i></i><i></i><i></i><i></i></span><span class="pcur-scan"></span><span class="pcur-orbit"><b></b><b></b><b></b></span><img class="pcur-thumb" alt="" hidden></span>
+        <span class="pcur-txt"><span class="pcur-k"></span><span class="pcur-name"></span></span>
+        <span class="pcur-more" hidden></span>
+      </button>
+      <button type="button" class="pcur-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
+    </div>`) as HTMLElement;
+    center.appendChild(dock);
+    $("#prevCurtainChip", dock)?.addEventListener("click", (ev) => {
+      const cur = chipView(curtainEntries).head;
+      if (!cur || cur.phase !== "ready") return;
+      swingOutPreview(cur.key, ev.currentTarget as HTMLElement);
+    });
+    $("#prevCurtainX", dock)?.addEventListener("click", () => {
+      for (const e of curtainEntries) if (e.key === "agent") dismissedAgentPreviews.add(e.path); // no chip for this file again until you open it
+      curtainEntries = [];
+      paintCurtainChip();
+    });
+  }
+  dock.dataset.motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  // The panel being open is the invitation accepted: nothing to show over it.
+  dock.hidden = !head || previewOpen;
+  if (!head) return;
+  const chip = $("#prevCurtainChip", dock) as HTMLButtonElement;
+  const ready = head.phase === "ready";
+  chip.dataset.phase = head.phase;
+  chip.setAttribute("aria-disabled", String(!ready));
+  const name = head.title || head.label;
+  ($(".pcur-k", chip) as HTMLElement).textContent = ready ? "Preview ready" : "Preparing preview";
+  ($(".pcur-name", chip) as HTMLElement).textContent = name;
+  const thumb = $(".pcur-thumb", chip) as HTMLImageElement;
+  if (ready && head.thumb) { if (thumb.getAttribute("src") !== head.thumb) thumb.src = head.thumb; thumb.hidden = false; }
+  else { thumb.hidden = true; thumb.removeAttribute("src"); }
+  const badge = $(".pcur-more", chip) as HTMLElement;
+  badge.hidden = more === 0;
+  badge.textContent = `+${more}`;
+  chip.setAttribute("aria-label", ready ? `Open the preview of ${name}${more ? `, ${more} more waiting` : ""}` : `Preparing a preview of ${name}`);
+  setTip(chip, ready ? "Open the preview" : "Preparing a preview",
+    ready ? `${name} rendered. Click to swing the Preview panel out on its own tab.${more ? ` ${more} more waiting.` : ""}`
+      : `${name} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.`);
+}
+
+/** Open the Preview panel on tab `key` with the swing: a 3D unfold hinged at the point of the panel nearest
+ *  the chip the user clicked (reduced motion or the minimal tier: instant). */
+function swingOutPreview(key: string, from: HTMLElement | null): void {
+  const fromRect = from?.getBoundingClientRect() ?? null;
+  const wasOpen = previewOpen;
+  if (!wasOpen) openPreview({ reveal: key });
+  else switchPrevLane(key);
+  curtainEntries = dropCurtain(curtainEntries, key);
+  paintCurtainChip();
+  // The phone mirror photographs on-screen pixels, so the agent's page reaches connected phones once it is
+  // actually shown (it no-ops without a live share).
+  if (key === "agent" && prevPathByLane.agent) schedulePhoneAutoSend(prevPathByLane.agent);
+  for (const b of document.querySelectorAll<HTMLElement>(".prev-tab")) if (b.dataset.lane === key) { b.focus({ preventScroll: true }); break; }
+  const panel = $("#preview") as HTMLElement | null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (wasOpen || !panel || motion === "still") return;
+  const o = swingOrigin(fromRect, panel.getBoundingClientRect());
+  panel.style.setProperty("--pcur-ox", `${o.x}px`);
+  panel.style.setProperty("--pcur-oy", `${o.y}px`);
+  panel.style.setProperty("--pcur-ms", `${CURTAIN.swingMs}ms`);
+  // The class stays until closePreview: removing it would hand animation-name back to .kg's slideInR, which
+  // restarts that animation (a second entrance right after the swing).
+  panel.classList.add("pcur-swing");
+  if (motion === "calm") panel.classList.add("pcur-calm");
+}
+/** The fleet card's / orbit spoke's mini chip (FleetGridDeps / FleetOrbitDeps.openLanePreview). */
+function openLanePreviewFrom(laneId: string, from: HTMLElement | null): void {
+  const id = laneTabId(laneId);
+  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setLaneMini(laneId, null); return; } // the tab was closed or evicted
+  swingOutPreview(id, from);
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
@@ -10190,7 +10670,7 @@ function openFigmaForm(): void {
       const res = await bridge.figmaImport(url, pat || undefined).catch(() => null);
       if (res && res.path) {
         fileName = res.fileName ?? "the design";
-        onPreviewAvailable(res.path); // open + load the design board in the Preview panel
+        onPreviewAvailable(res.path, { open: true }); // you asked for it: load the design board, then swing the panel out (P-PREVIEW-CURTAIN.1)
         modal.innerHTML = figmaNextStepsHtml(res); // guided next step (review / DESIGN.md)
       } else {
         status(res?.error ?? "Couldn't import. Check the file URL and token.", true);
@@ -10385,6 +10865,9 @@ function switchPrevLane(l: PrevLane): void {
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
   applyDeviceScale(); syncPreviewZoomControls(); sendPreviewZoomMode();
   syncPreviewCanvas();
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): a tab the curtain loaded while the panel was closed laid out at no size
+  // (a canvas app sized itself to 0x0); its first real reveal reloads it at the size it is shown at.
+  if (previewOpen && curtainHiddenLoads.delete(l) && prevPathByLane[l]) loadPreview(prevPathByLane[l]!, l);
 }
 // ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
 // Review a PWA / mobile / responsive layout at real device sizes. Applies to BOTH lanes; the visible frame is
@@ -10594,6 +11077,14 @@ function dropLaneTabFrame(tabId: string): void {
   delete prevKindByLane[tabId];
   prevZoomByLane.delete(tabId);
   prevWheelZoomByLane.delete(tabId);
+  // P-PREVIEW-CURTAIN.1: the invitations to this tab go with it, unless a newer write is still behind the
+  // curtain (that one re-creates the tab if it renders).
+  curtainHiddenLoads.delete(tabId);
+  if (!curtainRuns.has(tabId)) {
+    curtainEntries = dropCurtain(curtainEntries, tabId);
+    if (tabId.startsWith("lane:")) setLaneMini(tabId.slice(5), null);
+    paintCurtainChip();
+  }
 }
 /** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
  *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
@@ -10608,20 +11099,27 @@ function closeLaneTab(tabId: string): void {
   renderPrevTabs();
 }
 /** P-PREVIEW.10 entry (threaded into fleet_grid as the previewLaneFile dep): a lane wrote a previewable
- *  file. Upsert its tab, load the file through the normal serve path, and badge the preview rail icon
- *  (the agent-dot pattern). NEVER steals the user's current tab: only when the panel is CLOSED does it
- *  auto-open on the lane tab - mirroring onPreviewAvailable's auto-show. */
+ *  file. P-PREVIEW-CURTAIN.1 (ADR-0621): it passes the curtain gate first (the lane's fleet card and orbit
+ *  spoke show the mini loading chip meanwhile). Only a page that renders upserts the lane's tab, loads it
+ *  through the normal serve path in the background, badges the rail icon and turns the mini chip into a
+ *  clickable "Preview"; a blank or failed page leaves no tab and no chip. NEVER opens the panel and never
+ *  steals the user's current tab. */
 export function previewShowLaneFile(laneId: string, laneName: string, path: string): void {
   if (!laneId || !path) return;
   const id = laneTabId(laneId);
-  const prior = prevLaneTabs;
-  prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
-  for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
-  renderPrevTabs();
-  ensureLaneTabFrame(id);
-  loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
-  const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
-  if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
+  curtainBegin(id, path);
+  curtainGate(id, path, (r) => {
+    if (r.verdict !== "ready") { curtainRetire(id, path, r); return; }
+    const prior = prevLaneTabs;
+    prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
+    for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
+    renderPrevTabs();
+    ensureLaneTabFrame(id);
+    loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
+    if (previewOpen) curtainHiddenLoads.delete(id); else curtainHiddenLoads.add(id);
+    const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+    curtainReady(id, path, r, false);
+  });
 }
 /** P-ASKLUCID.9 (ADR-0600): show an image Ask Lucid edited in the Preview's own "Ask Lucid" tab: the lane-tab
  *  pattern (its own iframe, loaded through the normal serve route), opened and focused because the user just
@@ -11903,7 +12401,7 @@ async function openResourcePanelLive(): Promise<void> {
  *  The same bridge calls and toasts as Settings' #personalToggle and #personalSetup; the view re-renders to the
  *  next step, and Settings (if open) follows through hydratePersonal. */
 function bindKgPersonalGate(canvas: HTMLElement): void {
-  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openPersonalizationSettings());
+  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openSettingsTo("personal"));
   $("#kgPersonalOn", canvas)?.addEventListener("click", async (e) => {
     (e.currentTarget as HTMLButtonElement).disabled = true;
     const r = await bridge.personalEnable(true).catch(() => null);
@@ -12362,6 +12860,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
       <div class="ws-path">${esc(ws.current)}</div>
     </div>
+    <div class="prov-grid" style="--prov-trail:2">
     <div class="prov-row">
       <input class="prov-key" id="wsPath" placeholder="Paste a folder path…" />
       <button class="btn-mini ok" id="wsBrowse">${icon("folder", 13)} Browse</button>
@@ -12375,6 +12874,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <input class="prov-key" id="wsGitPat" type="password" placeholder="Git access token - for private repo clones" autocomplete="off" spellcheck="false" />
       <button class="btn-mini ok" id="wsGitPatSave">${icon("shield", 13)} Save</button>
       ${gitPatSaved ? `<button class="btn-mini danger" id="wsGitPatClear">Remove</button>` : ""}
+    </div>
     </div>
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
@@ -12422,7 +12922,7 @@ function renderWorkspaceBar(): void {
   bar.hidden = false;
   if (state.workspace) {
     setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
-    void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+    void offerVaultEnvImport(w.current, () => openSettingsTo(VAULT_ENV_SEC)); // P-VAULT-ENV.1: once per workspace with a .env
   }
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
@@ -12849,7 +13349,7 @@ async function forgetRecentWorkspace(path: string): Promise<void> {
   const info = await bridge.removeRecentWorkspace(path).catch(() => null);
   if (info) state.workspace = info;
   const el = document.querySelector(`#setBody [data-sec="workspace"]`);
-  if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
+  if (el && state.workspace) el.outerHTML = workspaceSection(state.workspace); // the card carries its own data-sec (a wrapper nested a second one)
   renderWorkspaceBar();
 }
 // P-WSSETUP: the workspace-initialization offer. When the opened folder has no .agents framework
@@ -13944,21 +14444,17 @@ const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_
 function updateDatasetButton(): void {
   const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
   const span = $("#ctDatasetName", btn);
-  btn.hidden = false; // ADR-0220: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
-  if (state.asksage?.configured) {
-    const n = state.asksage?.datasets?.length ?? 0;
-    if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
-    btn.classList.toggle("on", n > 0);
-    btn.setAttribute("data-tip", "Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover.");
-  } else {
-    if (span) span.textContent = "Knowledge";
-    btn.classList.remove("on");
-    btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
-  }
+  // P-SETUX.1 (ADR-0620): only the AskSage gateway gets a titlebar chip (its RAG datasets). Local Knowledge is no
+  // longer a titlebar chip: it lives in the composer "+" menu (Knowledge) and the left rail's Knowledge graph.
+  btn.hidden = !state.asksage?.configured;
+  if (btn.hidden) return;
+  const n = state.asksage?.datasets?.length ?? 0;
+  if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+  btn.classList.toggle("on", n > 0);
 }
-// ADR-0220: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
-// compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
-// importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
+// ADR-0220: the entry to local RAG (the user's own notes/docs compiled into a KG, searched by the agent's
+// knowledge_search tool), opened from the "+" menus. Routes to the existing self-contained importKgFlow (add an
+// Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
 function openKnowledgeMenu(anchor: HTMLElement): void {
   cfgClose?.();
   const html = `<div class="cfg-sec"><div class="cfg-lbl">Knowledge <span class="cur">ground on your own notes</span></div>
@@ -14108,18 +14604,19 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
 }
 
 // P-IDE.2 (ADR-0029): skills come from TWO sources behind one picker - BUNDLED (skills.ts, trusted
-// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The
-// Skills button is always available (bundled skills always exist).
+// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The picker
+// opens from the composer "+" menu (Skills) and the command palette; the left rail holds the directory.
 async function loadSkills(): Promise<void> {
   state.skills = (await bridge.skills()) ?? [];
-  const btn = $("#ctSkill"); if (btn) (btn as HTMLElement).hidden = false;
   updateSkillButton();
 }
-/** Reflect the active bundled skill on the composer's Skills button. */
+/** P-SETUX.1 (ADR-0620): the titlebar no longer carries a permanent Skills chip. It appears only while a skill
+ *  is active, named after it, so an active skill stays visible and one click away from being cleared. */
 function updateSkillButton(): void {
-  const btn = $("#ctSkill"); if (!btn) return;
+  const btn = $("#ctSkill") as HTMLElement | null; if (!btn) return;
   const span = btn.querySelector("span"); if (span) span.textContent = state.activeSkill?.name ?? "Skills";
   btn.classList.toggle("on", !!state.activeSkill);
+  btn.hidden = !state.activeSkill;
 }
 /** Project (omp-native) skill: prepend /skill:<name> to the composer (omp expands it server-side). */
 function useSkill(name: string): void {
@@ -14403,7 +14900,7 @@ const speech = new SpeechQueue({
     tone: "warn",
     title: "Nothing came back from the speech engine",
     desc: note || "Pick an engine and voice from the composer's voice button, or add that provider's API key.",
-    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsToVoice() }, { label: "OK" }],
+    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsTo("voice") }, { label: "OK" }],
     timeout: 7000,
   }),
   onChange: () => updateVoiceChip(),
@@ -14829,7 +15326,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
     const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
     if (dead) {
       const row = data?.engines?.find((x) => x.id === dead);
-      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsToVoice(); } }, { label: "OK" }], timeout: 9000 });
+      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsTo("voice"); } }, { label: "OK" }], timeout: 9000 });
       return;
     }
     const eng = (t.closest("[data-vprov]") as HTMLElement | null)?.dataset.vprov;
@@ -14846,7 +15343,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
       return;
     }
     if (t.closest("#voicePopTest")) { void speakText("This is the voice I'll use to read replies aloud."); return; }
-    if (t.closest("#voicePopMore")) { close(); openSettingsToVoice(); }
+    if (t.closest("#voicePopMore")) { close(); openSettingsTo("voice"); }
   });
   await reload();
 }
@@ -14977,7 +15474,7 @@ async function warnSttFailure(sess: DictationSession, r: { text: string; note: s
   if (v?.sttProvider !== "elevenlabs" && ws && !ws.running && ws.capable && ws.binAvailable) {
     actions.push({ label: "Start local Whisper", kind: "ok", run: () => { void startManagedWhisperFromMic(); } });
   }
-  actions.push({ label: "Voice settings", run: () => { openSettingsToVoice(); } });
+  actions.push({ label: "Voice settings", run: () => { openSettingsTo("voice"); } });
   showToast({ tone: "warn", title: "Heard you, but nothing transcribed", desc: msg, actions, timeout: 12000 });
 }
 /** Start the managed offline Whisper from the dictation-failure toast (same flow as the Voice card's
@@ -15139,9 +15636,9 @@ function openGoalForm(): void {
         </div>
         <div class="goal-ckr-why" id="goalCkrWhy"></div>
         <details class="goal-dial" id="goalDial">
-          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) ALWAYS block, whatever the dial.")}</summary>
+          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only with the dial at T4, full auto; your organization's policy can still block them.")}</summary>
           <div class="goal-dial-grid" id="goalDialGrid"></div>
-          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) always block. Default is the safest (T0) posture.</div>
+          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only at T4, full auto. Default is the safest (T0) posture.</div>
         </details>
       </section>
       <section class="goal-step" data-step="5">
@@ -16320,8 +16817,11 @@ const GOAL_DIAL_ROWS: [keyof NonNullable<GoalDial>, string][] = [
   ["shell", "Shell"], ["edit", "Edit files"], ["delete", "Delete"],
   ["web-fetch", "Web fetch"], ["web-search", "Web search"], ["subagent", "Subagents"],
 ];
-const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3"] as const;
-const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive" };
+// P-AUTO.FULL1 (ADR-0639): T4 is "full auto": the loop runs everything, sudo and other catastrophic commands
+// included; only the organization's managed policy (its loop ceiling and denylist) still stops a command.
+const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3", "T4"] as const;
+const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive", T4: "full auto" };
+const GOAL_DIAL_MAX = GOAL_DIAL_TIERS.length - 1;
 function loadGoalDial(): GoalDial {
   try { const v = JSON.parse(localStorage.getItem("lucid.goalDial") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
@@ -16336,7 +16836,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const idx = Math.max(0, GOAL_DIAL_TIERS.indexOf(tierOf(k)));
     return `<div class="goal-dial-row">
       <span class="goal-dial-name">${esc(label)}</span>
-      <input type="range" class="goal-dial-slider" min="0" max="3" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / 3}" aria-label="${esc(label)} auto-run ceiling"/>
+      <input type="range" class="goal-dial-slider" min="0" max="${GOAL_DIAL_MAX}" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / GOAL_DIAL_MAX}" aria-label="${esc(label)} auto-run ceiling"/>
       <span class="goal-dial-tier" data-dt="${esc(String(k))}">${GOAL_DIAL_TIERS[idx]}<i>${GOAL_DIAL_TIER_LABEL[GOAL_DIAL_TIERS[idx]!]}</i></span>
     </div>`;
   }).join("");
@@ -16347,7 +16847,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const tier = GOAL_DIAL_TIERS[Number(s.value)] ?? "T0";
     dial[k] = tier;
     try { localStorage.setItem("lucid.goalDial", JSON.stringify(dial)); } catch { /* private mode */ }
-    s.style.setProperty("--dial", String(Number(s.value) / 3));
+    s.style.setProperty("--dial", String(Number(s.value) / GOAL_DIAL_MAX));
     const badge = $(`[data-dt="${k}"]`, ov) as HTMLElement | null;
     if (badge) badge.innerHTML = `${tier}<i>${GOAL_DIAL_TIER_LABEL[tier]}</i>`;
   });
@@ -16371,6 +16871,7 @@ async function runGoalLoop(
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
     if (owner !== turnViewEpoch) return;
+    vizBus.emit("main", "chat", e); // P-VIZ.1 (ADR-0622): a /goal loop is Main working too
     if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
     else if (e.type === "goal-iter") {
       buf = "";
@@ -17809,6 +18310,7 @@ function wire(): void {
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
     if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
+    if (r === "settings") return openSettings(); // P-SETUX.1: an overlay, so whatever is open stays open beneath it
     if (r !== "knowledge") closeKnowledge();
     if (r !== "meetings") closeMeetings(); // P-MEET.1
     if (r !== "remote") closeRemoteView(); // P-RS-VIEW.1
@@ -17819,7 +18321,6 @@ function wire(): void {
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
-    else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "meetings") openMeetings(); // P-MEET.1
     else if (r === "remote") openRemoteView(); // P-RS-VIEW.1
@@ -18445,7 +18946,9 @@ function wire(): void {
       askLucid().toggle();
       return;
     }
-    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald")) {
+    // P-ASKPLUS.1: a menu opened from Ask Lucid (the "+" Knowledge picker leaves focus on the "+") is the
+    // topmost overlay, so Escape closes that menu first (ui.ts popover() consumes it) and Ask Lucid stays.
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald") && !document.querySelector(".popover.show")) {
       e.preventDefault(); e.stopImmediatePropagation();
       askLucidPanel?.close();
     }
@@ -18464,6 +18967,13 @@ function wire(): void {
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
   $("#zoomLvl")!.addEventListener("click", () => resetZoom());
+  // P-SETUX.1 (ADR-0620): hover shows the controls (CSS); a click or Enter pins them open for keyboard and touch,
+  // and a click elsewhere or Esc unpins.
+  const zoomWrap = $("#zoomWrap")!, zoomBtn = $("#zoomBtn")!;
+  const pinZoom = (open: boolean): void => { zoomWrap.classList.toggle("open", open); zoomBtn.setAttribute("aria-expanded", String(open)); };
+  zoomBtn.addEventListener("click", () => pinZoom(!zoomWrap.classList.contains("open")));
+  document.addEventListener("pointerdown", (e) => { if (zoomWrap.classList.contains("open") && !zoomWrap.contains(e.target as Node)) pinZoom(false); });
+  zoomWrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && zoomWrap.classList.contains("open")) { e.stopPropagation(); pinZoom(false); zoomBtn.focus(); } });
   window.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
@@ -18489,7 +18999,7 @@ function wire(): void {
   // P-TITLEBAR.1 (ADR-0603): the model name stays whole; the optional chips fold into More when the bar is full.
   $("#tbMore")!.addEventListener("click", () => openTitlebarMore($("#tbMore")!));
   installTitlebarFit({
-    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $(".titlebar .zoom"),
+    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $("#zoomWrap"),
     keep: $("#modelName")!, shrinkFirst: $("#tbRepo"), shrinkFloorPx: 240, spacer: $(".titlebar .tb-spacer"),
   });
   $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle
@@ -18552,8 +19062,9 @@ function wire(): void {
     attach: bridge,
     openKnowledge: (anchor) => openKnowledgeMenu(anchor),
     openSkills: (anchor) => openSkillDropdown(anchor),
-    openConnectors: openSettingsToMcp,
+    openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the card's mini chip
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
     // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
@@ -18619,6 +19130,7 @@ function wire(): void {
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the spoke's mini chip
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
@@ -18698,9 +19210,31 @@ function wire(): void {
   // P-FLEET.L5: the reviewable timeline dock.
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
+  // P-VIZ.1 (ADR-0622): Visualize. The hub's "Stop the main turn" is the composer's own Stop path.
+  // P-VIZ.4 (ADR-0625): the node panel talks to an agent like its grid card (prompt idle, stage busy) and to
+  // Main through the composer's own send path; Main's recent output is the chat thread's last turn.
+  initViz({
+    fleetStatus: bridge.fleetStatus, fleetWatch: bridge.fleetWatch, fleetCancel: bridge.fleetCancel, fleetStop: bridge.fleetStop,
+    fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
+    fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
+    mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const, text: (m.querySelector(".text")?.textContent ?? "").trim(),
+    })),
+    sendMain: (text) => {
+      if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
+      const ta = $("#input") as HTMLTextAreaElement;
+      if (ta.value.trim()) return "Your main composer already has a draft. Send or clear it first, so nothing is lost.";
+      ta.value = text; autosize(ta);
+      void send();
+      return null;
+    },
+    openFleet: () => openFleetGrid(),
+    focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
+  });
+  $("#ctViz")?.addEventListener("click", () => toggleViz());
 
   // settings page actions (delegated)
-  $("#setClose")!.addEventListener("click", () => closeSettings());
+  initSettingsChrome(); // P-SETUX.1 (ADR-0615): close, layout, nav, search, scrim, Esc, focus trap
   // P-IDE.1c: enable the China-unlock button only when exactly ACKNOWLEDGE is typed.
   $("#setBody")!.addEventListener("input", (e) => {
     const t = e.target as HTMLElement;
@@ -19633,7 +20167,7 @@ function wire(): void {
       folder: true,
       knowledge: (anchor) => openKnowledgeMenu(anchor),
       skills: (anchor) => openSkillDropdown(anchor),
-      connectors: openSettingsToMcp,
+      connectors: () => openSettingsTo("mcpQuick"),
     }));
     syncPlusButton(plusBtn, bridge, ta);
   }
@@ -19736,7 +20270,7 @@ function wire(): void {
   // sidebar collapse (rail toggle + header collapse), mirroring the right panel
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
-  $("#wsBar")!.addEventListener("click", () => openSettings());
+  $("#wsBar")!.addEventListener("click", () => openSettingsTo("workspace")); // P-SETUX.1: the workspace pill lands on its card
   $("#sessList")!.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
@@ -19854,6 +20388,11 @@ function newSession(force = false): void {
 function resetAgentPreviewLane(): void {
   ++agentPreviewRevision; // Invalidate pending probes even when the lane is already empty.
   pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1: the agent's page behind the curtain belongs to the conversation that ended too.
+  curtainRuns.get("agent")?.();
+  curtainHiddenLoads.delete("agent");
+  curtainEntries = dropCurtain(curtainEntries, "agent");
+  paintCurtainChip();
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",
     agent: prevPathByLane.agent ?? "",
@@ -20939,8 +21478,8 @@ function openProviderHub(onClose?: () => void): void {
     // P-LOCAL.4: a preset tile pre-fills the add form (via pendingLocalPreset); a configured tile / the
     // "Add a custom endpoint" tile just opens Settings -> Local Providers. All route to the one add form.
     const lpPresetTile = t.closest("[data-hub-local-preset]") as HTMLElement | null;
-    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsToLocalProviders(); return; }
-    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsToLocalProviders(); return; }
+    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsTo("localProviders"); return; }
+    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsTo("localProviders"); return; }
     // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
     const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
     if (tile && !t.closest(".provhub-config")) {

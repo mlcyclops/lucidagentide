@@ -72,6 +72,9 @@ import { autofitPlan, CARD_DEF_W, CARD_GAP, CARD_MIN_H, CARD_MIN_W, clampSize, d
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
+import { miniChipHtml, miniChipTip, type LaneMini } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
+import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the lane sink's Visualize tap
+import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the More menu's Visualize
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
@@ -101,6 +104,9 @@ export interface FleetGridDeps extends FleetFns {
    *  Preview panel tab. Optional and threaded from app.ts (like fleetAuto) so this module never imports
    *  the app shell; absent, previewable writes simply stay in the transcript. */
   previewLaneFile?: (laneId: string, laneName: string, path: string) => void;
+  /** P-PREVIEW-CURTAIN.1 (ADR-0621): the card's ready mini "Preview" chip was clicked; swing the Preview panel
+   *  out on this lane's tab, from `from`. */
+  openLanePreview?: (laneId: string, from: HTMLElement) => void;
   /** P-FLEET.L8: attach / release the MAIN composer on this lane, mid-turn. Optional and threaded from
    *  app.ts (like previewLaneFile) so this module never imports the app shell; absent, the promote button
    *  simply does not appear. `demoteLane` takes the id for symmetry - the server demotes whichever lane
@@ -253,13 +259,18 @@ function moreMenuItems(): PlusItem[] {
   const check = (on: boolean): string => (on ? "\u2713" : "");
   return [
     { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the map of the hub and its agents. Same agents, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
-    ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
+    // P-VIZ.1 (ADR-0622): the 3D view of the same fleet; it opens over the grid and leaves every agent as it is.
+    { id: "visualize", label: "Visualize", icon: icon("visualize", 15), tip: tipValue("Visualize", "Main, these agents and their subagents in 2D or 3D, with estimated tokens flowing between them. Hover for the rate, click a node for its actions."), run: () => openViz() },
+    ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon(LAYOUT_ICONS[l.id], 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
     { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each agent works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
     { id: "board", label: "New board", icon: icon("plus", 15), tip: tipValue("New board", "A named set of agents with its own layout. Board tabs appear once you have one."), run: () => { void addBoard(); } },
     { id: "home", label: "Open the grid first", icon: icon("star", 15), kbd: check(fleetHome() === "grid"), tip: tipValue("Open the grid first", "Make the grid what the Fleet button opens. The orbit has the same setting."), run: () => setFleetHome("grid") },
     { id: "hub", label: "Classic hub in a terminal", icon: icon("terminal", 15), tip: tipValue("Classic hub", "Opens the classic hub in a new terminal window: your agents and boards as panes, linked to this app. You can also type lucid hub in any terminal."), run: (a) => { if (a instanceof HTMLButtonElement) void openHubFrom(a, () => deps?.hubOpen()); } },
   ];
 }
+
+/** P-VIZ.5 (ADR-0629): each layout's own glyph in the More menu, drawn as the shape it gives the board. */
+const LAYOUT_ICONS: Record<BoardLayout, string> = { side: "layoutSide", grid4: "layoutGrid4", focus: "layoutFocus", free: "layoutFree" };
 
 const LAYOUT_TIPS: Record<BoardLayout, string> = {
   side: "The agents on this board fill the panel. Drag an edge to resize; double-click an edge for equal sizes.",
@@ -318,7 +329,6 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Start a new local agent in this grid. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
       <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (agents keep running)">${UP_ARROW}</button>
-      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (agents keep running)">${icon("close", 15)}</button>
     </div>
     <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
     <button class="fleet-boards-handle" data-fleet-boards-toggle type="button" hidden aria-expanded="false" aria-label="Show boards"><span class="fleet-boards-handle-chev">${icon("chevron", 9)}</span><i class="fleet-board-dot" data-board-handle-dot hidden></i></button>
@@ -334,7 +344,7 @@ export function openFleetGrid(): void {
   </div>`);
   document.body.appendChild(dock);
   const more = $("[data-fleet-more]", dock) as HTMLElement | null;
-  if (more) mountPlusMenu(more, moreMenuItems, "Fleet options");
+  if (more) mountPlusMenu(more, moreMenuItems, "Fleet options", "below");
   applyShape();
   wireDrag();
   wireResize();
@@ -1028,9 +1038,10 @@ const onWinResize = (): void => {
   persist();
 };
 // Escape MINIMIZES (non-destructive - the lanes keep running), and only when focus is inside this dock,
-// mirroring the join dock's convention.
+// mirroring the join dock's convention. An Escape a menu already consumed (ui.ts popover(), ADR-0632) closes
+// only that menu.
 const onKey = (e: KeyboardEvent): void => {
-  if (e.key === "Escape" && dock && !dock.hidden && dock.contains(document.activeElement)) { e.preventDefault(); minimize(); }
+  if (e.key === "Escape" && !e.defaultPrevented && dock && !dock.hidden && dock.contains(document.activeElement)) { e.preventDefault(); minimize(); }
 };
 
 function minimize(): void {
@@ -1584,6 +1595,7 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
+      <button class="pcur-mini" data-lane-preview type="button" hidden></button>
       <select class="fleet-model" data-fleet-model aria-label="Agent model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this agent from the main composer" data-tip="Promote|Point the main composer at this agent" hidden>${icon("arrowRight", 12)}</button>
       ${CARD_BOARDS_BTN}
@@ -1721,6 +1733,28 @@ function paintProgress(run: LaneRun): void {
   }
 }
 
+// P-PREVIEW-CURTAIN.1 (ADR-0621): the lane's mini "Preview" chip. app.ts owns the curtain (probe, verdict);
+// this module only remembers the lane's state so a card rebuilt on reopen shows the same chip. A lane whose
+// page came out blank or failed has no entry, so its card shows nothing.
+const lanePreviews = new Map<string, LaneMini>();
+export function paintLanePreview(laneId: string, v: LaneMini | null): void {
+  if (v) lanePreviews.set(laneId, v); else lanePreviews.delete(laneId);
+  const card = runs.get(laneId)?.card;
+  if (card) paintPreviewMini(card, laneId);
+}
+function paintPreviewMini(card: HTMLElement, laneId: string): void {
+  const btn = $("[data-lane-preview]", card) as HTMLElement | null; if (!btn) return;
+  const v = lanePreviews.get(laneId);
+  btn.hidden = !v || !deps?.openLanePreview;
+  if (!v || (btn.dataset.phase === v.phase && btn.dataset.label === v.label)) return;
+  btn.dataset.phase = v.phase; btn.dataset.label = v.label;
+  btn.innerHTML = miniChipHtml(v.phase);
+  const t = miniChipTip(v);
+  btn.setAttribute("aria-label", t.aria);
+  btn.setAttribute("aria-disabled", String(v.phase !== "ready"));
+  setTip(btn, t.title, t.desc);
+}
+
 /** Repaint everything on the card EXCEPT the output stream: the status frame (class + LED + border), the
  *  labels, the model pick, the promote affordance, the context-fill and health chips, the approval bar, the
  *  recovery bar, the quiet chip, and the compose row's enable/cancel state. Never touches the textarea's
@@ -1735,6 +1769,7 @@ function paintFrame(run: LaneRun): void {
   // unchanged frame, so a class this write erased would unfold a collapsed group on the next poll.
   const dragging = card.classList.contains("dragging");
   card.className = `fleet-card lane-${displayStatus(v)}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
+  paintPreviewMini(card, v.id); // P-PREVIEW-CURTAIN.1
   // P-FLEET.L8: promote / pull back. Hidden entirely when app.ts did not thread the dep, because a button
   // that cannot act is worse than no button.
   const promote = $("[data-fleet-promote]", card) as HTMLButtonElement | null;
@@ -2165,6 +2200,7 @@ function foldPending(run: LaneRun, error?: string): void {
 }
 
 function onLaneEvent(id: string, e: LaneEvent): void {
+  vizBus.emit(id, "lane", e); // P-VIZ.1 (ADR-0622): a no-op unless Visualize is open
   const run = runs.get(id); if (!run) return;
   switch (e.type) {
     case "token": run.pending += e.text; run.waiting = null; paintOutput(run); break;
@@ -3026,7 +3062,6 @@ function openGroupMenu(run: LaneRun, anchor: HTMLElement): void {
 
 function onClick(ev: Event): void {
   const t = ev.target as HTMLElement;
-  if (t.closest("[data-fleet-close]")) { closeFleetGrid(); return; }
   if (t.closest("[data-dock-min]")) { minimize(); return; }
   // P-FLEET-BOARDS.1: Next that needs you, and the board tabs. Orbit, layouts, By repo, the default view and the
   // classic hub live in the More menu (P-FLEET.HEAD1), which handles its own clicks.
@@ -3115,6 +3150,10 @@ function onClick(ev: Event): void {
     if (turn) void copyOut(copyTurn, turnCopyText(turn));
     return;
   }
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready mini chip swings the Preview panel out on this lane's tab; a
+  // loading one only explains itself (tooltip).
+  const mini = t.closest("[data-lane-preview]") as HTMLElement | null;
+  if (mini) { if (mini.dataset.phase === "ready") deps.openLanePreview?.(run.view.id, mini); return; }
   // P-FLEET.L8: attach or release the main composer. The LOOK is not touched here - `LaneView.promoted` on
   // the next poll is the only thing that flips the card, so the two ends cannot disagree. The nudge just
   // stops the user staring at an unchanged button for up to a full poll interval.

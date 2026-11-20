@@ -378,3 +378,29 @@ describe("managedAttachmentPolicy (P-ATTACH.1)", () => {
     expect(managedAttachmentPolicy(merged)).toEqual({ enabled: false, files: 2, bytes: 1_048_576, retentionDays: 3 });
   });
 });
+
+// ── P-SETUX.1 (ADR-0616): the org-authorized MCP Quick connect list on the /api/managed view ─────────
+import { managedMcpCatalog } from "./managed_config.ts";
+
+describe("managedMcpCatalog (P-SETUX.1)", () => {
+  test("unmanaged, absent or non-array = []", () => {
+    expect(managedMcpCatalog(null)).toEqual([]);
+    expect(managedMcpCatalog({ orgName: "Acme" })).toEqual([]);
+    expect(managedMcpCatalog(JSON.parse(`{"mcpCatalog": {"name": "x", "url": "https://x.example.com"}}`))).toEqual([]);
+  });
+
+  test("keeps well-formed https entries as source org and drops the rest", () => {
+    const mc: ManagedConfig = { orgName: "Acme", mcpCatalog: [
+      { name: "Acme Jira", url: "https://mcp.atlassian.com/v2/mcp", auth: "oauth", category: "productivity" },
+      { name: "Plain http", url: "http://intranet.acme.example/mcp" },
+      "garbage",
+    ] };
+    const out = managedMcpCatalog(mc);
+    expect(out.map((e) => [e.id, e.url, e.source])).toEqual([["acme-jira", "https://mcp.atlassian.com/v2/mcp", "org"]]);
+  });
+
+  test("the policy file's list replaces the registry's whole list", () => {
+    const merged = mergeManaged({ mcpCatalog: [{ name: "Reg", url: "https://reg.example.com" }] }, { mcpCatalog: [{ name: "File", url: "https://file.example.com" }] });
+    expect(managedMcpCatalog(merged).map((e) => e.name)).toEqual(["File"]);
+  });
+});

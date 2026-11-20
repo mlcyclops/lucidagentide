@@ -137,6 +137,12 @@ async function handle(line: string): Promise<void> {
     // lane test can assert the authored diff survives the wire. Consumers that only read title/kind are
     // unaffected (the firewall suites).
     write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", title: "search", kind: "edit", status: "completed", rawInput: { path: "src/greeting.ts", edits: [{ old_text: "hello", new_text: "hello\nworld" }] } } } });
+    // P-VIZ.4 (ADR-0625): "[delegate]" makes a background omp `task` call (omp 18 batch shape): it opens, then
+    // completes at once ("Spawned 2 background agents"), the way the real task tool answers.
+    if (promptText.includes("[delegate]")) {
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "call-task-1", title: "task", kind: "other", status: "pending", rawInput: { agent: "task", context: "# Goal\nfix it", tasks: [{ name: "FixApp", task: "Fix app.py" }, { name: "SmokeScript", task: "# Smoke\nWrite verify_fixes.py" }] } } } });
+      write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "call-task-1", status: "completed" } } });
+    }
     // P-FLEET.L7: a CODE-LESS call (bash) plus a usage report. Before L7 the lane wire threw both away:
     // a bash call arrived with only omp's one-line title, so its chevron had nothing to open, and no
     // usage_update case existed at all, so a promoted lane could not report its own context spend.

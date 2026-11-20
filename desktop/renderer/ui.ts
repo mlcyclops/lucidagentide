@@ -7,7 +7,7 @@
 import { $, el } from "./dom.ts";
 import { icon } from "./icons.ts";
 import { esc } from "./format.ts";
-import { placePopover } from "./popover_place.ts"; // P-VOICE.2 (ADR-0247): flip + height-cap math, testable
+import { placePopover, popoverLayer } from "./popover_place.ts"; // P-VOICE.2 (ADR-0247): flip + height-cap math, testable
 import { parseTip, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): the data-tip text format
 
 // ───────────────────────── tooltip ─────────────────────────
@@ -211,8 +211,14 @@ export function createPalette(getActions: () => Action[]) {
 // picker paints a skeleton, then the fetched voice list) grows after the first measurement, so a card
 // anchored to the bottom-of-window composer would grow straight off the bottom. Callers that repaint MUST
 // call `reposition()` afterwards; placePopover() also caps the height so a tall card scrolls, never clips.
-export function popover(anchor: HTMLElement, inner: string, onClose?: () => void): { node: HTMLElement; close: () => void; reposition: () => void } {
+// P-ASKPLUS.1 (ADR-0632): the card opens in front of the layer its anchor lives in (a menu opened from Ask
+// Lucid, z 250, used to land behind the panel), and a prompt bar's menu passes `prefer: "above"`.
+export function popover(anchor: HTMLElement, inner: string, onClose?: () => void, opts: { prefer?: "above" | "below" } = {}): { node: HTMLElement; close: () => void; reposition: () => void } {
   const node = el(`<div class="popover" role="dialog">${inner}</div>`);
+  const zs: number[] = [];
+  for (let a = anchor.parentElement; a; a = a.parentElement) zs.push(Number.parseInt(getComputedStyle(a).zIndex, 10));
+  const lift = popoverLayer(zs);
+  if (lift !== null) node.style.zIndex = String(lift);
   document.body.appendChild(node);
   const reposition = (): void => {
     node.style.maxHeight = ""; // measure the NATURAL height, not the cap left by the previous pass
@@ -222,6 +228,7 @@ export function popover(anchor: HTMLElement, inner: string, onClose?: () => void
       anchor: { top: a.top, bottom: a.bottom, left: a.left },
       card: { width: c.width, height: c.height },
       viewport: { width: window.innerWidth, height: window.innerHeight },
+      ...(opts.prefer ? { prefer: opts.prefer } : {}),
     });
     node.style.left = `${p.left}px`;
     node.style.top = `${p.top}px`;
@@ -237,7 +244,9 @@ export function popover(anchor: HTMLElement, inner: string, onClose?: () => void
     onClose?.();
   };
   const outside = (e: MouseEvent) => { if (!node.contains(e.target as Node) && !anchor.contains(e.target as Node)) close(); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+  // preventDefault marks Escape consumed: a host that closes on Escape (the Ask Lucid dock checks
+  // defaultPrevented) stays open, so one Escape closes the topmost overlay only.
+  const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
   setTimeout(() => { document.addEventListener("mousedown", outside, true); document.addEventListener("keydown", onKey, true); }, 0);
   return { node, close, reposition };
 }

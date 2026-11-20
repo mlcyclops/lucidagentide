@@ -37,7 +37,7 @@ import { askDigest, canonical, classifyAsk, MAX_REMOTE_INPUT, type RemoteAsk } f
 import { FLEET_PRESSURE_PCT, FLEET_SUSTAIN_MS, laneAdmission, pressureOf, pushSample, type LaneAdmission, type PressureSample } from "./fleet_resources.ts";
 import { sampleSystem, type SystemSnapshot } from "./system_profile.ts";
 import { HEALTH_PROBE_NOTE, healthVerdict, newEpisode, onActivity, onProbe, onRecover, type HealthEpisode } from "./health_watch.ts";
-import { pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
+import { parseTaskCall, pendingSnapshot, settleToolCall, trackToolCall, type PendingCall, type PendingView } from "./turn_pending.ts";
 import { PendingWrites } from "./checkout_owners.ts"; // P-OWN.1: ownership only for writes that completed
 import { DurationHistory, PROGRESS_TICK_MS, QUIET_MS, progressView, type ProgressView } from "./turn_progress.ts"; // P-PROGRESS.1
 import { PulseTracker, oldestCallStart, pulseVerdict, stoppedCallNote, type SubagentSignal } from "./call_pulse.ts"; // P-LIVENESS.1 (ADR-0418)
@@ -152,6 +152,10 @@ export type LaneEvent =
    *  step the tool_call opened (done / failed, with `elapsedMs`) instead of painting a second row; `intent`
    *  is the agent's own `i` phrase, the plain-words "what it is doing" line. */
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
+  /** P-VIZ.4 (ADR-0625): the lane's `task` call delegated to subagents (the same shape the master chat's
+   *  `subagent` event has; `id` is the task call's toolCallId, so its `tool` settle names the batch). The
+   *  call's own `tool` event still rides beside it, so a card that ignores this event loses nothing. */
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] }
   /** P-PROGRESS.1: the lane's progress view, every PROGRESS_TICK_MS while its turn runs. Never activity. */
   | { type: "progress"; progress: ProgressView }
   /** P-WAIT.1: a write in this turn waits for a file another worker is editing (write_claims.ts). */
@@ -1238,6 +1242,12 @@ export class FleetLaneManager {
     return lane ? lane.transcript.map(copyRecord) : [];
   }
 
+  /** P-VIZ.4 (ADR-0625): the omp session behind a lane (null for an unknown lane or before its first
+   *  session), so /api/subagents can read THAT session's background subagent runs. */
+  laneSessionId(laneId: string): string | null {
+    return this.#lanes.get(laneId)?.sessionId ?? null;
+  }
+
   /** P-REMOTE.16: the lane's IN-FLIGHT assistant turn as a replayable rich turn (`live: true`), or null when
    *  the lane is idle. A guest that starts watching mid-turn sees the work so far at the same detail the
    *  settled turns carry; the live stream then continues it. Copies only. */
@@ -1703,6 +1713,18 @@ export class FleetLaneManager {
             lane.liveToolRecords.push(rec);
           }
           this.#emit(lane, { type: "tool", ...(id ? { id, status } : {}), name, detail: title, ...(code ? { code } : {}), ...(input ? { input } : {}), ...(intent ? { intent } : {}) });
+          // P-VIZ.4 (ADR-0625): a `task` call (detected by shape, the master chat's parseTaskCall) also says
+          // WHO it delegated to, so Visualize can hang the lane's subagents off the lane.
+          const taskItems = parseTaskCall(u.rawInput);
+          if (taskItems) {
+            const agent = [...new Set(taskItems.map((t) => t.agent))].join(" + ");
+            const names = taskItems.map((t) => t.name).filter(Boolean);
+            this.#emit(lane, {
+              type: "subagent", id: id ?? title, agent, title: title || `${agent} subagent`,
+              assignments: taskItems.map((t) => t.task.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 200)).filter(Boolean),
+              ...(names.length ? { names } : {}),
+            });
+          }
           break;
         }
         // P-FLEET.L7: omp reports CONTEXT fill, the window, and cost. It does NOT report per-turn output

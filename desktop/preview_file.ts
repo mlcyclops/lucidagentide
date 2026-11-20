@@ -136,15 +136,18 @@ export function readPreviewFile(
 export function probePreviewFile(
   target: string,
   io: { size?: (p: string) => number } = {},
-): { ok: true; kind: PreviewKind } | { ok: false; error: string } {
+): { ok: true; kind: PreviewKind; bytes: number } | { ok: false; error: string } {
   const size = io.size ?? ((p) => statSync(p).size);
   if (!target || !isLocalFileTarget(target)) return { ok: false, error: "not a local file path" };
   const kind = previewKindOf(target);
   if (!kind) return { ok: false, error: NOT_PREVIEWABLE };
   const cap = previewMaxBytes(kind);
   try {
-    if (size(toFsPath(target)) > cap) return { ok: false, error: `file too large to preview (over ${Math.round(cap / (1024 * 1024))} MB)` };
-    return { ok: true, kind };
+    // P-PREVIEW-CURTAIN.1 (ADR-0621): the size rides along, so the curtain can call a 0-byte file blank
+    // from the same single stat.
+    const bytes = size(toFsPath(target));
+    if (bytes > cap) return { ok: false, error: `file too large to preview (over ${Math.round(cap / (1024 * 1024))} MB)` };
+    return { ok: true, kind, bytes };
   } catch {
     return { ok: false, error: "file not found or unreadable" };
   }

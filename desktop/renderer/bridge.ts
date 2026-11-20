@@ -372,6 +372,7 @@ export interface LaneImage { data: string; mimeType: string }
 export interface StagedLanePromptView { text: string; images: LaneImage[]; attachments?: string[] }
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
+import type { McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -380,6 +381,9 @@ export type LaneEvent =
    *  P-PROGRESS.1: `id`/`status`/`elapsedMs` let a tool_call_update settle the step its tool_call opened
    *  (one row per call, marked done or failed with its duration); `intent` is the agent's own `i` phrase. */
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
+  /** P-VIZ.4 (ADR-0625): the lane's `task` call delegated to subagents (mirrors the chat `subagent` event).
+   *  The call's own `tool` event rides beside it, so the grid card ignores this one. */
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] }
   /** P-PROGRESS.1: the lane's progress view, every few seconds while its turn runs. */
   | { type: "progress"; progress: ProgressView }
   /** P-WAIT.1: a write in the lane's turn waits for a file another worker is editing. */
@@ -746,7 +750,7 @@ import type { TurnStatus } from "./chat_events.ts";
 import { streamNdjson as streamNdjsonCore } from "./ndjson_stream.ts"; // reader + drop classification + P-REATTACH.1 recovery
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
-export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
+export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3" | "T4">>;
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
@@ -817,6 +821,9 @@ export interface ManagedPolicy {
   asksageOnly: boolean;
   /** ADR-0068 (P-ENT.1): which controls the managed policy locks (UI disables them + "Managed by <org>"). */
   locks?: { exec: boolean; egress: boolean; loop: boolean; models: boolean };
+  /** ADR-0616 (P-SETUX.1): org-authorized MCP servers for Settings "Quick connect", normalized server side
+   *  (normalizeOrgCatalog, `source: "org"`). Empty = unmanaged or none set: show MCP_COMMUNITY_CATALOG. */
+  mcpCatalog: McpCatalogEntry[];
 }
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
@@ -1545,6 +1552,10 @@ export interface LucidBridge {
   // preview with HTTP 200 and a human-readable HTML body, so the client cannot tell a rendered app from a
   // rendered failure; this is that missing signal, and it costs one `stat` (no read, no asset inlining).
   previewProbe(path: string): Promise<boolean>;
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the same probe with its detail (kind, size, HTTP status) for the loading
+  // curtain. `remote` asks the engine to reach a LOOPBACK URL (a dev server). Fail-closed: no answer reads
+  // as { resolves: false }.
+  previewProbeInfo(path: string, remote?: boolean): Promise<{ resolves: boolean; kind?: string; bytes?: number; status?: number; error?: string }>;
   // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
@@ -1569,8 +1580,9 @@ export interface LucidBridge {
   browserClose(): Promise<void>;
   // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
   browserStop(): Promise<void>;
-  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
-  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation. P-VIZ.4 (ADR-0625):
+  // with a lane id, that lane's session's runs instead.
+  subagents(laneId?: string): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
@@ -2516,6 +2528,17 @@ export const bridge: LucidBridge = {
     const r = d as { resolves?: unknown } | null;
     return r?.resolves === true;
   },
+  previewProbeInfo: async (path, remote) => { // P-PREVIEW-CURTAIN.1 (ADR-0621)
+    const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}${remote ? "&remote=1" : ""}`);
+    const r = (d ?? {}) as { resolves?: unknown; kind?: unknown; bytes?: unknown; status?: unknown; error?: unknown };
+    return {
+      resolves: r.resolves === true,
+      ...(typeof r.kind === "string" ? { kind: r.kind } : {}),
+      ...(typeof r.bytes === "number" ? { bytes: r.bytes } : {}),
+      ...(typeof r.status === "number" ? { status: r.status } : {}),
+      ...(typeof r.error === "string" ? { error: r.error } : d ? {} : { error: "the engine did not answer" }),
+    };
+  },
   // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
   // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
   // file) kept showing the previously served document forever, no matter what was on disk. The server
@@ -2537,7 +2560,7 @@ export const bridge: LucidBridge = {
   browserShot: async () => { const d: unknown = await getData("/api/browser/shot"); return d && typeof d === "object" && "png" in d && typeof d.png === "string" ? d.png : null; },
   browserClose: async () => { await post("/api/browser/close", {}); },
   browserStop: async () => { await post("/api/browser/close", {}); }, // the turn-stop half is renderer-side
-  subagents: () => getData("/api/subagents"), // P-TASK.5
+  subagents: (laneId) => getData(laneId ? `/api/subagents?laneId=${encodeURIComponent(laneId)}` : "/api/subagents"), // P-TASK.5; P-VIZ.4: a lane's runs
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;

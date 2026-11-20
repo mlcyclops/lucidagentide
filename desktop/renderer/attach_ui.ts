@@ -579,8 +579,9 @@ export function plusMenuItems(cfg: PlusMenuConfig): PlusItem[] {
 
 /** A small menu under a "+" button: arrows move, Enter or Space picks, Esc closes, and focus returns to the
  *  button. Built on the shared anchored popover (ui.ts), so it places, flips and closes like the others. The Fleet
- *  window's More menu (P-FLEET.HEAD1) uses it too, with its own `label`. */
-export function mountPlusMenu(button: HTMLElement, items: PlusItem[] | (() => PlusItem[]), label = "Add to this prompt"): { open(): void; close(): void } {
+ *  window's More menu (P-FLEET.HEAD1) uses it too, with its own `label` and `prefer: "below"`. A prompt bar's
+ *  menu opens above the bar by default, over the chips and away from the bar's own panel edge (P-ASKPLUS.1). */
+export function mountPlusMenu(button: HTMLElement, items: PlusItem[] | (() => PlusItem[]), label = "Add to this prompt", prefer: "above" | "below" = "above"): { open(): void; close(): void } {
   let cur: { node: HTMLElement; close: () => void } | null = null;
   button.setAttribute("aria-haspopup", "menu");
   button.setAttribute("aria-expanded", "false");
@@ -590,7 +591,7 @@ export function mountPlusMenu(button: HTMLElement, items: PlusItem[] | (() => Pl
     const rows = typeof items === "function" ? items() : items;
     const html = `<div class="att-menu" role="menu" aria-label="${esc(label)}">${rows.map((it, i) =>
       `<div class="cfg-opt att-menu-opt" role="menuitem" tabindex="-1" data-att-menu="${i}" data-tip="${esc(it.tip)}" data-tip-side="right"><span class="att-menu-ic">${it.icon}</span><span class="nm">${esc(it.label)}</span>${it.kbd ? `<kbd class="att-menu-kbd">${esc(it.kbd)}</kbd>` : ""}</div>`).join("")}</div>`;
-    const p = popover(button, html, () => { cur = null; button.setAttribute("aria-expanded", "false"); button.classList.remove("on"); button.focus(); });
+    const p = popover(button, html, () => { cur = null; button.setAttribute("aria-expanded", "false"); button.classList.remove("on"); button.focus(); }, { prefer });
     p.node.classList.add("att-menu-pop");
     p.reposition(); // the narrow menu measures differently from the default card width
     cur = p;

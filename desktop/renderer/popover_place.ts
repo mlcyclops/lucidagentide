@@ -24,6 +24,22 @@ export interface PopoverPlaceInput {
   gap?: number;
   /** Minimum distance the card keeps from every viewport edge. */
   margin?: number;
+  /** The side tried first. Default "below" (reading order); a prompt bar's menu prefers "above". */
+  prefer?: "above" | "below";
+}
+
+/** The popover's base layer (styles.css `.popover`). */
+export const POPOVER_Z = 95;
+/** The tooltip layer (#tip): a lifted popover stays below it so its row tips still show. */
+const TIP_Z = 260;
+
+/** The z-index a popover needs so it opens IN FRONT of the layer its anchor lives in, or null when the base
+ *  layer already is. `ancestorZ` lists the numeric z-index of every positioned ancestor of the anchor. Without
+ *  this a "+" menu inside Ask Lucid (z 250) opened behind the panel: invisible when docked, half hidden when
+ *  floating (P-ASKPLUS.1). */
+export function popoverLayer(ancestorZ: readonly number[]): number | null {
+  const top = Math.max(-Infinity, ...ancestorZ.filter(Number.isFinite));
+  return top >= POPOVER_Z ? Math.min(top + 1, TIP_Z - 1) : null;
 }
 
 export interface PopoverPlacement {
@@ -42,7 +58,10 @@ export function placePopover(i: PopoverPlaceInput): PopoverPlacement {
   // Prefer below (reading order). Flip above when the card doesn't fit below. When it fits NEITHER side,
   // take the roomier one and cap the height there, so the card scrolls internally instead of being clipped
   // by the window — which is what happens for a tall picker anchored to the composer.
-  const side = i.card.height <= roomBelow ? "below" : i.card.height <= roomAbove ? "above" : roomAbove > roomBelow ? "above" : "below";
+  const fitsBelow = i.card.height <= roomBelow, fitsAbove = i.card.height <= roomAbove;
+  const side = i.prefer === "above"
+    ? (fitsAbove ? "above" : fitsBelow ? "below" : roomAbove >= roomBelow ? "above" : "below")
+    : (fitsBelow ? "below" : fitsAbove ? "above" : roomAbove > roomBelow ? "above" : "below");
   const maxHeight = Math.min(i.card.height, side === "above" ? roomAbove : roomBelow);
   return {
     left: Math.max(margin, Math.min(i.anchor.left, i.viewport.width - i.card.width - margin)),

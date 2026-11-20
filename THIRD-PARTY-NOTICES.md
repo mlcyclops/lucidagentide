@@ -3,7 +3,8 @@
 LUCID's first-party code is BUSL-1.1 (see `LICENSE`). The files listed below contain code PORTED
 (translated to TypeScript and modified) from permissively licensed projects. Each ported file keeps the
 upstream copyright line and license text in its header; the notices are repeated here as the licenses
-require. npm dependencies keep their own licenses inside `node_modules/` and are not listed here.
+require. npm dependencies keep their own licenses inside `node_modules/` and are not listed here, except the
+libraries bundled into the shipped renderer, listed under "Bundled libraries" below.
 
 ## Ported source
 
@@ -107,6 +108,41 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to http://unlicense.org/
+```
+
+## Bundled libraries
+
+These npm packages are compiled unmodified into the shipped renderer bundle (`desktop/renderer/app.bundle.js`,
+built by `bun build`), so their notices travel with it.
+
+| LUCID file | Upstream | License | Copyright |
+|---|---|---|---|
+| `desktop/renderer/viz_scene.ts` (imports `three` and `three/examples/jsm/*`: OrbitControls, RoomEnvironment, RoundedBoxGeometry, EffectComposer, RenderPass, UnrealBloomPass, OutputPass) | three.js 0.187.0, https://github.com/mrdoob/three.js (npm `three`) | MIT | Copyright (c) 2010-2026 three.js authors |
+
+### three.js (MIT)
+
+```
+The MIT License
+
+Copyright © 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 ```
 
 ## Bundled models and runtimes
