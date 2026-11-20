@@ -3334,7 +3334,8 @@ function setSendEnabled(): void {
   const btn = $("#send") as HTMLButtonElement;
   // P-ACP.4: while a turn runs the button is a Stop control (always enabled) that interrupts; otherwise
   // it's Send (enabled only with text). The composer stays usable so a prompt can be pre-staged.
-  if (state.streaming) {
+  // An attached lane's turn counts even when this composer did not start it (the card, its queue).
+  if (turnInFlight()) {
     btn.disabled = false;
     if (!btn.classList.contains("stop")) stopShownAt = Date.now(); // P-STOP-GUARD.1: when Stop became visible
     btn.classList.add("stop");
@@ -3559,9 +3560,17 @@ let stopHoldsQueue = false;
 /** P-ACP.4: Stop - interrupt the running turn. omp's session/cancel ends the turn, so the streaming
  *  `done`/finally path flips `streaming` off; the staged queue waits for the user (stopHoldsQueue). */
 async function stopTurn(): Promise<void> {
-  if (!state.streaming) return;
+  if (!turnInFlight()) return;
   stopHoldsQueue = true; renderQueued();
   if (activeTurnView) { await activeTurnView.stop(); return; }
+  // The attached lane's turn started elsewhere: this composer owns no view of it, so cancel it on the lane.
+  // The watch's done/status event clears laneTurnLive and turns the button back into Send.
+  const t = state.composerTarget;
+  if (!state.streaming && isLaneTarget(t)) {
+    const r = await bridge.fleetCancel(t.laneId).catch(() => null);
+    if (!r?.ok) showToast({ tone: "warn", title: "Stop was not confirmed", desc: "The agent did not confirm Stop. Try again, or stop it from its fleet card.", actions: [{ label: "OK" }], timeout: 8000 });
+    return;
+  }
   // P-GOAL.2: a running /goal loop is canceled at the LOOP level (halt iterations + abort the turn);
   // an ordinary turn just cancels the turn.
   try { await (goalLoopRunning ? bridge.cancelGoal() : bridge.cancelChat()); } catch { /* best-effort; it still settles */ }
@@ -3603,7 +3612,7 @@ async function pushMidTurn(text: string, at = state.queuedItems.length): Promise
   if (r.ok) { addNoteChip(`Pushed mid-turn: ${text}`); return; }
   // The engine is the authority on whether the lane's turn runs. A missed `done` on the watch left this
   // flag set, and a send() with it set would open the chooser again for a turn that no longer exists.
-  if (r.code === "idle" && laneId) laneTurnLive = false;
+  if (r.code === "idle" && laneId) setLaneTurnLive(false);
   const ta = $("#input") as HTMLTextAreaElement | null;
   const plan = pushRecovery(r.code, r.reason, { draft: composerHasDraft(), ownTurnOpen: state.streaming });
   if (ta && plan.keep !== "stage") {
@@ -3669,6 +3678,13 @@ let laneOwnedGen = 0;
  *  at promote, then kept by the watch's events). A prompt sent now would be refused by the engine (one turn
  *  per lane), so send() stages or interjects it instead, exactly as it does while the master streams. */
 let laneTurnLive = false;
+/** Every change goes through here so the composer button follows it: a lane turn this composer did not
+ *  start must still show Stop (it used to show Send, leaving no way to stop a spoke from the composer). */
+function setLaneTurnLive(live: boolean): void {
+  if (laneTurnLive === live) return;
+  laneTurnLive = live;
+  setSendEnabled();
+}
 /** A turn is running on whatever the composer is attached to: our own, or the attached lane's. */
 const turnInFlight = (): boolean => state.streaming || (isLaneTarget(state.composerTarget) && laneTurnLive);
 
@@ -3771,7 +3787,7 @@ async function promoteLane(laneId: string): Promise<void> {
   // lane that had been working for minutes and read as "the spoke stopped".
   // The engine sends `live` whenever the lane is busy, EMPTY while it thinks or waits on a long tool call;
   // an empty snapshot is still a running turn, so the bubble and its status line show either way.
-  laneTurnLive = lane.status === "working" || lane.status === "needs-approval" || !!r.live;
+  setLaneTurnLive(lane.status === "working" || lane.status === "needs-approval" || !!r.live);
   if (laneTurnLive) {
     const live = showLaneWorking(lane.status);
     for (const title of r.live?.tools ?? []) live.stream.before(laneToolChip(title));
@@ -3807,7 +3823,7 @@ function demoteLane(): void {
   laneWatch?.stop();
   laneWatch = null;
   laneOwnedTail = false;
-  laneTurnLive = false;
+  setLaneTurnLive(false);
   closeQueueChooser(); // a chooser for the lane's turn must not stage text into the master's queue
   // A prompt held for the lane's next turn would otherwise fire at the MASTER's next settle.
   const held = nextHold(state.queuedItems);
@@ -3867,7 +3883,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
   // (the engine seeds the current status), or a watch that missed the end. Without it laneTurnLive could
   // stay set, and every send would be staged behind a turn that no longer exists.
   if (e.type === "status") {
-    laneTurnLive = e.status === "working" || e.status === "needs-approval";
+    setLaneTurnLive(e.status === "working" || e.status === "needs-approval");
     if (state.streaming || laneOwnedTail) return; // our own turn: send() renders it and its HUD
     // A turn started elsewhere (the lane's card, its queue) shows the moment it starts, not at its first
     // token; a turn that ended without a done this watch saw stops reading as live.
@@ -3883,8 +3899,8 @@ function onLaneWatchEvent(e: LaneEvent): void {
   }
   // A turn this composer did not start is running the moment its output arrives, and over on done/error.
   // A staged prompt (hold) runs when that turn ends, as it does when the master's own turn settles.
-  if (e.type === "token" || e.type === "thinking" || e.type === "tool") laneTurnLive = true;
-  else if (e.type === "done" || e.type === "error") laneTurnLive = false;
+  if (e.type === "token" || e.type === "thinking" || e.type === "tool") setLaneTurnLive(true);
+  else if (e.type === "done" || e.type === "error") setLaneTurnLive(false);
   if (e.type === "thinking") {
     // P-SCROLL.1: reasoning is not the answer. It used to be appended into the answer text, which read as
     // the reply's sentences arriving jumbled; it now gets the master turn's collapsible reasoning block.
@@ -20223,7 +20239,7 @@ function wire(): void {
     // A keyboard activation (Enter, Space) is a click with detail 0 and no pointer press of its own. A press
     // recorded earlier and never clicked (released off the button, a right click) must not be read as its press.
     const pressedAt = e instanceof UIEvent && e.detail === 0 ? null : sendPressedAt;
-    const intent = stopClickIntent({ streaming: state.streaming, stopShownAt, pressedAt, now: Date.now() });
+    const intent = stopClickIntent({ streaming: turnInFlight(), stopShownAt, pressedAt, now: Date.now() });
     sendPressedAt = null;
     if (intent === "stop") void stopTurn(); else void send();
   });
