@@ -1,24 +1,36 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_scene.ts - P-VIZ.1 (ADR-0622): the Visualize view's three.js scene.
+// desktop/renderer/viz_scene.ts - P-VIZ.1 (ADR-0622), P-VIZ.2 (ADR-0623): the Visualize view's three.js scene.
 //
-// Every node is a small procedural bot (head, visor, eyes, ears or antenna per persona; no binary assets)
-// standing in front of a liquid-glass frame: a rounded transparent slab with a thin bright rim cage that
-// catches the room environment's reflections as the camera orbits, plus a tiny role and task caption.
-// Agents get a tall rounded frame, subagents a small round one, the hub a large frame with a halo.
+// Every node is a mini Lucid, dressed in its persona's color (viz_mini_look.lookFor).
+//   3D: a procedural 3D mini Lucid (viz_mini3d.createMini3D, built at the perf tier's detail) inside a
+//       translucent glass CUBE: a transmissive (or, below the full tier, clear reflective) rounded box with a
+//       faint iridescence, thin bright accent edges and a dark floor plate he stands on. He runs his persona's
+//       rotation of activities while the node works (viz_mini_look.activityAt), faster with the node's smoothed
+//       est. tok/s, throws a rapid burst move on a surge, and plays the node's power-downs (failed, paused,
+//       ended, killed). Subagents get smaller cubes, the hub a larger one. The role and task caption is a crisp
+//       canvas sprite on the cube's lower front edge.
+//   2D: the PIXEL mini Lucid typing (viz_mini2d.createMini2D, nearest-neighbor, never blurred) as a
+//       camera-facing sprite on a flat rounded tile in the persona color, the caption on the tile's lower edge.
 //
 // Tokens are GPU points (one ShaderMaterial, additive) flowing along each active edge from the producer to
 // its parent; count and speed follow the node's est. tok/s. A surge throws a jagged regenerated lightning
 // bolt along the edge and a plasma burst (an expanding shader billboard plus a spark spray). Power-downs are
 // distinct: tool-failed flickers red, sheds sparks and shakes, then recovers; paused freezes the flow under
-// a frosty blue tint with a slow breathing glow; ended dims gracefully with rising green embers and frosts
-// the glass; killed implodes in a white flash, cracks the glass and leaves it dark gray.
+// a frosty blue tint; ended dims gracefully with rising green embers and frosts the glass; killed implodes
+// in a white flash, cracks the glass and leaves it dark gray.
+//
+// The camera: an AUTO camera (on by default) follows viz_director's focus, the node where the action is most,
+// on critically damped springs: it frames the focused cube to about FILL of the view height with a gentle
+// sway around it, or pulls back to the overview when nothing happens. The moment the user drags, pans or
+// zooms (a real pointer move or wheel, not a click), auto turns off and the view is told (onUserCamera);
+// setAuto(true) glides back from wherever the user left the camera.
 //
 // Resource contract (the orbit canvas's, ADR-0522): a DPR-capped canvas sized by a ResizeObserver, a frame
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
-// nothing flows and parks entirely when hidden or under reduced motion with nothing changing. destroy()
-// disposes every geometry, material, texture, render target, the controls and the WebGL context.
+// nothing moves and parks entirely when hidden or under reduced motion with nothing changing. destroy()
+// disposes every geometry, material, texture, render target, figure, the controls and the WebGL context.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -28,6 +40,10 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
+import { createMini2D, type Mini2D } from "./viz_mini2d.ts";
+import { createMini3D, type Mini3D, type MiniActivity, type MiniLook, type MiniState } from "./viz_mini3d.ts";
+import { activityAt, lookFor } from "./viz_mini_look.ts";
 import { frameInterval, IDLE_FPS, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizTierOpts } from "./viz_model.ts";
 
 export type VizViewMode = "2d" | "3d";
@@ -44,8 +60,12 @@ export interface VizSceneHandle {
   sync(nodes: readonly SceneNode[], edges: readonly SceneEdge[]): void;
   fire(events: readonly VizEvent[]): void;
   setView(mode: VizViewMode): void;
-  /** Re-frame the camera on every node (after a layout switch, or on demand). */
+  /** Re-frame the camera on every node (after a layout switch, or on demand). Leaves auto as it is. */
   fit(): void;
+  /** Auto camera on (glides from the current view to the action) or off (the user's controls only). */
+  setAuto(on: boolean): void;
+  /** The user took the camera (a drag, pan, pinch or wheel): auto has turned itself off. */
+  onUserCamera(cb: () => void): void;
   setVisible(on: boolean): void;
   setRecording(on: boolean): void;
   onHover(cb: (hit: SceneHit | null, x: number, y: number) => void): void;
@@ -121,6 +141,34 @@ const WHITE = new THREE.Color("#ffffff");
 const SPARK = new THREE.Color("#ffae42");
 
 const KIND_SCALE: Record<VizKind, number> = { hub: 1.35, agent: 1, subagent: 0.58 };
+/** The glass cube's side (before the kind's scale). The figure is about 1 unit tall. */
+const CUBE = 1.5;
+const FLOOR_Y = -CUBE / 2;
+const PLATE_H = 0.045;
+/** The 2D tile's side and the pixel figure's height on it (before the kind's scale). */
+const TILE = 1.5;
+const FIG_2D = 1.18;
+/** 2D layers above the node's plane: the tile covers the edge ends, the sprites sit on the tile. */
+const TILE_Y = 0.1, SPRITE_Y = 0.13;
+/** A tool failure: the figure flinches this long, then goes back to its status. */
+const FAIL_MS = 900;
+/** The figure's intensity follows the node's est. tok/s with this time constant (seconds). */
+const POWER_TAU = 0.6;
+
+/** Auto camera: the focused cube fills this share of the view height (padded for its depth). */
+const FILL = 0.45;
+/** 2D frames the focus looser: the flat map is about who is talking to whom, so the neighbors stay in view. */
+const FILL_2D = 0.24;
+const FRAME_PAD = 1.15;
+/** Spring natural frequency (rad/s): a focus change glides in about 1.5 s, so the subject is centered most of the hold. */
+const CAM_OMEGA = 3.2;
+/** The sway around the focus: azimuth amplitude (rad), polar amplitude (rad), period (s). */
+const SWAY_AZ = 0.42, SWAY_POLAR = 0.06, SWAY_S = 26;
+/** Polar angles from straight up: a little above the figure's eyes when focused, the fit's angle for the overview. */
+const FOCUS_POLAR = 1.12, OVERVIEW_POLAR = 0.77;
+/** A press that moves this far (CSS px) is the user taking the camera, not a click. */
+const GRAB_PX = 4;
+
 const SEG = 32; // points per edge curve
 const BOLT_PTS = 33;
 const BRANCH_PTS = 9;
@@ -130,22 +178,27 @@ const BOLT_MS = 380;
 const BURST_MS = 650;
 const FLOW_SPAWN_MAX = 420; // particles per second on a full-intensity edge at the full budget
 
-interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number }
+interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
+
+/** The 3D parts of a node: the figure in its glass cube. */
+interface Node3D {
+  mini: Mini3D; holder: THREE.Group; glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial;
+  activity: MiniActivity | null; state: MiniState | null;
+}
+
+/** The 2D parts of a node: the pixel figure on its tile. */
+interface Node2D { mini: Mini2D; tile: THREE.Mesh; tileMat: THREE.MeshBasicMaterial; rimMat: THREE.LineBasicMaterial; figMat: THREE.SpriteMaterial }
 
 interface NodeObj {
-  id: string; kind: VizKind; persona: Persona; size: number;
-  root: THREE.Group; pivot: THREE.Group; bot: THREE.Group;
-  cage: THREE.Mesh; cageMat: THREE.MeshPhysicalMaterial; rimMat: THREE.LineBasicMaterial;
-  cageW: number; cageH: number; cageZ: number; round: boolean;
+  id: string; kind: VizKind; persona: Persona; size: number; seed: number;
+  look: MiniLook; base: THREE.Color; tileBase: THREE.Color;
+  root: THREE.Group; pivot: THREE.Group;
+  d3: Node3D | null; d2: Node2D | null;
   label: THREE.Sprite; labelMat: THREE.SpriteMaterial; labelText: string;
-  shells: THREE.MeshStandardMaterial[]; shellBase: THREE.Color[];
-  eyes: THREE.MeshBasicMaterial; eyeBase: THREE.Color;
-  scanner: THREE.Object3D | null;
   cracks: THREE.LineSegments | null;
-  status: VizStatus; glow: number;
+  status: VizStatus; glow: number; power: number;
   cur: THREE.Vector3; target: THREE.Vector3; placed: boolean;
-  phase: number; yaw: number;
-  look: { tint: number; dim: number; frost: number };
+  tone: { tint: number; dim: number; frost: number };
   fx: NodeFx;
 }
 
@@ -160,7 +213,7 @@ interface Bolt { line: THREE.Line; branches: THREE.Line[]; mat: THREE.LineBasicM
 interface Burst { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; start: number; dur: number; scale: number; active: boolean }
 
 /** Mount the scene into `host`. Throws when WebGL cannot start (the view shows that honestly). */
-export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTheme, initialView: VizViewMode): VizSceneHandle {
+export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTheme, initialView: VizViewMode, initialAuto: boolean): VizSceneHandle {
   const o = tier;
   const renderer = new THREE.WebGLRenderer({ antialias: o.antialias, alpha: false, powerPreference: "high-performance" });
   const canvas = renderer.domElement;
@@ -190,7 +243,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   scene.add(world);
 
   // Cameras: a perspective one orbiting in 3D, an orthographic one looking straight down in 2D.
-  const persp = new THREE.PerspectiveCamera(45, 1, 0.1, 400);
+  const persp = new THREE.PerspectiveCamera(45, 1, 0.05, 500);
   persp.position.set(0, 9, 15);
   const ortho = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 400);
   ortho.position.set(0, 60, 0);
@@ -209,7 +262,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   if (bloomOn) {
     composer = new EffectComposer(renderer);
     renderPass = new RenderPass(scene, camera);
-    bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.38, 0.45, 0.86); // glow on particles and arcs, bots stay readable
+    bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.4, 0.93); // glow on particles, arcs and cube edges; figures stay readable
     composer.addPass(renderPass);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
@@ -228,6 +281,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const hitMeshes: THREE.Object3D[] = [];
   const edgeLines: THREE.Object3D[] = [];
   const blend = theme.light ? THREE.NormalBlending : THREE.AdditiveBlending;
+  const bgColor = new THREE.Color(theme.bg);
 
   // ------------------------------------------------------------------ flow particles (GPU points)
   const flow = makePointPool(o.particles);
@@ -311,8 +365,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let hoverCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let pickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let lostCb: (() => void) | null = null;
+  let userCamCb: (() => void) | null = null;
   let pointer: { x: number; y: number; dirty: boolean } | null = null;
   let lastHitKey = "";
+
+  // The director picks the focus (pure, viz_director.ts); the rig springs the camera toward it.
+  let auto = initialAuto;
+  const director = createDirector(performance.now());
+  let focusId: string | null = null;
+  const rig = { tx: 0, ty: 0, tz: 0, vx: 0, vy: 0, vz: 0, dist: 10, vd: 0, az: 0, va: 0, polar: OVERVIEW_POLAR, vp: 0, lz: 0, vlz: 0, settled: true };
 
   function makeControls(): OrbitControls {
     const c = new OrbitControls(camera, canvas);
@@ -320,242 +381,164 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     c.dampingFactor = 0.08;
     if (mode === "3d") {
       c.enableRotate = true;
-      c.minDistance = 3;
-      c.maxDistance = 80;
+      c.minDistance = 0.5;
+      c.maxDistance = 160;
       c.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
       c.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
     } else {
       c.enableRotate = false;
       c.screenSpacePanning = true;
-      c.minZoom = 0.2;
-      c.maxZoom = 8;
+      c.minZoom = 0.05;
+      c.maxZoom = 60;
       c.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
       c.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
     }
-    c.zoomToCursor = true;
+    // Zoom toward the cursor only on the flat map. In 3D OrbitControls moves the TARGET to where the cursor ray
+    // meets a plane through it, and at the auto camera's low grazing angles that point is far away: one wheel
+    // notch threw the camera off into empty space. In 3D the wheel dollies toward the target, which the auto
+    // camera has already put on the bot in focus.
+    c.zoomToCursor = mode === "2d";
     c.addEventListener("change", kick);
-    c.addEventListener("start", () => { interacting = true; userMoved = true; kick(); });
+    c.addEventListener("start", () => { interacting = true; kick(); });
     c.addEventListener("end", () => { interacting = false; kick(); });
     return c;
   }
 
+  /** The user really moved the camera (not a click, not the director): auto hands it over. */
+  function userGrab(): void {
+    userMoved = true;
+    if (!auto) return;
+    auto = false;
+    userCamCb?.();
+  }
+
   // ------------------------------------------------------------------ nodes
   function buildNode(n: SceneNode): NodeObj {
-    const look = PERSONAS[n.persona];
-    const size = KIND_SCALE[n.kind];
-    const base = new THREE.Color(look.color);
-    const sub = n.kind === "subagent";
-    const shellColor = base.clone().lerp(WHITE, sub ? 0.55 : 0.28);
-    const bodyColor = sub ? base.clone().lerp(WHITE, 0.3) : base.clone();
+    const color = PERSONAS[n.persona].color;
+    const base = new THREE.Color(color);
     const root = new THREE.Group();
     const pivot = new THREE.Group();
-    const bot = new THREE.Group();
     root.add(pivot);
-    pivot.add(bot);
+    const size = KIND_SCALE[n.kind];
     root.scale.setScalar(size);
 
-    const shellMat = new THREE.MeshStandardMaterial({ color: shellColor, metalness: 0.25, roughness: 0.28, envMapIntensity: 1.1 });
-    const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.45, roughness: 0.32, envMapIntensity: 1.1 });
-    const visorMat = new THREE.MeshPhysicalMaterial({ color: 0x0a0e18, metalness: 0.3, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.4 });
-    const eyeBase = base.clone().lerp(WHITE, 0.35);
-    const eyes = new THREE.MeshBasicMaterial({ color: eyeBase.clone(), toneMapped: false });
-
-    // body
-    const body = new THREE.Mesh(shared("body", () => new RoundedBoxGeometry(0.62, 0.48, 0.42, 3, 0.12)), bodyMat);
-    body.position.y = -0.42;
-    bot.add(body);
-    const chest = new THREE.Mesh(shared("chest", () => new THREE.CircleGeometry(0.06, 20)), eyes);
-    chest.position.set(0, -0.38, 0.215);
-    bot.add(chest);
-
-    // head
-    let front = 0.27;
-    let head: THREE.Mesh;
-    switch (look.head) {
-      case "dome": {
-        head = new THREE.Mesh(shared("head-dome", () => new THREE.SphereGeometry(0.38, 28, 18, 0, Math.PI * 2, 0, Math.PI / 2)), shellMat);
-        const rim = new THREE.Mesh(shared("head-dome-base", () => new THREE.CylinderGeometry(0.38, 0.36, 0.2, 28)), shellMat);
-        rim.position.y = -0.1;
-        head.add(rim);
-        head.position.y = 0.12;
-        front = 0.36;
-        break;
-      }
-      case "box": head = new THREE.Mesh(shared("head-box", () => new RoundedBoxGeometry(0.68, 0.5, 0.52, 4, 0.14)), shellMat); head.position.y = 0.16; front = 0.26; break;
-      case "capsule": head = new THREE.Mesh(shared("head-capsule", () => new THREE.CapsuleGeometry(0.25, 0.26, 8, 18)), shellMat); head.rotation.z = Math.PI / 2; head.position.y = 0.16; front = 0.25; break;
-      case "hex": head = new THREE.Mesh(shared("head-hex", () => new THREE.CylinderGeometry(0.37, 0.37, 0.5, 6)), shellMat); head.rotation.x = Math.PI / 2; head.position.y = 0.16; front = 0.25; break;
-      default: head = new THREE.Mesh(shared("head-round", () => new THREE.SphereGeometry(0.35, 30, 22)), shellMat); head.position.y = 0.16; front = 0.3; break;
-    }
-    bot.add(head);
-    const vy = head.position.y + 0.02;
-    const vz = front + 0.012;
-
-    // visor + eyes
-    let scanner: THREE.Object3D | null = null;
-    const eye = (x: number, y: number, r: number, sx = 1): void => {
-      const m = new THREE.Mesh(shared("eye", () => new THREE.SphereGeometry(1, 14, 10)), eyes);
-      m.scale.set(r * sx, r, r * 0.5);
-      m.position.set(x, y, vz + 0.035);
-      bot.add(m);
-    };
-    switch (look.visor) {
-      case "band": {
-        const v = new THREE.Mesh(shared("visor-band", () => new RoundedBoxGeometry(0.56, 0.18, 0.06, 2, 0.03)), visorMat);
-        v.position.set(0, vy, vz);
-        bot.add(v);
-        eye(-0.12, vy, 0.042, 1.7); eye(0.12, vy, 0.042, 1.7);
-        break;
-      }
-      case "twin": {
-        for (const x of [-0.13, 0.13]) {
-          const v = new THREE.Mesh(shared("visor-twin", () => new THREE.CylinderGeometry(0.1, 0.1, 0.05, 24)), visorMat);
-          v.rotation.x = Math.PI / 2;
-          v.position.set(x, vy, vz);
-          bot.add(v);
-          eye(x, vy, 0.055);
-        }
-        break;
-      }
-      case "mono": {
-        const v = new THREE.Mesh(shared("visor-mono", () => new THREE.CylinderGeometry(0.15, 0.15, 0.05, 28)), visorMat);
-        v.rotation.x = Math.PI / 2;
-        v.position.set(0, vy, vz);
-        bot.add(v);
-        const ring = new THREE.Mesh(shared("mono-ring", () => new THREE.TorusGeometry(0.15, 0.018, 8, 32)), bodyMat);
-        ring.position.set(0, vy, vz + 0.02);
-        bot.add(ring);
-        eye(0, vy, 0.07);
-        break;
-      }
-      default: { // grille: a dark band with slats and a scanning light bar
-        const v = new THREE.Mesh(shared("visor-band", () => new RoundedBoxGeometry(0.56, 0.18, 0.06, 2, 0.03)), visorMat);
-        v.position.set(0, vy, vz);
-        bot.add(v);
-        for (const dy of [-0.05, 0, 0.05]) {
-          const slat = new THREE.Mesh(shared("slat", () => new THREE.BoxGeometry(0.5, 0.012, 0.012)), bodyMat);
-          slat.position.set(0, vy + dy, vz + 0.035);
-          bot.add(slat);
-        }
-        const bar = new THREE.Mesh(shared("scan", () => new THREE.BoxGeometry(0.07, 0.15, 0.02)), eyes);
-        bar.position.set(0, vy, vz + 0.04);
-        bot.add(bar);
-        scanner = bar;
-        break;
-      }
-    }
-
-    // ears, antenna, halo
-    const top = head.position.y + (look.head === "dome" ? 0.38 : 0.27);
-    const antenna = (x: number, tilt: number): void => {
-      const stalk = new THREE.Mesh(shared("stalk", () => new THREE.CylinderGeometry(0.014, 0.018, 0.26, 8)), bodyMat);
-      stalk.position.set(x + Math.sin(tilt) * 0.13, top + Math.cos(tilt) * 0.13, 0);
-      stalk.rotation.z = -tilt;
-      bot.add(stalk);
-      const tip = new THREE.Mesh(shared("tip", () => new THREE.SphereGeometry(0.048, 14, 10)), eyes);
-      tip.position.set(x + Math.sin(tilt) * 0.27, top + Math.cos(tilt) * 0.27, 0);
-      bot.add(tip);
-    };
-    switch (look.ears) {
-      case "halo": {
-        const halo = new THREE.Mesh(shared("halo", () => new THREE.TorusGeometry(0.3, 0.024, 10, 48)), eyes);
-        halo.rotation.x = Math.PI / 2;
-        halo.position.y = top + 0.16;
-        bot.add(halo);
-        break;
-      }
-      case "antenna": antenna(0, 0); break;
-      case "twin": antenna(-0.16, -0.32); antenna(0.16, 0.32); break;
-      case "dish": {
-        for (const s of [-1, 1]) {
-          const dish = new THREE.Mesh(shared("dish", () => new THREE.ConeGeometry(0.13, 0.1, 22, 1, true)), bodyMat);
-          dish.rotation.z = s * Math.PI / 2;
-          dish.position.set(s * 0.42, head.position.y, 0);
-          bot.add(dish);
-          const nub = new THREE.Mesh(shared("tip", () => new THREE.SphereGeometry(0.048, 14, 10)), eyes);
-          nub.position.set(s * 0.47, head.position.y, 0);
-          bot.add(nub);
-        }
-        break;
-      }
-      case "horns": {
-        for (const s of [-1, 1]) {
-          const horn = new THREE.Mesh(shared("horn", () => new THREE.ConeGeometry(0.06, 0.24, 12)), bodyMat);
-          horn.position.set(s * 0.22, top + 0.08, 0);
-          horn.rotation.z = -s * 0.45;
-          bot.add(horn);
-        }
-        break;
-      }
-      default: { // fins
-        for (const s of [-1, 1]) {
-          const fin = new THREE.Mesh(shared("fin", () => new RoundedBoxGeometry(0.05, 0.3, 0.24, 2, 0.02)), bodyMat);
-          fin.position.set(s * 0.4, head.position.y + 0.04, -0.02);
-          fin.rotation.z = s * 0.18;
-          bot.add(fin);
-        }
-        break;
-      }
-    }
-
-    // the liquid-glass frame behind: rounded slab + a thin bright rim cage (front and back rims, corner posts)
-    const round = n.kind === "subagent";
-    const cageW = n.kind === "hub" ? 2.1 : round ? 1.8 : 1.6;
-    const cageH = n.kind === "hub" ? 2.5 : round ? 1.8 : 1.95;
-    const depth = 0.14;
-    const cageZ = -0.55;
-    const tint = base.clone().lerp(WHITE, 0.82);
-    const cageMat = new THREE.MeshPhysicalMaterial(o.transmission
-      ? { color: tint, metalness: 0, roughness: 0.08, transmission: 1, thickness: 0.4, ior: 1.4, clearcoat: 1, clearcoatRoughness: 0.04, iridescence: 0.3, iridescenceIOR: 1.3, envMapIntensity: 1.4, specularIntensity: 1, transparent: true, depthWrite: false }
-      : { color: tint, metalness: 0.1, roughness: 0.07, clearcoat: 1, clearcoatRoughness: 0.05, iridescence: 0.2, envMapIntensity: 1.8, transparent: true, opacity: 0.24, depthWrite: false });
-    const slabGeo = round
-      ? shared("cage-disc", () => new THREE.CylinderGeometry(0.9, 0.9, depth, 56).rotateX(Math.PI / 2))
-      : shared(`cage-${cageW}x${cageH}`, () => new RoundedBoxGeometry(cageW, cageH, depth, 5, 0.24));
-    const cage = new THREE.Mesh(slabGeo, cageMat);
-    cage.position.set(0, -0.08, cageZ);
-    cage.userData.nodeId = n.id;
-    cage.renderOrder = 1;
-    pivot.add(cage);
-    hitMeshes.push(cage);
-    const rimMat = new THREE.LineBasicMaterial({ color: base.clone().lerp(WHITE, 0.5), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
-    const outline = round ? circlePts(0.9, 64) : roundRectPts(cageW, cageH, 0.24);
-    const rimGeo = shared(round ? "rim-disc" : `rim-${cageW}x${cageH}`, () => new THREE.BufferGeometry().setFromPoints(outline.map((p) => new THREE.Vector3(p.x, p.y, 0))));
-    for (const z of [depth / 2 + 0.004, -depth / 2 - 0.004]) {
-      const rim = new THREE.LineLoop(rimGeo, rimMat);
-      rim.position.set(0, -0.08, cageZ + z);
-      pivot.add(rim);
-    }
-    const posts = shared(round ? "posts-disc" : `posts-${cageW}x${cageH}`, () => {
-      const pts: THREE.Vector3[] = [];
-      const corners = round
-        ? [0, 1, 2, 3, 4, 5].map((k) => new THREE.Vector2(Math.cos((k / 6) * Math.PI * 2) * 0.9, Math.sin((k / 6) * Math.PI * 2) * 0.9))
-        : [new THREE.Vector2(-cageW / 2 + 0.07, -cageH / 2 + 0.07), new THREE.Vector2(cageW / 2 - 0.07, -cageH / 2 + 0.07), new THREE.Vector2(cageW / 2 - 0.07, cageH / 2 - 0.07), new THREE.Vector2(-cageW / 2 + 0.07, cageH / 2 - 0.07)];
-      for (const c of corners) { pts.push(new THREE.Vector3(c.x, c.y, depth / 2 + 0.004), new THREE.Vector3(c.x, c.y, -depth / 2 - 0.004)); }
-      return new THREE.BufferGeometry().setFromPoints(pts);
-    });
-    const postLines = new THREE.LineSegments(posts, rimMat);
-    postLines.position.set(0, -0.08, cageZ);
-    pivot.add(postLines);
-
-    // the tiny caption: role and task, a crisp canvas sprite at the frame's foot
     const labelMat = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, toneMapped: false });
     const label = new THREE.Sprite(labelMat);
     label.renderOrder = 10;
-    label.position.set(0, -cageH / 2 - 0.08 - 0.22, cageZ + 0.2);
     pivot.add(label);
 
     world.add(root);
+    let seed = 7;
+    for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) >>> 0;
     const obj: NodeObj = {
-      id: n.id, kind: n.kind, persona: n.persona, size,
-      root, pivot, bot, cage, cageMat, rimMat, cageW, cageH, cageZ, round, label, labelMat, labelText: "",
-      shells: [shellMat, bodyMat], shellBase: [shellColor, bodyColor], eyes, eyeBase, scanner, cracks: null,
-      status: n.status, glow: n.glow,
+      id: n.id, kind: n.kind, persona: n.persona, size, seed,
+      look: lookFor(color), base, tileBase: base.clone().lerp(bgColor, theme.light ? 0.8 : 0.74),
+      root, pivot, d3: null, d2: null,
+      label, labelMat, labelText: "", cracks: null,
+      status: n.status, glow: n.glow, power: n.glow,
       cur: new THREE.Vector3(...n.pos), target: new THREE.Vector3(...n.pos), placed: false,
-      phase: Math.random() * Math.PI * 2, yaw: 0,
-      look: { tint: 0, dim: 0, frost: 0 },
-      fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0 },
+      tone: { tint: 0, dim: 0, frost: 0 },
+      fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0 },
     };
     paintLabel(obj, n.label);
+    ensureParts(obj);
     return obj;
+  }
+
+  /** Build the current mode's parts and drop the other mode's (only one figure per node holds GPU memory). */
+  function ensureParts(obj: NodeObj): void {
+    if (mode === "3d") { drop2d(obj); if (!obj.d3) obj.d3 = build3d(obj); }
+    else { drop3d(obj); if (!obj.d2) obj.d2 = build2d(obj); }
+    placeLabel(obj);
+  }
+
+  function build3d(obj: NodeObj): Node3D {
+    // The figure rides a holder of ours (standing on the plate; the kill implosion scales it), so the figure's
+    // own transforms stay the figure's.
+    const mini = createMini3D({ look: obj.look, detail: o.detail });
+    const holder = new THREE.Group();
+    holder.position.y = FLOOR_Y + PLATE_H;
+    holder.add(mini.group);
+    obj.pivot.add(holder);
+
+    // The glass: CLEAR, not transmissive. Transmission rendered the dark space behind it as a milky gray slab that
+    // washed the figure out, and double-sided walls stacked two layers of haze in front of him. Front faces only,
+    // a whisper of opacity, and the reflection (clearcoat + environment) is what reads as glass as you orbit.
+    // It never writes depth and draws after the (opaque) figure, so he stays visible from any angle.
+    const tint = obj.base.clone().lerp(WHITE, 0.85);
+    const glassMat = new THREE.MeshPhysicalMaterial({ color: tint, metalness: 0, roughness: 0.04, clearcoat: 1, clearcoatRoughness: 0.03, iridescence: 0.3, iridescenceIOR: 1.3, envMapIntensity: 0.18, specularIntensity: 0.6, transparent: true, opacity: 0.025, depthWrite: false, side: THREE.FrontSide });
+    const glass = new THREE.Mesh(shared("cube-glass", () => new RoundedBoxGeometry(CUBE, CUBE, CUBE, 3, 0.045)), glassMat);
+    glass.renderOrder = 1;
+    glass.userData.nodeId = obj.id;
+    obj.pivot.add(glass);
+    hitMeshes.push(glass);
+
+    const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
+    const rims = new THREE.LineSegments(shared("cube-edges", () => new THREE.EdgesGeometry(new THREE.BoxGeometry(CUBE, CUBE, CUBE))), edgeMat);
+    rims.renderOrder = 2;
+    obj.pivot.add(rims);
+
+    // A dark plate with a faint persona glow: bright enough to ground him, dim enough that he, not the floor, is lit.
+    const plateMat = new THREE.MeshStandardMaterial({ color: obj.base.clone().lerp(bgColor, 0.93), metalness: 0.2, roughness: 0.5, emissive: obj.base.clone(), emissiveIntensity: 0.03, envMapIntensity: 0.2 });
+    const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
+    plate.position.y = FLOOR_Y + PLATE_H / 2;
+    obj.pivot.add(plate);
+    return { mini, holder, glass, glassMat, edgeMat, plateMat, activity: null, state: null };
+  }
+
+  function build2d(obj: NodeObj): Node2D {
+    const mini = createMini2D(obj.look);
+    const tileMat = new THREE.MeshBasicMaterial({ color: obj.tileBase.clone(), toneMapped: false });
+    const tile = new THREE.Mesh(shared("tile", () => new THREE.ShapeGeometry(roundRectShape(TILE, TILE, 0.2), 6).rotateX(-Math.PI / 2)), tileMat);
+    tile.position.y = TILE_Y;
+    tile.userData.nodeId = obj.id;
+    obj.pivot.add(tile);
+    hitMeshes.push(tile);
+    const rimMat = new THREE.LineBasicMaterial({ color: obj.base.clone(), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
+    const rim = new THREE.LineLoop(shared("tile-rim", () => new THREE.BufferGeometry().setFromPoints(roundRectShape(TILE, TILE, 0.2).getPoints(6).map((p) => new THREE.Vector3(p.x, 0, -p.y)))), rimMat);
+    rim.position.y = TILE_Y + 0.004;
+    obj.pivot.add(rim);
+    const figMat = new THREE.SpriteMaterial({ map: mini.texture, transparent: true, alphaTest: 0.5, toneMapped: false, depthWrite: false });
+    const fig = new THREE.Sprite(figMat);
+    fig.scale.set(FIG_2D * mini.aspect, FIG_2D, 1);
+    fig.position.set(0, SPRITE_Y, -0.08);
+    fig.renderOrder = 9;
+    obj.pivot.add(fig);
+    return { mini, tile, tileMat, rimMat, figMat };
+  }
+
+  /** Remove `x` from the node and dispose every material it holds (the geometries are shared or the figure's). */
+  function detach(obj: NodeObj, x: THREE.Object3D): void {
+    obj.pivot.remove(x);
+    const i = hitMeshes.indexOf(x);
+    if (i >= 0) hitMeshes.splice(i, 1);
+    const m = (x as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (Array.isArray(m)) m.forEach((mm) => mm.dispose()); else m?.dispose();
+  }
+
+  function drop3d(obj: NodeObj): void {
+    const d = obj.d3;
+    if (!d) return;
+    obj.pivot.remove(d.holder);
+    d.mini.dispose();
+    for (const x of [...obj.pivot.children]) if (x === d.glass || (x as THREE.Mesh).material === d.edgeMat || (x as THREE.Mesh).material === d.plateMat) detach(obj, x);
+    obj.d3 = null;
+  }
+
+  function drop2d(obj: NodeObj): void {
+    const d = obj.d2;
+    if (!d) return;
+    for (const x of [...obj.pivot.children]) {
+      const m = (x as THREE.Mesh).material;
+      if (x === d.tile || m === d.rimMat || m === d.figMat) detach(obj, x);
+    }
+    d.mini.dispose();
+    obj.d2 = null;
+  }
+
+  function placeLabel(obj: NodeObj): void {
+    if (mode === "3d") obj.label.position.set(0, FLOOR_Y, CUBE / 2 + 0.02);
+    else obj.label.position.set(0, SPRITE_Y + 0.01, TILE / 2 - 0.06);
   }
 
   function paintLabel(obj: NodeObj, text: string): void {
@@ -563,7 +546,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const key = `${role}|${text}`;
     if (obj.labelText === key) return;
     obj.labelText = key;
-    const scale = 2;
+    const scale = 3;
     const cv = document.createElement("canvas");
     const ctx = cv.getContext("2d");
     if (!ctx) return;
@@ -578,11 +561,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const h = 40 * scale;
     cv.width = w; cv.height = h;
     const c2 = cv.getContext("2d")!;
-    c2.fillStyle = theme.light ? "rgba(255,255,255,0.78)" : "rgba(10,12,20,0.62)";
+    c2.fillStyle = theme.light ? "rgba(255,255,255,0.86)" : "rgba(10,12,20,0.74)";
     roundRect(c2, 0, 0, w, h, h / 2);
     c2.fill();
     c2.strokeStyle = PERSONAS[obj.persona].color;
-    c2.globalAlpha = 0.6; c2.lineWidth = 2 * scale;
+    c2.globalAlpha = 0.7; c2.lineWidth = 2 * scale;
     roundRect(c2, scale, scale, w - 2 * scale, h - 2 * scale, h / 2 - scale);
     c2.stroke();
     c2.globalAlpha = 1;
@@ -601,22 +584,17 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     obj.labelMat.map?.dispose();
     obj.labelMat.map = tex;
     obj.labelMat.needsUpdate = true;
-    const worldH = 0.26;
+    const worldH = 0.2;
     obj.label.scale.set((w / h) * worldH, worldH, 1);
   }
 
   function disposeNode(obj: NodeObj): void {
     world.remove(obj.root);
-    const i = hitMeshes.indexOf(obj.cage);
-    if (i >= 0) hitMeshes.splice(i, 1);
-    const mats = new Set<THREE.Material>();
-    obj.root.traverse((x) => {
-      const m = (x as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(m)) m.forEach((mm) => mats.add(mm)); else if (m) mats.add(m);
-    });
-    for (const m of mats) m.dispose();
+    drop3d(obj);
+    drop2d(obj);
+    healCracks(obj);
     obj.labelMat.map?.dispose();
-    obj.cracks?.geometry.dispose();
+    obj.labelMat.dispose();
   }
 
   // ------------------------------------------------------------------ edges
@@ -670,9 +648,17 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     ed.p0.copy(a.cur).y += 0.05 * a.size;
     ed.p2.copy(b.cur).y += 0.05 * b.size;
     const dir = tmpA.subVectors(ed.p2, ed.p0);
-    const len = Math.max(0.001, dir.length());
-    ed.len = len;
+    let len = Math.max(0.001, dir.length());
     dir.divideScalar(len);
+    // The flow starts and ends at the cube walls, not at the cube centers: centered endpoints piled a ball of
+    // glowing particles onto mini Lucid's head, and bloom turned him into a white blur.
+    const ra = CUBE * a.size * 0.55, rb = CUBE * b.size * 0.55;
+    if (len > (ra + rb) * 1.2) {
+      ed.p0.addScaledVector(dir, ra);
+      ed.p2.addScaledVector(dir, -rb);
+      len -= ra + rb;
+    }
+    ed.len = len;
     const side = tmpB.set(-dir.z, 0, dir.x);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
@@ -770,8 +756,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     attr.needsUpdate = true;
   }
 
+  /** Where a node's effects start: the figure's chest in 3D (the cube is centered on the node), just above
+   *  the tile in 2D. */
   function nodeHead(obj: NodeObj, out: THREE.Vector3): THREE.Vector3 {
-    return out.copy(obj.cur).setY(obj.cur.y + 0.15 * obj.size);
+    return out.copy(obj.cur).setY(obj.cur.y + (mode === "3d" ? -0.18 : 0.2) * obj.size);
   }
 
   const fxAt = new THREE.Vector3(), fxTo = new THREE.Vector3();
@@ -779,14 +767,17 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const obj = nodes.get(ev.node);
     if (!obj) return;
     const now = clock.now;
-    const color = new THREE.Color(PERSONAS[obj.persona].color);
+    cue(director, ev.node, ev.kind === "power" ? ev.power : ev.kind, performance.now());
+    const color = obj.base.clone();
     if (ev.kind === "spawn") {
       if (o.motion) { burstAt(nodeHead(obj, fxAt), color.clone().lerp(WHITE, 0.4), 1.6 * obj.size, 500); spawnFx(24, fxAt, color, { speed: 1.4, up: 0.2, spread: 0.2, life: 0.7, size: 0.07, gravity: 0, drag: 2.5 }); }
       effectsUntil = Math.max(effectsUntil, now + 700);
       return;
     }
     if (ev.kind === "surge") {
-      if (!o.motion) { obj.fx.colorUntil = now + 600; effectsUntil = Math.max(effectsUntil, now + 700); return; }
+      obj.fx.colorUntil = now + (o.motion ? 260 : 600);
+      if (!o.motion) { effectsUntil = Math.max(effectsUntil, now + 700); return; }
+      obj.d3?.mini.burst();
       const hot = color.clone().lerp(WHITE, 0.45).multiplyScalar(2.2);
       nodeHead(obj, fxAt);
       const parent = [...edges.values()].find((e) => !e.ring && e.from === obj.id);
@@ -802,7 +793,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
           boltBetween(fxAt, fxTo, hot);
         }
       }
-      burstAt(fxAt, color.clone().lerp(WHITE, 0.25), 2.2 * obj.size);
+      burstAt(fxAt, color.clone().lerp(WHITE, 0.25), 1.9 * obj.size);
       spawnFx(40, fxAt, hot, { speed: 3.2, up: 0.3, spread: 0.15, life: 0.6, size: 0.08, gravity: -1.5, drag: 1.6 });
       effectsUntil = Math.max(effectsUntil, now + 900);
       return;
@@ -813,43 +804,44 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function applyPower(obj: NodeObj, kind: PowerKind, now: number, color: THREE.Color): void {
     nodeHead(obj, fxAt);
     effectsUntil = Math.max(effectsUntil, now + (o.motion ? 2600 : 1200));
+    const s = obj.size;
     switch (kind) {
       case "tool-failed":
         obj.fx.flickerUntil = now + 950;
+        obj.fx.failUntil = now + FAIL_MS;
         if (!o.motion) return;
-        obj.fx.shakeUntil = now + 420; obj.fx.shakeAmp = 0.07;
-        spawnFx(70, fxAt, SPARK, { speed: 2.6, up: 1.8, spread: 0.2, life: 0.9, size: 0.06, gravity: -7, drag: 0.6 });
-        spawnFx(20, fxAt, RED, { speed: 1.6, up: 1, spread: 0.2, life: 0.6, size: 0.09, gravity: -5, drag: 1 });
+        obj.fx.shakeUntil = now + 420; obj.fx.shakeAmp = 0.06;
+        spawnFx(70, fxAt, SPARK, { speed: 2.4 * s, up: 1.6 * s, spread: 0.25 * s, life: 0.9, size: 0.06, gravity: -7, drag: 0.6 });
+        spawnFx(20, fxAt, RED, { speed: 1.4 * s, up: 0.9 * s, spread: 0.25 * s, life: 0.6, size: 0.09, gravity: -5, drag: 1 });
         return;
       case "paused":
         if (!o.motion) return;
-        burstAt(fxAt, ICE, 2.4 * obj.size, 1100);
-        spawnFx(30, fxAt, ICE, { speed: 0.5, up: 0.1, spread: 0.9 * obj.size, life: 2.2, size: 0.05, gravity: 0, drag: 0.8 });
+        burstAt(fxAt, ICE, 2.2 * s, 1100);
+        spawnFx(30, fxAt, ICE, { speed: 0.4, up: 0.1, spread: CUBE * s, life: 2.2, size: 0.05, gravity: 0, drag: 0.8 });
         return;
       case "ended":
         if (!o.motion) return;
-        spawnFx(50, fxAt.setY(fxAt.y - 0.2 * obj.size), EMBER, { speed: 0.35, up: 0.9, spread: 0.9 * obj.size, life: 2.4, size: 0.055, gravity: 0.25, drag: 0.4 });
-        burstAt(fxAt, EMBER.clone().multiplyScalar(0.6), 1.6 * obj.size, 900);
+        spawnFx(50, fxAt.setY(obj.cur.y + FLOOR_Y * s), EMBER, { speed: 0.3, up: 0.9, spread: CUBE * 0.8 * s, life: 2.4, size: 0.055, gravity: 0.25, drag: 0.4 });
+        burstAt(nodeHead(obj, fxAt), EMBER.clone().multiplyScalar(0.6), 1.6 * s, 900);
         return;
       case "killed":
         obj.fx.implodeAt = now;
         if (!o.motion) return;
-        obj.fx.shakeUntil = now + 300; obj.fx.shakeAmp = 0.12;
-        burstAt(fxAt, WHITE.clone().multiplyScalar(2.5), 3.4 * obj.size, 420);
-        spawnFx(90, fxAt, WHITE, { speed: 4.2, up: 0.2, spread: 0.1, life: 0.55, size: 0.07, gravity: -2, drag: 2.2 });
-        spawnFx(30, fxAt, color, { speed: 2.2, up: 0.4, spread: 0.2, life: 0.9, size: 0.08, gravity: -4, drag: 1 });
+        obj.fx.shakeUntil = now + 300; obj.fx.shakeAmp = 0.1;
+        burstAt(fxAt, WHITE.clone().multiplyScalar(2.5), 3.2 * s, 420);
+        spawnFx(90, fxAt, WHITE, { speed: 4 * s, up: 0.2, spread: 0.1, life: 0.55, size: 0.07, gravity: -2, drag: 2.2 });
+        spawnFx(30, fxAt, color, { speed: 2 * s, up: 0.4, spread: 0.2, life: 0.9, size: 0.08, gravity: -4, drag: 1 });
         return;
     }
   }
 
-  /** Fracture lines across the glass: a few jagged cracks radiating from an impact point. */
-  function crackCage(obj: NodeObj): void {
+  /** Fracture lines across the cube's front face (3D) or the tile (2D): jagged cracks from an impact point. */
+  function crack(obj: NodeObj): void {
     if (obj.cracks) return;
     const pts: THREE.Vector3[] = [];
-    const hw = obj.cageW / 2 - 0.12, hh = obj.cageH / 2 - 0.12;
-    const ox = (Math.random() - 0.5) * hw, oy = (Math.random() - 0.3) * hh;
-    const z = 0.075;
-    const inside = (x: number, y: number): boolean => obj.round ? Math.hypot(x, y) < 0.82 : Math.abs(x) < hw && Math.abs(y) < hh;
+    const half = CUBE / 2 - 0.1;
+    const ox = (Math.random() - 0.5) * half, oy = (Math.random() - 0.3) * half;
+    const inside = (x: number, y: number): boolean => Math.abs(x) < half && Math.abs(y) < half;
     for (let k = 0; k < 7; k++) {
       let a = (k / 7) * Math.PI * 2 + Math.random() * 0.6;
       let x = ox, y = oy;
@@ -858,11 +850,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         const step = 0.12 + Math.random() * 0.16;
         const nx = x + Math.cos(a) * step, ny = y + Math.sin(a) * step;
         if (!inside(nx, ny)) break;
-        pts.push(new THREE.Vector3(x, y, z), new THREE.Vector3(nx, ny, z));
+        pts.push(new THREE.Vector3(x, y, 0), new THREE.Vector3(nx, ny, 0));
         if (s === 2 && Math.random() < 0.6) { // a side branch
           const ba = a + (Math.random() < 0.5 ? -1 : 1) * 0.9;
           const bx = nx + Math.cos(ba) * 0.15, by = ny + Math.sin(ba) * 0.15;
-          if (inside(bx, by)) pts.push(new THREE.Vector3(nx, ny, z), new THREE.Vector3(bx, by, z));
+          if (inside(bx, by)) pts.push(new THREE.Vector3(nx, ny, 0), new THREE.Vector3(bx, by, 0));
         }
         x = nx; y = ny;
       }
@@ -870,12 +862,12 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const g = new THREE.BufferGeometry().setFromPoints(pts);
     const m = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95, toneMapped: false, depthWrite: false });
     const lines = new THREE.LineSegments(g, m);
-    lines.position.set(0, -0.08, obj.cageZ);
+    lines.renderOrder = 3;
     obj.pivot.add(lines);
     obj.cracks = lines;
   }
 
-  function healCage(obj: NodeObj): void {
+  function healCracks(obj: NodeObj): void {
     if (!obj.cracks) return;
     obj.pivot.remove(obj.cracks);
     obj.cracks.geometry.dispose();
@@ -886,91 +878,105 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   // ------------------------------------------------------------------ per-frame update
   const tmpColor = new THREE.Color();
   const tintTarget = new THREE.Color();
+  const tileTint = new THREE.Color();
   const camPos = new THREE.Vector3();
   const flowColor = new THREE.Color();
+
+  /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
+  function miniState(obj: NodeObj, t: number): MiniState {
+    switch (obj.status) {
+      case "paused": return "paused";
+      case "ended": return "ended";
+      case "killed": return "killed";
+      default: return t < obj.fx.failUntil ? "failed" : obj.status === "active" ? "working" : "idle";
+    }
+  }
 
   function updateNode(obj: NodeObj, t: number, dt: number): void {
     const k = o.motion ? 1 - Math.exp(-dt * 5) : 1;
     if (!obj.placed) { obj.cur.copy(obj.target); obj.placed = true; } else obj.cur.lerp(obj.target, k);
     obj.root.position.copy(obj.cur);
+    obj.power += (obj.glow - obj.power) * (o.motion ? 1 - Math.exp(-dt / POWER_TAU) : 1);
 
-    // status looks: tint (ice for paused, gray for killed), dim, frost, cracks
+    // status tones: tint (ice for paused, gray for killed), dim, frost
     const st = obj.status;
-    const want = {
-      tint: st === "paused" ? 0.55 : st === "killed" ? 0.85 : 0,
-      dim: st === "ended" ? 0.55 : st === "killed" ? 0.3 : 0,
-      frost: st === "ended" ? 1 : st === "killed" ? 0.6 : st === "paused" ? 0.35 : 0,
-    };
-    obj.look.tint += (want.tint - obj.look.tint) * k;
-    obj.look.dim += (want.dim - obj.look.dim) * k;
-    obj.look.frost += (want.frost - obj.look.frost) * k;
+    obj.tone.tint += ((st === "paused" ? 0.55 : st === "killed" ? 0.85 : 0) - obj.tone.tint) * k;
+    obj.tone.dim += ((st === "ended" ? 0.55 : st === "killed" ? 0.3 : 0) - obj.tone.dim) * k;
+    obj.tone.frost += ((st === "ended" ? 1 : st === "killed" ? 0.6 : st === "paused" ? 0.35 : 0) - obj.tone.frost) * k;
     tintTarget.copy(st === "killed" ? DEAD : ICE);
     const flicker = t < obj.fx.flickerUntil;
     const flickOn = flicker && (Math.floor(t / 70) % 2 === 0 || !o.motion);
-    for (let i = 0; i < obj.shells.length; i++) {
-      const m = obj.shells[i]!;
-      m.color.copy(obj.shellBase[i]!).lerp(tintTarget, obj.look.tint).multiplyScalar(1 - obj.look.dim * 0.6);
-      m.emissive.copy(RED).multiplyScalar(flickOn ? 0.55 : 0);
-    }
 
-    // eyes: glow with activity; amber pulse when waiting; ice breathing when paused; out when ended/killed
+    // the accent (cube edges in 3D, tile rim in 2D): glows with work, amber pulse while waiting, red flicker
+    // on a tool failure, white flash on a surge, dim when ended, near-dark when killed
     let level: number;
-    tmpColor.copy(obj.eyeBase);
-    if (flicker) { tmpColor.copy(RED); level = flickOn ? 2.4 : 0.4; }
-    else if (st === "paused") { tmpColor.copy(ICE); level = 0.5 + (o.motion ? 0.45 * Math.sin((t / 3000) * Math.PI * 2) : 0.2); }
-    else if (st === "waiting") { tmpColor.copy(AMBER); level = 0.9 + (o.motion ? 0.7 * (0.5 + 0.5 * Math.sin(t / 260)) : 0.3); }
-    else if (st === "ended") level = 0.1;
-    else if (st === "killed") level = 0;
-    else if (st === "idle") level = 0.55;
-    else level = 0.9 + 1.8 * obj.glow;
-    if (t < obj.fx.colorUntil) { tmpColor.copy(WHITE); level = 2.2; }
-    obj.eyes.color.copy(tmpColor).multiplyScalar(level);
+    tmpColor.copy(obj.base).lerp(WHITE, 0.3);
+    if (flicker) { tmpColor.copy(RED); level = flickOn ? 2.2 : 0.4; }
+    else if (st === "paused") { tmpColor.copy(ICE); level = 0.6 + (o.motion ? 0.3 * Math.sin((t / 3000) * Math.PI * 2) : 0); }
+    else if (st === "waiting") { tmpColor.copy(AMBER); level = 0.9 + (o.motion ? 0.6 * (0.5 + 0.5 * Math.sin(t / 260)) : 0.3); }
+    else if (st === "ended") level = 0.35;
+    else if (st === "killed") level = 0.18;
+    else if (st === "idle") level = 0.6;
+    else level = 0.85 + 1.1 * obj.power;
+    if (t < obj.fx.colorUntil) { tmpColor.copy(WHITE); level = 2; }
+    const stateNow = miniState(obj, t);
 
-    // glass: frosted when ended, dark gray when killed, icy when paused
-    const cm = obj.cageMat;
-    cm.roughness = 0.07 + obj.look.frost * 0.5;
-    if (o.transmission) cm.transmission = 1 - obj.look.frost * 0.5;
-    else cm.opacity = 0.24 + obj.look.frost * 0.22;
-    cm.color.copy(obj.shellBase[0]!).lerp(WHITE, 0.6).lerp(tintTarget, Math.max(obj.look.tint, st === "ended" ? 0.25 : 0));
-    obj.rimMat.opacity = st === "killed" ? 0.18 : st === "ended" ? 0.35 : 0.9;
-    obj.rimMat.color.copy(obj.shellBase[1]!).lerp(WHITE, 0.5).lerp(tintTarget, obj.look.tint);
+    if (obj.d3) {
+      const d = obj.d3;
+      if (stateNow !== d.state) { d.mini.setState(stateNow); d.state = stateNow; }
+      const act = activityAt(obj.persona, obj.kind, obj.seed, t, st === "active");
+      if (act !== d.activity) { d.mini.setActivity(act); d.activity = act; }
+      d.mini.setIntensity(obj.power);
+      d.mini.update(t / 1000, dt, o.motion);
+      d.edgeMat.color.copy(tmpColor).multiplyScalar(level);
+      d.edgeMat.opacity = st === "killed" ? 0.35 : st === "ended" ? 0.5 : 0.95;
+      d.plateMat.emissive.copy(flickOn ? RED : obj.base);
+      d.plateMat.emissiveIntensity = flickOn ? 0.6 : st === "ended" || st === "killed" ? 0.02 : 0.03 + 0.07 * obj.power;
+      // glass: frosted when ended, dark gray when killed, icy when paused
+      const g = d.glassMat;
+      g.roughness = 0.04 + obj.tone.frost * 0.45;
+      g.opacity = 0.025 + obj.tone.frost * 0.22;
+      // He turns to face the camera (with a little lag) so the viewer sees him, not his back.
+      camera.getWorldPosition(camPos);
+      const face = Math.atan2(camPos.x - obj.cur.x, camPos.z - obj.cur.z);
+      let dy = face - d.holder.rotation.y;
+      dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      d.holder.rotation.y += dy * (o.motion ? 1 - Math.exp(-dt * 3) : 1);
+      g.color.copy(obj.base).lerp(WHITE, 0.85).lerp(tintTarget, Math.max(obj.tone.tint, st === "ended" ? 0.25 : 0)).multiplyScalar(1 - obj.tone.dim * 0.3);
+      // killed: a quick implosion of the figure (the figure's own slump plays inside it)
+      let scale = 1;
+      if (st === "killed" && o.motion && obj.fx.implodeAt) {
+        const age = (t - obj.fx.implodeAt) / 1000;
+        scale = age < 0.18 ? 1 - 0.55 * easeIn(age / 0.18) : age < 0.6 ? 0.45 + 0.55 * easeOut((age - 0.18) / 0.42) : 1;
+      }
+      d.holder.scale.setScalar(scale);
+    }
+    if (obj.d2) {
+      const d = obj.d2;
+      d.mini.update(t, stateNow, obj.power);
+      d.rimMat.color.copy(tmpColor).multiplyScalar(Math.min(1.4, level));
+      d.rimMat.opacity = st === "killed" ? 0.4 : st === "ended" ? 0.55 : 0.95;
+      tileTint.copy(tintTarget).lerp(bgColor, 0.6);
+      d.tileMat.color.copy(obj.tileBase).lerp(tileTint, obj.tone.tint).lerp(bgColor, obj.tone.dim * 0.5);
+      d.figMat.color.setRGB(1, flickOn ? 0.55 : 1, flickOn ? 0.55 : 1);
+    }
     obj.labelMat.opacity = st === "ended" || st === "killed" ? 0.6 : 1;
-    if (st === "killed") crackCage(obj); else healCage(obj);
+
+    if (st === "killed") crack(obj); else healCracks(obj);
     if (obj.cracks) {
+      if (mode === "3d") { obj.cracks.rotation.set(0, 0, 0); obj.cracks.position.set(0, 0, CUBE / 2 + 0.004); }
+      else { obj.cracks.rotation.set(-Math.PI / 2, 0, 0); obj.cracks.position.set(0, TILE_Y + 0.006, 0); }
       const age = (t - obj.fx.implodeAt) / 1000;
-      const cmat = obj.cracks.material as THREE.LineBasicMaterial;
-      cmat.color.setScalar(Math.max(0.45, 1.6 - age));
+      (obj.cracks.material as THREE.LineBasicMaterial).color.setScalar(Math.max(0.45, 1.6 - age));
     }
 
-    // motion: bob, shake, implode collapse, scanner sweep, facing
-    let scale = 1, sag = 0, tilt = 0;
-    if (st === "killed") {
-      const age = o.motion ? (t - obj.fx.implodeAt) / 1000 : 9;
-      scale = age < 0.22 ? 1 - 0.85 * easeIn(age / 0.22) : age < 0.6 ? 0.15 + 0.6 * easeOut((age - 0.22) / 0.38) : 0.75;
-      sag = -0.18 * Math.min(1, age / 0.6); tilt = 0.35 * Math.min(1, age / 0.6);
-    }
-    obj.bot.scale.setScalar(scale);
-    obj.bot.rotation.z = tilt;
-    const bob = o.motion && st !== "killed" && st !== "ended" && st !== "paused" ? Math.sin(t / 1000 * 1.7 + obj.phase) * 0.055 : 0;
-    obj.bot.position.y = bob + sag;
+    // shake
     let sx = 0, sz = 0;
     if (o.motion && t < obj.fx.shakeUntil) {
       const a = obj.fx.shakeAmp * ((obj.fx.shakeUntil - t) / 420);
       sx = (Math.random() - 0.5) * a * 2; sz = (Math.random() - 0.5) * a * 2;
     }
     obj.pivot.position.set(sx, 0, sz);
-    if (obj.scanner) obj.scanner.position.x = o.motion && st === "active" ? Math.sin(t / 380 + obj.phase) * 0.2 : 0;
-    if (mode === "2d") {
-      obj.pivot.rotation.set(-Math.PI / 2, 0, 0);
-    } else {
-      // Face the camera with a little lag and only most of the way, so the glass turns against the room as you orbit.
-      camera.getWorldPosition(camPos);
-      const full = Math.atan2(camPos.x - obj.cur.x, camPos.z - obj.cur.z);
-      let d = full * 0.82 - obj.yaw;
-      d = Math.atan2(Math.sin(d), Math.cos(d));
-      obj.yaw += d * (o.motion ? 1 - Math.exp(-dt * 4) : 1);
-      obj.pivot.rotation.set(0, obj.yaw, 0);
-    }
   }
 
   let busyFlow = false;
@@ -1109,11 +1115,17 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   }
 
   // ------------------------------------------------------------------ camera
-  function fit(): void {
+  /** The radius that holds every node (the fit and the auto overview frame it). */
+  function sceneRadius(): number {
     let r = 3;
     for (const n of nodes.values()) r = Math.max(r, Math.hypot(n.target.x, n.target.y, n.target.z) + 1.6 * n.size);
+    return r;
+  }
+
+  function fit(): void {
+    const r = sceneRadius();
     if (mode === "3d") {
-      const dist = (r / Math.sin((persp.fov * Math.PI) / 360)) * 0.78; // the bounding sphere is loose; frame the bots, not empty space
+      const dist = (r / Math.sin((persp.fov * Math.PI) / 360)) * 0.78; // the bounding sphere is loose; frame the figures, not empty space
       persp.position.set(0, dist * 0.72, dist * 0.7); // ~46 degrees up, so the orbit ellipse reads as a ring, not a stack
       controls.target.set(0, 0, 0);
     } else {
@@ -1124,8 +1136,64 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     }
     controls.update();
     needFit = false;
-    userMoved = false;
+    seedRig();
     kick();
+  }
+
+  /** Start the auto camera's springs from wherever the camera is now, at rest. */
+  function seedRig(): void {
+    const tg = controls.target;
+    rig.tx = tg.x; rig.ty = tg.y; rig.tz = tg.z;
+    rig.vx = rig.vy = rig.vz = rig.vd = rig.va = rig.vp = rig.vlz = 0;
+    tmpA.subVectors(persp.position, tg);
+    rig.dist = Math.max(0.5, tmpA.length());
+    rig.polar = Math.acos(Math.max(-1, Math.min(1, tmpA.y / rig.dist)));
+    rig.az = Math.atan2(tmpA.x, tmpA.z);
+    rig.lz = Math.log(Math.max(1e-3, ortho.zoom));
+    rig.settled = false;
+  }
+
+  /** One auto camera step: spring the target, distance (zoom in 2D) and angles toward the focus. */
+  const aim = new THREE.Vector3();
+  function driveCamera(t: number, dt: number): void {
+    const f = focusId ? nodes.get(focusId) : undefined;
+    const sec = t / 1000;
+    const swayOn = o.motion && !!f;
+    const sway = swayOn ? Math.sin((sec * Math.PI * 2) / SWAY_S) : 0;
+    let moving = 0;
+    const track = (x: number, v: number, to: number): [number, number] => {
+      const r: [number, number] = o.motion ? springStep(x, v, to, CAM_OMEGA, dt) : [to, 0];
+      moving = Math.max(moving, Math.abs(r[1]), Math.abs(to - r[0]));
+      return r;
+    };
+    if (f) aim.copy(f.cur); else aim.set(0, 0, 0);
+    if (mode === "3d") {
+      const wantDist = f ? frameDistance(CUBE * f.size * FRAME_PAD, persp.fov, FILL) : (sceneRadius() / Math.sin((persp.fov * Math.PI) / 360)) * 0.78;
+      const wantAz = rig.az + angleDelta(rig.az, SWAY_AZ * sway);
+      const wantPolar = f ? FOCUS_POLAR + (swayOn ? SWAY_POLAR * Math.sin((sec * Math.PI * 2) / (SWAY_S * 0.61)) : 0) : OVERVIEW_POLAR;
+      [rig.tx, rig.vx] = track(rig.tx, rig.vx, aim.x);
+      [rig.ty, rig.vy] = track(rig.ty, rig.vy, aim.y);
+      [rig.tz, rig.vz] = track(rig.tz, rig.vz, aim.z);
+      [rig.dist, rig.vd] = track(rig.dist, rig.vd, wantDist);
+      [rig.az, rig.va] = track(rig.az, rig.va, wantAz);
+      [rig.polar, rig.vp] = track(rig.polar, rig.vp, wantPolar);
+      rig.dist = Math.max(controls.minDistance, rig.dist);
+      const sp = Math.sin(rig.polar);
+      persp.position.set(rig.tx + rig.dist * sp * Math.sin(rig.az), rig.ty + rig.dist * Math.cos(rig.polar), rig.tz + rig.dist * sp * Math.cos(rig.az));
+      controls.target.set(rig.tx, rig.ty, rig.tz);
+    } else {
+      // Zoom springs in log space, so zooming in and out feel the same speed.
+      const wantZoom = f ? ((ortho.top - ortho.bottom) * FILL_2D) / (TILE * f.size) : orthoHalf / (sceneRadius() * 1.12);
+      if (f) aim.x += sway * 0.08 * f.size;
+      [rig.tx, rig.vx] = track(rig.tx, rig.vx, aim.x);
+      [rig.tz, rig.vz] = track(rig.tz, rig.vz, aim.z);
+      [rig.lz, rig.vlz] = track(rig.lz, rig.vlz, Math.log(Math.min(controls.maxZoom, Math.max(controls.minZoom, wantZoom))));
+      ortho.position.set(rig.tx, 60, rig.tz);
+      controls.target.set(rig.tx, 0, rig.tz);
+      ortho.zoom = Math.exp(rig.lz);
+      ortho.updateProjectionMatrix();
+    }
+    rig.settled = !swayOn && moving < 1e-3;
   }
 
   let orthoHalf = 10;
@@ -1167,7 +1235,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     kick();
   }
 
-  // ------------------------------------------------------------------ hover + pick
+  // ------------------------------------------------------------------ hover + pick + taking the camera
   const rc = new THREE.Raycaster();
   rc.params.Line = { threshold: 0.12 };
   const ndc = new THREE.Vector2();
@@ -1191,12 +1259,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (key || lastHitKey) hoverCb?.(hit, pointer.x, pointer.y);
     lastHitKey = key;
   }
+  let down: { x: number; y: number; at: number } | null = null;
   const onMove = (e: PointerEvent): void => {
     pointer = { x: e.clientX, y: e.clientY, dirty: true };
+    // A press that travels is a drag, pan or pinch the controls are acting on: the user has the camera.
+    if (down && interacting && Math.hypot(e.clientX - down.x, e.clientY - down.y) > GRAB_PX) userGrab();
     if (!raf) hoverNow();
   };
   const onLeave = (): void => { pointer = null; lastHitKey = ""; canvas.style.cursor = ""; hoverCb?.(null, 0, 0); };
-  let down: { x: number; y: number; at: number } | null = null;
   const onDown = (e: PointerEvent): void => { down = { x: e.clientX, y: e.clientY, at: performance.now() }; };
   const onUp = (e: PointerEvent): void => {
     if (!down) return;
@@ -1205,21 +1275,30 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     down = null;
     if (moved < 6 && quick && e.button === 0) pickCb?.(hitAt(e.clientX, e.clientY), e.clientX, e.clientY);
   };
+  const onWheel = (): void => userGrab();
   canvas.addEventListener("pointermove", onMove);
   canvas.addEventListener("pointerleave", onLeave);
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("wheel", onWheel, { passive: true });
   const onLostCtx = (e: Event): void => { e.preventDefault(); park(); lostCb?.(); };
   canvas.addEventListener("webglcontextlost", onLostCtx);
 
   // ------------------------------------------------------------------ the loop
+  let busyNodes = false, busyCam = false;
   function render(t: number): void {
     const dt = Math.min(0.1, last ? (t - last) / 1000 : 0.016);
     last = t;
     clock.now = t;
     if (needFit && nodes.size) fit();
+    busyCam = false;
+    if (auto && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled; }
     controls.update();
-    for (const n of nodes.values()) updateNode(n, t, dt);
+    busyNodes = false;
+    for (const n of nodes.values()) {
+      updateNode(n, t, dt);
+      if (n.status === "active" || t < n.fx.failUntil) busyNodes = true;
+    }
     updateFlow(dt);
     const fxLive = updateFx(dt);
     const boltLive = updateBolts(t);
@@ -1227,8 +1306,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (fxLive || boltLive || burstLive) effectsUntil = Math.max(effectsUntil, t + 50);
     pointScale();
     hoverNow();
-    // No bloom in 2D: looking straight down, every glass frame faces the camera and mirrors the bright room, and
-    // bloom turns those into white blocks. The flat map renders plain.
+    // No bloom in 2D: the flat map is pixel art on tiles and renders plain.
     if (composer && renderPass && mode === "3d") { renderPass.camera = camera; composer.render(dt); }
     else renderer.render(scene, camera);
   }
@@ -1238,16 +1316,16 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function frame(t: number): void {
     raf = 0;
     if (stopped || !visible) return;
-    const busy = busyFlow || t < effectsUntil || interacting;
+    const busy = busyFlow || busyNodes || busyCam || t < effectsUntil || interacting;
     let interval = frameInterval(o, busy, recording);
-    if (interval === null && (t < effectsUntil || interacting)) interval = 1000 / IDLE_FPS; // color transitions only
+    if (interval === null && (t < effectsUntil || interacting || busyCam)) interval = 1000 / IDLE_FPS; // color transitions and a snap only
     if (interval !== null && t - lastFrame < interval - 1.5) { raf = requestAnimationFrame(frame); return; }
     lastFrame = t;
     inFrame = true; wanted = false;
     try { render(t); } finally { inFrame = false; }
-    const after = busyFlow || t < effectsUntil || interacting;
+    const after = busyFlow || busyNodes || busyCam || t < effectsUntil || interacting;
     if (stopped || !visible) return;
-    if (wanted || frameInterval(o, after, recording) !== null || t < effectsUntil || interacting) raf = requestAnimationFrame(frame);
+    if (wanted || frameInterval(o, after, recording) !== null || t < effectsUntil || interacting || busyCam) raf = requestAnimationFrame(frame);
   }
 
   function kick(): void {
@@ -1273,10 +1351,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         keep.add(n.id);
         let obj = nodes.get(n.id);
         if (obj && obj.persona !== n.persona) { disposeNode(obj); nodes.delete(n.id); obj = undefined; }
-        if (!obj) { obj = buildNode(n); nodes.set(n.id, obj); if (!userMoved) needFit = true; } // keep everyone in frame until the user takes the camera
+        if (!obj) { obj = buildNode(n); nodes.set(n.id, obj); if (!userMoved && !auto) needFit = true; } // keep everyone in frame until the user takes the camera
         obj.target.set(n.pos[0], n.pos[1], n.pos[2]);
-        if (obj.status !== n.status && n.status !== "killed") obj.fx.implodeAt = obj.status === "killed" ? 0 : obj.fx.implodeAt;
-        if (obj.status === "killed" && n.status !== "killed") obj.bot.rotation.z = 0;
+        if (obj.status === "killed" && n.status !== "killed") obj.fx.implodeAt = 0;
         if (n.status === "killed" && obj.status !== "killed" && obj.fx.implodeAt === 0) obj.fx.implodeAt = clock.now;
         obj.status = n.status;
         obj.glow = n.glow;
@@ -1289,7 +1366,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         const ed = edgeFor(e, false);
         want.add(ed.key);
         ed.intensity = e.intensity; ed.frozen = e.frozen; ed.dead = e.dead;
-        ed.color.set(PERSONAS[nodes.get(e.from)!.persona].color);
+        ed.color.copy(nodes.get(e.from)!.base);
       }
       // Main's own tokens swirl around the hub.
       const hub = list.find((n) => n.kind === "hub");
@@ -1302,11 +1379,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         ring.color.set(PERSONAS[hub.persona].color);
       }
       for (const ed of [...edges.values()]) if (!want.has(ed.key)) dropEdge(ed);
+      const prev = focusId;
+      focusId = directorStep(director, list.map((n) => ({ id: n.id, activity: n.glow })), performance.now());
+      if (focusId !== prev && auto) rig.settled = false;
       kick();
     },
     fire(events) {
       clock.now = performance.now(); // the loop may have been parked: effects start now, on the rAF timeline
       for (const ev of events) fireOne(ev);
+      focusId = director.focus; // a kill or a tool failure grabs the camera now, not on the next sync
       if (events.length) kick();
     },
     setView(next) {
@@ -1315,9 +1396,18 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       camera = mode === "3d" ? persp : ortho;
       controls.dispose();
       controls = makeControls();
+      interacting = false;
+      for (const obj of nodes.values()) ensureParts(obj);
       fit();
     },
     fit,
+    setAuto(on) {
+      if (on === auto) return;
+      auto = on;
+      if (on) seedRig(); // glide from wherever the user left the camera
+      kick();
+    },
+    onUserCamera(cb) { userCamCb = cb; },
     setVisible(on) {
       visible = on;
       if (on) kick(); else park();
@@ -1334,6 +1424,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       canvas.removeEventListener("pointerleave", onLeave);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("webglcontextlost", onLostCtx);
       controls.dispose();
       for (const obj of nodes.values()) disposeNode(obj);
@@ -1366,7 +1457,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 function easeIn(x: number): number { return x * x * x; }
 function easeOut(x: number): number { return 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3); }
 
-function roundRectPts(w: number, h: number, r: number): THREE.Vector2[] {
+/** A w x h rounded rectangle centered on the origin (the 2D tile and its rim). */
+function roundRectShape(w: number, h: number, r: number): THREE.Shape {
   const s = new THREE.Shape();
   const x = -w / 2, y = -h / 2;
   s.moveTo(x + r, y);
@@ -1378,13 +1470,7 @@ function roundRectPts(w: number, h: number, r: number): THREE.Vector2[] {
   s.quadraticCurveTo(x, y + h, x, y + h - r);
   s.lineTo(x, y + r);
   s.quadraticCurveTo(x, y, x + r, y);
-  return s.getPoints(6);
-}
-
-function circlePts(r: number, n: number): THREE.Vector2[] {
-  const out: THREE.Vector2[] = [];
-  for (let i = 0; i < n; i++) out.push(new THREE.Vector2(Math.cos((i / n) * Math.PI * 2) * r, Math.sin((i / n) * Math.PI * 2) * r));
-  return out;
+  return s;
 }
 
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

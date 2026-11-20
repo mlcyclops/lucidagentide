@@ -25,25 +25,23 @@ export const HUB_ID = "main";
 
 export type VizKind = "hub" | "agent" | "subagent";
 
-/** The closed set of personas a node can wear. Each has a color and a bot design (viz_scene builds it). */
+/** The closed set of personas a node can wear. Each has a color: P-VIZ.2 (ADR-0623) dresses that node's mini
+ *  Lucid in it (viz_mini_look.lookFor) and picks his repertoire of activities from the persona. */
 export type Persona = "lead" | "coder" | "tester" | "reviewer" | "researcher" | "planner" | "writer" | "guard" | "builder" | "scout";
-export type HeadShape = "dome" | "box" | "capsule" | "round" | "hex";
-export type EarStyle = "halo" | "antenna" | "twin" | "dish" | "horns" | "fins";
-export type VisorStyle = "band" | "twin" | "mono" | "grille";
-export interface PersonaLook { label: string; color: string; head: HeadShape; ears: EarStyle; visor: VisorStyle }
+export interface PersonaLook { label: string; color: string }
 
 /** A categorical data-visualization palette, readable on both themes (the scene draws its own backdrop). */
 export const PERSONAS: Record<Persona, PersonaLook> = {
-  lead: { label: "Lead", color: "#b07cff", head: "dome", ears: "halo", visor: "band" },
-  coder: { label: "Coder", color: "#38bdf8", head: "box", ears: "antenna", visor: "band" },
-  tester: { label: "Tester", color: "#4ade80", head: "capsule", ears: "twin", visor: "twin" },
-  reviewer: { label: "Reviewer", color: "#fbbf24", head: "round", ears: "dish", visor: "mono" },
-  researcher: { label: "Researcher", color: "#2dd4bf", head: "round", ears: "antenna", visor: "twin" },
-  planner: { label: "Planner", color: "#818cf8", head: "hex", ears: "antenna", visor: "grille" },
-  writer: { label: "Writer", color: "#f472b6", head: "capsule", ears: "fins", visor: "band" },
-  guard: { label: "Guard", color: "#f87171", head: "hex", ears: "horns", visor: "mono" },
-  builder: { label: "Builder", color: "#fb923c", head: "box", ears: "twin", visor: "grille" },
-  scout: { label: "Scout", color: "#a3e635", head: "round", ears: "fins", visor: "mono" },
+  lead: { label: "Lead", color: "#b07cff" },
+  coder: { label: "Coder", color: "#38bdf8" },
+  tester: { label: "Tester", color: "#4ade80" },
+  reviewer: { label: "Reviewer", color: "#fbbf24" },
+  researcher: { label: "Researcher", color: "#2dd4bf" },
+  planner: { label: "Planner", color: "#818cf8" },
+  writer: { label: "Writer", color: "#f472b6" },
+  guard: { label: "Guard", color: "#f87171" },
+  builder: { label: "Builder", color: "#fb923c" },
+  scout: { label: "Scout", color: "#a3e635" },
 };
 
 /** omp agent types (the `subagent` event's `agent`) that name a persona outright. */
@@ -607,7 +605,7 @@ export type VizLayout = "orbit" | "constellation";
 export type Vec3 = [number, number, number];
 
 /** Orbit-stage pixels per world unit: the orbit's 1600 x 1000 stage becomes a ring about 10 x 6 units. */
-// 70 px per unit spreads the orbit wide enough that a bot and its glass frame (about 1.5 units) never overlap
+// 70 px per unit spreads the orbit wide enough that a mini Lucid's glass cube (1.5 units) never overlaps
 // its neighbor from the default camera; Main's helpers ring the hub outside its own frame.
 const STAGE_W = 1600, STAGE_H = 1000, PX_PER_UNIT = 70;
 const SUB_RING_AGENT = 1.9, SUB_RING_HUB = 3.1;
@@ -687,22 +685,22 @@ export interface VizTierOpts {
   dprCap: number;
   antialias: boolean;
   bloom: boolean;
-  /** Real refraction on the glass frames (an extra render pass); else a cheaper clear reflective glass. */
-  transmission: boolean;
   /** Lightning detail: 0 none (a flash only), 1 a single jagged bolt, 2 a bolt with branches. */
   lightning: 0 | 1 | 2;
   /** Any automatic motion (bobbing, flowing particles, shakes). Off under prefers-reduced-motion. */
   motion: boolean;
+  /** How detailed each mini Lucid figure is built (P-VIZ.2): the tier itself. */
+  detail: PerfTier;
 }
 
 /** The perf tier (perf_tier.ts, the same Auto / Full / Reduced / Minimal the Knowledge Graph uses) decides
  *  the budgets; prefers-reduced-motion removes all automatic motion and leaves effects as color changes. */
 export function vizTierOpts(tier: PerfTier, reducedMotion: boolean): VizTierOpts {
   const base: VizTierOpts = tier === "full"
-    ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, transmission: true, lightning: 2, motion: true }
+    ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full" }
     : tier === "reduced"
-      ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, transmission: false, lightning: 1, motion: true }
-      : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, transmission: false, lightning: 0, motion: true };
+      ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, lightning: 1, motion: true, detail: "reduced" }
+      : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, lightning: 0, motion: true, detail: "minimal" };
   return reducedMotion ? { ...base, particles: 0, fx: 0, lightning: 0, motion: false } : base;
 }
 

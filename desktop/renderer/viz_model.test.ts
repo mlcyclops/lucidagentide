@@ -245,9 +245,11 @@ describe("layout", () => {
 
 describe("perf budgets", () => {
   test("per tier: particles, frame cap, DPR cap, bloom and glass only on full", () => {
-    expect(vizTierOpts("full", false)).toMatchObject({ particles: 6000, fps: 60, dprCap: 1.5, bloom: true, transmission: true, antialias: true });
-    expect(vizTierOpts("reduced", false)).toMatchObject({ particles: 2500, fps: 30, dprCap: 1.25, bloom: false, transmission: false });
+    expect(vizTierOpts("full", false)).toMatchObject({ particles: 6000, fps: 60, dprCap: 1.5, bloom: true, antialias: true });
+    expect(vizTierOpts("reduced", false)).toMatchObject({ particles: 2500, fps: 30, dprCap: 1.25, bloom: false });
     expect(vizTierOpts("minimal", false)).toMatchObject({ particles: 600, fps: 20, dprCap: 1, lightning: 0 });
+    // P-VIZ.2: the mini Lucid figures are built at the tier's detail, reduced motion included.
+    expect((["full", "reduced", "minimal"] as const).map((t) => vizTierOpts(t, true).detail)).toEqual(["full", "reduced", "minimal"]);
   });
   test("reduced motion: no automatic motion, effects become color changes, frames only on change", () => {
     const o = vizTierOpts("full", true);

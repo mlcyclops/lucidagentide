@@ -8436,3 +8436,21 @@ body.ald-dragging .ald-head{cursor:grabbing}
 @media (prefers-reduced-motion: reduce){
   .viz-view .orbit-nebula,.viz-spin,.viz-recind i{animation:none}
 }
+/* P-VIZ.2 (ADR-0623): the header's Auto camera checkbox and the "you have the camera" hint. The hint lives in
+   .viz-stage (z 3 there: over the canvas, legend and REC pill at 2, under the tip 4, menu 5 and player 6), placed
+   under the checkbox by viz_view.showAutoHint, and never takes pointer events. */
+.viz-auto{flex:none;display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 7px;border:1px solid var(--line);border-radius:8px;
+  font-size:11px;font-weight:600;color:var(--txt-2);white-space:nowrap;cursor:pointer;user-select:none}
+.viz-auto:hover{color:var(--txt)}
+.viz-auto input{margin:0;width:13px;height:13px;accent-color:var(--accent);cursor:pointer}
+.viz-auto:has(input:checked){color:var(--txt);border-color:rgb(var(--accent-rgb) / .5);background:rgb(var(--accent-rgb) / .1)}
+.viz-auto:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:1px}
+.viz-auto-hint{position:absolute;top:10px;left:14px;z-index:3;margin:0;max-width:300px;padding:7px 11px;border-radius:10px;
+  font-size:11.5px;line-height:1.45;color:var(--txt);pointer-events:none;
+  background:color-mix(in srgb,var(--bg-1) 92%,transparent);border:1px solid rgb(var(--accent-rgb) / .45);box-shadow:0 8px 24px rgb(0 0 0 / .25);
+  animation:vizHintIn 180ms var(--ease-out)}
+.viz-auto-hint[hidden]{display:none}
+@keyframes vizHintIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .viz-auto-hint{animation:none}
+}

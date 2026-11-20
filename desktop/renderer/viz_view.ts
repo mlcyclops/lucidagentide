@@ -13,6 +13,11 @@
 // Opening never changes an agent. Closing stops every timer and watch, unsubscribes the bus and tears the
 // WebGL scene down completely (viz_scene.destroy). The rules live in viz_model.ts (pure, tested); the
 // drawing in viz_scene.ts. A deterministic DEMO feed (viz_demo.ts) runs only with ?vizDemo=1 in the URL.
+//
+// P-VIZ.2 (ADR-0623): the header's Auto camera checkbox (persisted in localStorage `lucid.viz.autoCamera`,
+// on by default) hands the camera to the scene's director, which follows the action. The scene unchecks it
+// the moment the user drags, pans or zooms, and a short hint under it says how to hand the camera back.
+// Fit frames everything and takes the camera off auto.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -89,6 +94,12 @@ function loadPrefs(): Prefs {
 let prefs: Prefs = loadPrefs();
 function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
 
+/** P-VIZ.2 (ADR-0623): the auto camera (follows the action; on unless the user turned it off last time). */
+const AUTO_KEY = "lucid.viz.autoCamera";
+const AUTO_HINT_MS = 4500;
+let autoCam = ((): boolean => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch { return true; } })();
+let autoHintTimer = 0;
+
 /** A data-tip value escaped for an HTML attribute. */
 const tipAttr = (title: string, desc: string): string => esc(tipValue(title, desc));
 
@@ -137,7 +148,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
 export function closeViz(): void {
   if (!view || !opened) return;
   if (rec) stopRec("closed");
-  closeMenu(); closePlayer(); recPop?.close(); recPop = null;
+  closeMenu(); closePlayer(); recPop?.close(); recPop = null; hideAutoHint();
   offBus?.(); offBus = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
@@ -173,7 +184,8 @@ function buildView(): HTMLElement {
         <button type="button" data-viz-layout="orbit" data-tip="${tipAttr("Orbit layout", "Main at the center and the agents on the Fleet orbit's ring; each agent's subagents on a small ring around it.")}">Orbit</button>
         <button type="button" data-viz-layout="constellation" data-tip="${tipAttr("Constellation", "The agents spread around Main in 3D, each with its subagents clustered close.")}">Constellation</button>
       </div>
-      <button type="button" class="btn-mini orbit-btn" data-viz-fit aria-label="Fit everything in view" data-tip="${tipAttr("Fit", "Bring every node back into view.")}">${icon("center", 13)}</button>
+      <label class="viz-auto" data-tip="${tipAttr("Auto camera", "Follows the action: the camera glides to the agent working hardest, and briefly to a kill or a failed tool. Drag, pan or zoom to take the camera yourself; this turns off until you check it again.")}"><input type="checkbox" data-viz-auto checked><span>Auto camera</span></label>
+      <button type="button" class="btn-mini orbit-btn" data-viz-fit aria-label="Fit everything in view" data-tip="${tipAttr("Fit", "Bring every node back into view. Takes the camera off auto.")}">${icon("center", 13)}</button>
       <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
       <button type="button" class="btn-mini orbit-btn viz-rec-btn" data-viz-rec></button>
       <button type="button" class="btn-mini orbit-btn" data-viz-recs data-tip="${tipAttr("Recordings", "Play back or save what you recorded in this session. Recordings are kept in memory until LUCID closes.")}">${icon("play", 13)}<span>Recordings</span><b class="orbit-ghost-n" data-viz-recn hidden></b></button>
@@ -184,6 +196,7 @@ function buildView(): HTMLElement {
       <div class="viz-state viz-error" data-viz-error hidden role="alert"><p data-viz-error-msg></p><button type="button" class="btn-mini" data-viz-retry>Try again</button></div>
       <p class="viz-caption" data-viz-empty hidden>Main is idle. Start an agent or send a prompt to see tokens flow.</p>
       <div class="viz-recind" data-viz-recind hidden><i aria-hidden="true"></i><b>REC</b><span data-viz-rectime>0:00</span><span class="viz-rec-cap">stops at 2:00</span></div>
+      <p class="viz-auto-hint" data-viz-auto-hint hidden role="status">You have the camera. Check Auto camera to hand it back.</p>
       <div class="viz-legend" data-viz-legend aria-label="Roles"></div>
       <div class="viz-tip" data-viz-tip hidden role="status"></div>
       <div class="viz-menu" data-viz-menu hidden role="menu"></div>
@@ -196,6 +209,10 @@ function buildView(): HTMLElement {
     </div>
   </div>`);
   v.addEventListener("click", onViewClick);
+  v.addEventListener("change", (ev) => {
+    const t = ev.target as HTMLInputElement;
+    if (t.matches("[data-viz-auto]")) setAutoCamera(t.checked, false);
+  });
   return v;
 }
 
@@ -205,8 +222,8 @@ function onViewClick(ev: Event): void {
   const vb = t.closest("[data-viz-view]") as HTMLElement | null;
   if (vb) { prefs.view = vb.dataset.vizView === "2d" ? "2d" : "3d"; savePrefs(); paintToggles(); scene?.setView(prefs.view); return; }
   const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
-  if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintToggles(); syncScene(); scene?.fit(); return; }
-  if (t.closest("[data-viz-fit]")) { scene?.fit(); return; }
+  if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintToggles(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
+  if (t.closest("[data-viz-fit]")) { if (autoCam) setAutoCamera(false, true); scene?.fit(); return; }
   if (t.closest("[data-viz-quality]")) { cycleQuality(); return; }
   if (t.closest("[data-viz-rec]")) { if (rec) stopRec("user"); else startRec(); return; }
   const recsBtn = t.closest("[data-viz-recs]") as HTMLElement | null;
@@ -219,8 +236,42 @@ function onViewClick(ev: Event): void {
   if (!t.closest("[data-viz-menu]") && !(t instanceof HTMLCanvasElement)) closeMenu();
 }
 
+/** Turn the auto camera on or off (the checkbox, Fit, or the user grabbing the camera) and remember it. */
+function setAutoCamera(on: boolean, hint: boolean): void {
+  autoCam = on;
+  try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch { /* still applies for this session */ }
+  paintToggles();
+  scene?.setAuto(on);
+  if (on) hideAutoHint(); else if (hint) showAutoHint();
+}
+
+/** The scene saw the user drag, pan or zoom: it already handed the camera over. */
+function onUserCamera(): void {
+  if (autoCam) setAutoCamera(false, true);
+}
+
+/** "You have the camera" for a few seconds, under the checkbox. */
+function showAutoHint(): void {
+  if (!view) return;
+  const hint = $("[data-viz-auto-hint]", view) as HTMLElement;
+  const box = $(".viz-auto", view) as HTMLElement;
+  const stage = $("[data-viz-stage]", view) as HTMLElement;
+  hint.hidden = false;
+  const r = box.getBoundingClientRect(), s = stage.getBoundingClientRect();
+  hint.style.left = `${Math.max(8, Math.min(s.width - hint.offsetWidth - 8, r.left - s.left))}px`;
+  window.clearTimeout(autoHintTimer);
+  autoHintTimer = window.setTimeout(hideAutoHint, AUTO_HINT_MS);
+}
+
+function hideAutoHint(): void {
+  window.clearTimeout(autoHintTimer); autoHintTimer = 0;
+  const hint = view ? ($("[data-viz-auto-hint]", view) as HTMLElement | null) : null;
+  if (hint) hint.hidden = true;
+}
+
 function paintToggles(): void {
   if (!view) return;
+  ($("[data-viz-auto]", view) as HTMLInputElement).checked = autoCam;
   for (const b of view.querySelectorAll<HTMLElement>("[data-viz-view]")) { const on = b.dataset.vizView === prefs.view; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
   for (const b of view.querySelectorAll<HTMLElement>("[data-viz-layout]")) { const on = b.dataset.vizLayout === prefs.layout; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
 }
@@ -284,7 +335,7 @@ function mount(): void {
   const theme = readTheme(view);
   themeSig = JSON.stringify(theme);
   try {
-    scene = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view);
+    scene = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
   } catch (e) {
     scene = null;
     loading.hidden = true;
@@ -293,6 +344,7 @@ function mount(): void {
   }
   scene.onHover(onHover);
   scene.onPick(onPick);
+  scene.onUserCamera(onUserCamera);
   scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
   syncScene();
   requestAnimationFrame(() => requestAnimationFrame(() => { loading.hidden = true; }));
