@@ -30,6 +30,12 @@
 // Main goes through the composer's own send path; subagents take no prompts and say why). Esc or a click on
 // empty space closes it. A double click is an outburst and opens nothing. Each working lane's background
 // subagent runs are polled (/api/subagents?laneId=) so a lane's subagents end when their runs do.
+//
+// P-VIZ.5 (ADR-0629): the node panel sits BESIDE its node (viz_panel_place.ts: the side with more room,
+// hysteresis on flips, clamped on screen, docked at the nearest edge while the node is off screen), never over
+// it. The header measures itself (a ResizeObserver) and takes the widest density that fits on one row: wide;
+// medium (no subtitle, one census chip, icon-only Record and Recordings); narrow (icon segments, an icon Auto
+// camera toggle, Record and Recordings inside the View menu). The close X is always at the far right.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -46,6 +52,7 @@ import {
   isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
   type Persona, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
+import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountVizScene, type SceneHit, type SceneNode, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 
 export interface VizDeps {
@@ -101,6 +108,7 @@ let fleetOffline = false;
 let themeSig = "";
 let hover: { hit: SceneHit; x: number; y: number } | null = null;
 let censusAt = 0;
+let censusSig = "";
 const watches = new Map<string, { stop: () => void }>();
 const recordings: Recording[] = [];
 let recSeq = 0;
@@ -113,8 +121,9 @@ const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced
 
 /** P-VIZ.4 (ADR-0625): lanes whose background subagent runs are polled per cycle, at most. */
 const LANE_RUNS_MAX = 4;
-/** The node panel: which node, the frame that keeps it on its node, and what it last painted. */
-interface Panel { id: string; raf: number; outSig: string; headSig: string; note: string; at: { x: number; y: number } | null }
+/** The node panel: which node, the frame that keeps it beside its node, where the node was last seen (stage
+ *  pixels) and which side the panel is on (P-VIZ.5), and what it last painted. */
+interface Panel { id: string; raf: number; outSig: string; headSig: string; note: string; box: NodeBox | null; side: PanelSide | null; flipTimer: number }
 let panel: Panel | null = null;
 /** Each lane's recent output (viz_model.foldOutput), from the same events the model takes. */
 const outputs = new Map<string, VizOutput>();
@@ -140,6 +149,13 @@ let autoHintTimer = 0;
 
 /** A data-tip value escaped for an HTML attribute. */
 const tipAttr = (title: string, desc: string): string => esc(tipValue(title, desc));
+const RECS_WHY = "Play back or save what you recorded in this session. Recordings are kept in memory until LUCID closes.";
+
+/** P-VIZ.5 (ADR-0629): the header's densities, widest first; fitHead takes the first that fits on one row. */
+const HEAD_FITS = ["wide", "medium", "narrow"] as const;
+type HeadFit = (typeof HEAD_FITS)[number];
+let headFit: HeadFit = "wide";
+let headRo: ResizeObserver | null = null;
 
 /** Called once from app.ts with the bridge seam. */
 export function initViz(d: VizDeps): void {
@@ -174,6 +190,8 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   paintToggles();
   paintQuality();
   paintRecs();
+  headRo = new ResizeObserver(fitHead);
+  headRo.observe($("[data-viz-head]", view) as HTMLElement); // fires once now, then on every width change
   mount();
   startTimers();
   fleetBusy = false; // a reply still in flight from a previous open is dropped by its model check
@@ -189,6 +207,7 @@ export function closeViz(): void {
   if (rec) stopRec("closed");
   closePanel(); closePlayer(); recPop?.close(); recPop = null; viewPop?.close(); viewPop = null; hideAutoHint();
   offBus?.(); offBus = null;
+  headRo?.disconnect(); headRo = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
   watches.clear();
@@ -212,23 +231,23 @@ export function closeViz(): void {
 function buildView(): HTMLElement {
   const v = el(`<div id="vizView" class="viz-view" role="dialog" aria-modal="true" aria-label="Visualize: agents, subagents and token flow" hidden>
     <div class="orbit-nebula" aria-hidden="true"></div>
-    <header class="orbit-head viz-head">
+    <header class="orbit-head viz-head" data-viz-head data-viz-fit="wide">
       <div class="orbit-title">${icon("visualize", 17)}<b>Visualize</b><span class="orbit-sub">agents and token flow</span><span class="viz-demo" data-viz-demo hidden>DEMO</span></div>
       <div class="viz-census" data-viz-census aria-live="polite"></div>
       <span class="orbit-headgap"></span>
       <div class="viz-seg" role="group" aria-label="View">
-        <button type="button" data-viz-view="2d" data-tip="${tipAttr("2D", "Top-down map: pan and zoom. The Orbit layout here is the Fleet orbit itself.")}">2D</button>
-        <button type="button" data-viz-view="3d" data-tip="${tipAttr("3D", "Orbit around the agents: drag to rotate, right-drag to pan, scroll to zoom.")}">3D</button>
+        <button type="button" data-viz-view="2d" aria-label="2D" data-tip="${tipAttr("2D", "Top-down map: pan and zoom. The Orbit layout here is the Fleet orbit itself.")}">${icon("view2d", 14)}<span>2D</span></button>
+        <button type="button" data-viz-view="3d" aria-label="3D" data-tip="${tipAttr("3D", "Orbit around the agents: drag to rotate, right-drag to pan, scroll to zoom.")}">${icon("view3d", 14)}<span>3D</span></button>
       </div>
       <div class="viz-seg" role="group" aria-label="Style">
-        <button type="button" data-viz-style="anime" data-tip="${tipAttr("Anime", "Every agent is a mini Lucid in a glass cube, with plasma flowing between them.")}">Anime</button>
-        <button type="button" data-viz-style="professional" data-tip="${tipAttr("Professional", "Office workers at their desks, Main as the boss in the middle, fiber optic lines between them.")}">Professional</button>
+        <button type="button" data-viz-style="anime" aria-label="Anime" data-tip="${tipAttr("Anime", "Every agent is a mini Lucid in a glass cube, with plasma flowing between them.")}">${icon("styleAnime", 14)}<span>Anime</span></button>
+        <button type="button" data-viz-style="professional" aria-label="Professional" data-tip="${tipAttr("Professional", "Office workers at their desks, Main as the boss in the middle, fiber optic lines between them.")}">${icon("stylePro", 14)}<span>Professional</span></button>
       </div>
-      <label class="viz-auto" data-tip="${tipAttr("Auto camera", "Follows the action: the camera glides to the agent working hardest, and briefly to a kill or a failed tool. Drag, pan or zoom to take the camera yourself; this turns off until you check it again.")}"><input type="checkbox" data-viz-auto checked><span>Auto camera</span></label>
+      <label class="viz-auto" data-tip="${tipAttr("Auto camera", "Follows the action: the camera glides to the agent working hardest, and briefly to a kill or a failed tool. Drag, pan or zoom to take the camera yourself; this turns off until you check it again.")}"><input type="checkbox" data-viz-auto aria-label="Auto camera" checked>${icon("autoCamera", 14)}<span>Auto camera</span></label>
       <button type="button" class="btn-mini orbit-btn" data-viz-fit aria-label="Fit everything in view" data-tip="${tipAttr("Fit", "Bring every node back into view. Takes the camera off auto.")}">${icon("center", 13)}</button>
-      <button type="button" class="btn-mini orbit-btn" data-viz-viewmenu aria-haspopup="true" aria-label="View options: layout and quality" data-tip="${tipAttr("View", "Layout (Orbit or Constellation) and Quality.")}">${icon("gauge", 13)}<span>View</span></button>
+      <button type="button" class="btn-mini orbit-btn" data-viz-viewmenu aria-haspopup="true">${icon("gauge", 13)}<span>View</span></button>
       <button type="button" class="btn-mini orbit-btn viz-rec-btn" data-viz-rec></button>
-      <button type="button" class="btn-mini orbit-btn" data-viz-recs data-tip="${tipAttr("Recordings", "Play back or save what you recorded in this session. Recordings are kept in memory until LUCID closes.")}">${icon("play", 13)}<span>Recordings</span><b class="orbit-ghost-n" data-viz-recn hidden></b></button>
+      <button type="button" class="btn-mini orbit-btn" data-viz-recs aria-label="Recordings" data-tip="${tipAttr("Recordings", RECS_WHY)}">${icon("play", 13)}<span>Recordings</span><b class="orbit-ghost-n" data-viz-recn hidden></b></button>
       <button type="button" class="btn-mini orbit-btn orbit-x" data-viz-close aria-label="Close Visualize" data-tip="${tipAttr("Close (Esc)", "Your agents keep running; this view only watches them.")}">${icon("close", 13)}</button>
     </header>
     <div class="viz-stage" data-viz-stage>
@@ -301,9 +320,15 @@ function onViewClick(ev: Event): void {
   if (act) { void runAction(act.dataset.vizNode ?? "", act.dataset.vizAct as VizAsk, act); return; }
 }
 
-/** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). */
+/** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). A narrow
+ *  header (P-VIZ.5) folds Record and Recordings in here too. */
 function openViewMenu(anchor: HTMLElement): void {
   if (viewPop) { viewPop.close(); viewPop = null; return; }
+  const recRows = headFit === "narrow" ? `<div class="viz-vmenu-h">Record</div>
+    <div class="viz-vmenu-row">
+      <button type="button" class="btn-mini orbit-btn viz-rec-btn" data-viz-rec></button>
+      <button type="button" class="btn-mini orbit-btn" data-viz-recs data-tip="${tipAttr("Recordings", RECS_WHY)}">${icon("play", 13)}<span>Recordings</span><b class="orbit-ghost-n" data-viz-recn hidden></b></button>
+    </div>` : "";
   const p = popover(anchor, `<div class="viz-vmenu">
     <div class="viz-vmenu-h">Layout</div>
     <div class="viz-seg" role="group" aria-label="Layout">
@@ -312,15 +337,36 @@ function openViewMenu(anchor: HTMLElement): void {
     </div>
     <div class="viz-vmenu-h">Quality</div>
     <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+    ${recRows}
   </div>`, () => { viewPop = null; });
   viewPop = p;
   paintViewMenu();
+  paintRecs();
   p.node.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
     const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
     if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintViewMenu(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
-    if (t.closest("[data-viz-quality]")) cycleQuality();
+    if (t.closest("[data-viz-quality]")) { cycleQuality(); return; }
+    if (t.closest("[data-viz-rec]")) { if (rec) stopRec("user"); else startRec(); return; }
+    if (t.closest("[data-viz-recs]")) { p.close(); viewPop = null; openRecs(anchor); }
   });
+}
+
+/** P-VIZ.5 (ADR-0629): the widest header density whose row fits without overflowing (measured, so a long
+ *  census, the DEMO badge or a Stop label are all accounted for). The writes and reads run in one task, so no
+ *  intermediate density is ever painted. */
+function fitHead(): void {
+  const head = view ? ($("[data-viz-head]", view) as HTMLElement | null) : null;
+  if (!head?.clientWidth) return;
+  for (const f of HEAD_FITS) {
+    headFit = f;
+    head.dataset.vizFit = f;
+    if (head.scrollWidth <= head.clientWidth + 1) break;
+  }
+  const narrow = headFit === "narrow";
+  const vm = $("[data-viz-viewmenu]", head) as HTMLElement;
+  vm.setAttribute("aria-label", narrow ? "View options: layout, quality and recording" : "View options: layout and quality");
+  vm.setAttribute("data-tip", tipValue("View", narrow ? "Layout, Quality, Record and Recordings." : "Layout (Orbit or Constellation) and Quality."));
 }
 
 /** Turn the auto camera on or off (the checkbox, Fit, or the user grabbing the camera) and remember it. */
@@ -613,10 +659,14 @@ function paintCensus(now: number): void {
   const box = $("[data-viz-census]", view) as HTMLElement;
   const chip = (txt: string, cls = ""): string => `<span class="viz-chip${cls}">${esc(txt)}</span>`;
   const rate = c.tapped ? fmtRate(c.tokps) : "no token stream yet";
+  const agents = `${c.agents} agent${c.agents === 1 ? "" : "s"}`;
+  const subs = `${c.subagents} subagent${c.subagents === 1 ? "" : "s"}`;
+  // P-VIZ.5 (ADR-0629): the full chips, and the one chip a medium or narrow header shows instead (styles.css).
+  const one = `<span class="viz-chip viz-census-one${c.tapped ? " hot" : ""}" data-tip="${tipAttr("Census", `${agents}, ${subs}, ${rate}.`)}">${esc(`${agents} \u00b7 ${c.subagents} sub \u00b7 ${c.tapped ? fmtRate(c.tokps) : "no stream"}`)}</span>`;
   const html = fleetOffline && !demo
     ? chip("Fleet status unavailable", " warn")
-    : chip(`${c.agents} agent${c.agents === 1 ? "" : "s"}`) + chip(`${c.subagents} subagent${c.subagents === 1 ? "" : "s"}`) + chip(rate, c.tapped ? " hot" : "");
-  if (box.innerHTML !== html) box.innerHTML = html;
+    : `<span class="viz-census-full">${chip(agents) + chip(subs) + chip(rate, c.tapped ? " hot" : "")}</span>${one}`;
+  if (censusSig !== html) { censusSig = html; box.innerHTML = html; fitHead(); } // not innerHTML: the browser re-serializes the tip attribute
   const hub = model.nodes.get(HUB_ID);
   const quiet = c.agents === 0 && c.subagents === 0 && (!hub || (hub.status !== "active" && !isTapped(hub, now)));
   ($("[data-viz-empty]", view) as HTMLElement).hidden = !quiet;
@@ -669,7 +719,7 @@ function placeIn(node: HTMLElement, x: number, y: number): void {
   node.style.top = `${Math.max(8, Math.min(r.height - h - 8, y - r.top))}px`;
 }
 
-/** A click on a node: its figure stares at you (an interruption) and its panel opens above it. Empty space
+/** A click on a node: its figure stares at you (an interruption) and its panel opens beside it. Empty space
  *  closes the panel. */
 function onPick(hit: SceneHit | null): void {
   if (!hit || hit.kind !== "node") { closePanel(); return; }
@@ -690,9 +740,9 @@ function openPanel(id: string): void {
   if (!n) return;
   hideTip();
   if (panel?.id !== id) {
-    if (panel) cancelAnimationFrame(panel.raf);
+    if (panel) { cancelAnimationFrame(panel.raf); window.clearTimeout(panel.flipTimer); }
     killArm = null;
-    panel = { id, raf: 0, outSig: "", headSig: "", note: "", at: null };
+    panel = { id, raf: 0, outSig: "", headSig: "", note: "", box: null, side: null, flipTimer: 0 };
     (panelEl("[data-viz-panel-input]") as HTMLTextAreaElement).value = "";
     panelEl("[data-viz-panel-out]").scrollTop = 0;
   }
@@ -710,10 +760,12 @@ function openPanel(id: string): void {
 function closePanel(): void {
   if (!panel || !view) { panel = null; return; }
   cancelAnimationFrame(panel.raf);
+  window.clearTimeout(panel.flipTimer);
   panel = null;
   killArm = null;
   const box = panelEl("[data-viz-panel]");
   box.hidden = true;
+  box.classList.remove("flip");
   panelEl("[data-viz-panel-out]").innerHTML = "";
   panelEl("[data-viz-panel-acts]").innerHTML = "";
   if (box.contains(document.activeElement)) scene?.canvas.focus({ preventScroll: true });
@@ -830,8 +882,10 @@ function paintPanel(): void {
   setPanelNote(panel.note);
 }
 
-/** Keep the panel on its node every frame (the camera moves, the auto camera glides). A node off screen
- *  leaves the panel where it last was, dimmed. */
+/** P-VIZ.5 (ADR-0629): keep the panel BESIDE its node every frame (the camera moves, the auto camera glides),
+ *  on the side with more room, tilted toward the node, its tail aimed at it (viz_panel_place). A node off screen
+ *  docks the panel at the nearest edge, dimmed, its tail pointing out toward the node; it never leaves the view.
+ *  A side change glides (.flip) instead of jumping. */
 function followPanel(): void {
   const p = panel;
   if (!p) return;
@@ -841,26 +895,29 @@ function followPanel(): void {
     if (panel !== p || !view) return;
     const box = panelEl("[data-viz-panel]");
     const stage = panelEl("[data-viz-stage]").getBoundingClientRect();
-    const at = scene?.screenOf(p.id) ?? null;
-    if (at) p.at = at;
-    const a = p.at ?? { x: stage.left + stage.width / 2, y: stage.top + stage.height * 0.4 };
-    const w = box.offsetWidth, h = box.offsetHeight;
-    const left = Math.round(Math.max(8, Math.min(stage.width - w - 8, a.x - stage.left - w / 2)));
-    const top = Math.round(Math.max(8, Math.min(stage.height - h - 8, a.y - stage.top - h - 16)));
-    // Tilted toward the middle of the view like a card standing in the scene: the farther off center, the more.
-    const ry = Math.max(-9, Math.min(9, ((stage.left + stage.width / 2 - a.x) / Math.max(1, stage.width)) * 22)).toFixed(1);
-    const tail = Math.round(Math.max(18, Math.min(w - 18, a.x - stage.left - left)));
-    const sig = `${left},${top},${ry},${tail},${at ? 1 : 0}`;
+    const seen = scene?.screenBoxOf(p.id) ?? null;
+    if (seen) p.box = { x: seen.x - stage.left, y: seen.y - stage.top, r: seen.r };
+    const node = p.box ?? { x: stage.width / 2, y: stage.height / 2, r: 0 }; // behind the camera since it opened
+    const at = placePanel({ w: stage.width, h: stage.height }, { w: box.offsetWidth, h: box.offsetHeight }, node, p.side);
+    if (p.side && at.side !== p.side) {
+      box.classList.add("flip");
+      window.clearTimeout(p.flipTimer);
+      p.flipTimer = window.setTimeout(() => box.classList.remove("flip"), 280);
+    }
+    p.side = at.side;
+    const lost = !seen || at.docked;
+    const sig = `${at.left},${at.top},${at.side},${at.tailY},${lost ? 1 : 0}`;
     if (sig !== last) {
       last = sig;
-      box.style.left = `${left}px`; box.style.top = `${top}px`;
-      box.style.setProperty("--viz-ry", `${ry}deg`);
-      box.style.setProperty("--viz-tail", `${tail}px`);
-      box.classList.toggle("lost", !at);
+      box.style.left = `${at.left}px`; box.style.top = `${at.top}px`;
+      box.dataset.side = at.side;
+      box.style.setProperty("--viz-ry", `${at.ry}deg`);
+      box.style.setProperty("--viz-tail", `${at.tailY}px`);
+      box.classList.toggle("lost", lost);
     }
     p.raf = requestAnimationFrame(step);
   };
-  p.raf = requestAnimationFrame(step);
+  step(); // placed before the first paint, not a frame late at the stage's corner
 }
 
 /** Expand: the agent's real card in the Fleet panel (or back to the orbit it came from), Main's chat. */
@@ -976,16 +1033,22 @@ function onKey(e: KeyboardEvent): void {
 
 // ---------------------------------------------------------------------------------------------- recording
 
+/** The Record button in the header and, while a narrow header has folded it there, in the View menu. The label
+ *  is its own span so a medium header can show the icon alone (P-VIZ.5). */
 function paintRec(): void {
-  const b = view ? ($("[data-viz-rec]", view) as HTMLElement | null) : null;
-  if (!b) return;
-  b.classList.toggle("on", !!rec);
-  b.innerHTML = rec ? `${icon("square", 13)} Stop` : `${icon("record", 13)} Record`;
-  b.setAttribute("aria-label", rec ? "Stop recording" : "Record the visualization");
-  b.setAttribute("data-tip", rec ? tipValue("Stop recording", "Keeps the clip in Recordings.") : tipValue("Record", "Captures this view as a video (up to 2 minutes) that you can play back here or save."));
-  const ind = $("[data-viz-recind]", view!) as HTMLElement;
-  ind.hidden = !rec;
+  if (!view) return;
+  for (const b of recRoots().flatMap((r) => [...r.querySelectorAll<HTMLElement>("[data-viz-rec]")])) {
+    b.classList.toggle("on", !!rec);
+    b.innerHTML = rec ? `${icon("square", 13)}<span>Stop</span>` : `${icon("record", 13)}<span>Record</span>`;
+    b.setAttribute("aria-label", rec ? "Stop recording" : "Record the visualization");
+    b.setAttribute("data-tip", rec ? tipValue("Stop recording", "Keeps the clip in Recordings.") : tipValue("Record", "Captures this view as a video (up to 2 minutes) that you can play back here or save."));
+  }
+  ($("[data-viz-recind]", view) as HTMLElement).hidden = !rec;
+  fitHead(); // Stop and Record differ in width
 }
+
+/** Where Record and Recordings live: the header, and the View menu while it is open. */
+const recRoots = (): HTMLElement[] => [view, viewPop?.node].filter((r): r is HTMLElement => !!r);
 
 function startRec(): void {
   if (!scene || rec) return;
@@ -1045,8 +1108,7 @@ function finishRec(r: ActiveRec): void {
 }
 
 function paintRecs(): void {
-  const n = view ? ($("[data-viz-recn]", view) as HTMLElement | null) : null;
-  if (n) { n.hidden = recordings.length === 0; n.textContent = String(recordings.length); }
+  for (const n of recRoots().flatMap((r) => [...r.querySelectorAll<HTMLElement>("[data-viz-recn]")])) { n.hidden = recordings.length === 0; n.textContent = String(recordings.length); }
   paintRec();
 }
 

@@ -17,6 +17,11 @@
 // Reactions layer over whatever plays: `stare` turns the head to the camera with annoyed eyes and holds it;
 // `outburst` plays a body clip (both hands slam the desk twice, fists up, shouting) with a red face, steam,
 // flying papers and sloshing coffee, then a glare at the camera. reactAt() is the whole timeline.
+//
+// P-VIZ.5 (ADR-0631): the boss is one of two managers on the same rig, a man or a woman, both with a full head of
+// salt-and-pepper hair. Who is on duty is a seeded coin flip per Visualize open (a rebuild keeps the cast), and
+// the managers hand over every MANAGER_SWAP_MIN_S to MANAGER_SWAP_MAX_S: the one at the desk stands, walks off
+// to the side and dissolves, the other walks in and sits down (managerSwapAt()). Never mid-reaction.
 
 import { bump, clamp01, ease, fract, type AnimeState, type Ease } from "./viz_anime_pose.ts";
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
@@ -70,9 +75,15 @@ export function officeFaceKey(emotion: OfficeEmotionName, blink: number, gaze: n
 
 // ------------------------------------------------------------------------------------------ the look
 
+/** The two managers who take turns at the boss's desk. */
+export type ManagerVariant = "man" | "woman";
+export const MANAGER_VARIANTS: readonly ManagerVariant[] = ["man", "woman"];
+
 export interface OfficeLook {
-  shirt: string; tie: string; slacks: string; jacket: string; shoe: string; skin: string; hair: string;
-  glasses: boolean; mustache: boolean;
+  shirt: string; tie: string; slacks: string; jacket: string; shoe: string; skin: string;
+  /** The hair's base color; `grey` the streaks through it (the managers' salt and pepper), null for plain hair. */
+  hair: string; grey: string | null;
+  glasses: boolean;
 }
 
 type Rgb = readonly [number, number, number];
@@ -82,7 +93,12 @@ const WHITE: Rgb = [255, 255, 255];
 const CHARCOAL: Rgb = [0x2b, 0x30, 0x3a];
 export const OFFICE_SKINS: readonly string[] = ["#f3c9a1", "#e8b48a", "#c98c5e", "#8d5a3b", "#f6d6b8"];
 export const OFFICE_HAIRS: readonly string[] = ["#2b2118", "#4a3020", "#7a5230", "#c99a4a", "#1c1c22", "#8a3b22"];
-export const BOSS_HAIR = "#a7adb5";
+/** The managers' salt and pepper: a dark base with grey streaks (denser at the temples, see viz_office). */
+export const MANAGER_HAIR: Readonly<Record<ManagerVariant, { readonly base: string; readonly grey: string }>> = {
+  man: { base: "#2f2924", grey: "#b8bcc2" },
+  woman: { base: "#46362b", grey: "#c6c5c4" },
+};
+const NAVY: Rgb = [0x2a, 0x31, 0x45];
 
 function hash32(x: number): number {
   let h = (x + 0x9e3779b9) | 0;
@@ -92,23 +108,38 @@ function hash32(x: number): number {
 }
 
 /** The office outfit from a mini look. The persona color is the tie (and tints the worker's shirt pastel);
- *  skin, hair and glasses vary by `seed` so a fleet is a cast, not clones. The boss wears a charcoal suit with a
- *  white shirt, gray hair, reading glasses and a mustache. */
-export function officeLook(l: MiniLook, seed: number, role: OfficeRole): OfficeLook {
+ *  skin, hair and glasses vary by `seed` so a fleet is a cast, not clones. The boss is `variant`: the man wears
+ *  a charcoal suit with a white shirt and the persona tie (reading glasses most of the time); the woman a navy
+ *  blazer over a cream blouse with the persona scarf (glasses some of the time). Both have salt-and-pepper hair. */
+export function officeLook(l: MiniLook, seed: number, role: OfficeRole, variant: ManagerVariant = "man"): OfficeLook {
   const accent = parseHex(l.accent) ?? [0x41, 0xff, 0x8b];
   const h = hash32(Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 2147483647 : 0);
-  const boss = role === "boss";
-  const jacket = mixRgb(CHARCOAL, accent, 0.1);
+  if (role !== "boss") {
+    return {
+      shirt: toHex(mixRgb(accent, WHITE, 0.78)),
+      tie: toHex(accent),
+      slacks: "#3c4250",
+      jacket: toHex(mixRgb(CHARCOAL, accent, 0.1)),
+      shoe: "#1d1a19",
+      skin: OFFICE_SKINS[h % OFFICE_SKINS.length]!,
+      hair: OFFICE_HAIRS[(h >>> 8) % OFFICE_HAIRS.length]!,
+      grey: null,
+      glasses: ((h >>> 16) & 1) === 1,
+    };
+  }
+  const woman = variant === "woman";
+  const suit = toHex(mixRgb(woman ? NAVY : CHARCOAL, accent, woman ? 0.12 : 0.1));
+  const hv = woman ? hash32(h) : h; // two different people, each stable for the hub
   return {
-    shirt: boss ? "#f4f6fa" : toHex(mixRgb(accent, WHITE, 0.78)),
+    shirt: woman ? "#f8f0e4" : "#f4f6fa",
     tie: toHex(accent),
-    slacks: boss ? toHex(jacket) : "#3c4250",
-    jacket: toHex(jacket),
-    shoe: "#1d1a19",
-    skin: OFFICE_SKINS[h % OFFICE_SKINS.length]!,
-    hair: boss ? BOSS_HAIR : OFFICE_HAIRS[(h >>> 8) % OFFICE_HAIRS.length]!,
-    glasses: boss || ((h >>> 16) & 1) === 1,
-    mustache: boss,
+    slacks: suit,
+    jacket: suit,
+    shoe: woman ? "#2a1c1a" : "#1d1a19",
+    skin: OFFICE_SKINS[hv % OFFICE_SKINS.length]!,
+    hair: MANAGER_HAIR[woman ? "woman" : "man"].base,
+    grey: MANAGER_HAIR[woman ? "woman" : "man"].grey,
+    glasses: woman ? ((hv >>> 18) & 3) === 0 : ((hv >>> 16) & 3) !== 0,
   };
 }
 
@@ -497,4 +528,137 @@ export function zedAt(i: number, n: number, t: number, out: Zed): Zed {
   out.s = 0.04 + 0.05 * ph;
   out.a = bump(ph, 0, 0.2, 0.7, 1);
   return out;
+}
+
+// ------------------------------------------------------------------------------------------ the manager on duty
+
+/** The managers hand over every MANAGER_SWAP_MIN_S to MANAGER_SWAP_MAX_S seconds (a seeded draw per handover). */
+export const MANAGER_SWAP_MIN_S = 8 * 60;
+export const MANAGER_SWAP_MAX_S = 15 * 60;
+/** A boss built within this many seconds of the last one going away is a rebuild (a style, 2D/3D or detail
+ *  switch), not a new open of Visualize: it keeps the cast instead of flipping a new coin. */
+export const MANAGER_REBUILD_S = 10;
+
+export function otherManager(v: ManagerVariant): ManagerVariant {
+  return v === "man" ? "woman" : "man";
+}
+
+/** Draw `k` of the uniform stream for `seed`, in [0, 1). Pure: the same seed and draw give the same number. */
+export function seededUnit(seed: number, k: number): number {
+  const s = Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 4294967296 : 0;
+  const i = Number.isFinite(k) ? Math.floor(Math.abs(k)) : 0;
+  return hash32((s ^ Math.imul(i + 1, 0x9e3779b1)) | 0) / 4294967296;
+}
+
+/** Who is at the boss's desk, and when the next handover is due (seconds on the caller's clock). */
+export interface ManagerCast { readonly variant: ManagerVariant; readonly seed: number; readonly swaps: number; readonly nextAt: number }
+/** The cast the last boss left with, and when he or she went away. */
+export interface ManagerMemo { readonly cast: ManagerCast; readonly goneAt: number }
+
+/** Seconds until handover `k` (draw 0 is the opening coin flip, the delays use the odd draws). */
+export function managerSwapDelay(seed: number, k: number): number {
+  return MANAGER_SWAP_MIN_S + (MANAGER_SWAP_MAX_S - MANAGER_SWAP_MIN_S) * seededUnit(seed, 2 * k + 1);
+}
+
+/** The cast for a boss built at `now`: the remembered one when the last boss went away under MANAGER_REBUILD_S
+ *  ago (a rebuild), else a coin flip for who opens, with the first handover a seeded delay away. */
+export function openManagerCast(seed: number, now: number, memo: ManagerMemo | null): ManagerCast {
+  const t = Number.isFinite(now) ? now : 0;
+  if (memo && t >= memo.goneAt && t - memo.goneAt <= MANAGER_REBUILD_S) return memo.cast;
+  return { variant: seededUnit(seed, 0) < 0.5 ? "man" : "woman", seed, swaps: 0, nextAt: t + managerSwapDelay(seed, 0) };
+}
+
+/** The cast once `variant` takes the desk at `now` (a handover or a pinned choice): the next one a fresh delay away. */
+export function recastManager(c: ManagerCast, variant: ManagerVariant, now: number): ManagerCast {
+  const swaps = c.swaps + 1;
+  return { variant, seed: c.seed, swaps, nextAt: (Number.isFinite(now) ? now : 0) + managerSwapDelay(c.seed, swaps) };
+}
+
+export function managerSwapDue(c: ManagerCast, now: number): boolean {
+  return Number.isFinite(now) && now >= c.nextAt;
+}
+
+/** A handover waits for a quiet moment: at the desk (idle or working; a paused, ended, killed or failed hub keeps
+ *  its manager), no reaction and no one-shot (the done stretch, a frantic burst) playing. */
+export function managerSwapReady(state: OfficeState, reacting: boolean, oneShot: boolean): boolean {
+  return (state === "idle" || state === "working") && !reacting && !oneShot;
+}
+
+/** The handover: the manager on duty stands (pushing the chair back) over SWAP_RISE_S, turns and walks off toward
+ *  +X over SWAP_WALK_S while dissolving; at SWAP_AT_S the other takes over out of sight and plays it in reverse
+ *  (walks in, turns to the desk, sits down). */
+export const SWAP_RISE_S = 0.6;
+export const SWAP_WALK_S = 1.1;
+export const SWAP_AT_S = SWAP_RISE_S + SWAP_WALK_S;
+export const MANAGER_SWAP_S = 2 * SWAP_AT_S;
+/** How far the walk goes (figure units, toward +X); how high the hips rise to stand, and how far they step
+ *  forward of the pushed-back chair. */
+export const SWAP_WALK_X = 0.62;
+export const STAND_LIFT = 0.29;
+export const STAND_FORWARD = 0.22;
+const SWAP_TURN = 1.25;
+const STEP_HZ = 1.7;
+
+export interface SwapSample {
+  /** 0 seated .. 1 standing: the weight of the standing pose. */
+  stand: number;
+  /** The hips' offset from their seated place (figure units). */
+  x: number; lift: number; z: number;
+  /** The body's turn toward the walk (positive faces +X). */
+  turn: number;
+  /** The stride's weight 0..1 and its phase in stride cycles. */
+  gait: number; phase: number;
+  /** The figure's opacity (the dissolve). */
+  alpha: number;
+  /** The second half: the incoming manager is the one on screen. */
+  incoming: boolean;
+  done: boolean;
+}
+
+export function managerSwapAt(t: number, out: SwapSample): SwapSample {
+  const tt = Number.isFinite(t) ? Math.max(0, t) : 0;
+  out.done = tt >= MANAGER_SWAP_S;
+  out.incoming = tt >= SWAP_AT_S;
+  const u = out.incoming ? Math.max(0, MANAGER_SWAP_S - tt) : tt; // the incoming half is the outgoing one in reverse
+  const w = clamp01((u - SWAP_RISE_S) / SWAP_WALK_S);
+  out.stand = ease("smooth", u / SWAP_RISE_S);
+  out.gait = ease("smooth", (u - SWAP_RISE_S + 0.1) / 0.25);
+  out.phase = tt * STEP_HZ;
+  out.x = SWAP_WALK_X * w * w * (3 - 2 * w);
+  out.z = STAND_FORWARD * out.stand;
+  out.lift = STAND_LIFT * out.stand + 0.012 * out.gait * Math.abs(Math.cos(out.phase * Math.PI * 2));
+  out.turn = SWAP_TURN * ease("smooth", (u - SWAP_RISE_S * 0.6) / (SWAP_RISE_S * 0.6)) * (out.incoming ? -1 : 1);
+  out.alpha = 1 - ease("smooth", (w - 0.3) / 0.7);
+  return out;
+}
+
+/** Standing beside the pushed-back chair: legs straight, arms loose. */
+export const STAND_POSE = officePoseVector({
+  emotion: "content", rootZ: -0.3, spine: [0.04, 0, 0], head: [0.05, 0, 0],
+  shL: [0.05, 0, -0.1], elL: [-0.2, 0, 0], shR: [0.05, 0, 0.1], elR: [-0.2, 0, 0],
+  hipL: [0, 0, -0.03], kneeL: [0, 0, 0], hipR: [0, 0, 0.03], kneeR: [0, 0, 0],
+});
+const W_HIPS = officeJointOffset("hips");
+const W_HIPL = officeJointOffset("hipL");
+const W_KNEEL = officeJointOffset("kneeL");
+const W_HIPR = officeJointOffset("hipR");
+const W_KNEER = officeJointOffset("kneeR");
+const W_SHL = officeJointOffset("shL");
+const W_SHR = officeJointOffset("shR");
+
+/** Blend `pose` toward STAND_POSE by s.stand, walk on top of it (alternating legs, counter-swinging arms) and
+ *  turn the body by s.turn. The hips' offset (x, lift, z) is the figure's to apply: it is not a pose joint. */
+export function applyManagerSwap(pose: Float32Array, s: SwapSample): void {
+  const k = clamp01(s.stand);
+  if (k > 0) for (let i = 0; i < OFFICE_POSE_LEN; i++) pose[i] = pose[i]! + (STAND_POSE[i]! - pose[i]!) * k;
+  const sw = Math.sin(s.phase * Math.PI * 2) * clamp01(s.gait);
+  if (sw !== 0) {
+    pose[W_HIPL] = pose[W_HIPL]! - 0.5 * sw;
+    pose[W_HIPR] = pose[W_HIPR]! + 0.5 * sw;
+    pose[W_KNEEL] = pose[W_KNEEL]! + 0.6 * Math.max(0, sw);
+    pose[W_KNEER] = pose[W_KNEER]! + 0.6 * Math.max(0, -sw);
+    pose[W_SHL] = pose[W_SHL]! + 0.35 * sw;
+    pose[W_SHR] = pose[W_SHR]! - 0.35 * sw;
+  }
+  pose[W_HIPS + 1] = pose[W_HIPS + 1]! + s.turn;
 }

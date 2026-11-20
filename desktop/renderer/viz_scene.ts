@@ -22,9 +22,10 @@
 // Lighting follows the camera like the anime lab's sheet: a key from the upper front right, a cool rim light
 // from behind, and the hemisphere fill.
 //
-// Edges are viz_plasma conduits from the producer to its parent (P-VIZ.4, ADR-0626): a spinning plasma conduit
-// with traveling plasma pulses (anime) or a silver fiber-optic cable with rapid red light pulses
-// (professional), both scaling with the node's est. tok/s; the hub's own stream is a closed loop around it. A
+// Edges are viz_plasma conduits from the producer to its parent (P-VIZ.4, ADR-0626; P-VIZ.5, ADR-0630): a thin
+// spinning plasma conduit with token particles swirling around and through it and small plasma pulses (anime)
+// or a thin line with streaming red light particles (professional), both scaling with the node's est. tok/s,
+// arcing high between agents and lower to a subagent; the hub's own stream is a closed loop around it. A
 // surge flares the edge, throws a jagged regenerated lightning bolt along it and a plasma burst (an expanding
 // shader billboard plus a spark spray). Power-downs are
 // distinct: tool-failed flickers red, sheds sparks and shakes, then recovers; paused freezes the flow under
@@ -55,8 +56,8 @@ import { ANIME_HEIGHT, createAnimeFigure, type AnimeFigure, type AnimeState } fr
 import { createOfficeFigure, type OfficeFigure } from "./viz_office.ts";
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
-import { edgeStyleFor } from "./viz_plasma_math.ts";
-import { frameInterval, IDLE_FPS, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
+import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
+import { CUBE, frameInterval, IDLE_FPS, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
 
 export type VizViewMode = "2d" | "3d";
 
@@ -92,9 +93,10 @@ export interface VizSceneHandle {
   onDoublePick(cb: (hit: SceneHit | null, x: number, y: number) => void): void;
   /** P-VIZ.4: the node's figure reacts to the viewer (a stare, or an outburst); its work and state go on. */
   reactNode(id: string, kind: "stare" | "outburst"): void;
-  /** P-VIZ.4: the node's anchor (just above its frame) in client pixels, or null when it is off screen or
-   *  behind the camera. The node panel follows it. */
-  screenOf(id: string): { x: number; y: number } | null;
+  /** P-VIZ.5 (ADR-0629): the node's frame on screen, in client pixels: its center and its half extent (r).
+   *  Still reported when the node is off to a side (the panel docks at that edge); null when it is behind the
+   *  camera or gone. The node panel sits beside it. */
+  screenBoxOf(id: string): { x: number; y: number; r: number } | null;
   onLost(cb: () => void): void;
   destroy(): void;
 }
@@ -165,9 +167,8 @@ const DEAD = new THREE.Color("#2a2d33");
 const WHITE = new THREE.Color("#ffffff");
 const SPARK = new THREE.Color("#ffae42");
 
-const KIND_SCALE: Record<VizKind, number> = { hub: 1.35, agent: 1, subagent: 0.58 };
-/** The glass cube's side (before the kind's scale). The figure is about 1 unit tall. */
-const CUBE = 1.5;
+// KIND_SCALE and CUBE (the glass cube's side before the kind's scale) live in viz_model: the layout spaces
+// the cubes by them.
 const FLOOR_Y = -CUBE / 2;
 const PLATE_H = 0.045;
 /** The 2D tile's side (before the kind's scale). */
@@ -725,8 +726,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const side = ed.side.set(-dir.z, 0, dir.x);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
-    ed.p1.copy(ed.p0).add(ed.p2).multiplyScalar(0.5).addScaledVector(side, len * 0.09);
-    ed.p1.y += len * 0.16;
+    // P-VIZ.5: agents' streams loop clearly over; a subagent's link to its parent stays lower (viz_plasma_math).
+    const sub = a.kind === "subagent" || b.kind === "subagent";
+    ed.p1.copy(ed.p0).add(ed.p2).multiplyScalar(0.5).addScaledVector(side, edgeBow(len, sub));
+    ed.p1.y += edgeLift(len, sub);
     ed.conduit.bezier(ed.p0, ed.p1, ed.p2, side);
   }
 
@@ -967,6 +970,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (obj.idleTold.fig !== slot.fig || obj.idleTold.sec !== obj.idleSec) { slot.fig.setIdleSeconds(obj.idleSec); obj.idleTold = { fig: slot.fig, sec: obj.idleSec }; }
       slot.fig.setIntensity(obj.power);
       slot.fig.update(t / 1000, dt, o.motion);
+      // P-VIZ.5: a manager handover is a 3.4 s walk-off; at the idle cadence it would stutter.
+      if ("handingOver" in slot.fig && slot.fig.handingOver) busyNodes = true;
     }
 
     if (obj.d3) {
@@ -1257,7 +1262,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const onLeave = (): void => { pointer = null; lastHitKey = ""; canvas.style.cursor = ""; hoverCb?.(null, 0, 0); };
   const onDown = (e: PointerEvent): void => { down = { x: e.clientX, y: e.clientY, at: performance.now() }; };
   let clickWait: { x: number; y: number; hit: SceneHit | null; timer: number } | null = null;
-  const anchorAt = new THREE.Vector3(); // screenOf's scratch
+  const anchorAt = new THREE.Vector3(); // screenBoxOf's scratch
   const onUp = (e: PointerEvent): void => {
     if (!down) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
@@ -1439,16 +1444,19 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       effectsUntil = Math.max(effectsUntil, performance.now() + REACT_MS); // frames for the reaction even when nothing else moves
       kick();
     },
-    screenOf(id) {
+    screenBoxOf(id) {
       const obj = nodes.get(id);
       const r = canvas.getBoundingClientRect();
       if (!obj || !r.width || !r.height) return null;
-      // The top of the cube in 3D; the top edge of the tile on the top-down map (screen up is -Z there).
+      anchorAt.copy(obj.cur).project(camera);
+      if (anchorAt.z > 1 || anchorAt.z < -1) return null; // behind the camera or past the far plane
+      const x = r.left + ((anchorAt.x + 1) / 2) * r.width, y = r.top + ((1 - anchorAt.y) / 2) * r.height;
+      // The half extent: center to the top of the cube in 3D, to the top edge of the tile on the map (screen up is -Z there).
       anchorAt.copy(obj.cur);
       if (mode === "3d") anchorAt.y += (CUBE / 2) * obj.size; else anchorAt.z -= (TILE / 2) * obj.size;
       anchorAt.project(camera);
-      if (anchorAt.z > 1 || anchorAt.z < -1 || Math.abs(anchorAt.x) > 1.05 || Math.abs(anchorAt.y) > 1.05) return null;
-      return { x: r.left + ((anchorAt.x + 1) / 2) * r.width, y: r.top + ((1 - anchorAt.y) / 2) * r.height };
+      const tx = r.left + ((anchorAt.x + 1) / 2) * r.width, ty = r.top + ((1 - anchorAt.y) / 2) * r.height;
+      return { x, y, r: Math.max(8, Math.hypot(tx - x, ty - y)) };
     },
     onLost(cb) { lostCb = cb; },
     destroy() {

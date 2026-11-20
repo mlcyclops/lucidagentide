@@ -1714,3 +1714,7 @@ demo-P-VIZ.3: ## P-VIZ.3 (ADR-0624): Visualize figures are the anime LUCID masco
 .PHONY: demo-P-VIZ.4
 demo-P-VIZ.4: ## P-VIZ.4 (ADR-0625..0628): Visualize below the titlebar (header and window controls usable in Electron), a supervising boss, lane subagents from /api/subagents?laneId=, the node panel with output and a prompt box, stare and outburst reactions, plasma conduits and fiber-optic edges, and the professional office cast. Rendering is checked in the desktop app with ?vizDemo=1 or live agents
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_director.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-VIZ.5
+demo-P-VIZ.5: ## P-VIZ.5 (ADR-0629..0631): the node panel beside its node, a self-measuring Visualize header, distinct Fleet layout icons, thin plasma with token particles, higher arcs, a thin professional line with red streaks, spaced subagents, and two alternating salt-and-pepper managers
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_panel_place.test.ts desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_anime_pose.test.ts harness/adr_numbering.test.ts

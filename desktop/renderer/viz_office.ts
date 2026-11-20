@@ -10,10 +10,18 @@
 //   Worker: a short-sleeve dress shirt tinted pastel toward the persona color, a tie IN the persona color,
 //     slacks, sometimes glasses; an office chair at a desk with a monitor (persona-colored code scrolling on the
 //     screen while he works, dim when idle), a keyboard, a coffee mug and a paper pile.
-//   Boss (the hub): a charcoal suit, white shirt, persona tie, gray hair ring, reading glasses and a mustache, at
-//     a larger wooden desk with a report pile, a clipboard, a mug and a nameplate.
-// The face is a canvas texture on a patch of the head sphere (eyes, brows, mouth, glasses, mustache, a sweat
-// drop) drawn from an OfficeEmotion and redrawn only when the emotion, the blink step or the gaze bucket changes.
+//   Boss (the hub), at a larger wooden desk with a report pile, a clipboard, a mug and a nameplate, is one of two
+//     managers on the same rig (P-VIZ.5, ADR-0631), both with a full head of salt-and-pepper hair (a dark base
+//     with grey strands, greyer at the temples, from a shared canvas texture on a sculpted hair mesh):
+//     the man: a charcoal suit, white shirt, persona tie, side-parted hair swept over, reading glasses (usually);
+//     the woman: a navy blazer, cream blouse, a persona scarf knotted at the throat, a chin-length bob with a
+//     side-swept fringe, small gold earrings, lashes, rose lips, rounded glasses (sometimes).
+//     They alternate (viz_office_pose's cast: a coin flip per open, a handover every 8 to 15 minutes, never
+//     mid-reaction): the one on duty stands, walks off to the side and dissolves (alpha-hash, so no sorting),
+//     the other walks in and sits down; reduced motion swaps in place. The second manager's own parts (hair,
+//     tie or scarf and earrings) are built the first time he or she takes the desk.
+// The face is a canvas texture on a patch of the head sphere (eyes, brows, mouth, glasses, lashes, a sweat drop)
+// drawn from an OfficeEmotion and redrawn only when the emotion, the blink step or the gaze bucket changes.
 // The canvas is transparent, so a red face (the outburst) is the skin material turning red under it.
 //
 // 3D: the worker's whole diorama (desk, chair, him, and the optional low fabric cubicle) is turned OFFICE_YAW_3D
@@ -36,12 +44,13 @@ import {
   crtOff, ENTER_SLAM_S, enterTapBoost, lookAngles, mugHeld, OFFICE_CLIPS, OFFICE_EMOTIONS, OFFICE_POSE_LEN, OFFICE_STATES, OFFICE_STILL_T,
   officeClipDone, officeClipFor, officeClipTime, officeFaceKey, officeJointOffset, OFFICE_JOINTS, officeLook, officeTempo, officeTransitionShot,
   OUTBURST_S, pageFlipAt, paperFlight, printHeld, reactAt, sampleOfficeClip, stareHold, tapRate, zedAt,
-  type Crt, type LookAngles, type MouthShape, type OfficeClipName, type OfficeClipSample, type OfficeEmotion,
-  type OfficeLook, type OfficeRole, type OfficeState, type Paper, type ReactKind, type ReactSample, type Zed,
+  applyManagerSwap, MANAGER_HAIR, MANAGER_VARIANTS, managerSwapAt, managerSwapDue, managerSwapReady, openManagerCast, otherManager, recastManager,
+  type Crt, type LookAngles, type ManagerCast, type ManagerMemo, type ManagerVariant, type MouthShape, type OfficeClipName, type OfficeClipSample,
+  type OfficeEmotion, type OfficeRole, type OfficeState, type Paper, type ReactKind, type ReactSample, type SwapSample, type Zed,
 } from "./viz_office_pose.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 
-export type { OfficeRole, OfficeState } from "./viz_office_pose.ts";
+export type { ManagerVariant, OfficeRole, OfficeState } from "./viz_office_pose.ts";
 export type OfficeDetail = "full" | "reduced" | "minimal";
 
 export interface OfficeFigure {
@@ -57,6 +66,14 @@ export interface OfficeFigure {
   react(kind: ReactKind, camera: THREE.Camera): void;
   /** Seconds the agent has been idle: coffee under 60 s, head down on the desk after. */
   setIdleSeconds(sec: number): void;
+  /** The boss only (a worker ignores it): "man" or "woman" pins that manager (handed over at the next quiet
+   *  moment, animated under motion), "auto" (the default) alternates them every 8 to 15 minutes. */
+  setManagerVariant(v: ManagerVariant | "auto"): void;
+  /** The manager at the desk (the incoming one once a handover passes its midpoint); null for a worker. */
+  readonly managerVariant: ManagerVariant | null;
+  /** True while a handover animates: the caller should keep drawing at its busy cadence. */
+  readonly handingOver: boolean;
+  /** `tSec` is on the performance.now() timeline in seconds (rAF time / 1000): the handover schedule runs on it. */
   update(tSec: number, dt: number, motion: boolean): void;
   dispose(): void;
 }
@@ -99,9 +116,10 @@ const SCREEN_Y = 0.2;
 
 const FW = 512, FH = 380;
 const EYE_Y = 148, EYE_DX = 78;
-interface FacePaint { glasses: boolean; boss: boolean; brow: string; mustache: string | null }
+/** `readers`: the man's half-moon reading glasses; `frames`: rounded rectangles (workers, the woman). */
+interface FacePaint { glasses: "none" | "readers" | "frames"; brow: string; browW: number; lashes: boolean; lip: string }
 
-function drawEye(c: CanvasRenderingContext2D, cx: number, cy: number, inner: number, emo: OfficeEmotion, blink: number, gaze: number): void {
+function drawEye(c: CanvasRenderingContext2D, cx: number, cy: number, inner: number, emo: OfficeEmotion, blink: number, gaze: number, lashes: boolean): void {
   c.strokeStyle = INK;
   if (emo.shape === "x") {
     c.lineWidth = 9;
@@ -146,12 +164,24 @@ function drawEye(c: CanvasRenderingContext2D, cx: number, cy: number, inner: num
     c.lineWidth = 8; c.beginPath(); c.moveTo(x0, lid0); c.lineTo(x1, lid1); c.stroke();
     c.restore();
   }
+  if (lashes && open > 0.3) {
+    // two lashes flicking out from the outer end of the upper lid (or the rim, when the lid is up)
+    const o = -inner;
+    c.lineWidth = 6;
+    c.beginPath();
+    for (const [k, len, dx, dy] of [[0.8, 16, 0.8, -0.6], [0.45, 13, 0.4, -0.92]] as const) {
+      const lx = cx + o * rx * k;
+      const ly = Math.max(cy - ry * Math.sqrt(1 - k * k), top + tilt * (((lx - cx) * inner) / rx));
+      c.moveTo(lx, ly); c.lineTo(lx + o * dx * len, ly + dy * len);
+    }
+    c.stroke();
+  }
 }
 
-function drawMouth(c: CanvasRenderingContext2D, m: MouthShape, x: number, y: number): void {
+function drawMouth(c: CanvasRenderingContext2D, m: MouthShape, x: number, y: number, lip: string): void {
   c.save();
   c.translate(x, y);
-  c.strokeStyle = INK; c.lineWidth = 7;
+  c.strokeStyle = lip; c.lineWidth = 7;
   c.beginPath();
   switch (m) {
     case "flat": c.moveTo(-28, 0); c.lineTo(28, 0); c.stroke(); break;
@@ -183,40 +213,35 @@ function drawFace(c: CanvasRenderingContext2D, p: FacePaint, emo: OfficeEmotion,
   c.lineJoin = "round";
   for (let side = -1; side <= 1; side += 2) {
     const cx = FW / 2 + side * EYE_DX, inner = -side;
-    drawEye(c, cx, EYE_Y, inner, emo, blink, gaze);
+    drawEye(c, cx, EYE_Y, inner, emo, blink, gaze, p.lashes);
     // the brow's angle is the emotion: a positive brow pulls the inner end down
     c.save();
     c.translate(cx + inner * 4, EYE_Y - 66 - emo.browY * 34);
     c.rotate(inner * emo.brow * 0.5);
-    c.strokeStyle = p.brow; c.lineWidth = p.boss ? 16 : 11;
-    c.beginPath(); c.moveTo(-36, 0); c.quadraticCurveTo(0, -8, 36, 0); c.stroke();
+    c.strokeStyle = p.brow; c.lineWidth = p.browW;
+    c.beginPath(); c.moveTo(-36, 0); c.quadraticCurveTo(0, p.lashes ? -14 : -8, 36, 0); c.stroke();
     c.restore();
   }
-  if (p.mustache) {
-    c.fillStyle = p.mustache; c.strokeStyle = INK; c.lineWidth = 4;
-    for (let side = -1; side <= 1; side += 2) {
-      c.beginPath(); c.ellipse(FW / 2 + side * 24, 262, 30, 12, side * 0.15, 0, TAU); c.fill(); c.stroke();
-    }
-  }
-  drawMouth(c, emo.mouth, FW / 2, p.mustache ? 302 : 292);
-  if (p.glasses) {
+  drawMouth(c, emo.mouth, FW / 2, 292, p.lip);
+  if (p.glasses !== "none") {
+    const readers = p.glasses === "readers";
     c.strokeStyle = INK; c.lineWidth = 7;
     for (let side = -1; side <= 1; side += 2) {
       const cx = FW / 2 + side * EYE_DX;
       c.beginPath();
-      if (p.boss) { c.moveTo(cx - 50, EYE_Y + 6); c.lineTo(cx + 50, EYE_Y + 6); c.quadraticCurveTo(cx + 48, EYE_Y + 52, cx, EYE_Y + 52); c.quadraticCurveTo(cx - 48, EYE_Y + 52, cx - 50, EYE_Y + 6); }
+      if (readers) { c.moveTo(cx - 50, EYE_Y + 6); c.lineTo(cx + 50, EYE_Y + 6); c.quadraticCurveTo(cx + 48, EYE_Y + 52, cx, EYE_Y + 52); c.quadraticCurveTo(cx - 48, EYE_Y + 52, cx - 50, EYE_Y + 6); }
       else {
         const x = cx - 52, y = EYE_Y - 46, w = 104, h = 92, r = 18;
         c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
       }
       c.fillStyle = "rgba(170,210,255,0.16)"; c.fill(); c.stroke();
       c.strokeStyle = "rgba(255,255,255,0.75)"; c.lineWidth = 5;
-      c.beginPath(); c.moveTo(cx + 18, EYE_Y + (p.boss ? 14 : -32)); c.lineTo(cx + 34, EYE_Y + (p.boss ? 2 : -16)); c.stroke();
+      c.beginPath(); c.moveTo(cx + 18, EYE_Y + (readers ? 14 : -32)); c.lineTo(cx + 34, EYE_Y + (readers ? 2 : -16)); c.stroke();
       c.strokeStyle = INK; c.lineWidth = 7;
       // the temple arm runs from the outer rim toward the ear
       c.beginPath(); c.moveTo(cx + side * 52, EYE_Y - 20); c.lineTo(FW / 2 + side * 200, EYE_Y - 26); c.stroke();
     }
-    const by = p.boss ? EYE_Y + 10 : EYE_Y - 8;
+    const by = readers ? EYE_Y + 10 : EYE_Y - 8;
     c.beginPath(); c.moveTo(FW / 2 - EYE_DX + 52, by); c.quadraticCurveTo(FW / 2, by - 10, FW / 2 + EYE_DX - 52, by); c.stroke();
   }
   if (emo.sweat) {
@@ -289,6 +314,46 @@ function zedCanvas(): HTMLCanvasElement {
   return cv;
 }
 
+/** Salt-and-pepper hair: the base with thin grey strands running from the crown down, denser toward the temples
+ *  (u 0 and 1 are the ears, u 0.5 the front and the back; see hairUv). */
+function saltPepperCanvas(base: string, grey: string): HTMLCanvasElement {
+  const W = 256, H = 128;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  c.fillStyle = base; c.fillRect(0, 0, W, H);
+  let seed = 29;
+  const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  c.strokeStyle = grey;
+  c.lineCap = "round";
+  for (let i = 0; i < 520; i++) {
+    const u = rnd();
+    const temple = (2 * u - 1) * (2 * u - 1);
+    if (rnd() > 0.3 + 0.7 * temple) continue;
+    const x = u * W, y = rnd() * H * 0.7, len = 18 + rnd() * 50;
+    c.globalAlpha = 0.3 + 0.55 * rnd() * (0.5 + 0.5 * temple);
+    c.lineWidth = 1 + rnd() * 1.5;
+    c.beginPath(); c.moveTo(x, y); c.quadraticCurveTo(x + (rnd() - 0.5) * 6, y + len / 2, x + (rnd() - 0.5) * 9, y + len); c.stroke();
+  }
+  c.globalAlpha = 1;
+  return cv;
+}
+
+/** Hair UVs from the position (skull frame) so every hair part maps the strands the same way and seamlessly:
+ *  u is the angle from the left ear around to the right (front and back meet at 0.5), v the height. */
+function hairUv(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const p = g.getAttribute("position");
+  const uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    uv[i * 2] = Math.abs(Math.atan2(z, -x)) / Math.PI;
+    uv[i * 2 + 1] = Math.min(1, Math.max(0, (y + 0.13) / 0.36));
+  }
+  g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  return g;
+}
+
 function canvasTex(cv: HTMLCanvasElement): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -317,7 +382,8 @@ function inkMat(width: number): THREE.MeshBasicMaterial {
   const m = new THREE.MeshBasicMaterial({ color: 0x0a0a12, side: THREE.BackSide, toneMapped: false });
   m.onBeforeCompile = (s) => {
     s.uniforms.uW = { value: width };
-    s.vertexShader = "uniform float uW;\n" + s.vertexShader.replace("#include <begin_vertex>", "vec3 transformed = position + normal * uW;");
+    // (an alpha-hashed hull, the boss's dissolve, still needs vPosition, which begin_vertex would have set)
+    s.vertexShader = "uniform float uW;\n" + s.vertexShader.replace("#include <begin_vertex>", "vec3 transformed = position + normal * uW;\n#ifdef USE_ALPHAHASH\n\tvPosition = vec3( position );\n#endif");
   };
   m.customProgramCacheKey = () => `office-ink-${width}`;
   return m;
@@ -374,7 +440,7 @@ interface GeoSet {
   pelvis: THREE.BufferGeometry; torso: THREE.BufferGeometry; belt: THREE.BufferGeometry | null; collar: THREE.BufferGeometry | null;
   tieKnot: THREE.BufferGeometry; tieBlade: THREE.BufferGeometry; vee: THREE.BufferGeometry; neck: THREE.BufferGeometry;
   head: THREE.BufferGeometry; face: THREE.BufferGeometry; ear: THREE.BufferGeometry | null; nose: THREE.BufferGeometry;
-  hair: THREE.BufferGeometry; bossHair: THREE.BufferGeometry;
+  hair: THREE.BufferGeometry;
   shoulderCap: THREE.BufferGeometry; sleeve: THREE.BufferGeometry; upperArm: THREE.BufferGeometry; foreArm: THREE.BufferGeometry;
   jacketCap: THREE.BufferGeometry; jacketUpper: THREE.BufferGeometry; jacketFore: THREE.BufferGeometry; hand: THREE.BufferGeometry;
   thigh: THREE.BufferGeometry; shin: THREE.BufferGeometry; shoe: THREE.BufferGeometry;
@@ -407,10 +473,6 @@ function buildGeo(t: Tier): GeoSet {
   const tuft = new THREE.SphereGeometry(0.07, S[0], S[1]);
   tuft.scale(1.4, 0.55, 1);
   placed(tuft, 0.05, 0.14, 0.06, 0, 0, -0.3);
-  const ring = new THREE.TorusGeometry(0.15, 0.032, Math.max(4, S[1]), t.head[0] >> 1, Math.PI * 1.25);
-  ring.rotateX(-Math.PI / 2);
-  ring.rotateY(-0.39);
-  ring.translate(0, 0.02, 0);
   const mug = new THREE.CylinderGeometry(0.035, 0.032, 0.075, L);
   mug.translate(0, 0.0375, 0);
   const handle = placed(new THREE.TorusGeometry(0.022, 0.007, 5, 10, Math.PI), 0.034, 0.04, 0, 0, 0, -Math.PI / 2);
@@ -439,7 +501,6 @@ function buildGeo(t: Tier): GeoSet {
     ear: t.extras ? (() => { const g = new THREE.SphereGeometry(0.035, S[0], S[1]); g.scale(0.5, 1, 0.8); return g; })() : null,
     nose: (() => { const g = new THREE.SphereGeometry(0.042, S[0], S[1]); g.scale(0.9, 0.8, 1.1); return g; })(),
     hair: merge([hairCap, tuft]),
-    bossHair: ring,
     shoulderCap: new THREE.SphereGeometry(0.062, S[0], S[1]),
     sleeve: placed(new THREE.CylinderGeometry(0.062, 0.056, 0.1, L), 0, -0.04, 0),
     upperArm: placed(new THREE.CylinderGeometry(0.042, 0.038, 0.2, L), 0, -0.1, 0),
@@ -502,6 +563,93 @@ function releaseGeo(detail: OfficeDetail): void {
   GEO_CACHE.delete(detail);
 }
 
+/** One manager's own parts per detail tier, built the first time that manager takes the desk and ref-counted
+ *  like GeoSet: the hair (skull frame) and its salt-and-pepper texture; the woman's scarf (chest frame) and
+ *  earrings (skull frame). The man's tie is the shared GeoSet's. */
+interface ManagerGeo {
+  refs: number;
+  hair: THREE.BufferGeometry; hairTex: THREE.CanvasTexture;
+  scarf: THREE.BufferGeometry | null; earrings: THREE.BufferGeometry | null;
+}
+
+function buildManagerGeo(t: Tier, v: ManagerVariant): ManagerGeo {
+  const H = t.head, S = t.small, L = t.limb;
+  const ball = (r: number): THREE.SphereGeometry => new THREE.SphereGeometry(r, Math.max(8, H[0] >> 1), Math.max(6, H[1] >> 1));
+  const band = (r: number, open: number, from: number, len: number): THREE.SphereGeometry =>
+    new THREE.SphereGeometry(r, H[0], Math.max(4, H[1] >> 1), Math.PI / 2 + open, TAU - 2 * open, from, len);
+  const cap = new THREE.SphereGeometry(v === "man" ? 0.168 : 0.17, H[0], Math.max(4, H[1] >> 1), 0, TAU, 0, Math.PI / 2);
+  let hair: THREE.BufferGeometry;
+  if (v === "man") {
+    // a full head: the cap swept up off the forehead, combed over from the part on his left (-X) with volume at
+    // the front, trimmed behind the ears down to the nape
+    cap.scale(1.03, 1.1, 1.04);
+    cap.rotateX(-0.38);
+    cap.translate(0, 0.012, -0.012);
+    const sweep = ball(0.1);
+    sweep.scale(1.35, 0.5, 1.05);
+    placed(sweep, 0.035, 0.13, 0.05, -0.2, 0, -0.22);
+    const side = ball(0.07);
+    side.scale(0.9, 0.5, 1.25);
+    placed(side, -0.1, 0.115, 0.02, -0.1, 0, 0.55);
+    hair = merge([cap, sweep, side, band(0.171, 1.75, Math.PI * 0.42, Math.PI * 0.22)]);
+  } else {
+    // a chin-length bob, open over the face, its hem curving under at the jaw, and a side-swept fringe
+    cap.scale(1.05, 1.1, 1.05);
+    cap.rotateX(-0.3);
+    cap.translate(0, 0.01, -0.008);
+    const bob = band(0.178, 0.95, Math.PI * 0.28, Math.PI * 0.42);
+    bob.scale(1.06, 1, 1.02);
+    const fringe = ball(0.085);
+    fringe.scale(1.55, 0.42, 0.9);
+    placed(fringe, 0.03, 0.118, 0.09, -0.32, 0, -0.3);
+    hair = merge([cap, bob, fringe]);
+  }
+  hairUv(hair);
+  const hairTex = canvasTex(saltPepperCanvas(MANAGER_HAIR[v].base, MANAGER_HAIR[v].grey));
+  if (v === "man") return { refs: 0, hair, hairTex, scarf: null, earrings: null };
+  // the scarf: a loop around the collar, a knot at the throat and two short tails over the blouse
+  const loop = new THREE.TorusGeometry(0.068, 0.022, Math.max(4, S[1]), Math.max(10, L + 4));
+  loop.rotateX(Math.PI / 2);
+  loop.scale(1, 1, 0.92);
+  loop.translate(0, 0.185, 0.006);
+  const knot = new THREE.SphereGeometry(0.026, S[0], S[1]);
+  knot.scale(1.1, 0.9, 0.8);
+  knot.translate(0.016, 0.168, 0.1);
+  const scarf = merge([
+    loop, knot,
+    placed(new THREE.BoxGeometry(0.034, 0.085, 0.012), 0.032, 0.12, 0.142, -0.18, 0, 0.22),
+    placed(new THREE.BoxGeometry(0.03, 0.075, 0.012), 0.004, 0.126, 0.144, -0.18, 0, -0.12),
+  ]);
+  const earrings = merge([-1, 1].map((s) => placed(new THREE.SphereGeometry(0.013, S[0], S[1]), s * 0.128, -0.118, 0.035)));
+  return { refs: 0, hair, hairTex, scarf, earrings };
+}
+
+const MANAGER_GEO = new Map<string, ManagerGeo>();
+
+function acquireManagerGeo(detail: OfficeDetail, v: ManagerVariant): ManagerGeo {
+  const key = `${detail}:${v}`;
+  let set = MANAGER_GEO.get(key);
+  if (!set) {
+    set = buildManagerGeo(TIERS[detail], v);
+    MANAGER_GEO.set(key, set);
+  }
+  set.refs++;
+  return set;
+}
+
+function releaseManagerGeo(detail: OfficeDetail, v: ManagerVariant): void {
+  const key = `${detail}:${v}`;
+  const set = MANAGER_GEO.get(key);
+  if (!set || --set.refs > 0) return;
+  for (const x of Object.values(set)) if (x instanceof THREE.BufferGeometry || x instanceof THREE.Texture) x.dispose();
+  MANAGER_GEO.delete(key);
+}
+
+/** The cast the last boss left with, so a rebuild (a style, 2D/3D or detail switch) keeps the manager; while a
+ *  boss lives it is that boss's cast, so a second live boss shows the same manager. */
+let castMemo: (ManagerMemo & { auto: boolean }) | null = null;
+let liveBosses = 0;
+
 // ------------------------------------------------------------------------------------------ the figure
 
 const O_ROOT = officeJointOffset("root");
@@ -513,6 +661,8 @@ const O_SHL = officeJointOffset("shL");
 const O_ELL = officeJointOffset("elL");
 const O_SHR = officeJointOffset("shR");
 const O_ELR = officeJointOffset("elR");
+const J_SHL = OFFICE_JOINTS.indexOf("shL");
+const J_SHR = OFFICE_JOINTS.indexOf("shR");
 const DEAD_GRAY = new THREE.Color("#5a5f6a");
 const RAGE = new THREE.Color("#ff4a3a");
 let instanceSeed = 1;
@@ -533,6 +683,8 @@ class Office implements OfficeFigure {
   private readonly seed: number;
   private readonly mats: THREE.Material[] = [];
   private disposed = false;
+  private readonly boss: boolean;
+  private readonly grad: THREE.DataTexture;
 
   // materials
   private readonly mShirt: THREE.MeshToonMaterial;
@@ -541,10 +693,20 @@ class Office implements OfficeFigure {
   private readonly mJacket: THREE.MeshToonMaterial;
   private readonly mSkin: THREE.MeshToonMaterial;
   private readonly mHair: THREE.MeshToonMaterial;
+  private readonly mShoe: THREE.MeshToonMaterial;
+  /** The boss's nameplate: the tie's color, but its own material so it never dissolves with the manager. */
+  private readonly mPlate: THREE.MeshToonMaterial | null;
   private readonly mWall: THREE.MeshToonMaterial;
   private readonly mTrim: THREE.MeshToonMaterial;
   private readonly mInk: THREE.MeshBasicMaterial;
   private readonly mInkThin: THREE.MeshBasicMaterial;
+  /** The ink hulls add() gives a part: the boss's person (body and manager parts) gets its own, alpha-hashed
+   *  pair so it dissolves without the desk's and chair's ink. */
+  private hull: THREE.MeshBasicMaterial;
+  private hullThin: THREE.MeshBasicMaterial;
+  private readonly personInk: readonly [THREE.MeshBasicMaterial, THREE.MeshBasicMaterial] | null;
+  /** Everything that dissolves in a handover (the boss only). */
+  private readonly personMats: THREE.Material[] = [];
   private readonly mScreen: THREE.MeshBasicMaterial;
   private readonly mCrt: THREE.MeshBasicMaterial;
   private readonly mSmoke: THREE.MeshBasicMaterial;
@@ -554,10 +716,10 @@ class Office implements OfficeFigure {
   private readonly mZed: THREE.SpriteMaterial;
 
   // look
-  private lookNow: OfficeLook;
+  private mini: MiniLook;
   private readonly cTie = new THREE.Color();
   private readonly cSkin = new THREE.Color();
-  private readonly face: FacePaint;
+  private readonly face: FacePaint = { glasses: "none", brow: INK, browW: 11, lashes: false, lip: INK };
   private readonly faceCtx: CanvasRenderingContext2D | null;
   private readonly faceTex: THREE.CanvasTexture;
   private readonly screenTex: THREE.Texture;
@@ -566,10 +728,30 @@ class Office implements OfficeFigure {
   // rig (OFFICE_JOINTS order)
   private readonly joints: THREE.Group[] = [];
   private readonly root: THREE.Group;
+  private readonly hips: THREE.Group;
+  private readonly chest: THREE.Group;
+  private readonly torso: THREE.Mesh;
   private readonly skull = new THREE.Group();
   private readonly backPivot = new THREE.Group();
   private readonly handL: THREE.Group;
   private readonly handR: THREE.Group;
+
+  // the manager on duty (the boss only; see viz_office_pose's cast)
+  private variant: ManagerVariant = "man";
+  private cast: ManagerCast = { variant: "man", seed: 0, swaps: 0, nextAt: Infinity };
+  private auto = true;
+  /** A manager waiting for a quiet moment to take the desk (pinned, or the automatic handover due). */
+  private want: ManagerVariant | null = null;
+  private swapTo: ManagerVariant = "man";
+  /** Seconds into the handover, or -1 when none plays. */
+  private swapT = -1;
+  private fade = 1;
+  private clockNow = 0;
+  private readonly sw: SwapSample = { stand: 0, x: 0, lift: 0, z: 0, turn: 0, gait: 0, phase: 0, alpha: 1, incoming: false, done: true };
+  /** Each manager's own parts, built the first time he or she takes the desk. */
+  private readonly managerParts: Partial<Record<ManagerVariant, THREE.Object3D[]>> = {};
+  /** The shared ManagerGeo sets this boss holds a reference on (released by dispose()). */
+  private readonly managerGeo: Partial<Record<ManagerVariant, ManagerGeo>> = {};
 
   // props and effects
   private readonly desk = new THREE.Group();
@@ -661,27 +843,46 @@ class Office implements OfficeFigure {
     this.seed = Number.isFinite(o.seed) ? o.seed : 0;
     const t = (this.tier = TIERS[this.detail]);
     const g = (this.geo = acquireGeo(this.detail));
-    const boss = this.role === "boss";
+    const boss = (this.boss = this.role === "boss");
     const flat = o.flat;
     this.rng = (instanceSeed++ * 2654435761) >>> 0 || 1;
     this.phase = this.random() * TAU;
     this.blinkIn = nextBlinkDelay(this.random());
     this.group.name = boss ? "office-boss" : "office-worker";
-    this.lookNow = officeLook(o.look, this.seed, this.role);
+    this.mini = o.look;
+    if (boss) {
+      // who opens: the live or just-gone boss's cast (a rebuild), else a fresh seeded coin flip
+      const now = performance.now() / 1000;
+      this.clockNow = now;
+      const memo = castMemo && liveBosses > 0 ? { ...castMemo, goneAt: now } : castMemo;
+      this.cast = openManagerCast(Math.floor(Math.random() * 4294967296), now, memo);
+      this.auto = memo !== null && this.cast === memo.cast ? memo.auto : true;
+      this.variant = this.cast.variant;
+      liveBosses++;
+      this.remember(now);
+    }
 
     // ---- materials (untoned like the anime figure, so the persona color stays itself)
-    const grad = toonGrad(flat ? 2 : 3);
+    const grad = (this.grad = toonGrad(flat ? 2 : 3));
     const toon = (p: THREE.MeshToonMaterialParameters = {}) => this.own(new THREE.MeshToonMaterial({ gradientMap: grad, toneMapped: false, ...p }));
     const basic = (p: THREE.MeshBasicMaterialParameters) => this.own(new THREE.MeshBasicMaterial({ toneMapped: false, ...p }));
-    this.mShirt = toon();
-    this.mTie = toon({ emissiveIntensity: 0.15 });
-    this.mSlacks = toon();
-    this.mJacket = toon();
-    this.mSkin = toon();
-    this.mHair = toon();
+    // the boss's person dissolves in a handover: alpha-hashed (no sorting; fully opaque at opacity 1)
+    const person = (p: THREE.MeshToonMaterialParameters = {}): THREE.MeshToonMaterial => {
+      if (!boss) return toon(p);
+      const m = toon({ alphaHash: true, ...p });
+      this.personMats.push(m);
+      return m;
+    };
+    this.mShirt = person();
+    this.mTie = person({ emissiveIntensity: 0.15 });
+    this.mSlacks = person();
+    this.mJacket = person();
+    this.mSkin = person();
+    this.mHair = person(boss ? { side: THREE.DoubleSide } : {}); // the managers' hair has open shells (the bob, the nape)
+    this.mShoe = person({ color: "#1d1a19" });
+    this.mPlate = boss ? toon({ emissiveIntensity: 0.15 }) : null;
     this.mWall = toon();
     this.mTrim = toon({ emissiveIntensity: 0.25 });
-    const mShoe = toon({ color: "#1d1a19" });
     const mChair = toon({ color: "#2a2e36" });
     const mMetal = toon({ color: "#8d939c" });
     const mDesk = toon({ color: boss ? "#7a4e2d" : "#bfc3ca" });
@@ -702,9 +903,14 @@ class Office implements OfficeFigure {
     this.faceTex.colorSpace = THREE.SRGBColorSpace;
     this.faceTex.anisotropy = 4;
     const mFace = toon({ map: this.faceTex, transparent: true });
+    if (boss) this.personMats.push(mFace); // already transparent: it fades by opacity
     const ink = flat ? INK_FLAT : INK_3D;
     this.mInk = this.own(inkMat(ink));
     this.mInkThin = this.own(inkMat(ink * 0.6));
+    this.hull = this.mInk;
+    this.hullThin = this.mInkThin;
+    this.personInk = boss ? [this.own(inkMat(ink)), this.own(inkMat(ink * 0.6))] : null;
+    if (this.personInk) for (const m of this.personInk) { m.alphaHash = true; this.personMats.push(m); }
     this.screenTex = g.codeTex.clone(); // shares the code canvas's GPU upload, keeps its own scroll offset
     this.screenTex.repeat.set(1, 0.5);
     this.screenTex.offset.y = this.random();
@@ -715,7 +921,6 @@ class Office implements OfficeFigure {
     this.mSweat = basic({ color: 0xbfe7ff });
     this.mCoffeeDrop = basic({ color: 0x5a3a20 });
     this.mZed = this.own(new THREE.SpriteMaterial({ map: g.zedTex, transparent: true, depthWrite: false, toneMapped: false }));
-    this.face = { glasses: this.lookNow.glasses, boss, brow: boss ? this.lookNow.hair : INK, mustache: this.lookNow.mustache ? this.lookNow.hair : null };
     this.setLook(o.look);
 
     // ---- the frame: turned in 3D so the camera sees his face and the monitor (see the header)
@@ -743,7 +948,7 @@ class Office implements OfficeFigure {
     this.coffee = new THREE.Mesh(g.coffee, mCoffee);
     this.deskMug.add(this.coffee);
     if (boss) {
-      const plate = this.add(this.desk, g.nameplate, this.mTie, thin);
+      const plate = this.add(this.desk, g.nameplate, this.mPlate ?? this.mTie, thin);
       plate.position.set(0, DESK_Y + 0.0225, 0.6);
       const dc = (this.deskClipboard = G());
       this.desk.add(dc);
@@ -789,28 +994,30 @@ class Office implements OfficeFigure {
     this.backPivot.position.set(0, SEAT_Y, -0.19);
     this.add(this.backPivot, boss ? g.bossBack : g.back, mChair, 1);
 
-    // ---- the body
-    const hips = G(), spine = G(), chest = G(), neck = G(), head = G();
+    // ---- the body (the boss's person takes the dissolving ink, see `hull`)
+    if (this.personInk) [this.hull, this.hullThin] = this.personInk;
+    const hips = (this.hips = G()), spine = G(), chest = (this.chest = G()), neck = G(), head = G();
     root.add(hips); hips.position.y = HIP_Y; hips.add(spine); spine.add(chest); chest.position.y = 0.16; chest.add(neck); neck.position.y = 0.17; neck.add(head); head.position.y = 0.05;
     this.add(hips, g.pelvis, this.mSlacks, 1);
-    const torso = this.add(spine, g.torso, boss ? this.mJacket : this.mShirt, 1);
-    torso.scale.set(boss ? 1.12 : 1, 1, boss ? 0.86 : 0.78);
-    if (g.belt && !boss) this.add(spine, g.belt, mShoe, 0).scale.set(1, 0.8, 1);
+    this.torso = this.add(spine, g.torso, boss ? this.mJacket : this.mShirt, 1);
+    this.torso.scale.set(1, 1, 0.78); // the boss's suit and blazer: showVariant()
+    if (g.belt && !boss) this.add(spine, g.belt, this.mShoe, 0).scale.set(1, 0.8, 1);
     if (g.collar) this.add(chest, g.collar, this.mShirt, thin).scale.set(1, 0.85, 1);
     if (boss) {
       const vee = this.add(chest, g.vee, this.mShirt, 0);
       vee.rotation.set(Math.PI, Math.PI / 6 + Math.PI, 0);
       vee.position.set(0, 0.1, 0.118);
       vee.scale.set(1, 1, 0.2);
+    } else {
+      // the boss's tie is the man's own part (buildManager)
+      this.add(chest, g.tieKnot, this.mTie, thin).position.set(0, 0.162, 0.108);
+      const blade = this.add(chest, g.tieBlade, this.mTie, 0);
+      blade.position.set(0, 0.152, 0.114);
+      blade.rotation.x = -0.08;
     }
-    const front = boss ? 0.012 : 0;
-    this.add(chest, g.tieKnot, this.mTie, thin).position.set(0, 0.162, 0.108 + front);
-    const blade = this.add(chest, g.tieBlade, this.mTie, 0);
-    blade.position.set(0, 0.152, 0.114 + front);
-    blade.rotation.x = -0.08;
     this.add(neck, g.neck, this.mSkin, 1).position.y = 0.02;
 
-    // head: the skull, the face patch, the nose, ears, hair (boss: the gray ring)
+    // head: the skull, the face patch, the nose, ears, hair (the boss's hair is the manager's own part)
     head.add(this.skull);
     this.skull.position.y = 0.15;
     this.skull.scale.set(1, 1.06, 0.98);
@@ -820,7 +1027,7 @@ class Office implements OfficeFigure {
     this.skull.add(faceMesh);
     this.add(this.skull, g.nose, this.mSkin, thin).position.set(0, -0.025, 0.148);
     if (g.ear) for (let s = -1; s <= 1; s += 2) this.add(this.skull, g.ear, this.mSkin, thin).position.set(s * 0.153, -0.01, 0);
-    this.add(this.skull, boss ? g.bossHair : g.hair, this.mHair, 1);
+    if (!boss) this.add(this.skull, g.hair, this.mHair, 1);
 
     // arms (L is -X): the worker's short sleeves and bare forearms, the boss's jacket sleeves
     const arm = (side: number): [THREE.Group, THREE.Group, THREE.Group] => {
@@ -844,7 +1051,7 @@ class Office implements OfficeFigure {
       this.add(hip, g.thigh, this.mSlacks, 1);
       const knee = G(); hip.add(knee); knee.position.y = -0.3;
       this.add(knee, g.shin, this.mSlacks, 1);
-      this.add(knee, g.shoe, mShoe, thin).position.set(0, -0.35, 0.035);
+      this.add(knee, g.shoe, this.mShoe, thin).position.set(0, -0.35, 0.035);
       return [hip, knee];
     };
     const [shL, elL, handL] = arm(-1), [shR, elR, handR] = arm(1), [hipL, kneeL] = leg(-1), [hipR, kneeR] = leg(1);
@@ -888,6 +1095,9 @@ class Office implements OfficeFigure {
       const pr = (this.printout = this.add(handL, g.sheet, mPaper, 0));
       pr.visible = false;
     }
+    this.hull = this.mInk;
+    this.hullThin = this.mInkThin;
+    if (boss) this.showVariant(this.variant);
 
     // ---- effects
     this.body.add(this.smoke);
@@ -966,7 +1176,7 @@ class Office implements OfficeFigure {
   }
 
   burst(): void {
-    if (this.state === "paused" || this.state === "ended" || this.state === "killed") return;
+    if (this.state === "paused" || this.state === "ended" || this.state === "killed" || this.swapT >= 0) return;
     if (this.shot === "frantic" && this.shotT < 0.6) return;
     this.shot = "frantic";
     this.shotT = 0;
@@ -975,14 +1185,23 @@ class Office implements OfficeFigure {
   }
 
   setLook(l: MiniLook): void {
-    const lk = (this.lookNow = officeLook(l, this.seed, this.role));
+    this.mini = l;
+    const lk = officeLook(l, this.seed, this.role, this.variant);
     this.mShirt.color.set(lk.shirt);
     this.cTie.set(lk.tie);
     this.mSlacks.color.set(lk.slacks);
     this.mJacket.color.set(lk.jacket);
+    this.mShoe.color.set(lk.shoe);
     this.cSkin.set(lk.skin);
     this.mSkin.color.copy(this.cSkin);
-    this.mHair.color.set(lk.hair);
+    // the managers' hair is their salt-and-pepper texture (white keeps it as painted)
+    this.mHair.color.set(lk.grey ? "#ffffff" : lk.hair);
+    const f = this.face, woman = this.boss && this.variant === "woman";
+    f.glasses = !lk.glasses ? "none" : this.boss && !woman ? "readers" : "frames";
+    f.brow = !this.boss ? INK : woman ? "#4a3a30" : "#4b4540";
+    f.browW = !this.boss ? 11 : woman ? 10 : 15;
+    f.lashes = woman;
+    f.lip = woman ? "#9c4552" : INK;
     // the cubicle fabric: office blue-gray with a hint of the persona; the trim is the persona color
     this.mWall.color.set("#76839a").lerp(this.cTie, 0.12);
     this.mTrim.color.copy(this.cTie);
@@ -991,7 +1210,8 @@ class Office implements OfficeFigure {
   }
 
   react(kind: ReactKind, camera: THREE.Camera): void {
-    if (this.disposed || this.state === "killed" || (kind !== "stare" && kind !== "outburst")) return;
+    // (mid-handover there is nobody at the desk to react)
+    if (this.disposed || this.state === "killed" || this.swapT >= 0 || (kind !== "stare" && kind !== "outburst")) return;
     if (this.reactKind === "outburst" && kind === "stare") return; // never cut an outburst short
     if (this.reactKind === kind && this.reactT < 0.4) return;
     this.reactKind = kind;
@@ -1004,7 +1224,32 @@ class Office implements OfficeFigure {
     this.idleSec = Number.isFinite(sec) ? Math.max(0, sec) : 0;
   }
 
-  update(_tSec: number, dt: number, motion: boolean): void {
+  setManagerVariant(v: ManagerVariant | "auto"): void {
+    if (!this.boss || this.disposed) return;
+    if (v === "auto") {
+      if (this.auto) return;
+      // back to alternating: the next handover a fresh delay from now, not one long overdue
+      this.auto = true;
+      this.want = null;
+      this.cast = recastManager(this.cast, this.swapT >= 0 ? this.swapTo : this.variant, this.clockNow);
+      this.remember(this.clockNow);
+      return;
+    }
+    if (!MANAGER_VARIANTS.includes(v)) return;
+    this.auto = false;
+    this.want = v;
+    this.remember(this.clockNow);
+  }
+
+  get managerVariant(): ManagerVariant | null {
+    return this.boss ? this.variant : null;
+  }
+
+  get handingOver(): boolean {
+    return this.swapT >= 0;
+  }
+
+  update(tSec: number, dt: number, motion: boolean): void {
     if (this.disposed) return;
     const d = motion && Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0;
     this.life += d;
@@ -1020,6 +1265,8 @@ class Office implements OfficeFigure {
         this.snapshot(BLEND_S, false);
       }
     }
+    // ---- the manager on duty: a due or pinned handover starts at a quiet moment and plays over everything
+    const sw = this.boss ? this.manage(tSec, d, motion) : null;
 
     // ---- the clip: the state's, the activity's, or the idle behavior; a change blends from the last pose
     const base = officeClipFor(this.role, this.state, this.activity, this.idleSec);
@@ -1048,7 +1295,7 @@ class Office implements OfficeFigure {
       }
     }
     const baseT = officeClipTime(clip, motion ? this.clipT : OFFICE_STILL_T[base]);
-    const live = this.shot === null;
+    const live = this.shot === null && sw === null;
     const frantic = this.shot === "frantic";
 
     // ---- the reaction on top
@@ -1097,11 +1344,13 @@ class Office implements OfficeFigure {
     }
     if (rs && motion && rs.shake > 0) o[0] += 0.018 * Math.sin(this.life * 90) * rs.shake;
     if (rs && rs.look > 0.001) this.lookAtCamera(o, rs);
+    if (sw) applyManagerSwap(o, sw);
     this.apply(o);
+    if (sw) this.hips.position.set(sw.x, HIP_Y + sw.lift, sw.z);
     this.backPivot.rotation.x = Math.min(0, o[O_SPINE]!) * 0.8;
 
     // ---- the face: redrawn only when the emotion, the blink step or the gaze bucket changes
-    const emotion = rs?.emotion ?? info.emotion;
+    const emotion = sw ? "content" : rs?.emotion ?? info.emotion;
     if (motion) {
       this.blinkIn -= d;
       this.blinkAge += d;
@@ -1113,7 +1362,7 @@ class Office implements OfficeFigure {
     const emo = OFFICE_EMOTIONS[emotion];
     const staring = rs !== null && rs.look > 0.5;
     const bl = emo.shape === "open" && !staring ? blinkStep(this.blinkAge) : 0; // a stare never blinks
-    const gb = gazeBucket(info.gaze * (1 - (rs?.look ?? 0)));
+    const gb = gazeBucket(sw ? 0 : info.gaze * (1 - (rs?.look ?? 0)));
     const key = officeFaceKey(emotion, bl, gb);
     if (key !== this.faceKeyNow) {
       this.faceKeyNow = key;
@@ -1134,6 +1383,11 @@ class Office implements OfficeFigure {
     this.faceTex.dispose();
     this.screenTex.dispose();
     releaseGeo(this.detail);
+    if (this.boss) {
+      liveBosses = Math.max(0, liveBosses - 1);
+      this.remember(performance.now() / 1000);
+      for (const v of MANAGER_VARIANTS) if (this.managerGeo[v]) releaseManagerGeo(this.detail, v);
+    }
   }
 
   // ------------------------------------------------------------------------------------------ internals
@@ -1147,8 +1401,92 @@ class Office implements OfficeFigure {
   private add(parent: THREE.Object3D, geo: THREE.BufferGeometry, mat: THREE.Material, ink: 0 | 1 | 2): THREE.Mesh {
     const m = new THREE.Mesh(geo, mat);
     parent.add(m);
-    if (ink !== 0) m.add(new THREE.Mesh(geo, ink === 1 ? this.mInk : this.mInkThin));
+    if (ink !== 0) m.add(new THREE.Mesh(geo, ink === 1 ? this.hull : this.hullThin));
     return m;
+  }
+
+  /** Remember this boss's cast (a pinned manager still waiting counts as on duty), for a rebuild or a second boss. */
+  private remember(now: number): void {
+    const cast = !this.auto && this.want ? { ...this.cast, variant: this.want } : this.cast;
+    castMemo = { cast, goneAt: now, auto: this.auto };
+  }
+
+  /** The boss's schedule and handover: returns this frame's handover sample, or null when none plays. */
+  private manage(tSec: number, d: number, motion: boolean): SwapSample | null {
+    const now = Number.isFinite(tSec) && tSec > 0 ? (this.clockNow = tSec) : this.clockNow;
+    if (this.swapT >= 0) {
+      if (!motion) { this.finishSwap(); return null; } // reduced motion mid-handover: done at once
+      this.swapT += d;
+      const s = managerSwapAt(this.swapT, this.sw);
+      if (s.incoming && this.variant !== this.swapTo) this.showVariant(this.swapTo);
+      if (s.done) { this.finishSwap(); return null; }
+      this.setFade(s.alpha);
+      return s;
+    }
+    if (this.auto && managerSwapDue(this.cast, now)) this.want = otherManager(this.variant);
+    const to = this.want;
+    if (to === null) return null;
+    if (to === this.variant) { this.want = null; return null; }
+    if (!managerSwapReady(this.state, this.reactKind !== null, this.shot !== null)) return null;
+    this.want = null;
+    this.cast = recastManager(this.cast, to, now);
+    this.remember(now);
+    if (!motion) { this.showVariant(to); return null; } // reduced motion: a plain swap
+    this.swapTo = to;
+    this.swapT = 0;
+    return managerSwapAt(0, this.sw);
+  }
+
+  private finishSwap(): void {
+    if (this.variant !== this.swapTo) this.showVariant(this.swapTo);
+    this.swapT = -1;
+    this.setFade(1);
+    this.hips.position.set(0, HIP_Y, 0);
+  }
+
+  private setFade(a: number): void {
+    if (a === this.fade) return;
+    this.fade = a;
+    for (const m of this.personMats) m.opacity = a;
+  }
+
+  /** Put manager `v` at the desk: his or her own parts (built on first need), the cut of the suit, the hair's
+   *  texture, the colors and the face. */
+  private showVariant(v: ManagerVariant): void {
+    const parts = (this.managerParts[v] ??= this.buildManager(v));
+    for (const m of MANAGER_VARIANTS) for (const p of this.managerParts[m] ?? []) p.visible = false;
+    for (const p of parts) p.visible = true;
+    this.variant = v;
+    const woman = v === "woman";
+    this.torso.scale.set(woman ? 1.05 : 1.12, 1, 0.86);
+    this.joints[J_SHL]!.position.x = woman ? -0.18 : -0.19;
+    this.joints[J_SHR]!.position.x = woman ? 0.18 : 0.19;
+    this.mHair.map = this.managerGeo[v]!.hairTex;
+    this.setLook(this.mini);
+  }
+
+  /** Manager `v`'s own parts on the shared rig: the hair; the man's tie, or the woman's scarf and earrings. They
+   *  take the dissolving ink, and the shared geometry stays acquired until dispose(). */
+  private buildManager(v: ManagerVariant): THREE.Object3D[] {
+    const mg = (this.managerGeo[v] = acquireManagerGeo(this.detail, v));
+    const g = this.geo, thin: 0 | 2 = this.tier.smallInk ? 2 : 0;
+    if (this.personInk) [this.hull, this.hullThin] = this.personInk;
+    const parts: THREE.Object3D[] = [this.add(this.skull, mg.hair, this.mHair, 1)];
+    if (mg.scarf && mg.earrings) {
+      const gold = this.own(new THREE.MeshToonMaterial({ gradientMap: this.grad, toneMapped: false, color: "#d9b24c", alphaHash: true, opacity: this.fade }));
+      this.personMats.push(gold);
+      parts.push(this.add(this.chest, mg.scarf, this.mTie, thin), this.add(this.skull, mg.earrings, gold, 0));
+    } else {
+      const knot = this.add(this.chest, g.tieKnot, this.mTie, thin);
+      knot.position.set(0, 0.162, 0.12);
+      const blade = this.add(this.chest, g.tieBlade, this.mTie, 0);
+      blade.position.set(0, 0.152, 0.126);
+      blade.rotation.x = -0.08;
+      parts.push(knot, blade);
+    }
+    this.hull = this.mInk;
+    this.hullThin = this.mInkThin;
+    return parts;
   }
 
   /** A clipboard in its own XY plane: the checklist faces -Z (the reader), the board's back faces +Z. */
@@ -1227,6 +1565,11 @@ class Office implements OfficeFigure {
     this.mTie.color.copy(this.cTie).lerp(DEAD_GRAY, 0.75 * this.dead);
     this.mTie.emissive.copy(this.mTie.color);
     this.mTie.emissiveIntensity = this.glow;
+    if (this.mPlate) {
+      this.mPlate.color.copy(this.mTie.color);
+      this.mPlate.emissive.copy(this.mTie.color);
+      this.mPlate.emissiveIntensity = this.glow;
+    }
     this.mTrim.emissiveIntensity = (0.12 + this.glow) * (1 - 0.8 * this.dead);
     // the outburst's red face; the worker's face catches the screen's glow while he works
     this.mSkin.color.copy(this.cSkin).lerp(RAGE, 0.55 * (rs?.red ?? 0));

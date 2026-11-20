@@ -8508,3 +8508,45 @@ body.ald-dragging .ald-head{cursor:grabbing}
 @media (prefers-reduced-motion: reduce){
   .viz-auto-hint{animation:none}
 }
+/* ============================== P-VIZ.5 (ADR-0629): Visualize panel beside its node, auto-compact header ==============================
+   No new layers: the panel keeps z 5 in .viz-stage and the View menu stays a .popover (95).
+   The node panel sits BESIDE its node (viz_view.followPanel + viz_panel_place): data-side is the side of the node it
+   is on, so its tail sits on the opposite edge at --viz-tail from the top, pointing at the node, and the card
+   leans back on that edge (--viz-ry), toward the node. .flip glides a side change; every other frame follows the
+   camera without lag. */
+.viz-panel-card{transform:rotateX(2deg) rotateY(var(--viz-ry));transform-origin:0 50%}
+.viz-panel[data-side=left] .viz-panel-card{transform-origin:100% 50%}
+.viz-panel-card::after{left:-7px;top:var(--viz-tail);bottom:auto;margin:-6px 0 0;border:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.viz-panel[data-side=left] .viz-panel-card::after{left:auto;right:-7px;border:0;border-top:1px solid var(--line);border-right:1px solid var(--line)}
+.viz-panel.flip{transition:left 260ms var(--ease-out),top 260ms var(--ease-out)}
+/* The header (viz_view.fitHead) measures itself and sets data-viz-fit to the widest density that fits on one row:
+   wide (everything labeled), medium (no subtitle, the census as one chip, Record and Recordings as icons with their
+   tooltips), narrow (2D/3D, Anime/Professional and Auto camera as icons; Record and Recordings move into the View
+   menu; the census chip ellipsizes). Nothing in it ever wraps (invariant #11), and the close X stays pinned at the
+   far right even if the row still has to scroll. */
+.viz-head{gap:10px}
+.viz-head .orbit-title{flex:none;white-space:nowrap}
+.viz-head .viz-census{flex:none}
+.viz-census-full{display:inline-flex;align-items:center;gap:6px}
+.viz-census-one{display:none}
+.viz-head .viz-seg button{display:inline-flex;align-items:center;gap:5px}
+.viz-head .viz-seg .ic,.viz-auto .ic{display:none}
+.viz-head [data-viz-close]{position:sticky;right:0;flex:none}
+.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .orbit-sub,
+.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .viz-census-full,
+.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) :is([data-viz-rec],[data-viz-recs])>span{display:none}
+.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .viz-census-one{display:inline-block}
+.viz-head[data-viz-fit=narrow]{gap:6px;padding-left:10px;padding-right:10px}
+.viz-head[data-viz-fit=narrow] .viz-census{flex:0 1 auto;min-width:0;overflow:hidden}
+.viz-head[data-viz-fit=narrow] .viz-census>.viz-chip{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.viz-head[data-viz-fit=narrow] .viz-seg button{padding:4px 7px}
+.viz-head[data-viz-fit=narrow] :is(.viz-seg button,.viz-auto)>span{display:none}
+.viz-head[data-viz-fit=narrow] :is(.viz-seg,.viz-auto) .ic{display:block}
+.viz-head[data-viz-fit=narrow] .viz-auto{position:relative;padding:4px 7px}
+.viz-head[data-viz-fit=narrow] .viz-auto input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0}
+.viz-head[data-viz-fit=narrow] :is([data-viz-rec],[data-viz-recs]){display:none}
+/* Record and Recordings inside the View menu (narrow header only). */
+.viz-vmenu-row{display:flex;align-items:center;gap:6px}
+@media (prefers-reduced-motion: reduce){
+  .viz-panel.flip{transition:none}
+}

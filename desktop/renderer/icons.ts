@@ -188,6 +188,21 @@ const RAW: Record<string, string> = {
   // record (a ring around a filled dot) and play (a triangle)
   record: "<circle cx='12' cy='12' r='7.5'/><circle cx='12' cy='12' r='3.6' fill='currentColor' stroke='none'/>",
   play: P("M8.5 5.8v12.4l10-6.2z"),
+  // P-VIZ.5 (ADR-0629): the Fleet board layouts, one shape each. Side by side: two tall panes; grid of four:
+  // two by two; focus: one large pane and a strip of small ones; free: three offset cards of different sizes.
+  layoutSide: P("M4 5.5h7v13H4z") + P("M13 5.5h7v13h-7z"),
+  layoutGrid4: P("M4 4.5h7v6.5H4z") + P("M13 4.5h7v6.5h-7z") + P("M4 13h7v6.5H4z") + P("M13 13h7v6.5h-7z"),
+  layoutFocus: P("M4 4.5h11v15H4z") + P("M17 4.5h3v4h-3z") + P("M17 10h3v4h-3z") + P("M17 15.5h3v4h-3z"),
+  layoutFree: "<rect x='3.5' y='4' width='9' height='7' rx='1'/>"
+    + "<rect x='10' y='8.5' width='10.5' height='8' rx='1' fill='currentColor' fill-opacity='.18'/>"
+    + "<rect x='5' y='14' width='6.5' height='6' rx='1'/>",
+  // P-VIZ.5: the compact Visualize header. 2D: a folded map seen from above; 3D: a cube; Anime: a sparkle;
+  // Professional: a briefcase; Auto camera: a video camera.
+  view2d: P("M4 6.5l5-2 6 2 5-2v13l-5 2-6-2-5 2z") + P("M9 4.5v13") + P("M15 6.5v13"),
+  view3d: P("M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7z") + P("M4.5 7.7 12 12l7.5-4.3") + P("M12 12v8.5"),
+  styleAnime: P("M11 3.5c.6 4.2 2.3 5.9 6.5 6.5-4.2.6-5.9 2.3-6.5 6.5-.6-4.2-2.3-5.9-6.5-6.5 4.2-.6 5.9-2.3 6.5-6.5z") + P("M18.5 15.5v4") + P("M16.5 17.5h4"),
+  stylePro: P("M4 8h16v10.5H4z") + P("M9 8V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2") + P("M4 12.5h16"),
+  autoCamera: P("M3.5 7.5h11v9h-11z") + P("M14.5 10.5l6-3v9l-6-3z"),
 };
 
 // Action glyphs that read as "do something now" - they get the .ic-action hook

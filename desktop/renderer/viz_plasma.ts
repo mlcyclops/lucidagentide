@@ -1,42 +1,47 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_plasma.ts - P-VIZ.4 (ADR-0626): the Visualize edges, drawn in one of two styles.
+// desktop/renderer/viz_plasma.ts - P-VIZ.4 (ADR-0626), P-VIZ.5 (ADR-0630): the Visualize edges, drawn in one
+// of two styles.
 //
-//   plasma (the anime scene): a glowing plasma conduit along the edge's curve. A tube with its own shader
+//   plasma (the anime scene): a thin glowing plasma conduit along the edge's curve. A tube with its own shader
 //     (additive, a fresnel edge glow, domain-warped noise flowing from the producer to its parent, and two
-//     counter-rotating helical bands, so it visibly spins). Always there: calm at idle (slim, dim, desaturated,
-//     drifting slowly), scaling continuously with the edge's est. tok/s intensity (thicker, brighter, faster
-//     spin and flow, a saturated body with a white-hot filament). The color runs from the source's persona
-//     color into the target's. Spinning plasma pulses (an orb with a rotating three-lobed corona) travel
-//     from source to target, their rate and size following the intensity. A surge fires a big burst pulse
-//     (with spokes) and a flare along the whole conduit (a bright wave front crossing it, which the full
-//     tier's bloom turns into a flash); the scene keeps its lightning arcs on top.
-//   fiber (the professional scene): a reflective silver fiber-optic cable (a metal MeshPhysicalMaterial with
-//     low roughness, the room environment's reflections and a bump-mapped sheathing segment every 0.3 units)
-//     carrying rapid red light pulses: short bright red streaks with a soft glow, aligned with the cable on
-//     screen, their rate following the intensity. Idle shows an occasional faint red flicker. A surge sends
-//     a burst train of red pulses and a brief red glow along the cable.
-// 2D draws the same tube squashed flat (a ribbon that reads from the top-down camera); the plasma shader
-// derives its fresnel analytically there.
+//     counter-rotating helical bands, so it visibly spins). Always there: a hairline glow at idle (dim,
+//     desaturated, drifting slowly), scaling continuously with the edge's est. tok/s intensity (a little
+//     thicker, brighter, faster spin and flow, a saturated body with a white-hot filament). The color runs
+//     from the source's persona color into the target's. Around it stream TOKEN PARTICLES: small bright
+//     dots, most spiraling around the conduit, every third passing back and forth through its core, in the
+//     same persona gradient; their rate, speed, size and swirl follow the intensity (a sparse trickle at idle).
+//     Small spinning plasma pulses (an orb with a rotating three-lobed corona) travel among them. A surge
+//     fires a burst pulse (with spokes), sprays a burst of token particles outward, and flares the whole
+//     conduit (a bright wave front crossing it, which the full tier's bloom turns into a flash); the scene
+//     keeps its lightning arcs on top.
+//   fiber (the professional scene): a small thin line (a crisp 1 px gray-silver line, darker in the light
+//     theme) carrying streaming red light particles: fast tight red streaks aligned with the line on screen,
+//     their rate and speed following the intensity. Idle shows an occasional faint red particle. A surge sends
+//     a burst train of red streaks and tints the line red for a moment.
+// 2D draws the conduit squashed flat (a ribbon that reads from the top-down camera; the plasma shader derives
+// its fresnel analytically there) and flattens the token particles' swirl the same way; the line is flat.
 //
 // Budgets (viz_plasma_math.edgeBudget): the tier sets rings, sides, noise octaves, the warp, the halo shell and
-// the pulse pool. Reduced motion freezes the shader's phases and spawns no pulses: the conduits hold a static
-// glow and say what is happening by brightness and color only.
+// the one particle pool (orbs plus stream particles). Reduced motion freezes the shader's phases and spawns no
+// particles: the edges hold a static glow or line and say what is happening by brightness and color only.
 //
-// Allocation: one geometry per edge, rewritten in place only when its curve moves; one instanced draw for
-// every pulse; nothing allocated per frame. remove() and dispose() free every geometry, material and texture.
+// Allocation: one geometry per edge, rewritten in place only when its curve moves (the fiber line shares the
+// center line's buffer); one instanced draw for every particle of every edge; nothing allocated per frame.
+// remove() and dispose() free every geometry and material.
 
 import * as THREE from "three";
 import {
-  arcLengths, edgeBudget, FIBER_R, FIBER_TRAIN, FIBER_TRAIN_MS, FLAT_SQUASH, flareFront, flareLevel, IDLE_I, plasmaLook,
-  pointAt, pulseRate, pulseSize, pulseSpeed, raySegment, sampleCircle, sampleQuadratic, smoothK, tubeIndex, writeTube,
+  arcLengths, edgeBudget, FIBER_TRAIN, FIBER_TRAIN_MS, FLAT_SQUASH, flareFront, flareLevel, IDLE_I, LINE_PICK_R, plasmaLook,
+  pointAt, pulseRate, pulseSize, pulseSpeed, raySegment, sampleCircle, sampleQuadratic, smoothK, TOKEN_SURGE,
+  TOKEN_THROUGH_EVERY, tokenOrbit, tokenRate, tokenSize, tokenSpeed, TUBE_REF, tubeIndex, writeTube,
   type EdgeDetail, type EdgeStyle, type PlasmaLook, type TubeOut,
 } from "./viz_plasma_math.ts";
 
 export interface EdgeFxOpts {
   detail: EdgeDetail;
-  /** The tier's flow budget (viz_model.VizTierOpts.particles); the pulse pool is sized from it. */
+  /** The tier's flow budget (viz_model.VizTierOpts.particles); the particle pool is sized from it. */
   particles: number;
   motion: boolean;
   /** The light theme: normal blending instead of additive, no halo shell. */
@@ -66,7 +71,8 @@ export interface EdgeFx {
   remove(c: EdgeConduit): void;
   setStyle(style: EdgeStyle): void;
   setFlat(flat: boolean): void;
-  /** One frame at `t` ms; returns true while anything moves (an active edge, a pulse in flight, a flare). */
+  /** One frame at `t` ms; returns true while anything moves fast (an active edge, its particles, a burst, a
+   *  flare). An idle edge's slow trickle of particles alone keeps the scene on its idle cadence. */
   update(t: number, dt: number): boolean;
   dispose(): void;
 }
@@ -181,8 +187,10 @@ void main() {
   gl_FragColor = linearToOutputTexel(gl_FragColor);
 }`;
 
-// Pulses: camera-facing quads (view space, so the same in perspective and orthographic). A plasma orb spins its
-// corona (iP.z); a fiber streak stretches along the cable's on-screen direction, its head leading.
+// Particles: camera-facing quads (view space, so the same in perspective and orthographic). iP.w is the kind:
+// 0 orb, 1 fiber streak, 2 burst orb, 3 token. A plasma orb spins its corona (iP.z); a fiber streak stretches
+// along the line's on-screen direction, its head leading; a token is a soft dot with a hot core, drawn out a
+// little along its path.
 const PULSE_VS = /* glsl */ `
 attribute vec3 iPos;
 attribute vec3 iTan;
@@ -205,7 +213,7 @@ void main() {
   float dl = length(d);
   vec2 ax = dl > 1e-5 ? d / dl : vec2(1.0, 0.0);
   vec2 ay = vec2(-ax.y, ax.x);
-  float stretch = abs(iP.w - 1.0) < 0.5 ? 3.6 : 1.0;
+  float stretch = abs(iP.w - 1.0) < 0.5 ? 3.6 : iP.w > 2.5 ? 1.7 : 1.0;
   c.xy += ax * position.x * iP.x * stretch + ay * position.y * iP.x;
   gl_Position = projectionMatrix * c;
 }`;
@@ -227,6 +235,13 @@ void main() {
     float core = exp(-vQ.y * vQ.y * 70.0) * body;
     a = body * w + core;
     c = vCol * body * w * 1.3 + vec3(1.0, 0.82, 0.78) * core * 1.4;
+  } else if (vKind > 2.5) {
+    float r2 = dot(vQ, vQ);
+    if (r2 > 1.0) discard;
+    float glow = exp(-r2 * 5.0);
+    float core = exp(-r2 * 28.0);
+    a = glow + core;
+    c = vCol * glow + vec3(1.0) * core * 0.9;
   } else {
     float cs = cos(vSpin);
     float sn = sin(vSpin);
@@ -254,14 +269,18 @@ const DEAD = new THREE.Color("#2a2d33");
 const WHITE = new THREE.Color("#ffffff");
 /** The fiber's light: a hot red, pushed past 1 in the dark theme so the full tier's bloom catches it. */
 const FIBER_RED = new THREE.Color("#ff2a1a");
-const SILVER = new THREE.Color("#c9ced6");
-const DEAD_SILVER = new THREE.Color("#3a3d42");
+/** The fiber line: a neutral gray-silver, slightly darker in the light theme so it holds on a pale page. */
+const LINE_DARK = new THREE.Color("#a7aeb8");
+const LINE_LIGHT = new THREE.Color("#6a717a");
+const LINE_DEAD = new THREE.Color("#4a4e55");
 /** The noise repeats every 64 cells along the conduit, so the flow phases wrap there without a jump. */
 const WRAP_FLOW = 64;
 /** The helices use uSpin and 1.35 * uSpin: 20 turns is a whole number of turns for both. */
 const WRAP_SPIN = Math.PI * 2 * 20;
-const SHEATH_PERIOD = 0.3;
-const KIND_ORB = 0, KIND_STREAK = 1, KIND_BURST = 2;
+const KIND_ORB = 0, KIND_STREAK = 1, KIND_BURST = 2, KIND_TOKEN = 3;
+/** At most this many particles owed by one edge are spawned in a single frame (a long frame does not dump a
+ *  clump of them at the source). */
+const SPAWN_CAP = 8;
 
 interface Rec extends EdgeConduit {
   slot: number;
@@ -277,11 +296,14 @@ interface Rec extends EdgeConduit {
   side: Float32Array;
   plasma: THREE.ShaderMaterial;
   halo: THREE.Mesh | null;
-  fiber: THREE.MeshPhysicalMaterial;
+  line: THREE.Line;
+  lineGeom: THREE.BufferGeometry;
+  lineAttr: THREE.BufferAttribute;
+  lineMat: THREE.LineBasicMaterial;
   target: number; lvl: number; frozen: boolean; dead: boolean;
   colA: THREE.Color; colB: THREE.Color;
   flow: number; drift: number; spin: number; breath: number; radius: number;
-  surgeAt: number; acc: number; train: number; trainNext: number;
+  surgeAt: number; acc: number; tokAcc: number; tokSeq: number; train: number; trainNext: number;
 }
 
 export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
@@ -296,23 +318,18 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
   const slots: (Rec | null)[] = [];
   const indexCache = new Map<number, Uint16Array>();
   let now = performance.now();
+  /** The plasma conduit's material in the fiber style: draws nothing, so the mesh stays the edge's pick target. */
+  const hidden = new THREE.MeshBasicMaterial({ visible: false });
 
-  // The sheathing: a groove every SHEATH_PERIOD along the cable (uv.x is arc length), as a bump map.
-  const sheathPx = new Uint8Array(16 * 4);
-  for (let i = 0; i < 16; i++) {
-    const v = i < 2 ? 40 : i < 3 ? 150 : 255;
-    sheathPx.set([v, v, v, 255], i * 4);
-  }
-  const sheath = new THREE.DataTexture(sheathPx, 16, 1);
-  sheath.wrapS = sheath.wrapT = THREE.RepeatWrapping;
-  sheath.magFilter = sheath.minFilter = THREE.LinearFilter;
-  sheath.repeat.set(1 / SHEATH_PERIOD, 1);
-  sheath.needsUpdate = true;
-
-  // ---------------------------------------------------------------- the pulse pool (one instanced draw)
-  const P = B.pulses;
+  // ---------------------------------------------------------------- the particle pool (one instanced draw)
+  // Stream particles (tokens, fiber streaks) spawn only while fewer than B.tokens are alive, so B.pulses of
+  // the pool always stay free for the orbs, the surge bursts and the fiber's surge train.
+  const P = B.pulses + B.tokens;
   const pEdge = new Int32Array(P), pU = new Float32Array(P), pV = new Float32Array(P), pSize = new Float32Array(P);
   const pKind = new Uint8Array(P), pSpin = new Float32Array(P), pSpinV = new Float32Array(P), pA = new Float32Array(P);
+  // a token's swirl: orbit radius, its growth (a surge spray flies outward), ellipse (1 or -1 a spiral either
+  // way round, 0 a pass back and forth through the core) and the axis it swings on
+  const pR = new Float32Array(P), pDR = new Float32Array(P), pE = new Float32Array(P), pPsi = new Float32Array(P);
   let live = 0;
   let pulses: THREE.Mesh | null = null;
   let iPos: THREE.InstancedBufferAttribute | null = null, iTan: THREE.InstancedBufferAttribute | null = null;
@@ -342,20 +359,40 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
     parent.add(pulses);
   }
 
-  function spawn(r: Rec, kind: number, size: number, speed: number, alpha: number): void {
-    if (live >= P) return;
+  /** A new particle at the edge's source, or -1 when the pool (or, for a stream particle, its share) is full. */
+  function spawn(r: Rec, kind: number, size: number, speed: number, alpha: number, stream: boolean): number {
+    if (live >= (stream ? B.tokens : P)) return -1;
     const i = live++;
     pEdge[i] = r.slot; pU[i] = 0; pV[i] = speed; pSize[i] = size; pKind[i] = kind; pA[i] = alpha;
     pSpin[i] = Math.random() * Math.PI * 2;
     pSpinV[i] = (Math.random() < 0.5 ? -1 : 1) * (2.5 + 9 * r.lvl);
+    pR[i] = 0; pDR[i] = 0; pE[i] = 1; pPsi[i] = 0;
+    return i;
   }
 
-  /** Swap-remove pulse i (the last live one takes its place). */
+  /** A token particle: most spiral around the conduit (either way round), every TOKEN_THROUGH_EVERY-th swings
+   *  back and forth through its core; a spray particle starts at the core and flies outward. */
+  function spawnToken(r: Rec, spray: boolean): void {
+    const k = spray ? Math.max(r.lvl, 0.6) : r.lvl;
+    const speed = tokenSpeed(k, r.len) * (0.8 + 0.4 * Math.random()) * (spray ? 1.4 : 1);
+    const i = spawn(r, KIND_TOKEN, tokenSize(k) * (0.7 + 0.6 * Math.random()), speed, spray ? 1.3 : 0.55 + 0.6 * r.lvl, true);
+    if (i < 0) return;
+    const through = r.tokSeq++ % TOKEN_THROUGH_EVERY === 0;
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    pE[i] = through ? 0 : dir;
+    pPsi[i] = Math.random() * Math.PI * 2;
+    pSpinV[i] = dir * (through ? 3 + 7 * k : 4 + 14 * k);
+    if (spray) { pR[i] = 0.02; pDR[i] = 0.5 + Math.random(); }
+    else pR[i] = tokenOrbit(k) * (0.5 + 0.8 * Math.random());
+  }
+
+  /** Swap-remove particle i (the last live one takes its place). */
   function kill(i: number): void {
     const j = --live;
     if (i === j) return;
     pEdge[i] = pEdge[j]!; pU[i] = pU[j]!; pV[i] = pV[j]!; pSize[i] = pSize[j]!;
     pKind[i] = pKind[j]!; pSpin[i] = pSpin[j]!; pSpinV[i] = pSpinV[j]!; pA[i] = pA[j]!;
+    pR[i] = pR[j]!; pDR[i] = pDR[j]!; pE[i] = pE[j]!; pPsi[i] = pPsi[j]!;
   }
 
   // ---------------------------------------------------------------- edges
@@ -369,8 +406,9 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
 
   function reshape(r: Rec): void {
     r.len = arcLengths(r.centers, r.n, r.arc);
-    writeTube(r.centers, r.arc, r.n, B.radial, FIBER_R, flat ? FLAT_SQUASH : 1, r.closed, r.side, r.tube);
+    writeTube(r.centers, r.arc, r.n, B.radial, TUBE_REF, flat ? FLAT_SQUASH : 1, r.closed, r.side, r.tube);
     for (const a of r.attrs) a.needsUpdate = true;
+    r.lineAttr.needsUpdate = true;
     r.plasma.uniforms.uLen!.value = r.len;
   }
 
@@ -385,9 +423,10 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
 
   function applyStyle(r: Rec): void {
     const plasma = style === "plasma";
-    r.mesh.material = plasma ? r.plasma : r.fiber;
+    r.mesh.material = plasma ? r.plasma : hidden;
     r.mesh.renderOrder = plasma ? 4 : 0;
     if (r.halo) r.halo.visible = plasma;
+    r.line.visible = !plasma;
   }
 
   const rayO = new Float64Array(3), rayD = new Float64Array(3), segA = new Float64Array(3), segB = new Float64Array(3);
@@ -410,7 +449,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
     geom.setAttribute("uv", attrs[3]!);
     geom.setIndex(indexFor(n));
     const uniforms = {
-      uRadius: { value: 0.05 }, uRef: { value: FIBER_R }, uLen: { value: 1 }, uFlat: flatU, uClosed: { value: closed ? 1 : 0 },
+      uRadius: { value: 0.02 }, uRef: { value: TUBE_REF }, uLen: { value: 1 }, uFlat: flatU, uClosed: { value: closed ? 1 : 0 },
       uI: { value: 0 }, uFlow: { value: 0 }, uDrift: { value: 0 }, uSpin: { value: 0 }, uFlare: { value: 0 }, uFront: { value: 0 },
       uGain: { value: 1 }, uLight: lightU, uColA: { value: new THREE.Color() }, uColB: { value: new THREE.Color() },
     };
@@ -421,12 +460,18 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       side: halo ? THREE.FrontSide : THREE.DoubleSide,
     });
     const plasma = plasmaMat(false);
-    const fiber = new THREE.MeshPhysicalMaterial({
-      color: SILVER, metalness: 1, roughness: 0.16, clearcoat: 0.5, clearcoatRoughness: 0.08, envMapIntensity: 1.25,
-      bumpMap: sheath, bumpScale: 0.8, emissive: FIBER_RED, emissiveIntensity: 0,
-    });
     const mesh: THREE.Mesh = new THREE.Mesh(geom, plasma);
     mesh.frustumCulled = false;
+    // The fiber line draws the center line itself: its position attribute wraps the same samples.
+    const centers = new Float32Array(n * 3);
+    const lineGeom = new THREE.BufferGeometry();
+    const lineAttr = new THREE.BufferAttribute(centers, 3).setUsage(THREE.DynamicDrawUsage);
+    lineGeom.setAttribute("position", lineAttr);
+    const lineMat = new THREE.LineBasicMaterial({ color: light ? LINE_LIGHT : LINE_DARK, transparent: true, opacity: 0.9, depthWrite: false });
+    const line = new THREE.Line(lineGeom, lineMat);
+    line.frustumCulled = false;
+    line.raycast = () => {};
+    mesh.add(line);
     let halo: THREE.Mesh | null = null;
     if (B.halo && !light) {
       halo = new THREE.Mesh(geom, plasmaMat(true));
@@ -439,12 +484,12 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
     if (slot < 0) { slot = slots.length; slots.push(null); }
     const r: Rec = {
       mesh, slot, closed, n, geom, attrs, tube,
-      centers: new Float32Array(n * 3), arc: new Float32Array(n), len: 1,
+      centers, arc: new Float32Array(n), len: 1,
       shape: new Float32Array(9).fill(Number.NaN), side: new Float32Array([1, 0, 0]),
-      plasma, halo, fiber,
+      plasma, halo, line, lineGeom, lineAttr, lineMat,
       target: 0, lvl: 0, frozen: false, dead: false, colA: new THREE.Color(), colB: new THREE.Color(),
-      flow: 0, drift: Math.random() * WRAP_FLOW, spin: Math.random() * Math.PI * 2, breath: 0, radius: 0.05,
-      surgeAt: -1e9, acc: 0, train: 0, trainNext: 0,
+      flow: 0, drift: Math.random() * WRAP_FLOW, spin: Math.random() * Math.PI * 2, breath: 0, radius: 0.02,
+      surgeAt: -1e9, acc: 0, tokAcc: 0, tokSeq: 0, train: 0, trainNext: 0,
       bezier(p0, p1, p2, side) {
         if (!moved(r, p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z)) return;
         r.side[0] = side.x; r.side[1] = side.y; r.side[2] = side.z;
@@ -464,8 +509,10 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
         // events arrive between frames (the loop may be parked): the rAF timeline is performance.now()'s
         r.surgeAt = performance.now();
         if (!motion || r.frozen || r.dead) return;
-        if (style === "plasma") spawn(r, KIND_BURST, 0.62, pulseSpeed("plasma", 1, r.len) * 1.3, 1.6);
-        else { r.train = FIBER_TRAIN; r.trainNext = r.surgeAt; }
+        if (style === "plasma") {
+          spawn(r, KIND_BURST, 0.34, pulseSpeed("plasma", 1, r.len) * 1.3, 1.6, false);
+          for (let k = 0; k < TOKEN_SURGE; k++) spawnToken(r, true);
+        } else { r.train = FIBER_TRAIN; r.trainNext = r.surgeAt; }
       },
     };
     // Picking: the distance from the ray to the center line, within the scene's line threshold plus the radius.
@@ -479,7 +526,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
         raySegment(rayO, rayD, segA, segB, rayHit);
         if (rayHit[0]! < best) { best = rayHit[0]!; bestT = rayHit[1]!; }
       }
-      const thr = (rc.params.Line?.threshold ?? 0.12) + (style === "plasma" ? r.radius : FIBER_R);
+      const thr = (rc.params.Line?.threshold ?? 0.12) + (style === "plasma" ? r.radius : LINE_PICK_R);
       if (best <= thr * thr) hits.push({ distance: bestT, point: rc.ray.at(bestT, new THREE.Vector3()), object: mesh });
     };
     applyStyle(r);
@@ -497,7 +544,8 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
     r.geom.dispose();
     r.plasma.dispose();
     (r.halo?.material as THREE.Material | undefined)?.dispose();
-    r.fiber.dispose();
+    r.lineGeom.dispose();
+    r.lineMat.dispose();
   }
 
   // ---------------------------------------------------------------- per frame
@@ -518,7 +566,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       r.spin = (r.spin + look.spin * dt) % WRAP_SPIN;
       r.breath = (r.breath + look.breath * dt) % (Math.PI * 2);
     }
-    r.radius = look.radius * (1 + (moving ? 0.07 * Math.sin(r.breath) : 0)) + flare * 0.07;
+    r.radius = look.radius * (1 + (moving ? 0.07 * Math.sin(r.breath) : 0)) + flare * 0.025;
     const plasma = style === "plasma";
     if (plasma) {
       const u = r.plasma.uniforms;
@@ -535,24 +583,32 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       else if (r.frozen) { a.copy(ICE); b.copy(ICE); }
       else { a.copy(r.colA); b.copy(r.colB); }
     } else {
-      const f = r.fiber;
-      f.color.copy(r.dead ? DEAD_SILVER : SILVER);
-      f.roughness = r.dead ? 0.55 : 0.16;
-      f.emissive.copy(r.frozen ? ICE : FIBER_RED);
-      f.emissiveIntensity = r.dead ? 0 : r.frozen ? 0.12 : 0.03 + 0.25 * r.lvl * r.lvl + flare * 1.2;
+      // the line: neutral, a touch of red while busy, a red flash at a surge; frosty when paused, dim when dead
+      const m = r.lineMat;
+      if (r.dead) { m.color.copy(LINE_DEAD); m.opacity = 0.45; }
+      else {
+        m.color.copy(light ? LINE_LIGHT : LINE_DARK);
+        if (r.frozen) m.color.lerp(ICE, 0.5);
+        else m.color.lerp(FIBER_RED, Math.min(1, 0.12 * r.lvl + 0.85 * flare));
+        m.opacity = 0.9;
+      }
     }
     if (moving && P > 0) {
-      r.acc += pulseRate(style, r.lvl) * dt;
+      r.acc = Math.min(SPAWN_CAP, r.acc + pulseRate(style, r.lvl) * dt);
       while (r.acc >= 1) {
         r.acc -= 1;
-        if (plasma) spawn(r, KIND_ORB, pulseSize("plasma", r.lvl), pulseSpeed("plasma", r.lvl, r.len), 1);
-        else if (r.lvl < IDLE_I) spawn(r, KIND_STREAK, pulseSize("fiber", 0), pulseSpeed("fiber", 0, r.len), 0.3);
-        else spawn(r, KIND_STREAK, pulseSize("fiber", r.lvl), pulseSpeed("fiber", r.lvl, r.len), 1);
+        if (plasma) spawn(r, KIND_ORB, pulseSize("plasma", r.lvl), pulseSpeed("plasma", r.lvl, r.len), 1, false);
+        else if (r.lvl < IDLE_I) spawn(r, KIND_STREAK, pulseSize("fiber", 0), pulseSpeed("fiber", 0, r.len), 0.3, true);
+        else spawn(r, KIND_STREAK, pulseSize("fiber", r.lvl), pulseSpeed("fiber", r.lvl, r.len), 1, true);
+      }
+      if (plasma) {
+        r.tokAcc = Math.min(SPAWN_CAP, r.tokAcc + tokenRate(r.lvl) * dt);
+        while (r.tokAcc >= 1) { r.tokAcc -= 1; spawnToken(r, false); }
       }
       while (r.train > 0 && now >= r.trainNext) {
         r.train--;
         r.trainNext += FIBER_TRAIN_MS;
-        spawn(r, KIND_STREAK, pulseSize("fiber", 1) * 1.2, pulseSpeed("fiber", 1, r.len), 1.5);
+        spawn(r, KIND_STREAK, pulseSize("fiber", 1) * 1.2, pulseSpeed("fiber", 1, r.len), 1.5, false);
       }
     }
     return (moving && r.lvl > IDLE_I) || flare > 0 || r.train > 0;
@@ -561,20 +617,47 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
   function updatePulses(dt: number): boolean {
     if (!pulses || !iPos || !iTan || !iCol || !iP || !pulseGeom) return false;
     const pos = iPos.array as Float32Array, tg = iTan.array as Float32Array, col = iCol.array as Float32Array, prm = iP.array as Float32Array;
+    const squash = flat ? FLAT_SQUASH : 1;
+    let busy = false;
     for (let i = 0; i < live;) {
       const r = slots[pEdge[i]!];
       if (!r) { kill(i); continue; }
+      const moving = !r.dead && !r.frozen;
       if (r.dead) {
         pA[i] = pA[i]! * Math.exp(-dt * 8);
         if (pA[i]! < 0.02) { kill(i); continue; }
-      } else if (!r.frozen) pU[i] = pU[i]! + pV[i]! * dt;
+      } else if (moving) pU[i] = pU[i]! + pV[i]! * dt;
       const u = pU[i]!;
       if (u >= 1) { kill(i); continue; }
-      pSpin[i] = (pSpin[i]! + pSpinV[i]! * dt) % (Math.PI * 2);
+      const kind = pKind[i]!;
+      if (moving) {
+        pSpin[i] = (pSpin[i]! + pSpinV[i]! * dt) % (Math.PI * 2);
+        if (pDR[i]! > 0) { pR[i] = pR[i]! + pDR[i]! * dt; pDR[i] = pDR[i]! * Math.exp(-dt * 2.5); }
+        // an idle edge's slow trickle alone does not need the full frame rate
+        if (r.lvl > IDLE_I || kind === KIND_BURST || pDR[i]! > 0.05 || r.train > 0) busy = true;
+      }
       pointAt(r.centers, r.arc, r.n, u * r.len, r.closed, at, tan);
       const env = r.closed ? Math.sqrt(Math.sin(Math.PI * u)) : smoothstepJs(0, 0.06, u) * (1 - smoothstepJs(0.9, 1, u));
-      const kind = pKind[i]!;
+      if (kind === KIND_TOKEN) {
+        // the swirl around the center line: side = T x up (horizontal), N = T x side; in 2D the N part (mostly
+        // vertical) is squashed like the ribbon, so the swirl reads as a weave from the top-down camera. The
+        // swirl narrows into the cube walls at an open edge's ends.
+        const tx = tan[0]!, ty = tan[1]!, tz = tan[2]!;
+        let sx = -tz, sz = tx;
+        const hl = Math.hypot(sx, sz);
+        if (hl > 1e-3) { sx /= hl; sz /= hl; } else { sx = r.side[0]!; sz = r.side[2]!; }
+        const nx = ty * sz, ny = tz * sx - tx * sz, nz = -ty * sx;
+        const taper = r.closed ? 1 : 0.25 + 0.75 * smoothstepJs(0, 0.12, u) * (1 - smoothstepJs(0.88, 1, u));
+        const R = pR[i]! * taper, th = pSpin[i]!, psi = pPsi[i]!;
+        const c1 = R * Math.cos(th), c2 = R * pE[i]! * Math.sin(th);
+        const cp = Math.cos(psi), sp = Math.sin(psi);
+        const a = c1 * cp - c2 * sp, b = (c1 * sp + c2 * cp) * squash;
+        at[0] = at[0]! + sx * a + nx * b;
+        at[1] = at[1]! + ny * b;
+        at[2] = at[2]! + sz * a + nz * b;
+      }
       if (kind === KIND_STREAK) tint.copy(r.frozen ? ICE : FIBER_RED).multiplyScalar(light ? 1 : 2.2);
+      else if (kind === KIND_TOKEN) tint.copy(r.frozen ? ICE : r.colA).lerp(r.frozen ? ICE : r.colB, u).lerp(WHITE, 0.35).multiplyScalar(light ? 0.85 : 1.8);
       else tint.copy(r.frozen ? ICE : r.colA).lerp(r.frozen ? ICE : r.colB, u).lerp(WHITE, 0.3).multiplyScalar(light ? 1 : 1.6);
       pos[i * 3] = at[0]!; pos[i * 3 + 1] = at[1]!; pos[i * 3 + 2] = at[2]!;
       tg[i * 3] = tan[0]!; tg[i * 3 + 1] = tan[1]!; tg[i * 3 + 2] = tan[2]!;
@@ -593,7 +676,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       upload(iCol, live * 3);
       upload(iP, live * 4);
     }
-    return live > 0;
+    return busy;
   }
 
   /** Upload only the live part of an instance attribute. */
@@ -610,7 +693,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       if (next === style) return;
       style = next;
       live = 0;
-      for (const r of slots) if (r) { r.acc = 0; r.train = 0; applyStyle(r); }
+      for (const r of slots) if (r) { r.acc = 0; r.tokAcc = 0; r.train = 0; applyStyle(r); }
     },
     setFlat(next) {
       if (next === flat) return;
@@ -630,7 +713,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       slots.length = 0;
       live = 0;
       if (pulses) { parent.remove(pulses); pulseGeom?.dispose(); (pulses.material as THREE.Material).dispose(); }
-      sheath.dispose();
+      hidden.dispose();
       indexCache.clear();
     },
   };

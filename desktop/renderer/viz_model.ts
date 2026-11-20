@@ -738,8 +738,30 @@ export type Vec3 = [number, number, number];
 // 70 px per unit spreads the orbit wide enough that a mini Lucid's glass cube (1.5 units) never overlaps
 // its neighbor from the default camera; Main's helpers ring the hub outside its own frame.
 const STAGE_W = 1600, STAGE_H = 1000, PX_PER_UNIT = 70;
-const SUB_RING_AGENT = 1.9, SUB_RING_HUB = 3.1;
-const SPHERE_R = 5.6, SUB_SPHERE = 1.5;
+const SPHERE_R = 5.6;
+
+/** The glass cube's side before the kind's scale (viz_scene draws it; the figure is about 1 unit tall). */
+export const CUBE = 1.5;
+export const KIND_SCALE: Record<VizKind, number> = { hub: 1.35, agent: 1, subagent: 0.58 };
+/** Half a cube's side for a kind. */
+export function cubeHalf(kind: VizKind): number { return (CUBE * KIND_SCALE[kind]) / 2; }
+
+// P-VIZ.5 (ADR-0630): subagents keep their distance. Every subagent sits at least SUB_CLEAR times the two
+// cubes' combined half-sizes from its siblings and its parent (so 1.45 x 0.87 = 1.26 units between two
+// subagents, 1.72 to an agent, 2.10 to Main), with rings that grow with the helper count instead of packing.
+const SUB_CLEAR = 1.45;
+/** The smallest rings: a lane's helpers, Main's helpers (its ring and sphere), a lane's sphere in 3D. */
+const SUB_RING_AGENT = 2.4, SUB_RING_HUB = 3.6, SUB_SPHERE = 2.1;
+/** A lane's helpers fan this far apart (radians) on the arc facing away from the hub, up to SUB_FAN_MAX. */
+const SUB_FAN_STEP = 0.8, SUB_FAN_MAX = Math.PI * 1.4;
+
+/** The ring radius around a parent: at least `floor`, clear of the parent's cube, and wide enough that two
+ *  helpers `step` radians apart on it are SUB_CLEAR apart (chord = 2 r sin(step / 2)). */
+function subRing(parent: VizKind, floor: number, step: number): number {
+  const sib = SUB_CLEAR * 2 * cubeHalf("subagent");
+  const chord = step > 0 ? sib / (2 * Math.sin(Math.min(Math.PI, step) / 2)) : 0;
+  return Math.max(floor, SUB_CLEAR * (cubeHalf(parent) + cubeHalf("subagent")), chord);
+}
 
 /** Where every node sits. Orbit: the hub at the center and the agents on the orbit's own ellipse
  *  (orbitSlots, in the XZ plane, so the 2D top-down view IS the orbit map), subagents on small rings around
@@ -767,22 +789,28 @@ export function layoutPositions(nodes: readonly { id: string; kind: VizKind; par
   for (const [parentId, kids] of byParent) {
     const c = pos.get(parentId);
     if (!c) continue;
-    const r = parentId === hub?.id ? SUB_RING_HUB : SUB_RING_AGENT;
+    const aroundHub = parentId === hub?.id;
+    const parentKind: VizKind = aroundHub ? "hub" : "agent";
+    const n = kids.length;
     if (layout === "orbit") {
       // Main's helpers ring the hub; a lane's helpers fan out on the arc facing away from the hub, so they
       // never sit on the lane's own line to Main.
-      const aroundHub = parentId === hub?.id;
       const base = aroundHub ? -Math.PI / 2 : Math.atan2(c[2], c[0]);
-      const spread = Math.min(Math.PI * 1.4, 0.75 * (kids.length - 1));
+      const step = n < 2 ? 0 : aroundHub ? (Math.PI * 2) / n : Math.min(SUB_FAN_MAX, SUB_FAN_STEP * (n - 1)) / (n - 1);
+      const r = subRing(parentKind, aroundHub ? SUB_RING_HUB : SUB_RING_AGENT, step);
       kids.forEach((k, i) => {
-        const ang = aroundHub
-          ? base + (i / kids.length) * Math.PI * 2
-          : base + (kids.length === 1 ? 0 : (i / (kids.length - 1) - 0.5) * spread);
+        const ang = aroundHub ? base + i * step : base + (i - (n - 1) / 2) * step;
         pos.set(k.id, [c[0] + Math.cos(ang) * r, c[1] + 0.35, c[2] + Math.sin(ang) * r]);
       });
     } else {
-      const pts = fibonacciSphere(kids.length);
-      const rr = parentId === hub?.id ? SUB_RING_HUB : SUB_SPHERE;
+      const pts = fibonacciSphere(n);
+      // the sphere is scaled until its closest pair of helpers is SUB_CLEAR apart
+      let near = Infinity;
+      for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        near = Math.min(near, Math.hypot(pts[i]![0] - pts[j]![0], pts[i]![1] - pts[j]![1], pts[i]![2] - pts[j]![2]));
+      }
+      const sib = SUB_CLEAR * 2 * cubeHalf("subagent");
+      const rr = Math.max(subRing(parentKind, aroundHub ? SUB_RING_HUB : SUB_SPHERE, 0), Number.isFinite(near) ? sib / near : 0);
       kids.forEach((k, i) => { const p = pts[i]!; pos.set(k.id, [c[0] + p[0] * rr, c[1] + p[1] * rr, c[2] + p[2] * rr]); });
     }
   }

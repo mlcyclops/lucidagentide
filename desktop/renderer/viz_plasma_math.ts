@@ -1,15 +1,17 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_plasma_math.ts - P-VIZ.4 (ADR-0626): the pure math behind the Visualize edges
-// (viz_plasma.ts draws them). How a conduit looks at a given est. tok/s intensity, how often and how fast its
-// pulses travel, the per-tier budgets, and the allocation-free geometry: sampling an edge's path, the tube
-// (or the flat 2D ribbon) around it, walking it by arc length, and the ray distance used for picking.
+// desktop/renderer/viz_plasma_math.ts - P-VIZ.4 (ADR-0626), P-VIZ.5 (ADR-0630): the pure math behind the
+// Visualize edges (viz_plasma.ts draws them). How a conduit looks at a given est. tok/s intensity, how often
+// and how fast its pulses and token particles travel, how high an edge arcs, the per-tier budgets, and the
+// allocation-free geometry: sampling an edge's path, the tube (or the flat 2D ribbon) around it, walking it by
+// arc length, and the ray distance used for picking.
 //
 // Intensity is the edge's 0..1 value from viz_model.nodeIntensity (est. tok/s on a log scale), so every curve
 // here is continuous in it: no thresholds that make a conduit jump when a stream speeds up.
 
-/** The edge styles: an anime plasma conduit, or a professional silver fiber-optic cable with red light pulses. */
+/** The edge styles: an anime plasma conduit with token particles, or a professional thin line with streaming
+ *  red light particles. */
 export type EdgeStyle = "plasma" | "fiber";
 
 /** The scene style (viz_model.VizStyle) picks the edge style. */
@@ -34,23 +36,42 @@ export interface EdgeBudget {
   warp: boolean;
   /** A soft outer glow shell around each plasma conduit (one extra draw per edge). */
   halo: boolean;
-  /** Pulses alive at once across every edge (one instanced draw). */
+  /** Plasma orbs and surge bursts alive at once across every edge, reserved inside the one particle pool. */
   pulses: number;
+  /** Stream particles alive at once across every edge: the plasma's token particles, the fiber's red streaks. */
+  tokens: number;
 }
 
-/** The tier's edge budget. `particles` is the tier's flow budget (viz_model.VizTierOpts.particles): the pulses
- *  are its successor and take one fortieth of it; reduced motion (no motion) has no pulses at all. */
+/** The tier's edge budget. `particles` is the tier's flow budget (viz_model.VizTierOpts.particles): the orbs
+ *  take one fortieth of it, the stream particles one fifth (full 150 + 1200, reduced 63 + 500, minimal
+ *  15 + 120), all in one instanced draw; reduced motion (no motion) has no particles at all. */
 export function edgeBudget(detail: EdgeDetail, particles: number, motion: boolean): EdgeBudget {
   const pulses = motion ? Math.max(0, Math.round(particles / 40)) : 0;
-  if (detail === "full") return { rings: 64, loopRings: 72, radial: 12, octaves: 4, warp: true, halo: true, pulses };
-  if (detail === "reduced") return { rings: 40, loopRings: 48, radial: 8, octaves: 2, warp: true, halo: false, pulses };
-  return { rings: 24, loopRings: 32, radial: 6, octaves: 1, warp: false, halo: false, pulses };
+  const tokens = motion ? Math.max(0, Math.round(particles / 5)) : 0;
+  if (detail === "full") return { rings: 64, loopRings: 72, radial: 12, octaves: 4, warp: true, halo: true, pulses, tokens };
+  if (detail === "reduced") return { rings: 40, loopRings: 48, radial: 8, octaves: 2, warp: true, halo: false, pulses, tokens };
+  return { rings: 24, loopRings: 32, radial: 6, octaves: 1, warp: false, halo: false, pulses, tokens };
+}
+
+// ------------------------------------------------------------------------------------ arcs
+
+/** The control point of an edge's quadratic bezier sits edgeLift above the chord's midpoint and edgeBow to its
+ *  side, both proportional to the chord length `len` (after trimming to the cube walls). An agent's stream
+ *  loops clearly over (a quadratic peaks at half its control lift: 0.17 x len, double P-VIZ.4's 0.08); a
+ *  subagent's short link to its parent stays lower (0.1 x len). */
+export function edgeLift(len: number, sub: boolean): number {
+  return Math.max(0, len) * (sub ? 0.2 : 0.34);
+}
+export function edgeBow(len: number, sub: boolean): number {
+  return Math.max(0, len) * (sub ? 0.06 : 0.09);
 }
 
 // ------------------------------------------------------------------------------------ looks
 
-/** The fiber cable's radius (world units); the geometry is written at this radius, the plasma shader rescales. */
-export const FIBER_R = 0.045;
+/** The reference radius the tube geometry is written at (world units); the plasma shader rescales it. */
+export const TUBE_REF = 0.045;
+/** The fiber line's pick radius (world units), added to the scene's line threshold. */
+export const LINE_PICK_R = 0.03;
 /** In 2D the tube is squashed to a flat ribbon (its vertical half-axis over its horizontal one). */
 export const FLAT_SQUASH = 0.22;
 
@@ -65,11 +86,12 @@ export interface PlasmaLook {
   breath: number;
 }
 
-/** The plasma conduit at intensity `i`: calm and slim at idle (a slow drift and a lazy spin), thicker and
- *  spinning hard at a burst. Writes into `out` (no allocation per frame). */
+/** The plasma conduit at intensity `i`: a hairline glow at idle (a slow drift and a lazy spin), still modest
+ *  at a burst (about a third of P-VIZ.4's 0.05..0.16) but spinning hard; the token particles around it carry
+ *  the volume. Writes into `out` (no allocation per frame). */
 export function plasmaLook(i: number, out: PlasmaLook): PlasmaLook {
   const k = clamp01(i);
-  out.radius = 0.05 + 0.11 * k;
+  out.radius = 0.017 + 0.037 * k;
   out.spin = 0.4 + 11 * Math.pow(k, 1.3);
   out.flow = 0.18 + 3.4 * k;
   out.breath = 0.9 + 6 * k;
@@ -85,27 +107,58 @@ export const FIBER_TRAIN_MS = 45;
 export const IDLE_I = 0.02;
 
 /** Pulses per second leaving one edge's source. Plasma: none at idle (the conduit only drifts), a few orbs a
- *  second at a burst. Fiber: an occasional faint flicker at idle, a rapid stream at a burst. */
+ *  second at a burst. Fiber (its stream particles): an occasional faint red particle at idle, a dense stream
+ *  at a burst. */
 export function pulseRate(style: EdgeStyle, i: number): number {
   const k = clamp01(i);
   if (style === "plasma") return k < IDLE_I ? 0 : 0.3 + 4.2 * k * k;
-  return k < IDLE_I ? FIBER_IDLE_RATE : 1.5 + 22 * k * k;
+  return k < IDLE_I ? FIBER_IDLE_RATE : 2 + 46 * k * k;
 }
 
 /** A pulse's speed in path fractions per second. Plasma orbs glide (about 2.4 s at a trickle down to 0.8 s at
- *  a burst on a 6 unit edge); fiber light is fast (7 to 21 world units per second). */
+ *  a burst on a 6 unit edge); fiber light is fast (8 to 26 world units per second). */
 export function pulseSpeed(style: EdgeStyle, i: number, len: number): number {
   const k = clamp01(i);
   const L = Math.max(0.1, len);
   if (style === "plasma") return 1 / ((2.4 - 1.6 * k) * Math.min(1.6, Math.max(0.6, L / 6)));
-  return Math.min(1 / 0.18, (7 + 14 * k) / L);
+  return Math.min(1 / 0.18, (8 + 18 * k) / L);
 }
 
-/** A pulse's billboard half-size (world units). */
+/** A pulse's billboard half-size (world units): small plasma orbs, tight fiber streaks. */
 export function pulseSize(style: EdgeStyle, i: number): number {
   const k = clamp01(i);
-  return style === "plasma" ? 0.13 + 0.2 * k : 0.07 + 0.05 * k;
+  return style === "plasma" ? 0.075 + 0.1 * k : 0.035 + 0.025 * k;
 }
+
+/** Token particles per second leaving one plasma edge's source: a sparse trickle at idle (the stream is never
+ *  dead), a dense swarm at a burst. */
+export function tokenRate(i: number): number {
+  const k = clamp01(i);
+  return 1.2 + 70 * Math.pow(k, 1.5);
+}
+
+/** A token particle's speed in path fractions per second: 1.6 to 7 world units per second, never crossing a
+ *  short edge in under a quarter second. */
+export function tokenSpeed(i: number, len: number): number {
+  const k = clamp01(i);
+  return Math.min(4, (1.6 + 5.4 * k) / Math.max(0.1, len));
+}
+
+/** A token particle's billboard half-size (world units). */
+export function tokenSize(i: number): number {
+  return 0.022 + 0.018 * clamp01(i);
+}
+
+/** How far a token particle's orbit sits from the conduit's center line (world units): just outside the
+ *  conduit at idle, a wider swirl at a burst. Each particle scales it by its own 0.5..1.3 jitter. */
+export function tokenOrbit(i: number): number {
+  return 0.05 + 0.09 * clamp01(i);
+}
+
+/** Of every this many token particles, one passes through the conduit's core instead of spiraling around it. */
+export const TOKEN_THROUGH_EVERY = 3;
+/** A plasma surge sprays this many token particles at once. */
+export const TOKEN_SURGE = 36;
 
 /** The surge flare along a whole conduit: 1 at the surge, decaying over about a second; 0 before it. */
 export const FLARE_MS = 1100;
@@ -187,7 +240,7 @@ export function pointAt(c: Float32Array, arc: Float32Array, n: number, s: number
 // ------------------------------------------------------------------------------------ the tube
 
 export interface TubeOut {
-  /** Surface positions at FIBER_R (n * (radial + 1) * 3). */
+  /** Surface positions at the reference radius (n * (radial + 1) * 3). */
   pos: Float32Array;
   /** Lighting normals (the squashed ellipse's true normals). */
   nrm: Float32Array;

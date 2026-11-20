@@ -8,8 +8,9 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  arcLengths, edgeBudget, edgeStyleFor, FIBER_IDLE_RATE, FLARE_MS, flareFront, flareLevel, plasmaLook, pointAt,
-  pulseRate, pulseSize, pulseSpeed, raySegment, sampleCircle, sampleQuadratic, tubeIndex, writeTube, type PlasmaLook, type TubeOut,
+  arcLengths, edgeBow, edgeBudget, edgeLift, edgeStyleFor, FIBER_IDLE_RATE, FLARE_MS, flareFront, flareLevel, plasmaLook, pointAt,
+  pulseRate, pulseSize, pulseSpeed, raySegment, sampleCircle, sampleQuadratic, tokenOrbit, tokenRate, tokenSize, tokenSpeed,
+  tubeIndex, writeTube, type PlasmaLook, type TubeOut,
 } from "./viz_plasma_math.ts";
 
 const look = (i: number): PlasmaLook => plasmaLook(i, { radius: 0, spin: 0, flow: 0, breath: 0 });
@@ -37,6 +38,24 @@ describe("styles and budgets", () => {
     expect(full.halo && !red.halo && !min.halo).toBe(true);
     expect(min.warp).toBe(false);
     expect(edgeBudget("full", 0, false).pulses).toBe(0);
+    // The stream particles come out of the same tier budget, many more of them than orbs, none without motion.
+    expect(full.tokens).toBeGreaterThan(full.pulses * 4);
+    expect(full.pulses + full.tokens).toBeLessThanOrEqual(6000);
+    expect(red.tokens).toBeLessThan(full.tokens);
+    expect(min.tokens).toBeLessThan(red.tokens);
+    expect(min.tokens).toBeGreaterThan(0);
+    expect(edgeBudget("full", 6000, false).tokens).toBe(0);
+  });
+});
+
+describe("arcs", () => {
+  test("an agent's stream arcs clearly over, scaling with distance; a subagent's link stays lower", () => {
+    // a quadratic peaks at half its control lift: well above a tenth of the chord, double P-VIZ.4's 0.08
+    expect(edgeLift(10, false) / 2).toBeGreaterThanOrEqual(10 * 0.15);
+    expect(edgeLift(10, false)).toBeCloseTo(2 * edgeLift(5, false), 9);
+    expect(edgeLift(4, true)).toBeLessThan(edgeLift(4, false));
+    expect(edgeBow(4, true)).toBeLessThan(edgeBow(4, false));
+    expect(edgeLift(-1, false)).toBe(0);
   });
 });
 
@@ -53,6 +72,21 @@ describe("looks", () => {
     }
     expect(look(1).spin / look(0).spin).toBeGreaterThan(10); // a lazy drift at idle, a hard spin at a burst
     expect(look(2).radius).toBe(look(1).radius); // clamped
+    // P-VIZ.5: thin: a hairline at idle, still modest at a burst
+    expect(look(0).radius).toBeLessThan(0.025);
+    expect(look(1).radius).toBeLessThan(0.07);
+  });
+
+  test("token particles: denser, faster, bigger and wider with intensity; never zero at idle", () => {
+    expect(tokenRate(0)).toBeGreaterThan(0);
+    expect(tokenRate(1)).toBeGreaterThan(tokenRate(0) * 20);
+    expect(tokenRate(1)).toBeGreaterThan(pulseRate("plasma", 1) * 5); // a swarm around a few orbs
+    expect(tokenSpeed(1, 6)).toBeGreaterThan(tokenSpeed(0, 6));
+    expect(tokenSpeed(1, 0.2)).toBeLessThanOrEqual(4); // never a single-frame blink on a short edge
+    expect(tokenSize(1)).toBeGreaterThan(tokenSize(0));
+    expect(tokenSize(1)).toBeLessThan(pulseSize("plasma", 0)); // small next to the orbs
+    expect(tokenOrbit(1)).toBeGreaterThan(tokenOrbit(0));
+    expect(tokenOrbit(0)).toBeGreaterThan(look(0).radius); // they swirl around the conduit, not inside it
   });
 
   test("idle plasma sends no pulses; idle fiber flickers now and then", () => {

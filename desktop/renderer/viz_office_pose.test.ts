@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // desktop/renderer/viz_office_pose.test.ts - P-VIZ.4 (ADR-0627): the office cast's poses, clips, activity and idle
-// mapping, reaction timelines, head-look math, effect timing and the outfit mapping.
+// mapping, reaction timelines, head-look math, effect timing and the outfit mapping; P-VIZ.5 (ADR-0631): the two
+// managers' looks, the seeded alternation schedule and the handover timeline.
 
 import { describe, expect, test } from "bun:test";
 import {
-  activityClip, CRT_S, crtOff, ENTER_SLAM_S, enterTapBoost, IDLE_SLEEP_S, idleClip, LOOK_PITCH_MAX, LOOK_YAW_MAX, lookAngles, MUG_DROP_S,
+  activityClip, applyManagerSwap, MANAGER_HAIR, MANAGER_REBUILD_S, MANAGER_SWAP_MAX_S, MANAGER_SWAP_MIN_S, MANAGER_SWAP_S, MANAGER_VARIANTS,
+  managerSwapAt, managerSwapDelay, managerSwapDue, managerSwapReady, OFFICE_STATES, openManagerCast, otherManager, recastManager, seededUnit,
+  STAND_POSE, SWAP_AT_S, SWAP_WALK_X, type ManagerCast, type SwapSample,
+  CRT_S, crtOff, ENTER_SLAM_S, enterTapBoost, IDLE_SLEEP_S, idleClip, LOOK_PITCH_MAX, LOOK_YAW_MAX, lookAngles, MUG_DROP_S,
   MUG_GRAB_S, mugHeld, OFFICE_CLIP_NAMES, OFFICE_CLIPS, OFFICE_EMOTION_NAMES, OFFICE_EMOTIONS, OFFICE_HAIRS, OFFICE_POSE_LEN, OFFICE_POSE_VECTORS,
   OFFICE_SKINS, OFFICE_STILL_T, officeClipDone, officeClipFor, officeClipTime, officeFaceKey, officeJointOffset, officeLook, officeTempo,
   officeTransitionShot, OUTBURST_S, PAGE_FLIPS, pageFlipAt, paperFlight, PRINT_DROP_S, PRINT_GRAB_S, printHeld, reactAt, reactLength,
@@ -281,13 +285,157 @@ describe("face and outfit", () => {
         expect(relativeLuminance(w.shirt)).toBeGreaterThanOrEqual(relativeLuminance(w.tie));
         expect(OFFICE_SKINS).toContain(w.skin);
         expect(OFFICE_HAIRS).toContain(w.hair);
-        expect(w.mustache).toBe(false);
+        expect(w.grey).toBeNull();
         expect(officeLook(mini, seed, "worker")).toEqual(w);
       }
-      const b = officeLook(mini, 3, "boss");
-      expect(b.tie).toBe(mini.accent);
-      expect(relativeLuminance(b.jacket)).toBeLessThan(0.08);
-      expect(b.glasses && b.mustache).toBe(true);
+      for (const v of MANAGER_VARIANTS) {
+        const b = officeLook(mini, 3, "boss", v);
+        expect(b.tie).toBe(mini.accent);
+        expect(relativeLuminance(b.jacket)).toBeLessThan(0.08);
+        expect(relativeLuminance(b.shirt)).toBeGreaterThan(0.8);
+        // salt and pepper: a dark base with clearly lighter grey streaks
+        expect(b.hair).toBe(MANAGER_HAIR[v].base);
+        expect(b.grey).toBe(MANAGER_HAIR[v].grey);
+        expect(relativeLuminance(b.hair)).toBeLessThan(0.05);
+        expect(relativeLuminance(b.grey!)).toBeGreaterThan(0.4);
+      }
+      const man = officeLook(mini, 3, "boss", "man"), woman = officeLook(mini, 3, "boss", "woman");
+      expect(man.jacket).not.toBe(woman.jacket);
+      expect(man.shirt).not.toBe(woman.shirt);
+      expect(officeLook(mini, 3, "boss")).toEqual(man);
     }
+  });
+
+  test("the man wears reading glasses more often than not, the woman less often; both vary by seed", () => {
+    const mini = lookFor("#38bdf8");
+    let man = 0, woman = 0;
+    for (let seed = 0; seed < 400; seed++) {
+      if (officeLook(mini, seed, "boss", "man").glasses) man++;
+      if (officeLook(mini, seed, "boss", "woman").glasses) woman++;
+    }
+    expect(man).toBeGreaterThan(200);
+    expect(man).toBeLessThan(400);
+    expect(woman).toBeGreaterThan(0);
+    expect(woman).toBeLessThan(200);
+  });
+});
+
+describe("the manager on duty", () => {
+  test("seeded draws are deterministic, in [0, 1), and differ across draws", () => {
+    const seen = new Set<number>();
+    for (let k = 0; k < 50; k++) {
+      const r = seededUnit(1234, k);
+      expect(r).toBeGreaterThanOrEqual(0);
+      expect(r).toBeLessThan(1);
+      expect(seededUnit(1234, k)).toBe(r);
+      seen.add(r);
+    }
+    expect(seen.size).toBe(50);
+    for (const bad of [Number.NaN, Infinity, -5]) expect(Number.isFinite(seededUnit(bad, 0))).toBe(true);
+  });
+
+  test("a new open flips a seeded coin: both managers open, roughly half the time each", () => {
+    let woman = 0;
+    for (let seed = 0; seed < 2000; seed++) {
+      const c = openManagerCast(seed, 100, null);
+      expect(openManagerCast(seed, 100, null)).toEqual(c);
+      if (c.variant === "woman") woman++;
+      expect(c.swaps).toBe(0);
+      expect(c.nextAt).toBeGreaterThanOrEqual(100 + MANAGER_SWAP_MIN_S);
+      expect(c.nextAt).toBeLessThanOrEqual(100 + MANAGER_SWAP_MAX_S);
+    }
+    expect(woman).toBeGreaterThan(850);
+    expect(woman).toBeLessThan(1150);
+  });
+
+  test("a rebuild right after the last boss went away keeps the cast; a later open flips again", () => {
+    const cast: ManagerCast = { variant: "woman", seed: 7, swaps: 3, nextAt: 900 };
+    const memo = { cast, goneAt: 500 };
+    expect(openManagerCast(99, 500.5, memo)).toBe(cast);
+    expect(openManagerCast(99, 500 + MANAGER_REBUILD_S, memo)).toBe(cast);
+    expect(openManagerCast(99, 500 + MANAGER_REBUILD_S + 1, memo)).toEqual(openManagerCast(99, 500 + MANAGER_REBUILD_S + 1, null));
+    // a memo from another clock (gone "in the future") is not trusted
+    expect(openManagerCast(99, 400, memo)).toEqual(openManagerCast(99, 400, null));
+  });
+
+  test("every handover is 8 to 15 minutes after the last, seeded, and alternates the managers", () => {
+    let c = openManagerCast(42, 0, null);
+    const delays = new Set<number>();
+    let now = 0;
+    for (let i = 0; i < 30; i++) {
+      now = c.nextAt;
+      expect(managerSwapDue(c, now - 0.01)).toBe(false);
+      expect(managerSwapDue(c, now)).toBe(true);
+      const next = recastManager(c, otherManager(c.variant), now);
+      expect(next.variant).not.toBe(c.variant);
+      expect(next.swaps).toBe(c.swaps + 1);
+      const d = next.nextAt - now;
+      expect(d).toBeGreaterThanOrEqual(MANAGER_SWAP_MIN_S);
+      expect(d).toBeLessThanOrEqual(MANAGER_SWAP_MAX_S);
+      expect(d).toBeCloseTo(managerSwapDelay(42, next.swaps), 9);
+      delays.add(Math.round(d));
+      c = next;
+    }
+    expect(delays.size).toBeGreaterThan(20);
+    expect(managerSwapDue(c, Number.NaN)).toBe(false);
+  });
+
+  test("a handover waits for a quiet moment at the desk: never mid-reaction or mid one-shot", () => {
+    for (const s of OFFICE_STATES) {
+      expect(managerSwapReady(s, false, false)).toBe(s === "idle" || s === "working");
+      expect(managerSwapReady(s, true, false)).toBe(false);
+      expect(managerSwapReady(s, false, true)).toBe(false);
+    }
+  });
+
+  const swapAt = (t: number): SwapSample =>
+    managerSwapAt(t, { stand: 0, x: 0, lift: 0, z: 0, turn: 0, gait: 0, phase: 0, alpha: 0, incoming: false, done: false });
+
+  test("the handover: seated and solid at both ends, standing off to the side and gone at the switch", () => {
+    for (const t of [0, -1, Number.NaN]) {
+      const s = swapAt(t);
+      expect(s.stand).toBe(0); expect(s.x).toBe(0); expect(s.turn).toBe(0); expect(s.gait).toBe(0); expect(s.alpha).toBe(1);
+      expect(s.incoming).toBe(false); expect(s.done).toBe(false);
+    }
+    const mid = swapAt(SWAP_AT_S - 1e-6);
+    expect(mid.stand).toBeCloseTo(1, 6);
+    expect(mid.x).toBeCloseTo(SWAP_WALK_X, 4);
+    expect(mid.alpha).toBeCloseTo(0, 4);
+    expect(mid.incoming).toBe(false);
+    expect(swapAt(SWAP_AT_S).incoming).toBe(true);
+    const end = swapAt(MANAGER_SWAP_S);
+    expect(end.done).toBe(true);
+    expect(end.stand).toBe(0); expect(end.x).toBe(0); expect(end.turn).toBeCloseTo(0, 9); expect(end.alpha).toBe(1);
+  });
+
+  test("the incoming half mirrors the outgoing one, walking the other way; the dissolve only ever fades out", () => {
+    let alpha = 1;
+    for (let t = 0; t < SWAP_AT_S; t += 0.02) {
+      const a = swapAt(t), b = swapAt(MANAGER_SWAP_S - t);
+      expect(b.stand).toBeCloseTo(a.stand, 6);
+      expect(b.x).toBeCloseTo(a.x, 6);
+      expect(b.alpha).toBeCloseTo(a.alpha, 6);
+      expect(b.turn).toBeCloseTo(-a.turn, 6);
+      expect(a.turn).toBeGreaterThanOrEqual(0);
+      expect(a.alpha).toBeLessThanOrEqual(alpha + 1e-9);
+      alpha = a.alpha;
+    }
+  });
+
+  test("standing straightens the seated legs; seated with no stride leaves the pose alone; the stride alternates", () => {
+    const hipL = officeJointOffset("hipL"), hipR = officeJointOffset("hipR");
+    const seated = Float32Array.from(OFFICE_POSE_VECTORS.type);
+    const still = Float32Array.from(seated);
+    applyManagerSwap(still, { ...swapAt(0) });
+    expect(Array.from(still)).toEqual(Array.from(seated));
+    const up = Float32Array.from(seated);
+    applyManagerSwap(up, { ...swapAt(0), stand: 1 });
+    for (let i = 0; i < up.length; i++) expect(up[i]!).toBeCloseTo(STAND_POSE[i]!, 6);
+    expect(Math.abs(up[hipL]!)).toBeLessThan(0.1);
+    expect(seated[hipL]!).toBeLessThan(-1.2);
+    const step = Float32Array.from(seated);
+    applyManagerSwap(step, { ...swapAt(0), stand: 1, gait: 1, phase: 0.25 });
+    expect(step[hipL]! - STAND_POSE[hipL]!).toBeCloseTo(-(step[hipR]! - STAND_POSE[hipR]!), 6);
+    expect(step[hipL]!).not.toBeCloseTo(STAND_POSE[hipL]!, 2);
   });
 });

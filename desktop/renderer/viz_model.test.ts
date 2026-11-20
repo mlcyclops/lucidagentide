@@ -10,7 +10,7 @@ import { orbitSlots } from "./orbit_layout.ts";
 import type { VizBusEvent } from "./viz_bus.ts";
 import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
 import {
-  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
+  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, createOutput, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
   GONE_MS, HUB_ID, idleSeconds, OUT_CHARS, OUT_TURNS, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
   type PowerKind, type VizEvent, type VizState,
 } from "./viz_model.ts";
@@ -347,6 +347,28 @@ describe("layout", () => {
       expect(d).toBeLessThan(5.6 * 1.01);
     }
     expect(p.get("a")).not.toEqual(p.get("b"));
+  });
+  test("P-VIZ.5: subagent cubes keep clear of each other and of their parent, however many helpers", () => {
+    type K = "hub" | "agent" | "subagent";
+    for (const layout of ["orbit", "constellation"] as const) {
+      for (const parent of [HUB_ID, "a"]) {
+        for (let n = 1; n <= 12; n++) {
+          const ns: { id: string; kind: K; parent: string | null }[] = [
+            { id: HUB_ID, kind: "hub", parent: null },
+            { id: "a", kind: "agent", parent: HUB_ID },
+            { id: "b", kind: "agent", parent: HUB_ID },
+          ];
+          for (let i = 0; i < n; i++) ns.push({ id: `s${i}`, kind: "subagent", parent });
+          const p = layoutPositions(ns, layout);
+          const group = ns.filter((x) => x.id === parent || x.parent === parent && x.kind === "subagent");
+          for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) {
+            const u = p.get(group[i]!.id)!, v = p.get(group[j]!.id)!;
+            const d = Math.hypot(u[0] - v[0], u[1] - v[1], u[2] - v[2]);
+            expect(d).toBeGreaterThanOrEqual(1.3 * (cubeHalf(group[i]!.kind) + cubeHalf(group[j]!.kind)));
+          }
+        }
+      }
+    }
   });
 });
 

@@ -261,13 +261,16 @@ function moreMenuItems(): PlusItem[] {
     { id: "orbit", label: "Orbit view", icon: icon("share", 15), tip: tipValue("Orbit view", "Back to the map of the hub and its agents. Same agents, same colors: the grid and the orbit are two faces of one fleet."), run: () => openFleetOrbit() },
     // P-VIZ.1 (ADR-0622): the 3D view of the same fleet; it opens over the grid and leaves every agent as it is.
     { id: "visualize", label: "Visualize", icon: icon("visualize", 15), tip: tipValue("Visualize", "Main, these agents and their subagents in 2D or 3D, with estimated tokens flowing between them. Hover for the rate, click a node for its actions."), run: () => openViz() },
-    ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon("layout", 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
+    ...BOARD_LAYOUTS.map((l): PlusItem => ({ id: `layout-${l.id}`, label: l.id === "free" ? "Free layout" : l.label, icon: icon(LAYOUT_ICONS[l.id], 15), kbd: check(l.id === mode), tip: tipValue(l.label, LAYOUT_TIPS[l.id]), run: () => setBoardLayout(l.id) })),
     { id: "byrepo", label: "Group by repo", icon: icon("git", 15), kbd: check(groupByRepo), tip: tipValue("Group by repo", "Section the cards by the codebase each agent works on, in the same colors as the orbit. Your named groups come back when this is off."), run: () => toggleByRepo() },
     { id: "board", label: "New board", icon: icon("plus", 15), tip: tipValue("New board", "A named set of agents with its own layout. Board tabs appear once you have one."), run: () => { void addBoard(); } },
     { id: "home", label: "Open the grid first", icon: icon("star", 15), kbd: check(fleetHome() === "grid"), tip: tipValue("Open the grid first", "Make the grid what the Fleet button opens. The orbit has the same setting."), run: () => setFleetHome("grid") },
     { id: "hub", label: "Classic hub in a terminal", icon: icon("terminal", 15), tip: tipValue("Classic hub", "Opens the classic hub in a new terminal window: your agents and boards as panes, linked to this app. You can also type lucid hub in any terminal."), run: (a) => { if (a instanceof HTMLButtonElement) void openHubFrom(a, () => deps?.hubOpen()); } },
   ];
 }
+
+/** P-VIZ.5 (ADR-0629): each layout's own glyph in the More menu, drawn as the shape it gives the board. */
+const LAYOUT_ICONS: Record<BoardLayout, string> = { side: "layoutSide", grid4: "layoutGrid4", focus: "layoutFocus", free: "layoutFree" };
 
 const LAYOUT_TIPS: Record<BoardLayout, string> = {
   side: "The agents on this board fill the panel. Drag an edge to resize; double-click an edge for equal sizes.",
