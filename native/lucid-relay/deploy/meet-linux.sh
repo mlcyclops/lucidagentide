@@ -531,7 +531,7 @@ EOF
 		rm -f "$P$MARKER"
 		LUCID_RM_MARKER=""
 		# The program writes relay.json owner-only; the relay service reads it as its own user.
-		chown "root:$U" "$P$ETC/relay.json" && chmod 0640 "$P$ETC/relay.json"
+		if [ -f "$P$ETC/relay.json" ]; then chown "root:$U" "$P$ETC/relay.json" && chmod 0640 "$P$ETC/relay.json"; fi
 		# The enroll ran as root, so its lock file is root's; the relay takes the same lock at every start.
 		if [ -e "$P$STATE/fleet.lock" ]; then chown "$U:$U" "$P$STATE/fleet.lock"; fi
 		read_env "$RUN_ENV" || die "The relay program does not run on this host: $RUN_ENV is missing"
