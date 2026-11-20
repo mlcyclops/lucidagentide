@@ -221,6 +221,23 @@ fn strings(v: Option<&Value>) -> Vec<String> {
     v.and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
 }
 
+/// A reported `bootstrap`: the bare string of `hello` and `state`, or an object with `state`; "pending" otherwise.
+fn bootstrap_state_of(v: Option<&Value>) -> &str {
+    match v {
+        Some(Value::String(s)) => s,
+        Some(o) => o.get("state").and_then(Value::as_str).unwrap_or("pending"),
+        None => "pending",
+    }
+}
+
+/// A reported `bootstrap` as `{state, ...}` (an object is kept as it is; nothing reported is pending, no entries).
+fn bootstrap_object(v: Option<&Value>) -> Value {
+    match v {
+        Some(o) if o.is_object() => o.clone(),
+        _ => json!({ "state": bootstrap_state_of(v), "entries": [] }),
+    }
+}
+
 /// The audit chain keeps results as fixed words; a fleet call's result is one of the frame union's values
 /// (5.6), anything else is recorded as "failed".
 fn audit_result(r: &str) -> &'static str {
@@ -435,9 +452,15 @@ impl RelayRecord {
         })
     }
 
-    /// The bootstrap state the relay reports ("pending" or "done").
+    /// The bootstrap state the relay reports ("pending" or "done"): `hello` and `state` carry it as the bare string
+    /// (`admin_console_fleet_state_frame_v1.json`); an object with `state` is read too.
     pub fn bootstrap_state(&self) -> &str {
-        self.report.get("bootstrap").and_then(|b| b.get("state")).and_then(Value::as_str).unwrap_or("pending")
+        bootstrap_state_of(self.report.get("bootstrap"))
+    }
+
+    /// The bootstrap report as an object (`{state, ...}`) for the views and the audit.
+    fn bootstrap_view(&self) -> Value {
+        bootstrap_object(self.report.get("bootstrap"))
     }
 
     /// The relay takes writes from this console: the admin confirmed it and its own bootstrap is done (3.3).
@@ -1580,7 +1603,7 @@ impl Fleet {
         v["enrolledBy"] = Value::from(rec.enrolled_by.clone());
         v["enrolledAt"] = Value::from(rec.enrolled_at);
         v["scopeRequest"] = rec.report.get("scopeRequest").cloned().unwrap_or(Value::Null);
-        v["bootstrap"] = rec.report.get("bootstrap").cloned().unwrap_or_else(|| json!({ "state": "pending", "entries": [] }));
+        v["bootstrap"] = rec.bootstrap_view();
         v["bootstrapRosterHash"] = Value::from(rec.bootstrap_roster_hash.clone());
         v["held"] = json!(strings(rec.report.get("held")));
         v["unattested"] = json!(strings(rec.report.get("unattested")));
@@ -3073,6 +3096,7 @@ impl Fleet {
         if before.as_ref() == Some(&after) {
             return;
         }
+        let after = bootstrap_object(Some(&after));
         let anchors: Vec<Value> = after.get("entries").and_then(Value::as_array).map(|l| l.iter().filter(|e| !e["via"].is_null()).map(|e| json!({ "hint": e.get("hint"), "via": e.get("via") })).collect()).unwrap_or_default();
         self.record(c, &format!("relay {relay}"), "fleet.relay.bootstrap", Some(relay.to_owned()), json!({ "state": after.get("state"), "via": after.get("via"), "bootstrapRosterHash": after.get("bootstrapRosterHash"), "anchors": anchors }), t);
     }
@@ -4048,7 +4072,7 @@ impl Fleet {
         let e = reg.enrollments.get(id).ok_or_else(|| ApiError::with("not-found", "There is no such enrollment code."))?;
         let state = if e.state == "open" && e.expires <= t { "expired" } else { e.state.as_str() };
         let relay = e.relay.as_ref().and_then(|rid| reg.relays.get(rid)).map(|r| {
-            let mut bootstrap = r.report.get("bootstrap").cloned().filter(Value::is_object).unwrap_or_else(|| json!({ "state": "pending", "entries": [] }));
+            let mut bootstrap = r.bootstrap_view();
             if let Some(o) = bootstrap.as_object_mut() {
                 if !o.contains_key("anchored") {
                     let n = o.get("entries").and_then(Value::as_array).map(|l| l.iter().filter(|x| !x["via"].is_null()).count()).unwrap_or(0);
@@ -5857,7 +5881,7 @@ mod tests {
                 let b = self.f.book.lock();
                 (b.roster_seq, b.policy_seq)
             };
-            let body = json!({ "relayId": relay, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": scopes, "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": { "state": bootstrap }, "policySeq": ps, "rosterSeq": rs, "trustSeq": 1, "pins": [], "certNotAfter": null });
+            let body = json!({ "relayId": relay, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": scopes, "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": bootstrap, "policySeq": ps, "rosterSeq": rs, "trustSeq": 1, "pins": [], "certNotAfter": null });
             self.f.on_hello(relay, &body, "10.0.0.9", crate::codec::now_ms()).unwrap();
         }
 
@@ -6744,7 +6768,7 @@ mod tests {
         let t = crate::codec::now_ms();
         let spokes = h.seed(Product::Spokes);
         h.link.up.lock().insert(spokes.clone());
-        let hello = json!({ "relayId": spokes, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": ["read-health"], "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": { "state": "pending" }, "policySeq": 1, "rosterSeq": 0, "trustSeq": 1, "pins": [], "certNotAfter": null });
+        let hello = json!({ "relayId": spokes, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": ["read-health"], "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": "pending", "policySeq": 1, "rosterSeq": 0, "trustSeq": 1, "pins": [], "certNotAfter": null });
         assert!(h.f.on_hello(&spokes, &hello, "10.0.0.9", t).unwrap()["meetCaId"].is_null());
         let ca_id = with_ca(&h, None);
         assert_eq!(h.f.on_hello(&spokes, &hello, "10.0.0.9", t).unwrap()["meetCaId"], ca_id.as_str());
