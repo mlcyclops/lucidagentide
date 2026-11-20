@@ -1724,3 +1724,8 @@ demo-P-ASKPLUS.1: ## P-ASKPLUS.1 (ADR-0632): the Ask Lucid "+" menu opens in fro
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/popover_place.test.ts desktop/renderer/attach_ui.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
 	$(BUN) run harness/scripts/demo_pvoice2.ts
 	node --check desktop/scripts/demo_p_askplus_1.mjs
+
+.PHONY: demo-P-SPACING.1
+demo-P-SPACING.1: ## P-SPACING.1 (ADR-0633): Settings spacing audit in a running QA instance (both layouts, every category, every card and disclosure open): no touching boxes, stacked fields share a width, even card rhythm. Needs LUCID_DEMO_CDP_URL=ws://... and LUCID_DEMO_URL=http://127.0.0.1:<port>/
+	$(BUN) test $(TEST_IGNORES) tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node desktop/scripts/demo_p_spacing_1.mjs

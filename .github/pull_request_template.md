@@ -27,5 +27,6 @@ Added lines in UI files must never contain an em dash (U+2014); the gate fails w
 - [ ] **New-user path**: a first-run user can find and understand the change without reading docs
 - [ ] **Served bytes**: ran `cd desktop && bun run build-renderer`, grepped a new marker in the served `/app.js` or `/styles.css`; screenshot or recording attached
 - [ ] **Real-UI check**: drove the changed control with real input in every layout it lives in (docked, floating, narrow, wide); `elementFromPoint` proves it is on top; the check is kept as `desktop/scripts/demo_<id>.mjs`
+- [ ] **Spacing**: `auditBoxes` from `desktop/scripts/demo_p_spacing_1.mjs` passes on the changed surface in every layout (no touching boxes, stacked fields share a width, even card rhythm); Settings: `make demo-P-SPACING.1` against a QA instance
 
 Complexity count after this PR (surface: before -> after):

@@ -4472,6 +4472,30 @@ body.preview-open .thread{font-size:.9em}
 .set-coll-h:hover .set-coll-chev{color:var(--txt-2)}
 .set-coll.open .set-coll-chev{transform:rotate(180deg)}
 .set-coll-body{display:none;padding:0 12px 11px}
+/* P-SPACING.1 (ADR-0633): one spacing standard for every Settings card, checked in the running app by
+   desktop/scripts/demo_p_spacing_1.mjs. Cards sit --set-gap-card apart with --set-pad inside; every block in a
+   card body sits --set-gap-row below the one before it, so no two boxes touch; a card header is the same height
+   with or without a subtitle (a generic .set-sub rule used to push the subtitle 13px down). */
+#settings{--set-gap-card:12px;--set-pad:14px;--set-gap-row:10px}
+#settings .set-coll,#settings .set-sec{margin-bottom:var(--set-gap-card)}
+#settings .set-coll-h{padding:12px var(--set-pad);min-height:44px}
+#settings .set-coll-body{padding:0 var(--set-pad) var(--set-pad)}
+#settings .set-lbl .set-sub{margin:0}
+#settings :is(.set-coll-body,details)>*+*:not(summary){margin-top:var(--set-gap-row)}
+#settings :is(.prov-body,.wl-auth){gap:var(--set-gap-row)}
+#settings .ws-current{margin-bottom:0}
+/* A stack of field rows whose fields share one width: rows join one grid (field column, then trailing control
+   columns; --prov-trail sets how many), and a lone trailing control spans to the end so right edges line up. */
+.prov-grid{display:grid;grid-template-columns:minmax(0,1fr) repeat(var(--prov-trail,1),auto);gap:var(--set-gap-row,10px) 8px;align-items:center}
+.prov-grid>.prov-row{display:contents}
+.prov-grid>.prov-row>:first-child{grid-column:1}
+.prov-grid>.prov-row>:nth-child(2):last-child{grid-column:2 / -1}
+.prov-grid>.prov-row>:not(:first-child){justify-content:center}
+/* a labelled field row (provider config): the label takes its own line, tight to the field under it */
+.prov-grid>.prov-field>.prov-field-label{grid-column:1 / -1;margin-bottom:-6px}
+.prov-grid>.prov-field>.prov-field-label+*{grid-column:1;justify-content:normal}
+.prov-grid>.prov-field>.prov-field-label+*+:last-child{grid-column:2 / -1}
+#settings .set-tiles{gap:var(--set-gap-card)}
 .set-coll.open .set-coll-body{display:block;animation:setCollOpen var(--t-slow) var(--ease-out)}
 @keyframes setCollOpen{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 /* skeleton shimmer while a section hydrates - calm, premium sweep */

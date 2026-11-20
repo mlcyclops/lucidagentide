@@ -4533,7 +4533,7 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow || fieldsRows ? `<div class="prov-grid" style="--prov-trail:2">${keyRow}${fieldsRows}</div>` : ""}${hint}${guideRow}</div></div>`;
 }
 
 // ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
@@ -5773,9 +5773,9 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     <div class="role-seg-row">${chips}</div>
     ${hero}
     <div class="set-note">${icon("info", 12)} Shapes what you see first; nothing is ever locked away. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
-  return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
+  return setCard("profile", "Profile", "", `<div class="prov-grid"><div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
-      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
+      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
     ${managedLine}${idLine}
     ${roleRow}`, true);
 }
@@ -6107,11 +6107,13 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add an MCP server</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="mcpName" class="prov-key" placeholder="Name (e.g. Linear, internal-tools)" /></div>
         <div class="prov-row"><input id="mcpUrl" class="prov-key" placeholder="https://mcp.example.com/mcp (or /sse)" />
-          <select id="mcpTransport" class="prov-key" style="flex:none;width:84px"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
+          <select id="mcpTransport" class="prov-key" aria-label="Transport"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
         <div class="prov-row"><input id="mcpToken" class="prov-key" type="password" placeholder="Bearer token (optional)" />
           <button class="btn-mini ok" id="mcpAdd">${icon("check", 12)} Connect</button></div>
+        </div>
       </div></div>`;
   const note = `<div class="set-note">${icon("info", 12)} Auth + config only - <b>omp owns the MCP connection</b> (ADR-0020). The token is stored on this machine (git-ignored) and sent as an <code>Authorization: Bearer</code> header; MCP tool output is still scanned by the security gate. Enterprise IdP sign-in (Okta / Entra / GCP WIF) lands in P-MCP.2.</div>`;
   return setCard("mcp", "MCP connectors", "model context protocol", rows + form + note, true);
@@ -6139,10 +6141,12 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="agentName" class="prov-key" placeholder="Name (e.g. Hermes prod)" />
-          <select id="agentKind" class="prov-key" style="flex:none;width:110px"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
+          <select id="agentKind" class="prov-key" aria-label="Agent kind"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
         <div class="prov-row"><input id="agentCommand" class="prov-key" placeholder="Command (e.g. hermes, openclaw, uvx)" /></div>
         <div class="prov-row"><input id="agentArgs" class="prov-key" placeholder="Args (e.g. acp --url wss://host:18789 --token-file /abs/path)" /></div>
+        </div>
         <div class="prov-row">
           <select id="agentPerm" class="prov-key" style="flex:none;width:160px"><option value="deny">permissions: deny</option><option value="allow">permissions: allow</option></select>
           <button class="btn-mini ok" id="agentAdd">${icon("check", 12)} Connect</button></div>
@@ -6220,11 +6224,13 @@ function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds
             <select id="wlAuthKind" class="prov-key" style="flex:none;width:120px"><option value="">No auth</option><option value="jwt">JWT</option><option value="oauth">OAuth</option><option value="saml">SAML</option><option value="pem">PEM</option><option value="apikey">API key</option><option value="basic">User / Pass</option></select>
             <input id="wlAuthLabel" class="prov-key" placeholder="Label (e.g. prod-gateway)" />
           </div>
+          <div class="prov-grid">
           <div class="prov-row"><input id="wlAuthUser" class="prov-key" placeholder="Username (User/Pass only, optional)" spellcheck="false" /></div>
           <div class="prov-row"><input id="wlAuthRotate" class="prov-key" type="number" min="0" placeholder="Rotate every N days (optional)" data-tip="Rotation reminder|Flags the key as due N days after it's set. Visibility only - nothing auto-rotates; use the Rotate button to replace it." /></div>
           <div class="prov-row">
             <input id="wlAuthSecret" class="prov-key" type="password" placeholder="Paste token / password / API key" />
             <button class="btn-mini" id="wlAuthFile" data-tip="Upload file|Pick a token / PEM / API-key / config file. It's read + encrypted in the vault; the secret never enters this window.">${icon("folder", 12)} Upload file</button>
+          </div>
           </div>
           <div class="set-note">${icon("shield", 12)} Secrets are stored <b>OS-encrypted</b> (Windows DPAPI / macOS Keychain / Linux libsecret). The whitelist keeps only a reference - never the secret itself.</div>
         </details>
@@ -6703,8 +6709,10 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
   return setCard("embeddings", "Semantic search", "knowledge RAG \u00b7 your own embeddings", `
     <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
     <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
+    <div class="prov-grid">
     <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
-    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" value="${c.dim || ""}" style="max-width:90px"/></div>
+    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" aria-label="Dimension" value="${c.dim || ""}" style="width:90px"/></div>
+    </div>
     <div class="prov-row">
       <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
       <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
@@ -12852,6 +12860,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
       <div class="ws-path">${esc(ws.current)}</div>
     </div>
+    <div class="prov-grid" style="--prov-trail:2">
     <div class="prov-row">
       <input class="prov-key" id="wsPath" placeholder="Paste a folder path…" />
       <button class="btn-mini ok" id="wsBrowse">${icon("folder", 13)} Browse</button>
@@ -12865,6 +12874,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <input class="prov-key" id="wsGitPat" type="password" placeholder="Git access token - for private repo clones" autocomplete="off" spellcheck="false" />
       <button class="btn-mini ok" id="wsGitPatSave">${icon("shield", 13)} Save</button>
       ${gitPatSaved ? `<button class="btn-mini danger" id="wsGitPatClear">Remove</button>` : ""}
+    </div>
     </div>
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`

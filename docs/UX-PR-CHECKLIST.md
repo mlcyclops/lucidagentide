@@ -72,10 +72,19 @@ Tick a box only when it is true. Each item names what a reviewer should be able 
     check as a re-runnable `desktop/scripts/demo_<id>.mjs` (pattern: `demo_p_askplus_1.mjs`) and run it
     once against the old behavior to prove it fails. ADR-0632: the Ask Lucid "+" menu opened behind its
     own panel while every unit test passed.
+12. **Spacing.** One standard, measured in the running app by `auditBoxes` in
+    `desktop/scripts/demo_p_spacing_1.mjs`: boxed controls (fields, selects, filled buttons, bordered
+    cards and notes) that are not nested sit at least 6px apart and never overlap; text fields stacked on
+    one left edge share one width (join the rows in a `.prov-grid`); sibling cards are one even gap apart
+    and collapsed card headers share one height. Settings uses the tokens `--set-gap-card` (12px),
+    `--set-pad` (14px) and `--set-gap-row` (10px); a new card or form inherits them, it does not set its
+    own margins. Settings is covered by `verifySettingsSpacing` (both layouts, every category, every card
+    open, every disclosure open); another surface calls `auditBoxes(rootSelector, 6)` from its own
+    `demo_<id>.mjs`. A segmented control or split button whose parts touch on purpose carries `data-joined`.
 
 ## Reviewer notes
 
-- A checked box is a claim. Reviewers spot-check items 1, 2, 10 and 11 on every UI PR.
+- A checked box is a claim. Reviewers spot-check items 1, 2, 10, 11 and 12 on every UI PR.
 - If a PR cannot meet an item, say so in the PR body and link the follow-up; do not tick it.
 - When the complexity count goes up with no removal, the justification goes in the PR body and the
   new number goes into `docs/UX-REVIEW.md`.

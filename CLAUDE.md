@@ -51,6 +51,9 @@
    center must hit the control, not a panel on top of it. Keep the check as a re-runnable
    `desktop/scripts/demo_<id>.mjs` (pattern: `demo_p_askplus_1.mjs`) and show it failing against the
    old behavior once. A menu that opens behind its own panel passes every unit test (ADR-0632).
+   In the same run, `auditBoxes` from `desktop/scripts/demo_p_spacing_1.mjs` must pass on the changed
+   surface: no two boxes touch, stacked fields share a width, cards sit one even gap apart (ADR-0633).
+   Settings changes run `make demo-P-SPACING.1` (both layouts, every card).
 1. Append exactly 3 lines to PROGRESS.md: shipped / stubbed / next.
 
 Do not start the next increment in the same session. A half-finished second
