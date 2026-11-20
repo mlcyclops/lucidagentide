@@ -3037,7 +3037,7 @@ impl Fleet {
 
     /// The relay's first frame (5.6 `hello`), after fleet_port verified its certificate: the record moves
     /// `pending` to `unconfirmed`; a High console refuses relays not High or not in FIPS mode (4.10). The `welcome`
-    /// body; the updates the relay lacks follow on their own thread.
+    /// body; the updates the relay lacks follow in `on_welcomed`.
     pub fn on_hello(&self, relay: &str, body: &Value, source: &str, t: i64) -> Result<Value, ApiError> {
         let c = self.console()?;
         if c.profile_high() && !(str_of(body.get("profile")) == Some("high") && body.get("fips").and_then(Value::as_bool) == Some(true)) {
@@ -3072,7 +3072,13 @@ impl Fleet {
         drop(book);
         // AC-2b-D 8.7: `meetCaId`, null when this console holds no CA.
         let welcome = json!({ "consoleId": self.console_id, "time": t, "policySeq": policy_seq, "rosterSeq": roster_seq, "trustSeq": body.get("trustSeq").cloned().unwrap_or(Value::Null), "meetCaId": self.meet_ca_id() });
-        // Scopes narrowed while the relay was offline go first (4.1).
+        Ok(welcome)
+    }
+
+    /// After the port sent `welcome` (the relay refuses any other first frame): scopes narrowed while the relay was
+    /// offline first (4.1), then the roster and policy updates it lacks and the Meeting Hub list push (8.5).
+    pub fn on_welcomed(&self, relay: &str, t: i64) {
+        let Ok(c) = self.console() else { return };
         let (ours, theirs) = {
             let reg = self.registry.lock();
             reg.relays.get(relay).map(|r| (r.scopes.clone(), strings(r.report.get("scopes")))).unwrap_or_default()
@@ -3087,7 +3093,6 @@ impl Fleet {
         }
         self.catch_up(relay);
         self.meet_report(&c, relay, t);
-        Ok(welcome)
     }
 
     /// `fleet.relay.bootstrap` (7.1, revision 2 and 3) whenever the relay reports a new bootstrap state or anchors.
@@ -5883,6 +5888,7 @@ mod tests {
             };
             let body = json!({ "relayId": relay, "version": "1.0", "fips": false, "profile": "standard", "os": "linux", "localConsole": false, "scopes": scopes, "scopeGeneration": 1, "readOnly": false, "confirm": [], "bootstrap": bootstrap, "policySeq": ps, "rosterSeq": rs, "trustSeq": 1, "pins": [], "certNotAfter": null });
             self.f.on_hello(relay, &body, "10.0.0.9", crate::codec::now_ms()).unwrap();
+            self.f.on_welcomed(relay, crate::codec::now_ms());
         }
 
         fn confirm(&self, relay: &str) {

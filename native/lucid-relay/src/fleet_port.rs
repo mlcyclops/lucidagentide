@@ -104,6 +104,8 @@ pub trait Desk: Send + Sync {
     fn renew_switched(&self, relay: &str, serial: &str, t: i64) -> Vec<String>;
     fn relay_recovered(&self, relay: &str, old_serial: &str, new_serial: &str, generation: u64, retry: bool, t: i64);
     fn on_hello(&self, relay: &str, body: &Value, source: &str, t: i64) -> Result<Value, Refusal>;
+    /// After `welcome` went out (the relay takes no other frame first): the updates the relay lacks.
+    fn on_welcomed(&self, relay: &str, t: i64);
     fn on_event(&self, relay: &str, op: &str, body: &Value, t: i64);
     fn on_closed(&self, relay: &str, t: i64);
     fn flapping(&self, relay: &str, t: i64);
@@ -189,6 +191,9 @@ impl Desk for FleetDesk {
     }
     fn on_hello(&self, relay: &str, body: &Value, source: &str, t: i64) -> Result<Value, Refusal> {
         self.fleet.on_hello(relay, body, source, t).map_err(refusal)
+    }
+    fn on_welcomed(&self, relay: &str, t: i64) {
+        self.fleet.on_welcomed(relay, t)
     }
     fn on_event(&self, relay: &str, op: &str, body: &Value, t: i64) {
         self.fleet.on_event(relay, op, body, t)
@@ -777,6 +782,7 @@ impl PortState {
         match self.desk.on_hello(&relay, &hello, &source, t) {
             Ok(welcome) => {
                 chan.send(w::evt_text("welcome", welcome));
+                self.desk.on_welcomed(&relay, t);
             }
             Err(r) => {
                 self.logger.security("fleet.hello-refused", &Fields::new().with("relay", relay.as_str()).with("code", r.code.as_str()), Level::Warn);
@@ -1951,6 +1957,7 @@ pub(crate) mod tests {
             self.events.lock().push((relay.into(), "hello".into()));
             Ok(json!({ "consoleId": CID, "time": t, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1 }))
         }
+        fn on_welcomed(&self, _relay: &str, _t: i64) {}
         fn on_event(&self, relay: &str, op: &str, _body: &Value, _t: i64) {
             self.events.lock().push((relay.into(), op.into()));
         }
