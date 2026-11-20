@@ -372,6 +372,7 @@ export interface LaneImage { data: string; mimeType: string }
 export interface StagedLanePromptView { text: string; images: LaneImage[]; attachments?: string[] }
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
+import type { McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -817,6 +818,9 @@ export interface ManagedPolicy {
   asksageOnly: boolean;
   /** ADR-0068 (P-ENT.1): which controls the managed policy locks (UI disables them + "Managed by <org>"). */
   locks?: { exec: boolean; egress: boolean; loop: boolean; models: boolean };
+  /** ADR-0616 (P-SETUX.1): org-authorized MCP servers for Settings "Quick connect", normalized server side
+   *  (normalizeOrgCatalog, `source: "org"`). Empty = unmanaged or none set: show MCP_COMMUNITY_CATALOG. */
+  mcpCatalog: McpCatalogEntry[];
 }
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).

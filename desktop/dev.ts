@@ -461,7 +461,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedMcpCatalog, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
 import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
@@ -5511,6 +5511,7 @@ return Bun.serve({
           attribution: mc.config?.attribution ?? null,
           asksageOnly: managedAsksageOnly(mc.config),
           locks: managedLocks(mc.config),
+          mcpCatalog: managedMcpCatalog(mc.config), // P-SETUX.1 (ADR-0616): org-authorized Quick connect list
         } });
       }
       // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgment gate. GET returns the

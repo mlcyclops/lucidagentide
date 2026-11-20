@@ -3694,6 +3694,91 @@ body.lucid-capturing #toasts{visibility:hidden}
 .set-close{-webkit-app-region:no-drag;border:0;background:transparent;color:var(--txt-3);width:30px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
 .set-close:hover{background:var(--bg-3);color:var(--txt)}
 .set-body{flex:1;min-height:0;overflow:auto;padding:12px 14px 20px}
+/* P-SETUX.1 (ADR-0615): Settings is an overlay, a window (default) or a right panel, never an in-flow aside.
+   Stacking: above the fleet dock (55), the IDE (90), the orbit (92), the spoke banner (94), popovers (95) and
+   the voice dock (96); BELOW everything Settings itself opens or that must stay on top of it: the palette
+   (100/101), the file browser (110/111), plugins (115), toasts (120), rich tips (130/135), the tour (140+),
+   modals (200), Ask Lucid (250), context menus (400), menus (1000) and tooltips (1200). A popover opened
+   from a card (KG picker, RAG persona, whitelist quick-add) is lifted over it by body.set-open below.
+   The titlebar (40px) stays uncovered so the window can still be dragged, minimized and closed. */
+.set-scrim{position:fixed;inset:40px 0 0 0;z-index:97;background:rgb(var(--scrim-rgb) / .55);animation:fade var(--t) var(--ease)}
+#settings{position:fixed;z-index:98;width:auto;border-left:0;color:var(--txt);background:var(--bg-1);background-image:var(--emboss);display:flex;flex-direction:column;overflow:hidden}
+#settings[data-layout="window"]{inset:40px 0 0 0;margin:auto;width:min(1100px,94vw);height:min(760px,calc(100vh - 64px));
+  border:1px solid var(--line-strong);border-radius:14px;
+  box-shadow:var(--shadow-lg),0 30px 70px -30px rgb(var(--sh-rgb) / .7),0 0 0 1px rgb(var(--accent-rgb) / .1);animation:setWinIn var(--t-slow) var(--ease-out)}
+#settings[data-layout="panel"]{top:40px;right:0;bottom:0;width:min(560px,92vw);border-left:1px solid var(--line-strong);
+  box-shadow:-24px 0 48px -30px rgb(var(--sh-rgb) / .75)}
+@keyframes setWinIn{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#settings,.set-scrim{animation:none}}
+body.set-open .popover{z-index:99}
+#settings .set-head{gap:10px;justify-content:flex-start}
+#settings .set-title{flex:none;white-space:nowrap}
+.set-search{flex:1;min-width:0;max-width:340px;margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 9px;border:1px solid var(--line);
+  border-radius:8px;background:var(--bg-2)}
+.set-search .ic{flex:none;color:var(--txt-4)}
+.set-search input{flex:1;min-width:0;padding:6px 0;border:0;outline:none;background:transparent;color:var(--txt);font-size:12.5px}
+.set-search input::placeholder{color:var(--txt-4)}
+.set-search:focus-within{border-color:var(--accent-2);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent-2) 18%,transparent)}
+#settings .set-close{flex:none}
+.set-main{flex:1;min-height:0;display:flex}
+#settings[data-layout="panel"] .set-main{flex-direction:column}
+#settings .set-body{flex:1;min-width:0}
+.set-nav{flex:none;display:flex;flex-direction:column;gap:2px;overflow:auto;padding:10px 8px}
+#settings[data-layout="window"] .set-nav{width:232px;border-right:1px solid var(--line-soft)}
+#settings[data-layout="panel"] .set-nav{flex-direction:row;gap:4px;overflow-x:auto;overflow-y:hidden;padding:7px 10px;border-bottom:1px solid var(--line-soft);scrollbar-width:thin}
+#settings[data-layout="panel"] .set-nav.searching{flex-direction:column;max-height:40vh;overflow-y:auto;overflow-x:hidden}
+.set-nav-it{-webkit-app-region:no-drag;display:flex;align-items:center;gap:9px;min-width:0;padding:7px 10px;border:0;border-radius:8px;
+  background:transparent;color:var(--txt-2);font-size:12.5px;text-align:left;cursor:pointer;transition:background var(--t-fast),color var(--t-fast)}
+.set-nav-it .ic{flex:none;color:var(--txt-4)}
+.set-nav-it:hover{background:var(--bg-2);color:var(--txt)}
+.set-nav-it:focus-visible{outline:2px solid var(--accent-2);outline-offset:-2px}
+.set-nav-it.on{background:var(--accent-dim);color:var(--txt);font-weight:600}
+.set-nav-it.on .ic{color:var(--accent-2)}
+.set-nav-l{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#settings[data-layout="panel"] .set-nav:not(.searching) .set-nav-it{flex:none;padding:5px 10px}
+.set-nav-hit{flex-direction:column;align-items:stretch;gap:1px}
+.set-nav-s{display:block;font-size:11px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-nav-empty{padding:10px;font-size:12px;color:var(--txt-3)}
+.set-cat-h{margin:2px 0 12px;font-size:16px;font-weight:650;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Overview tiles: one ellipsized line per label, the icon never shrinks (invariant #11). */
+.set-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:9px}
+.set-tile{-webkit-app-region:no-drag;display:flex;flex-direction:column;gap:6px;min-width:0;padding:11px 12px;text-align:left;cursor:pointer;
+  border:1px solid var(--line-soft);border-radius:11px;background:var(--bg-2);color:var(--txt-2);box-shadow:var(--emboss);transition:border-color var(--t),background var(--t)}
+.set-tile:hover{border-color:var(--line);background:var(--bg-3)}
+.set-tile:focus-visible{outline:2px solid var(--accent-2);outline-offset:1px}
+.set-tile-h{display:flex;align-items:center;gap:8px;min-width:0}
+.set-tile-h .ic{flex:none;color:var(--accent-2)}
+.set-tile-t{flex:1;min-width:0;color:var(--txt);font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.set-tile-b{flex:none;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap;background:var(--bg-3);color:var(--txt-3)}
+.set-tile-b.t-ok{background:var(--green-dim);color:var(--green-txt)}
+.set-tile-b.t-warn{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber-txt)}
+.set-tile-b.t-info{background:var(--cyan-dim);color:var(--cyan-txt)}
+.set-tile-b.t-wait{color:var(--txt-4)}
+.set-tile-d{display:block;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ADR-0616 Quick connect: filter chips, then a tile per official server. */
+.mcpq-src{display:flex;align-items:center;gap:7px;margin:0 0 9px;font-size:12px;color:var(--txt-2)}
+.mcpq-src .ic{flex:none;color:var(--green)}
+.mcpq-src span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcpq-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.mcpq-chip{-webkit-app-region:no-drag;padding:3px 11px;border:1px solid var(--line);border-radius:999px;background:var(--bg-2);color:var(--txt-2);
+  font-size:11.5px;white-space:nowrap;cursor:pointer}
+.mcpq-chip:hover{color:var(--txt);border-color:var(--line-strong)}
+.mcpq-chip.on{background:var(--accent-dim);border-color:color-mix(in srgb,var(--accent) 45%,var(--line));color:var(--txt)}
+.mcpq-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:9px}
+.mcpq-tile{display:flex;flex-direction:column;gap:5px;min-width:0;padding:11px 12px;border:1px solid var(--line-soft);border-radius:11px;background:var(--bg-2);box-shadow:var(--emboss)}
+.mcpq-tile.blocked{opacity:.7}
+.mcpq-h{display:flex;align-items:center;gap:8px;min-width:0}
+.mcpq-name{flex:1;min-width:0;color:var(--txt);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcpq-h .abadge{flex:none}
+.mcpq-vendor{font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mcpq-badges{display:flex;flex-wrap:wrap;gap:5px}
+.mcpq-note{font-size:11.5px;line-height:1.5;color:var(--txt-3)}
+.mcpq-note.warn{color:var(--amber-txt)}
+.mcpq-foot{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:4px;min-width:0}
+.mcpq-docs{flex:none;font-size:11.5px;color:var(--accent-2);white-space:nowrap}
+.mcpq-foot .btn-mini{flex:none;margin-left:auto}
+.mcpq-foot .prov-key{flex:1;min-width:0}
+.mcpq-foot .prov-key+.btn-mini{margin-left:0}
 /* knowledge graph view (P9.3) */
 .kg{position:relative;width:var(--kg-w,min(900px,70vw));background:var(--bg-1);border-left:1px solid var(--line-soft);display:flex;flex-direction:column;overflow:hidden;animation:slideInR var(--t-slow) var(--ease-out)}
 /* P-PREVIEW.1 (ADR-0096): in-app browser preview fly-out — reuses the .kg shell but its own width var. */

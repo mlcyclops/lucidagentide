@@ -12,18 +12,21 @@ interface BuilderConfig {
   appId: string;
   productName: string;
   directories?: { output?: string };
-  extraMetadata?: { name?: string; productName?: string; lucidBuildFlavor?: string };
+  extraMetadata?: { name?: string; productName?: string; description?: string; lucidBuildFlavor?: string };
   protocols?: { name: string; schemes: string[] }[];
   files?: string[];
   extraResources?: unknown[];
-  mac?: { artifactName?: string; extendInfo?: Record<string, string> };
+  mac?: { icon?: string; artifactName?: string; extendInfo?: Record<string, string> };
   pkg?: { mustClose?: string[] };
-  nsis?: { artifactName?: string; shortcutName?: string; perMachine?: boolean; oneClick?: boolean };
+  nsis?: {
+    artifactName?: string; shortcutName?: string; perMachine?: boolean; oneClick?: boolean;
+    installerIcon?: string; uninstallerIcon?: string; installerHeaderIcon?: string;
+  };
   portable?: { artifactName?: string };
-  win?: { target?: ({ target: string } | string)[] };
+  win?: { icon?: string; target?: ({ target: string } | string)[] };
   msi?: { artifactName?: string };
   appx?: { artifactName?: string; identityName?: string };
-  linux?: { artifactName?: string; desktop?: Record<string, string> };
+  linux?: { icon?: string; artifactName?: string; desktop?: Record<string, string> };
   deb?: { artifactName?: string };
   rpm?: { artifactName?: string };
   publish?: { provider: string; owner?: string; repo?: string; url?: string; channel?: string }[];
@@ -111,6 +114,26 @@ describe("Creator packaging overlay (CREATOR-0, ADR-0279)", () => {
     expect(cfg.linux?.desktop?.Name).toBe("Lucid Creator");
     expect(cfg.nsis?.shortcutName).toBe("Lucid Creator");
     expect(cfg.pkg?.mustClose).toEqual([CREATOR_FLAVOR.appId]);
+  });
+
+  // P-SETUX.1 (ADR-0618): the shortcut hover text (NSIS APP_DESCRIPTION, from metadata.description) and
+  // every icon slot are identity too. A missed slot ships an Agent icon inside a Creator installer.
+  test("Creator has its own icons in every slot, and its own hover description", () => {
+    const nsis = cfg.nsis;
+    for (const p of [cfg.win?.icon, nsis?.installerIcon, nsis?.uninstallerIcon, nsis?.installerHeaderIcon]) expect(p).toBe("build/icon-creator.ico");
+    expect(cfg.mac?.icon).toBe("build/icon-creator.png");
+    expect(cfg.linux?.icon).toBe("build/icon-creator.png");
+    // The overlay names generated files; their SVG source must exist so `bun run icons` can produce them.
+    expect(readFileSync(join(import.meta.dir, "icon-creator.svg"), "utf8")).toContain("<svg");
+    expect(base.win?.icon).toBe("build/icon.ico"); // Agent untouched
+    expect(cfg.extraMetadata?.description?.startsWith("Lucid Creator")).toBe(true);
+  });
+
+  test("no em dash in either product's shortcut hover description", () => {
+    for (const d of [pkg.description, cfg.extraMetadata?.description ?? ""]) {
+      expect(d.length).toBeGreaterThan(0);
+      expect(d).not.toContain("\u2014");
+    }
   });
 
   test("packaging PAYLOAD is inherited unchanged - only identity differs", () => {

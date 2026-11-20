@@ -44,7 +44,7 @@ describe("the catalog", () => {
   test("a view a feature names has an opener in the app, and a setting has an apply branch", () => {
     const app = src("renderer/app.ts");
     for (const v of ASK_VIEWS) expect(app.includes(`v === "${v}"`) || v === "voice").toBe(true); // voice is the final else
-    expect(app).toContain("else openSettingsToVoice();");
+    expect(app).toContain('else openSettingsTo("voice");');
     for (const k of ASK_SETTING_KEYS.filter((k) => k !== "toolOutput.window")) expect(app).toContain(`if (key === "${k}")`); // the window is the final branch
     expect(app).toContain("bridge.setResultWindow(value === \"auto\" ? \"auto\" : Number(value))");
   });

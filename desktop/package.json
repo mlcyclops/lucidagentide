@@ -6,7 +6,7 @@
     "electron",
     "@resvg/resvg-js"
   ],
-  "description": "Electron desktop shell for LucidAgentIDE + omp — gated agent chat + live security/memory dashboards.",
+  "description": "Lucid Agent: secure AI coding IDE with gated agent chat and live security and memory dashboards",
   "homepage": "https://github.com/mlcyclops/lucidagentide",
   "author": "TECHLEAD 187 LLC <support@lucidagentide.com>",
   "main": "dist/main.js",

@@ -160,6 +160,8 @@ import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
+import { parseSettingsCat, parseSettingsLayout, resolveSettingsTarget, searchSettings, sectionsOf, SETTINGS_CAT_KEY, SETTINGS_CATEGORIES, SETTINGS_LAYOUT_KEY, settingsCategory, type SettingsCatId, type SettingsLayout, type SettingsSecId } from "./settings_nav.ts"; // P-SETUX.1 (ADR-0615)
+import { catalogEntryIsOfficial, configuredFor, MCP_CATEGORY_LABEL, MCP_COMMUNITY_CATALOG, MCP_OAUTH_HINT, normalizeOrgCatalog, type McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): Quick connect
 import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
@@ -171,7 +173,7 @@ import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancelable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyzer
-import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, EmbeddingsConfigView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -598,12 +600,20 @@ function buildShell(): void {
         </div>
       </aside>
 
-      <aside class="settings" id="settings" hidden>
+      <!-- P-SETUX.1 (ADR-0615): Settings is an overlay, never an in-flow aside, so no fixed panel (the fleet
+           dock, the IDE, the orbit) can sit on top of it. init moves both nodes to <body>. -->
+      <div class="set-scrim" id="setScrim" hidden></div>
+      <aside class="settings" id="settings" data-layout="window" aria-labelledby="setTitle" hidden>
         <div class="set-head">
-          <div class="set-title">${icon("sliders", 17)} Settings</div>
-          <button class="set-close" id="setClose" data-tip="Close settings">${icon("close", 16)}</button>
+          <div class="set-title" id="setTitle">${icon("sliders", 17)} Settings</div>
+          <label class="set-search">${icon("search", 13)}<input id="setSearch" type="search" placeholder="Search settings" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>
+          <button class="set-close" id="setLayoutBtn" type="button"></button>
+          <button class="set-close" id="setClose" type="button" aria-label="Close settings" data-tip="Close settings|Esc">${icon("close", 16)}</button>
         </div>
-        <div class="set-body" id="setBody"></div>
+        <div class="set-main">
+          <nav class="set-nav" id="setNav" aria-label="Settings categories"></nav>
+          <div class="set-body" id="setBody"></div>
+        </div>
       </aside>
 
       <aside class="settings skills-dir" id="skillsDir" hidden>
@@ -4692,8 +4702,8 @@ function datasetsSection(list: string[] | null): string {
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
-// Declutter (user call, 2026-08-01): every section starts collapsed; deep links (openSettingsToVoice
-// etc.) add their card id here before opening, so guided fixes still land expanded.
+// Declutter (user call, 2026-08-01): every section starts collapsed; a deep link (openSettingsTo) adds its
+// card id here before opening, so guided fixes still land expanded.
 const SET_OPEN = new Set<string>([]);
 
 function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
@@ -4708,6 +4718,7 @@ const setSkel = (name: string, title: string, sub: string, collapsible = false):
 function fillSec(name: string, html: string): void {
   const el = document.querySelector(`#setBody [data-sec="${name}"]`);
   if (el) el.outerHTML = html;
+  if (name !== "overview") queueSetOverview(); // P-SETUX.1: every hydration that lands can change a status tile
 }
 
 const isValidEmail = (s: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -4882,7 +4893,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     </div></div>`);
   document.body.appendChild(ov);
   const err = $("#govSetupErr", ov) as HTMLElement;
-  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsToAsksage(); onDone?.(); };
+  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsTo("asksage"); onDone?.(); };
   const save = async () => {
     const plan = planGovSetup({ key: ($("#govKey", ov) as HTMLInputElement)?.value ?? "", base: ($("#govBase", ov) as HTMLInputElement)?.value ?? "" });
     if (!plan.enableLockdown) { err.textContent = "Paste your AskSage API key to turn on lockdown, or choose \u201cI'll add it later\u201d."; err.hidden = false; return; }
@@ -4906,75 +4917,6 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
   $("#govSetupLater", ov)!.addEventListener("click", () => void later());
   ($("#govKey", ov) as HTMLInputElement)?.addEventListener("input", () => { err.hidden = true; });
   setTimeout(() => ($("#govKey", ov) as HTMLInputElement)?.focus(), 30);
-}
-
-// P-GOVCUI.1: open Settings on the AskSage gov-gateway card (expanded + scrolled + briefly highlighted) so a
-// new user SEES where lockdown lives. Mirrors openPersonalizationSettings.
-function openSettingsToAsksage(): void {
-  SET_OPEN.add("asksage");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="asksage"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-LOCAL.4: jump Settings to the Local Providers card (from the Provider Hub's "Local & self-hosted" tile),
-// scrolled + flashed so the user lands on the add form (with the one-click model presets).
-function openSettingsToLocalProviders(): void {
-  SET_OPEN.add("localProviders");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ASKLUCID.9 (ADR-0600): jump Settings to the Providers card (from the Edit image card when no image model is
-// connected), scrolled and flashed like the jumps above.
-function openSettingsToProviders(): void {
-  SET_OPEN.add("providers");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="providers"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
-function openSettingsToVoice(): void {
-  SET_OPEN.add("voice");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="voice"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ATTACH.1 (ADR-0598): the "+" menu's Connectors (MCP) entry lands on the MCP connectors card, opened,
-// scrolled and flashed like the jumps above.
-function openSettingsToMcp(): void {
-  SET_OPEN.add("mcp");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="mcp"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
 }
 
 // First-run role picker - four cards in the model-card idiom. Resolves once a role is chosen (or
@@ -5101,7 +5043,7 @@ function askLucid(): AskLucidHandle {
     imageEdit: {
       models: () => bridge.imageModels(),
       store: miniStore(),
-      openProviders: openSettingsToProviders,
+      openProviders: () => openSettingsTo("providers"),
       open: showAskLucidImage,
       ...(bridge.canShowInFolder() ? { showInFolder: (path: string) => bridge.showInFolder(path) } : {}),
     },
@@ -5308,8 +5250,8 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
     else if (v === "settings") openSettings();
     else if (v === "preview") openPreview();
     else if (v === "skills") openSkills();
-    else if (v === "local-models") openSettingsToLocalProviders();
-    else openSettingsToVoice();
+    else if (v === "local-models") openSettingsTo("localProviders");
+    else openSettingsTo("voice");
     // P-ASKLUCID.6 (ADR-0587): a view Lucid opened for the user is a feature they have now found.
     markFeaturesSeen(v === "orbit" ? ["fleet"] : [v]);
     return { ok: true, message: `Opened the ${v} view.` };
@@ -5706,7 +5648,7 @@ function renderAgentGap(item: ReadyItem): void {
     // The fix surfaces live in the rails, which the stage hides - park the stage first, then deep-link.
     if (state.immersive) setImmersive(false);
     if (fix === "hub") openProviderHub();
-    else if (fix === "voice") openSettingsToVoice();
+    else if (fix === "voice") openSettingsTo("voice");
     else openKnowledge();
   });
   document.querySelector(".center")?.appendChild(card);
@@ -6160,7 +6102,12 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
   return setCard("mcp", "MCP connectors", "model context protocol", rows + form + note, true);
 }
 function hydrateMcp(): void {
-  void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
+  void bridge.mcpList().then((m) => {
+    state.mcpServers = m ?? []; setLoaded.add("mcp");
+    fillSec("mcp", secMcp(state.mcpServers));
+    // P-SETUX.1: Quick connect's "Connected" badges follow the list, unless a token is being typed there.
+    if (document.activeElement?.id !== "mcpqToken") fillSec("mcpQuick", secMcpQuick());
+  });
 }
 // P-AGENTFW.2 (ADR-0149): Remote agents (hermes/openclaw) reached THROUGH the Lucid agent-firewall.
 function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
@@ -6189,7 +6136,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   return setCard("agents", "Remote agents", "hermes · openclaw · ACP firewall", rows + form + note, true);
 }
 function hydrateAgents(): void {
-  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; fillSec("agents", secAgents(state.agents)); });
+  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; setLoaded.add("agents"); fillSec("agents", secAgents(state.agents)); });
 }
 
 // P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
@@ -6736,7 +6683,9 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
   const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
   const opt = (v: string, label: string) => `<option value="${v}" ${c.authKind === v ? "selected" : ""}>${label}</option>`;
   const pill = active ? `<span class="abadge ok">active</span>` : (c.enabled ? `<span class="abadge warn">needs a key / relaunch</span>` : `<span class="abadge">off</span>`);
-  return `<div class="set-sec">
+  // P-SETUX.1 (ADR-0615): through setCard, so the fill keeps the card's header, collapse and data-sec (a bare
+  // `.set-sec` replaced the collapsible card with a headerless blob that later hydrations could not find).
+  return setCard("embeddings", "Semantic search", "knowledge RAG \u00b7 your own embeddings", `
     <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
     <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
     <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
@@ -6748,8 +6697,7 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
       <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
     </div>
     ${active ? `<div class="prov-row"><button class="btn-mini" id="embReindex">${icon("refresh", 13)} Re-index knowledge graphs</button><span class="set-sub" style="align-self:center">Rebuild every KG's semantic index from its compiled pages.</span></div>` : ""}
-    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>
-  </div>`;
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>`, true);
 }
 async function saveEmbeddings(): Promise<void> {
   const body = $("#setBody")!;
@@ -6806,39 +6754,188 @@ async function reindexEmbeddings(): Promise<void> {
   if (r?.ok) showToast({ tone: "ok", title: "Semantic index rebuilt", desc: `${r.stored ?? 0} passage${r.stored === 1 ? "" : "s"} across ${r.kgs ?? 0} knowledge graph${r.kgs === 1 ? "" : "s"}.`, timeout: 5200 });
   else showToast({ tone: "danger", title: "Re-index didn't run", desc: r?.error ?? "Enable semantic search first.", timeout: 5200 });
 }
+// ── P-SETUX.1 (ADR-0615): the Settings window - categories, Overview, Quick connect ─────────────────────
+/** Which fetches have landed at least once. Until one has, its Overview tile says "Checking", never a guess. */
+const setLoaded = new Set<"workspace" | "local" | "mcp" | "agents">();
+let setEmbeddings: { cfg: EmbeddingsConfigView | null; active: boolean } | null = null;
+let setVoice: VoiceSettingsView | null = null;
+
+/** First paint of every card, keyed by EVERY SettingsSecId (settings_nav.ts), so no card can be rendered
+ *  outside a category: adding one there without a renderer here, or the reverse, fails the typecheck. */
+const SET_SHELL: Record<SettingsSecId, () => string> = {
+  overview: () => secOverview(),
+  workspace: () => setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
+  // Profile is just the local name we already hold in state - render it instantly (no skeleton /
+  // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
+  profile: () => secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
+  personal: () => setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+  providers: () => setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+  asksage: () => setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
+  asksageQuota: () => `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
+  localProviders: () => setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+  others: () => setSkel("others", "More providers", "", true),
+  sovereignty: () => `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
+  subagents: () => setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
+  judgment: () => setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
+  compression: () => setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
+  mcpQuick: () => secMcpQuick(), // P-SETUX.1 (ADR-0616): official MCP servers, one click each
+  mcp: () => setSkel("mcp", "MCP connectors", "model context protocol", true),
+  agents: () => setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
+  embeddings: () => setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
+  vault: () => setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
+  [VAULT_DEST_SEC]: () => setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
+  [VAULT_ENV_SEC]: () => setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
+  whitelist: () => setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
+  voice: () => setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+  theme: () => secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
+  appearance: () => secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+  chatScroll: () => secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
+  workingStatus: () => secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
+  miniLucid: () => secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
+  trivia: () => secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
+  settingsLayout: () => secSettingsLayout(),
+  developer: () => setSkel("developer", "Developer", "logs · diagnostics", true),
+};
+/** One `<section class="set-cat">` per category; only the active one is shown. Cards keep their
+ *  `[data-sec]` ids under #setBody, so every in-place fillSec hydration works across categories. */
 function settingsShell(): string {
+  const keyNote = `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+  return SETTINGS_CATEGORIES.map((c) => `<section class="set-cat" data-cat="${c.id}" aria-label="${esc(c.label)}"${c.id === setCat ? "" : " hidden"}>
+    <h2 class="set-cat-h">${esc(c.label)}</h2>${sectionsOf(c.id).map((s) => SET_SHELL[s]()).join("")}${c.id === "models" ? keyNote : ""}</section>`).join("");
+}
+
+type SetTileTone = "ok" | "off" | "warn" | "wait" | "info";
+interface SetTile { sec: SettingsSecId; icon: string; title: string; tone: SetTileTone; badge: string; detail: string }
+const SET_WAIT = { tone: "wait", badge: "Checking", detail: "Reading the current state" } as const;
+const TTS_LABEL: Record<VoiceSettingsView["ttsProvider"], string> = { elevenlabs: "ElevenLabs", "openai-tts": "OpenAI", "local-tts": "on-device", "dots-tts": "dots.tts" };
+const STT_LABEL: Record<VoiceSettingsView["sttProvider"], string> = { elevenlabs: "ElevenLabs", whisper: "Whisper", whistle: "Whistle" };
+const CUSTODY_LABEL: Record<KeyVaultStatus["custody"], string> = { dpapi: "Windows DPAPI", keychain: "macOS Keychain", libsecret: "Secret Service", "plaintext-file": "a plain file" };
+
+/** "on/total" status for a list of switchable things (MCP servers, remote agents). */
+function setCountTile(sec: SettingsSecId, ic: string, title: string, loaded: boolean, items: readonly { name: string; enabled: boolean }[], none: string): SetTile {
+  if (!loaded) return { sec, icon: ic, title, ...SET_WAIT };
+  if (!items.length) return { sec, icon: ic, title, tone: "off", badge: "None", detail: none };
+  const on = items.filter((x) => x.enabled);
+  return { sec, icon: ic, title, tone: on.length ? "ok" : "warn", badge: `${on.length}/${items.length} on`, detail: (on.length ? on : items).map((x) => x.name).join(", ") };
+}
+/** The Overview's tiles, each from data hydrateSettings already fetched. Unknown stays "Checking". */
+function overviewTiles(): SetTile[] {
+  const ws = state.workspace;
+  const a = state.auth;
+  const providers = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id) && providerConfigured(p));
+  const ask = state.asksage;
+  const vault = a?.vault;
+  const emb = setEmbeddings;
+  const voice = state.voice ?? setVoice; // the composer's live cache once loaded; the Voice card's fetch until then
   return [
-    setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
-    // Profile is just the local name we already hold in state - render it instantly (no skeleton /
-    // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
-    secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
-    setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
-    setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
-    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
-    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
-    `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
-    setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
-    setSkel("mcp", "MCP connectors", "model context protocol", true),
-    setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
-    setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
-    setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
-    setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
-    setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
-    setSkel("others", "More providers", "", true),
-    setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
-    setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
-    setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
-    secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
-    secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
-    secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
-    secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
-    secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
-    secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
-    setSkel("developer", "Developer", "logs · diagnostics", true),
-    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
-  ].join("");
+    ws ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "ok", badge: "Open", detail: ws.current }
+      : setLoaded.has("workspace") ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "off", badge: "No folder", detail: "Pick a folder to work in" }
+      : { sec: "workspace", icon: "folder", title: "Workspace", ...SET_WAIT },
+    !a ? { sec: "providers", icon: "spark", title: "Providers", ...SET_WAIT }
+      : providers.length ? { sec: "providers", icon: "spark", title: "Providers", tone: "ok", badge: `${providers.length} connected`, detail: providers.map((p) => p.name).join(", ") }
+      : { sec: "providers", icon: "spark", title: "Providers", tone: "off", badge: "Not connected", detail: "Sign in or paste a key to start chatting" },
+    !ask ? { sec: "asksage", icon: "shield", title: "AskSage gateway", ...SET_WAIT }
+      : ask.configured ? { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "ok", badge: "Connected", detail: ask.only ? "Lockdown on: every turn routes through the gateway" : "Configured, lockdown off" }
+      : { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "off", badge: "Not set up", detail: "For Government and CUI work" },
+    !setLoaded.has("local") ? { sec: "localProviders", icon: "gauge", title: "Local providers", ...SET_WAIT }
+      : state.localProviders.length ? { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "ok", badge: `${state.localProviders.length} added`, detail: state.localProviders.map((p) => p.name).join(", ") }
+      : { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "off", badge: "None", detail: "Ollama, vLLM or another self-hosted endpoint" },
+    setCountTile("mcp", "plugins", "MCP servers", setLoaded.has("mcp"), state.mcpServers, "Quick connect lists official servers"),
+    setCountTile("agents", "link", "Remote agents", setLoaded.has("agents"), state.agents, "Hermes or OpenClaw through the agent firewall"),
+    !voice ? { sec: "voice", icon: "volume", title: "Voice", ...SET_WAIT }
+      : { sec: "voice", icon: "volume", title: "Voice", tone: "info", badge: voice.ttsAutoSpeak ? "Auto-speak on" : "Selected", detail: `Read aloud: ${TTS_LABEL[voice.ttsProvider] ?? voice.ttsProvider}, dictation: ${STT_LABEL[voice.sttProvider] ?? voice.sttProvider}` },
+    !a ? { sec: "vault", icon: "shield", title: "Credential vault", ...SET_WAIT }
+      : !vault ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "info", badge: "Not reported", detail: "The engine did not report its key store" }
+      : vault.state !== "ok" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Unavailable", detail: vault.detail || `The ${CUSTODY_LABEL[vault.custody]} store could not be read` }
+      : vault.custody === "plaintext-file" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Plain file", detail: "Keys are kept in a plain file on this machine" }
+      : { sec: "vault", icon: "shield", title: "Credential vault", tone: "ok", badge: "Protected", detail: `Keys encrypted by ${CUSTODY_LABEL[vault.custody]}` },
+    !emb ? { sec: "embeddings", icon: "search", title: "Semantic search", ...SET_WAIT }
+      : emb.active ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "ok", badge: "On", detail: emb.cfg?.model || "Embedding endpoint active" }
+      : emb.cfg?.enabled ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "warn", badge: "Needs attention", detail: "Saved, but needs a key or a relaunch" }
+      : { sec: "embeddings", icon: "search", title: "Semantic search", tone: "off", badge: "Off", detail: "Lexical search only" },
+  ];
+}
+function secOverview(): string {
+  const tiles = overviewTiles().map((t) => `<button class="set-tile" type="button" data-set-jump="${t.sec}" aria-label="${esc(`${t.title}: ${t.badge}. Open its settings`)}">
+    <span class="set-tile-h">${icon(t.icon, 15)}<b class="set-tile-t">${esc(t.title)}</b><span class="set-tile-b t-${t.tone}">${esc(t.badge)}</span></span>
+    <span class="set-tile-d">${esc(t.detail)}</span></button>`).join("");
+  return setCard("overview", "What's connected", "click a tile to open its card", `<div class="set-tiles">${tiles}</div>`, false);
+}
+/** Repaint the Overview once per frame however many hydrations land in it, keeping a focused tile focused. */
+let setOverviewQueued = false;
+function queueSetOverview(): void {
+  if (!state.settingsOpen || setOverviewQueued) return;
+  setOverviewQueued = true;
+  requestAnimationFrame(() => {
+    setOverviewQueued = false;
+    const focused = (document.activeElement as HTMLElement | null)?.closest?.('[data-sec="overview"] [data-set-jump]') as HTMLElement | null;
+    fillSec("overview", secOverview());
+    if (focused) ($(`#setBody [data-sec="overview"] [data-set-jump="${focused.dataset.setJump}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
+  });
+}
+
+// ADR-0616: Quick connect. An org's managed list REPLACES the community catalog (never merges with it).
+let mcpQuickCat = "all";
+let mcpQuickTokenFor = "";
+/** Re-validated here too: the list arrives as JSON over the engine API, and only well-formed https entries
+ *  may ever reach a Connect button. An engine that predates the field sends none (community catalog). */
+function orgMcpCatalog(): McpCatalogEntry[] {
+  return normalizeOrgCatalog(state.managed?.mcpCatalog ?? []);
+}
+function mcpQuickTile(e: McpCatalogEntry): string {
+  const official = catalogEntryIsOfficial(e);
+  const conn = setLoaded.has("mcp") ? configuredFor(e, state.mcpServers) : undefined;
+  const auth = e.auth === "oauth" ? "OAuth sign-in" : e.auth === "token" ? "Token" : "No sign-in";
+  let action: string;
+  if (!official) action = `<button class="btn-mini" type="button" disabled>Not offered</button>`;
+  else if (conn) action = `<button class="btn-mini" type="button" data-set-jump="mcp">Manage</button>`;
+  else if (e.auth === "token" && mcpQuickTokenFor === e.id) action = `<input class="prov-key" id="mcpqToken" type="password" placeholder="${esc(e.name)} token" aria-label="${esc(e.name)} token" autocomplete="off" spellcheck="false" /><button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  else action = `<button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  return `<div class="mcpq-tile${official ? "" : " blocked"}">
+    <div class="mcpq-h"><b class="mcpq-name">${esc(e.name)}</b>${conn ? `<span class="abadge ok">${conn.enabled ? "Connected" : "Added, off"}</span>` : ""}</div>
+    <div class="mcpq-vendor">${esc(e.vendor)}</div>
+    <div class="mcpq-badges"><span class="abadge set">${esc(MCP_CATEGORY_LABEL[e.category] ?? e.category)}</span><span class="abadge">${auth}</span></div>
+    ${official ? (e.note ? `<div class="mcpq-note">${esc(e.note)}</div>` : "") : `<div class="mcpq-note warn">Not offered: its endpoint or docs page is not on a domain the vendor owns.</div>`}
+    <div class="mcpq-foot">${official ? `<a class="mcpq-docs" href="${esc(e.docsUrl)}" target="_blank" rel="noopener noreferrer">Official docs</a>` : ""}${action}</div>
+  </div>`;
+}
+function secMcpQuick(): string {
+  const org = orgMcpCatalog();
+  const entries = org.length ? org : MCP_COMMUNITY_CATALOG;
+  const cats = [...new Set(entries.map((e) => e.category))];
+  const cat = cats.some((c) => c === mcpQuickCat) ? mcpQuickCat : "all";
+  const chips = ["all", ...cats].map((c) => `<button class="mcpq-chip${c === cat ? " on" : ""}" type="button" data-mcpq-cat="${esc(c)}" aria-pressed="${c === cat}">${esc(c === "all" ? "All" : MCP_CATEGORY_LABEL[c as McpCatalogEntry["category"]] ?? c)}</button>`).join("");
+  const tiles = entries.filter((e) => cat === "all" || e.category === cat).map(mcpQuickTile).join("");
+  const source = org.length
+    ? `<div class="mcpq-src">${icon("shield", 13)}<span>Authorized by ${esc(state.managed?.orgName || "your organization")}</span></div>`
+    : `<div class="mcpq-src">${icon("check", 13)}<span>Community catalog: official vendor endpoints only</span></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} ${org.length ? "Your organization's policy lists these servers." : "Every entry is the vendor's own endpoint, checked against the vendor's own documentation page; look-alike servers are left out."} Connecting adds the server to <b>MCP connectors</b> below, where you can turn it off or remove it. Tool output is still scanned by the security gate.</div>`;
+  return setCard("mcpQuick", "Quick connect", "official MCP servers", `${source}<div class="mcpq-chips" role="group" aria-label="Filter by category">${chips}</div><div class="mcpq-grid">${tiles || `<div class="empty">Nothing in this category.</div>`}</div>${note}`, false);
+}
+async function mcpQuickConnect(id: string): Promise<void> {
+  const org = orgMcpCatalog();
+  const e = (org.length ? org : MCP_COMMUNITY_CATALOG).find((x) => x.id === id);
+  if (!e || !catalogEntryIsOfficial(e)) return; // never connect an entry that fails the official-domain check
+  let token: string | undefined;
+  if (e.auth === "token") {
+    if (mcpQuickTokenFor !== id) { mcpQuickTokenFor = id; fillSec("mcpQuick", secMcpQuick()); ($("#mcpqToken") as HTMLInputElement | null)?.focus(); return; }
+    token = (($("#mcpqToken") as HTMLInputElement | null)?.value ?? "").trim();
+    if (!token) { showToast({ tone: "warn", title: "Paste the token first", desc: `${e.name} needs an access token from ${e.vendor}. The official docs link shows where to create one.`, timeout: 4200 }); return; }
+  }
+  const saved = await bridge.mcpUpsert({ name: e.name, transport: e.transport, url: e.url, ...(token ? { token } : {}) }).catch(() => null);
+  if (!saved) { showToast({ tone: "danger", title: `${e.name} was not added`, desc: "The engine did not save the server. Try again, or add it by hand under MCP connectors.", timeout: 6000 }); return; }
+  mcpQuickTokenFor = "";
+  hydrateMcp();
+  showToast(e.auth === "oauth"
+    ? { title: `${e.name} added`, desc: MCP_OAUTH_HINT, meta: "omp owns the connection \u00b7 tool output is still scanned", actions: [{ label: "OK" }], timeout: 0 }
+    : { title: `${e.name} connected`, desc: "The agent picks it up on your next turn.", meta: "omp owns the connection \u00b7 tool output is still scanned", timeout: 4200 });
+}
+
+function secSettingsLayout(): string {
+  const opt = (v: SettingsLayout, label: string, d: string) => `<label class="set-toggle"><input type="radio" name="setLayout" value="${v}"${setLayout === v ? " checked" : ""}/><span><b>${label}</b> - ${d}</span></label>`;
+  return setCard("settingsLayout", "Settings window", "window or side panel",
+    opt("window", "Window", "a large window with the categories on the left (recommended)")
+    + opt("panel", "Side panel", "a full-height panel on the right, over the other panels"), true);
 }
 /** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives - no flash). */
 function hydrateSettings(): void {
@@ -6846,8 +6943,13 @@ function hydrateSettings(): void {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = ws ? workspaceSection(ws) : `<div data-sec="workspace"></div>`;
+    setLoaded.add("workspace"); queueSetOverview();
   });
-  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
+  void bridge.embeddingsConfig().then((r) => { // ADR-0221
+    const emb = { cfg: r?.config ?? null, active: !!r?.active };
+    setEmbeddings = emb;
+    fillSec("embeddings", secEmbeddings(emb.cfg, emb.active));
+  });
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -6864,7 +6966,7 @@ function hydrateSettings(): void {
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.voiceSettings().then((vset) => { setVoice = vset; fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
     void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
     void bridge.perCallModel().catch(() => null).then((v) => fillSec("subagents", secSubagents(v))); // P-MODEL.11 (ADR-0602)
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
@@ -6983,6 +7085,7 @@ async function hydrateLocalProviders(): Promise<void> {
     bridge.resultWindow().catch(() => null), // P-CTX.2b (ADR-0579): the tool-output window choice
   ]);
   state.localProviders = providers ?? [];
+  setLoaded.add("local");
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
   // The fill must be the WHOLE card. fillSec swaps the element's outerHTML, so passing the bare body (as
   // this did before ADR-0579) dropped the card's title and its data-sec, and every later refresh of the
@@ -7238,27 +7341,156 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
       ${destroy}</div>
     ${passphraseChangeHtml("cui")}</div>`;
 }
-function openSettings(): void {
-  closeKnowledge();
-  closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
-  closeSkills(); // P-SKILL.4
-  closeMeetings(); // P-MEET.1
-  closeRemoteView(); // P-RS-VIEW.1
+// ── P-SETUX.1 (ADR-0615): Settings is an OVERLAY (a centered window by default, or a right panel) ─────────
+// It floats above every fixed panel (fleet dock, IDE, orbit) the way Ask Lucid does, so opening it no longer
+// closes the other right-edge surfaces, collapses the sidebar or hides the inspector: closing it returns the
+// user to exactly what was there. Those surfaces still close Settings when THEY open (closeSettings).
+const readSetPref = (key: string): string | null => { try { return localStorage.getItem(key); } catch { return null; } };
+const writeSetPref = (key: string, v: string): void => { try { localStorage.setItem(key, v); } catch { /* private mode */ } };
+let setCat: SettingsCatId = parseSettingsCat(readSetPref(SETTINGS_CAT_KEY)) ?? "overview";
+let setLayout: SettingsLayout = parseSettingsLayout(readSetPref(SETTINGS_LAYOUT_KEY));
+let setOpener: HTMLElement | null = null; // focus goes back here on close
+let setRailBefore: HTMLElement | null = null; // the rail button that was lit before Settings took it
+/** A child overlay Settings can open (or one opened over it) owns Esc while it is up. */
+const SET_CHILD_OVERLAYS = ".popover, .modal-ov, .fb, .ctx-menu, .palette.show, .coach-card, .figma-scrim, .mkt-scrim, .goal-scrim";
+
+/** Open Settings on a category (the remembered one when none is named). */
+function openSettings(cat: SettingsCatId = setCat): void {
+  const wasOpen = state.settingsOpen;
+  if (!wasOpen) {
+    setOpener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    setRailBefore = $(".rail-btn.active") as HTMLElement | null;
+  }
   state.settingsOpen = true;
-  if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
-  $("#inspector")!.hidden = true;
+  document.body.classList.add("set-open");
+  applySettingsLayout();
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "settings"));
-  void renderSettings();
+  if (!wasOpen) renderSettings();
+  showSettingsCat(cat);
+  if (!wasOpen) requestAnimationFrame(() => ($("#setNav .set-nav-it.on") as HTMLElement | null)?.focus({ preventScroll: true }));
+}
+/** The one deep link: open Settings on the card's category, expand the card, scroll to it, flash it and
+ *  focus its header. A category id opens that category; anything unknown opens the Overview. */
+function openSettingsTo(target: string): void {
+  const { cat, sec } = resolveSettingsTarget(target);
+  if (sec) SET_OPEN.add(sec);
+  openSettings(cat);
+  if (!sec) return;
+  setTimeout(() => {
+    const card = document.querySelector<HTMLElement>(`#setBody [data-sec="${sec}"]`);
+    if (!card) return;
+    card.classList.add("open");
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.add("set-flash");
+    setTimeout(() => card.classList.remove("set-flash"), 1600);
+    (card.querySelector(".set-coll-h, [data-set-jump], button") as HTMLElement | null)?.focus({ preventScroll: true });
+  }, 140);
 }
 function closeSettings(): void {
   if (!state.settingsOpen) return;
   state.settingsOpen = false;
   seasonPreview?.dispose(); seasonPreview = null; // P-SEASON.1: no hidden canvas keeps animating
-  $("#settings")!.hidden = true;
-  $("#inspector")!.hidden = false;
+  const aside = $("#settings")!;
+  const hadFocus = aside.contains(document.activeElement);
+  aside.hidden = true;
+  $("#setScrim")!.hidden = true;
+  document.body.classList.remove("set-open");
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
-  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+  (setRailBefore?.isConnected ? setRailBefore : $('.rail-btn[data-rail="chat"]'))?.classList.add("active");
+  const back = setOpener;
+  setOpener = null; setRailBefore = null;
+  if (hadFocus && back?.isConnected) back.focus({ preventScroll: true });
+}
+function showSettingsCat(cat: SettingsCatId): void {
+  setCat = cat;
+  writeSetPref(SETTINGS_CAT_KEY, cat);
+  $$("#setBody .set-cat").forEach((s) => { (s as HTMLElement).hidden = (s as HTMLElement).dataset.cat !== cat; });
+  const body = $("#setBody");
+  if (body) body.scrollTop = 0;
+  renderSetNav();
+}
+/** The category list, or (while the search box has text) the matching cards. */
+function renderSetNav(): void {
+  const nav = $("#setNav");
+  if (!nav) return;
+  const q = (($("#setSearch") as HTMLInputElement | null)?.value ?? "").trim();
+  nav.classList.toggle("searching", !!q);
+  if (q) {
+    const hits = searchSettings(q);
+    nav.innerHTML = hits.length
+      ? hits.map((s) => `<button class="set-nav-it set-nav-hit" type="button" data-set-jump="${s.sec}"><span class="set-nav-l">${esc(s.title)}</span><span class="set-nav-s">${esc(settingsCategory(s.cat)?.label ?? "")}</span></button>`).join("")
+      : `<div class="set-nav-empty">No setting matches \u201c${esc(q)}\u201d.</div>`;
+    return;
+  }
+  nav.innerHTML = SETTINGS_CATEGORIES.map((c) => `<button class="set-nav-it${c.id === setCat ? " on" : ""}" type="button" data-set-cat="${c.id}"${c.id === setCat ? ' aria-current="page"' : ""} data-tip="${esc(`${c.label}|${c.blurb}`)}" data-tip-side="right">${icon(c.icon, 15)}<span class="set-nav-l">${esc(c.label)}</span></button>`).join("");
+}
+/** Window (modal, scrim, focus trapped) or panel (a right flyout over the other panels, nothing dimmed). */
+function applySettingsLayout(): void {
+  const aside = $("#settings")!;
+  const win = setLayout === "window";
+  aside.dataset.layout = setLayout;
+  aside.setAttribute("role", "dialog");
+  if (win) aside.setAttribute("aria-modal", "true"); else aside.removeAttribute("aria-modal");
+  $("#setScrim")!.hidden = !(win && state.settingsOpen);
+  const btn = $("#setLayoutBtn")!;
+  btn.innerHTML = icon(win ? "sidebar" : "square", 15);
+  btn.setAttribute("aria-label", win ? "Show settings as a side panel" : "Show settings as a window");
+  btn.dataset.tip = win ? "Side panel|Dock Settings on the right, over the other panels" : "Window|Show Settings as a large window with the categories on the left";
+}
+function setSettingsLayout(next: SettingsLayout): void {
+  setLayout = next;
+  writeSetPref(SETTINGS_LAYOUT_KEY, next);
+  applySettingsLayout();
+  fillSec("settingsLayout", secSettingsLayout());
+}
+/** Wires the Settings chrome once at init: nav, search, layout, scrim, Esc and the window-mode focus trap. */
+function initSettingsChrome(): void {
+  const aside = $("#settings")!;
+  const scrim = $("#setScrim")!;
+  document.body.append(scrim, aside); // fixed layers live at the top level, like Ask Lucid's dock
+  const search = $("#setSearch") as HTMLInputElement;
+  $("#setClose")!.addEventListener("click", () => closeSettings());
+  $("#setLayoutBtn")!.addEventListener("click", () => setSettingsLayout(setLayout === "window" ? "panel" : "window"));
+  scrim.addEventListener("click", () => closeSettings());
+  search.addEventListener("input", () => renderSetNav());
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = searchSettings(search.value)[0];
+    if (first) { e.preventDefault(); search.value = ""; openSettingsTo(first.sec); }
+  });
+  aside.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const cat = (t.closest("[data-set-cat]") as HTMLElement | null)?.dataset.setCat;
+    if (cat) { const c = parseSettingsCat(cat); if (c) showSettingsCat(c); return; }
+    const jump = (t.closest("[data-set-jump]") as HTMLElement | null)?.dataset.setJump;
+    if (jump) { search.value = ""; openSettingsTo(jump); return; }
+    const qcat = (t.closest("[data-mcpq-cat]") as HTMLElement | null)?.dataset.mcpqCat;
+    if (qcat) { mcpQuickCat = qcat; fillSec("mcpQuick", secMcpQuick()); return; }
+    const conn = (t.closest("[data-mcpq-connect]") as HTMLButtonElement | null);
+    if (conn) { conn.disabled = true; void mcpQuickConnect(conn.dataset.mcpqConnect!).finally(() => { conn.disabled = false; }); }
+  });
+  aside.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.target as HTMLElement).id === "mcpqToken") { e.preventDefault(); ((e.target as HTMLElement).parentElement?.querySelector("[data-mcpq-connect]") as HTMLElement | null)?.click(); return; }
+    if (e.key !== "Tab" || setLayout !== "window") return; // aria-modal: Tab stays inside the window
+    const f = [...aside.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((n) => !(n as HTMLButtonElement).disabled && n.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0]!, last = f[f.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  aside.addEventListener("change", (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.name === "setLayout" && t.checked) setSettingsLayout(parseSettingsLayout(t.value));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !state.settingsOpen || e.defaultPrevented) return;
+    // Esc inside Ask Lucid never gets here: its window capture-phase listener stops it first.
+    if (document.querySelector(SET_CHILD_OVERLAYS)) return; // an open child overlay owns this Esc
+    e.preventDefault();
+    if (document.activeElement === search && search.value) { search.value = ""; renderSetNav(); return; }
+    closeSettings();
+  });
 }
 
 // ── P-SKILL.4 (ADR-0097): the Skills directory + management fly-out ───────────────────────────────
@@ -9198,18 +9430,6 @@ async function runStudioCodify(btn: HTMLElement): Promise<void> {
   }
 }
 
-// P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view -
-// the nudge CTA, and the entry point for a brand-new user to enable + set a passphrase.
-function openPersonalizationSettings(): void {
-  SET_OPEN.add("personal");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="personal"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 120);
-}
-
 // First-run onboarding: while personalization is UNCONFIGURED, keep the Personalization settings
 // section expanded (so enable→passphrase is discoverable, not buried in a collapsed accordion), and
 // show a one-time nudge toast guiding the user to import their ChatGPT/Claude/Gemini history.
@@ -9226,7 +9446,7 @@ async function maybeOnboardPersonal(): Promise<void> {
     desc: "Import your ChatGPT, Claude, or Gemini history to tailor replies. It's encrypted on this device, scanned by the security gate, and you can forget or export anything anytime.",
     meta: "Private · on-device · opt-in",
     tone: "info",
-    actions: [{ label: "Set up personalization", kind: "ok", run: () => openPersonalizationSettings() }, { label: "Later" }],
+    actions: [{ label: "Set up personalization", kind: "ok", run: () => openSettingsTo("personal") }, { label: "Later" }],
     timeout: 0,
   }), 1500);
 }
@@ -11903,7 +12123,7 @@ async function openResourcePanelLive(): Promise<void> {
  *  The same bridge calls and toasts as Settings' #personalToggle and #personalSetup; the view re-renders to the
  *  next step, and Settings (if open) follows through hydratePersonal. */
 function bindKgPersonalGate(canvas: HTMLElement): void {
-  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openPersonalizationSettings());
+  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openSettingsTo("personal"));
   $("#kgPersonalOn", canvas)?.addEventListener("click", async (e) => {
     (e.currentTarget as HTMLButtonElement).disabled = true;
     const r = await bridge.personalEnable(true).catch(() => null);
@@ -12422,7 +12642,7 @@ function renderWorkspaceBar(): void {
   bar.hidden = false;
   if (state.workspace) {
     setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
-    void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+    void offerVaultEnvImport(w.current, () => openSettingsTo(VAULT_ENV_SEC)); // P-VAULT-ENV.1: once per workspace with a .env
   }
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
@@ -12849,7 +13069,7 @@ async function forgetRecentWorkspace(path: string): Promise<void> {
   const info = await bridge.removeRecentWorkspace(path).catch(() => null);
   if (info) state.workspace = info;
   const el = document.querySelector(`#setBody [data-sec="workspace"]`);
-  if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
+  if (el && state.workspace) el.outerHTML = workspaceSection(state.workspace); // the card carries its own data-sec (a wrapper nested a second one)
   renderWorkspaceBar();
 }
 // P-WSSETUP: the workspace-initialization offer. When the opened folder has no .agents framework
@@ -14403,7 +14623,7 @@ const speech = new SpeechQueue({
     tone: "warn",
     title: "Nothing came back from the speech engine",
     desc: note || "Pick an engine and voice from the composer's voice button, or add that provider's API key.",
-    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsToVoice() }, { label: "OK" }],
+    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsTo("voice") }, { label: "OK" }],
     timeout: 7000,
   }),
   onChange: () => updateVoiceChip(),
@@ -14829,7 +15049,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
     const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
     if (dead) {
       const row = data?.engines?.find((x) => x.id === dead);
-      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsToVoice(); } }, { label: "OK" }], timeout: 9000 });
+      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsTo("voice"); } }, { label: "OK" }], timeout: 9000 });
       return;
     }
     const eng = (t.closest("[data-vprov]") as HTMLElement | null)?.dataset.vprov;
@@ -14846,7 +15066,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
       return;
     }
     if (t.closest("#voicePopTest")) { void speakText("This is the voice I'll use to read replies aloud."); return; }
-    if (t.closest("#voicePopMore")) { close(); openSettingsToVoice(); }
+    if (t.closest("#voicePopMore")) { close(); openSettingsTo("voice"); }
   });
   await reload();
 }
@@ -14977,7 +15197,7 @@ async function warnSttFailure(sess: DictationSession, r: { text: string; note: s
   if (v?.sttProvider !== "elevenlabs" && ws && !ws.running && ws.capable && ws.binAvailable) {
     actions.push({ label: "Start local Whisper", kind: "ok", run: () => { void startManagedWhisperFromMic(); } });
   }
-  actions.push({ label: "Voice settings", run: () => { openSettingsToVoice(); } });
+  actions.push({ label: "Voice settings", run: () => { openSettingsTo("voice"); } });
   showToast({ tone: "warn", title: "Heard you, but nothing transcribed", desc: msg, actions, timeout: 12000 });
 }
 /** Start the managed offline Whisper from the dictation-failure toast (same flow as the Voice card's
@@ -17809,6 +18029,7 @@ function wire(): void {
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
     if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
+    if (r === "settings") return openSettings(); // P-SETUX.1: an overlay, so whatever is open stays open beneath it
     if (r !== "knowledge") closeKnowledge();
     if (r !== "meetings") closeMeetings(); // P-MEET.1
     if (r !== "remote") closeRemoteView(); // P-RS-VIEW.1
@@ -17819,7 +18040,6 @@ function wire(): void {
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
-    else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "meetings") openMeetings(); // P-MEET.1
     else if (r === "remote") openRemoteView(); // P-RS-VIEW.1
@@ -18552,7 +18772,7 @@ function wire(): void {
     attach: bridge,
     openKnowledge: (anchor) => openKnowledgeMenu(anchor),
     openSkills: (anchor) => openSkillDropdown(anchor),
-    openConnectors: openSettingsToMcp,
+    openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
@@ -18700,7 +18920,7 @@ function wire(): void {
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
 
   // settings page actions (delegated)
-  $("#setClose")!.addEventListener("click", () => closeSettings());
+  initSettingsChrome(); // P-SETUX.1 (ADR-0615): close, layout, nav, search, scrim, Esc, focus trap
   // P-IDE.1c: enable the China-unlock button only when exactly ACKNOWLEDGE is typed.
   $("#setBody")!.addEventListener("input", (e) => {
     const t = e.target as HTMLElement;
@@ -19633,7 +19853,7 @@ function wire(): void {
       folder: true,
       knowledge: (anchor) => openKnowledgeMenu(anchor),
       skills: (anchor) => openSkillDropdown(anchor),
-      connectors: openSettingsToMcp,
+      connectors: () => openSettingsTo("mcpQuick"),
     }));
     syncPlusButton(plusBtn, bridge, ta);
   }
@@ -19736,7 +19956,7 @@ function wire(): void {
   // sidebar collapse (rail toggle + header collapse), mirroring the right panel
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
-  $("#wsBar")!.addEventListener("click", () => openSettings());
+  $("#wsBar")!.addEventListener("click", () => openSettingsTo("workspace")); // P-SETUX.1: the workspace pill lands on its card
   $("#sessList")!.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
@@ -20939,8 +21159,8 @@ function openProviderHub(onClose?: () => void): void {
     // P-LOCAL.4: a preset tile pre-fills the add form (via pendingLocalPreset); a configured tile / the
     // "Add a custom endpoint" tile just opens Settings -> Local Providers. All route to the one add form.
     const lpPresetTile = t.closest("[data-hub-local-preset]") as HTMLElement | null;
-    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsToLocalProviders(); return; }
-    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsToLocalProviders(); return; }
+    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsTo("localProviders"); return; }
+    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsTo("localProviders"); return; }
     // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
     const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
     if (tile && !t.closest(".provhub-config")) {

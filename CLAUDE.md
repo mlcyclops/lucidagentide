@@ -161,6 +161,15 @@ inline tags directly as siblings inside a flex box. And mockups MUST reuse the r
 component CSS (or copy it verbatim) - a hand-rolled divergent style that flexes
 prose is this same bug wearing a costume, which is exactly how it slipped back in.
 
+### 12. UI/UX changes pass the UX gate.
+
+A PR that touches `desktop/renderer/**` (not tests), `desktop/*.html` or `mockups/**`
+carries the ticked "UX review" checklist from `.github/pull_request_template.md`
+(rules: `docs/UX-PR-CHECKLIST.md`, baseline: `docs/UX-REVIEW.md`) or one line
+`UX: N/A (reason)`. Every added control, card or overlay pays for itself in the
+complexity budget. CI runs `tools/ux_pr_gate.ts`, which also fails on any em dash
+in an added UI line (ADR-0617).
+
 -----
 
 ## Frozen contract files (changing any one is its own increment + ADR)
