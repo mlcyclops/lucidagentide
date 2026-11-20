@@ -10,8 +10,8 @@ import { orbitSlots } from "./orbit_layout.ts";
 import type { VizBusEvent } from "./viz_bus.ts";
 import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
 import {
-  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, createVizState, describeNode, drainEvents, edgesOf, fmtRate, frameInterval,
-  GONE_MS, HUB_ID, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, tick, vizTierOpts,
+  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
+  GONE_MS, HUB_ID, idleSeconds, OUT_CHARS, OUT_TURNS, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
   type PowerKind, type VizEvent, type VizState,
 } from "./viz_model.ts";
 
@@ -179,6 +179,113 @@ describe("subagents", () => {
     const kid = [...s.nodes.values()].find((n) => n.kind === "subagent")!;
     expect(kid.persona).toBe("planner");
     expect(kid.status).toBe("ended");
+  });
+  test("P-VIZ.4: a lane's background delegation hangs off the lane and outlives the task call and the turn; its run poll ends it", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working")], T0);
+    applyEvent(s, ev("L1", { type: "tool", id: "tc1", name: "other", detail: "task", status: "open" }), T0 + 1);
+    applyEvent(s, ev("L1", { type: "subagent", id: "tc1", agent: "task", title: "task", assignments: ["Fix app.py", "Write smoke tests"], names: ["FixApp", "SmokeScript"] }), T0 + 1);
+    const kids = () => [...s.nodes.values()].filter((n) => n.kind === "subagent");
+    expect(kids().map((k) => [k.name, k.parent])).toEqual([["FixApp", "L1"], ["SmokeScript", "L1"]]);
+    // omp returns "Spawned 2 background agents" at once: the call settles, the subagents keep running.
+    applyEvent(s, ev("L1", { type: "tool", id: "tc1", name: "other", detail: "task", status: "done", elapsedMs: 40 }), T0 + 50);
+    expect(kids().every((k) => k.status === "active")).toBe(true);
+    const run = (name: string, done: boolean, at: number) => ({ name, done, lastAt: at, ...(done ? { endedAt: at } : {}), assignment: "", model: null, tools: 1, steps: [] });
+    applyRuns(s, [run("FixApp", false, T0 + 900), run("SmokeScript", false, T0 + 900)], T0 + 1000, "L1");
+    applyEvent(s, ev("L1", { type: "done" }), T0 + 1100);
+    expect(kids().every((k) => k.status === "active")).toBe(true);
+    drainEvents(s);
+    applyRuns(s, [run("FixApp", true, T0 + 2000), run("SmokeScript", false, T0 + 2000)], T0 + 2100, "L1");
+    expect(powers(drainEvents(s))).toEqual([{ node: kids()[0]!.id, power: "ended" }]);
+    expect(kids()[1]!.status).toBe("active");
+  });
+  test("P-VIZ.4: lane runs stay under their own lane, even with the same run name as another lane's", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working"), lane("L2", "working")], T0);
+    const run = { name: "Reviewer", done: false, lastAt: T0, assignment: "Audit", model: null, tools: 0, steps: [] };
+    applyRuns(s, [run], T0, "L1");
+    applyRuns(s, [run], T0, "L2");
+    applyRuns(s, [run], T0, "gone-lane");
+    expect([...s.nodes.values()].filter((n) => n.kind === "subagent").map((n) => [n.id, n.parent])).toEqual([["run:L1:Reviewer", "L1"], ["run:L2:Reviewer", "L2"]]);
+  });
+  test("P-VIZ.4: a failed task call kills the batch it announced", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working")], T0);
+    applyEvent(s, ev("L1", { type: "subagent", id: "tc9", agent: "reviewer", title: "task", assignments: ["Review tests"], names: ["TestReviewer"] }), T0 + 1);
+    drainEvents(s);
+    applyEvent(s, ev("L1", { type: "tool", id: "tc9", name: "other", detail: "task", status: "failed" }), T0 + 2);
+    const kid = [...s.nodes.values()].find((n) => n.kind === "subagent")!;
+    expect(kid.status).toBe("killed");
+    expect(powers(drainEvents(s))).toEqual([{ node: "L1", power: "tool-failed" }, { node: kid.id, power: "killed" }]);
+  });
+});
+
+describe("P-VIZ.4 node panel output", () => {
+  test("a watch seed, the live stream, a sent prompt and a turn end read like the card's transcript", () => {
+    const o = createOutput();
+    foldOutput(o, { type: "watch-seed", turns: [{ role: "user", text: "Fix app.py" }, { role: "assistant", text: "Done." }, { role: "system", text: "x" }] });
+    expect(o.seeded).toBe(true);
+    expect(o.turns).toEqual([{ role: "user", text: "Fix app.py" }, { role: "assistant", text: "Done." }]);
+    foldOutput(o, { type: "user", text: "Now add tests" });
+    foldOutput(o, { type: "token", text: "Reading" });
+    foldOutput(o, { type: "tool", id: "c1", name: "read", detail: "app.py", status: "open" });
+    foldOutput(o, { type: "tool", id: "c1", name: "read", detail: "app.py", status: "done" });
+    foldOutput(o, { type: "token", text: "Wrote them." });
+    expect(o.live).toBe("Reading\n> app.py\nWrote them.");
+    foldOutput(o, { type: "done" });
+    expect(o.live).toBe("");
+    expect(o.turns.slice(-2)).toEqual([{ role: "user", text: "Now add tests" }, { role: "assistant", text: "Reading\n> app.py\nWrote them." }]);
+    foldOutput(o, { type: "error", message: "boom" });
+    expect(o.turns.at(-1)).toEqual({ role: "assistant", text: "Error: boom" });
+  });
+  test("bounded: the newest turns and the newest text are kept", () => {
+    const o = createOutput();
+    for (let i = 0; i < OUT_TURNS + 3; i++) foldOutput(o, { type: "user", text: `p${i}` });
+    expect(o.turns).toHaveLength(OUT_TURNS);
+    expect(o.turns.at(-1)!.text).toBe(`p${OUT_TURNS + 2}`);
+    foldOutput(o, { type: "token", text: "a".repeat(OUT_CHARS) + "END" });
+    expect(o.live).toHaveLength(OUT_CHARS);
+    expect(o.live.endsWith("END")).toBe(true);
+  });
+});
+
+describe("P-VIZ.4 boss and idle clock", () => {
+  test("Main not streaming while an agent works is supervising them; with nobody working it is just idle", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working"), lane("L2", "working"), lane("L3", "done")], T0);
+    const hub = s.nodes.get(HUB_ID)!;
+    expect(teamOf(s, HUB_ID)).toEqual({ agents: 2, subagents: 0 });
+    expect(describeNode(hub, T0, teamOf(s, HUB_ID)).lines).toContain("supervising 2 agents");
+    expect(superviseText({ agents: 1, subagents: 2 })).toBe("supervising 1 agent and 2 subagents");
+    applyFleet(s, [lane("L1", "done"), lane("L2", "done"), lane("L3", "done")], T0 + 1000);
+    expect(teamOf(s, HUB_ID)).toEqual({ agents: 0, subagents: 0 });
+    expect(describeNode(hub, T0 + 1000, teamOf(s, HUB_ID)).lines).toContain("idle");
+    // Main streaming is Main working, never supervising.
+    applyEvent(s, tok(HUB_ID, 40, "chat"), T0 + 1100);
+    applyFleet(s, [lane("L1", "working")], T0 + 1200);
+    expect(describeNode(hub, T0 + 1200, teamOf(s, HUB_ID)).lines.join(" ")).not.toContain("supervising");
+  });
+  test("an agent's team is its own subagents only", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "done"), lane("L2", "working")], T0);
+    applyRuns(s, [{ name: "a", done: false, lastAt: T0, assignment: "x", model: null, tools: 0, steps: [] }], T0, "L1");
+    expect(teamOf(s, "L1")).toEqual({ agents: 0, subagents: 1 });
+    expect(teamOf(s, "L2")).toEqual({ agents: 0, subagents: 0 });
+  });
+  test("idleSince starts when work stops and clears while working", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working")], T0);
+    const n = s.nodes.get("L1")!;
+    tick(s, T0 + 100);
+    expect(n.idleSince).toBeNull();
+    expect(idleSeconds(n, T0 + 100)).toBe(0);
+    applyEvent(s, ev("L1", { type: "done" }), T0 + 200);
+    tick(s, T0 + 300);
+    expect(n.idleSince).toBe(T0 + 300);
+    expect(idleSeconds(n, T0 + 61_300)).toBe(61);
+    applyEvent(s, tok("L1", 40), T0 + 62_000);
+    tick(s, T0 + 62_100);
+    expect(idleSeconds(n, T0 + 62_100)).toBe(0);
   });
 });
 

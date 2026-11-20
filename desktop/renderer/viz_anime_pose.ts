@@ -13,6 +13,9 @@
 // sharp move reads as anticipation key, snap key, then a smooth settle key. Emotion lives in the EYES: every key
 // carries an emotion (the pose's own unless overridden) and a gaze; the figure redraws its eye canvas only when
 // the emotion, the blink step or the gaze bucket changes (eyeKey).
+//
+// P-VIZ.4 (ADR-0628): the `supervise` clip (the hub watching his team, with a ticking holo checklist), the glare
+// and angry eyes, and the reaction timeline (stare / outburst) the figure layers over its activity.
 
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 
@@ -40,6 +43,9 @@ export const EMOTIONS = {
   tired: E("open", 0.32, -0.2, 0.05, 1.0, -0.3, -0.04),
   pain: E("open", 0.28, 0.35, 0.35, 0.8, -0.45, 0.06, true),
   ko: E("x", 1, 0, 0, 1, -0.3, 0.05),
+  // P-VIZ.4 (ADR-0628) reactions: the narrowed, annoyed stare at the camera and the outburst's sharp V brows
+  glare: E("open", 0.42, 0.5, 0.42, 0.4, 0.85, -0.14),
+  angry: E("open", 0.55, 0.7, 0.3, 0.36, 1.05, -0.2),
 } satisfies Record<string, Emotion>;
 export type EmotionName = keyof typeof EMOTIONS;
 export const EMOTION_NAMES = Object.keys(EMOTIONS) as EmotionName[];
@@ -89,6 +95,10 @@ export type PoseDef = { readonly emotion: EmotionName; readonly rootX?: number; 
 const SHADE_SH: V3 = [-2.92, 0, 0.47];
 const SHADE_EL: V3 = [0.66, 0, -0.82];
 const KATA_LEGS = { hipL: [-0.4, 0, -0.25], kneeL: [0.6, 0, 0], hipR: [0.3, 0, 0.25], kneeR: [0.45, 0, 0] } as const;
+// Folded arms in `supervise`: each upper arm swings forward and twists about its own axis so the elbow bend lays
+// the forearm across the chest (horizontal for that swing); the right forearm rides a little higher, over the left.
+const CROSSED = { shL: [-0.85, 1.4, 0], elL: [-1.38, 0, 0], shR: [-0.95, -1.4, 0], elR: [-1.34, 0, 0] } as const;
+const WIDE_FEET = { hipL: [0, 0, -0.14], hipR: [0, 0, 0.14] } as const;
 
 export const POSES = {
   // ---- the approved lab poses
@@ -125,6 +135,17 @@ export const POSES = {
   flinch: { emotion: "pain", rootY: -0.04, spine: [-0.3, 0, 0], head: [-0.25, 0, 0.15], shL: [-1.3, 0, 0.35], elL: [-1.9, 0, 0], shR: [-1.3, 0, -0.35], elR: [-1.9, 0, 0], hipL: [-0.15, 0, -0.12], kneeL: [0.3, 0, 0], hipR: [0.1, 0, 0.12], kneeR: [0.25, 0, 0] },
   bow: { emotion: "happy", spine: [0.6, 0, 0], head: [0.3, 0, 0], shL: [0, 0, -0.08], shR: [0, 0, 0.08], hipL: [0, 0, -0.08], hipR: [0, 0, 0.08] },
   jolt: { emotion: "surprised", spine: [-0.15, 0, 0], head: [-0.2, 0, 0], shL: [0, 0, -0.5], elL: [-0.3, 0, 0], shR: [0, 0, 0.5], elR: [-0.3, 0, 0], hipL: [0, 0, -0.1], hipR: [0, 0, 0.1] },
+
+  // ---- P-VIZ.4 (ADR-0628): supervising his team (arms folded, chest out, looking over his agents) and the outburst
+  supervise: { emotion: "focused", chest: [-0.04, 0, 0], head: [0.06, 0, 0], ...CROSSED, ...WIDE_FEET },
+  superviseL: { emotion: "focused", chest: [-0.04, 0.12, 0], head: [0.04, 0.45, 0], ...CROSSED, ...WIDE_FEET },
+  superviseR: { emotion: "focused", chest: [-0.04, -0.12, 0], head: [0.04, -0.45, 0], ...CROSSED, ...WIDE_FEET },
+  superviseNodL: { emotion: "focused", chest: [-0.02, 0.12, 0], head: [0.3, 0.42, 0], ...CROSSED, ...WIDE_FEET },
+  superviseNodR: { emotion: "focused", chest: [-0.02, -0.12, 0], head: [0.3, -0.42, 0], ...CROSSED, ...WIDE_FEET },
+  // a quick look down at the holo checklist floating at his -X side
+  superviseCheck: { emotion: "focused", chest: [0.06, -0.15, 0], head: [0.38, -0.4, 0], ...CROSSED, ...WIDE_FEET },
+  // The outburst's upper body (layered over whatever he is doing): leaning in, both fists raised beside the face.
+  outburst: { emotion: "angry", spine: [0.06, 0, 0], chest: [0.1, 0, 0], shL: [-1.45, 0, -0.4], elL: [-1.75, 0, 0], shR: [-1.45, 0, 0.4], elR: [-1.75, 0, 0] },
 } as const satisfies Record<string, PoseDef>;
 export type PoseName = keyof typeof POSES;
 export const LAB_POSES: readonly PoseName[] = ["stance", "typing", "powerup", "kiblast", "dash", "meditate", "portrait", "victory", "powerdown"];
@@ -190,7 +211,8 @@ export function tapCurve(u: number): number {
 export interface Key { readonly at: number; readonly pose: PoseName; readonly ease: Ease; readonly emotion: EmotionName; readonly gaze: number }
 export interface Clip { readonly len: number; readonly loop: boolean; readonly keys: readonly Key[] }
 export type ShotName = "powerup" | "victory";
-export type ClipName = MiniActivity | ShotName | "failed" | "ended" | "killed";
+/** `supervise` is named explicitly so the clip table type-checks whether or not MiniActivity carries it yet. */
+export type ClipName = MiniActivity | "supervise" | ShotName | "failed" | "ended" | "killed";
 
 const K = (at: number, pose: PoseName, e: Ease = "smooth", o: { emotion?: EmotionName; gaze?: number } = {}): Key =>
   ({ at, pose, ease: e, emotion: o.emotion ?? POSES[pose].emotion, gaze: o.gaze ?? 0 });
@@ -198,6 +220,17 @@ const K = (at: number, pose: PoseName, e: Ease = "smooth", o: { emotion?: Emotio
 export const CLIPS: Readonly<Record<ClipName, Clip>> = {
   // Focused typing at the holo keyboard (the taps are layered by the figure), an occasional glance up and aside.
   typing: { len: 4.4, loop: true, keys: [K(0, "typing"), K(2.2, "typing"), K(2.5, "typingGlance", "smooth", { gaze: 0.6 }), K(3.1, "typingGlance", "smooth", { gaze: 0.6 }), K(3.35, "typing")] },
+  // P-VIZ.4: the hub while his team works. Arms folded, he looks slowly over his agents one side then the other
+  // with a nod each way; every half loop (SUPERVISE_TICK_AT) a quick snap glance down at the holo checklist.
+  supervise: {
+    len: 8.4, loop: true,
+    keys: [
+      K(0, "superviseCheck", "snap", { gaze: -0.5 }), K(0.55, "superviseCheck", "smooth", { gaze: -0.5 }), K(0.95, "supervise"),
+      K(1.9, "superviseL", "smooth", { gaze: 1 }), K(2.7, "superviseL", "smooth", { gaze: 1 }), K(3.0, "superviseNodL", "smooth", { gaze: 1 }), K(3.3, "superviseL", "smooth", { gaze: 1 }), K(4.0, "supervise"),
+      K(4.2, "superviseCheck", "snap", { gaze: -0.5 }), K(4.75, "superviseCheck", "smooth", { gaze: -0.5 }), K(5.15, "supervise"),
+      K(6.1, "superviseR", "smooth", { gaze: -1 }), K(6.9, "superviseR", "smooth", { gaze: -1 }), K(7.2, "superviseNodR", "smooth", { gaze: -1 }), K(7.5, "superviseR", "smooth", { gaze: -1 }), K(8.2, "supervise"),
+    ],
+  },
   // Coil and charge with determined eyes while the ki ball grows, a snap thrust that fires it, a smooth reset.
   kiblast: { len: 3.2, loop: true, keys: [K(0, "kiReady"), K(0.35, "kiCharge"), K(1.5, "kiCharge"), K(1.62, "kiblast", "snap"), K(2.3, "kiblast"), K(2.85, "kiReady")] },
   // Guard, then three snaps with a wind-up each: right punch, left punch, a chambered front kick.
@@ -228,7 +261,7 @@ export const CLIPS: Readonly<Record<ClipName, Clip>> = {
 
 /** Representative clip times for motion=false (a readable still of each clip). */
 export const STILL_T: Readonly<Record<ClipName, number>> = {
-  typing: 0.5, kiblast: 1.66, kata: 0.7, meditate: 0, scan: 1.0, dash: 1.0, powerup: 0.8, victory: 1.0, failed: 0.2, ended: 4, killed: 2,
+  typing: 0.5, supervise: 2.2, kiblast: 1.66, kata: 0.7, meditate: 0, scan: 1.0, dash: 1.0, powerup: 0.8, victory: 1.0, failed: 0.2, ended: 4, killed: 2,
 };
 
 /** The sampled key data besides the pose (reused by the caller, never allocated per frame). */
@@ -364,4 +397,159 @@ export function auraLevel(t: number): number {
 /** A short decaying shake at the start of a powerup or a failure. */
 export function shakeLevel(t: number): number {
   return t < 0 || t >= 0.45 ? 0 : 1 - t / 0.45;
+}
+
+// ------------------------------------------------------------------------------------------ supervise checklist
+
+/** supervise clip times at which the glance lands on the holo checklist and a box ticks. */
+export const SUPERVISE_TICK_AT: readonly number[] = [0.3, 4.5];
+export const CHECK_ROWS = 3;
+
+/** Boxes ticked on the holo checklist after `t` seconds of the supervise clock: one more per glance, and the
+ *  glance after a full list starts a fresh one (0 .. CHECK_ROWS). */
+export function checklistTicks(t: number): number {
+  if (!Number.isFinite(t) || t < 0) return 0;
+  const len = CLIPS.supervise.len;
+  const loops = Math.floor(t / len);
+  const ct = t - loops * len;
+  let n = loops * SUPERVISE_TICK_AT.length;
+  for (const a of SUPERVISE_TICK_AT) if (ct >= a) n++;
+  return n % (CHECK_ROWS + 1);
+}
+
+// ------------------------------------------------------------------------------------------ reactions (P-VIZ.4)
+//
+// A tap on the figure is an interruption. `stare`: the eyes snap wide open (surprised), then narrow into an
+// annoyed glare while the head and torso turn smoothly to the camera; he holds it with one slow suspicious blink,
+// then turns back to his work more slowly than he turned in. `outburst` (a double tap): fists up and shaking,
+// a stomp, strain eyes (the yell) then angry ones, an anger mark, steam and an aura flare, then a glare at the
+// camera and back to work. A reaction is a LAYER: the activity clock keeps running underneath and the figure
+// blends the turn (`turn`) and the raised fists (`rage`) over the activity pose by weight.
+
+export type ReactionKind = "stare" | "outburst";
+export const REACTION_KINDS: readonly ReactionKind[] = ["stare", "outburst"];
+/** The turn to the camera: smooth, quicker for an outburst. */
+export const STARE_TURN_IN_S = 0.35;
+export const OUTBURST_TURN_IN_S = 0.18;
+/** The slower turn back to the work. */
+export const REACT_TURN_OUT_S = 0.65;
+/** The eyes snap wide open for this long before they narrow into the glare. */
+export const SURPRISE_S = 0.3;
+export const STARE_HOLD_MIN_S = 1.6;
+export const STARE_HOLD_MAX_S = 2.2;
+/** The one slow suspicious blink in the stare: a normal blink slowed to this long, starting mid hold. */
+export const SLOW_BLINK_S = 0.6;
+export const OUTBURST_MIN_S = 1.5;
+export const OUTBURST_MAX_S = 2.5;
+/** The outburst opens with strain > < eyes (the yell) for this long, then angry V brows. */
+export const YELL_S = 0.45;
+/** The stomp: a decaying shake starting here. */
+export const STOMP_AT_S = 0.15;
+export const STOMP_S = 0.4;
+/** After the outburst, the glare at the camera before he turns back. */
+export const GLARE_S = 0.9;
+/** The raised fists come up over RAGE_IN_S and drop over RAGE_OUT_S. */
+export const RAGE_IN_S = 0.2;
+export const RAGE_OUT_S = 0.3;
+
+export interface Reaction {
+  readonly kind: ReactionKind;
+  readonly turnIn: number;
+  /** stare: how long he holds the gaze after the turn in (0 for an outburst). */
+  readonly hold: number;
+  /** outburst: how long the outburst lasts before the glare (0 for a stare). */
+  readonly rage: number;
+  /** When he starts turning back to the work. */
+  readonly face: number;
+  readonly len: number;
+  /** Layer weights already on when this reaction started: a reaction restarted mid-way blends from them. */
+  readonly turnFrom: number;
+  readonly rageFrom: number;
+}
+
+export interface ReactionSample {
+  /** Weight of the turn toward the camera (0 = his own pose). */
+  turn: number;
+  /** Weight of the raised-fists outburst pose. */
+  rage: number;
+  /** The reaction's eyes, or null for the activity's own. */
+  emotion: EmotionName | null;
+  /** The blink step while the reaction owns the eyes (natural blinks are held off), -1 when it does not. */
+  blink: number;
+  stomp: number;
+  /** Anger mark, steam puffs and aura flare levels (0..1). */
+  mark: number;
+  steam: number;
+  aura: number;
+  done: boolean;
+}
+
+/** Resets a sample to "no reaction" (also the initial sample). */
+export function clearReaction(out: ReactionSample): ReactionSample {
+  out.turn = 0; out.rage = 0; out.emotion = null; out.blink = -1; out.stomp = 0; out.mark = 0; out.steam = 0; out.aura = 0; out.done = true;
+  return out;
+}
+
+export function newReactionSample(): ReactionSample {
+  return clearReaction({ turn: 0, rage: 0, emotion: null, blink: -1, stomp: 0, mark: 0, steam: 0, aura: 0, done: true });
+}
+
+/** Plans a reaction from a uniform random number in [0, 1) (the stare's hold, the outburst's length) and the
+ *  layer weights already on (`from`, the current sample when a reaction interrupts another). */
+export function planReaction(kind: ReactionKind, r: number, from?: { readonly turn: number; readonly rage: number }): Reaction {
+  const u = clamp01(Number.isFinite(r) ? r : 0.5);
+  // clamp01 lets NaN through (both comparisons fail), so a NaN weight reads as 0 here
+  const turnFrom = clamp01(from?.turn || 0), rageFrom = clamp01(from?.rage || 0);
+  if (kind === "outburst") {
+    const rage = OUTBURST_MIN_S + (OUTBURST_MAX_S - OUTBURST_MIN_S) * u;
+    const face = rage + GLARE_S;
+    return { kind, turnIn: OUTBURST_TURN_IN_S, hold: 0, rage, face, len: face + REACT_TURN_OUT_S, turnFrom, rageFrom };
+  }
+  const hold = STARE_HOLD_MIN_S + (STARE_HOLD_MAX_S - STARE_HOLD_MIN_S) * u;
+  const face = STARE_TURN_IN_S + hold;
+  return { kind: "stare", turnIn: STARE_TURN_IN_S, hold, rage: 0, face, len: face + REACT_TURN_OUT_S, turnFrom, rageFrom };
+}
+
+/** The reaction `t` seconds in (a non-finite time reads as 0). Past `len` it is cleared and `done`. */
+export function sampleReaction(r: Reaction, t: number, out: ReactionSample): ReactionSample {
+  const tt = Number.isFinite(t) ? Math.max(0, t) : 0;
+  if (tt >= r.len) return clearReaction(out);
+  out.done = false;
+  out.turn = tt < r.turnIn ? r.turnFrom + (1 - r.turnFrom) * smoothEase(tt / r.turnIn) : tt < r.face ? 1 : 1 - smoothEase((tt - r.face) / REACT_TURN_OUT_S);
+  const back = tt >= r.face + REACT_TURN_OUT_S * 0.5;
+  if (r.kind === "outburst") {
+    const down = r.rage - RAGE_OUT_S;
+    out.rage = tt < RAGE_IN_S ? r.rageFrom + (1 - r.rageFrom) * smoothEase(tt / RAGE_IN_S) : tt < down ? 1 : 1 - smoothEase((tt - down) / RAGE_OUT_S);
+    out.emotion = back ? null : tt < YELL_S ? "strain" : tt < r.rage ? "angry" : "glare";
+    out.blink = back ? -1 : 0;
+    out.stomp = tt >= STOMP_AT_S && tt < STOMP_AT_S + STOMP_S ? 1 - (tt - STOMP_AT_S) / STOMP_S : 0;
+    out.mark = bump(tt, 0.08, 0.2, r.rage, r.rage + 0.35);
+    out.steam = bump(tt, 0.25, 0.45, r.rage - 0.2, r.rage + 0.3);
+    out.aura = 0.8 * bump(tt, 0, 0.15, r.rage - 0.4, r.rage);
+  } else {
+    out.rage = r.rageFrom * (1 - smoothEase(tt / RAGE_OUT_S));
+    out.emotion = back ? null : tt < SURPRISE_S ? "surprised" : "glare";
+    const age = tt - (r.turnIn + r.hold * 0.5);
+    out.blink = back ? -1 : age >= 0 && age < SLOW_BLINK_S ? blinkStep((age * BLINK_S) / SLOW_BLINK_S) : 0;
+    out.stomp = 0; out.mark = 0; out.steam = 0; out.aura = 0;
+  }
+  return out;
+}
+
+/** How the turn to the camera spreads over the body: shares of the yaw for spine, chest, neck and head, each
+ *  capped; whatever they cannot cover turns the whole body (the root), so he faces a camera behind him too. */
+const YAW_SHARE = [0.2, 0.25, 0.2, 0.35] as const;
+const YAW_MAX = [0.35, 0.45, 0.4, 0.7] as const;
+
+/** Writes [root, spine, chest, neck, head] yaw for a turn of `need` radians (wrapped to -PI..PI) into `out`. */
+export function distributeYaw(need: number, out: Float32Array): Float32Array {
+  const n = Number.isFinite(need) ? need - Math.round(need / (Math.PI * 2)) * Math.PI * 2 : 0;
+  let rest = n;
+  for (let i = 0; i < 4; i++) {
+    const v = Math.min(YAW_MAX[i]!, Math.max(-YAW_MAX[i]!, n * YAW_SHARE[i]!));
+    out[i + 1] = v;
+    rest -= v;
+  }
+  out[0] = rest;
+  return out;
 }

@@ -93,6 +93,14 @@ describe("activityAt", () => {
     for (let t = 0; t < 60_000; t += 1700) expect(activityAt("tester", "agent", 3, t, false)).toBe("meditate");
   });
 
+  test("an idle boss whose team works supervises, never meditates; working beats supervising", () => {
+    for (let t = 0; t < 60_000; t += 1700) {
+      expect(activityAt("lead", "hub", 1, t, false, true)).toBe("supervise");
+      expect(activityAt("lead", "hub", 1, t, true, true)).not.toBe("supervise");
+    }
+    expect(MINI_ACTIVITIES).toContain("supervise");
+  });
+
   test("deterministic, switches only on the slot beat, and visits the whole repertoire", () => {
     const step = 50;
     const changes: number[] = [];

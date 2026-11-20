@@ -15,12 +15,18 @@
 //   2D: the same figure in the flat cel style (2 steps, thick ink), standing upright with his front turned up
 //       to the top-down camera, filling about 80 percent of a flat rounded tile in the persona color; the
 //       caption on the tile's lower edge.
+// P-VIZ.4 (ADR-0627): setStyle("professional") rebuilds every node with the office cast instead
+// (viz_office.createOfficeFigure: the hub is the boss at the central desk, everyone else a worker at a monitor).
+// In 3D the cube becomes a low fabric cubicle riding the figure (the glass stays as an invisible pick box, its
+// edge color draws the cubicle's top edges); 2D keeps the tile.
 // Lighting follows the camera like the anime lab's sheet: a key from the upper front right, a cool rim light
 // from behind, and the hemisphere fill.
 //
-// Tokens are GPU points (one ShaderMaterial, additive) flowing along each active edge from the producer to
-// its parent; count and speed follow the node's est. tok/s. A surge throws a jagged regenerated lightning
-// bolt along the edge and a plasma burst (an expanding shader billboard plus a spark spray). Power-downs are
+// Edges are viz_plasma conduits from the producer to its parent (P-VIZ.4, ADR-0626): a spinning plasma conduit
+// with traveling plasma pulses (anime) or a silver fiber-optic cable with rapid red light pulses
+// (professional), both scaling with the node's est. tok/s; the hub's own stream is a closed loop around it. A
+// surge flares the edge, throws a jagged regenerated lightning bolt along it and a plasma burst (an expanding
+// shader billboard plus a spark spray). Power-downs are
 // distinct: tool-failed flickers red, sheds sparks and shakes, then recovers; paused freezes the flow under
 // a frosty blue tint; ended dims gracefully with rising green embers and frosts the glass; killed implodes
 // in a white flash, cracks the glass and leaves it dark gray.
@@ -46,12 +52,17 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
 import { ANIME_HEIGHT, createAnimeFigure, type AnimeFigure, type AnimeState } from "./viz_anime.ts";
+import { createOfficeFigure, type OfficeFigure } from "./viz_office.ts";
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
-import { frameInterval, IDLE_FPS, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizTierOpts } from "./viz_model.ts";
+import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
+import { edgeStyleFor } from "./viz_plasma_math.ts";
+import { frameInterval, IDLE_FPS, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
 
 export type VizViewMode = "2d" | "3d";
 
-export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number }
+/** P-VIZ.4 (ADR-0625): `team` = how many of the node's team work right now (viz_model.teamOf; an idle node
+ *  with a working team supervises), `idleSec` = whole seconds since it last worked (figure.setIdleSeconds). */
+export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number; team: number; idleSec: number }
 export interface SceneEdge { from: string; to: string; intensity: number; frozen: boolean; dead: boolean }
 export type SceneHit = { kind: "node"; id: string } | { kind: "edge"; from: string; to: string };
 
@@ -63,6 +74,9 @@ export interface VizSceneHandle {
   sync(nodes: readonly SceneNode[], edges: readonly SceneEdge[]): void;
   fire(events: readonly VizEvent[]): void;
   setView(mode: VizViewMode): void;
+  /** P-VIZ.4 (ADR-0627): rebuild every node's figure in the style (anime mini Lucids in glass cubes, or the
+   *  office cast in cubicles) and switch the edges with it (plasma or fiber, viz_plasma). */
+  setStyle(style: VizStyle): void;
   /** Re-frame the camera on every node (after a layout switch, or on demand). Leaves auto as it is. */
   fit(): void;
   /** Auto camera on (glides from the current view to the action) or off (the user's controls only). */
@@ -72,7 +86,15 @@ export interface VizSceneHandle {
   setVisible(on: boolean): void;
   setRecording(on: boolean): void;
   onHover(cb: (hit: SceneHit | null, x: number, y: number) => void): void;
+  /** A single click (delivered only once no second click followed within DOUBLE_MS). */
   onPick(cb: (hit: SceneHit | null, x: number, y: number) => void): void;
+  /** P-VIZ.4 (ADR-0625): a double click (its first click is never delivered to onPick). */
+  onDoublePick(cb: (hit: SceneHit | null, x: number, y: number) => void): void;
+  /** P-VIZ.4: the node's figure reacts to the viewer (a stare, or an outburst); its work and state go on. */
+  reactNode(id: string, kind: "stare" | "outburst"): void;
+  /** P-VIZ.4: the node's anchor (just above its frame) in client pixels, or null when it is off screen or
+   *  behind the camera. The node panel follows it. */
+  screenOf(id: string): { x: number; y: number } | null;
   onLost(cb: () => void): void;
   destroy(): void;
 }
@@ -179,24 +201,29 @@ const SWAY_AZ = 0.42, SWAY_POLAR = 0.06, SWAY_S = 26;
 const FOCUS_POLAR = 1.12, OVERVIEW_POLAR = 0.77;
 /** A press that moves this far (CSS px) is the user taking the camera, not a click. */
 const GRAB_PX = 4;
+/** P-VIZ.4: a second click this soon (ms) after the first, near it, is a double click. */
+const DOUBLE_MS = 260;
+/** P-VIZ.4: full-cadence frames after a reaction; covers the longest one (the office outburst plus its glare, 3.45 s). */
+const REACT_MS = 3600;
 
-const SEG = 32; // points per edge curve
 const BOLT_PTS = 33;
 const BRANCH_PTS = 9;
 const BOLT_POOL = 8;
 const BURST_POOL = 8;
 const BOLT_MS = 380;
 const BURST_MS = 650;
-const FLOW_SPAWN_MAX = 420; // particles per second on a full-intensity edge at the full budget
+/** The hub's own stream: a closed loop this far out from its center, lifted a little. */
+const LOOP_R = 1.55, LOOP_LIFT = 0.1;
 
 interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
 
 /** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. */
-interface FigureSlot { fig: AnimeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null }
+interface FigureSlot { fig: AnimeFigure | OfficeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null }
 
-/** The 3D parts of a node: the figure in its glass cube. */
+/** The 3D parts of a node: the figure in its glass cube. `office`: the professional style, where the glass is an
+ *  invisible pick box, the cubicle rides the figure and `edgeMat` draws the cubicle's top edges. */
 interface Node3D extends FigureSlot {
-  glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial;
+  glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial; office: boolean;
 }
 
 /** The 2D parts of a node: the flat figure on its tile. */
@@ -213,13 +240,15 @@ interface NodeObj {
   cur: THREE.Vector3; target: THREE.Vector3; placed: boolean;
   tone: { tint: number; dim: number; frost: number };
   fx: NodeFx;
+  /** P-VIZ.4: working team members (an idle node with a team at work supervises) and idle seconds, with the
+   *  figure that last heard the idle seconds (a rebuilt figure, after a mode or style switch, hears them again). */
+  team: number; idleSec: number; idleTold: { fig: unknown; sec: number };
 }
 
 interface EdgeObj {
-  key: string; from: string; to: string; slot: number; ring: boolean;
-  line: THREE.Line | null; mat: THREE.LineBasicMaterial | null; posAttr: THREE.BufferAttribute | null;
-  p0: THREE.Vector3; p1: THREE.Vector3; p2: THREE.Vector3; n1: THREE.Vector3; n2: THREE.Vector3; len: number;
-  intensity: number; frozen: boolean; dead: boolean; color: THREE.Color; acc: number;
+  key: string; from: string; to: string; ring: boolean; conduit: EdgeConduit;
+  p0: THREE.Vector3; p1: THREE.Vector3; p2: THREE.Vector3; side: THREE.Vector3;
+  intensity: number; frozen: boolean; dead: boolean; color: THREE.Color; colorTo: THREE.Color;
 }
 
 interface Bolt { line: THREE.Line; branches: THREE.Line[]; mat: THREE.LineBasicMaterial; from: THREE.Vector3; to: THREE.Vector3; start: number; next: number; active: boolean; color: THREE.Color }
@@ -231,7 +260,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const renderer = new THREE.WebGLRenderer({ antialias: o.antialias, alpha: false, powerPreference: "high-performance" });
   const canvas = renderer.domElement;
   canvas.className = "viz-cv";
-  canvas.setAttribute("aria-label", "Agent visualization. Drag to move the view, scroll to zoom, click a node for its actions.");
+  canvas.setAttribute("aria-label", "Agent visualization. Drag to move the view, scroll to zoom, click a node for its panel.");
   canvas.tabIndex = 0;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, o.dprCap));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -280,6 +309,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   ortho.up.set(0, 0, -1);
   ortho.lookAt(0, 0, 0);
   let mode: VizViewMode = initialView;
+  /** P-VIZ.4: which cast the nodes are built with (the view calls setStyle with the saved preference). */
+  let style: VizStyle = "anime";
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = mode === "3d" ? persp : ortho;
   let controls = makeControls();
   let interacting = false;
@@ -307,14 +338,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 
   const nodes = new Map<string, NodeObj>();
   const edges = new Map<string, EdgeObj>();
-  const slots: (EdgeObj | null)[] = [];
   const hitMeshes: THREE.Object3D[] = [];
   const edgeLines: THREE.Object3D[] = [];
   const blend = theme.light ? THREE.NormalBlending : THREE.AdditiveBlending;
   const bgColor = new THREE.Color(theme.bg);
 
-  // ------------------------------------------------------------------ flow particles (GPU points)
-  const flow = makePointPool(o.particles);
+  // ------------------------------------------------------------------ edges (viz_plasma) + effect particles
+  // The scene starts in the anime style; setStyle switches the edges with the figures.
+  const edgeFx = createEdgeFx(world, { detail: o.detail, particles: o.particles, motion: o.motion, light: theme.light, flat: mode === "2d", style: "plasma" });
   const fx = makePointPool(o.fx);
   const fxVel = new Float32Array(o.fx * 3);
   const fxLife = new Float32Array(o.fx);
@@ -322,12 +353,6 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const fxGrav = new Float32Array(o.fx);
   const fxDrag = new Float32Array(o.fx);
   const fxSize0 = new Float32Array(o.fx);
-  const flowSlot = new Int16Array(o.particles).fill(-1);
-  const flowT = new Float32Array(o.particles);
-  const flowO1 = new Float32Array(o.particles);
-  const flowO2 = new Float32Array(o.particles);
-  const flowFree: number[] = [];
-  for (let i = o.particles - 1; i >= 0; i--) flowFree.push(i);
   const fxFree: number[] = [];
   for (let i = o.fx - 1; i >= 0; i--) fxFree.push(i);
 
@@ -394,6 +419,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const clock = { now: performance.now() };
   let hoverCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let pickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
+  let doublePickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let lostCb: (() => void) | null = null;
   let userCamCb: (() => void) | null = null;
   let pointer: { x: number; y: number; dirty: boolean } | null = null;
@@ -469,6 +495,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       cur: new THREE.Vector3(...n.pos), target: new THREE.Vector3(...n.pos), placed: false,
       tone: { tint: 0, dim: 0, frost: 0 },
       fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0 },
+      team: n.team, idleSec: n.idleSec, idleTold: { fig: null, sec: -1 },
     };
     paintLabel(obj, n.label);
     ensureParts(obj);
@@ -485,11 +512,31 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function build3d(obj: NodeObj): Node3D {
     // The figure rides a holder of ours (standing on the plate; the kill implosion scales it), so the figure's
     // own transforms stay the figure's.
-    const fig = createAnimeFigure({ look: obj.look, detail: o.detail, flat: false });
+    // P-VIZ.4 (ADR-0627): the professional style seats the office cast in a low fabric cubicle that rides the
+    // figure (it turns to the camera with him, open side front); the cube's glass stays as an invisible pick box,
+    // and its edge material draws the cubicle's top edges, so every status color below still reads.
+    const office = style === "professional";
+    const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
+    const fig = office
+      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, cubicle: { status: edgeMat } })
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false });
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
     holder.add(fig.group);
     obj.pivot.add(holder);
+    if (office) {
+      const glassMat = new THREE.MeshPhysicalMaterial({ visible: false });
+      const glass = new THREE.Mesh(shared("cube-glass", () => new RoundedBoxGeometry(CUBE, CUBE, CUBE, 3, 0.045)), glassMat);
+      glass.userData.nodeId = obj.id;
+      obj.pivot.add(glass);
+      hitMeshes.push(glass);
+      // office carpet, with the same faint persona glow as the cube's plate
+      const plateMat = new THREE.MeshStandardMaterial({ color: new THREE.Color("#3b4250").lerp(obj.base, 0.08), metalness: 0, roughness: 0.95, emissive: obj.base.clone(), emissiveIntensity: 0.03, envMapIntensity: 0.1 });
+      const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
+      plate.position.y = FLOOR_Y + PLATE_H / 2;
+      obj.pivot.add(plate);
+      return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
+    }
 
     // The glass: CLEAR, not transmissive. Transmission rendered the dark space behind it as a milky gray slab that
     // washed the figure out, and double-sided walls stacked two layers of haze in front of him. Front faces only,
@@ -503,7 +550,6 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     obj.pivot.add(glass);
     hitMeshes.push(glass);
 
-    const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
     const rims = new THREE.LineSegments(shared("cube-edges", () => new THREE.EdgesGeometry(new THREE.BoxGeometry(CUBE, CUBE, CUBE))), edgeMat);
     rims.renderOrder = 2;
     obj.pivot.add(rims);
@@ -513,7 +559,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
     plate.position.y = FLOOR_Y + PLATE_H / 2;
     obj.pivot.add(plate);
-    return { fig, holder, glass, glassMat, edgeMat, plateMat, activity: null, state: null };
+    return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
   }
 
   function build2d(obj: NodeObj): Node2D {
@@ -528,8 +574,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     rim.position.y = TILE_Y + 0.004;
     obj.pivot.add(rim);
     // The figure stands upright in its own frame; the holder tips him back so his front faces the top-down
-    // camera, his head toward the top of the screen (the ortho camera's up is -Z).
-    const fig = createAnimeFigure({ look: obj.look, detail: o.detail, flat: true });
+    // camera, his head toward the top of the screen (the ortho camera's up is -Z). The office cast tips back the
+    // same way with his desk (P-VIZ.4).
+    const fig = style === "professional"
+      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed })
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true });
     const holder = new THREE.Group();
     holder.rotation.x = -Math.PI / 2;
     holder.position.set(0, FIG_2D_Y, FIG_2D_FEET_Z);
@@ -554,6 +603,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     obj.pivot.remove(d.holder);
     d.fig.dispose();
     for (const x of [...obj.pivot.children]) if (x === d.glass || (x as THREE.Mesh).material === d.edgeMat || (x as THREE.Mesh).material === d.plateMat) detach(obj, x);
+    if (d.office) d.edgeMat.dispose(); // its lines rode the figure's cubicle, not the pivot
     obj.d3 = null;
   }
 
@@ -632,95 +682,52 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const key = ring ? `ring:${e.from}` : `${e.from}>${e.to}`;
     let ed = edges.get(key);
     if (ed) return ed;
-    let slot = slots.indexOf(null);
-    if (slot < 0) { slot = slots.length; slots.push(null); }
     ed = {
-      key, from: e.from, to: e.to, slot, ring, line: null, mat: null, posAttr: null,
-      p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), n1: new THREE.Vector3(1, 0, 0), n2: new THREE.Vector3(0, 1, 0), len: 1,
-      intensity: 0, frozen: false, dead: false, color: new THREE.Color(), acc: 0,
+      key, from: e.from, to: e.to, ring, conduit: edgeFx.add(ring),
+      p0: new THREE.Vector3(), p1: new THREE.Vector3(), p2: new THREE.Vector3(), side: new THREE.Vector3(1, 0, 0),
+      intensity: 0, frozen: false, dead: false, color: new THREE.Color(), colorTo: new THREE.Color(),
     };
-    if (!ring) {
-      const g = new THREE.BufferGeometry();
-      const attr = new THREE.BufferAttribute(new Float32Array(SEG * 3), 3).setUsage(THREE.DynamicDrawUsage);
-      g.setAttribute("position", attr);
-      const mat = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.2, depthWrite: false, toneMapped: false });
-      const line = new THREE.Line(g, mat);
-      line.frustumCulled = false;
-      line.userData.edge = { from: e.from, to: e.to };
-      world.add(line);
-      edgeLines.push(line);
-      ed.line = line; ed.mat = mat; ed.posAttr = attr;
+    if (!ring) { // the hub's loop is not pickable (it was never an edge between two nodes)
+      ed.conduit.mesh.userData.edge = { from: e.from, to: e.to };
+      edgeLines.push(ed.conduit.mesh);
     }
-    slots[slot] = ed;
     edges.set(key, ed);
     return ed;
   }
 
   function dropEdge(ed: EdgeObj): void {
     edges.delete(ed.key);
-    slots[ed.slot] = null;
-    for (let i = 0; i < o.particles; i++) if (flowSlot[i] === ed.slot) killFlow(i);
-    if (ed.line) {
-      world.remove(ed.line);
-      const i = edgeLines.indexOf(ed.line);
-      if (i >= 0) edgeLines.splice(i, 1);
-      ed.line.geometry.dispose();
-      ed.mat?.dispose();
-    }
+    const i = edgeLines.indexOf(ed.conduit.mesh);
+    if (i >= 0) edgeLines.splice(i, 1);
+    edgeFx.remove(ed.conduit);
   }
 
-  /** Recompute an edge's curve from the nodes' current positions (a quadratic bezier lifted and bowed). */
+  /** Recompute an edge's curve from the nodes' current positions (a quadratic bezier lifted and bowed); the
+   *  conduit rewrites its geometry only when the curve really moved. */
   const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpC = new THREE.Vector3();
   function shapeEdge(ed: EdgeObj): void {
     const a = nodes.get(ed.from), b = nodes.get(ed.to);
     if (!a || !b) return;
-    if (ed.ring) { ed.p0.copy(a.cur); ed.len = 2 * Math.PI * 1.5; return; }
+    if (ed.ring) { ed.conduit.loop(a.cur, LOOP_R, LOOP_LIFT); return; }
     ed.p0.copy(a.cur).y += 0.05 * a.size;
     ed.p2.copy(b.cur).y += 0.05 * b.size;
     const dir = tmpA.subVectors(ed.p2, ed.p0);
     let len = Math.max(0.001, dir.length());
     dir.divideScalar(len);
-    // The flow starts and ends at the cube walls, not at the cube centers: centered endpoints piled a ball of
-    // glowing particles onto mini Lucid's head, and bloom turned him into a white blur.
+    // The conduit starts and ends at the cube walls, not at the cube centers: centered endpoints piled a ball of
+    // glow onto mini Lucid's head, and bloom turned him into a white blur.
     const ra = CUBE * a.size * 0.55, rb = CUBE * b.size * 0.55;
     if (len > (ra + rb) * 1.2) {
       ed.p0.addScaledVector(dir, ra);
       ed.p2.addScaledVector(dir, -rb);
       len -= ra + rb;
     }
-    ed.len = len;
-    const side = tmpB.set(-dir.z, 0, dir.x);
+    const side = ed.side.set(-dir.z, 0, dir.x);
     if (side.lengthSq() < 1e-6) side.set(1, 0, 0);
     side.normalize();
     ed.p1.copy(ed.p0).add(ed.p2).multiplyScalar(0.5).addScaledVector(side, len * 0.09);
     ed.p1.y += len * 0.16;
-    ed.n1.copy(side);
-    ed.n2.crossVectors(dir, side).normalize();
-    if (ed.posAttr) {
-      const arr = ed.posAttr.array as Float32Array;
-      for (let i = 0; i < SEG; i++) {
-        bez(ed, i / (SEG - 1), tmpC);
-        arr[i * 3] = tmpC.x; arr[i * 3 + 1] = tmpC.y; arr[i * 3 + 2] = tmpC.z;
-      }
-      ed.posAttr.needsUpdate = true;
-    }
-  }
-
-  function bez(ed: EdgeObj, t: number, out: THREE.Vector3): THREE.Vector3 {
-    const u = 1 - t;
-    out.set(
-      u * u * ed.p0.x + 2 * u * t * ed.p1.x + t * t * ed.p2.x,
-      u * u * ed.p0.y + 2 * u * t * ed.p1.y + t * t * ed.p2.y,
-      u * u * ed.p0.z + 2 * u * t * ed.p1.z + t * t * ed.p2.z,
-    );
-    return out;
-  }
-
-  function killFlow(i: number): void {
-    if (flowSlot[i] === -1) return;
-    flowSlot[i] = -1;
-    flow.alpha[i] = 0;
-    flowFree.push(i);
+    ed.conduit.bezier(ed.p0, ed.p1, ed.p2, side);
   }
 
   // ------------------------------------------------------------------ effects
@@ -806,11 +813,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     }
     if (ev.kind === "surge") {
       obj.fx.colorUntil = now + (o.motion ? 260 : 600);
-      if (!o.motion) { effectsUntil = Math.max(effectsUntil, now + 700); return; }
+      // the node's own edge flares (its link to the parent, or the hub's loop); reduced motion: color only
+      const parent = [...edges.values()].find((e) => !e.ring && e.from === obj.id);
+      (parent ?? edges.get(`ring:${obj.id}`))?.conduit.surge();
+      if (!o.motion) { effectsUntil = Math.max(effectsUntil, now + 1150); return; }
       (obj.d3 ?? obj.d2)?.fig.burst();
       const hot = color.clone().lerp(WHITE, 0.45).multiplyScalar(2.2);
       nodeHead(obj, fxAt);
-      const parent = [...edges.values()].find((e) => !e.ring && e.from === obj.id);
       const to = parent ? nodes.get(parent.to) : undefined;
       if (to) {
         nodeHead(to, fxTo);
@@ -910,7 +919,6 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const tintTarget = new THREE.Color();
   const tileTint = new THREE.Color();
   const camPos = new THREE.Vector3();
-  const flowColor = new THREE.Color();
 
   /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
   function figureState(obj: NodeObj, t: number): AnimeState {
@@ -953,8 +961,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (slot) {
       const stateNow = figureState(obj, t);
       if (stateNow !== slot.state) { slot.fig.setState(stateNow); slot.state = stateNow; }
-      const act = activityAt(obj.persona, obj.kind, obj.seed, t, st === "active");
+      // P-VIZ.4: an idle node whose team works supervises (Main while any agent works) instead of meditating.
+      const act = activityAt(obj.persona, obj.kind, obj.seed, t, st === "active", st === "idle" && obj.team > 0);
       if (act !== slot.activity) { slot.fig.setActivity(act); slot.activity = act; }
+      if (obj.idleTold.fig !== slot.fig || obj.idleTold.sec !== obj.idleSec) { slot.fig.setIdleSeconds(obj.idleSec); obj.idleTold = { fig: slot.fig, sec: obj.idleSec }; }
       slot.fig.setIntensity(obj.power);
       slot.fig.update(t / 1000, dt, o.motion);
     }
@@ -993,7 +1003,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     }
     obj.labelMat.opacity = st === "ended" || st === "killed" ? 0.6 : 1;
 
-    if (st === "killed") crack(obj); else healCracks(obj);
+    if (st === "killed" && !obj.d3?.office) crack(obj); else healCracks(obj); // a cubicle has no glass to crack
     if (obj.cracks) {
       if (mode === "3d") { obj.cracks.rotation.set(0, 0, 0); obj.cracks.position.set(0, 0, CUBE / 2 + 0.004); }
       else { obj.cracks.rotation.set(-Math.PI / 2, 0, 0); obj.cracks.position.set(0, TILE_Y + 0.006, 0); }
@@ -1011,65 +1021,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   }
 
   let busyFlow = false;
-  function updateFlow(dt: number): void {
+  /** Follow the nodes (the conduits rewrite only what moved), then run the conduits and their pulses. */
+  function updateFlow(t: number, dt: number): void {
     busyFlow = false;
     for (const ed of edges.values()) {
-      if (!ed.ring) {
-        shapeEdge(ed);
-        const childDead = ed.dead;
-        if (ed.mat) {
-          ed.mat.color.copy(childDead ? DEAD : ed.frozen ? ICE : ed.color).multiplyScalar(theme.light ? 0.7 : 1.2);
-          ed.mat.opacity = childDead ? 0.12 : 0.16 + 0.55 * ed.intensity;
-        }
-      } else shapeEdge(ed);
+      shapeEdge(ed);
       if (ed.intensity > 0 && !ed.frozen && !ed.dead) busyFlow = true;
-      if (o.particles === 0 || ed.frozen || ed.dead || ed.intensity <= 0) continue;
-      const budgetShare = o.particles / 6000;
-      ed.acc += ed.intensity * ed.intensity * FLOW_SPAWN_MAX * budgetShare * dt * (ed.ring ? 0.6 : 1) + ed.intensity * 6 * dt;
-      while (ed.acc >= 1) {
-        ed.acc -= 1;
-        const i = flowFree.pop();
-        if (i === undefined) { ed.acc = 0; break; }
-        flowSlot[i] = ed.slot;
-        flowT[i] = 0;
-        flowO1[i] = (Math.random() - 0.5) * 2;
-        flowO2[i] = (Math.random() - 0.5) * 2;
-        flow.size[i] = 0.07 + Math.random() * 0.07 + ed.intensity * 0.05;
-      }
     }
-    if (o.particles === 0) return;
-    for (let i = 0; i < o.particles; i++) {
-      const s = flowSlot[i]!;
-      if (s === -1) continue;
-      const ed = slots[s];
-      if (!ed) { killFlow(i); continue; }
-      if (ed.dead) { flow.alpha[i] = flow.alpha[i]! * 0.85; if (flow.alpha[i]! < 0.02) killFlow(i); continue; }
-      if (!ed.frozen) {
-        const traverse = ed.ring ? 2.8 - ed.intensity * 1.6 : (1.7 - ed.intensity * 1.25) * Math.max(0.6, ed.len / 6);
-        flowT[i] = flowT[i]! + dt / Math.max(0.25, traverse);
-      }
-      const tt = flowT[i]!;
-      if (tt >= 1) { killFlow(i); continue; }
-      const env = Math.sin(Math.PI * tt);
-      if (ed.ring) {
-        const a = tt * Math.PI * 2 + flowO1[i]! * Math.PI;
-        const r = 1.55 + flowO2[i]! * 0.18;
-        flow.pos[i * 3] = ed.p0.x + Math.cos(a) * r;
-        flow.pos[i * 3 + 1] = ed.p0.y + 0.1 + Math.sin(a * 2 + flowO2[i]!) * 0.14;
-        flow.pos[i * 3 + 2] = ed.p0.z + Math.sin(a) * r;
-      } else {
-        bez(ed, tt, tmpA);
-        const w = 0.13 * env;
-        flow.pos[i * 3] = tmpA.x + (ed.n1.x * flowO1[i]! + ed.n2.x * flowO2[i]!) * w;
-        flow.pos[i * 3 + 1] = tmpA.y + (ed.n1.y * flowO1[i]! + ed.n2.y * flowO2[i]!) * w;
-        flow.pos[i * 3 + 2] = tmpA.z + (ed.n1.z * flowO1[i]! + ed.n2.z * flowO2[i]!) * w;
-      }
-      flowColor.copy(ed.frozen ? ICE : ed.color).lerp(WHITE, 0.15 + 0.35 * ed.intensity * env);
-      if (theme.light) flowColor.multiplyScalar(0.75);
-      flow.col[i * 3] = flowColor.r; flow.col[i * 3 + 1] = flowColor.g; flow.col[i * 3 + 2] = flowColor.b;
-      flow.alpha[i] = (ed.frozen ? 0.45 : 0.55 + 0.45 * ed.intensity) * env;
-    }
-    for (const a of flow.attrs) a.needsUpdate = true;
+    if (edgeFx.update(t, dt)) busyFlow = true;
   }
 
   function updateFx(dt: number): boolean {
@@ -1243,11 +1202,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const scale = isOrtho
       ? bufSize.y / ((ortho.top - ortho.bottom) / ortho.zoom)
       : bufSize.y / (2 * Math.tan((persp.fov * Math.PI) / 360));
-    for (const m of [flow.mat, fx.mat]) {
-      if (!m) continue;
-      m.uniforms.uScale!.value = scale;
-      m.uniforms.uOrtho!.value = isOrtho ? 1 : 0;
-    }
+    if (!fx.mat) return;
+    fx.mat.uniforms.uScale!.value = scale;
+    fx.mat.uniforms.uOrtho!.value = isOrtho ? 1 : 0;
   }
 
   function resize(): void {
@@ -1299,12 +1256,27 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   };
   const onLeave = (): void => { pointer = null; lastHitKey = ""; canvas.style.cursor = ""; hoverCb?.(null, 0, 0); };
   const onDown = (e: PointerEvent): void => { down = { x: e.clientX, y: e.clientY, at: performance.now() }; };
+  let clickWait: { x: number; y: number; hit: SceneHit | null; timer: number } | null = null;
+  const anchorAt = new THREE.Vector3(); // screenOf's scratch
   const onUp = (e: PointerEvent): void => {
     if (!down) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     const quick = performance.now() - down.at < 650;
     down = null;
-    if (moved < 6 && quick && e.button === 0) pickCb?.(hitAt(e.clientX, e.clientY), e.clientX, e.clientY);
+    if (moved >= 6 || !quick || e.button !== 0) return;
+    // P-VIZ.4: a click waits DOUBLE_MS for a second one near it; a pair is one double click, never a single.
+    const x = e.clientX, y = e.clientY;
+    if (clickWait && Math.hypot(x - clickWait.x, y - clickWait.y) < 12) {
+      window.clearTimeout(clickWait.timer);
+      const hit = clickWait.hit;
+      clickWait = null;
+      doublePickCb?.(hit, x, y);
+      return;
+    }
+    if (clickWait) { window.clearTimeout(clickWait.timer); const c = clickWait; clickWait = null; pickCb?.(c.hit, c.x, c.y); }
+    const hit = hitAt(x, y);
+    const timer = window.setTimeout(() => { clickWait = null; pickCb?.(hit, x, y); }, DOUBLE_MS);
+    clickWait = { x, y, hit, timer };
   };
   const onWheel = (): void => userGrab();
   canvas.addEventListener("pointermove", onMove);
@@ -1330,7 +1302,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       updateNode(n, t, dt);
       if (n.status === "active" || t < n.fx.failUntil) busyNodes = true;
     }
-    updateFlow(dt);
+    updateFlow(t, dt);
     const fxLive = updateFx(dt);
     const boltLive = updateBolts(t);
     const burstLive = updateBursts(t);
@@ -1389,6 +1361,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         if (n.status === "killed" && obj.status !== "killed" && obj.fx.implodeAt === 0) obj.fx.implodeAt = clock.now;
         obj.status = n.status;
         obj.glow = n.glow;
+        obj.team = n.team; obj.idleSec = n.idleSec; // P-VIZ.4: read by updateNode
         paintLabel(obj, n.label);
       }
       for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); }
@@ -1399,6 +1372,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         want.add(ed.key);
         ed.intensity = e.intensity; ed.frozen = e.frozen; ed.dead = e.dead;
         ed.color.copy(nodes.get(e.from)!.base);
+        ed.colorTo.copy(nodes.get(e.to)!.base);
+        ed.conduit.set(ed.intensity, ed.frozen, ed.dead, ed.color, ed.colorTo);
       }
       // Main's own tokens swirl around the hub.
       const hub = list.find((n) => n.kind === "hub");
@@ -1409,6 +1384,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         ring.frozen = hub.status === "paused";
         ring.dead = false;
         ring.color.set(PERSONAS[hub.persona].color);
+        ring.conduit.set(ring.intensity, ring.frozen, ring.dead, ring.color, ring.color);
       }
       for (const ed of [...edges.values()]) if (!want.has(ed.key)) dropEdge(ed);
       const prev = focusId;
@@ -1430,7 +1406,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       controls = makeControls();
       interacting = false;
       for (const obj of nodes.values()) ensureParts(obj);
+      edgeFx.setFlat(mode === "2d");
       fit();
+    },
+    setStyle(next) {
+      if (next === style || (next !== "anime" && next !== "professional")) return;
+      style = next;
+      edgeFx.setStyle(edgeStyleFor(next));
+      for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
+      kick();
     },
     fit,
     setAuto(on) {
@@ -1447,10 +1431,30 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     setRecording(on) { recording = on; kick(); },
     onHover(cb) { hoverCb = cb; },
     onPick(cb) { pickCb = cb; },
+    onDoublePick(cb) { doublePickCb = cb; },
+    reactNode(id, kind) {
+      const slot = nodes.get(id)?.d3 ?? nodes.get(id)?.d2;
+      if (!slot) return;
+      slot.fig.react(kind, camera);
+      effectsUntil = Math.max(effectsUntil, performance.now() + REACT_MS); // frames for the reaction even when nothing else moves
+      kick();
+    },
+    screenOf(id) {
+      const obj = nodes.get(id);
+      const r = canvas.getBoundingClientRect();
+      if (!obj || !r.width || !r.height) return null;
+      // The top of the cube in 3D; the top edge of the tile on the top-down map (screen up is -Z there).
+      anchorAt.copy(obj.cur);
+      if (mode === "3d") anchorAt.y += (CUBE / 2) * obj.size; else anchorAt.z -= (TILE / 2) * obj.size;
+      anchorAt.project(camera);
+      if (anchorAt.z > 1 || anchorAt.z < -1 || Math.abs(anchorAt.x) > 1.05 || Math.abs(anchorAt.y) > 1.05) return null;
+      return { x: r.left + ((anchorAt.x + 1) / 2) * r.width, y: r.top + ((1 - anchorAt.y) / 2) * r.height };
+    },
     onLost(cb) { lostCb = cb; },
     destroy() {
       stopped = true;
       park();
+      if (clickWait) { window.clearTimeout(clickWait.timer); clickWait = null; }
       ro.disconnect();
       canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerleave", onLeave);
@@ -1462,6 +1466,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       for (const obj of nodes.values()) disposeNode(obj);
       nodes.clear();
       for (const ed of [...edges.values()]) dropEdge(ed);
+      edgeFx.dispose();
       const mats = new Set<THREE.Material>();
       const sharedGeo = new Set<THREE.BufferGeometry>(geo.values());
       scene.traverse((x) => {

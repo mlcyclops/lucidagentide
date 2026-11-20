@@ -16,12 +16,21 @@
 //
 // DOM-free and IO-free: viz_view.ts feeds it (bus taps, fleet polls, subagent run polls), viz_scene.ts draws
 // it, and viz_model.test.ts pins the rules headless.
+//
+// P-VIZ.4 (ADR-0625): a lane's `task` delegations arrive on its stream like Main's and hang off the lane.
+// omp runs them in the BACKGROUND (the task call returns at once), so the task call's settle does not end
+// them: the lane's own run poll (applyRuns with the lane as parent) does, or the lane stopping. Only a
+// task call that FAILED ends its batch at once. Every node keeps `idleSince` (the office figure dozes off
+// after a minute), and `teamOf` says how many of a node's team work while it does not (it supervises).
 
 import { orbitSlots } from "./orbit_layout.ts";
 import type { PerfTier } from "./perf_tier.ts";
 import type { VizBusEvent, VizOrigin } from "./viz_bus.ts";
 
 export const HUB_ID = "main";
+
+/** P-VIZ.4 (ADR-0625): how the figures are drawn: the anime mini Lucids, or office workers at desks. */
+export type VizStyle = "anime" | "professional";
 
 export type VizKind = "hub" | "agent" | "subagent";
 
@@ -131,6 +140,12 @@ export interface VizNode {
   agentType: string | null;
   assignment: string | null;
   runName: string | null;
+  /** Subagents: the task call (toolCallId) that spawned this one, so a failed call ends its batch. */
+  batch: string | null;
+  /** Subagents: a run poll has reported this run, so the poll (not the parent's turn) decides its end. */
+  polled: boolean;
+  /** When the node last stopped working (null while it works). */
+  idleSince: number | null;
   usage: { used: number; size: number; cost: number } | null;
 }
 
@@ -187,7 +202,7 @@ function newNode(p: { id: string; kind: VizKind; parent: string | null; name: st
   return {
     ...p, status: "idle", laneStatus: null, rate: 0, mean: 0, pending: 0, totalTok: 0, tools: 0, toolFails: 0, activity: 0,
     tappedAt: 0, lastAt: now, bornAt: now, endedAt: null, goneAt: null, asked: null, surgeAt: 0,
-    agentType: null, assignment: null, runName: null, usage: null,
+    agentType: null, assignment: null, runName: null, batch: null, polled: false, idleSince: now, usage: null,
   };
 }
 
@@ -234,15 +249,20 @@ function wake(n: VizNode, now: number): void {
   if (n.status !== "active") { n.status = "active"; n.endedAt = null; }
 }
 
-type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown };
+type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown; detail?: unknown; turns?: unknown };
 
 /** Fold one tapped event in. Events for a source that is neither Main nor a known agent are dropped
- *  (another hub's lane, or a lane the fleet poll has not listed yet). */
-export function applyEvent(s: VizState, ev: VizBusEvent, now: number): void {
+ *  (another hub's lane, or a lane the fleet poll has not listed yet). True when the event was taken (not a
+ *  duplicate from a second stream), so the view can keep the same one-stream record of the output. */
+export function applyEvent(s: VizState, ev: VizBusEvent, now: number): boolean {
   const n = s.nodes.get(ev.source);
-  if (!n || n.kind === "subagent" || n.goneAt !== null) return;
-  if (!accepts(s, ev.source, ev.origin, now)) return;
-  const e = ev.e as Loose;
+  if (!n || n.kind === "subagent" || n.goneAt !== null) return false;
+  if (!accepts(s, ev.source, ev.origin, now)) return false;
+  fold(s, n, ev.e as Loose, now);
+  return true;
+}
+
+function fold(s: VizState, n: VizNode, e: Loose, now: number): void {
   switch (e.type) {
     case "token":
     case "thinking": {
@@ -253,11 +273,11 @@ export function applyEvent(s: VizState, ev: VizBusEvent, now: number): void {
       return;
     }
     case "tool":
-      if (e.status === "failed") { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); return; }
+      if (e.status === "failed") { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); return; }
       if (e.status === undefined || e.status === "open") { n.tools++; n.activity = 1; wake(n, now); }
       return;
     case "tool-meta":
-      if (e.ok === false) toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool");
+      if (e.ok === false) { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); }
       return;
     case "subagent":
       addSubagents(s, n, e, now);
@@ -304,14 +324,27 @@ function turnEnd(s: VizState, n: VizNode, now: number): void {
     n.status = "idle";
     power(s, n, "ended", now, "turn finished");
   }
-  if (n.kind === "agent") endChildren(s, n, now, "the agent's turn ended");
+  if (n.kind === "agent") endChildren(s, n, now, "the agent's turn ended", true);
 }
 
-function endChildren(s: VizState, parent: VizNode, now: number, why: string): void {
+/** End `parent`'s live subagents. `unpolledOnly`: a turn end leaves the runs a poll is tracking (omp runs
+ *  delegations in the background, so they outlive the turn that spawned them; the poll ends them). */
+function endChildren(s: VizState, parent: VizNode, now: number, why: string, unpolledOnly = false): void {
   for (const c of s.nodes.values()) {
     if (c.parent !== parent.id || c.kind !== "subagent" || c.status === "ended" || c.status === "killed") continue;
+    if (unpolledOnly && c.polled) continue;
     c.status = "ended"; c.endedAt = now;
     power(s, c, "ended", now, why);
+  }
+}
+
+/** A `task` call failed: the subagents it announced never ran (or died with it). */
+function failBatch(s: VizState, parent: VizNode, id: unknown, now: number): void {
+  if (typeof id !== "string" || !id) return;
+  for (const c of s.nodes.values()) {
+    if (c.parent !== parent.id || c.batch !== id || c.status === "ended" || c.status === "killed") continue;
+    c.status = "killed"; c.endedAt = now;
+    power(s, c, "killed", now, "the task call failed");
   }
 }
 
@@ -373,7 +406,7 @@ function addSubagents(s: VizState, parent: VizNode, e: Loose, now: number): void
       persona: personaFor({ kind: "subagent", agentType: agent, text: `${name} ${assignment} ${title}` }),
       model: "",
     }, now);
-    n.agentType = agent; n.assignment = assignment || null; n.runName = names[i] ?? null;
+    n.agentType = agent; n.assignment = assignment || null; n.runName = names[i] ?? null; n.batch = typeof e.id === "string" && e.id ? e.id : null;
     n.status = "active"; n.activity = 1;
     s.nodes.set(id, n);
     have++;
@@ -420,20 +453,23 @@ export function applyFleet(s: VizState, lanes: readonly VizLaneInput[], now: num
 
 export interface VizRunInput { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: readonly { kind: string }[] }
 
-/** The subagent run poll (/api/subagents: Main's runs). A run joins the subagent node its delegation
- *  created (by run name, else by assignment), or becomes a node of its own when it is live or finished
- *  recently. Step cadence drives the node's activity; `done` ends it. */
-export function applyRuns(s: VizState, runs: readonly VizRunInput[], now: number): void {
+/** The subagent run poll (/api/subagents: Main's runs; P-VIZ.4, with `?laneId=`: that lane's runs, `parent`
+ *  the lane). A run joins the subagent node its delegation created under the same parent (by run name, else
+ *  by assignment), or becomes a node of its own when it is live or finished recently. Step cadence drives
+ *  the node's activity; `done` ends it. A polled node is the poll's to end, not its parent's turn's. */
+export function applyRuns(s: VizState, runs: readonly VizRunInput[], now: number, parentId: string = HUB_ID): void {
+  const parent = s.nodes.get(parentId);
+  if (!parent || parent.kind === "subagent" || parent.goneAt !== null) return;
+  const mine = (): VizNode[] => [...s.nodes.values()].filter((c) => c.kind === "subagent" && c.parent === parentId);
   for (const r of runs) {
-    let n = [...s.nodes.values()].find((c) => c.kind === "subagent" && c.runName === r.name);
-    if (!n) n = [...s.nodes.values()].find((c) => c.kind === "subagent" && c.parent === HUB_ID && c.runName === null && !!c.assignment && sameTask(c.assignment, r.assignment));
+    let n = mine().find((c) => c.runName === r.name);
+    if (!n) n = mine().find((c) => c.runName === null && !!c.assignment && sameTask(c.assignment, r.assignment));
     if (!n) {
       const finishedAt = r.endedAt ?? r.lastAt;
       if (r.done && now - finishedAt > RUN_RECENT_MS) continue;
-      const kids = [...s.nodes.values()].filter((c) => c.parent === HUB_ID && c.kind === "subagent").length;
-      if (kids >= SUB_MAX_PER_PARENT) continue;
+      if (mine().length >= SUB_MAX_PER_PARENT) continue;
       n = newNode({
-        id: `run:${r.name}`, kind: "subagent", parent: HUB_ID, name: r.name, label: shortLabel(r.name, 16),
+        id: parentId === HUB_ID ? `run:${r.name}` : `run:${parentId}:${r.name}`, kind: "subagent", parent: parentId, name: r.name, label: shortLabel(r.name, 16),
         persona: personaFor({ kind: "subagent", text: `${r.name} ${r.assignment}` }), model: r.model ?? "",
       }, now);
       n.assignment = r.assignment || null;
@@ -443,6 +479,7 @@ export function applyRuns(s: VizState, runs: readonly VizRunInput[], now: number
       push(s, { kind: "spawn", at: now, node: n.id });
     }
     n.runName = r.name;
+    n.polled = true;
     if (r.model) n.model = r.model;
     if (r.tools > n.tools || r.lastAt > n.lastAt) n.activity = 1; // a new step landed
     n.tools = Math.max(n.tools, r.tools);
@@ -454,6 +491,7 @@ export function applyRuns(s: VizState, runs: readonly VizRunInput[], now: number
       }
     } else {
       n.status = r.lastAt > 0 && now - r.lastAt >= RUN_QUIET_MS ? "idle" : "active";
+      n.endedAt = null; // a run the parent's turn end gave up on is still running: it is back
     }
   }
 }
@@ -487,12 +525,15 @@ export function tick(s: VizState, now: number): void {
       n.surgeAt = now;
       push(s, { kind: "surge", at: now, node: n.id, rate: n.rate });
     }
+    if (n.status === "active") n.idleSince = null;
+    else n.idleSince ??= now;
     if (n.goneAt !== null && now - n.goneAt >= GONE_MS) { drop(s, n.id); continue; }
     if (n.kind !== "subagent") continue;
-    if (n.status === "ended" && n.endedAt !== null && now - n.endedAt >= SUB_LINGER_MS) { drop(s, n.id); continue; }
+    if ((n.status === "ended" || n.status === "killed") && n.endedAt !== null && now - n.endedAt >= SUB_LINGER_MS) { drop(s, n.id); continue; }
     const parent = n.parent ? s.nodes.get(n.parent) : undefined;
     if (!parent) { drop(s, n.id); continue; }
-    if (n.runName === null && n.status === "active" && parent.status !== "active" && now - n.lastAt >= ORPHAN_MS) {
+    // A delegation no run poll ever confirmed ends a while after its parent went quiet.
+    if (!n.polled && n.status === "active" && parent.status !== "active" && now - n.lastAt >= ORPHAN_MS) {
       n.status = "ended"; n.endedAt = now;
       power(s, n, "ended", now, "no run reported");
     }
@@ -507,6 +548,26 @@ function drop(s: VizState, id: string): void {
 
 /** Is a token stream feeding this node (so its rate means something)? */
 export function isTapped(n: VizNode, now: number): boolean { return n.tappedAt > 0 && now - n.tappedAt < TAPPED_MS; }
+
+/** Whole seconds since the node last worked (0 while it works). */
+export function idleSeconds(n: VizNode, now: number): number {
+  return n.idleSince === null ? 0 : Math.max(0, Math.floor((now - n.idleSince) / 1000));
+}
+
+export interface VizTeam { agents: number; subagents: number }
+
+/** Who in `id`'s team is working right now: for the hub every agent and subagent (Main is the boss of the
+ *  whole board), for an agent its own subagents. A node not working while its team works supervises. */
+export function teamOf(s: VizState, id: string): VizTeam {
+  const t: VizTeam = { agents: 0, subagents: 0 };
+  const hub = id === HUB_ID;
+  for (const c of s.nodes.values()) {
+    if (c.id === id || c.kind === "hub" || c.status !== "active" || c.goneAt !== null) continue;
+    if (!hub && c.parent !== id) continue;
+    if (c.kind === "agent") t.agents++; else t.subagents++;
+  }
+  return t;
+}
 
 // ------------------------------------------------------------------------------------ derived views
 
@@ -578,17 +639,26 @@ const STATUS_WORDS: Record<VizStatus, string> = {
   idle: "idle", active: "working", waiting: "waiting on you", paused: "paused (turn stopped)", ended: "ended", killed: "stopped on an error or killed",
 };
 
-/** The hover card for a node: a title and short lines, honest about what is measured and what is not. */
-export function describeNode(n: VizNode, now: number): { title: string; lines: string[] } {
+/** "supervising 2 agents and 1 subagent" (empty when nobody in the team works). */
+export function superviseText(t: VizTeam): string {
+  const part = (k: number, w: string): string => (k ? `${k} ${w}${k === 1 ? "" : "s"}` : "");
+  const parts = [part(t.agents, "agent"), part(t.subagents, "subagent")].filter(Boolean);
+  return parts.length ? `supervising ${parts.join(" and ")}` : "";
+}
+
+/** The hover card for a node: a title and short lines, honest about what is measured and what is not.
+ *  `team` (teamOf): a node that is not working while its team works reads as supervising them. */
+export function describeNode(n: VizNode, now: number, team?: VizTeam): { title: string; lines: string[] } {
   const kind = n.kind === "hub" ? "Main session" : n.kind === "agent" ? "Agent" : "Subagent";
   const lines: string[] = [`${PERSONAS[n.persona].label} \u00b7 ${kind}`];
   if (n.kind === "subagent") {
     const tools = `${n.tools} tool${n.tools === 1 ? "" : "s"}`;
-    lines.push(n.status === "ended" ? `ended, ${tools}` : n.status === "active" ? `live, ${tools}` : `quiet, ${tools}`);
+    lines.push(n.status === "ended" ? `ended, ${tools}` : n.status === "killed" ? `stopped, ${tools}` : n.status === "active" ? `live, ${tools}` : `quiet, ${tools}`);
     if (n.assignment) lines.push(shortLabel(n.assignment, 80));
   } else {
     const word = STATUS_WORDS[n.status];
-    lines.push(n.kind === "agent" && n.laneStatus && n.laneStatus !== word ? `${word} (${n.laneStatus})` : word);
+    const boss = n.status === "idle" && team ? superviseText(team) : "";
+    lines.push(boss || (n.kind === "agent" && n.laneStatus && n.laneStatus !== word ? `${word} (${n.laneStatus})` : word));
     if (isTapped(n, now)) lines.push(fmtRate(n.rate));
     else if (n.status === "active") lines.push(n.kind === "hub" ? "working, no tokens streamed yet" : "working, token stream not tapped");
     if (n.totalTok > 0) lines.push(`~${fmtCount(n.totalTok)} est. tokens seen, ${n.tools} tool${n.tools === 1 ? "" : "s"}`);
@@ -597,6 +667,66 @@ export function describeNode(n: VizNode, now: number): { title: string; lines: s
   if (n.toolFails > 0) lines.push(`${n.toolFails} failed tool call${n.toolFails === 1 ? "" : "s"}`);
   if (n.model) lines.push(n.model);
   return { title: n.name, lines };
+}
+
+// ------------------------------------------------------------------------------ an agent's output
+
+/** P-VIZ.4 (ADR-0625): the recent output the node panel shows for an agent, folded from the same lane events
+ *  the grid card renders (a watch's history seed, then the live stream). Bounded: OUT_TURNS settled turns and
+ *  OUT_CHARS of each turn's text, the newest kept. */
+export interface VizTurn { role: "user" | "assistant"; text: string }
+export interface VizOutput { turns: VizTurn[]; live: string; seeded: boolean }
+export const OUT_TURNS = 6;
+export const OUT_CHARS = 4000;
+
+export function createOutput(): VizOutput { return { turns: [], live: "", seeded: false }; }
+
+const tail = (text: string): string => (text.length > OUT_CHARS ? text.slice(text.length - OUT_CHARS) : text);
+
+function settle(o: VizOutput, turn: VizTurn): void {
+  o.turns.push({ role: turn.role, text: tail(turn.text) });
+  if (o.turns.length > OUT_TURNS) o.turns.splice(0, o.turns.length - OUT_TURNS);
+}
+
+/** Fold one lane event (or a prompt the user sent from the panel, `{ type: "user", text }`) into `o`. */
+export function foldOutput(o: VizOutput, ev: { readonly type: string; readonly [k: string]: unknown }): void {
+  const e = ev as Loose; // a lane event: every field read below is narrowed first
+  switch (e.type) {
+    case "watch-seed":
+      if (!Array.isArray(e.turns)) return;
+      o.turns = [];
+      for (const t of e.turns as unknown[]) {
+        if (!t || typeof t !== "object" || !("role" in t) || !("text" in t)) continue;
+        if ((t.role === "user" || t.role === "assistant") && typeof t.text === "string") settle(o, { role: t.role, text: t.text });
+      }
+      o.live = ""; o.seeded = true;
+      return;
+    case "user":
+      if (typeof e.text !== "string" || !e.text.trim()) return;
+      if (o.live.trim()) settle(o, { role: "assistant", text: o.live });
+      o.live = "";
+      settle(o, { role: "user", text: e.text });
+      return;
+    case "token":
+      if (typeof e.text === "string") o.live = tail(o.live + e.text);
+      return;
+    case "tool": {
+      if (e.status !== undefined && e.status !== "open") return; // a settle repaints nothing here
+      const line = typeof e.detail === "string" && e.detail ? e.detail : typeof e.name === "string" ? e.name : "tool";
+      o.live = tail(`${o.live}${o.live && !o.live.endsWith("\n") ? "\n" : ""}> ${line.slice(0, 160)}\n`);
+      return;
+    }
+    case "done":
+      if (o.live.trim()) settle(o, { role: "assistant", text: o.live });
+      o.live = "";
+      return;
+    case "error":
+      settle(o, { role: "assistant", text: `${o.live}${o.live ? "\n" : ""}Error: ${typeof e.message === "string" ? e.message : "the turn failed"}` });
+      o.live = "";
+      return;
+    default:
+      return;
+  }
 }
 
 // ------------------------------------------------------------------------------------------ layout

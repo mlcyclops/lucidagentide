@@ -8,9 +8,11 @@
 // accent always reads against the suit. Each persona has a repertoire of activities (a coder mostly types, a
 // guard runs kata and dashes) and `activityAt` rotates through it every MINI_ACTIVITY_MS like mascot.ts
 // `workActivity`, with a per-node seed so a fleet never moves in lockstep. An idle node meditates.
+// P-VIZ.4 (ADR-0625): an idle node whose team still works (Main while any agent works, a lane while its
+// background subagents run) supervises instead: the boss watching the team never meditates through it.
 
-export type MiniActivity = "typing" | "kiblast" | "kata" | "meditate" | "scan" | "dash";
-export const MINI_ACTIVITIES: readonly MiniActivity[] = ["typing", "kiblast", "kata", "meditate", "scan", "dash"];
+export type MiniActivity = "typing" | "kiblast" | "kata" | "meditate" | "scan" | "dash" | "supervise";
+export const MINI_ACTIVITIES: readonly MiniActivity[] = ["typing", "kiblast", "kata", "meditate", "scan", "dash", "supervise"];
 
 /** CSS hex colors. accent = headband/belt/wraps glow; gi/giShadow/giHighlight = the suit. */
 export interface MiniLook { accent: string; accentDeep: string; gi: string; giShadow: string; giHighlight: string }
@@ -129,9 +131,10 @@ function hash32(x: number): number {
 }
 
 /** The activity at `tMs`: deterministic, one slot per MINI_ACTIVITY_MS, with the seed shifting both the
- *  starting slot and the moment of each switch. Not working means meditating. */
-export function activityAt(persona: string, kind: MiniKind, seed: number, tMs: number, working: boolean): MiniActivity {
-  if (!working) return "meditate";
+ *  starting slot and the moment of each switch. Not working means meditating, unless the node's team is
+ *  working (`teamWorking`): then it supervises. */
+export function activityAt(persona: string, kind: MiniKind, seed: number, tMs: number, working: boolean, teamWorking = false): MiniActivity {
+  if (!working) return teamWorking ? "supervise" : "meditate";
   const list = activitiesFor(persona, kind);
   const h = hash32(Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 2147483647 : 0);
   const phase = ((h % 1009) / 1009) * MINI_ACTIVITY_MS;

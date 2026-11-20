@@ -4382,8 +4382,11 @@ return Bun.serve({
       // P-TASK.5 (ADR-0180): live subagent activity for the delegation card. Reads the CURRENT
       // session's subtask transcripts (omp persists each subtask beside the parent session file) -
       // read-only, path-confined to the resolved session file, fail-quiet [] when nothing delegated.
+      // P-VIZ.4 (ADR-0625): `?laneId=` reads that LANE's session instead (lane `task` calls run in the
+      // background, so only their transcripts say when each subagent ends). Same read-only path, same gate.
       if (p === "/api/subagents") {
-        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(backend.currentSessionId())) } }); }
+        const laneId = url.searchParams.get("laneId");
+        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(laneId ? fleet.laneSessionId(laneId) : backend.currentSessionId())) } }); }
         catch { return json({ ok: true, data: { runs: [] } }); }
       }
       // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict + top processes. Read-only

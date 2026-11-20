@@ -381,6 +381,9 @@ export type LaneEvent =
    *  P-PROGRESS.1: `id`/`status`/`elapsedMs` let a tool_call_update settle the step its tool_call opened
    *  (one row per call, marked done or failed with its duration); `intent` is the agent's own `i` phrase. */
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
+  /** P-VIZ.4 (ADR-0625): the lane's `task` call delegated to subagents (mirrors the chat `subagent` event).
+   *  The call's own `tool` event rides beside it, so the grid card ignores this one. */
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] }
   /** P-PROGRESS.1: the lane's progress view, every few seconds while its turn runs. */
   | { type: "progress"; progress: ProgressView }
   /** P-WAIT.1: a write in the lane's turn waits for a file another worker is editing. */
@@ -1577,8 +1580,9 @@ export interface LucidBridge {
   browserClose(): Promise<void>;
   // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
   browserStop(): Promise<void>;
-  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
-  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation. P-VIZ.4 (ADR-0625):
+  // with a lane id, that lane's session's runs instead.
+  subagents(laneId?: string): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
@@ -2556,7 +2560,7 @@ export const bridge: LucidBridge = {
   browserShot: async () => { const d: unknown = await getData("/api/browser/shot"); return d && typeof d === "object" && "png" in d && typeof d.png === "string" ? d.png : null; },
   browserClose: async () => { await post("/api/browser/close", {}); },
   browserStop: async () => { await post("/api/browser/close", {}); }, // the turn-stop half is renderer-side
-  subagents: () => getData("/api/subagents"), // P-TASK.5
+  subagents: (laneId) => getData(laneId ? `/api/subagents?laneId=${encodeURIComponent(laneId)}` : "/api/subagents"), // P-TASK.5; P-VIZ.4: a lane's runs
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;

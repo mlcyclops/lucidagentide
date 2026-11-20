@@ -1,0 +1,500 @@
+// Copyright (c) 2026 TechLead 187 LLC
+// SPDX-License-Identifier: BUSL-1.1
+
+// desktop/renderer/viz_office_pose.ts - P-VIZ.4 (ADR-0627): the professional office cast's poses, clips, emotions,
+// reactions and effect timing.
+//
+// PURE (no three, no DOM), the office twin of viz_anime_pose.ts. The figure (viz_office.ts) is a SEATED rig of
+// nested joints in the anime rig's order; a pose is one flat vector (root position, then an Euler XYZ rotation per
+// joint). The root carries the office chair, so the root position is the chair rolling and the root's y rotation
+// is the chair swiveling. Every pose sits: a joint a pose leaves out takes the seated default (SEAT), not zero.
+//
+// Two roles share the rig: the worker (types at a keyboard while reading the monitor at his right, slams Enter,
+// stretches, squints at the screen, rolls the chair out to grab a printout) and the boss at the central desk
+// (reads reports and flips pages, ticks boxes on a clipboard, supervises the team over the clipboard). Both drink
+// coffee when idle for under IDLE_SLEEP_S and put their head down on the desk after that.
+//
+// Reactions layer over whatever plays: `stare` turns the head to the camera with annoyed eyes and holds it;
+// `outburst` plays a body clip (both hands slam the desk twice, fists up, shouting) with a red face, steam,
+// flying papers and sloshing coffee, then a glare at the camera. reactAt() is the whole timeline.
+
+import { bump, clamp01, ease, fract, type AnimeState, type Ease } from "./viz_anime_pose.ts";
+import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
+
+export type OfficeState = AnimeState;
+export const OFFICE_STATES: readonly OfficeState[] = ["idle", "working", "paused", "ended", "killed", "failed"];
+export type OfficeRole = "worker" | "boss";
+
+// ------------------------------------------------------------------------------------------ emotions (face)
+
+export type OfficeEyeShape = "open" | "happy" | "closed" | "strain" | "x";
+export type MouthShape = "flat" | "smile" | "frown" | "o" | "shout" | "grit" | "wavy" | "smirk";
+export interface OfficeEmotion {
+  readonly shape: OfficeEyeShape; readonly open: number; readonly slant: number; readonly lower: number;
+  readonly pupil: number; readonly brow: number; readonly browY: number; readonly sweat: boolean; readonly mouth: MouthShape;
+}
+const E = (shape: OfficeEyeShape, open: number, slant: number, lower: number, pupil: number, brow: number, browY: number, mouth: MouthShape, sweat = false): OfficeEmotion =>
+  ({ shape, open, slant, lower, pupil, brow, browY, sweat, mouth });
+
+export const OFFICE_EMOTIONS = {
+  neutral: E("open", 0.9, 0.05, 0.1, 1.0, 0.1, 0, "flat"),
+  focused: E("open", 0.65, 0.15, 0.2, 0.9, 0.3, -0.05, "flat"),
+  determined: E("open", 0.62, 0.4, 0.25, 0.8, 0.6, -0.1, "grit"),
+  strain: E("strain", 1, 0.5, 0, 1, 0.75, -0.12, "grit", true),
+  happy: E("happy", 1, 0, 0, 1, -0.12, 0.12, "smile"),
+  content: E("open", 0.5, -0.1, 0.3, 1, -0.1, 0.05, "smile"),
+  calm: E("closed", 1, 0, 0, 1, 0, 0.02, "flat"),
+  yawn: E("closed", 1, 0, 0, 1, -0.2, 0.1, "o"),
+  asleep: E("closed", 1, -0.1, 0, 1, -0.15, -0.02, "wavy"),
+  surprised: E("open", 1.15, 0, 0, 0.45, -0.25, 0.3, "o"),
+  wide: E("open", 1.2, 0, 0, 0.35, -0.1, 0.25, "flat"),
+  annoyed: E("open", 0.5, 0.35, 0.25, 0.55, 0.55, -0.1, "frown"),
+  angry: E("open", 0.8, 0.6, 0.2, 0.45, 0.9, -0.15, "grit"),
+  furious: E("open", 0.95, 0.7, 0.1, 0.35, 1.0, -0.18, "shout"),
+  glare: E("open", 0.45, 0.55, 0.3, 0.5, 0.85, -0.15, "frown"),
+  squint: E("open", 0.28, 0.15, 0.35, 0.8, 0.45, -0.1, "smirk"),
+  skeptical: E("open", 0.55, 0.1, 0.3, 0.8, 0.2, 0.05, "smirk"),
+  blank: E("open", 0.95, 0, 0, 0.3, 0, 0, "flat"),
+  pain: E("strain", 1, 0.3, 0, 1, -0.45, 0.06, "frown", true),
+  ko: E("x", 1, 0, 0, 1, -0.3, 0.05, "wavy"),
+} satisfies Record<string, OfficeEmotion>;
+export type OfficeEmotionName = keyof typeof OFFICE_EMOTIONS;
+export const OFFICE_EMOTION_NAMES = Object.keys(OFFICE_EMOTIONS) as OfficeEmotionName[];
+const EMOTION_INDEX = Object.fromEntries(OFFICE_EMOTION_NAMES.map((n, i) => [n, i])) as Record<OfficeEmotionName, number>;
+
+/** One number per distinct face drawing: the face canvas is redrawn only when this changes. `blink` 0..2,
+ *  `gaze` the bucket -2..2 (viz_anime_pose.gazeBucket; +2 looks toward +X, the monitor side). */
+export function officeFaceKey(emotion: OfficeEmotionName, blink: number, gaze: number): number {
+  return EMOTION_INDEX[emotion] * 100 + blink * 10 + (gaze + 2);
+}
+
+// ------------------------------------------------------------------------------------------ the look
+
+export interface OfficeLook {
+  shirt: string; tie: string; slacks: string; jacket: string; shoe: string; skin: string; hair: string;
+  glasses: boolean; mustache: boolean;
+}
+
+type Rgb = readonly [number, number, number];
+const toHex = (c: Rgb): string => `#${c.map((v) => Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, "0")).join("")}`;
+const mixRgb = (a: Rgb, b: Rgb, t: number): Rgb => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const WHITE: Rgb = [255, 255, 255];
+const CHARCOAL: Rgb = [0x2b, 0x30, 0x3a];
+export const OFFICE_SKINS: readonly string[] = ["#f3c9a1", "#e8b48a", "#c98c5e", "#8d5a3b", "#f6d6b8"];
+export const OFFICE_HAIRS: readonly string[] = ["#2b2118", "#4a3020", "#7a5230", "#c99a4a", "#1c1c22", "#8a3b22"];
+export const BOSS_HAIR = "#a7adb5";
+
+function hash32(x: number): number {
+  let h = (x + 0x9e3779b9) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** The office outfit from a mini look. The persona color is the tie (and tints the worker's shirt pastel);
+ *  skin, hair and glasses vary by `seed` so a fleet is a cast, not clones. The boss wears a charcoal suit with a
+ *  white shirt, gray hair, reading glasses and a mustache. */
+export function officeLook(l: MiniLook, seed: number, role: OfficeRole): OfficeLook {
+  const accent = parseHex(l.accent) ?? [0x41, 0xff, 0x8b];
+  const h = hash32(Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 2147483647 : 0);
+  const boss = role === "boss";
+  const jacket = mixRgb(CHARCOAL, accent, 0.1);
+  return {
+    shirt: boss ? "#f4f6fa" : toHex(mixRgb(accent, WHITE, 0.78)),
+    tie: toHex(accent),
+    slacks: boss ? toHex(jacket) : "#3c4250",
+    jacket: toHex(jacket),
+    shoe: "#1d1a19",
+    skin: OFFICE_SKINS[h % OFFICE_SKINS.length]!,
+    hair: boss ? BOSS_HAIR : OFFICE_HAIRS[(h >>> 8) % OFFICE_HAIRS.length]!,
+    glasses: boss || ((h >>> 16) & 1) === 1,
+    mustache: boss,
+  };
+}
+
+// ------------------------------------------------------------------------------------------ pose vectors
+
+export const OFFICE_JOINTS = ["root", "hips", "spine", "chest", "neck", "head", "shL", "elL", "shR", "elR", "hipL", "kneeL", "hipR", "kneeR"] as const;
+export type OfficeJoint = (typeof OFFICE_JOINTS)[number];
+/** Root position x, y, z, then three Euler angles per joint. */
+export const OFFICE_POSE_LEN = 3 + OFFICE_JOINTS.length * 3;
+export function officeJointOffset(j: OfficeJoint): number {
+  return 3 + OFFICE_JOINTS.indexOf(j) * 3;
+}
+
+type V3 = readonly [number, number, number];
+export type OfficePoseDef = { readonly emotion: OfficeEmotionName; readonly rootX?: number; readonly rootY?: number; readonly rootZ?: number } & { readonly [J in OfficeJoint]?: V3 };
+
+/** Seated legs: thighs forward on the seat, shins down. Every pose starts from this. */
+export const SEAT: Readonly<Partial<Record<OfficeJoint, V3>>> = { hipL: [-1.5, 0, -0.05], kneeL: [1.5, 0, 0], hipR: [-1.5, 0, 0.05], kneeR: [1.5, 0, 0] };
+
+// L is -X, R is +X (the anime rig's convention). Shoulder x < 0 raises the arm forward; z > 0 brings the L arm
+// in (and the R arm out). The monitor stands at the worker's +X front, so looking at it is a positive head yaw.
+const TYPE_ARMS = { shL: [-0.6, 0, 0.28], elL: [-1.05, 0, 0], shR: [-0.6, 0, -0.28], elR: [-1.05, 0, 0] } as const;
+const CLIP_ARMS = { shL: [-0.95, 0, 0.3], elL: [-1.45, 0, 0], shR: [-0.85, 0, -0.35], elR: [-1.5, 0, 0] } as const;
+const LOW_CLIP_ARMS = { shL: [-0.8, 0, 0.3], elL: [-1.6, 0, 0], shR: [-0.6, 0, -0.3], elR: [-1.4, 0, 0] } as const;
+
+export const OFFICE_POSES = {
+  // ---- the worker at the keyboard
+  type: { emotion: "focused", spine: [0.1, 0, 0], chest: [0.05, 0.1, 0], neck: [0, 0.1, 0], head: [0.12, 0.3, 0], ...TYPE_ARMS },
+  typeGlance: { emotion: "neutral", spine: [0.08, 0, 0], chest: [0.05, 0, 0], head: [0.05, 0.05, 0], ...TYPE_ARMS },
+  enterWind: { emotion: "determined", spine: [0.05, 0, 0], chest: [-0.05, 0.15, 0], head: [0, 0.4, 0], shL: [-0.6, 0, 0.28], elL: [-1.05, 0, 0], shR: [-2.6, 0, -0.15], elR: [-0.5, 0, 0] },
+  enterSlam: { emotion: "determined", rootY: -0.01, spine: [0.22, 0, 0], chest: [0.1, 0.1, 0], head: [0.2, 0.35, 0], shL: [-0.6, 0, 0.28], elL: [-1.05, 0, 0], shR: [-0.75, 0, -0.15], elR: [-0.85, 0, 0] },
+  stretchUp: { emotion: "yawn", spine: [-0.25, 0, 0], chest: [-0.1, 0, 0], head: [-0.35, 0, 0], shL: [-3.0, 0, 0.2], elL: [-0.25, 0, 0], shR: [-3.0, 0, -0.2], elR: [-0.25, 0, 0] },
+  handsBehind: { emotion: "content", spine: [-0.3, 0, 0], chest: [-0.05, 0, 0], head: [-0.2, 0, 0], shL: [-2.7, 0, -0.75], elL: [-2.4, 0, 0], shR: [-2.7, 0, 0.75], elR: [-2.4, 0, 0] },
+  squint: { emotion: "squint", spine: [0.35, 0.25, 0], chest: [0.1, 0.2, 0], neck: [0.1, 0.2, 0], head: [0.05, 0.35, 0.1], shL: [-0.55, 0, 0.3], elL: [-1.1, 0, 0], shR: [-0.5, 0, -0.2], elR: [-1.2, 0, 0] },
+  squintNear: { emotion: "squint", spine: [0.45, 0.3, 0], chest: [0.12, 0.2, 0], neck: [0.1, 0.25, 0], head: [0.1, 0.4, 0.2], shL: [-0.55, 0, 0.3], elL: [-1.1, 0, 0], shR: [-0.5, 0, -0.2], elR: [-1.2, 0, 0] },
+  squintAha: { emotion: "surprised", spine: [0.1, 0.1, 0], chest: [0, 0.15, 0], head: [-0.15, 0.3, 0], shL: [-0.55, 0, 0.3], elL: [-1.1, 0, 0], shR: [-1.5, 0, -0.3], elR: [-1.6, 0, 0] },
+  rollPush: { emotion: "determined", rootX: -0.05, spine: [0.15, 0, 0], shL: [-0.7, 0, 0.1], elL: [-0.6, 0, 0], shR: [-0.7, 0, -0.1], elR: [-0.6, 0, 0] },
+  rollReach: { emotion: "determined", rootX: -0.32, rootZ: -0.08, root: [0, -0.8, 0], spine: [0.1, -0.2, 0], head: [0, -0.3, 0], shL: [-1.6, 0, -0.35], elL: [-0.2, 0, 0], shR: [-0.3, 0, 0.2], elR: [-0.5, 0, 0], hipL: [-1.3, 0, -0.25], kneeL: [1.2, 0, 0], hipR: [-1.4, 0, 0.15], kneeR: [1.3, 0, 0] },
+  rollBack: { emotion: "focused", rootX: -0.15, root: [0, -0.3, 0], spine: [0.05, 0, 0], head: [0.3, -0.1, 0], shL: [-1.1, 0, 0.35], elL: [-1.2, 0, 0], shR: [-0.45, 0, -0.12], elR: [-1.0, 0, 0] },
+  readPaper: { emotion: "focused", spine: [0.05, 0, 0], head: [0.35, -0.15, 0], shL: [-1.0, 0, 0.35], elL: [-1.3, 0, 0], shR: [-0.6, 0, -0.28], elR: [-1.05, 0, 0] },
+  frantic: { emotion: "strain", spine: [0.3, 0, 0], chest: [0.1, 0.1, 0], head: [0.25, 0.45, 0], shL: [-0.55, 0, 0.3], elL: [-1.15, 0, 0], shR: [-0.55, 0, -0.3], elR: [-1.15, 0, 0] },
+
+  // ---- the boss at the central desk
+  reportsHold: { emotion: "focused", spine: [0.05, 0, 0], head: [0.3, 0, 0], shL: [-1.05, 0, 0.4], elL: [-1.25, 0, 0], shR: [-1.05, 0, -0.4], elR: [-1.25, 0, 0] },
+  reportsFlip: { emotion: "skeptical", spine: [0.05, 0, 0], head: [0.3, -0.05, 0], shL: [-1.05, 0, 0.4], elL: [-1.25, 0, 0], shR: [-1.2, 0, -0.1], elR: [-1.35, 0, 0] },
+  clipHold: { emotion: "focused", spine: [0.05, 0, 0], head: [0.35, 0.05, 0], ...CLIP_ARMS },
+  clipLook: { emotion: "skeptical", spine: [0, 0, 0], head: [0, 0.15, 0], ...CLIP_ARMS },
+  superviseL: { emotion: "skeptical", chest: [0, -0.15, 0], head: [0.05, -0.6, 0], ...LOW_CLIP_ARMS },
+  superviseC: { emotion: "skeptical", head: [0.1, 0, 0], ...LOW_CLIP_ARMS },
+  superviseR: { emotion: "skeptical", chest: [0, 0.15, 0], head: [0.05, 0.6, 0], ...LOW_CLIP_ARMS },
+
+  // ---- both: coffee, sleep, states
+  sitBack: { emotion: "neutral", spine: [-0.08, 0, 0], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-0.45, 0, -0.12], elR: [-1.0, 0, 0] },
+  reachMug: { emotion: "neutral", spine: [0.1, -0.1, 0], head: [0.15, -0.2, 0], shL: [-0.8, 0, 0.05], elL: [-0.7, 0, 0], shR: [-0.45, 0, -0.12], elR: [-1.0, 0, 0] },
+  sipUp: { emotion: "calm", spine: [-0.05, 0, 0], head: [-0.12, -0.05, 0], shL: [-1.3, 0, 0.55], elL: [-2.0, 0, 0], shR: [-0.45, 0, -0.12], elR: [-1.0, 0, 0] },
+  sleep: { emotion: "asleep", spine: [0.75, 0, 0], chest: [0.2, 0, 0], neck: [0.1, 0, 0], head: [0.25, 0, 0.35], shL: [-2.1, 0, 0.55], elL: [-0.9, 0, 0], shR: [-2.1, 0, -0.55], elR: [-0.9, 0, 0] },
+  sleepDeep: { emotion: "asleep", spine: [0.78, 0, 0], chest: [0.22, 0, 0], neck: [0.1, 0, 0], head: [0.27, 0, 0.38], shL: [-2.1, 0, 0.55], elL: [-0.9, 0, 0], shR: [-2.1, 0, -0.55], elR: [-0.9, 0, 0] },
+  blank: { emotion: "blank", spine: [-0.05, 0, 0], head: [0.05, 0, 0], shL: [0.05, 0, -0.08], elL: [-0.35, 0, 0], shR: [0.05, 0, 0.08], elR: [-0.35, 0, 0] },
+  blank2: { emotion: "blank", spine: [-0.05, 0, 0], head: [0.08, 0, 0.12], shL: [0.05, 0, -0.08], elL: [-0.35, 0, 0], shR: [0.05, 0, 0.08], elR: [-0.35, 0, 0] },
+  facepalm: { emotion: "pain", spine: [0.25, 0, 0], chest: [0.1, 0, 0], head: [0.4, 0, 0], shL: [-0.5, 0, 0.2], elL: [-1.0, 0, 0], shR: [-1.55, 0, -0.55], elR: [-2.25, 0, 0] },
+  jolt: { emotion: "surprised", spine: [-0.2, 0, 0], head: [-0.2, 0, 0], shL: [-0.3, 0, -0.5], elL: [-0.4, 0, 0], shR: [-0.3, 0, 0.5], elR: [-0.4, 0, 0] },
+  slump: { emotion: "ko", rootY: -0.03, spine: [0.35, 0, 0.25], chest: [0.15, 0, 0.1], head: [0.5, 0, 0.45], shL: [0.2, 0, -0.1], elL: [-0.1, 0, 0], shR: [0.15, 0, 0.15], elR: [-0.15, 0, 0], hipL: [-1.35, 0, -0.2], kneeL: [1.2, 0, 0], hipR: [-1.35, 0, 0.2], kneeR: [1.3, 0, 0] },
+
+  // ---- the outburst (reaction body clip)
+  slamWind: { emotion: "angry", rootY: 0.02, spine: [-0.15, 0, 0], chest: [-0.1, 0, 0], head: [-0.15, 0, 0], shL: [-2.7, 0, -0.2], elL: [-0.6, 0, 0], shR: [-2.7, 0, 0.2], elR: [-0.6, 0, 0] },
+  slamDown: { emotion: "furious", rootY: 0.03, spine: [0.4, 0, 0], chest: [0.15, 0, 0], head: [0.05, 0, 0], shL: [-1.5, 0, -0.25], elL: [-0.25, 0, 0], shR: [-1.5, 0, 0.25], elR: [-0.25, 0, 0] },
+  shout: { emotion: "furious", rootY: 0.03, spine: [-0.2, 0, 0], chest: [-0.05, 0, 0], head: [-0.25, 0, 0], shL: [-1.9, 0, -0.45], elL: [-1.6, 0, 0], shR: [-1.9, 0, 0.45], elR: [-1.6, 0, 0] },
+} as const satisfies Record<string, OfficePoseDef>;
+export type OfficePoseName = keyof typeof OFFICE_POSES;
+
+/** A pose definition as a flat vector; joints it leaves out take SEAT, then zero. */
+export function officePoseVector(p: OfficePoseDef): Float32Array {
+  const v = new Float32Array(OFFICE_POSE_LEN);
+  v[0] = p.rootX ?? 0;
+  v[1] = p.rootY ?? 0;
+  v[2] = p.rootZ ?? 0;
+  for (let j = 0; j < OFFICE_JOINTS.length; j++) {
+    const name = OFFICE_JOINTS[j]!;
+    const r = p[name] ?? SEAT[name];
+    if (!r) continue;
+    v[3 + j * 3] = r[0];
+    v[4 + j * 3] = r[1];
+    v[5 + j * 3] = r[2];
+  }
+  return v;
+}
+
+export const OFFICE_POSE_VECTORS = Object.fromEntries(Object.entries(OFFICE_POSES).map(([k, p]) => [k, officePoseVector(p)])) as Record<OfficePoseName, Float32Array>;
+
+// ------------------------------------------------------------------------------------------ clips
+
+export interface OfficeKey { readonly at: number; readonly pose: OfficePoseName; readonly ease: Ease; readonly emotion: OfficeEmotionName; readonly gaze: number }
+export interface OfficeClip { readonly len: number; readonly loop: boolean; readonly keys: readonly OfficeKey[] }
+export type OfficeClipName =
+  | "type" | "enter" | "stretch" | "squint" | "roll" | "reports" | "clipboard" | "supervise" | "sip" | "sleep" | "blank"
+  | "facepalm" | "relax" | "slump" | "frantic" | "done" | "outburst";
+
+const K = (at: number, pose: OfficePoseName, e: Ease = "smooth", o: { emotion?: OfficeEmotionName; gaze?: number } = {}): OfficeKey =>
+  ({ at, pose, ease: e, emotion: o.emotion ?? OFFICE_POSES[pose].emotion, gaze: o.gaze ?? 0 });
+const MON = { gaze: 1 } as const;
+
+/** kiblast: the Enter key slam lands here (screen flash, keyboard bounce). */
+export const ENTER_SLAM_S = 1.9;
+/** sip: the hand closes on the desk mug at MUG_GRAB_S and sets it back down at MUG_DROP_S. */
+export const MUG_GRAB_S = 0.7;
+export const MUG_DROP_S = 3.2;
+/** roll: the printout is in the hand between these clip times. */
+export const PRINT_GRAB_S = 1.35;
+export const PRINT_DROP_S = 3.85;
+/** reports: a page turns at each of these clip times, over FLIP_S. */
+export const PAGE_FLIPS: readonly number[] = [2.05, 4.45];
+export const FLIP_S = 0.5;
+/** outburst: both hands hit the desk at these reaction times. */
+export const OUTBURST_SLAMS: readonly number[] = [0.32, 1.58];
+
+export const OFFICE_CLIPS: Readonly<Record<OfficeClipName, OfficeClip>> = {
+  // Typing while reading the monitor at his right, an occasional glance down at the keys.
+  type: { len: 4.4, loop: true, keys: [K(0, "type", "smooth", MON), K(2.2, "type", "smooth", MON), K(2.5, "typeGlance"), K(3.1, "typeGlance"), K(3.35, "type", "smooth", MON)] },
+  // A rapid burst of typing (the figure speeds the taps up), the hand winds up and SLAMS Enter, a smug beat.
+  enter: { len: 3.0, loop: true, keys: [K(0, "type", "smooth", MON), K(1.5, "type", "smooth", MON), K(1.72, "enterWind"), K(ENTER_SLAM_S, "enterSlam", "snap"), K(2.4, "enterSlam", "smooth", { emotion: "happy" }), K(2.75, "type", "smooth", MON)] },
+  // Arms up with a yawn, then leaning back with the hands behind the head, back to the keys.
+  stretch: { len: 5.0, loop: true, keys: [K(0, "type", "smooth", MON), K(0.6, "stretchUp"), K(1.6, "stretchUp"), K(2.2, "handsBehind"), K(3.8, "handsBehind"), K(4.4, "type", "smooth", MON)] },
+  // Leaning in to squint at the screen, closer, then a finger-up "aha".
+  squint: { len: 5.2, loop: true, keys: [K(0, "type", "smooth", MON), K(0.5, "squint", "smooth", MON), K(2.0, "squint", "smooth", MON), K(2.4, "squintNear", "smooth", MON), K(3.2, "squintNear", "smooth", MON), K(3.35, "squintAha", "snap", { gaze: 0.5 }), K(3.9, "squintAha", "smooth", { gaze: 0.5 }), K(4.6, "type", "smooth", MON)] },
+  // Push off the desk, roll out to grab a printout, roll back reading it.
+  roll: { len: 4.4, loop: true, keys: [K(0, "type", "smooth", MON), K(0.4, "rollPush"), K(1.0, "rollReach"), K(1.5, "rollReach"), K(2.3, "rollBack"), K(3.2, "readPaper", "smooth", { gaze: -0.5 }), K(3.7, "readPaper", "smooth", { gaze: -0.5 }), K(4.0, "type", "smooth", MON)] },
+  // The boss reads a report and turns a page every couple of seconds.
+  reports: { len: 6, loop: true, keys: [K(0, "reportsHold"), K(1.8, "reportsHold"), K(2.1, "reportsFlip"), K(2.5, "reportsHold"), K(4.2, "reportsHold"), K(4.5, "reportsFlip"), K(4.9, "reportsHold")] },
+  // Ticking boxes on the clipboard (the pen ticks are layered by the figure), a skeptical look up.
+  clipboard: { len: 4, loop: true, keys: [K(0, "clipHold"), K(1.6, "clipHold"), K(1.8, "clipLook", "smooth", { gaze: 0.3 }), K(2.4, "clipLook", "smooth", { gaze: 0.3 }), K(2.6, "clipHold")] },
+  // Looking around the team over the clipboard: left, center, right.
+  supervise: { len: 6.4, loop: true, keys: [K(0, "superviseL", "smooth", { gaze: -1 }), K(1.4, "superviseL", "smooth", { gaze: -1 }), K(2.2, "superviseC"), K(2.9, "superviseC"), K(3.7, "superviseR", "smooth", { gaze: 1 }), K(5.1, "superviseR", "smooth", { gaze: 1 })] },
+  // A coffee: reach, lift and sip with closed eyes, set it down, sit back and look around.
+  sip: { len: 6, loop: true, keys: [K(0, "sitBack"), K(MUG_GRAB_S, "reachMug"), K(1.3, "sipUp"), K(2.6, "sipUp"), K(MUG_DROP_S, "reachMug"), K(3.7, "sitBack"), K(5.0, "sitBack", "smooth", { gaze: -0.5 })] },
+  // Head down on the desk, breathing slowly.
+  sleep: { len: 5, loop: true, keys: [K(0, "sleep"), K(2.5, "sleepDeep")] },
+  // Paused: a blank stare with a slow head tilt.
+  blank: { len: 6, loop: true, keys: [K(0, "blank"), K(3, "blank2")] },
+  // A tool failure: a facepalm.
+  facepalm: { len: 1.0, loop: false, keys: [K(0, "facepalm"), K(1.0, "facepalm")] },
+  // The session ended: leans back, hands behind the head.
+  relax: { len: 3, loop: false, keys: [K(0, "sitBack", "smooth", { emotion: "calm" }), K(0.8, "handsBehind"), K(3, "handsBehind", "smooth", { emotion: "content" })] },
+  // Killed: a jolt, then a slump with x x eyes.
+  slump: { len: 2, loop: false, keys: [K(0, "sitBack"), K(0.12, "jolt", "snap"), K(0.4, "jolt"), K(1.4, "slump"), K(2, "slump")] },
+  // burst(): frantic typing with sweat.
+  frantic: { len: 1.5, loop: false, keys: [K(0, "frantic"), K(1.5, "frantic")] },
+  // A working turn ends: a happy stretch, then sit back.
+  done: { len: 2.2, loop: false, keys: [K(0, "type"), K(0.35, "stretchUp", "smooth", { emotion: "happy" }), K(1.3, "stretchUp", "smooth", { emotion: "happy" }), K(2.2, "sitBack", "smooth", { emotion: "content" })] },
+  // react("outburst"): hands up, SLAM, fists up shouting, a second SLAM.
+  outburst: { len: 2.0, loop: false, keys: [K(0, "slamWind"), K(0.22, "slamWind"), K(OUTBURST_SLAMS[0]!, "slamDown", "snap"), K(0.7, "slamDown"), K(0.85, "shout"), K(1.45, "shout"), K(OUTBURST_SLAMS[1]!, "slamDown", "snap"), K(2.0, "slamDown")] },
+};
+export const OFFICE_CLIP_NAMES = Object.keys(OFFICE_CLIPS) as OfficeClipName[];
+
+/** Representative clip times for motion=false (a readable still of each clip). */
+export const OFFICE_STILL_T: Readonly<Record<OfficeClipName, number>> = {
+  type: 0.5, enter: 1.95, stretch: 3.0, squint: 2.8, roll: 1.4, reports: 1.0, clipboard: 1.0, supervise: 0.5, sip: 2.0, sleep: 0, blank: 0,
+  facepalm: 0.5, relax: 3, slump: 2, frantic: 0.6, done: 1.0, outburst: 1.0,
+};
+
+export interface OfficeClipSample { emotion: OfficeEmotionName; gaze: number }
+
+export function officeClipTime(clip: OfficeClip, t: number): number {
+  if (!Number.isFinite(t)) return 0;
+  return clip.loop ? t - Math.floor(t / clip.len) * clip.len : Math.min(Math.max(t, 0), clip.len);
+}
+
+export function officeClipDone(clip: OfficeClip, t: number): boolean {
+  return !clip.loop && t >= clip.len;
+}
+
+/** The clip's pose at `t` into `out`, its emotion and gaze into `info` (viz_anime_pose.sampleClip's rules: a loop
+ *  eases its last key into its first; the emotion switches halfway through a smooth segment, at once on a snap). */
+export function sampleOfficeClip(clip: OfficeClip, t: number, out: Float32Array, info: OfficeClipSample): void {
+  const keys = clip.keys;
+  const n = keys.length;
+  const tt = officeClipTime(clip, t);
+  let i = n - 1;
+  for (let k = 0; k < n - 1; k++) {
+    if (tt < keys[k + 1]!.at) { i = k; break; }
+  }
+  const a = keys[i]!;
+  const last = i === n - 1;
+  const b = last ? (clip.loop ? keys[0]! : a) : keys[i + 1]!;
+  const span = last ? clip.len - a.at : b.at - a.at;
+  const u = span > 0 ? Math.min(1, (tt - a.at) / span) : 1;
+  const w = ease(b.ease, u);
+  const pa = OFFICE_POSE_VECTORS[a.pose];
+  const pb = OFFICE_POSE_VECTORS[b.pose];
+  for (let c = 0; c < OFFICE_POSE_LEN; c++) out[c] = pa[c]! + (pb[c]! - pa[c]!) * w;
+  info.emotion = (b.ease === "snap" ? u > 0 : w >= 0.5) ? b.emotion : a.emotion;
+  info.gaze = a.gaze + (b.gaze - a.gaze) * clamp01(w);
+}
+
+// ------------------------------------------------------------------------------------------ what plays
+
+/** Idle this long (seconds) and the coffee turns into a head-down nap. */
+export const IDLE_SLEEP_S = 60;
+
+export function idleClip(idleSec: number): OfficeClipName {
+  return Number.isFinite(idleSec) && idleSec >= IDLE_SLEEP_S ? "sleep" : "sip";
+}
+
+const WORKER_CLIPS: Readonly<Record<MiniActivity, OfficeClipName | null>> = {
+  typing: "type", kiblast: "enter", kata: "stretch", scan: "squint", dash: "roll", supervise: "squint", meditate: null,
+};
+const BOSS_CLIPS: Readonly<Record<MiniActivity, OfficeClipName | null>> = {
+  typing: "reports", kiblast: "clipboard", kata: "sip", scan: "supervise", dash: "reports", supervise: "supervise", meditate: null,
+};
+
+/** A working activity's clip for the role; null means the idle behavior (meditate is a coffee break). */
+export function activityClip(role: OfficeRole, a: MiniActivity): OfficeClipName | null {
+  const map = role === "boss" ? BOSS_CLIPS : WORKER_CLIPS;
+  return Object.prototype.hasOwnProperty.call(map, a) ? map[a] : WORKER_CLIPS.typing;
+}
+
+/** What the figure plays: a power-down state's clip, else the activity (idle and meditate: coffee or a nap). */
+export function officeClipFor(role: OfficeRole, state: OfficeState, a: MiniActivity, idleSec: number): OfficeClipName {
+  switch (state) {
+    case "killed": return "slump";
+    case "ended": return "relax";
+    case "failed": return "facepalm";
+    case "paused": return "blank";
+    // an idle node whose team works supervises (viz_mini_look.activityAt) instead of a coffee or a nap
+    case "idle": return a === "supervise" ? activityClip(role, a) ?? idleClip(idleSec) : idleClip(idleSec);
+    default: return activityClip(role, a) ?? idleClip(0);
+  }
+}
+
+/** A one-shot fired by a state change: a working turn that ends plays the happy stretch. */
+export function officeTransitionShot(prev: OfficeState, next: OfficeState): "done" | null {
+  return prev === "working" && next === "idle" ? "done" : null;
+}
+
+/** The activity clock's speed: faster with the intensity while working, frozen while paused. */
+export function officeTempo(state: OfficeState, k: number): number {
+  const x = Number.isFinite(k) ? clamp01(k) : 0;
+  return state === "working" ? 0.75 + 0.6 * x : state === "paused" ? 0 : 1;
+}
+
+/** Typing taps per second at intensity k (frantic: much faster). */
+export function tapRate(k: number, frantic: boolean): number {
+  const x = Number.isFinite(k) ? clamp01(k) : 0;
+  return frantic ? 18 : 5 + 7 * x;
+}
+
+/** enter clip: the tap tempo multiplier, accelerating into the slam; 0 while the hand winds up and slams. */
+export function enterTapBoost(t: number): number {
+  if (t < 1.5) return 1 + 1.5 * clamp01(t / 1.5);
+  return t < 2.75 ? 0 : 1;
+}
+
+export function mugHeld(clip: OfficeClipName, t: number): boolean {
+  return clip === "sip" && t >= MUG_GRAB_S && t < MUG_DROP_S;
+}
+
+export function printHeld(clip: OfficeClipName, t: number): boolean {
+  return clip === "roll" && t >= PRINT_GRAB_S && t < PRINT_DROP_S;
+}
+
+/** reports clip: the turning page's progress 0..1, or -1 when no page is turning. */
+export function pageFlipAt(t: number): number {
+  for (const s of PAGE_FLIPS) if (t >= s && t < s + FLIP_S) return (t - s) / FLIP_S;
+  return -1;
+}
+
+// ------------------------------------------------------------------------------------------ reactions
+
+export type ReactKind = "stare" | "outburst";
+export const STARE_MIN_S = 1.6;
+export const STARE_MAX_S = 2.2;
+/** The outburst body clip runs this long, then the glare at the camera holds GLARE_S. */
+export const OUTBURST_S = 2.0;
+export const GLARE_S = 1.2;
+const LOOK_IN_S = 0.12;
+const LOOK_OUT_S = 0.35;
+const GLARE_AT = OUTBURST_S - 0.1;
+/** Flying papers stay airborne this long after the first slam. */
+export const PAPER_S = 1.4;
+
+/** How long a stare holds the gaze, from a uniform random number in [0, 1). */
+export function stareHold(r: number): number {
+  return STARE_MIN_S + (STARE_MAX_S - STARE_MIN_S) * clamp01(Number.isFinite(r) ? r : 0.5);
+}
+
+export function reactLength(kind: ReactKind, hold: number): number {
+  return kind === "stare" ? hold + LOOK_OUT_S : GLARE_AT + GLARE_S + LOOK_OUT_S;
+}
+
+/** One frame of a reaction: `body` blends the outburst clip over the pose, `look` turns the head to the camera,
+ *  `lift` raises a slumped torso to look, `emotion` overrides the face (null = the clip's own). */
+export interface ReactSample {
+  body: number; look: number; lift: number; emotion: OfficeEmotionName | null;
+  red: number; steam: number; shake: number; papers: number; slosh: number; done: boolean;
+}
+
+function lookCurve(t: number, start: number, end: number): number {
+  if (t < start || t >= end + LOOK_OUT_S) return 0;
+  if (t < start + LOOK_IN_S) return 1 - (1 - (t - start) / LOOK_IN_S) ** 3;
+  if (t < end) return 1;
+  const u = (t - end) / LOOK_OUT_S;
+  return 1 - u * u * (3 - 2 * u);
+}
+
+function impact(t: number, decay: number): number {
+  let m = 0;
+  for (const s of OUTBURST_SLAMS) if (t >= s && t < s + decay) m = Math.max(m, 1 - (t - s) / decay);
+  return m;
+}
+
+export function reactAt(kind: ReactKind, t: number, hold: number, out: ReactSample): ReactSample {
+  const tt = Number.isFinite(t) ? t : 0;
+  out.done = tt >= reactLength(kind, hold);
+  if (kind === "stare") {
+    out.body = 0;
+    out.look = lookCurve(tt, 0, hold);
+    out.lift = out.look;
+    out.emotion = tt < 0 || out.done ? null : tt < 0.3 ? "wide" : tt < hold + 0.15 ? "annoyed" : null;
+    out.red = out.steam = out.shake = out.slosh = 0;
+    out.papers = -1;
+    return out;
+  }
+  out.body = tt < 0 ? 0 : bump(tt, 0, 0.1, GLARE_AT, OUTBURST_S + 0.2);
+  out.look = Math.max(0.6 * bump(tt, 0.8, 0.95, 1.45, 1.6), lookCurve(tt, GLARE_AT, GLARE_AT + GLARE_S));
+  out.lift = out.look;
+  out.emotion = tt < 0 || out.done ? null : tt < OUTBURST_SLAMS[0]! ? "angry" : tt < GLARE_AT ? "furious" : tt < GLARE_AT + GLARE_S + 0.15 ? "glare" : null;
+  out.red = bump(tt, 0.1, 0.4, 2.6, 3.4);
+  out.steam = bump(tt, 0.35, 0.55, 2.1, 2.7);
+  out.shake = impact(tt, 0.35);
+  out.slosh = impact(tt, 0.8);
+  const p = tt - OUTBURST_SLAMS[0]!;
+  out.papers = p >= 0 && p < PAPER_S ? p / PAPER_S : -1;
+  return out;
+}
+
+/** Head angles toward a target at (dx, dy, dz) from the head, in the figure's frame (+Z forward): yaw turns the
+ *  face toward +X, pitch < 0 lifts the face. Clamped to what a neck can do. */
+export const LOOK_YAW_MAX = 1.5;
+export const LOOK_PITCH_MAX = 0.7;
+export interface LookAngles { yaw: number; pitch: number }
+export function lookAngles(dx: number, dy: number, dz: number, out: LookAngles): LookAngles {
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) { out.yaw = 0; out.pitch = 0; return out; }
+  const yaw = Math.atan2(dx, dz);
+  const pitch = -Math.atan2(dy, Math.hypot(dx, dz));
+  out.yaw = Math.max(-LOOK_YAW_MAX, Math.min(LOOK_YAW_MAX, yaw));
+  out.pitch = Math.max(-LOOK_PITCH_MAX, Math.min(LOOK_PITCH_MAX, pitch));
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------ effect timing
+
+/** The CRT power-off over CRT_S: the picture collapses to a bright line, the line to a dot, the dot fades. */
+export const CRT_S = 0.45;
+export interface Crt { sx: number; sy: number; a: number }
+export function crtOff(t: number, out: Crt): Crt {
+  if (!(t >= 0) || t >= CRT_S) { out.sx = 0; out.sy = 0; out.a = 0; return out; }
+  if (t < 0.18) { const u = t / 0.18; out.sx = 1; out.sy = 1 - 0.98 * u; out.a = 0.6 + 0.4 * u; }
+  else if (t < 0.38) { const u = (t - 0.18) / 0.2; out.sx = 1 - 0.97 * u; out.sy = 0.02; out.a = 1; }
+  else { out.sx = 0.03; out.sy = 0.02; out.a = 1 - (t - 0.38) / (CRT_S - 0.38); }
+  return out;
+}
+
+/** A flying paper `i` of `n` at progress u (0..1 of PAPER_S) from the desk pile: up and out, fluttering down to
+ *  no lower than `floor` below the desk top. Deterministic per paper. */
+export interface Paper { x: number; y: number; z: number; rx: number; rz: number }
+export function paperFlight(i: number, n: number, u: number, floor: number, out: Paper): Paper {
+  const h = hash32(i * 7919 + 13);
+  const r1 = (h & 1023) / 1023, r2 = ((h >>> 10) & 1023) / 1023;
+  const a = (n > 1 ? i / (n - 1) : 0.5) * Math.PI * 0.9 - Math.PI * 0.45 + (r1 - 0.5) * 0.4; // a fan, front-facing
+  const s = clamp01(Number.isFinite(u) ? u : 0) * PAPER_S;
+  const vh = 0.35 + 0.25 * r2, vy = 1.5 + 0.5 * r1, g = 3.4;
+  const reach = vh * (1 - Math.exp(-s * 2.2)); // air drag: the paper drifts out and stops
+  out.x = Math.sin(a) * reach + 0.04 * Math.sin(s * 7 + i);
+  out.z = Math.cos(a) * reach;
+  out.y = Math.max(-floor, vy * s - 0.5 * g * s * s);
+  out.rx = s * (3 + 2 * r1);
+  out.rz = s * (2 - 4 * r2);
+  return out;
+}
+
+/** The sleeping "z" `i` of `n` at time t: rising from the head, swaying, growing, fading. */
+export interface Zed { x: number; y: number; s: number; a: number }
+export function zedAt(i: number, n: number, t: number, out: Zed): Zed {
+  const ph = fract((Number.isFinite(t) ? t : 0) / 2.4 + (n > 0 ? i / n : 0));
+  out.y = ph * 0.35;
+  out.x = 0.06 * ph + 0.035 * Math.sin(ph * Math.PI * 2);
+  out.s = 0.04 + 0.05 * ph;
+  out.a = bump(ph, 0, 0.2, 0.7, 1);
+  return out;
+}

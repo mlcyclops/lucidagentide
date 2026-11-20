@@ -18,18 +18,24 @@
 // the ki ball (kiblast), a ground ring (meditate), speed streaks (dash), the aura flames and glowing hair (the
 // powerup burst) and rising smoke (killed). Geometry is shared per detail tier (ref-counted); materials and the
 // eye canvas texture are per figure and freed by dispose(). update() allocates nothing.
+//
+// P-VIZ.4 (ADR-0628): react() layers a stare or an outburst over the running activity (viz_anime_pose's reaction
+// timeline: the turn to the camera, the raised fists, the anger mark and steam built lazily on the first
+// outburst, a red-tinted aura flare), and the `supervise` activity adds a holo checklist that ticks.
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import {
-  animeLook, auraLevel, BLINK_LEVELS, blinkStep, clipDone, clipFor, CLIPS, clipTime, dashSpeed, EMOTIONS, eyeKey, fract, gazeBucket,
-  gazeOfBucket, jointOffset, JOINTS, kiBallAt, nextBlinkDelay, POSE_LEN, sampleClip, shakeLevel, stateEmotion, STILL_T, tapCurve, tempoFor,
-  transitionShot, ANIME_STATES, type AnimeState, type ClipName, type ClipSample, type Emotion, type KiBall, type ShotName,
+  animeLook, auraLevel, BLINK_LEVELS, blinkStep, CHECK_ROWS, checklistTicks, clearReaction, clipDone, clipFor, CLIPS, clipTime, dashSpeed,
+  distributeYaw, EMOTIONS, eyeKey, fract, gazeBucket, gazeOfBucket, jointOffset, JOINTS, kiBallAt, newReactionSample, nextBlinkDelay,
+  planReaction, POSE_LEN, POSE_VECTORS, REACTION_KINDS, sampleClip, sampleReaction, shakeLevel, stateEmotion, STILL_T, tapCurve, tempoFor,
+  transitionShot, ANIME_STATES, type AnimeState, type ClipName, type ClipSample, type Emotion, type KiBall, type Reaction, type ReactionKind,
+  type ShotName,
 } from "./viz_anime_pose.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 
-export type { AnimeState } from "./viz_anime_pose.ts";
+export type { AnimeState, ReactionKind } from "./viz_anime_pose.ts";
 export type AnimeDetail = "full" | "reduced" | "minimal";
 
 export interface AnimeFigure {
@@ -40,6 +46,11 @@ export interface AnimeFigure {
   setState(s: AnimeState): void;
   /** A token surge: the powerup one-shot (aura, glowing hair, strain eyes, a short shake). */
   burst(): void;
+  /** A tap (stare) or a double tap (outburst) at `camera`: a layer over the current activity, which keeps
+   *  running underneath and resumes; never changes the agent state. Ignored while killed. */
+  react(kind: ReactionKind, camera: THREE.Camera): void;
+  /** How long the agent has been idle. The anime figure ignores it (the office worker uses it). */
+  setIdleSeconds(sec: number): void;
   setLook(l: MiniLook): void;
   update(tSec: number, dt: number, motion: boolean): void;
   dispose(): void;
@@ -420,8 +431,11 @@ export function animeTriangles(root: THREE.Object3D): number {
 
 // ------------------------------------------------------------------------------------------ the figure
 
+const O_ROOT = jointOffset("root");
+const O_HIPS = jointOffset("hips");
 const O_SPINE = jointOffset("spine");
 const O_CHEST = jointOffset("chest");
+const O_NECK = jointOffset("neck");
 const O_HEAD = jointOffset("head");
 const O_SHL = jointOffset("shL");
 const O_ELL = jointOffset("elL");
@@ -431,7 +445,34 @@ const DEAD_GRAY = new THREE.Color("#5a5f6a");
 const WHITE = new THREE.Color("#ffffff");
 const HALO_ALPHA = [0.85, 0.4, 0.14] as const;
 const HALO_SCALE = [0.2, 0.31, 0.46] as const;
+const RAGE_RED = new THREE.Color("#ff3a24");
+/** Eye height in the body's lab units (hips 0.86 + spine 0.26 + neck 0.36 + head 0.08 + skull 0.2). */
+const EYE_Y = 1.76;
+/** The stare glares from under the brows: the head dips this much below looking straight at the camera. */
+const GLARE_DIP = 0.08;
+/** The outburst pose's upper body joints (x, y, z each), blended over the activity by the rage weight. */
+const RAGE_JOINTS = (["spine", "chest", "shL", "elL", "shR", "elR"] as const).map(jointOffset);
+const STEAM_PUFFS = 4;
 let instanceSeed = 1;
+
+/** The anger mark (the red cross-shaped vein): four bent strokes around a center, dark rim under a bright red. */
+function drawAngerMark(ctx: CanvasRenderingContext2D, size: number): void {
+  const s = size / 128;
+  ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.clearRect(0, 0, 128, 128);
+  ctx.lineCap = "round";
+  for (const [color, width] of [["#5a0608", 24], ["#ff2a1c", 13]] as const) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    for (let k = 0; k < 4; k++) {
+      ctx.save();
+      ctx.translate(64, 64);
+      ctx.rotate((k * Math.PI) / 2);
+      ctx.beginPath(); ctx.moveTo(12, 46); ctx.quadraticCurveTo(15, 15, 46, 12); ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
 
 /** Moves `w` toward `target` at `rate` per call (rate 1 = jump). */
 function approach(w: number, target: number, rate: number): number {
@@ -538,6 +579,23 @@ class Anime implements AnimeFigure {
   private rng: number;
   private readonly phase: number;
 
+  // P-VIZ.4 reactions: a layer over the activity (the turn to the camera, the outburst's fists and effects)
+  private readonly skull: THREE.Group;
+  private reaction: Reaction | null = null;
+  private reactT = 0;
+  private reactCam: THREE.Camera | null = null;
+  private readonly rs = newReactionSample();
+  private readonly yaw = new Float32Array(5);
+  private readonly q1 = new THREE.Quaternion();
+  private readonly q2 = new THREE.Quaternion();
+  /** Built on the first outburst (most figures never get one). */
+  private rageFx: { mark: THREE.Mesh; mMark: THREE.MeshBasicMaterial; mSteam: THREE.MeshBasicMaterial; steam: THREE.Mesh[]; geo: THREE.PlaneGeometry; tex: THREE.CanvasTexture } | null = null;
+  // supervise: the holo checklist at his -X side
+  private readonly checklist = new THREE.Group();
+  private readonly checkBoxes: THREE.Mesh[] = [];
+  private wCheck = 0;
+  private ticksNow = -1;
+
   constructor(look: MiniLook, detail: AnimeDetail, flat: boolean) {
     this.detail = Object.prototype.hasOwnProperty.call(TIERS, detail) ? detail : "full";
     const t = (this.tier = TIERS[this.detail]);
@@ -609,7 +667,7 @@ class Anime implements AnimeFigure {
     const trap = this.add(chest, g.trap, this.mGi, 1); trap.scale.set(1.45, 0.45, 0.75); trap.position.y = 0.33; // the neck sits in the shoulders
 
     // head: an anime skull with a tapered jaw, the fitted mask, the canvas eye band, the headband and its tails
-    const skull = G(); head.add(skull); skull.position.y = 0.2;
+    const skull = (this.skull = G()); head.add(skull); skull.position.y = 0.2;
     this.add(skull, g.head, this.mSkin, 1);
     if (g.ear) for (let s = -1; s <= 1; s += 2) { const e = this.add(skull, g.ear, this.mSkin, thin); e.scale.set(0.45, 1, 0.8); e.position.set(s * 0.262, -0.02, -0.01); }
     this.add(skull, g.mask, this.mGiDark, 1);
@@ -664,6 +722,19 @@ class Anime implements AnimeFigure {
       this.keys.push(key);
     }
     this.keyboard.add(new THREE.LineSegments(g.kbEdges, this.mKbLine));
+
+    // supervise: a small holo checklist floating at his -X side, tilted toward him; a box ticks on every glance
+    root.add(this.checklist);
+    this.checklist.position.set(-0.5, 1.08, 0.42);
+    this.checklist.rotation.set(-0.35, 0.45, 0);
+    const panel = new THREE.Mesh(g.kbPlane, this.mKbPlane); panel.scale.set(0.4, 1.3, 1); this.checklist.add(panel);
+    const frame = new THREE.LineSegments(g.kbEdges, this.mKbLine); frame.scale.set(0.4, 1.3, 1); this.checklist.add(frame);
+    for (let r = 0; r < CHECK_ROWS; r++) {
+      const y = 0.1 - (r * 0.2) / Math.max(1, CHECK_ROWS - 1);
+      const boxM = new THREE.Mesh(g.kbKey, this.mKey); boxM.position.set(-0.085, y, 0.002); boxM.scale.setScalar(0.8); this.checklist.add(boxM);
+      const line = new THREE.Mesh(g.kbKey, this.mKey); line.position.set(0.035, y, 0.002); line.scale.set(2.8, 0.22, 1); this.checklist.add(line);
+      this.checkBoxes.push(boxM);
+    }
 
     // ki ball: a white core inside three additive halos (the lab's r = 0.2)
     this.body.add(this.ki);
@@ -740,6 +811,22 @@ class Anime implements AnimeFigure {
     this.snapshot(SNAP_BLEND_S, true);
   }
 
+  react(kind: ReactionKind, camera: THREE.Camera): void {
+    if (this.disposed || this.state === "killed" || !REACTION_KINDS.includes(kind) || !camera) return;
+    // a reaction during a reaction restarts from the weights already on (this.rs), so nothing pops
+    this.reaction = planReaction(kind, this.random(), this.rs);
+    this.reactT = 0;
+    this.reactCam = camera;
+    if (kind === "outburst") {
+      this.ensureRageFx();
+      this.flash = 0.6;
+    }
+  }
+
+  setIdleSeconds(_sec: number): void {
+    // the anime figure has no idle props; the office worker uses this
+  }
+
   setLook(l: MiniLook): void {
     const a = animeLook(l);
     this.mGi.color.set(a.gi);
@@ -770,6 +857,13 @@ class Anime implements AnimeFigure {
         this.snapshot(BLEND_S, false);
       }
     }
+    // ---- the reaction layer's clock: dropped without motion or once he is knocked out
+    const rs = this.rs;
+    if (this.reaction && (!motion || this.state === "killed")) this.endReaction();
+    if (this.reaction) {
+      this.reactT += d;
+      if (sampleReaction(this.reaction, this.reactT, rs).done) this.endReaction();
+    }
 
     // ---- the pose: a clip sample, blended from the last change
     const base: ClipName = clipFor(this.state, this.activity);
@@ -790,7 +884,7 @@ class Anime implements AnimeFigure {
         for (let i = 0; i < POSE_LEN; i++) this.cur[i] = this.from[i]! + (this.tgt[i]! - this.from[i]!) * w;
       }
     }
-    const emotion = this.shot ? info.emotion : stateEmotion(this.state, info.emotion);
+    const emotion = rs.emotion ?? (this.shot ? info.emotion : stateEmotion(this.state, info.emotion));
 
     // ---- effect weights
     const live = onActivity && this.shot === null;
@@ -802,7 +896,10 @@ class Anime implements AnimeFigure {
     this.wRing = approach(this.wRing, live && act === "meditate" ? 1 : 0, rate);
     this.wKi = approach(this.wKi, live && act === "kiblast" ? 1 : 0, rate);
     this.wDash = approach(this.wDash, live && act === "dash" ? speed : 0, rate * 3);
-    const auraT = this.shot === "powerup" ? auraLevel(this.shotT) : 0;
+    // (widened to ClipName so this reads the same before and after MiniActivity carries "supervise")
+    const supervising = (act as ClipName) === "supervise";
+    this.wCheck = approach(this.wCheck, live && supervising ? 1 : 0, rate);
+    const auraT = Math.max(this.shot === "powerup" ? auraLevel(this.shotT) : 0, rs.aura);
     this.wAura = approach(this.wAura, auraT, rate * 2);
     this.wSmoke = approach(this.wSmoke, this.state === "killed" && this.stateT > 0.5 ? 1 : 0, motion ? d / 1.2 : 1);
     this.wPause = approach(this.wPause, this.state === "paused" ? 1 : 0, motion ? d / 0.8 : 1);
@@ -837,6 +934,7 @@ class Anime implements AnimeFigure {
     o[O_SPINE] += 0.12 * this.wPause;
     o[O_HEAD] += 0.2 * this.wPause;
     o[1] -= 0.02 * this.wPause;
+    if (rs.turn > 0.001 || rs.rage > 0.001) this.layerReaction(o);
     this.apply(o);
     const sway = motion ? 1 : 0;
     this.tails.rotation.set(0.12 * Math.sin(this.life * 3.1) * sway + 0.35 * this.wDash + 0.3 * this.dead, 0.18 * Math.sin(this.life * 2.3 + 1) * sway, 0);
@@ -851,8 +949,9 @@ class Anime implements AnimeFigure {
       }
     } else this.blinkAge = 99;
     const emo = EMOTIONS[emotion];
-    const bl = emo.shape === "open" ? blinkStep(this.blinkAge) : 0;
-    const gb = gazeBucket(info.gaze);
+    // a reaction owns the lids (no natural blinks, only the stare's slow one) and looks straight down the turn
+    const bl = emo.shape !== "open" ? 0 : rs.emotion !== null ? rs.blink : blinkStep(this.blinkAge);
+    const gb = gazeBucket(info.gaze * (1 - rs.turn));
     const key = eyeKey(emotion, bl, gb);
     if (key !== this.eyeKeyNow) {
       this.eyeKeyNow = key;
@@ -862,6 +961,8 @@ class Anime implements AnimeFigure {
 
     this.updateColors(d, motion);
     this.updateFx(d, motion, act === "kiblast" ? actClipT : -1, speed, br, auraT);
+    this.updateChecklist(supervising ? (motion ? this.actT : STILL_T.supervise) : -1);
+    this.updateRageFx();
   }
 
   dispose(): void {
@@ -870,6 +971,11 @@ class Anime implements AnimeFigure {
     this.group.removeFromParent();
     for (const m of this.mats) m.dispose();
     this.eyeTex.dispose();
+    if (this.rageFx) {
+      this.rageFx.tex.dispose();
+      this.rageFx.geo.dispose();
+    }
+    this.reactCam = null;
     releaseGeo(this.detail);
   }
 
@@ -893,6 +999,122 @@ class Anime implements AnimeFigure {
     this.blendT = 0;
     this.blendDur = dur;
     this.blendSnap = snap;
+  }
+
+  private endReaction(): void {
+    this.reaction = null;
+    this.reactCam = null;
+    clearReaction(this.rs);
+  }
+
+  /** The reaction over the activity pose. First the outburst: the raised fists on the upper body (shaking), a
+   *  body tremble and the stomp. Then the turn: the yaw to the camera spread over spine, chest, neck and head
+   *  (the root takes what they cannot), the head pitched to the camera's height, glaring from under the brows. */
+  private layerReaction(o: Float32Array): void {
+    const rs = this.rs;
+    const rage = rs.rage;
+    if (rage > 0.001) {
+      const p = POSE_VECTORS.outburst;
+      for (const j of RAGE_JOINTS) for (let c = j; c < j + 3; c++) o[c] = o[c]! + (p[c]! - o[c]!) * rage;
+      const sh = Math.sin(this.life * 32);
+      o[O_ELL] += 0.25 * sh * rage; o[O_ELR] -= 0.25 * sh * rage;
+      o[O_SHL] += 0.08 * sh * rage; o[O_SHR] -= 0.08 * sh * rage;
+      o[0] += 0.012 * Math.sin(this.life * 61) * rage;
+    }
+    if (rs.stomp > 0) {
+      o[1] -= 0.05 * rs.stomp;
+      o[0] += 0.035 * Math.sin(this.life * 83) * rs.stomp;
+    }
+    const cam = this.reactCam;
+    const w = rs.turn;
+    if (w <= 0.001 || !cam) return;
+    // the camera in the body's frame (lab units, facing +Z); the last render's matrices are current enough
+    const v = this.body.worldToLocal(cam.getWorldPosition(this.v1));
+    const horiz = Math.hypot(v.x, v.z), dy = v.y - EYE_Y;
+    let need = Math.atan2(v.x, v.z) - o[O_ROOT + 1]! - o[O_HIPS + 1]!;
+    need -= Math.round(need / TAU) * TAU;
+    // a camera overhead (the 2D map) has no meaningful heading: turn less the steeper it looks down
+    distributeYaw(need * Math.min(1, horiz / Math.max(1e-6, Math.abs(dy))), this.yaw);
+    const y = this.yaw;
+    o[O_ROOT + 1] += y[0]! * w;
+    o[O_SPINE + 1] += (y[1]! - o[O_SPINE + 1]!) * w;
+    o[O_CHEST + 1] += (y[2]! - o[O_CHEST + 1]!) * w;
+    o[O_NECK + 1] += (y[3]! - o[O_NECK + 1]!) * w;
+    o[O_HEAD + 1] += (y[4]! - o[O_HEAD + 1]!) * w;
+    const lean = o[O_HIPS]! + o[O_SPINE]! + o[O_CHEST]! + o[O_NECK]!;
+    const headX = Math.min(0.9, Math.max(-0.9, -Math.atan2(dy, horiz) - lean + GLARE_DIP));
+    o[O_HEAD] += (headX - o[O_HEAD]!) * w;
+    o[O_HEAD + 2] += (0.06 - o[O_HEAD + 2]!) * w; // a slight suspicious tilt
+  }
+
+  private ensureRageFx(): void {
+    if (this.rageFx) return;
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 64;
+    const ctx = cv.getContext("2d");
+    if (ctx) drawAngerMark(ctx, 64);
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const geo = new THREE.PlaneGeometry(1, 1);
+    const mMark = this.own(new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+    const mSteam = this.own(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+    // effects only: never a pick target
+    const noPick = (): void => {};
+    const mark = new THREE.Mesh(geo, mMark);
+    mark.position.set(0.22, 0.14, 0.17); // the temple, just off the skull
+    mark.renderOrder = 3;
+    mark.raycast = noPick;
+    mark.visible = false;
+    this.skull.add(mark);
+    const steam: THREE.Mesh[] = [];
+    for (let i = 0; i < STEAM_PUFFS; i++) {
+      const p = new THREE.Mesh(this.geo.puff, mSteam);
+      p.raycast = noPick;
+      p.visible = false;
+      this.skull.add(p);
+      steam.push(p);
+    }
+    this.rageFx = { mark, mMark, mSteam, steam, geo, tex };
+  }
+
+  /** The anger mark pops and pulses at the temple facing the camera; steam puffs rise off both sides of the head. */
+  private updateRageFx(): void {
+    const fx = this.rageFx;
+    if (!fx) return;
+    const rs = this.rs;
+    fx.mark.visible = rs.mark > 0.01;
+    if (fx.mark.visible) {
+      fx.mark.scale.setScalar(0.17 * rs.mark * (1 + 0.18 * Math.sin(this.life * 16)));
+      fx.mMark.opacity = Math.min(1, rs.mark * 1.5);
+      const cam = this.reactCam;
+      if (cam) fx.mark.quaternion.copy(this.skull.getWorldQuaternion(this.q1).invert()).multiply(cam.getWorldQuaternion(this.q2));
+    }
+    const on = rs.steam > 0.01;
+    fx.mSteam.opacity = 0.75 * rs.steam;
+    const n = fx.steam.length;
+    for (let i = 0; i < n; i++) {
+      const p = fx.steam[i]!;
+      p.visible = on;
+      if (!on) continue;
+      const f = fract(this.life * 1.4 + i / n);
+      const side = i % 2 === 0 ? -1 : 1;
+      p.position.set(side * (0.17 + 0.12 * f), 0.24 + 0.4 * f, -0.02);
+      p.scale.setScalar(0.001 + (0.035 + 0.075 * f) * (1 - f * f) * rs.steam);
+    }
+  }
+
+  /** supervise: the holo checklist grows in with the activity; `t` (the supervise clock, -1 when not
+   *  supervising) ticks a box on every glance. */
+  private updateChecklist(t: number): void {
+    const cl = this.checklist;
+    cl.visible = this.wCheck > 0.01;
+    if (!cl.visible) return;
+    cl.scale.setScalar(this.wCheck);
+    if (t < 0) return;
+    const n = checklistTicks(t);
+    if (n === this.ticksNow) return;
+    this.ticksNow = n;
+    for (let i = 0; i < this.checkBoxes.length; i++) this.checkBoxes[i]!.material = i < n ? this.mKeyHot : this.mKey;
   }
 
   private random(): number {
@@ -943,7 +1165,8 @@ class Anime implements AnimeFigure {
     this.mKey.color.copy(acc);
     this.mKbLine.color.copy(acc);
     for (let i = 0; i < this.mKiHalo.length; i++) this.mKiHalo[i]!.color.copy(acc);
-    (this.mAura.uniforms.uC!.value as THREE.Color).copy(acc);
+    // the outburst's flare burns toward red
+    (this.mAura.uniforms.uC!.value as THREE.Color).copy(acc).lerp(RAGE_RED, 0.7 * Math.min(1, this.rs.aura / 0.8));
     this.mRing.color.copy(acc);
     this.mStreak.color.copy(acc);
   }

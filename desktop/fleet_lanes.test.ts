@@ -401,6 +401,20 @@ test("a write/edit tool_call carries its authored code over the lane wire, path 
   expect(tool.code.path.replace(/\\/g, "/")).toContain("desktop/src/greeting.ts"); // lane cwd, not the master's
 }, TIMEOUT);
 
+// P-VIZ.4 (ADR-0625): a lane's `task` call says whom it delegated to (Visualize hangs those subagents off the
+// lane); the call's own tool row still opens and settles by the same id, so the grid card keeps its chip.
+test("a lane task call emits a subagent event beside its tool row, keyed by the call id", async () => {
+  live = manager();
+  const r = await live.spawn({ cwd: import.meta.dir });
+  const events: LaneEvent[] = [];
+  await live.prompt(r.lane!.id, "split this [delegate]", (e) => events.push(e));
+  const sub = events.find((e) => e.type === "subagent");
+  if (sub?.type !== "subagent") throw new Error("no subagent event");
+  expect(sub).toEqual({ type: "subagent", id: "call-task-1", agent: "task", title: "task", assignments: ["Fix app.py", "Smoke Write verify_fixes.py"], names: ["FixApp", "SmokeScript"] });
+  const rows = events.filter((e) => e.type === "tool" && e.id === "call-task-1").map((e) => (e.type === "tool" ? e.status : undefined));
+  expect(rows).toEqual(["open", "done"]);
+}, TIMEOUT);
+
 test("images ride the prompt as ACP blocks; the transcript remembers the COUNT, never the bytes", async () => {
   live = manager();
   const r = await live.spawn({ cwd: import.meta.dir });

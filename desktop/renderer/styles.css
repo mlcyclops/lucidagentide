@@ -7099,7 +7099,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
    z 92: above the IDE slide-out panel (90) but below .popover (95) and #tip (260), so menus and
    tooltips still stack over the map. Colors are the fleet grid's OWN state language (--lane custom
    properties per lane-<status>), so the two surfaces can never drift apart. */
-.orbit-view{position:fixed;inset:0;z-index:92;display:flex;flex-direction:column;
+/* P-VIZ.4 (ADR-0625): below the 40px .titlebar, never over it. Electron computes -webkit-app-region:drag from
+   the titlebar regardless of what paints on top, so a full-window overlay lost every click in its top 40px
+   to window dragging and hid the app's own minimize / maximize / close. no-drag carves the overlay out too. */
+.orbit-view{position:fixed;inset:40px 0 0 0;z-index:92;display:flex;flex-direction:column;-webkit-app-region:no-drag;
   background:color-mix(in srgb,var(--bg-0) 88%,transparent);
   backdrop-filter:blur(14px) saturate(112%);-webkit-backdrop-filter:blur(14px) saturate(112%);
   opacity:0;transition:opacity 220ms var(--ease-out)}
@@ -8354,8 +8357,11 @@ body.ald-dragging .ald-head{cursor:grabbing}
    modals, Ask Lucid and tooltips, which all still stack over it. The header and nebula reuse the orbit's classes.
    The three.js canvas paints its own themed backdrop (so recordings match the live view); everything here is DOM
    chrome over it. Colors come from the theme variables; the role palette inside the canvas is viz_model.PERSONAS. */
-.viz-view{position:fixed;inset:0;z-index:93;display:flex;flex-direction:column;background:var(--bg-0);
-  opacity:0;transition:opacity 200ms var(--ease-out)}
+/* P-VIZ.4 (ADR-0625): below the 40px .titlebar (the app's drag region and its minimize / maximize / close stay
+   live; see .orbit-view), and no-drag on the overlay and every control in it. */
+.viz-view{position:fixed;inset:40px 0 0 0;z-index:93;display:flex;flex-direction:column;background:var(--bg-0);
+  opacity:0;transition:opacity 200ms var(--ease-out);-webkit-app-region:no-drag}
+.viz-view button,.viz-view label,.viz-view input,.viz-view textarea,.viz-view canvas,.viz-view video{-webkit-app-region:no-drag}
 .viz-view.open{opacity:1}
 .viz-view[hidden]{display:none}
 .viz-head{z-index:2;background:color-mix(in srgb,var(--bg-0) 82%,transparent);overflow-x:auto;scrollbar-width:none}
@@ -8405,19 +8411,67 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-tip[hidden]{display:none}
 .viz-tip b{color:var(--txt);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-tip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-menu{position:absolute;z-index:5;display:flex;flex-direction:column;gap:2px;min-width:200px;max-width:280px;padding:6px;border-radius:12px;
-  background:var(--bg-1);border:1px solid var(--line);box-shadow:0 12px 32px rgb(0 0 0 / .3)}
-.viz-menu[hidden]{display:none}
-.viz-menu-h{display:flex;flex-direction:column;gap:1px;padding:4px 8px 6px;margin-bottom:2px;border-bottom:1px solid var(--line-soft)}
-.viz-menu-h b{font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-menu-h span{font-size:10.5px;color:var(--txt-3);white-space:nowrap}
-.viz-menu-i{font:inherit;font-size:12px;text-align:left;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:var(--txt);cursor:pointer;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-menu-i:hover:not(:disabled),.viz-menu-i:focus-visible{background:var(--bg-3);outline:none}
-.viz-menu-i:disabled{color:var(--txt-4);cursor:default}
-.viz-menu-i.danger{color:var(--red)}
-.viz-menu-i.danger.armed{background:rgb(var(--red-rgb) / .14)}
-.viz-menu-note{margin:4px 8px;font-size:11px;line-height:1.45;color:var(--txt-3)}
+/* P-VIZ.4 (ADR-0625): the node panel (replaces the P-VIZ.1 node menu). z 5 in .viz-stage: over the canvas, legend,
+   REC pill (2), the camera hint (3) and the hover tip (4); under the recording player (6). viz_view.followPanel puts
+   it above its node every frame (left/top) and tilts it toward the middle of the view (--viz-ry) so it reads as a
+   card standing in the scene; the tail points at the node (--viz-tail). .lost: the node is off screen. */
+.viz-panel{position:absolute;left:0;top:0;z-index:5;width:min(340px,calc(100% - 16px));perspective:900px;--viz-ry:0deg;--viz-tail:50%}
+.viz-panel[hidden]{display:none}
+.viz-panel.lost{opacity:.6}
+.viz-panel-card{position:relative;display:flex;flex-direction:column;gap:7px;padding:10px 11px 9px;border-radius:14px;
+  transform:rotateX(7deg) rotateY(var(--viz-ry));transform-origin:50% 100%;transition:transform 260ms var(--ease-out);
+  background:color-mix(in srgb,var(--bg-1) 94%,transparent);border:1px solid var(--line);
+  border-top:2px solid var(--viz-c,var(--accent));box-shadow:0 18px 40px rgb(0 0 0 / .34),0 2px 0 rgb(var(--accent-rgb) / .08) inset;
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);animation:vizPanelIn 180ms var(--ease-out)}
+.viz-panel-card::after{content:"";position:absolute;left:var(--viz-tail);bottom:-7px;width:12px;height:12px;margin-left:-6px;transform:rotate(45deg);
+  background:inherit;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.viz-panel-h{display:flex;align-items:center;gap:8px;min-width:0}
+.viz-panel-dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--viz-c,var(--accent));box-shadow:0 0 8px var(--viz-c,var(--accent))}
+.viz-panel-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.viz-panel-id b{font-size:13px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-id span{font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-btn{flex:none;display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg-2);color:var(--txt-2);font:inherit;font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer}
+.viz-panel-btn:hover{color:var(--txt);border-color:var(--line-strong)}
+.viz-panel-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-panel-st{font-family:var(--mono);font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-st:empty{display:none}
+.viz-panel-out{max-height:168px;min-height:44px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:7px 8px;border-radius:9px;
+  background:var(--bg-0);border:1px solid var(--line-soft);scrollbar-width:thin}
+.viz-panel-turn{display:flex;flex-direction:column;gap:2px;min-width:0}
+.viz-panel-turn b{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-turn.user b{color:var(--viz-c,var(--accent))}
+.viz-panel-turn p{margin:0;font-family:var(--mono);font-size:11px;line-height:1.45;color:var(--txt-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.viz-panel-turn.live p{color:var(--txt)}
+.viz-panel-empty{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
+.viz-panel-acts{display:flex;flex-wrap:wrap;gap:5px}
+.viz-panel-acts:empty{display:none}
+.viz-panel-act{font:inherit;font-size:11.5px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt);cursor:pointer;
+  white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-act:hover:not(:disabled),.viz-panel-act:focus-visible{background:var(--bg-3);outline:none;border-color:var(--line-strong)}
+.viz-panel-act:disabled{color:var(--txt-4);cursor:default}
+.viz-panel-act.danger{color:var(--red)}
+.viz-panel-act.danger.armed{background:rgb(var(--red-rgb) / .14);border-color:rgb(var(--red-rgb) / .55)}
+.viz-panel-why{margin:0;font-size:11px;line-height:1.45;color:var(--txt-3)}
+.viz-panel-ask{display:flex;align-items:flex-end;gap:6px;margin:0}
+.viz-panel-in{flex:1;min-width:0;resize:none;max-height:96px;padding:6px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg-2);
+  color:var(--txt);font:inherit;font-size:12px;line-height:1.4}
+.viz-panel-in::placeholder{color:var(--txt-4)}
+.viz-panel-in:focus-visible{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+.viz-panel-in:disabled{opacity:.7;cursor:not-allowed}
+.viz-panel-send{flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:1px solid rgb(var(--accent-rgb) / .5);
+  background:rgb(var(--accent-rgb) / .16);color:var(--txt);cursor:pointer}
+.viz-panel-send:disabled{opacity:.45;cursor:not-allowed}
+.viz-panel-send:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-panel-note{margin:0;font-size:11px;line-height:1.4;color:var(--txt-2)}
+.viz-panel-note:empty,.viz-panel-note[hidden]{display:none}
+/* The header's View menu (in a .popover, z 95): Layout and Quality. */
+.viz-vmenu{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:200px}
+.viz-vmenu-h{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
+@keyframes vizPanelIn{from{opacity:0;transform:rotateX(18deg) rotateY(var(--viz-ry)) translateY(6px)}to{opacity:1}}
+@media (prefers-reduced-motion: reduce){
+  .viz-panel-card{animation:none;transition:none}
+}
 .viz-player{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;background:var(--bg-0)}
 .viz-player[hidden]{display:none}
 .viz-player-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-soft)}

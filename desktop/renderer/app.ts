@@ -2132,7 +2132,9 @@ interface SubagentCard {
   etas: () => readonly (number | null)[];
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): SubagentCard {
+// P-VIZ.4 (ADR-0625): `laneId` = the delegation came from a lane the composer is attached to (lanes now emit
+// `subagent` too), so its runs are read from that lane's session, not Main's.
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true, laneId?: string): SubagentCard {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
@@ -2225,7 +2227,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
-    const v = await bridge.subagents().catch(() => null);
+    const v = await bridge.subagents(laneId).catch(() => null);
     // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
     // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
     // fallback keeps single-batch turns rendering even when neither yields a match).
@@ -3139,7 +3141,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
-      const card = createSubagentCard(e, () => subCards.length <= 1);
+      const card = createSubagentCard(e, () => subCards.length <= 1, opts.laneId);
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
@@ -19194,9 +19196,25 @@ function wire(): void {
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
   // P-VIZ.1 (ADR-0622): Visualize. The hub's "Stop the main turn" is the composer's own Stop path.
+  // P-VIZ.4 (ADR-0625): the node panel talks to an agent like its grid card (prompt idle, stage busy) and to
+  // Main through the composer's own send path; Main's recent output is the chat thread's last turn.
   initViz({
     fleetStatus: bridge.fleetStatus, fleetWatch: bridge.fleetWatch, fleetCancel: bridge.fleetCancel, fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
+    fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
+    mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const, text: (m.querySelector(".text")?.textContent ?? "").trim(),
+    })),
+    sendMain: (text) => {
+      if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
+      const ta = $("#input") as HTMLTextAreaElement;
+      if (ta.value.trim()) return "Your main composer already has a draft. Send or clear it first, so nothing is lost.";
+      ta.value = text; autosize(ta);
+      void send();
+      return null;
+    },
+    openFleet: () => openFleetGrid(),
+    focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 

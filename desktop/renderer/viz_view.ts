@@ -18,20 +18,33 @@
 // on by default) hands the camera to the scene's director, which follows the action. The scene unchecks it
 // the moment the user drags, pans or zooms, and a short hint under it says how to hand the camera back.
 // Fit frames everything and takes the camera off auto.
+//
+// P-VIZ.4 (ADR-0625): the overlay sits below the app titlebar (styles.css), so the window's own controls stay
+// live and Electron's titlebar drag region no longer eats the header's clicks. The header gained the style
+// toggle (Anime | Professional, persisted with the other prefs, scene.setStyle) and folded Layout and Quality
+// into a small View menu so it stays one row. A click on a node makes its figure stare at you and opens the
+// node PANEL above it (it follows the node as the camera moves): the agent's recent output (the same lane
+// stream the grid card shows: a read-only watch's history seed, then the live events; Main's is the chat
+// thread's last turn), Stop turn / End agent / Kill (moved here from the old node menu), Expand (the agent's
+// Fleet card, or the chat for Main) and a prompt box (an idle agent gets the prompt, a busy one stages it,
+// Main goes through the composer's own send path; subagents take no prompts and say why). Esc or a click on
+// empty space closes it. A double click is an outburst and opens nothing. Each working lane's background
+// subagent runs are polled (/api/subagents?laneId=) so a lane's subagents end when their runs do.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
-import type { LaneView, LucidBridge } from "./bridge.ts";
+import type { LaneEvent, LaneView, LucidBridge } from "./bridge.ts";
 import { hubLanes } from "./orbit_layout.ts";
 import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
 import {
-  applyEvent, applyFleet, applyRuns, census, createVizState, describeNode, drainEvents, edgesOf, fmtRate, HUB_ID, isTapped, layoutPositions,
-  markAsked, nodeIntensity, PERSONAS, tick, vizTierOpts, type Persona, type VizAsk, type VizEvent, type VizLayout, type VizState,
+  applyEvent, applyFleet, applyRuns, census, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
+  isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
+  type Persona, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { mountVizScene, type SceneHit, type SceneNode, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 
@@ -41,12 +54,25 @@ export interface VizDeps {
   fleetCancel: LucidBridge["fleetCancel"];
   fleetStop: LucidBridge["fleetStop"];
   fleetRemove: LucidBridge["fleetRemove"];
+  /** Main's subagent runs, or with a lane id that lane's (P-VIZ.4). */
   subagents: LucidBridge["subagents"];
   /** The app-wide Performance mode (the Knowledge Graph's chip cycles the same one). */
   perf: PerfTierWatcher;
   /** Stop Main's running turn through the app's own Stop path. */
   stopMain: () => Promise<void> | void;
   mainBusy: () => boolean;
+  /** P-VIZ.4 (ADR-0625): the node panel. A lane's history, its prompt and stage calls (the grid card's). */
+  fleetTranscript: LucidBridge["fleetTranscript"];
+  fleetPrompt: LucidBridge["fleetPrompt"];
+  fleetQueueAdd: LucidBridge["fleetQueueAdd"];
+  /** Main's recent turn from the chat thread (oldest first). */
+  mainRecent: () => VizTurn[];
+  /** Send `text` to Main through the composer's own send path; a reason string when it could not. */
+  sendMain: (text: string) => string | null;
+  /** Open the Fleet panel (Expand on an agent; the view then scrolls to and flashes its card). */
+  openFleet: () => void;
+  /** Focus the main composer (Expand on Main). */
+  focusMain: () => void;
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
@@ -81,15 +107,27 @@ let recSeq = 0;
 interface ActiveRec { mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; mime: string; at: number; end: number; meta: VizEvent[]; timer: number }
 let rec: ActiveRec | null = null;
 let recPop: { close: () => void } | null = null;
+let viewPop: { node: HTMLElement; close: () => void } | null = null;
 let killArm: { id: string; until: number } | null = null;
 const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 
-interface Prefs { view: VizViewMode; layout: VizLayout }
+/** P-VIZ.4 (ADR-0625): lanes whose background subagent runs are polled per cycle, at most. */
+const LANE_RUNS_MAX = 4;
+/** The node panel: which node, the frame that keeps it on its node, and what it last painted. */
+interface Panel { id: string; raf: number; outSig: string; headSig: string; note: string; at: { x: number; y: number } | null }
+let panel: Panel | null = null;
+/** Each lane's recent output (viz_model.foldOutput), from the same events the model takes. */
+const outputs = new Map<string, VizOutput>();
+/** Lanes with a prompt from the panel in flight (a second send stages instead). */
+const sending = new Set<string>();
+let lastLanes: readonly LaneView[] = [];
+
+interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle }
 function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
-    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit" };
-  } catch { return { view: "3d", layout: "orbit" }; }
+    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: p.style === "professional" ? "professional" : "anime" };
+  } catch { return { view: "3d", layout: "orbit", style: "anime" }; }
 }
 let prefs: Prefs = loadPrefs();
 function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
@@ -128,6 +166,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   requestAnimationFrame(() => view?.classList.add("open"));
   const now = Date.now();
   model = createVizState(now);
+  outputs.clear(); sending.clear(); lastLanes = [];
   demo = new URLSearchParams(location.search).get("vizDemo") === "1" ? createDemo(now) : null; // the DEMO feed: only ever through the URL
   demoPrev = now;
   ($("[data-viz-demo]", view) as HTMLElement).hidden = !demo;
@@ -148,13 +187,14 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
 export function closeViz(): void {
   if (!view || !opened) return;
   if (rec) stopRec("closed");
-  closeMenu(); closePlayer(); recPop?.close(); recPop = null; hideAutoHint();
+  closePanel(); closePlayer(); recPop?.close(); recPop = null; viewPop?.close(); viewPop = null; hideAutoHint();
   offBus?.(); offBus = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
   watches.clear();
   scene?.destroy(); scene = null;
   model = null; demo = null; hover = null;
+  outputs.clear(); sending.clear(); lastLanes = [];
   window.removeEventListener("keydown", onKey, true);
   document.removeEventListener("visibilitychange", onVisibility);
   motionMq?.removeEventListener("change", remount);
@@ -180,13 +220,13 @@ function buildView(): HTMLElement {
         <button type="button" data-viz-view="2d" data-tip="${tipAttr("2D", "Top-down map: pan and zoom. The Orbit layout here is the Fleet orbit itself.")}">2D</button>
         <button type="button" data-viz-view="3d" data-tip="${tipAttr("3D", "Orbit around the agents: drag to rotate, right-drag to pan, scroll to zoom.")}">3D</button>
       </div>
-      <div class="viz-seg" role="group" aria-label="Layout">
-        <button type="button" data-viz-layout="orbit" data-tip="${tipAttr("Orbit layout", "Main at the center and the agents on the Fleet orbit's ring; each agent's subagents on a small ring around it.")}">Orbit</button>
-        <button type="button" data-viz-layout="constellation" data-tip="${tipAttr("Constellation", "The agents spread around Main in 3D, each with its subagents clustered close.")}">Constellation</button>
+      <div class="viz-seg" role="group" aria-label="Style">
+        <button type="button" data-viz-style="anime" data-tip="${tipAttr("Anime", "Every agent is a mini Lucid in a glass cube, with plasma flowing between them.")}">Anime</button>
+        <button type="button" data-viz-style="professional" data-tip="${tipAttr("Professional", "Office workers at their desks, Main as the boss in the middle, fiber optic lines between them.")}">Professional</button>
       </div>
       <label class="viz-auto" data-tip="${tipAttr("Auto camera", "Follows the action: the camera glides to the agent working hardest, and briefly to a kill or a failed tool. Drag, pan or zoom to take the camera yourself; this turns off until you check it again.")}"><input type="checkbox" data-viz-auto checked><span>Auto camera</span></label>
       <button type="button" class="btn-mini orbit-btn" data-viz-fit aria-label="Fit everything in view" data-tip="${tipAttr("Fit", "Bring every node back into view. Takes the camera off auto.")}">${icon("center", 13)}</button>
-      <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+      <button type="button" class="btn-mini orbit-btn" data-viz-viewmenu aria-haspopup="true" aria-label="View options: layout and quality" data-tip="${tipAttr("View", "Layout (Orbit or Constellation) and Quality.")}">${icon("gauge", 13)}<span>View</span></button>
       <button type="button" class="btn-mini orbit-btn viz-rec-btn" data-viz-rec></button>
       <button type="button" class="btn-mini orbit-btn" data-viz-recs data-tip="${tipAttr("Recordings", "Play back or save what you recorded in this session. Recordings are kept in memory until LUCID closes.")}">${icon("play", 13)}<span>Recordings</span><b class="orbit-ghost-n" data-viz-recn hidden></b></button>
       <button type="button" class="btn-mini orbit-btn orbit-x" data-viz-close aria-label="Close Visualize" data-tip="${tipAttr("Close (Esc)", "Your agents keep running; this view only watches them.")}">${icon("close", 13)}</button>
@@ -199,7 +239,24 @@ function buildView(): HTMLElement {
       <p class="viz-auto-hint" data-viz-auto-hint hidden role="status">You have the camera. Check Auto camera to hand it back.</p>
       <div class="viz-legend" data-viz-legend aria-label="Roles"></div>
       <div class="viz-tip" data-viz-tip hidden role="status"></div>
-      <div class="viz-menu" data-viz-menu hidden role="menu"></div>
+      <div class="viz-panel" data-viz-panel hidden role="dialog" aria-label="Agent">
+        <div class="viz-panel-card">
+          <div class="viz-panel-h">
+            <i class="viz-panel-dot" aria-hidden="true"></i>
+            <div class="viz-panel-id"><b data-viz-panel-name></b><span data-viz-panel-sub></span></div>
+            <button type="button" class="viz-panel-btn" data-viz-panel-expand></button>
+            <button type="button" class="viz-panel-btn" data-viz-panel-close aria-label="Close this panel" data-tip="${tipAttr("Close (Esc)", "The agent keeps working.")}">${icon("close", 12)}</button>
+          </div>
+          <div class="viz-panel-st" data-viz-panel-st></div>
+          <div class="viz-panel-out" data-viz-panel-out></div>
+          <div class="viz-panel-acts" data-viz-panel-acts></div>
+          <form class="viz-panel-ask" data-viz-panel-form>
+            <textarea class="viz-panel-in" data-viz-panel-input rows="2" aria-label="Message this agent"></textarea>
+            <button type="submit" class="viz-panel-send" data-viz-panel-send aria-label="Send">${icon("send", 13)}</button>
+          </form>
+          <p class="viz-panel-note" data-viz-panel-note role="status"></p>
+        </div>
+      </div>
       <div class="viz-player" data-viz-player hidden>
         <div class="viz-player-head"><b data-viz-player-title>Recording</b><span class="viz-player-meta" data-viz-player-meta></span><span class="orbit-headgap"></span>
           <button type="button" class="btn-mini orbit-btn" data-viz-player-save>${icon("download", 13)} Save</button>
@@ -213,6 +270,12 @@ function buildView(): HTMLElement {
     const t = ev.target as HTMLInputElement;
     if (t.matches("[data-viz-auto]")) setAutoCamera(t.checked, false);
   });
+  // The panel's prompt: Enter sends, Shift+Enter is a new line (the composer's convention).
+  v.addEventListener("submit", (ev) => { if ((ev.target as HTMLElement).matches("[data-viz-panel-form]")) { ev.preventDefault(); void sendFromPanel(); } });
+  v.addEventListener("keydown", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.matches("[data-viz-panel-input]") && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); void sendFromPanel(); }
+  });
   return v;
 }
 
@@ -221,19 +284,43 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-viz-close]")) { closeViz(); return; }
   const vb = t.closest("[data-viz-view]") as HTMLElement | null;
   if (vb) { prefs.view = vb.dataset.vizView === "2d" ? "2d" : "3d"; savePrefs(); paintToggles(); scene?.setView(prefs.view); return; }
-  const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
-  if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintToggles(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
+  const sb = t.closest("[data-viz-style]") as HTMLElement | null;
+  if (sb) { prefs.style = sb.dataset.vizStyle === "professional" ? "professional" : "anime"; savePrefs(); paintToggles(); scene?.setStyle(prefs.style); return; }
   if (t.closest("[data-viz-fit]")) { if (autoCam) setAutoCamera(false, true); scene?.fit(); return; }
-  if (t.closest("[data-viz-quality]")) { cycleQuality(); return; }
+  const vm = t.closest("[data-viz-viewmenu]") as HTMLElement | null;
+  if (vm) { openViewMenu(vm); return; }
   if (t.closest("[data-viz-rec]")) { if (rec) stopRec("user"); else startRec(); return; }
   const recsBtn = t.closest("[data-viz-recs]") as HTMLElement | null;
   if (recsBtn) { openRecs(recsBtn); return; }
   if (t.closest("[data-viz-retry]")) { remount(); return; }
   if (t.closest("[data-viz-player-close]")) { closePlayer(); return; }
   if (t.closest("[data-viz-player-save]")) { const r = recordings.find((x) => x.id === playingId); if (r) saveRec(r); return; }
+  if (t.closest("[data-viz-panel-close]")) { closePanel(); return; }
+  if (t.closest("[data-viz-panel-expand]")) { expandPanel(); return; }
   const act = t.closest("[data-viz-act]") as HTMLElement | null;
   if (act) { void runAction(act.dataset.vizNode ?? "", act.dataset.vizAct as VizAsk, act); return; }
-  if (!t.closest("[data-viz-menu]") && !(t instanceof HTMLCanvasElement)) closeMenu();
+}
+
+/** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). */
+function openViewMenu(anchor: HTMLElement): void {
+  if (viewPop) { viewPop.close(); viewPop = null; return; }
+  const p = popover(anchor, `<div class="viz-vmenu">
+    <div class="viz-vmenu-h">Layout</div>
+    <div class="viz-seg" role="group" aria-label="Layout">
+      <button type="button" data-viz-layout="orbit" data-tip="${tipAttr("Orbit layout", "Main at the center and the agents on the Fleet orbit's ring; each agent's subagents on a small ring around it.")}">Orbit</button>
+      <button type="button" data-viz-layout="constellation" data-tip="${tipAttr("Constellation", "The agents spread around Main in 3D, each with its subagents clustered close.")}">Constellation</button>
+    </div>
+    <div class="viz-vmenu-h">Quality</div>
+    <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+  </div>`, () => { viewPop = null; });
+  viewPop = p;
+  paintViewMenu();
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
+    if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintViewMenu(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
+    if (t.closest("[data-viz-quality]")) cycleQuality();
+  });
 }
 
 /** Turn the auto camera on or off (the checkbox, Fit, or the user grabbing the camera) and remember it. */
@@ -273,11 +360,19 @@ function paintToggles(): void {
   if (!view) return;
   ($("[data-viz-auto]", view) as HTMLInputElement).checked = autoCam;
   for (const b of view.querySelectorAll<HTMLElement>("[data-viz-view]")) { const on = b.dataset.vizView === prefs.view; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
-  for (const b of view.querySelectorAll<HTMLElement>("[data-viz-layout]")) { const on = b.dataset.vizLayout === prefs.layout; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  for (const b of view.querySelectorAll<HTMLElement>("[data-viz-style]")) { const on = b.dataset.vizStyle === prefs.style; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+}
+
+/** The View menu's layout toggle and quality button (only while the menu is open). */
+function paintViewMenu(): void {
+  const menu = viewPop?.node;
+  if (!menu) return;
+  for (const b of menu.querySelectorAll<HTMLElement>("[data-viz-layout]")) { const on = b.dataset.vizLayout === prefs.layout; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  paintQuality();
 }
 
 function paintQuality(): void {
-  const b = view ? ($("[data-viz-quality]", view) as HTMLElement | null) : null;
+  const b = viewPop ? ($("[data-viz-quality]", viewPop.node) as HTMLElement | null) : null;
   if (!b || !deps) return;
   const m = deps.perf.mode(), tier = deps.perf.tier();
   b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto \u00b7 ${tier}` : m[0]!.toUpperCase() + m.slice(1)}`;
@@ -344,7 +439,9 @@ function mount(): void {
   }
   scene.onHover(onHover);
   scene.onPick(onPick);
+  scene.onDoublePick(onDoublePick);
   scene.onUserCamera(onUserCamera);
+  scene.setStyle(prefs.style);
   scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
   syncScene();
   requestAnimationFrame(() => requestAnimationFrame(() => { loading.hidden = true; }));
@@ -354,7 +451,7 @@ function mount(): void {
 function remount(): void {
   if (!isOpen()) return;
   if (rec) stopRec("quality");
-  closeMenu(); hideTip();
+  hideTip(); // the node panel stays: it finds its node again on the new scene
   scene?.destroy(); scene = null;
   mount();
 }
@@ -372,16 +469,28 @@ function syncScene(): void {
   const now = Date.now();
   const list = [...model.nodes.values()];
   const pos = layoutPositions(list, prefs.layout);
-  const nodes: SceneNode[] = list.map((n) => ({
-    id: n.id, kind: n.kind, persona: n.persona, label: n.kind === "hub" ? "Main" : n.label, status: n.status,
-    pos: pos.get(n.id) ?? [0, 0, 0], glow: nodeIntensity(n, now),
-  }));
+  const m = model;
+  const nodes: SceneNode[] = list.map((n) => {
+    const team = n.kind === "subagent" ? null : teamOf(m, n.id); // P-VIZ.4: an idle node with a working team supervises
+    return {
+      id: n.id, kind: n.kind, persona: n.persona, label: n.kind === "hub" ? "Main" : n.label, status: n.status,
+      pos: pos.get(n.id) ?? [0, 0, 0], glow: nodeIntensity(n, now),
+      team: team ? team.agents + team.subagents : 0, idleSec: idleSeconds(n, now),
+    };
+  });
   scene.sync(nodes, edgesOf(model, now));
 }
 
 // ---------------------------------------------------------------------------------------------- feeds
 
-function onBus(ev: VizBusEvent): void { if (model) applyEvent(model, ev, Date.now()); }
+/** One tapped event: the model takes it (or drops a second stream's copy), and a lane's panel output
+ *  follows exactly what the model took. */
+function onBus(ev: VizBusEvent): void {
+  if (!model || !applyEvent(model, ev, Date.now()) || ev.source === HUB_ID) return;
+  let out = outputs.get(ev.source);
+  if (!out) { out = createOutput(); outputs.set(ev.source, out); }
+  foldOutput(out, ev.e);
+}
 
 function startTimers(): void {
   stopTimers();
@@ -411,6 +520,7 @@ function onTick(): void {
     censusAt = now;
     paintCensus(now);
     if (hover) paintTip(hover.hit, hover.x, hover.y);
+    if (panel) paintPanel();
     if (view && themeSig && JSON.stringify(readTheme(view)) !== themeSig) remount(); // a theme switch while open
   }
 }
@@ -436,6 +546,7 @@ async function pollFleet(): Promise<void> {
   if (st) {
     const mine = hubLanes(st.lanes, st.hub);
     applyFleet(m, mine.map((l) => ({ id: l.id, name: l.name, model: l.model, status: l.status, ...(l.usage ? { usage: l.usage } : {}) })), Date.now(), st.masterModel);
+    lastLanes = mine;
     syncWatches(mine);
   }
   fleetTimer = window.setTimeout(() => void pollFleet(), pollDelay(POLL_MS, tier, document.hidden));
@@ -452,20 +563,37 @@ async function pollRuns(): Promise<void> {
   const v = await deps.subagents().catch(() => null);
   if (model !== m) return;
   if (v?.runs) applyRuns(m, v.runs, Date.now());
+  // P-VIZ.4 (ADR-0625): a lane's delegations run in the background, so only its own runs say when each ends.
+  // Lanes with live subagents first, then working lanes (a delegation an unwatched lane made shows up this
+  // way too). Never while the window is hidden: the backed-off cadence below covers Main alone.
+  if (!document.hidden) {
+    const live = new Set([...m.nodes.values()].filter((n) => n.kind === "subagent" && (n.status === "active" || n.status === "idle")).map((n) => n.parent));
+    const lanes = [...m.nodes.values()]
+      .filter((n) => n.kind === "agent" && n.goneAt === null && (live.has(n.id) || n.status === "active" || n.status === "waiting"))
+      .sort((a, b) => Number(live.has(b.id)) - Number(live.has(a.id)))
+      .slice(0, LANE_RUNS_MAX);
+    for (const lane of lanes) {
+      const lv = await deps.subagents(lane.id).catch(() => null);
+      if (model !== m) return;
+      if (lv?.runs) applyRuns(m, lv.runs, Date.now(), lane.id);
+    }
+  }
   runsTimer = window.setTimeout(() => void pollRuns(), pollDelay(RUNS_MS, deps.perf.tier(), document.hidden));
 }
 
 /** Watch (read-only, owns no turn) the most recently active live lanes, so their streams show even when
- *  no grid card or composer has them open. A second stream for a lane is deduplicated by the model. */
+ *  no grid card or composer has them open. A second stream for a lane is deduplicated by the model.
+ *  P-VIZ.4: the lane whose panel is open is watched first (its panel shows that stream). */
 function syncWatches(lanes: readonly LaneView[]): void {
   if (!deps) return;
-  const live = lanes.filter((l) => l.status !== "stopped" && l.status !== "error");
-  const busy = (l: LaneView): number => (l.status === "working" || l.status === "starting" || l.status === "needs-approval" || l.status === "awaiting-input" ? 1 : 0);
-  const want = new Set(live.sort((a, b) => busy(b) - busy(a) || b.lastActivityAt - a.lastActivityAt).slice(0, WATCH_MAX).map((l) => l.id));
+  const shown = panel?.id ?? "";
+  const live = lanes.filter((l) => l.status !== "stopped" && (l.status !== "error" || l.id === shown));
+  const rank = (l: LaneView): number => (l.id === shown ? 2 : l.status === "working" || l.status === "starting" || l.status === "needs-approval" || l.status === "awaiting-input" ? 1 : 0);
+  const want = new Set(live.sort((a, b) => rank(b) - rank(a) || b.lastActivityAt - a.lastActivityAt).slice(0, WATCH_MAX).map((l) => l.id));
   for (const [id, w] of [...watches]) if (!want.has(id)) { w.stop(); watches.delete(id); }
   for (const id of want) {
     if (watches.has(id)) continue;
-    const w = deps.fleetWatch(id, (e) => { if (model) applyEvent(model, { source: id, origin: "watch", e }, Date.now()); });
+    const w = deps.fleetWatch(id, (e: LaneEvent) => onBus({ source: id, origin: "watch", e }));
     watches.set(id, w);
     w.done.catch(() => { /* aborted on close, or the engine went away: the next poll decides again */ }).finally(() => { if (watches.get(id) === w) watches.delete(id); });
   }
@@ -519,7 +647,7 @@ function paintTip(hit: SceneHit, x: number, y: number): void {
   if (hit.kind === "node") {
     const n = model.nodes.get(hit.id);
     if (!n) { hideTip(); return; }
-    ({ title, lines } = describeNode(n, now));
+    ({ title, lines } = describeNode(n, now, n.kind === "subagent" ? undefined : teamOf(model, n.id)));
   } else {
     const a = model.nodes.get(hit.from), b = model.nodes.get(hit.to);
     if (!a || !b) { hideTip(); return; }
@@ -541,44 +669,265 @@ function placeIn(node: HTMLElement, x: number, y: number): void {
   node.style.top = `${Math.max(8, Math.min(r.height - h - 8, y - r.top))}px`;
 }
 
-function onPick(hit: SceneHit | null, x: number, y: number): void {
-  if (!hit || hit.kind !== "node") { closeMenu(); return; }
-  openMenu(hit.id, x, y);
+/** A click on a node: its figure stares at you (an interruption) and its panel opens above it. Empty space
+ *  closes the panel. */
+function onPick(hit: SceneHit | null): void {
+  if (!hit || hit.kind !== "node") { closePanel(); return; }
+  scene?.reactNode(hit.id, "stare");
+  openPanel(hit.id);
 }
 
-function openMenu(id: string, x: number, y: number): void {
+/** A double click: an outburst at being interrupted that hard. Opens nothing; the work goes on. */
+function onDoublePick(hit: SceneHit | null): void {
+  if (hit?.kind === "node") scene?.reactNode(hit.id, "outburst");
+}
+
+const panelEl = (sel: string): HTMLElement => $(sel, view!) as HTMLElement;
+
+function openPanel(id: string): void {
   if (!view || !model) return;
   const n = model.nodes.get(id);
   if (!n) return;
   hideTip();
-  killArm = null;
-  const menu = $("[data-viz-menu]", view) as HTMLElement;
-  const btn = (act: VizAsk, label: string, enabled: boolean, why: string, danger = false): string =>
-    `<button type="button" role="menuitem" class="viz-menu-i${danger ? " danger" : ""}" data-viz-act="${act}" data-viz-node="${esc(id)}"${enabled ? "" : " disabled"} data-tip="${tipAttr(label, why)}">${esc(label)}</button>`;
-  const head = `<div class="viz-menu-h"><b>${esc(n.name)}</b><span>${esc(PERSONAS[n.persona].label)}${n.kind === "hub" ? " \u00b7 Main session" : n.kind === "agent" ? " \u00b7 Agent" : " \u00b7 Subagent"}</span></div>`;
-  let body: string;
-  if (n.kind === "subagent") {
-    body = `<p class="viz-menu-note">Subagents are view-only here: each runs inside its parent's turn and stops with it. Stop the parent's turn to stop it.</p>`;
-  } else if (n.kind === "hub") {
-    const busy = demo ? n.status === "active" : !!deps?.mainBusy();
-    body = btn("cancel", "Stop the main turn", busy, busy ? "Stops Main's running turn, the same as the Stop button. The chat keeps everything so far." : "Main is not running a turn right now.");
-  } else {
-    const alive = n.status !== "ended" && n.status !== "killed" && n.goneAt === null;
-    const running = n.status === "active" || n.status === "waiting";
-    body = btn("cancel", "Stop turn", running, running ? "Stops this agent's current turn. The agent stays and can take the next prompt." : "This agent is not running a turn.")
-      + btn("end", "End agent", alive, alive ? "Stops the agent. Its card stays readable and Respawn brings it back." : "This agent has already ended.")
-      + btn("kill", "Kill", n.goneAt === null, "Removes the agent now, even mid-turn. Asks once more before it acts.", true);
+  if (panel?.id !== id) {
+    if (panel) cancelAnimationFrame(panel.raf);
+    killArm = null;
+    panel = { id, raf: 0, outSig: "", headSig: "", note: "", at: null };
+    (panelEl("[data-viz-panel-input]") as HTMLTextAreaElement).value = "";
+    panelEl("[data-viz-panel-out]").scrollTop = 0;
   }
-  menu.innerHTML = head + body + (demo ? `<p class="viz-menu-note">DEMO: actions here play on the demo agents only.</p>` : "");
-  menu.hidden = false;
-  placeIn(menu, x + 6, y + 6);
-  (menu.querySelector("button:not([disabled])") as HTMLElement | null)?.focus();
+  panelEl("[data-viz-panel]").hidden = false;
+  paintPanel();
+  if (n.kind === "agent" && !demo) {
+    syncWatches(lastLanes); // this lane's stream first
+    if (!outputs.get(id)?.seeded) void loadTranscript(id);
+  }
+  followPanel();
+  const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
+  (input.disabled ? panelEl("[data-viz-panel-close]") : input).focus({ preventScroll: true });
 }
 
-function closeMenu(): void {
-  const menu = view ? ($("[data-viz-menu]", view) as HTMLElement | null) : null;
-  if (menu && !menu.hidden) { menu.hidden = true; menu.innerHTML = ""; scene?.canvas.focus({ preventScroll: true }); }
+function closePanel(): void {
+  if (!panel || !view) { panel = null; return; }
+  cancelAnimationFrame(panel.raf);
+  panel = null;
   killArm = null;
+  const box = panelEl("[data-viz-panel]");
+  box.hidden = true;
+  panelEl("[data-viz-panel-out]").innerHTML = "";
+  panelEl("[data-viz-panel-acts]").innerHTML = "";
+  if (box.contains(document.activeElement)) scene?.canvas.focus({ preventScroll: true });
+}
+
+/** A lane nobody streamed yet: its bounded history (the grid card's catch-up seed), kept under any live text. */
+async function loadTranscript(id: string): Promise<void> {
+  if (!deps) return;
+  const t = await deps.fleetTranscript(id).catch(() => null);
+  if (!t || panel?.id !== id) return;
+  let out = outputs.get(id);
+  if (!out) { out = createOutput(); outputs.set(id, out); }
+  if (out.seeded) return;
+  const live = out.live;
+  foldOutput(out, { type: "watch-seed", turns: t.turns });
+  out.live = live;
+  paintPanel();
+}
+
+function setPanelNote(text: string): void {
+  if (!panel) return;
+  panel.note = text;
+  const note = panelEl("[data-viz-panel-note]");
+  note.textContent = text;
+  note.hidden = !text;
+}
+
+/** What a node's panel shows of its output: Main's last chat turn, a lane's folded stream, a subagent's task. */
+function panelTurns(n: VizNode): { turns: VizTurn[]; live: string; empty: string } {
+  if (n.kind === "subagent") {
+    const what = n.assignment ? [{ role: "user" as const, text: n.assignment }] : [];
+    return { turns: what, live: "", empty: "This subagent's task was not reported." };
+  }
+  if (demo) return { turns: [], live: "", empty: "DEMO: these agents are simulated and have no output." };
+  if (n.kind === "hub") return { turns: deps?.mainRecent() ?? [], live: "", empty: "No chat in this session yet." };
+  const out = outputs.get(n.id);
+  return { turns: out?.turns.slice(-3) ?? [], live: out?.live ?? "", empty: out?.seeded ? "No output yet. Send a prompt below." : "Loading this agent's recent output..." };
+}
+
+function paintPanel(): void {
+  if (!view || !model || !panel) return;
+  const id = panel.id;
+  const n = model.nodes.get(id);
+  if (!n) { closePanel(); return; } // the node left the scene
+  const now = Date.now();
+  const box = panelEl("[data-viz-panel]");
+  const kind = n.kind === "hub" ? "Main session" : n.kind === "agent" ? "Agent" : "Subagent";
+  const d = describeNode(n, now, n.kind === "subagent" ? undefined : teamOf(model, id));
+  const status = [d.lines[1] ?? "", n.kind !== "subagent" && isTapped(n, now) ? fmtRate(n.rate) : ""].filter(Boolean).join(" \u00b7 ");
+  const mainBusy = n.kind === "hub" && (demo ? n.status === "active" : !!deps?.mainBusy());
+  const armed = !!killArm && killArm.id === id && now < killArm.until;
+  const parent = n.parent ? model.nodes.get(n.parent) : undefined;
+  const ended = n.goneAt !== null || n.laneStatus === "stopped";
+  const busy = n.status === "active" || n.status === "waiting" || sending.has(id);
+  const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, demo ? 1 : 0, parent?.name].join("|");
+  ($("[data-viz-panel-st]", box) as HTMLElement).textContent = status;
+  if (headSig !== panel.headSig) {
+    panel.headSig = headSig;
+    box.setAttribute("aria-label", `${n.name}: ${kind}`);
+    box.style.setProperty("--viz-c", PERSONAS[n.persona].color);
+    panelEl("[data-viz-panel-name]").textContent = n.name;
+    panelEl("[data-viz-panel-sub]").textContent = `${PERSONAS[n.persona].label} \u00b7 ${kind}`;
+    const ex = panelEl("[data-viz-panel-expand]");
+    const exTarget = n.kind === "subagent" ? parent : n;
+    const toChat = !exTarget || exTarget.kind === "hub";
+    const exWhy = onCloseCb ? "Back to the Fleet orbit, where this agent is a spoke." : toChat ? "Close Visualize and go to the main chat." : `Close Visualize and open ${exTarget?.name ?? "the agent"}'s card in the Fleet panel.`;
+    ex.innerHTML = `${icon("arrowRight", 12)}<span>${toChat && !onCloseCb ? "Chat" : "Open"}</span>`;
+    ex.setAttribute("aria-label", exWhy);
+    ex.setAttribute("data-tip", tipValue("Expand", exWhy));
+    const btn = (act: VizAsk, label: string, enabled: boolean, why: string, danger = false): string =>
+      `<button type="button" class="viz-panel-act${danger ? " danger" : ""}${danger && armed ? " armed" : ""}" data-viz-act="${act}" data-viz-node="${esc(id)}"${enabled ? "" : " disabled"} data-tip="${tipAttr(label, why)}">${esc(label)}</button>`;
+    let acts: string;
+    if (n.kind === "subagent") {
+      acts = `<p class="viz-panel-why">Subagents are view-only here: each runs for its parent and stops with it. Stop ${esc(parent?.name ?? "the parent")}'s turn to stop it.</p>`;
+    } else if (n.kind === "hub") {
+      acts = btn("cancel", "Stop the main turn", mainBusy, mainBusy ? "Stops Main's running turn, the same as the Stop button. The chat keeps everything so far." : "Main is not running a turn right now.");
+    } else {
+      const alive = n.status !== "ended" && n.status !== "killed" && n.goneAt === null;
+      const running = n.status === "active" || n.status === "waiting";
+      acts = btn("cancel", "Stop turn", running, running ? "Stops this agent's current turn. The agent stays and can take the next prompt." : "This agent is not running a turn.")
+        + btn("end", "End agent", alive, alive ? "Stops the agent. Its card stays readable and Respawn brings it back." : "This agent has already ended.")
+        + btn("kill", armed ? `Click again to kill ${n.name}` : "Kill", n.goneAt === null, "Removes the agent now, even mid-turn. Asks once more before it acts.", true);
+    }
+    panelEl("[data-viz-panel-acts]").innerHTML = acts;
+    // The prompt box: what it does here, or why it is off.
+    const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
+    const send = panelEl("[data-viz-panel-send]") as HTMLButtonElement;
+    const off = n.kind === "subagent" ? `Subagents take no prompts: each one works for ${parent?.name ?? "its parent"}. Message ${parent?.name ?? "the parent"} instead.`
+      : demo ? "DEMO: prompts are not sent to simulated agents."
+      : n.kind === "agent" && ended ? "This agent has ended. Respawn it from the Fleet panel to talk to it."
+      : "";
+    const place = off || (n.kind === "hub" ? (mainBusy ? "Message Main (it waits for the running turn, like the composer)" : "Message Main (sent from the main composer)")
+      : busy ? `Stage a prompt for ${n.name} (it runs when this turn ends)` : `Message ${n.name}`);
+    input.disabled = !!off; send.disabled = !!off;
+    input.placeholder = place;
+    input.setAttribute("aria-label", place);
+    send.setAttribute("aria-label", n.kind === "agent" && busy ? "Stage" : "Send");
+    send.setAttribute("data-tip", tipValue(n.kind === "agent" && busy ? "Stage" : "Send", off || (n.kind === "agent" && busy ? `${n.name} is busy: the prompt waits in its queue and runs next.` : "Enter sends, Shift+Enter is a new line.")));
+  }
+  // The output: repainted only when it changed, and kept pinned to the newest line unless you scrolled up.
+  const o = panelTurns(n);
+  const who = (t: VizTurn): string => (t.role === "user" ? (n.kind === "subagent" ? "Task" : "You") : n.kind === "hub" ? "Main" : n.name);
+  const html = o.turns.length || o.live
+    ? o.turns.map((t) => `<div class="viz-panel-turn ${t.role}"><b>${esc(who(t))}</b><p>${esc(t.text.length > 1200 ? `\u2026${t.text.slice(-1200)}` : t.text)}</p></div>`).join("")
+      + (o.live ? `<div class="viz-panel-turn assistant live"><b>${esc(n.kind === "hub" ? "Main" : n.name)}</b><p>${esc(o.live.length > 1600 ? `\u2026${o.live.slice(-1600)}` : o.live)}</p></div>` : "")
+    : `<p class="viz-panel-empty">${esc(o.empty)}</p>`;
+  if (html !== panel.outSig) {
+    panel.outSig = html;
+    const out = panelEl("[data-viz-panel-out]");
+    const pinned = out.scrollTop + out.clientHeight >= out.scrollHeight - 12;
+    out.innerHTML = html;
+    if (pinned) out.scrollTop = out.scrollHeight;
+  }
+  setPanelNote(panel.note);
+}
+
+/** Keep the panel on its node every frame (the camera moves, the auto camera glides). A node off screen
+ *  leaves the panel where it last was, dimmed. */
+function followPanel(): void {
+  const p = panel;
+  if (!p) return;
+  cancelAnimationFrame(p.raf);
+  let last = "";
+  const step = (): void => {
+    if (panel !== p || !view) return;
+    const box = panelEl("[data-viz-panel]");
+    const stage = panelEl("[data-viz-stage]").getBoundingClientRect();
+    const at = scene?.screenOf(p.id) ?? null;
+    if (at) p.at = at;
+    const a = p.at ?? { x: stage.left + stage.width / 2, y: stage.top + stage.height * 0.4 };
+    const w = box.offsetWidth, h = box.offsetHeight;
+    const left = Math.round(Math.max(8, Math.min(stage.width - w - 8, a.x - stage.left - w / 2)));
+    const top = Math.round(Math.max(8, Math.min(stage.height - h - 8, a.y - stage.top - h - 16)));
+    // Tilted toward the middle of the view like a card standing in the scene: the farther off center, the more.
+    const ry = Math.max(-9, Math.min(9, ((stage.left + stage.width / 2 - a.x) / Math.max(1, stage.width)) * 22)).toFixed(1);
+    const tail = Math.round(Math.max(18, Math.min(w - 18, a.x - stage.left - left)));
+    const sig = `${left},${top},${ry},${tail},${at ? 1 : 0}`;
+    if (sig !== last) {
+      last = sig;
+      box.style.left = `${left}px`; box.style.top = `${top}px`;
+      box.style.setProperty("--viz-ry", `${ry}deg`);
+      box.style.setProperty("--viz-tail", `${tail}px`);
+      box.classList.toggle("lost", !at);
+    }
+    p.raf = requestAnimationFrame(step);
+  };
+  p.raf = requestAnimationFrame(step);
+}
+
+/** Expand: the agent's real card in the Fleet panel (or back to the orbit it came from), Main's chat. */
+function expandPanel(): void {
+  if (!model || !panel || !deps) return;
+  const n = model.nodes.get(panel.id);
+  if (!n) return;
+  const target = n.kind === "subagent" ? (n.parent ? model.nodes.get(n.parent) : undefined) : n;
+  const d = deps;
+  if (onCloseCb) { closeViz(); return; } // opened from the Fleet orbit: back to it, where this agent is a spoke
+  closeViz();
+  if (!target || target.kind === "hub") { d.focusMain(); return; }
+  d.openFleet();
+  revealCard(target.id, Date.now() + 3000);
+}
+
+/** Scroll the lane's Fleet card into view and flash it (the panel builds its cards on its first poll). */
+function revealCard(id: string, until: number): void {
+  const card = document.querySelector<HTMLElement>(`#fleetGrid .fleet-card[data-lane="${CSS.escape(id)}"]`);
+  if (!card) { if (Date.now() < until) window.setTimeout(() => revealCard(id, until), 150); return; }
+  card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  card.removeAttribute("data-fleet-flash");
+  void card.offsetWidth; // restart the flash
+  card.setAttribute("data-fleet-flash", "");
+  window.setTimeout(() => card.removeAttribute("data-fleet-flash"), 1600);
+}
+
+/** The panel's prompt box: Main through the composer, an idle agent gets the prompt, a busy one stages it. */
+async function sendFromPanel(): Promise<void> {
+  if (!view || !model || !deps || !panel) return;
+  const id = panel.id;
+  const n = model.nodes.get(id);
+  const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
+  const text = input.value.trim();
+  if (!n || !text || input.disabled) return;
+  if (n.kind === "hub") {
+    const why = deps.sendMain(text);
+    if (why) { setPanelNote(why); return; }
+    input.value = "";
+    setPanelNote("Sent to Main from the main composer.");
+    return;
+  }
+  if (n.kind !== "agent") return;
+  if (sending.has(id) || n.status === "active" || n.status === "waiting" || n.laneStatus === "starting") {
+    setPanelNote(`Staging for ${n.name}...`);
+    const r = await deps.fleetQueueAdd(id, text).catch(() => null);
+    if (panel?.id !== id) return;
+    if (!r?.ok) { setPanelNote(r?.reason ? `Not staged: ${r.reason}. Your prompt is still in the box.` : "Not staged: the engine did not answer in time. Your prompt is still in the box."); return; }
+    if (input.value.trim() === text) input.value = "";
+    setPanelNote(`Staged: it runs when ${n.name} finishes this turn${r.queued ? ` (${r.queued} waiting)` : ""}.`);
+    return;
+  }
+  input.value = "";
+  let out = outputs.get(id);
+  if (!out) { out = createOutput(); outputs.set(id, out); }
+  foldOutput(out, { type: "user", text });
+  sending.add(id);
+  panel.headSig = ""; // the box turns into Stage
+  setPanelNote(`Sent to ${n.name}.`);
+  paintPanel();
+  // The lane's own events reach the view through its watch (the panel's lane is watched first); this
+  // stream only reports a refusal.
+  const fail = (msg: string): void => { if (panel?.id === id) setPanelNote(`${n.name} did not take the prompt: ${msg}`); };
+  void deps.fleetPrompt(id, text, (e: LaneEvent) => { if (e.type === "error") fail(e.message); })
+    .catch((e: unknown) => fail(e instanceof Error ? e.message : "the engine did not answer"))
+    .finally(() => { sending.delete(id); if (panel?.id === id) panel.headSig = ""; });
+  void pollFleet();
 }
 
 async function runAction(id: string, ask: VizAsk, btnEl: HTMLElement): Promise<void> {
@@ -587,11 +936,14 @@ async function runAction(id: string, ask: VizAsk, btnEl: HTMLElement): Promise<v
   if (!n || n.kind === "subagent") return;
   if (ask === "kill" && (!killArm || killArm.id !== id || Date.now() > killArm.until)) {
     killArm = { id, until: Date.now() + 4000 };
-    btnEl.textContent = `Click again to kill ${n.name}`;
-    btnEl.classList.add("armed");
+    paintPanel();
+    (panelEl("[data-viz-panel-acts]").querySelector("[data-viz-act=kill]") as HTMLElement | null)?.focus();
     return;
   }
-  closeMenu();
+  killArm = null;
+  btnEl.blur();
+  if (ask === "kill") closePanel(); // the agent is leaving the scene
+  else if (panel) panel.headSig = "";
   markAsked(model, id, ask);
   if (demo) { demo.act(id, ask, Date.now()); return; }
   if (n.kind === "hub") { await deps.stopMain(); return; }
@@ -615,10 +967,10 @@ function onKey(e: KeyboardEvent): void {
   const active = document.activeElement;
   if (active && active !== document.body && !view.contains(active)) return; // a layer above us owns this Esc
   e.preventDefault(); e.stopPropagation();
-  const menu = $("[data-viz-menu]", view) as HTMLElement;
-  if (!menu.hidden) { closeMenu(); return; }
+  if (viewPop) { viewPop.close(); viewPop = null; return; }
   if (playerOpen()) { closePlayer(); return; }
   if (recPop) { recPop.close(); recPop = null; return; }
+  if (panel) { closePanel(); return; }
   closeViz();
 }
 
@@ -730,7 +1082,7 @@ const playerOpen = (): boolean => !!view && !($("[data-viz-player]", view) as HT
 function playRec(id: number): void {
   const r = recordings.find((x) => x.id === id);
   if (!view || !r) return;
-  closeMenu(); hideTip();
+  closePanel(); hideTip();
   playingId = id;
   const pl = $("[data-viz-player]", view) as HTMLElement;
   const video = $("[data-viz-video]", view) as HTMLVideoElement;

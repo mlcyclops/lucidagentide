@@ -6,10 +6,12 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  ANIME_SKIN, animeLook, auraLevel, BLINK_MAX_S, BLINK_MIN_S, BLINK_S, blinkStep, bump, clipDone, clipFor, CLIPS, clipTime, dashSpeed, ease,
-  easeOutBack, EMOTION_NAMES, EMOTIONS, eyeKey, gazeBucket, gazeOfBucket, jointOffset, JOINTS, KI_FIRE_S, KI_FLY_S, kiBallAt, LAB_POSES,
-  nextBlinkDelay, POSE_LEN, POSE_VECTORS, POSES, sampleClip, shakeLevel, smoothEase, stateEmotion, STILL_T, tapCurve, tempoFor, transitionShot,
-  type ClipName, type ClipSample, type EmotionName, type KiBall,
+  ANIME_SKIN, animeLook, auraLevel, BLINK_MAX_S, BLINK_MIN_S, BLINK_S, blinkStep, bump, CHECK_ROWS, checklistTicks, clipDone, clipFor, CLIPS,
+  clipTime, dashSpeed, distributeYaw, ease, easeOutBack, EMOTION_NAMES, EMOTIONS, eyeKey, gazeBucket, gazeOfBucket, GLARE_S, jointOffset, JOINTS,
+  KI_FIRE_S, KI_FLY_S, kiBallAt, LAB_POSES, newReactionSample, nextBlinkDelay, OUTBURST_MAX_S, OUTBURST_MIN_S, OUTBURST_TURN_IN_S, planReaction,
+  POSE_LEN, POSE_VECTORS, POSES, RAGE_IN_S, RAGE_OUT_S, REACT_TURN_OUT_S, sampleClip, sampleReaction, shakeLevel, SLOW_BLINK_S, smoothEase,
+  STARE_HOLD_MAX_S, STARE_HOLD_MIN_S, STARE_TURN_IN_S, stateEmotion, STILL_T, STOMP_AT_S, SUPERVISE_TICK_AT, SURPRISE_S, tapCurve, tempoFor,
+  transitionShot, YELL_S, type ClipName, type ClipSample, type EmotionName, type KiBall, type Reaction, type ReactionKind, type ReactionSample,
 } from "./viz_anime_pose.ts";
 import { lookFor, MINI_ACTIVITIES, relativeLuminance } from "./viz_mini_look.ts";
 
@@ -154,6 +156,7 @@ describe("emotion selection", () => {
   test("each activity speaks through the expected eyes", () => {
     const want: Record<ClipName, EmotionName[]> = {
       typing: ["focused", "neutral"],
+      supervise: ["focused"],
       kiblast: ["determined"],
       kata: ["focused", "determined"],
       meditate: ["calm"],
@@ -288,5 +291,196 @@ describe("animeLook", () => {
       expect(relativeLuminance(a.eye)).toBeGreaterThan(relativeLuminance(a.accent) * 0.5);
       expect(a.skin).toBe(ANIME_SKIN);
     }
+  });
+});
+
+// ------------------------------------------------------------------------------------------ P-VIZ.4 (ADR-0628)
+
+describe("supervise", () => {
+  test("the hub's supervise loop glances at the checklist exactly when a box ticks, about every 6 s when idle", () => {
+    expect(CLIPS.supervise.loop).toBe(true);
+    for (const a of SUPERVISE_TICK_AT) {
+      const { pose } = sample("supervise", a);
+      for (let i = 0; i < POSE_LEN; i++) expect(pose[i]).toBeCloseTo(POSE_VECTORS.superviseCheck[i]!, 5);
+    }
+    expect(CLIPS.supervise.len / SUPERVISE_TICK_AT.length / tempoFor("idle", 0)).toBeCloseTo(6, 1);
+    // he looks both ways over his team
+    const gazes = new Set<number>();
+    for (let t = 0; t < CLIPS.supervise.len; t += 0.05) gazes.add(gazeBucket(sample("supervise", t).info.gaze));
+    expect(gazes.has(2)).toBe(true);
+    expect(gazes.has(-2)).toBe(true);
+  });
+
+  test("the checklist ticks one box per glance and starts a fresh list after a full one", () => {
+    const len = CLIPS.supervise.len;
+    const [a, b] = SUPERVISE_TICK_AT as [number, number];
+    expect(CHECK_ROWS).toBe(3);
+    expect(checklistTicks(0)).toBe(0);
+    expect(checklistTicks(a - 0.01)).toBe(0);
+    expect(checklistTicks(a)).toBe(1);
+    expect(checklistTicks(b - 0.01)).toBe(1);
+    expect(checklistTicks(b)).toBe(2);
+    // (just past each tick: len + a is not exactly representable)
+    expect(checklistTicks(len + a + 0.01)).toBe(3);
+    expect(checklistTicks(len + b + 0.01)).toBe(0);
+    expect(checklistTicks(2 * len + a + 0.01)).toBe(1);
+    expect(checklistTicks(Number.NaN)).toBe(0);
+    expect(checklistTicks(-1)).toBe(0);
+  });
+});
+
+const rsample = (r: Reaction, t: number): ReactionSample => sampleReaction(r, t, newReactionSample());
+/** Consecutive distinct values of `pick` over the reaction (1/480 s steps, through the end). */
+const sequence = <T>(r: Reaction, pick: (s: ReactionSample) => T): T[] => {
+  const seen: T[] = [];
+  for (let t = 0; t <= r.len + 0.05; t += 1 / 480) {
+    const v = pick(rsample(r, t));
+    if (seen.length === 0 || seen[seen.length - 1] !== v) seen.push(v);
+  }
+  return seen;
+};
+
+describe("reactions: timeline", () => {
+  test("phase durations: the stare holds 1.6 to 2.2 s, the outburst lasts 1.5 to 2.5 s before its glare", () => {
+    for (let r = 0; r < 1; r += 0.1) {
+      const s = planReaction("stare", r);
+      expect(s.hold).toBeGreaterThanOrEqual(STARE_HOLD_MIN_S);
+      expect(s.hold).toBeLessThanOrEqual(STARE_HOLD_MAX_S);
+      expect(s.len).toBeCloseTo(STARE_TURN_IN_S + s.hold + REACT_TURN_OUT_S, 9);
+      const o = planReaction("outburst", r);
+      expect(o.rage).toBeGreaterThanOrEqual(OUTBURST_MIN_S);
+      expect(o.rage).toBeLessThanOrEqual(OUTBURST_MAX_S);
+      expect(o.face).toBeCloseTo(o.rage + GLARE_S, 9);
+      expect(o.len).toBeCloseTo(o.rage + GLARE_S + REACT_TURN_OUT_S, 9);
+    }
+    expect(planReaction("stare", Number.NaN).hold).toBeCloseTo((STARE_HOLD_MIN_S + STARE_HOLD_MAX_S) / 2, 9);
+    // a smooth turn in, a slower return
+    expect(STARE_TURN_IN_S).toBeLessThan(REACT_TURN_OUT_S);
+    expect(OUTBURST_TURN_IN_S).toBeLessThan(STARE_TURN_IN_S);
+  });
+
+  test("stare: eyes snap wide open, narrow into the glare, one slow blink in the hold, then the activity's eyes", () => {
+    const r = planReaction("stare", 0.5);
+    expect(rsample(r, 0).emotion).toBe("surprised");
+    expect(rsample(r, SURPRISE_S - 0.01).emotion).toBe("surprised");
+    expect(rsample(r, SURPRISE_S).emotion).toBe("glare");
+    expect(sequence(r, (s) => s.emotion)).toEqual(["surprised", "glare", null]);
+    expect(sequence(r, (s) => s.blink)).toEqual([0, 1, 2, 1, 0, -1]);
+    let shut = 0;
+    for (let t = 0; t < r.len; t += 1 / 480) if (rsample(r, t).blink > 0) shut += 1 / 480;
+    expect(shut).toBeGreaterThan(SLOW_BLINK_S * 0.5);
+    expect(shut).toBeLessThanOrEqual(SLOW_BLINK_S + 0.01);
+    // he faces the camera through the whole hold, and never raises his fists
+    for (let t = r.turnIn; t < r.face; t += 0.05) expect(rsample(r, t).turn).toBe(1);
+    for (let t = 0; t < r.len; t += 0.05) expect(rsample(r, t).rage + rsample(r, t).mark + rsample(r, t).steam + rsample(r, t).aura).toBe(0);
+  });
+
+  test("outburst: strain then angry eyes, fists up, a stomp, mark, steam and aura, then the glare", () => {
+    const r = planReaction("outburst", 0.5);
+    expect(sequence(r, (s) => s.emotion)).toEqual(["strain", "angry", "glare", null]);
+    expect(rsample(r, YELL_S - 0.01).emotion).toBe("strain");
+    expect(rsample(r, YELL_S).emotion).toBe("angry");
+    expect(rsample(r, r.rage).emotion).toBe("glare");
+    expect(rsample(r, RAGE_IN_S).rage).toBeCloseTo(1, 9);
+    expect(rsample(r, r.rage - RAGE_OUT_S).rage).toBeCloseTo(1, 9);
+    expect(rsample(r, r.rage).rage).toBeCloseTo(0, 9);
+    expect(rsample(r, STOMP_AT_S - 0.01).stomp).toBe(0);
+    expect(rsample(r, STOMP_AT_S).stomp).toBe(1);
+    const mid = rsample(r, r.rage / 2);
+    expect(mid.mark).toBeCloseTo(1, 6);
+    expect(mid.steam).toBeCloseTo(1, 6);
+    expect(mid.aura).toBeGreaterThan(0.5);
+    // the glare: still facing the camera with the fists down and the effects gone
+    const glare = rsample(r, r.face - 0.05);
+    expect(glare.turn).toBe(1);
+    expect(glare.rage + glare.mark + glare.steam + glare.aura + glare.stomp).toBe(0);
+    expect(glare.emotion).toBe("glare");
+  });
+
+  test("both reactions return to the activity: every layer weight eases back to 0 without a jump", () => {
+    for (const kind of ["stare", "outburst"] as const satisfies readonly ReactionKind[]) {
+      for (const u of [0, 0.5, 0.99]) {
+        const r = planReaction(kind, u);
+        let prev = rsample(r, 0);
+        expect(prev.turn).toBe(0);
+        expect(prev.done).toBe(false);
+        for (let t = 1 / 480; t <= r.len + 0.05; t += 1 / 480) {
+          const s = rsample(r, t);
+          expect(Math.abs(s.turn - prev.turn)).toBeLessThan(0.05);
+          expect(Math.abs(s.rage - prev.rage)).toBeLessThan(0.05);
+          prev = s;
+        }
+        expect(rsample(r, r.len - 1e-4).turn).toBeLessThan(1e-3);
+        const end = rsample(r, r.len);
+        expect(end).toEqual({ turn: 0, rage: 0, emotion: null, blink: -1, stomp: 0, mark: 0, steam: 0, aura: 0, done: true });
+        expect(rsample(r, r.len + 10).done).toBe(true);
+      }
+    }
+  });
+
+  test("a reaction during a reaction restarts cleanly from the weights already on", () => {
+    // a tap mid stare: the outburst starts already facing the camera
+    const stare = planReaction("stare", 0.3);
+    const s1 = rsample(stare, 1.0);
+    expect(s1.turn).toBe(1);
+    const out = planReaction("outburst", 0.3, s1);
+    expect(out.len).toBeCloseTo(planReaction("outburst", 0.3).len, 9);
+    const o0 = rsample(out, 0);
+    expect(o0.turn).toBe(1);
+    expect(o0.rage).toBe(0);
+    expect(o0.emotion).toBe("strain");
+    // a tap mid outburst: the fists come down smoothly while the new stare starts over with wide eyes
+    const s2 = rsample(out, 1.0);
+    expect(s2.rage).toBe(1);
+    const st = planReaction("stare", 0.3, s2);
+    const t0 = rsample(st, 0);
+    expect(t0.turn).toBe(1);
+    expect(t0.rage).toBe(1);
+    expect(t0.emotion).toBe("surprised");
+    expect(rsample(st, RAGE_OUT_S / 2).rage).toBeGreaterThan(0);
+    expect(rsample(st, RAGE_OUT_S).rage).toBeCloseTo(0, 9);
+    // a tap while he turns back: the turn resumes from where it was
+    const late = rsample(st, st.face + REACT_TURN_OUT_S / 2);
+    expect(late.turn).toBeCloseTo(0.5, 6);
+    const again = planReaction("stare", 0.3, late);
+    expect(rsample(again, 0).turn).toBeCloseTo(0.5, 6);
+    expect(rsample(again, STARE_TURN_IN_S).turn).toBe(1);
+    expect(again.len).toBeCloseTo(stare.len, 9);
+    // non-finite carried weights read as none
+    const bad = planReaction("stare", 0.3, { turn: Number.NaN, rage: Number.NaN });
+    expect(bad.turnFrom).toBe(0);
+    expect(bad.rageFrom).toBe(0);
+  });
+
+  test("the reaction eyes: the glare is narrowed and intense, the outburst's brows the sharpest", () => {
+    expect(EMOTIONS.surprised.open).toBeGreaterThan(EMOTIONS.neutral.open);
+    expect(EMOTIONS.glare.open).toBeLessThan(EMOTIONS.focused.open);
+    expect(EMOTIONS.glare.pupil).toBeLessThan(EMOTIONS.neutral.pupil);
+    expect(EMOTIONS.glare.brow).toBeGreaterThan(EMOTIONS.focused.brow);
+    expect(EMOTIONS.angry.brow).toBeGreaterThan(EMOTIONS.determined.brow);
+    expect(EMOTIONS.angry.pupil).toBeLessThan(EMOTIONS.determined.pupil);
+    expect(POSES.outburst.emotion).toBe("angry");
+  });
+});
+
+describe("reactions: turning to the camera", () => {
+  test("the yaw spreads over spine, chest, neck and head; the root turns only for what they cannot cover", () => {
+    const out = new Float32Array(5);
+    const sum = (): number => out.reduce((s, v) => s + v, 0);
+    distributeYaw(0.8, out);
+    expect(sum()).toBeCloseTo(0.8, 5);
+    expect(out[0]).toBeCloseTo(0, 6);
+    expect(out[4]).toBeGreaterThan(out[1]!);
+    distributeYaw(3, out);
+    expect(sum()).toBeCloseTo(3, 5);
+    expect(out[0]).toBeGreaterThan(1);
+    for (let i = 1; i < 5; i++) expect(Math.abs(out[i]!)).toBeLessThanOrEqual(0.7 + 1e-6);
+    distributeYaw(-3, out);
+    expect(sum()).toBeCloseTo(-3, 5);
+    expect(out[0]).toBeLessThan(-1);
+    distributeYaw(Math.PI * 2 + 0.5, out);
+    expect(sum()).toBeCloseTo(0.5, 5);
+    distributeYaw(Number.NaN, out);
+    expect([...out]).toEqual([0, 0, 0, 0, 0]);
   });
 });
