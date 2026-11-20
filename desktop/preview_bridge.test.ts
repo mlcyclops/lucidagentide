@@ -5,7 +5,7 @@
 // P-PREVIEW.13: plus the EARLY shim that repairs the opaque-origin environment before page code runs.
 
 import { test, expect, describe } from "bun:test";
-import { injectPreviewBridge, injectPreviewShim, PREVIEW_BRIDGE_JS, PREVIEW_SHIM_JS } from "./preview_bridge.ts";
+import { injectPreviewBridge, injectPreviewShim, injectPreviewZoom, PREVIEW_BRIDGE_JS, PREVIEW_SHIM_JS } from "./preview_bridge.ts";
 
 describe("injectPreviewBridge", () => {
   test("injects the bridge just before </body>", () => {
@@ -17,6 +17,16 @@ describe("injectPreviewBridge", () => {
   test("appends when there is no </body>", () => {
     const out = injectPreviewBridge("<h1>bare</h1>");
     expect(out.startsWith("<h1>bare</h1><script>")).toBe(true);
+  });
+  // P-PREVIEW-CURTAIN.1: an agent-written snippet often has no body tag. The bridge is then APPENDED, and the
+  // zoom script goes before the LAST closing body tag in the document. If the injected scripts spell one, that
+  // last match is inside the bridge, the zoom script lands mid-string, and the HTML parser ends the bridge early:
+  // no inspect listener, so every probe and preview_inspect call on such a page timed out.
+  test("a page with no body tag keeps every injected script whole", () => {
+    const out = injectPreviewZoom(injectPreviewBridge(injectPreviewShim("<!doctype html><h1>bare</h1>")), false);
+    const scripts = out.match(/<script>[\s\S]*?<\/script>/g) ?? [];
+    expect(scripts.some((s) => s.includes("window.addEventListener('message', function(ev)"))).toBe(true);
+    for (const js of [PREVIEW_SHIM_JS, PREVIEW_BRIDGE_JS]) expect(/<\/body/i.test(js)).toBe(false);
   });
   test("no arbitrary-code or unbounded-HTML surface (eval / Function / innerHTML / setAttribute)", () => {
     // Structured actions (click/type/focus/scroll) are allowed, but NEVER arbitrary JS or raw HTML injection.

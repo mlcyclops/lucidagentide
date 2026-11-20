@@ -8270,3 +8270,169 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-img-path{display:block;font-family:var(--mono);font-size:11.5px;line-height:1.45;color:var(--accent-2);text-decoration:underline;text-underline-offset:2px;overflow-wrap:break-word;word-break:normal;cursor:pointer}
 .al-img-acts{display:flex;flex-wrap:wrap;gap:6px}
 .prev-ask-act{flex:none}
+
+/* ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain in front of auto previews ──────────────────────
+   Layers (docs/UX-REVIEW.md "Overlay stack"):
+   - .pcur-dock is Content tier: positioned inside main.center at z-index 26, one above the chat's .jump-down
+     helpers (25). It covers only the chat column's top-right corner; the Fleet dock (55), Orbit (92),
+     popovers, palette, sheets, toasts, modals, Ask Lucid, menus and tooltips all cover it.
+   - .pcur-probe-host is BEHIND the app (z-index -1), transparent and inert: the hidden probe frame must be
+     laid out and rendered (so a canvas app draws) without ever being seen or reached.
+   - The swing animates #preview itself (a layout column), so it adds no layer.
+   Motion: data-motion on the dock (full / calm / still from the perf tier) and prefers-reduced-motion. */
+/* Not display:none, visibility:hidden or opacity:0: Chromium may throttle a cross-origin frame hidden that way
+   (no requestAnimationFrame, so a canvas app never draws). Behind the app and nearly transparent instead. */
+.pcur-probe-host{position:fixed;left:0;top:0;width:min(760px,50vw);height:calc(100vh - 60px);z-index:-1;opacity:.001;pointer-events:none;overflow:hidden}
+.pcur-probe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.pcur-dock{position:absolute;top:12px;right:14px;z-index:26;display:flex;align-items:center;gap:5px;max-width:min(340px,calc(100% - 28px));animation:pcurIn .32s var(--ease-out) both}
+.pcur-dock[hidden]{display:none}
+.pcur-chip{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 12px 6px 6px;border-radius:12px;border:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg-1) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--txt);font:inherit;text-align:left;cursor:default;
+  box-shadow:0 8px 24px -12px rgb(var(--sh-rgb) / .55);transition:border-color .2s,box-shadow .2s,transform .2s}
+.pcur-chip[data-phase="ready"]{cursor:pointer;border-color:rgb(var(--accent-rgb) / .55);box-shadow:0 10px 28px -12px rgb(var(--accent-rgb) / .55)}
+.pcur-chip[data-phase="ready"]:hover{transform:translateY(-1px);border-color:var(--accent)}
+.pcur-chip:focus-visible,.pcur-x:focus-visible,.pcur-mini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* The miniature page: four skeleton lines, a scanning shimmer and three dots orbiting on an ellipse. */
+.pcur-art{position:relative;flex:none;width:46px;height:34px;border-radius:7px;overflow:hidden;background:var(--bg-0);border:1px solid var(--line-soft)}
+.pcur-page{position:absolute;inset:5px 6px;display:flex;flex-direction:column;gap:3px}
+.pcur-page i{display:block;height:3px;border-radius:2px;background:var(--line)}
+.pcur-page i:first-child{width:60%;height:4px;background:rgb(var(--accent-rgb) / .45)}
+.pcur-page i:nth-child(2){width:90%}
+.pcur-page i:nth-child(3){width:74%}
+.pcur-page i:nth-child(4){width:48%}
+.pcur-scan{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(var(--accent-rgb) / .38) 50%,transparent 70%);transform:translateX(-100%);animation:pcurScan 1.4s ease-in-out infinite}
+.pcur-orbit{position:absolute;inset:0;transform:scaleY(.55)}
+.pcur-orbit b{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pcurOrbit 1.8s linear infinite}
+.pcur-orbit b:nth-child(2){animation-delay:-.6s;opacity:.7}
+.pcur-orbit b:nth-child(3){animation-delay:-1.2s;opacity:.45}
+.pcur-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pcur-thumb[hidden]{display:none}
+.pcur-chip[data-phase="ready"] .pcur-scan,.pcur-chip[data-phase="ready"] .pcur-orbit{display:none}
+.pcur-chip[data-phase="ready"] .pcur-art{border-color:rgb(var(--accent-rgb) / .5);animation:pcurReady .6s var(--ease-out)}
+/* Invariant 11: the two text lines are ONE block, each line nowrap with an ellipsis. */
+.pcur-txt{display:block;min-width:0;flex:1 1 auto}
+.pcur-k,.pcur-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pcur-k{font-size:10.5px;font-weight:700;letter-spacing:.03em;color:var(--txt-2)}
+.pcur-chip[data-phase="ready"] .pcur-k{color:var(--accent-2)}
+.pcur-name{font-size:12.5px;font-weight:600;color:var(--txt);max-width:210px}
+.pcur-more{flex:none;padding:1px 7px;border-radius:999px;background:var(--accent-dim);color:var(--txt);font-size:11px;font-weight:700;white-space:nowrap}
+.pcur-more[hidden]{display:none}
+.pcur-x{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);cursor:pointer;opacity:.8}
+.pcur-x:hover{opacity:1;color:var(--txt);border-color:var(--line-strong)}
+.pcur-dock[data-motion="calm"] .pcur-orbit{display:none}
+.pcur-dock[data-motion="still"] .pcur-scan,.pcur-dock[data-motion="still"] .pcur-orbit{display:none}
+.pcur-dock[data-motion="still"],.pcur-dock[data-motion="still"] .pcur-art{animation:none}
+/* The swing: #preview unfolds out of the chip, hinged at the panel point nearest it (--pcur-ox/oy). */
+#preview.pcur-swing{transform-origin:var(--pcur-ox,0) var(--pcur-oy,0);animation:pcurSwing var(--pcur-ms,.38s) cubic-bezier(.2,.9,.25,1.04) both}
+#preview.pcur-swing.pcur-calm{animation-name:pcurSwingCalm}
+/* The mini chip on a fleet lane card and an orbit spoke. */
+.pcur-mini{flex:none;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);
+  background:var(--bg-0);color:var(--txt-2);font:inherit;font-size:10.5px;font-weight:700;white-space:nowrap;cursor:default}
+.pcur-mini[hidden]{display:none}
+.pcur-mini[data-phase="ready"]{cursor:pointer;color:var(--txt);border-color:rgb(var(--accent-rgb) / .6);background:var(--accent-dim);animation:pcurReady .6s var(--ease-out)}
+.pcur-mini[data-phase="ready"]:hover{border-color:var(--accent)}
+.pcur-mini .ic{width:11px;height:11px}
+.pcur-mini-l{white-space:nowrap}
+.pcur-mini-art{position:relative;flex:none;width:10px;height:12px;border-radius:2px;border:1px solid var(--line-strong);overflow:hidden}
+.pcur-mini-art i{position:absolute;inset:0;background:linear-gradient(180deg,transparent 25%,rgb(var(--accent-rgb) / .65) 50%,transparent 75%);transform:translateY(-100%);animation:pcurScanY 1.2s ease-in-out infinite}
+.orbit-view.static .pcur-mini-art i,.orbit-view.static .pcur-mini{animation:none}
+@keyframes pcurIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes pcurScan{to{transform:translateX(100%)}}
+@keyframes pcurScanY{to{transform:translateY(100%)}}
+@keyframes pcurOrbit{from{transform:rotate(0deg) translateX(16px)}to{transform:rotate(360deg) translateX(16px)}}
+@keyframes pcurReady{0%{box-shadow:0 0 0 0 rgb(var(--accent-rgb) / .55)}100%{box-shadow:0 0 0 8px rgb(var(--accent-rgb) / 0)}}
+@keyframes pcurSwing{from{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}55%{opacity:1}to{opacity:1;transform:none}}
+@keyframes pcurSwingCalm{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){
+  .pcur-dock,.pcur-art,.pcur-scan,.pcur-orbit b,.pcur-mini,.pcur-mini-art i,#preview.pcur-swing{animation:none !important}
+  .pcur-scan,.pcur-orbit{display:none}
+}
+
+/* ============================== P-VIZ.1 (ADR-0622): Visualize (#vizView, viz_view.ts) ==============================
+   z 93: one above the Fleet orbit (92) it swaps in from, so it covers the orbit, the IDE panel (90), the fleet dock
+   (55) and the app; below .popover (95: the Recordings list), settings (97/98), the palette (100/101), toasts (120),
+   modals, Ask Lucid and tooltips, which all still stack over it. The header and nebula reuse the orbit's classes.
+   The three.js canvas paints its own themed backdrop (so recordings match the live view); everything here is DOM
+   chrome over it. Colors come from the theme variables; the role palette inside the canvas is viz_model.PERSONAS. */
+.viz-view{position:fixed;inset:0;z-index:93;display:flex;flex-direction:column;background:var(--bg-0);
+  opacity:0;transition:opacity 200ms var(--ease-out)}
+.viz-view.open{opacity:1}
+.viz-view[hidden]{display:none}
+.viz-head{z-index:2;background:color-mix(in srgb,var(--bg-0) 82%,transparent);overflow-x:auto;scrollbar-width:none}
+.viz-demo{margin-left:6px;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.14em;white-space:nowrap;
+  color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14);border:1px solid rgb(var(--amber-rgb) / .45)}
+.viz-demo[hidden]{display:none}
+.viz-census{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.viz-chip{white-space:nowrap;font-family:var(--mono);font-size:10.5px;color:var(--txt-2);padding:2px 8px;border-radius:999px;
+  border:1px solid var(--line-soft);background:var(--bg-1)}
+.viz-chip.hot{color:var(--txt);border-color:rgb(var(--accent-rgb) / .5)}
+.viz-chip.warn{color:var(--amber-txt,var(--amber));border-color:rgb(var(--amber-rgb) / .5)}
+.viz-seg{flex:none;display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.viz-seg button{font:inherit;font-size:11px;font-weight:600;padding:4px 10px;border:0;background:transparent;color:var(--txt-3);cursor:pointer;white-space:nowrap}
+.viz-seg button+button{border-left:1px solid var(--line)}
+.viz-seg button:hover{color:var(--txt)}
+.viz-seg button.on{color:var(--txt);background:rgb(var(--accent-rgb) / .16)}
+.viz-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.viz-rec-btn:not(.on) .ic{color:var(--red)}
+.viz-rec-btn.on{color:var(--red);border-color:rgb(var(--red-rgb) / .6)}
+.viz-stage{position:relative;flex:1;min-height:0;overflow:hidden;contain:layout paint}
+.viz-cv{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
+.viz-cv:focus-visible{box-shadow:inset 0 0 0 2px rgb(var(--accent-rgb) / .6)}
+.viz-state{position:absolute;inset:0;z-index:3;display:grid;place-content:center;justify-items:center;gap:12px;text-align:center;
+  color:var(--txt-2);font-size:13px;pointer-events:none}
+.viz-state[hidden]{display:none}
+.viz-state p{margin:0;max-width:440px;line-height:1.5}
+.viz-error{pointer-events:auto;background:var(--bg-0)}
+.viz-spin{width:28px;height:28px;border-radius:50%;border:2px solid rgb(var(--accent-rgb) / .25);border-top-color:var(--accent);animation:vizSpin .9s linear infinite}
+.viz-caption{position:absolute;left:50%;bottom:28px;z-index:2;transform:translateX(-50%);margin:0;padding:8px 14px;border-radius:999px;
+  font-size:12px;color:var(--txt-2);white-space:nowrap;pointer-events:none;
+  background:color-mix(in srgb,var(--bg-1) 82%,transparent);border:1px solid var(--line-soft)}
+.viz-caption[hidden]{display:none}
+.viz-recind{position:absolute;top:12px;left:14px;z-index:2;display:inline-flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;
+  font-family:var(--mono);font-size:11px;color:var(--txt);pointer-events:none;
+  background:color-mix(in srgb,var(--bg-1) 85%,transparent);border:1px solid rgb(var(--red-rgb) / .55)}
+.viz-recind[hidden]{display:none}
+.viz-recind i{width:9px;height:9px;border-radius:50%;background:var(--red);animation:vizRec 1.1s ease-in-out infinite}
+.viz-recind b{color:var(--red);letter-spacing:.12em}
+.viz-rec-cap{color:var(--txt-3)}
+.viz-legend{position:absolute;left:14px;bottom:14px;z-index:2;display:flex;flex-wrap:wrap;gap:6px;max-width:55%;pointer-events:none}
+.viz-legend-i{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:10.5px;color:var(--txt-2);padding:2px 8px;border-radius:999px;
+  background:color-mix(in srgb,var(--bg-1) 80%,transparent);border:1px solid var(--line-soft)}
+.viz-legend-i i{width:8px;height:8px;border-radius:50%;background:var(--viz-c)}
+.viz-tip{position:absolute;z-index:4;display:flex;flex-direction:column;gap:2px;max-width:280px;padding:8px 10px;border-radius:10px;
+  font-size:11.5px;color:var(--txt-2);pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  background:color-mix(in srgb,var(--bg-1) 92%,transparent);border:1px solid var(--line);box-shadow:0 8px 24px rgb(0 0 0 / .25)}
+.viz-tip[hidden]{display:none}
+.viz-tip b{color:var(--txt);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-tip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-menu{position:absolute;z-index:5;display:flex;flex-direction:column;gap:2px;min-width:200px;max-width:280px;padding:6px;border-radius:12px;
+  background:var(--bg-1);border:1px solid var(--line);box-shadow:0 12px 32px rgb(0 0 0 / .3)}
+.viz-menu[hidden]{display:none}
+.viz-menu-h{display:flex;flex-direction:column;gap:1px;padding:4px 8px 6px;margin-bottom:2px;border-bottom:1px solid var(--line-soft)}
+.viz-menu-h b{font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-menu-h span{font-size:10.5px;color:var(--txt-3);white-space:nowrap}
+.viz-menu-i{font:inherit;font-size:12px;text-align:left;padding:7px 9px;border:0;border-radius:8px;background:transparent;color:var(--txt);cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-menu-i:hover:not(:disabled),.viz-menu-i:focus-visible{background:var(--bg-3);outline:none}
+.viz-menu-i:disabled{color:var(--txt-4);cursor:default}
+.viz-menu-i.danger{color:var(--red)}
+.viz-menu-i.danger.armed{background:rgb(var(--red-rgb) / .14)}
+.viz-menu-note{margin:4px 8px;font-size:11px;line-height:1.45;color:var(--txt-3)}
+.viz-player{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;background:var(--bg-0)}
+.viz-player[hidden]{display:none}
+.viz-player-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-soft)}
+.viz-player-head b{font-size:13px;color:var(--txt);white-space:nowrap}
+.viz-player-meta{min-width:0;font-size:11px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-video{flex:1;min-height:0;width:100%;background:var(--bg-0);outline:none}
+.viz-recs{display:flex;flex-direction:column;gap:6px;min-width:300px}
+.viz-recs-h{display:flex;align-items:baseline;gap:8px}
+.viz-recs-h b{font-size:13px;color:var(--txt)}
+.viz-recs-h span{font-size:11px;color:var(--txt-3);white-space:nowrap}
+.viz-rec-row{display:flex;align-items:center;gap:6px}
+.viz-rec-name{flex:1;min-width:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-recs-empty{margin:0;max-width:300px;font-size:12px;line-height:1.5;color:var(--txt-3)}
+@keyframes vizSpin{to{transform:rotate(360deg)}}
+@keyframes vizRec{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
+@media (prefers-reduced-motion: reduce){
+  .viz-view .orbit-nebula,.viz-spin,.viz-recind i{animation:none}
+}

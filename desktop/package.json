@@ -315,9 +315,11 @@
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "@types/three": "0.187.0",
     "electron": "^44.5.1",
     "electron-builder": "^25.1.8",
     "png-to-ico": "^3.0.1",
+    "three": "0.187.0",
     "typescript": "^6.0.3"
   }
 }

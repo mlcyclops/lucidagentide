@@ -69,6 +69,8 @@ import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter ru
 import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
+// P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
+import { CURTAIN, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type CurtainDecision, type CurtainEntry, type CurtainProbe, type LaneMini, type PaintStats } from "./preview_curtain.ts";
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -82,6 +84,8 @@ import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ra
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
+import { initViz, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -135,8 +139,8 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -581,6 +585,8 @@ function buildShell(): void {
             <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
             <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet agents, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <!-- P-VIZ.1 (ADR-0622): Visualize - Main, its agents and subagents in 3D with the tokens flowing between them. -->
+            <button class="ctool ctool-icon" id="ctViz" type="button" aria-label="Visualize agents and token flow" data-tip="Visualize|Main, your agents and their subagents in 2D or 3D, with estimated tokens flowing between them. Hover for the rate, click a node for its actions, record a clip.">${icon("visualize", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyzer of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -2984,6 +2990,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
     if (!owns() || settled) return;
+    vizBus.emit(opts.laneId ?? "main", "chat", e); // P-VIZ.1 (ADR-0622): a no-op unless Visualize is open
     if (e.type === "connection") {
       rejoined = true; // the next snapshot arrives on the re-attach stream
       setPhase(e.message); paintHud();
@@ -10149,6 +10156,9 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   if (reveal === "yours" && !prevPathByLane.yours) ($("#prevPath") as HTMLInputElement | null)?.focus();
   startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
   startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
+  // P-PREVIEW-CURTAIN.1: the panel is open, so every ready invitation is now a tab in front of the user.
+  curtainEntries = curtainEntries.filter((e) => e.phase !== "ready");
+  paintCurtainChip();
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
@@ -10265,16 +10275,20 @@ function closePreview(): void {
   if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
   closeArcadeMenu?.();
   setPreviewPan(false);
-  if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
-  if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
-  ++agentPreviewRevision;
-  pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): closing no longer dismisses the agent's document or cancels its pending
+  // check. Nothing auto-opens any more, so there is no hijack to guard against, and this runs whenever ANY
+  // other right-edge surface opens: a page still loading behind the curtain must survive that. The chip's
+  // "Not now" is the dismissal.
   clearPreviewTesting();
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
-  stopPreviewInspectRelay(); // P-PREVIEW.6b
+  // P-PREVIEW.6b. P-PREVIEW-CURTAIN.1: the agent's page now lives behind the curtain with the panel closed,
+  // so its preview_inspect keeps working while the Agent tab holds one.
+  if (!prevPathByLane.agent) stopPreviewInspectRelay();
   $("#preview")!.hidden = true;
+  $("#preview")!.classList.remove("pcur-swing", "pcur-calm");
+  paintCurtainChip(); // a page still loading behind the curtain shows its chip again
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -10307,31 +10321,261 @@ function closeTrainer(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** Auto-open only a verified, current target that the user has not dismissed. */
-function onPreviewAvailable(path: string): void {
+/** An agent's previewable write (or preview_open). P-PREVIEW-CURTAIN.1 (ADR-0621): the target passes the
+ *  curtain gate first and NEVER opens the panel by itself; a page that renders loads into the Agent tab in
+ *  the background and earns the "Preview ready" chip, a blank or failed one retires quietly. `open` is for a
+ *  target the USER just asked for through this path (the Figma import): it swings out once ready, and a
+ *  failure says so. */
+function onPreviewAvailable(path: string, opts: { open?: boolean } = {}): void {
+  if (opts.open) dismissedAgentPreviews.delete(path); // asking for it opts the document back in
   if (!path || dismissedAgentPreviews.has(path)) return;
   const revision = ++agentPreviewRevision;
   const owner = turnViewEpoch;
   pendingAgentPreviewPath = path;
   state.lastPreviewablePath = "";
-  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview.
-  const ready = resolvePreview(path).kind === "remote"
-    ? bridge.previewEgressAllows(path).then((allowed) => canPreviewRemote(path, allowed))
-    : bridge.previewProbe(path);
-  void ready.catch(() => false).then((resolves) => {
+  curtainBegin("agent", path);
+  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview: the gate is.
+  curtainGate("agent", path, (r) => {
     const current = revision === agentPreviewRevision && owner === turnViewEpoch;
-    if (!current || dismissedAgentPreviews.has(path)) return;
+    if (!current || dismissedAgentPreviews.has(path)) { curtainRetire("agent", path, null); return; }
     pendingAgentPreviewPath = "";
-    if (!resolves) {
-      showToast({ tone: "warn", title: "Preview unavailable", desc: "The requested document could not be verified. Preview was not opened." });
+    if (r.verdict !== "ready") {
+      curtainRetire("agent", path, r);
+      if (opts.open) showToast({ tone: "warn", title: "Preview unavailable", desc: `It ${r.verdict === "blank" ? "rendered nothing" : "could not be shown"}: ${r.reason}.` });
       return;
     }
-    if (!previewOpen) openPreview({ reveal: "agent" });
     loadPreview(path, "agent");
+    if (previewOpen) curtainHiddenLoads.delete("agent"); else curtainHiddenLoads.add("agent");
     state.lastPreviewablePath = path;
     schedulePhoneAutoSend(path);
     kickPreviewShotSoon();
+    startPreviewInspectRelay(); // the agent can still preview_inspect its page before the user opens it
+    curtainReady("agent", path, r, opts.open === true);
   });
+}
+
+// ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain ─────────────────────────────────────────
+// Auto previews (agent and lane writes) load in a hidden PROBE frame first; preview_curtain.ts decides
+// ready / blank / error from the engine probe plus the page's own paint looks. Only `ready` earns an
+// invitation: the "Preview ready" chip at the chat column's top-right edge (and the mini chip on the lane's
+// fleet card and orbit spoke). Clicking it swings the panel out on that preview's own tab.
+type CurtainResult = { verdict: "ready" | "blank" | "error"; reason: string; title: string; thumb: string };
+let curtainEntries: CurtainEntry[] = [];
+let curtainSeq = 0;
+/** The gate in flight per tab key ("agent" / "lane:<id>"); a newer write to the same tab cancels it. */
+const curtainRuns = new Map<string, () => void>();
+/** Tabs loaded while the panel was CLOSED: their frame never laid out, so its first reveal reloads it. */
+const curtainHiddenLoads = new Set<string>();
+/** Gates waiting for a probe-frame slot (probeConcurrency: the perf tier's throttle). */
+const curtainWaiting: Array<() => void> = [];
+let curtainSlots = 0;
+const isLoopbackUrl = (u: string): boolean => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u.trim());
+const reducedMotionNow = (): boolean => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+perfWatch.onChange(() => paintCurtainChip()); // the chip's motion follows the perf tier live
+
+/** Run the gate for `path` on tab `key`. `done` is called exactly once, unless a newer gate for the same tab
+ *  (or a session reset) cancels this one first. */
+function curtainGate(key: string, path: string, done: (r: CurtainResult) => void): void {
+  curtainRuns.get(key)?.();
+  const timers: number[] = [];
+  let live = true, holdsSlot = false;
+  let frame: HTMLIFrameElement | null = null;
+  let waiter: (() => void) | null = null;
+  const cleanup = (): void => {
+    live = false;
+    for (const t of timers) window.clearTimeout(t);
+    if (frame) { frame.removeAttribute("src"); frame.remove(); frame = null; }
+    if (waiter) { const at = curtainWaiting.indexOf(waiter); if (at >= 0) curtainWaiting.splice(at, 1); waiter = null; }
+    if (holdsSlot) { holdsSlot = false; curtainSlots--; curtainWaiting.shift()?.(); }
+    if (curtainRuns.get(key) === cleanup) curtainRuns.delete(key);
+  };
+  curtainRuns.set(key, cleanup);
+  const finish = (r: CurtainResult): void => { if (!live) return; cleanup(); done(r); };
+  const remote = resolvePreview(path).kind === "remote";
+  const ask = (): Promise<CurtainProbe> => remote
+    ? bridge.previewEgressAllows(path).then((allowed): CurtainProbe | Promise<CurtainProbe> => {
+      if (!canPreviewRemote(path, allowed)) return { resolves: false, error: "the site is not approved for preview" };
+      // A loopback dev server is asked by the engine (connection refused, HTTP errors); any other approved
+      // site is cross-origin to us and only its approval can be checked.
+      return isLoopbackUrl(path) ? bridge.previewProbeInfo(path, true) : { resolves: true, kind: "remote" };
+    })
+    : bridge.previewProbeInfo(path);
+  const probe = (attempt: number): void => {
+    void ask().catch((): CurtainProbe => ({ resolves: false, error: "the engine did not answer" })).then((p) => {
+      if (!live) return;
+      // The write was announced when its tool call OPENED: give a missing or empty file time to land.
+      if (shouldReprobe(p, attempt)) { timers.push(window.setTimeout(() => probe(attempt + 1), CURTAIN.probeRetryMs)); return; }
+      const first = classifyCurtain({ probe: p, paint: null, looks: 0, loaded: false, elapsedMs: 0 });
+      if (first.verdict !== "loading") { finish({ verdict: first.verdict, reason: first.reason, title: "", thumb: "" }); return; }
+      const start = (): void => {
+        waiter = null;
+        if (!live) return;
+        holdsSlot = true; curtainSlots++;
+        frame = curtainProbeFrame(path, p, timers, () => live, (r) => finish(r));
+      };
+      if (curtainSlots < probeConcurrency(perfWatch.tier())) start();
+      else { waiter = start; curtainWaiting.push(start); }
+    });
+  };
+  probe(0);
+}
+
+/** The hidden probe frame: the same served document and sandbox as the real tab, mounted where it is laid
+ *  out and rendered (requestAnimationFrame runs, so a canvas app draws) yet invisible and inert. No
+ *  `allow` grants, so a page with audio stays silent here. Then up to two paint looks. */
+function curtainProbeFrame(path: string, p: CurtainProbe, timers: number[], isLive: () => boolean, settle: (r: CurtainResult) => void): HTMLIFrameElement {
+  const t0 = Date.now();
+  let host = $("#prevProbeHost") as HTMLElement | null;
+  if (!host) { host = el(`<div id="prevProbeHost" class="pcur-probe-host" aria-hidden="true" inert></div>`) as HTMLElement; document.body.appendChild(host); }
+  const f = document.createElement("iframe");
+  f.className = "pcur-probe";
+  f.setAttribute("sandbox", PREVIEW_SANDBOX);
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.tabIndex = -1;
+  f.title = "Preview check";
+  let loaded = false, looks = 0;
+  let paint: PaintStats | null = null;
+  const judge = () => classifyCurtain({ probe: p, paint, looks, loaded, elapsedMs: Date.now() - t0 });
+  const close = (v: CurtainDecision): void => {
+    if (v.verdict === "loading") return;
+    settle({ verdict: v.verdict, reason: v.reason, title: paint?.title ?? "", thumb: thumbFor(paint) });
+  };
+  const look = async (): Promise<void> => {
+    if (!isLive()) return;
+    const answer = parsePaint(await runInspectOnFrame(f, `pcur-${++curtainSeq}`, paintCommand(), CURTAIN.lookTimeoutMs));
+    if (!isLive()) return;
+    looks++;
+    paint = answer ?? paint; // a look that times out keeps what the previous one saw
+    const v = judge();
+    if (v.verdict === "loading") timers.push(window.setTimeout(() => void look(), CURTAIN.secondLookMs - CURTAIN.firstLookMs));
+    else close(v);
+  };
+  f.addEventListener("load", () => {
+    if (loaded || !isLive()) return;
+    loaded = true;
+    timers.push(window.setTimeout(() => void look(), CURTAIN.firstLookMs));
+  });
+  timers.push(window.setTimeout(() => { if (isLive() && !loaded) close(judge()); }, CURTAIN.loadTimeoutMs));
+  f.src = bridge.previewServeUrl(path); // set BEFORE insertion, so the first load event is the real document
+  host.appendChild(f);
+  return f;
+}
+
+/** A gate started: the chip (and the lane's mini chip) shows the loading curtain. */
+function curtainBegin(key: string, path: string): void {
+  curtainEntries = upsertCurtain(curtainEntries, { key, path, label: curtainLabel(path), seq: ++curtainSeq });
+  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "loading", label: curtainLabel(path) });
+  paintCurtainChip();
+}
+/** A blank or failed page (or a superseded one): retire quietly. One dev-log line, no toast, no panel. */
+function curtainRetire(key: string, path: string, r: CurtainResult | null): void {
+  const had = curtainEntries.some((e) => e.key === key && e.path === path);
+  curtainEntries = settleCurtain(curtainEntries, key, path, "error");
+  if (had && key.startsWith("lane:")) setLaneMini(key.slice(5), null);
+  if (r) console.info(`[preview-curtain] ${key} ${curtainLabel(path)}: ${r.verdict} (${r.reason}); not shown`);
+  paintCurtainChip();
+}
+/** A page that renders: with the panel closed the chip turns into the invitation; with it open the tab is
+ *  already there (badged), so the chip has nothing to add. `open` swings straight out. */
+function curtainReady(key: string, path: string, r: CurtainResult, open: boolean): void {
+  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "ready", label: r.title || curtainLabel(path) });
+  if (open || previewOpen) {
+    const chip = $("#prevCurtainChip") as HTMLElement | null;
+    const from = chip && !chip.closest("[hidden]") ? chip : null;
+    curtainEntries = dropCurtain(curtainEntries, key);
+    paintCurtainChip();
+    if (open) swingOutPreview(key, from);
+    return;
+  }
+  curtainEntries = settleCurtain(curtainEntries, key, path, "ready", { title: r.title, thumb: r.thumb });
+  paintCurtainChip();
+}
+function setLaneMini(laneId: string, v: LaneMini | null): void {
+  paintLanePreview(laneId, v);
+  paintSpokePreview(laneId, v);
+}
+
+/** The chip: one card at the chat column's top-right edge, nearest the panel it opens. Mounted on first use. */
+function paintCurtainChip(): void {
+  let dock = $("#prevCurtain") as HTMLElement | null;
+  const { head, more } = chipView(curtainEntries);
+  if (!dock) {
+    if (!head) return;
+    const center = document.querySelector("main.center");
+    if (!center) return;
+    dock = el(`<div class="pcur-dock" id="prevCurtain" hidden aria-live="polite">
+      <button type="button" class="pcur-chip" id="prevCurtainChip">
+        <span class="pcur-art" aria-hidden="true"><span class="pcur-page"><i></i><i></i><i></i><i></i></span><span class="pcur-scan"></span><span class="pcur-orbit"><b></b><b></b><b></b></span><img class="pcur-thumb" alt="" hidden></span>
+        <span class="pcur-txt"><span class="pcur-k"></span><span class="pcur-name"></span></span>
+        <span class="pcur-more" hidden></span>
+      </button>
+      <button type="button" class="pcur-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
+    </div>`) as HTMLElement;
+    center.appendChild(dock);
+    $("#prevCurtainChip", dock)?.addEventListener("click", (ev) => {
+      const cur = chipView(curtainEntries).head;
+      if (!cur || cur.phase !== "ready") return;
+      swingOutPreview(cur.key, ev.currentTarget as HTMLElement);
+    });
+    $("#prevCurtainX", dock)?.addEventListener("click", () => {
+      for (const e of curtainEntries) if (e.key === "agent") dismissedAgentPreviews.add(e.path); // no chip for this file again until you open it
+      curtainEntries = [];
+      paintCurtainChip();
+    });
+  }
+  dock.dataset.motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  // The panel being open is the invitation accepted: nothing to show over it.
+  dock.hidden = !head || previewOpen;
+  if (!head) return;
+  const chip = $("#prevCurtainChip", dock) as HTMLButtonElement;
+  const ready = head.phase === "ready";
+  chip.dataset.phase = head.phase;
+  chip.setAttribute("aria-disabled", String(!ready));
+  const name = head.title || head.label;
+  ($(".pcur-k", chip) as HTMLElement).textContent = ready ? "Preview ready" : "Preparing preview";
+  ($(".pcur-name", chip) as HTMLElement).textContent = name;
+  const thumb = $(".pcur-thumb", chip) as HTMLImageElement;
+  if (ready && head.thumb) { if (thumb.getAttribute("src") !== head.thumb) thumb.src = head.thumb; thumb.hidden = false; }
+  else { thumb.hidden = true; thumb.removeAttribute("src"); }
+  const badge = $(".pcur-more", chip) as HTMLElement;
+  badge.hidden = more === 0;
+  badge.textContent = `+${more}`;
+  chip.setAttribute("aria-label", ready ? `Open the preview of ${name}${more ? `, ${more} more waiting` : ""}` : `Preparing a preview of ${name}`);
+  setTip(chip, ready ? "Open the preview" : "Preparing a preview",
+    ready ? `${name} rendered. Click to swing the Preview panel out on its own tab.${more ? ` ${more} more waiting.` : ""}`
+      : `${name} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.`);
+}
+
+/** Open the Preview panel on tab `key` with the swing: a 3D unfold hinged at the point of the panel nearest
+ *  the chip the user clicked (reduced motion or the minimal tier: instant). */
+function swingOutPreview(key: string, from: HTMLElement | null): void {
+  const fromRect = from?.getBoundingClientRect() ?? null;
+  const wasOpen = previewOpen;
+  if (!wasOpen) openPreview({ reveal: key });
+  else switchPrevLane(key);
+  curtainEntries = dropCurtain(curtainEntries, key);
+  paintCurtainChip();
+  // The phone mirror photographs on-screen pixels, so the agent's page reaches connected phones once it is
+  // actually shown (it no-ops without a live share).
+  if (key === "agent" && prevPathByLane.agent) schedulePhoneAutoSend(prevPathByLane.agent);
+  for (const b of document.querySelectorAll<HTMLElement>(".prev-tab")) if (b.dataset.lane === key) { b.focus({ preventScroll: true }); break; }
+  const panel = $("#preview") as HTMLElement | null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (wasOpen || !panel || motion === "still") return;
+  const o = swingOrigin(fromRect, panel.getBoundingClientRect());
+  panel.style.setProperty("--pcur-ox", `${o.x}px`);
+  panel.style.setProperty("--pcur-oy", `${o.y}px`);
+  panel.style.setProperty("--pcur-ms", `${CURTAIN.swingMs}ms`);
+  // The class stays until closePreview: removing it would hand animation-name back to .kg's slideInR, which
+  // restarts that animation (a second entrance right after the swing).
+  panel.classList.add("pcur-swing");
+  if (motion === "calm") panel.classList.add("pcur-calm");
+}
+/** The fleet card's / orbit spoke's mini chip (FleetGridDeps / FleetOrbitDeps.openLanePreview). */
+function openLanePreviewFrom(laneId: string, from: HTMLElement | null): void {
+  const id = laneTabId(laneId);
+  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setLaneMini(laneId, null); return; } // the tab was closed or evicted
+  swingOutPreview(id, from);
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
@@ -10416,7 +10660,7 @@ function openFigmaForm(): void {
       const res = await bridge.figmaImport(url, pat || undefined).catch(() => null);
       if (res && res.path) {
         fileName = res.fileName ?? "the design";
-        onPreviewAvailable(res.path); // open + load the design board in the Preview panel
+        onPreviewAvailable(res.path, { open: true }); // you asked for it: load the design board, then swing the panel out (P-PREVIEW-CURTAIN.1)
         modal.innerHTML = figmaNextStepsHtml(res); // guided next step (review / DESIGN.md)
       } else {
         status(res?.error ?? "Couldn't import. Check the file URL and token.", true);
@@ -10611,6 +10855,9 @@ function switchPrevLane(l: PrevLane): void {
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
   applyDeviceScale(); syncPreviewZoomControls(); sendPreviewZoomMode();
   syncPreviewCanvas();
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): a tab the curtain loaded while the panel was closed laid out at no size
+  // (a canvas app sized itself to 0x0); its first real reveal reloads it at the size it is shown at.
+  if (previewOpen && curtainHiddenLoads.delete(l) && prevPathByLane[l]) loadPreview(prevPathByLane[l]!, l);
 }
 // ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
 // Review a PWA / mobile / responsive layout at real device sizes. Applies to BOTH lanes; the visible frame is
@@ -10820,6 +11067,14 @@ function dropLaneTabFrame(tabId: string): void {
   delete prevKindByLane[tabId];
   prevZoomByLane.delete(tabId);
   prevWheelZoomByLane.delete(tabId);
+  // P-PREVIEW-CURTAIN.1: the invitations to this tab go with it, unless a newer write is still behind the
+  // curtain (that one re-creates the tab if it renders).
+  curtainHiddenLoads.delete(tabId);
+  if (!curtainRuns.has(tabId)) {
+    curtainEntries = dropCurtain(curtainEntries, tabId);
+    if (tabId.startsWith("lane:")) setLaneMini(tabId.slice(5), null);
+    paintCurtainChip();
+  }
 }
 /** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
  *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
@@ -10834,20 +11089,27 @@ function closeLaneTab(tabId: string): void {
   renderPrevTabs();
 }
 /** P-PREVIEW.10 entry (threaded into fleet_grid as the previewLaneFile dep): a lane wrote a previewable
- *  file. Upsert its tab, load the file through the normal serve path, and badge the preview rail icon
- *  (the agent-dot pattern). NEVER steals the user's current tab: only when the panel is CLOSED does it
- *  auto-open on the lane tab - mirroring onPreviewAvailable's auto-show. */
+ *  file. P-PREVIEW-CURTAIN.1 (ADR-0621): it passes the curtain gate first (the lane's fleet card and orbit
+ *  spoke show the mini loading chip meanwhile). Only a page that renders upserts the lane's tab, loads it
+ *  through the normal serve path in the background, badges the rail icon and turns the mini chip into a
+ *  clickable "Preview"; a blank or failed page leaves no tab and no chip. NEVER opens the panel and never
+ *  steals the user's current tab. */
 export function previewShowLaneFile(laneId: string, laneName: string, path: string): void {
   if (!laneId || !path) return;
   const id = laneTabId(laneId);
-  const prior = prevLaneTabs;
-  prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
-  for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
-  renderPrevTabs();
-  ensureLaneTabFrame(id);
-  loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
-  const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
-  if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
+  curtainBegin(id, path);
+  curtainGate(id, path, (r) => {
+    if (r.verdict !== "ready") { curtainRetire(id, path, r); return; }
+    const prior = prevLaneTabs;
+    prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
+    for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
+    renderPrevTabs();
+    ensureLaneTabFrame(id);
+    loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
+    if (previewOpen) curtainHiddenLoads.delete(id); else curtainHiddenLoads.add(id);
+    const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+    curtainReady(id, path, r, false);
+  });
 }
 /** P-ASKLUCID.9 (ADR-0600): show an image Ask Lucid edited in the Preview's own "Ask Lucid" tab: the lane-tab
  *  pattern (its own iframe, loaded through the normal serve route), opened and focused because the user just
@@ -16594,6 +16856,7 @@ async function runGoalLoop(
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
     if (owner !== turnViewEpoch) return;
+    vizBus.emit("main", "chat", e); // P-VIZ.1 (ADR-0622): a /goal loop is Main working too
     if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
     else if (e.type === "goal-iter") {
       buf = "";
@@ -18784,6 +19047,7 @@ function wire(): void {
     openSkills: (anchor) => openSkillDropdown(anchor),
     openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the card's mini chip
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
     // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
@@ -18849,6 +19113,7 @@ function wire(): void {
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the spoke's mini chip
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
@@ -18928,6 +19193,12 @@ function wire(): void {
   // P-FLEET.L5: the reviewable timeline dock.
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
+  // P-VIZ.1 (ADR-0622): Visualize. The hub's "Stop the main turn" is the composer's own Stop path.
+  initViz({
+    fleetStatus: bridge.fleetStatus, fleetWatch: bridge.fleetWatch, fleetCancel: bridge.fleetCancel, fleetStop: bridge.fleetStop,
+    fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
+  });
+  $("#ctViz")?.addEventListener("click", () => toggleViz());
 
   // settings page actions (delegated)
   initSettingsChrome(); // P-SETUX.1 (ADR-0615): close, layout, nav, search, scrim, Esc, focus trap
@@ -20084,6 +20355,11 @@ function newSession(force = false): void {
 function resetAgentPreviewLane(): void {
   ++agentPreviewRevision; // Invalidate pending probes even when the lane is already empty.
   pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1: the agent's page behind the curtain belongs to the conversation that ended too.
+  curtainRuns.get("agent")?.();
+  curtainHiddenLoads.delete("agent");
+  curtainEntries = dropCurtain(curtainEntries, "agent");
+  paintCurtainChip();
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",
     agent: prevPathByLane.agent ?? "",

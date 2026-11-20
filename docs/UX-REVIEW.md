@@ -32,12 +32,12 @@ Settings as it exists on master and say which ones the rework closes.
 | Surface | Count | Evidence |
 |---|---|---|
 | Title bar controls in markup | 17 (model, repo, Persona, Skills, Datasets/Knowledge, More, CUI, Search, zoom out, zoom level, zoom in, Agent tier, Ask Lucid, Stage, 3 window) | `app.ts:438-470` |
-| Title bar controls visible on a fresh install | 9 (model, Knowledge, 3 zoom, Ask Lucid, 3 window) | `app.ts:438-470`, `13939-13980` |
+| Title bar controls visible on a fresh install | 9 at baseline; 6 after ADR-0620 (model, zoom magnifier, Ask Lucid, 3 window). Skills shows only while a skill is active, Datasets only for AskSage | `app.ts:438-470`, `13939-13980` |
 | Left rail buttons in markup | 19 | `app.ts:475-496` |
 | Left rail buttons visible by default | 16 (17 in a Creator build) | `#railRemote`, `#railStudio`, `#railLogs` hidden |
 | Left rail buttons with a visible text label | 0 | all `data-tip` only, no `aria-label` |
 | Sessions sidebar controls | 6 (workspace bar, new, collapse, search, agent-sessions toggle, resizer) | `app.ts:500-511` |
-| Composer toolbar buttons | 5 (Add, Dictate, Voice, Fleet, Timeline); 4 when policy hides Add; plus 3 conditional | `app.ts:555-575` |
+| Composer toolbar buttons | 5 at baseline; 6 after ADR-0622 (Add, Dictate, Voice, Fleet, Timeline, Visualize; the titlebar gave up 3 visible controls in the same change); 5 when policy hides Add; plus 3 conditional | `app.ts:555-575` |
 | Inspector tabs | 2 (Security, Memory) + Resources in Creator builds + collapse | `app.ts:585-592` |
 | Metrics rail tiles | 6 always (savings, avg/turn, context, turns, findings, quarantd) + up to 3 conditional | `renderMetricsRail()`, `app.ts:4246-4276` |
 | Settings cards in `settingsShell()` | 25 titled cards always, 27 when both conditional cards render, + 1 headerless note = 28 entries | `app.ts:6809-6842` |
@@ -64,11 +64,12 @@ Every overlay a PR adds names its tier here. Settings currently has no tier: it 
 
 | Tier | z-index | Selectors (styles.css line) |
 |---|---|---|
-| Content | auto | `.settings` column (3689), Skills/Knowledge/Meetings asides, inspector |
+| Content | auto, 26 | Skills/Knowledge/Meetings asides, inspector; `#prevCurtain` preview chip at 26 inside `main.center` (ADR-0621) |
 | Dock | 55 | `.share-dock` / `#fleetDock.fleet-dock` (5471) |
 | Side panel | 90 | `.ide-panel` (5052) |
-| Full-screen view | 92 | `.orbit-view` Fleet Orbit (7005) |
+| Full-screen view | 92, 93 | `.orbit-view` Fleet Orbit (7005); `#vizView` Visualize (93, ADR-0622) |
 | Popover | 95, 96 | `.popover` (2918), `.vdock` voice panel (3202) |
+| Settings | 97, 98 | `#setScrim`, `#settings` window or panel (ADR-0615); popovers opened from Settings lift to 99 |
 | Palette | 100, 101 | `#scrim` (2885), `.palette` (2889) |
 | Sheet | 110, 111, 115, 120, 121 | `.fb-scrim`/`.fb` (4935-4939), `.plg-layer` (1975), `#toasts` (3004), `.dod-scrim`/`.fb.dod` (5657) |
 | Coach | 142 | `.coach-card` tour (3572) |

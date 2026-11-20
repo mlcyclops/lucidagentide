@@ -180,6 +180,14 @@ const RAW: Record<string, string> = {
   // a chain link (copy invite link)
   link: P("M9.5 14.5a3.5 3.5 0 0 1 0-5l2-2a3.5 3.5 0 0 1 5 5l-1 1")
     + P("M14.5 9.5a3.5 3.5 0 0 1 0 5l-2 2a3.5 3.5 0 0 1-5-5l1-1"),
+  // P-VIZ.1 (ADR-0622): Visualize - a core with a tilted orbit and two satellites riding it
+  visualize: P("M12 9.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z")
+    + "<ellipse cx='12' cy='12' rx='9' ry='4.2' transform='rotate(-25 12 12)'/>"
+    + "<circle cx='20.1' cy='8.2' r='1.3' fill='currentColor' stroke='none'/>"
+    + "<circle cx='3.9' cy='15.8' r='1.1' fill='currentColor' stroke='none'/>",
+  // record (a ring around a filled dot) and play (a triangle)
+  record: "<circle cx='12' cy='12' r='7.5'/><circle cx='12' cy='12' r='3.6' fill='currentColor' stroke='none'/>",
+  play: P("M8.5 5.8v12.4l10-6.2z"),
 };
 
 // Action glyphs that read as "do something now" - they get the .ic-action hook

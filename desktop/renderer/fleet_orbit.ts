@@ -31,8 +31,10 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
+import { miniChipHtml, miniChipTip, type LaneMini } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
 import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0539)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
+import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the header's Visualize swaps to the 3D view
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
@@ -53,6 +55,9 @@ export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   repoGithub: LucidBridge["repoGithub"];
   repoContext: LucidBridge["repoContext"];
   openUrl: (url: string) => void;
+  /** P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's ready mini "Preview" chip was clicked; swing the Preview panel
+   *  out on this lane's tab, from `from` (the orbit closes right after, since it covers the panel). */
+  openLanePreview?: (laneId: string, from: HTMLElement) => void;
   /** The P-FLEET.L8 attach/release pair, owned by app.ts (thread park/seed lives there). */
   promoteLane: (laneId: string) => void;
   demoteLane: () => void;
@@ -826,6 +831,7 @@ function buildView(): HTMLElement {
       <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and agents as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
       <button class="btn-mini orbit-btn" data-orbit-hubterm data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 13)} Classic hub</button>
       <button class="btn-mini orbit-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything on this map. He can read what is on your screen, every agent and the orbit goal, and he opens on top of this view.">${icon("spark", 13)} Ask Lucid</button>
+      <button class="btn-mini orbit-btn" data-orbit-viz data-tip="Visualize|This same hub and its agents in 2D or 3D, with their subagents and estimated tokens flowing between them. Close it to come back to this map.">${icon("visualize", 13)} Visualize</button>
       <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with their own composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
       <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens instead of the grid. The grid header has the same pin to switch back."></button>
       <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The agents keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
@@ -882,6 +888,8 @@ function onViewClick(ev: Event): void {
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
+  // P-VIZ.1 (ADR-0622): swap to the 3D view of the same fleet; closing it brings this map back.
+  if (t.closest("[data-orbit-viz]")) { closeFleetOrbit(); openViz({ onClose: openFleetOrbit }); return; }
   const hubBtn = t.closest("[data-orbit-hubterm]") as HTMLButtonElement | null; // P-TUI.2
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-orbit-goal]")) { togglePanel("goal"); return; }
@@ -896,6 +904,13 @@ function onViewClick(ev: Event): void {
   if (deny) { void answer(deny.dataset.orbitDeny!, false); return; }
   const respawn = t.closest("[data-orbit-respawn]") as HTMLElement | null;
   if (respawn) { void deps?.fleetRespawn(respawn.dataset.orbitRespawn!); window.setTimeout(() => void refresh(false), 400); return; }
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready mini chip opens the lane's preview, never a takeover. The orbit
+  // covers the panel, so it closes once the swing has its origin.
+  const preview = t.closest("[data-orbit-preview]") as HTMLElement | null;
+  if (preview) {
+    if (preview.dataset.phase === "ready" && deps?.openLanePreview) { deps.openLanePreview(preview.dataset.orbitPreview!, preview); closeFleetOrbit(); }
+    return;
+  }
   // P-FLEET.L20: the node's own close. Checked BEFORE the card, or the X would also be a takeover click.
   const close = t.closest("[data-orbit-stop]") as HTMLElement | null;
   if (close) { void closeSpoke(close.dataset.orbitStop!, close.dataset.act === "dismiss" ? "dismiss" : "stop"); return; }
@@ -1136,7 +1151,7 @@ function buildNode(lane: LaneView): HTMLElement {
   const card = el(`<div class="orbit-node" data-lane-id="${esc(lane.id)}" role="button" tabindex="0" style="--fd:${(Math.abs(hash(lane.id)) % 40) / 10}s;--fdur:${5 + (Math.abs(hash(lane.id)) % 3)}s">
     <div class="orbit-node-float">
       <div class="orbit-node-card">
-        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
+        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="pcur-mini" data-orbit-preview="${esc(lane.id)}" type="button" hidden></button><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
         <div class="orbit-glance"></div>
         <div class="repo-chip orbit-repo" hidden></div>
         <div class="orbit-meta"><span class="spoke-repo-tag orbit-repo-tag"></span><span class="orbit-model"></span></div>
@@ -1197,6 +1212,28 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   const x = card.querySelector("[data-orbit-stop]") as HTMLElement;
   const step = spokeClose(lane.status);
   if (x.dataset.act !== step.act) { x.dataset.act = step.act; x.setAttribute("aria-label", step.label); x.dataset.tip = step.tip; }
+  paintSpokeMini(card, lane.id); // P-PREVIEW-CURTAIN.1
+}
+
+// P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's mini "Preview" chip, the same one the fleet card carries.
+// app.ts owns the verdict; a blank or failed page leaves no entry, so the spoke shows nothing.
+const spokePreviews = new Map<string, LaneMini>();
+export function paintSpokePreview(laneId: string, v: LaneMini | null): void {
+  if (v) spokePreviews.set(laneId, v); else spokePreviews.delete(laneId);
+  const card = nodes.get(laneId)?.card;
+  if (card) paintSpokeMini(card, laneId);
+}
+function paintSpokeMini(card: HTMLElement, laneId: string): void {
+  const btn = card.querySelector("[data-orbit-preview]") as HTMLElement | null; if (!btn) return;
+  const v = spokePreviews.get(laneId);
+  btn.hidden = !v || !deps?.openLanePreview;
+  if (!v || (btn.dataset.phase === v.phase && btn.dataset.label === v.label)) return;
+  btn.dataset.phase = v.phase; btn.dataset.label = v.label;
+  btn.innerHTML = miniChipHtml(v.phase);
+  const t = miniChipTip(v);
+  btn.setAttribute("aria-label", t.aria);
+  btn.setAttribute("aria-disabled", String(v.phase !== "ready"));
+  setTip(btn, t.title, t.desc);
 }
 
 function setText(root: HTMLElement, sel: string, text: string): void {

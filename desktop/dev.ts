@@ -3967,8 +3967,27 @@ return Bun.serve({
       // published it to a guest as a permanent snapshot. One `stat`, no read, no inlining.
       if (p === "/api/preview/probe") {
         const target = (url.searchParams.get("path") ?? "").trim();
+        // P-PREVIEW-CURTAIN.1 (ADR-0621): a LOOPBACK dev server (the agent's `npm run dev`) is asked too, only
+        // when the curtain says so (`remote=1`), so "connection refused" or an HTTP error never reaches the
+        // screen. Loopback only: anything else is the egress gate's business, and this answers with a status
+        // and a length, never the body.
+        if (url.searchParams.get("remote") === "1" && /^https?:\/\//i.test(target)) {
+          let host = "";
+          try { host = new URL(target).hostname.toLowerCase(); } catch { /* not a URL */ }
+          if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") return json({ ok: true, data: { resolves: false, error: "not a loopback URL" } });
+          try {
+            // Redirects are NOT followed: a loopback hop to a remote host would be engine egress. A 3xx counts
+            // as answering (the frame follows it under the egress rules it always had), with no length.
+            const res = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(3000) });
+            if (res.status >= 400) return json({ ok: true, data: { resolves: false, status: res.status, error: `HTTP ${res.status}` } });
+            const bytes = res.ok ? (await res.arrayBuffer()).byteLength : undefined;
+            return json({ ok: true, data: { resolves: true, kind: "remote", status: res.status, ...(bytes === undefined ? {} : { bytes }) } });
+          } catch {
+            return json({ ok: true, data: { resolves: false, error: "connection refused or timed out" } });
+          }
+        }
         const r = probePreviewFile(target);
-        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind } : { resolves: false, error: r.error } });
+        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind, bytes: r.bytes } : { resolves: false, error: r.error } });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits

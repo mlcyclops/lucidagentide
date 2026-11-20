@@ -1549,6 +1549,10 @@ export interface LucidBridge {
   // preview with HTTP 200 and a human-readable HTML body, so the client cannot tell a rendered app from a
   // rendered failure; this is that missing signal, and it costs one `stat` (no read, no asset inlining).
   previewProbe(path: string): Promise<boolean>;
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the same probe with its detail (kind, size, HTTP status) for the loading
+  // curtain. `remote` asks the engine to reach a LOOPBACK URL (a dev server). Fail-closed: no answer reads
+  // as { resolves: false }.
+  previewProbeInfo(path: string, remote?: boolean): Promise<{ resolves: boolean; kind?: string; bytes?: number; status?: number; error?: string }>;
   // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
@@ -2519,6 +2523,17 @@ export const bridge: LucidBridge = {
     const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}`);
     const r = d as { resolves?: unknown } | null;
     return r?.resolves === true;
+  },
+  previewProbeInfo: async (path, remote) => { // P-PREVIEW-CURTAIN.1 (ADR-0621)
+    const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}${remote ? "&remote=1" : ""}`);
+    const r = (d ?? {}) as { resolves?: unknown; kind?: unknown; bytes?: unknown; status?: unknown; error?: unknown };
+    return {
+      resolves: r.resolves === true,
+      ...(typeof r.kind === "string" ? { kind: r.kind } : {}),
+      ...(typeof r.bytes === "number" ? { bytes: r.bytes } : {}),
+      ...(typeof r.status === "number" ? { status: r.status } : {}),
+      ...(typeof r.error === "string" ? { error: r.error } : d ? {} : { error: "the engine did not answer" }),
+    };
   },
   // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
   // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same

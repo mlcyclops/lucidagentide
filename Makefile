@@ -1699,3 +1699,9 @@ demo-P-METRICS.1: ## P-METRICS.1 (ADR-0561): long-term download and clone tracki
 .PHONY: demo-P-SETUX.1
 demo-P-SETUX.1: ## P-SETUX.1 (ADR-0615..0619): Settings is a categorized window (opt-in side panel) above every panel, every UI button deep-links to its card (Workspace bar lands on Workspace), an Overview of what is connected, an official-vendor-only MCP Quick connect catalog (org list under managed policy), the UX PR gate, the Creator icon family and no em dash in either shortcut hover description
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/settings_nav.test.ts desktop/renderer/mcp_catalog.test.ts desktop/managed_config.test.ts tools/ux_pr_gate.test.ts desktop/build/electron-builder.creator.test.ts desktop/ask_lucid_features.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-PREVIEW-CURTAIN.1
+demo-P-PREVIEW-CURTAIN.1: ## P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain chip and never show the user a blank or errored page; a ready chip swings the panel out on the preview's own tab; mini chips on fleet cards and orbit spokes; a body-less page keeps the inspect bridge whole
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/preview_bridge.test.ts desktop/preview_file.test.ts desktop/renderer/preview_tabs.test.ts desktop/renderer/preview_session.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.1
+demo-P-VIZ.1: ## P-VIZ.1 (ADR-0622): Visualize, a three.js view of Main, agents and subagents with est. tok/s token flow, surges, power-down effects, 2D/3D, record and play back, throttled by the perf tier. Rendering is checked in a browser with ?vizDemo=1
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
