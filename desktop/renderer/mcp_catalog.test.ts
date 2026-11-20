@@ -49,6 +49,42 @@ describe("MCP_COMMUNITY_CATALOG", () => {
   });
 });
 
+// ADR-0638: the email and calendar servers each vendor hosts on its own domain.
+describe("Email and calendar category", () => {
+  const email = MCP_COMMUNITY_CATALOG.filter((e) => e.category === "email");
+  const host = (id: string) => new URL(email.find((e) => e.id === id)!.url).hostname;
+
+  test("has its own label and lists the verified vendor servers", () => {
+    expect(MCP_CATEGORY_LABEL.email).toBe("Email and calendar");
+    expect(email.map((e) => e.id).sort()).toEqual(
+      ["cal-com", "calendly", "fastmail", "gmail", "google-calendar", "microsoft-365", "nylas", "superhuman-mail"],
+    );
+  });
+
+  test("every endpoint sits on the vendor's own domain", () => {
+    expect(host("gmail")).toBe("gmailmcp.googleapis.com");
+    expect(host("google-calendar")).toBe("calendarmcp.googleapis.com");
+    expect(host("microsoft-365")).toBe("workiq.svc.cloud.microsoft");
+    expect(host("fastmail")).toBe("api.fastmail.com");
+    expect(host("superhuman-mail")).toBe("mcp.mail.superhuman.com");
+    expect(host("nylas")).toBe("mcp.us.nylas.com");
+    expect(host("calendly")).toBe("mcp.calendly.com");
+    expect(host("cal-com")).toBe("mcp.cal.com");
+    for (const e of email) expect(catalogEntryIsOfficial(e)).toBe(true);
+  });
+
+  test("look-alikes of the email vendors are rejected", () => {
+    const gmail = email.find((e) => e.id === "gmail")!;
+    const ms = email.find((e) => e.id === "microsoft-365")!;
+    const fm = email.find((e) => e.id === "fastmail")!;
+    expect(catalogEntryIsOfficial({ ...gmail, url: "https://gmailmcp.googleapis.com.evil.io/mcp/v1" })).toBe(false);
+    expect(catalogEntryIsOfficial({ ...gmail, url: "https://gmail-mcp.com/mcp" })).toBe(false);
+    expect(catalogEntryIsOfficial({ ...ms, url: "https://workiq.svc.cloud.microsoft.evil.io/mcp" })).toBe(false);
+    expect(catalogEntryIsOfficial({ ...ms, url: "https://workiq.svc.evilcloud.microsoft/mcp" })).toBe(false);
+    expect(catalogEntryIsOfficial({ ...fm, docsUrl: "https://fastmail-help.com/mcp" })).toBe(false);
+  });
+});
+
 describe("catalogEntryIsOfficial rejects look-alikes", () => {
   test("the base entry passes (subdomains of an official domain)", () => {
     expect(catalogEntryIsOfficial(BASE)).toBe(true);

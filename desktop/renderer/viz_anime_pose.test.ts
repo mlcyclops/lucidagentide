@@ -3,6 +3,7 @@
 
 // desktop/renderer/viz_anime_pose.test.ts - P-VIZ.3 (ADR-0624): the anime mini Lucid's pose library, clips,
 // interpolation math, emotion selection, blink and gaze bucketing, effect timing and the look mapping.
+// P-VIZ.6 (ADR-0637): the seeded gender, the charge (bolt, energy balls, Storm) and the hit reactions.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -12,6 +13,11 @@ import {
   POSE_LEN, POSE_VECTORS, POSES, RAGE_IN_S, RAGE_OUT_S, REACT_TURN_OUT_S, sampleClip, sampleReaction, shakeLevel, SLOW_BLINK_S, smoothEase,
   STARE_HOLD_MAX_S, STARE_HOLD_MIN_S, STARE_TURN_IN_S, stateEmotion, STILL_T, STOMP_AT_S, SUPERVISE_TICK_AT, SURPRISE_S, tapCurve, tempoFor,
   transitionShot, YELL_S, type ClipName, type ClipSample, type EmotionName, type KiBall, type Reaction, type ReactionKind, type ReactionSample,
+} from "./viz_anime_pose.ts";
+import {
+  addBoost, animeHitCharge, BOLT_S, chargeLevel, chargeTempo, decayCharge, DRINK_CHARGE, DRINK_S, HIT_BLEND_S, HIT_CLIPS, HIT_KINDS, HIT_OUT_S,
+  HIT_TURN_S, newCharge, newHitSample, ORB_DECAY_S, ORB_MAX, orbScale, planHit, sampleHit, seededGender, STAR_CHAIN_S, type AnimeHit, type Charge,
+  type HitPlan, type HitSample,
 } from "./viz_anime_pose.ts";
 import { lookFor, MINI_ACTIVITIES, relativeLuminance } from "./viz_mini_look.ts";
 
@@ -482,5 +488,257 @@ describe("reactions: turning to the camera", () => {
     expect(sum()).toBeCloseTo(0.5, 5);
     distributeYaw(Number.NaN, out);
     expect([...out]).toEqual([0, 0, 0, 0, 0]);
+  });
+});
+
+// ------------------------------------------------------------------------------------------ P-VIZ.6 (ADR-0637)
+
+/** viz_scene's node seed: the id hashed the same way. */
+const idSeed = (id: string): number => {
+  let s = 7;
+  for (let i = 0; i < id.length; i++) s = (s * 31 + id.charCodeAt(i)) >>> 0;
+  return s;
+};
+const NODE_IDS = Array.from({ length: 2000 }, (_, i) =>
+  i % 3 === 0 ? `agent-${i}` : i % 3 === 1 ? `sub:${i}:task-${(i * 7919) % 1000}` : `${((i * 2654435761) >>> 0).toString(16)}-lane`);
+const hsample = (p: HitPlan, t: number, pose?: Float32Array): HitSample => sampleHit(p, t, newHitSample(), pose);
+/** Decay `c` over `secs` in frame-sized steps. */
+const decayFor = (c: Charge, secs: number, dt = 1 / 60): Charge => {
+  const n = Math.round(secs / dt);
+  for (let i = 0; i < n; i++) decayCharge(c, dt);
+  return c;
+};
+
+describe("P-VIZ.6: who a node is", () => {
+  test("a node's gender is stable for its id and about half and half over a fleet", () => {
+    let female = 0;
+    for (const id of NODE_IDS) {
+      const g = seededGender(idSeed(id));
+      expect(seededGender(idSeed(id))).toBe(g);
+      if (g === "female") female++;
+    }
+    expect(female / NODE_IDS.length).toBeGreaterThan(0.42);
+    expect(female / NODE_IDS.length).toBeLessThan(0.58);
+    // consecutive seeds mix too (a figure built without a node seed falls back to an instance counter)
+    expect(new Set(Array.from({ length: 16 }, (_, i) => seededGender(i + 1))).size).toBe(2);
+    expect(seededGender(Number.NaN)).toBe(seededGender(0));
+  });
+});
+
+describe("P-VIZ.6: charge", () => {
+  test("a bolt supercharges to 1 and is fully gone by BOLT_S; a drink is 0.6 and gone by DRINK_S", () => {
+    const c = animeHitCharge(newCharge(), "bolt", 1);
+    expect(chargeLevel(c)).toBe(1);
+    decayFor(c, BOLT_S - 1);
+    expect(chargeLevel(c)).toBeGreaterThan(0);
+    expect(chargeLevel(c)).toBeLessThan(0.1);
+    decayFor(c, 1.5);
+    expect(chargeLevel(c)).toBe(0);
+    expect(c.boostRate).toBe(0);
+    decayFor(c, 30); // and it stays at 0: no drift below it, no NaN
+    expect(chargeLevel(c)).toBe(0);
+    const d = addBoost(newCharge(), DRINK_CHARGE, DRINK_S);
+    expect(chargeLevel(d)).toBeCloseTo(0.6, 9);
+    decayFor(d, DRINK_S / 2);
+    expect(chargeLevel(d)).toBeCloseTo(0.3, 2);
+    decayFor(d, DRINK_S / 2 + 0.1);
+    expect(chargeLevel(d)).toBe(0);
+  });
+
+  test("energy balls stack to ORB_MAX (+12 percent), a third of the charge each, and wear off over ORB_DECAY_S", () => {
+    const c = animeHitCharge(newCharge(), "orb", 1);
+    expect(chargeLevel(c)).toBeCloseTo(1 / 3, 9);
+    expect(orbScale(c)).toBeCloseTo(1.04, 9);
+    for (let i = 0; i < 10; i++) animeHitCharge(c, "orb", 1);
+    expect(c.orbs).toBe(ORB_MAX);
+    expect(orbScale(c)).toBeCloseTo(1.12, 9);
+    expect(chargeLevel(c)).toBe(1);
+    decayFor(c, ORB_DECAY_S / 2);
+    expect(orbScale(c)).toBeGreaterThan(1.05);
+    expect(orbScale(c)).toBeLessThan(1.07);
+    decayFor(c, ORB_DECAY_S / 2 + 0.5);
+    expect(c.orbs).toBe(0);
+    expect(orbScale(c)).toBe(1);
+    expect(chargeLevel(c)).toBe(0);
+  });
+
+  test("a weaker or shorter boost never cuts a running one short; a stronger one takes over", () => {
+    const c = animeHitCharge(newCharge(), "bolt", 1);
+    decayFor(c, 2);
+    const before = chargeLevel(c);
+    addBoost(c, DRINK_CHARGE, DRINK_S);
+    expect(chargeLevel(c)).toBeCloseTo(before, 9);
+    decayFor(c, 12.5); // the bolt had 13 s left
+    expect(chargeLevel(c)).toBeGreaterThan(0);
+    const d = addBoost(newCharge(), DRINK_CHARGE, DRINK_S);
+    decayFor(d, 10);
+    animeHitCharge(d, "bolt", 1);
+    expect(chargeLevel(d)).toBe(1);
+    decayFor(d, BOLT_S - 1);
+    expect(chargeLevel(d)).toBeGreaterThan(0);
+    // nonsense in, nothing changes
+    const e = addBoost(newCharge(), 0.5, 5);
+    addBoost(e, Number.NaN, 5);
+    addBoost(e, 1, 0);
+    decayCharge(e, Number.NaN);
+    decayCharge(e, -3);
+    expect(chargeLevel(e)).toBeCloseTo(0.5, 9);
+  });
+
+  test("only the anime throwables (and the Storm) charge the anime figure; the tempo follows the charge", () => {
+    for (const k of ["paper", "band", "drink", "stars"] as const) expect(chargeLevel(animeHitCharge(newCharge(), k, 1))).toBe(0);
+    expect(chargeLevel(animeHitCharge(newCharge(), "storm", 1))).toBeCloseTo(0.5, 9);
+    expect(chargeLevel(animeHitCharge(newCharge(), "bolt", 0.4))).toBeCloseTo(0.4, 9);
+    expect(chargeTempo(0)).toBe(1);
+    expect(chargeTempo(0.5)).toBeCloseTo(1.4, 9);
+    expect(chargeTempo(1)).toBeCloseTo(1.8, 9);
+    expect(chargeTempo(5)).toBeCloseTo(1.8, 9);
+    expect(chargeTempo(Number.NaN)).toBe(1);
+  });
+});
+
+describe("P-VIZ.6: hits", () => {
+  const PLAYS = Object.keys(HIT_CLIPS) as AnimeHit[];
+
+  test("hit clips are one-shots: keys start at 0, ascend strictly, end inside the clip, outlast the turn and the hand-back", () => {
+    for (const n of PLAYS) {
+      const c = HIT_CLIPS[n];
+      expect(c.loop).toBe(false);
+      expect(c.keys[0]!.at).toBe(0);
+      for (let i = 1; i < c.keys.length; i++) expect(c.keys[i]!.at).toBeGreaterThan(c.keys[i - 1]!.at);
+      expect(c.keys[c.keys.length - 1]!.at).toBeLessThanOrEqual(c.len);
+      expect(c.len).toBeGreaterThan(HIT_OUT_S + HIT_TURN_S);
+    }
+  });
+
+  test("each throwable plays its own reaction; the office ones are a generic flinch; only the Storm does not turn", () => {
+    const plays = Object.fromEntries(HIT_KINDS.map((k) => [k, planHit(k, 1, null, 0, 0)]));
+    for (const k of ["paper", "band", "drink"]) expect(plays[k]!.play).toBe("flinch");
+    expect(plays.stars!.play).toBe("starBlockR");
+    expect(plays.bolt!.play).toBe("bolt");
+    expect(plays.orb!.play).toBe("orb");
+    expect(plays.storm!.play).toBe("storm");
+    for (const k of HIT_KINDS) expect(plays[k]!.turns).toBe(k !== "storm");
+    expect(HIT_CLIPS.flinch.len).toBeGreaterThanOrEqual(1.5);
+    expect(HIT_CLIPS.flinch.len).toBeLessThanOrEqual(2.5);
+    expect(HIT_CLIPS.storm.len).toBeGreaterThanOrEqual(2.5);
+    expect(HIT_CLIPS.storm.len).toBeLessThanOrEqual(3.5);
+  });
+
+  test("every hit ends cleanly: the weight eases back to 0 without a jump and the eyes go back to the activity's", () => {
+    const pose = new Float32Array(POSE_LEN);
+    for (const k of HIT_KINDS) {
+      const p = planHit(k, 1, null, 0, 0);
+      let prev = hsample(p, 0, pose);
+      expect(prev.body).toBe(1);
+      expect(prev.blend).toBe(0);
+      expect(prev.done).toBe(false);
+      expect(prev.emotion).not.toBeNull();
+      for (let t = 1 / 240; t < p.len + 0.1; t += 1 / 240) {
+        const s = hsample(p, t, pose);
+        for (const v of pose) expect(Number.isFinite(v)).toBe(true);
+        expect(s.body).toBeGreaterThanOrEqual(0);
+        expect(s.body).toBeLessThanOrEqual(1);
+        expect(Math.abs(s.body - prev.body)).toBeLessThan(0.05);
+        expect(Math.abs(s.turn - prev.turn)).toBeLessThan(0.1);
+        prev = s;
+      }
+      expect(hsample(p, p.len - 1e-4).body).toBeLessThan(1e-3);
+      expect(hsample(p, p.len - HIT_OUT_S * 0.4).emotion).toBeNull();
+      expect(hsample(p, p.len)).toEqual({ body: 0, blend: 1, turn: 0, emotion: null, aura: 0, crackle: 0, absorb: 0, shake: 0, done: true });
+      expect(hsample(p, Number.NaN).done).toBe(false); // a bad clock reads as the start, never a stuck end
+    }
+  });
+
+  test("throwing stars: block right, block left, catch the third with smug eyes; a late star starts a new chain", () => {
+    const a = planHit("stars", 1, null, 0, 0);
+    expect(a.play).toBe("starBlockR");
+    const b = planHit("stars", 1, a, 0.15, hsample(a, 0.15).turn);
+    expect(b.play).toBe("starBlockL");
+    const c = planHit("stars", 1, b, 0.15, hsample(b, 0.15).turn);
+    expect(c.play).toBe("starCatch");
+    expect(hsample(c, 1.0).emotion).toBe("smug");
+    expect(c.len).toBeCloseTo(2.2, 6);
+    // the arms alternate: the right forearm comes up first, then the left
+    const shR = jointOffset("shR"), shL = jointOffset("shL");
+    const pa = new Float32Array(POSE_LEN), pb = new Float32Array(POSE_LEN);
+    hsample(a, 0.3, pa);
+    hsample(b, 0.3, pb);
+    expect(pa[shR]!).toBeLessThan(pa[shL]!);
+    expect(pb[shL]!).toBeLessThan(pb[shR]!);
+    // long after the catch, or after another kind of hit, a star opens a new chain
+    expect(planHit("stars", 1, c, STAR_CHAIN_S + 0.5, 0).play).toBe("starBlockR");
+    expect(planHit("stars", 1, planHit("bolt", 1, null, 0, 0), 0.1, 0).play).toBe("starBlockR");
+  });
+
+  test("a hit landing mid-hit never leaves a stuck pose: the turn carries on, the clip blends in, the last one ends", () => {
+    let seed = 12345;
+    const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let run = 0; run < 60; run++) {
+      let plan: HitPlan | null = null;
+      const n = 2 + Math.floor(rnd() * 6);
+      for (let i = 0; i < n; i++) {
+        const kind = HIT_KINDS[Math.floor(rnd() * HIT_KINDS.length)]!;
+        const at = rnd() * 2.6; // seconds into the current hit when the next lands (it may have ended by then)
+        let live: HitPlan | null = null, prevTurn = 0;
+        if (plan) {
+          const s = hsample(plan, at);
+          if (!s.done) { live = plan; prevTurn = s.turn; }
+        }
+        const next = planHit(kind, 1, live, at, prevTurn);
+        const s0 = hsample(next, 0);
+        expect(s0.body).toBe(1);
+        expect(s0.blend).toBe(0); // it starts from the pose on screen
+        expect(s0.turn).toBeCloseTo(prevTurn, 9);
+        expect(hsample(next, HIT_BLEND_S).blend).toBe(1);
+        plan = next;
+      }
+      const last = plan!;
+      const end = hsample(last, last.len + 0.01);
+      expect(end.done).toBe(true);
+      expect(end.body).toBe(0);
+      expect(end.turn).toBe(0);
+      expect(end.emotion).toBeNull();
+    }
+  });
+
+  test("Storm: about 3 s of power-up to the sky, then the body is the interrupted activity's again", () => {
+    const p = planHit("storm", 1, null, 0, 0);
+    const pose = new Float32Array(POSE_LEN);
+    const mid = hsample(p, 1.5, pose);
+    expect(mid.body).toBe(1);
+    expect(mid.turn).toBe(0);
+    expect(mid.emotion).toBe("determined");
+    expect(mid.aura).toBeGreaterThan(0.5);
+    expect(pose[jointOffset("head")]!).toBeLessThan(-0.3); // face up to the sky
+    // the figure lays the hit over the activity by `body`: once it ends, what shows is the activity's own pose
+    const act = sample("typing", 2.0).pose;
+    const shown = new Float32Array(POSE_LEN);
+    for (const t of [p.len - HIT_OUT_S / 2, p.len, p.len + 1]) {
+      const s = hsample(p, t, pose);
+      for (let i = 0; i < POSE_LEN; i++) shown[i] = act[i]! + (pose[i]! - act[i]!) * s.body;
+      if (t >= p.len) expect([...shown]).toEqual([...act]);
+      else expect(s.body).toBeGreaterThan(0);
+    }
+  });
+
+  test("bolt: struck rigid with strain, a crackle and a shake, then the aura; orb: the ball between the hands, then the aura", () => {
+    const b = planHit("bolt", 1, null, 0, 0);
+    const b0 = hsample(b, 0.2);
+    expect(b0.emotion).toBe("strain");
+    expect(b0.crackle).toBeGreaterThan(0.9);
+    expect(b0.shake).toBeGreaterThan(0);
+    const b1 = hsample(b, 1.3);
+    expect(b1.aura).toBeGreaterThan(0.9);
+    expect(b1.crackle).toBe(0);
+    const o = planHit("orb", 1, null, 0, 0);
+    expect(hsample(o, 0.8).absorb).toBe(1);
+    expect(hsample(o, 0.8).emotion).toBe("calm");
+    expect(hsample(o, 2.0).absorb).toBe(0);
+    expect(hsample(o, 2.0).aura).toBeGreaterThan(0.9);
+    // strength scales the effects, not the choreography
+    const weak = planHit("bolt", 0.25, null, 0, 0);
+    expect(hsample(weak, 0.2).crackle).toBeCloseTo(0.25, 6);
+    expect(hsample(weak, 0.2).body).toBe(1);
   });
 });

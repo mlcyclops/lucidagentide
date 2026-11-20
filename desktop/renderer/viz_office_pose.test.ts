@@ -3,7 +3,8 @@
 
 // desktop/renderer/viz_office_pose.test.ts - P-VIZ.4 (ADR-0627): the office cast's poses, clips, activity and idle
 // mapping, reaction timelines, head-look math, effect timing and the outfit mapping; P-VIZ.5 (ADR-0631): the two
-// managers' looks, the seeded alternation schedule and the handover timeline.
+// managers' looks, the seeded alternation schedule and the handover timeline; P-VIZ.6 (ADR-0637): the mixed cast
+// of workers and the hit reactions.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -17,6 +18,11 @@ import {
   sampleOfficeClip, SEAT, STARE_MAX_S, STARE_MIN_S, stareHold, tapRate, zedAt,
   type Crt, type OfficeClipName, type OfficeClipSample, type OfficeEmotionName, type Paper, type ReactSample, type Zed,
 } from "./viz_office_pose.ts";
+import {
+  CAN_DROP_S, CAN_GRAB_S, FEMALE_HAIRS, longSleeves, MALE_HAIRS, newOfficeHitSample, OFFICE_HIT_CLIPS, officeHitCharge, officeHitPlay, PAPER_S,
+  planOfficeHit, sampleOfficeHit, STORM_PAPERS_AT, workerCast, type OfficeHit, type OfficeHitPlan, type OfficeHitSample, type WorkerTop,
+} from "./viz_office_pose.ts";
+import { chargeLevel, decayCharge, DRINK_S, HIT_BLEND_S, HIT_KINDS, HIT_OUT_S, HIT_TURN_S, newCharge, seededGender } from "./viz_anime_pose.ts";
 import { lookFor, MINI_ACTIVITIES, relativeLuminance } from "./viz_mini_look.ts";
 
 const sample = (name: OfficeClipName, t: number): { pose: Float32Array; info: OfficeClipSample } => {
@@ -437,5 +443,186 @@ describe("the manager on duty", () => {
     applyManagerSwap(step, { ...swapAt(0), stand: 1, gait: 1, phase: 0.25 });
     expect(step[hipL]! - STAND_POSE[hipL]!).toBeCloseTo(-(step[hipR]! - STAND_POSE[hipR]!), 6);
     expect(step[hipL]!).not.toBeCloseTo(STAND_POSE[hipL]!, 2);
+  });
+});
+
+// ------------------------------------------------------------------------------------------ P-VIZ.6 (ADR-0637)
+
+/** viz_scene's node seed: the id hashed the same way. */
+const idSeed = (id: string): number => {
+  let s = 7;
+  for (let i = 0; i < id.length; i++) s = (s * 31 + id.charCodeAt(i)) >>> 0;
+  return s;
+};
+const NODE_IDS = Array.from({ length: 2000 }, (_, i) =>
+  i % 3 === 0 ? `agent-${i}` : i % 3 === 1 ? `sub:${i}:task-${(i * 7919) % 1000}` : `${((i * 2654435761) >>> 0).toString(16)}-lane`);
+const INK_MOUTH = "#0a0a12";
+const hsample = (p: OfficeHitPlan, t: number, pose?: Float32Array): OfficeHitSample => sampleOfficeHit(p, t, newOfficeHitSample(), pose);
+
+describe("P-VIZ.6: the mixed cast", () => {
+  test("a worker's gender is stable per node, about half and half, and the same as the node's anime figure", () => {
+    let women = 0;
+    for (const id of NODE_IDS) {
+      const seed = idSeed(id);
+      const cast = workerCast(seed);
+      expect(workerCast(seed)).toEqual(cast);
+      expect(cast.gender).toBe(seededGender(seed));
+      if (cast.gender === "female") women++;
+    }
+    expect(women / NODE_IDS.length).toBeGreaterThan(0.42);
+    expect(women / NODE_IDS.length).toBeLessThan(0.58);
+  });
+
+  test("hairstyles and tops follow the gender, and every one of them turns up over a fleet", () => {
+    const hairs = new Set<string>(), tops = new Set<WorkerTop>();
+    for (const id of NODE_IDS) {
+      const c = workerCast(idSeed(id));
+      if (c.gender === "female") {
+        expect(FEMALE_HAIRS).toContain(c.hair);
+        expect(["blouse", "cardigan", "blazer"]).toContain(c.top);
+      } else {
+        expect(MALE_HAIRS).toContain(c.hair);
+        expect(["shirt", "sweater"]).toContain(c.top);
+      }
+      hairs.add(c.hair);
+      tops.add(c.top);
+    }
+    expect(hairs.size).toBe(MALE_HAIRS.length + FEMALE_HAIRS.length);
+    expect(tops.size).toBe(5);
+    expect(longSleeves("shirt") || longSleeves("blouse")).toBe(false);
+    expect(longSleeves("sweater") && longSleeves("cardigan") && longSleeves("blazer")).toBe(true);
+  });
+
+  test("worker looks: the women's lips are colored, the men's mouths ink; a long top goes over a lighter shirt or blouse", () => {
+    for (const color of ["#41ff8b", "#38bdf8", "#ff5a5a", "#9d8bff", "#000000"]) {
+      const mini = lookFor(color);
+      for (const id of NODE_IDS.slice(0, 300)) {
+        const seed = idSeed(id), cast = workerCast(seed), w = officeLook(mini, seed, "worker");
+        if (cast.gender === "female") expect(w.lip).not.toBe(INK_MOUTH);
+        else expect(w.lip).toBe(INK_MOUTH);
+        expect(w.tie).toBe(mini.accent);
+        if (longSleeves(cast.top)) expect(relativeLuminance(w.jacket)).toBeLessThan(relativeLuminance(w.shirt));
+      }
+    }
+    // the managers keep their own looks (the woman's rose lips)
+    expect(officeLook(lookFor("#38bdf8"), 3, "boss", "woman").lip).not.toBe(INK_MOUTH);
+    expect(officeLook(lookFor("#38bdf8"), 3, "boss", "man").lip).toBe(INK_MOUTH);
+  });
+});
+
+describe("P-VIZ.6: hits", () => {
+  const PLAYS = Object.keys(OFFICE_HIT_CLIPS) as OfficeHit[];
+
+  test("hit clips are one-shots: keys start at 0, ascend strictly, end inside the clip, outlast the turn and the hand-back", () => {
+    for (const n of PLAYS) {
+      const c = OFFICE_HIT_CLIPS[n];
+      expect(c.loop).toBe(false);
+      expect(c.keys[0]!.at).toBe(0);
+      for (let i = 1; i < c.keys.length; i++) expect(c.keys[i]!.at).toBeGreaterThan(c.keys[i - 1]!.at);
+      expect(c.keys[c.keys.length - 1]!.at).toBeLessThanOrEqual(c.len);
+      expect(c.len).toBeGreaterThan(HIT_OUT_S + HIT_TURN_S);
+    }
+  });
+
+  test("the office throwables play their own clips, the anime ones a flinch; only the Storm does not turn, only the drink charges", () => {
+    for (const k of ["paper", "band", "drink", "storm"] as const) expect(officeHitPlay(k)).toBe(k);
+    for (const k of ["stars", "bolt", "orb"] as const) expect(officeHitPlay(k)).toBe("flinch");
+    for (const k of HIT_KINDS) {
+      expect(planOfficeHit(k, 1, 0).turns).toBe(k !== "storm");
+      expect(chargeLevel(officeHitCharge(newCharge(), k, 1))).toBeCloseTo(k === "drink" ? 0.6 : 0, 9);
+    }
+    expect(OFFICE_HIT_CLIPS.paper.len).toBeCloseTo(2.0, 6);
+    expect(OFFICE_HIT_CLIPS.band.len).toBeCloseTo(1.8, 6);
+    expect(OFFICE_HIT_CLIPS.storm.len).toBeCloseTo(3.0, 6);
+  });
+
+  test("every hit ends cleanly: the weight eases back to 0 without a jump and the face goes back to the activity's", () => {
+    const pose = new Float32Array(OFFICE_POSE_LEN);
+    for (const k of HIT_KINDS) {
+      const p = planOfficeHit(k, 1, 0);
+      let prev = hsample(p, 0, pose);
+      expect(prev.body).toBe(1);
+      expect(prev.blend).toBe(0);
+      expect(prev.emotion).not.toBeNull();
+      for (let t = 1 / 240; t < p.len + 0.1; t += 1 / 240) {
+        const s = hsample(p, t, pose);
+        for (const v of pose) expect(Number.isFinite(v)).toBe(true);
+        expect(s.body).toBeGreaterThanOrEqual(0);
+        expect(s.body).toBeLessThanOrEqual(1);
+        expect(Math.abs(s.body - prev.body)).toBeLessThan(0.05);
+        expect(Math.abs(s.turn - prev.turn)).toBeLessThan(0.1);
+        prev = s;
+      }
+      expect(hsample(p, p.len - 1e-4).body).toBeLessThan(1e-3);
+      expect(hsample(p, p.len - HIT_OUT_S * 0.4).emotion).toBeNull();
+      expect(hsample(p, p.len)).toEqual({ body: 0, blend: 1, turn: 0, emotion: null, can: false, tilt: 0, papers: -1, shake: 0, done: true });
+    }
+  });
+
+  test("drink: the can is in hand from the catch to the fist pump, tipped up only to chug; energized after; the charge is gone by DRINK_S", () => {
+    const p = planOfficeHit("drink", 1, 0);
+    expect(hsample(p, CAN_GRAB_S - 0.01).can).toBe(false);
+    expect(hsample(p, CAN_GRAB_S).can).toBe(true);
+    expect(hsample(p, CAN_DROP_S - 0.01).can).toBe(true);
+    expect(hsample(p, CAN_DROP_S).can).toBe(false);
+    expect(hsample(p, 0.5).tilt).toBe(0);
+    expect(hsample(p, 1.1).tilt).toBe(1);
+    expect(hsample(p, 1.1).emotion).toBe("calm");
+    expect(hsample(p, 1.65).tilt).toBe(0);
+    expect(hsample(p, 2.0).emotion).toBe("energized");
+    const c = officeHitCharge(newCharge(), "drink", 1);
+    expect(chargeLevel(c)).toBeCloseTo(0.6, 9);
+    for (let i = 0; i < Math.round(DRINK_S * 60) + 6; i++) decayCharge(c, 1 / 60);
+    expect(chargeLevel(c)).toBe(0);
+  });
+
+  test("storm: papers fly off the pile, he ducks and holds the desk, then straightens up; no turn", () => {
+    const p = planOfficeHit("storm", 1, 0);
+    const spine = officeJointOffset("spine");
+    const pose = new Float32Array(OFFICE_POSE_LEN);
+    expect(hsample(p, STORM_PAPERS_AT / 2).papers).toBe(-1);
+    const fly = hsample(p, 0.5).papers;
+    expect(fly).toBeGreaterThan(0);
+    expect(fly).toBeLessThan(1);
+    expect(hsample(p, STORM_PAPERS_AT + PAPER_S + 0.01).papers).toBe(-1);
+    const duck = hsample(p, 0.8, pose);
+    expect(duck.emotion).toBe("strain");
+    expect(pose[spine]!).toBeGreaterThan(0.5);
+    hsample(p, 2.8, pose);
+    expect(Math.abs(pose[spine]!)).toBeLessThan(0.2);
+    for (let t = 0; t < p.len; t += 0.1) expect(hsample(p, t).turn).toBe(0);
+  });
+
+  test("a hit landing mid-hit never leaves a stuck pose: the turn carries on, the clip blends in, the last one ends", () => {
+    let seed = 777;
+    const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let run = 0; run < 60; run++) {
+      let plan: OfficeHitPlan | null = null;
+      const n = 2 + Math.floor(rnd() * 6);
+      for (let i = 0; i < n; i++) {
+        const kind = HIT_KINDS[Math.floor(rnd() * HIT_KINDS.length)]!;
+        const at = rnd() * 2.6;
+        let prevTurn = 0;
+        if (plan) {
+          const s = hsample(plan, at);
+          if (!s.done) prevTurn = s.turn;
+        }
+        const next = planOfficeHit(kind, 1, prevTurn);
+        const s0 = hsample(next, 0);
+        expect(s0.body).toBe(1);
+        expect(s0.blend).toBe(0);
+        expect(s0.turn).toBeCloseTo(prevTurn, 9);
+        expect(hsample(next, HIT_BLEND_S).blend).toBe(1);
+        plan = next;
+      }
+      const last = plan!;
+      const end = hsample(last, last.len + 0.01);
+      expect(end.done).toBe(true);
+      expect(end.body).toBe(0);
+      expect(end.turn).toBe(0);
+      expect(end.emotion).toBeNull();
+      expect(end.can).toBe(false);
+      expect(end.papers).toBe(-1);
+    }
   });
 });

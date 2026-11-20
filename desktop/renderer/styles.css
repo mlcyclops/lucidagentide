@@ -8439,6 +8439,30 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-tip[hidden]{display:none}
 .viz-tip b{color:var(--txt);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-tip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-VIZ.6 (ADR-0636): the throw tray, bottom center of the stage (z 2 like the legend and the ledger; the node
+   panel (5) and the player (6) cover it). One row that never wraps; the persona legend keeps to its left and the
+   idle caption sits above it. .on: the armed throwable. .cool: Storm in its cooldown. The ghost follows a drag. */
+.viz-throw{position:absolute;left:50%;bottom:14px;z-index:2;transform:translateX(-50%);display:flex;flex-wrap:nowrap;align-items:center;gap:6px;
+  max-width:260px;padding:4px 6px;border-radius:12px;white-space:nowrap;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  background:color-mix(in srgb,var(--bg-1) 86%,transparent);border:1px solid var(--line-soft);box-shadow:0 6px 18px rgb(0 0 0 / .22)}
+.viz-throw-b{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:28px;height:28px;padding:0 6px;border-radius:8px;
+  font:inherit;font-size:11px;font-weight:600;color:var(--txt-2);background:transparent;border:1px solid transparent;cursor:grab;touch-action:none}
+.viz-throw-b:hover{color:var(--txt);background:rgb(var(--accent-rgb) / .1)}
+.viz-throw-b.on{color:var(--txt);background:rgb(var(--accent-rgb) / .2);border-color:rgb(var(--accent-rgb) / .6)}
+.viz-throw-b:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-throw-b .ic{flex:none}
+.viz-throw-storm{cursor:pointer;padding:0 9px}
+.viz-throw-storm span{white-space:nowrap}
+.viz-throw-storm.cool{opacity:.5;cursor:default}
+.viz-throw-sep{flex:none;width:1px;height:18px;background:var(--line)}
+.viz-throw-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.viz-throw-ghost{position:absolute;left:0;top:0;z-index:4;display:grid;place-items:center;width:28px;height:28px;border-radius:50%;pointer-events:none;
+  color:var(--txt);background:color-mix(in srgb,var(--bg-1) 70%,transparent);border:1px solid var(--line);opacity:.85}
+.viz-throw-ghost[hidden]{display:none}
+.viz-throw-ghost.on{color:var(--accent);border-color:rgb(var(--accent-rgb) / .7);opacity:1}
+.viz-stage:has(> .viz-throw) .viz-legend{max-width:calc(50% - 136px)}
+.viz-stage:has(> .viz-throw) .viz-caption{bottom:62px}
+@media (prefers-reduced-motion: no-preference){.viz-throw-b{transition:background-color .12s,border-color .12s,color .12s}}
 /* P-VIZ.4 (ADR-0625): the node panel (replaces the P-VIZ.1 node menu). z 5 in .viz-stage: over the canvas, legend,
    REC pill (2), the camera hint (3) and the hover tip (4); under the recording player (6). viz_view.followPanel puts
    it above its node every frame (left/top) and tilts it toward the middle of the view (--viz-ry) so it reads as a
@@ -8577,4 +8601,66 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-vmenu-row{display:flex;align-items:center;gap:6px}
 @media (prefers-reduced-motion: reduce){
   .viz-panel.flip{transition:none}
+}
+/* ============================== P-VIZ.6 (ADR-0635): Visualize session ledger (viz_ledger.ts) ==============================
+   No new layer: z 2 in .viz-stage, with the legend and the REC pill, under the hover tip (4) and the node panel (5).
+   The collapsed box sits lower right, no wider than leaves room for the bottom-center throw tray (half of it <= 130px)
+   and clear of the bottom-left legend. The card zooms out of the box (viz_ledger.zoom, a FLIP from the box's rect),
+   drags by its header (.placed: left/top set by the drag, re-clamped on resize) and leans a little while dragged.
+   The list shows exactly five 24px rows, then scrolls. Every label is one line that ellipsizes (invariant #11). */
+.viz-ledger{position:absolute;inset:0;z-index:2;pointer-events:none}
+.viz-ledger-pill{position:absolute;right:14px;bottom:14px;box-sizing:border-box;width:min(320px,calc(50% - 150px));min-width:190px;
+  display:flex;flex-direction:column;align-items:stretch;gap:2px;padding:7px 11px;border-radius:12px;font:inherit;text-align:left;cursor:pointer;
+  color:var(--txt-2);background:color-mix(in srgb,var(--bg-1) 90%,transparent);border:1px solid var(--line);box-shadow:0 8px 24px rgb(0 0 0 / .25);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);pointer-events:auto;transform-origin:100% 100%;
+  transition:opacity 180ms var(--ease-out),visibility 180ms,border-color 120ms}
+.viz-ledger-pill:hover{border-color:var(--line-strong)}
+.viz-ledger-pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.viz-ledger-pill.away{opacity:0;visibility:hidden;pointer-events:none}
+.viz-ledger-pill.zoom-in{animation:vizLedgerIn 320ms var(--ease-out)}
+.viz-ledger-l1{font-family:var(--mono);font-size:10.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-l2{font-size:11px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-pill.empty .viz-ledger-l1{color:var(--txt-3)}
+.viz-ledger-card{position:absolute;right:14px;bottom:14px;box-sizing:border-box;width:min(420px,calc(100% - 28px));display:flex;flex-direction:column;gap:6px;
+  padding:8px 9px 9px;border-radius:14px;pointer-events:auto;transform-origin:0 0;
+  background:color-mix(in srgb,var(--bg-1) 94%,transparent);border:1px solid var(--line);box-shadow:0 18px 40px rgb(0 0 0 / .34);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transition:transform 200ms var(--ease-out),box-shadow 200ms}
+.viz-ledger-card[hidden]{display:none}
+.viz-ledger-card.placed{right:auto;bottom:auto}
+.viz-ledger-card.dragging{transform:perspective(700px) rotateX(4deg) rotateY(var(--lg-ry,0deg)) scale(1.02);box-shadow:0 26px 54px rgb(0 0 0 / .42);transition:transform 120ms linear,box-shadow 200ms}
+.viz-ledger-h{display:flex;align-items:center;gap:8px;min-width:0;cursor:grab;user-select:none;touch-action:none}
+.viz-ledger-card.dragging .viz-ledger-h{cursor:grabbing}
+.viz-ledger-grip{flex:none;width:10px;height:14px;background:radial-gradient(circle,var(--txt-4) 1px,transparent 1.5px) 0 0/5px 5px}
+.viz-ledger-title{flex:1;min-width:0;font-size:12.5px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-x{flex:none;display:grid;place-items:center;width:24px;height:24px;padding:0;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg-2);color:var(--txt-2);cursor:pointer}
+.viz-ledger-x:hover{color:var(--txt);border-color:var(--line-strong)}
+.viz-ledger-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-ledger-cols,.viz-ledger-row{display:grid;grid-template-columns:minmax(0,1fr) 72px 92px 92px;gap:10px;align-items:center;padding:0 8px}
+.viz-ledger-cols span{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-cols span:is(:nth-child(2),:nth-child(3)){text-align:right}
+.viz-ledger-list{max-height:120px;overflow-y:auto;overscroll-behavior:contain;border-radius:9px;
+  background:color-mix(in srgb,var(--bg-0) 60%,transparent);border:1px solid var(--line-soft)}
+.viz-ledger-list:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-ledger-list[hidden],.viz-ledger-empty[hidden]{display:none}
+.viz-ledger-row{box-sizing:border-box;height:24px;font-size:11px;color:var(--txt-2)}
+.viz-ledger-row+.viz-ledger-row{border-top:1px solid var(--line-soft)}
+.viz-ledger-row.gone{opacity:.55}
+.viz-ledger-name{display:flex;align-items:center;gap:6px;min-width:0}
+.viz-ledger-name i{flex:none;width:8px;height:8px;border-radius:50%;background:var(--viz-c,var(--accent))}
+.viz-ledger-name span{min-width:0;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-subs{flex:none;font-weight:500;font-size:9.5px;line-height:14px;padding:0 5px;border-radius:7px;white-space:nowrap;
+  color:var(--txt-3);background:var(--bg-2);border:1px solid var(--line-soft)}
+.viz-ledger-subs[hidden]{display:none}
+.viz-ledger-num{font-family:var(--mono);font-size:10.5px;font-variant-numeric:tabular-nums;text-align:right;border-radius:4px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-repo{color:var(--txt-3);border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ledger-row .bump{animation:vizLedgerBump 900ms ease-out}
+.viz-ledger-empty{margin:0;padding:10px 6px;font-size:11.5px;color:var(--txt-3);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@keyframes vizLedgerIn{from{opacity:0;transform:scale(.35)}to{opacity:1;transform:none}}
+@keyframes vizLedgerBump{from{background:rgb(var(--accent-rgb) / .3);color:var(--txt)}to{background:transparent}}
+@media (prefers-reduced-motion: reduce){
+  .viz-ledger-pill,.viz-ledger-card{transition:none}
+  .viz-ledger-pill.zoom-in,.viz-ledger-row .bump{animation:none}
+  .viz-ledger-card.dragging{transform:none}
 }

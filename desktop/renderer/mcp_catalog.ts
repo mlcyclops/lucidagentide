@@ -11,7 +11,7 @@
 //   - normalizeOrgCatalog: the org-authorized list an admin places in managed policy (`mcpCatalog`).
 // Only http/sse endpoints qualify because the LUCID MCP store (bridge.mcpUpsert) only speaks those.
 
-export type McpCatalogCategory = "cloud" | "developer" | "productivity" | "saas" | "social" | "design" | "data" | "payments";
+export type McpCatalogCategory = "cloud" | "developer" | "productivity" | "email" | "saas" | "social" | "design" | "data" | "payments";
 export type McpCatalogAuth = "oauth" | "token" | "none";
 export interface McpCatalogEntry {
   /** Stable slug, e.g. "github". */
@@ -41,6 +41,7 @@ export const MCP_CATEGORY_LABEL: Record<McpCatalogCategory, string> = {
   cloud: "Cloud",
   developer: "Developer tools",
   productivity: "Productivity",
+  email: "Email and calendar",
   saas: "Business apps",
   social: "Social media",
   design: "Design and web",
@@ -52,6 +53,10 @@ const VERIFIED = "2026-11-20";
 
 /** Meta's servers register only the MCP clients Meta lists; other clients need a Meta app ID. */
 const META_NOTE = "Meta signs in only the clients it lists; other clients need a Meta app ID.";
+
+/** Google's Workspace MCP servers are a Developer Preview and sign in only with an OAuth client you create in
+ *  your own Google Cloud project (no dynamic client registration). */
+const GOOGLE_WORKSPACE_NOTE = "Developer Preview: join Google's preview program and create your own Google Cloud OAuth client.";
 
 type CommunitySeed = Omit<McpCatalogEntry, "verifiedOn" | "source">;
 
@@ -120,6 +125,41 @@ const COMMUNITY_SEED: readonly CommunitySeed[] = [
   { id: "asana", name: "Asana", vendor: "Asana, Inc.", category: "productivity",
     url: "https://mcp.asana.com/v2/mcp", transport: "http", auth: "oauth",
     docsUrl: "https://developers.asana.com/docs/using-asanas-mcp-server", officialDomains: ["asana.com"] },
+  // ── Email and calendar (ADR-0638) ──────────────────────────────────────────────────────────────
+  { id: "gmail", name: "Gmail", vendor: "Google LLC", category: "email",
+    url: "https://gmailmcp.googleapis.com/mcp/v1", transport: "http", auth: "oauth",
+    docsUrl: "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server", officialDomains: ["google.com", "googleapis.com"],
+    note: GOOGLE_WORKSPACE_NOTE },
+  { id: "google-calendar", name: "Google Calendar", vendor: "Google LLC", category: "email",
+    url: "https://calendarmcp.googleapis.com/mcp/v1", transport: "http", auth: "oauth",
+    docsUrl: "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server", officialDomains: ["google.com", "googleapis.com"],
+    note: GOOGLE_WORKSPACE_NOTE },
+  { id: "microsoft-365", name: "Microsoft 365 (Outlook mail, calendar)", vendor: "Microsoft Corporation", category: "email",
+    url: "https://workiq.svc.cloud.microsoft/mcp", transport: "http", auth: "oauth",
+    docsUrl: "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/quickstart/github-copilot-cli",
+    officialDomains: ["microsoft.com", "cloud.microsoft"],
+    note: "Work IQ MCP: work or school accounts only, and a tenant admin must enable Work IQ first." },
+  { id: "fastmail", name: "Fastmail", vendor: "Fastmail Pty Ltd", category: "email",
+    url: "https://api.fastmail.com/mcp", transport: "http", auth: "oauth",
+    docsUrl: "https://www.fastmail.help/hc/en-us/articles/15869557281295-Connecting-AI-tools-via-Fastmail-s-MCP-server",
+    officialDomains: ["fastmail.com", "fastmail.help"],
+    note: "Mail, contacts and calendars; pick read, write or send access at sign-in." },
+  { id: "superhuman-mail", name: "Superhuman Mail", vendor: "Superhuman Platform Inc.", category: "email",
+    url: "https://mcp.mail.superhuman.com/mcp", transport: "http", auth: "oauth",
+    docsUrl: "https://help.superhuman.com/hc/en-us/articles/46005696690317-Superhuman-Mail-MCP-Server", officialDomains: ["superhuman.com"],
+    note: "Business plan or higher; covers the Gmail and Outlook inboxes on your seat." },
+  { id: "nylas", name: "Nylas (email, calendar, contacts)", vendor: "Nylas, Inc.", category: "email",
+    url: "https://mcp.us.nylas.com", transport: "http", auth: "oauth",
+    docsUrl: "https://developer.nylas.com/docs/dev-guide/mcp/", officialDomains: ["nylas.com"],
+    note: "EU data uses https://mcp.eu.nylas.com; a Nylas API key also works as the token." },
+  { id: "calendly", name: "Calendly", vendor: "Calendly LLC", category: "email",
+    url: "https://mcp.calendly.com", transport: "http", auth: "oauth",
+    docsUrl: "https://developer.calendly.com/calendly-mcp-server", officialDomains: ["calendly.com"],
+    note: "OAuth sign-in only; Calendly personal access tokens are not accepted." },
+  { id: "cal-com", name: "Cal.com", vendor: "Cal.com, Inc.", category: "email",
+    url: "https://mcp.cal.com/mcp", transport: "http", auth: "oauth",
+    docsUrl: "https://cal.com/docs/mcp-server", officialDomains: ["cal.com"],
+    note: "Add ?toolsets=bookings,availability to the URL to limit the tools." },
   // ── Business apps ──────────────────────────────────────────────────────────────────────────────
   { id: "intercom", name: "Intercom", vendor: "Intercom, Inc.", category: "saas",
     url: "https://mcp.intercom.com/mcp", transport: "http", auth: "oauth",

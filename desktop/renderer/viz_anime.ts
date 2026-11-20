@@ -22,6 +22,15 @@
 // P-VIZ.4 (ADR-0628): react() layers a stare or an outburst over the running activity (viz_anime_pose's reaction
 // timeline: the turn to the camera, the raised fists, the anger mark and steam built lazily on the first
 // outburst, a red-tinted aura flare), and the `supervise` activity adds a holo checklist that ticks.
+//
+// P-VIZ.6 (ADR-0637): a node is a ninja or a kunoichi (viz_anime_pose.seededGender on the node's seed, the same
+// as its office worker's). The kunoichi is an original variant on the same rig, clips and eye band: a long high
+// ponytail (its own mesh, swaying like the headband tails) instead of the crown spikes, side locks framing the
+// mask, lashes on the eyes, slightly narrower shoulders and a slimmer build, accent lapels and longer wrist wraps.
+// Her hair is built once per detail tier on first need (shared, ref-counted). hit() plays the throw tray's
+// reactions over the activity (viz_anime_pose's hit plan: turned toward the throw, blended in from the pose on
+// screen); the charge they leave (bolt, energy balls, Storm) speeds the activity up, lights the accent, keeps a
+// small aura burning (crackling while a bolt's boost lasts) and, for energy balls, grows him up to +12 percent.
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -32,8 +41,11 @@ import {
   planReaction, POSE_LEN, POSE_VECTORS, REACTION_KINDS, sampleClip, sampleReaction, shakeLevel, stateEmotion, STILL_T, tapCurve, tempoFor,
   transitionShot, ANIME_STATES, type AnimeState, type ClipName, type ClipSample, type Emotion, type KiBall, type Reaction, type ReactionKind,
   type ShotName,
+  animeHitCharge, chargeLevel, chargeTempo, clearHit, decayCharge, HIT_KINDS, newCharge, newHitSample, orbScale, planHit, sampleHit,
+  seededGender, type HitPlan,
 } from "./viz_anime_pose.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
+import type { HitKind } from "./viz_throw_kinds.ts";
 
 export type { AnimeState, ReactionKind } from "./viz_anime_pose.ts";
 export type AnimeDetail = "full" | "reduced" | "minimal";
@@ -49,6 +61,13 @@ export interface AnimeFigure {
   /** A tap (stare) or a double tap (outburst) at `camera`: a layer over the current activity, which keeps
    *  running underneath and resumes; never changes the agent state. Ignored while killed. */
   react(kind: ReactionKind, camera: THREE.Camera): void;
+  /** Something reached him (P-VIZ.6): throwing stars (blocked, dodged, the third caught), a lightning bolt
+   *  (supercharged), an energy ball (absorbed: he grows, up to 3 stacks) or the Storm (a power-up to the sky); the
+   *  office throwables are a generic flinch. `from` is the world point the throw came from (he turns toward it);
+   *  `strength` 0..1 scales the effect. A hit replaces any reaction or hit playing; a no-op once disposed or killed. */
+  hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength?: number): void;
+  /** 0..1: how supercharged he is right now (bolt, energy balls, Storm); decays inside update(). */
+  readonly charge: number;
   /** How long the agent has been idle. The anime figure ignores it (the office worker uses it). */
   setIdleSeconds(sec: number): void;
   setLook(l: MiniLook): void;
@@ -74,7 +93,8 @@ const INK_FLAT = 0.024;
 
 const EB_W = 768, EB_H = 168;
 const INK = "#0a0a12";
-interface EyePaint { skin: string; eye: string; eyeLight: string }
+/** `lashes`: the kunoichi's two lash flicks at the outer corner of each open eye. */
+interface EyePaint { skin: string; eye: string; eyeLight: string; lashes: boolean }
 
 /** The eye band texture: skin, two anime eyes, brows and an effort sweat drop, all from one Emotion. Drawn in
  *  the lab's 768 x 168 units; `scale` maps them onto a smaller canvas. */
@@ -142,6 +162,15 @@ function drawEyeBand(ctx: CanvasRenderingContext2D, p: EyePaint, emo: Emotion, b
       ctx.beginPath(); ctx.moveTo(ox - inner * 8, oy - 8); ctx.bezierCurveTo(ox + inner * w * 0.15, top - 4, ix - inner * w * 0.35, top + slantY * 0.9, ix, iy); ctx.stroke();
       ctx.lineWidth = 3.5;
       ctx.beginPath(); ctx.moveTo(ox + inner * 8, oy + 6); ctx.bezierCurveTo(ox + inner * w * 0.3, bot + 2, ix - inner * w * 0.3, bot + 4, ix - inner * 6, iy + 2); ctx.stroke();
+      if (p.lashes && open > 0.3) {
+        // two lashes flicking up and out from the outer end of the lash line
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.moveTo(ox - inner * 6, oy - 10); ctx.lineTo(ox - inner * 30, oy - 26);
+        const ly = (oy + top) / 2 - 4;
+        ctx.moveTo(ox + inner * 14, ly); ctx.lineTo(ox - inner * 4, ly - 20);
+        ctx.stroke();
+      }
     }
     // brow: the angle is the emotion (positive pulls the inner end down: effort and anger read)
     const by = 30 - emo.browY * 30;
@@ -307,7 +336,12 @@ function jaw(g: THREE.BufferGeometry): THREE.BufferGeometry {
   return g;
 }
 
-function hairGeo(t: Tier): THREE.BufferGeometry {
+/** The kunoichi keeps only the side and lower spikes (the ponytail takes the crown). */
+const FEMALE_SPIKES: readonly number[] = [3, 4, 5, 6, 10, 11, 12, 13];
+/** Her ponytail's root on the skull: high on the back of the head. */
+const PONY_AT = [0, 0.22, -0.2] as const;
+
+function hairGeo(t: Tier, female: boolean): THREE.BufferGeometry {
   const geos: THREE.BufferGeometry[] = [];
   // the front edge lifted to the headband: forehead and brows stay clear, the back of the head is covered
   const cap = new THREE.SphereGeometry(0.288, t.hairCap[0], t.hairCap[1], 0, TAU, 0, Math.PI * 0.5);
@@ -315,10 +349,16 @@ function hairGeo(t: Tier): THREE.BufferGeometry {
   cap.translate(0, 0.03, -0.01);
   geos.push(cap);
   for (const i of t.spikes) {
+    if (female && !FEMALE_SPIKES.includes(i)) continue;
     const [az, el, len, w, flat, up, back] = SPIKES[i]!;
     const dir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize();
     const base = dir.clone().multiplyScalar(0.2).add(new THREE.Vector3(0, 0.06, -0.02));
     geos.push(spikeGeo(base, dir, new THREE.Vector3(0, up, -back), len, w * 1.35, flat, t.spikeSides, t.spikeRings));
+  }
+  // her side locks: two long strands falling past the mask in front of the ears
+  if (female) for (let s = -1; s <= 1; s += 2) {
+    const dir = new THREE.Vector3(s * 0.15, -1, 0.25).normalize();
+    geos.push(spikeGeo(new THREE.Vector3(s * 0.25, 0.06, 0.09), dir, new THREE.Vector3(s * 0.06, 0, 0.08), 0.42, 0.1, 0.55, t.spikeSides, t.spikeRings));
   }
   for (const i of t.bangs) {
     const [x, tilt, len] = BANGS[i]!;
@@ -336,6 +376,38 @@ function hairGeo(t: Tier): THREE.BufferGeometry {
   for (const g of geos) g.dispose();
   for (const g of parts) g.dispose();
   return merged;
+}
+
+/** Her long high ponytail, rooted at its pivot (PONY_AT): it rises up and back off the crown, then falls down the
+ *  back of the head to the shoulders. */
+function ponytailGeo(t: Tier): THREE.BufferGeometry {
+  // built in the XY plane (+X standing for -Z, back) so spikeGeo's ring frame never flips at the arc's peak, then
+  // turned so the arc runs backward
+  const g = spikeGeo(new THREE.Vector3(), new THREE.Vector3(0.6, 0.9, 0).normalize(), new THREE.Vector3(0.1, -1.6, 0), 1.0, 0.15, 0.9, t.spikeSides, t.spikeRings * 2);
+  g.rotateY(Math.PI / 2);
+  return g;
+}
+
+/** The kunoichi's own parts per detail tier, built on first need and ref-counted like GeoSet. */
+interface FemaleGeo { refs: number; hair: THREE.BufferGeometry; pony: THREE.BufferGeometry }
+const FEMALE_GEO = new Map<AnimeDetail, FemaleGeo>();
+
+function acquireFemaleGeo(detail: AnimeDetail): FemaleGeo {
+  let set = FEMALE_GEO.get(detail);
+  if (!set) {
+    set = { refs: 0, hair: hairGeo(TIERS[detail], true), pony: ponytailGeo(TIERS[detail]) };
+    FEMALE_GEO.set(detail, set);
+  }
+  set.refs++;
+  return set;
+}
+
+function releaseFemaleGeo(detail: AnimeDetail): void {
+  const set = FEMALE_GEO.get(detail);
+  if (!set || --set.refs > 0) return;
+  set.hair.dispose();
+  set.pony.dispose();
+  FEMALE_GEO.delete(detail);
 }
 
 interface GeoSet {
@@ -374,7 +446,7 @@ function buildGeo(t: Tier): GeoSet {
     headband: new THREE.TorusGeometry(0.274, 0.03, t.headband[0], t.headband[1]),
     plate: box(0.17, 0.065, 0.025, Math.min(2, t.box), 0.01),
     tail: new THREE.CapsuleGeometry(0.024, 0.34, t.tail[0], t.tail[1]),
-    hair: hairGeo(t),
+    hair: hairGeo(t, false),
     deltoid: new THREE.SphereGeometry(0.095, t.deltoid[0], t.deltoid[1]),
     upperArm: lathe(UPPER_ARM, t.upperArm),
     foreArm: lathe(FORE_ARM, t.foreArm),
@@ -453,6 +525,10 @@ const GLARE_DIP = 0.08;
 /** The outburst pose's upper body joints (x, y, z each), blended over the activity by the rage weight. */
 const RAGE_JOINTS = (["spine", "chest", "shL", "elL", "shR", "elR"] as const).map(jointOffset);
 const STEAM_PUFFS = 4;
+/** P-VIZ.6: the aura level a full charge keeps burning (a hit's own flare goes higher). */
+const CHARGE_AURA = 0.45;
+/** The hit turn glares a little from under the brows too, less than the stare. */
+const HIT_DIP = 0.04;
 let instanceSeed = 1;
 
 /** The anger mark (the red cross-shaped vein): four bent strokes around a center, dark rim under a bright red. */
@@ -512,7 +588,7 @@ class Anime implements AnimeFigure {
   private readonly cAccent = new THREE.Color();
   private readonly cAccNow = new THREE.Color();
   private readonly tmpColor = new THREE.Color();
-  private readonly paint: EyePaint = { skin: "#f3c9a1", eye: "#1fd17a", eyeLight: "#ffffff" };
+  private readonly paint: EyePaint = { skin: "#f3c9a1", eye: "#1fd17a", eyeLight: "#ffffff", lashes: false };
   private readonly eyeCtx: CanvasRenderingContext2D | null;
   private readonly eyeTex: THREE.CanvasTexture;
   private eyeKeyNow = -1;
@@ -590,16 +666,39 @@ class Anime implements AnimeFigure {
   private readonly q2 = new THREE.Quaternion();
   /** Built on the first outburst (most figures never get one). */
   private rageFx: { mark: THREE.Mesh; mMark: THREE.MeshBasicMaterial; mSteam: THREE.MeshBasicMaterial; steam: THREE.Mesh[]; geo: THREE.PlaneGeometry; tex: THREE.CanvasTexture } | null = null;
+  // P-VIZ.6: the kunoichi variant (her own hair and ponytail), the hit layer (a one-shot over the activity) and charge
+  private readonly female: boolean;
+  /** The body's size: 1 for him, a little smaller for her (the energy balls scale on top). */
+  private readonly size: number;
+  private readonly pony: THREE.Group | null = null;
+  private hitPlan: HitPlan | null = null;
+  private hitT = 0;
+  private readonly hs = newHitSample();
+  private readonly hitPose = new Float32Array(POSE_LEN);
+  /** The pose on screen when the hit landed: the hit blends in from it. */
+  private readonly hitSnap = new Float32Array(POSE_LEN);
+  private readonly hitFrom = new THREE.Vector3();
+  /** The throw had no usable origin: turn toward `hitCam` instead. */
+  private hitAtCam = false;
+  private hitCam: THREE.Camera | null = null;
+  private readonly chg = newCharge();
+  private chargeNow = 0;
+  private clockAt = Number.NaN;
   // supervise: the holo checklist at his -X side
   private readonly checklist = new THREE.Group();
   private readonly checkBoxes: THREE.Mesh[] = [];
   private wCheck = 0;
   private ticksNow = -1;
 
-  constructor(look: MiniLook, detail: AnimeDetail, flat: boolean) {
+  constructor(look: MiniLook, detail: AnimeDetail, flat: boolean, seed: number) {
     this.detail = Object.prototype.hasOwnProperty.call(TIERS, detail) ? detail : "full";
     const t = (this.tier = TIERS[this.detail]);
     const g = (this.geo = acquireGeo(this.detail));
+    // no node seed (a standalone figure): a per-instance one, so a set of them is still mixed
+    const female = (this.female = seededGender(Number.isFinite(seed) ? seed : instanceSeed) === "female");
+    const fg = female ? acquireFemaleGeo(this.detail) : null;
+    this.size = female ? 0.97 : 1;
+    this.paint.lashes = female;
     this.rng = (instanceSeed++ * 2654435761) >>> 0 || 1;
     this.phase = this.random() * TAU;
     this.blinkIn = nextBlinkDelay(this.random());
@@ -649,22 +748,25 @@ class Anime implements AnimeFigure {
     const G = () => new THREE.Group();
     const root = (this.root = G()), hips = G(), spine = G(), chest = (this.chest = G()), neck = G(), head = G();
     this.group.add(this.body);
-    this.body.scale.setScalar(ANIME_SCALE);
+    this.body.scale.setScalar(ANIME_SCALE * this.size);
     this.body.add(root);
     root.add(hips); hips.position.y = 0.86; hips.add(spine); spine.add(chest); chest.position.y = 0.26; chest.add(neck); neck.position.y = 0.36; neck.add(head); head.position.y = 0.08;
 
-    // torso: a sleeveless gi vest over a broad chest, a V opening shows the accent undershirt
-    const pelvis = this.add(hips, g.pelvis, this.mGi, 1); pelvis.scale.set(1.18, 0.78, 0.92); pelvis.position.y = -0.03;
-    const torso = this.add(spine, g.torso, this.mGi, 1); torso.scale.set(1, 1, 0.76);
+    // torso: a sleeveless gi vest over a broad chest (hers slimmer), a V opening shows the accent undershirt; her
+    // lapels are accent trim
+    const pelvis = this.add(hips, g.pelvis, this.mGi, 1); pelvis.position.y = -0.03;
+    if (female) pelvis.scale.set(1.22, 0.8, 0.92); else pelvis.scale.set(1.18, 0.78, 0.92);
+    const torso = this.add(spine, g.torso, this.mGi, 1);
+    if (female) torso.scale.set(0.93, 1, 0.72); else torso.scale.set(1, 1, 0.76);
     const vee = this.add(chest, g.vee, this.mAccent, 0); vee.rotation.set(Math.PI, Math.PI / 6 + Math.PI, 0); vee.position.set(0, 0.25, 0.185); vee.scale.set(1, 1, 0.16);
     for (let s = -1; s <= 1; s += 2) {
-      if (g.lapel) { const l = this.add(chest, g.lapel, this.mGiDark, thin); l.position.set(s * 0.06, 0.25, 0.2); l.rotation.set(0.1, 0, s * 0.45); }
+      if (g.lapel) { const l = this.add(chest, g.lapel, female ? this.mAccent : this.mGiDark, thin); l.position.set(s * 0.06, 0.25, female ? 0.19 : 0.2); l.rotation.set(0.1, 0, s * 0.45); }
       if (g.beltTail) { const bt = this.add(hips, g.beltTail, this.mAccent, thin); bt.position.set(0.06 + s * 0.035, 0, 0.205); bt.rotation.z = s * 0.25; bt.scale.z = 0.5; }
     }
     const belt = this.add(hips, g.belt, this.mAccent, 1); belt.rotation.x = Math.PI / 2; belt.scale.set(1.13, 0.9, 1); belt.position.y = 0.1;
     this.add(hips, g.knot, this.mAccent, smallThick).position.set(0.06, 0.1, 0.195);
     this.add(neck, g.neck, this.mSkin, 1);
-    const trap = this.add(chest, g.trap, this.mGi, 1); trap.scale.set(1.45, 0.45, 0.75); trap.position.y = 0.33; // the neck sits in the shoulders
+    const trap = this.add(chest, g.trap, this.mGi, 1); trap.scale.set(female ? 1.3 : 1.45, 0.45, female ? 0.72 : 0.75); trap.position.y = 0.33; // the neck sits in the shoulders
 
     // head: an anime skull with a tapered jaw, the fitted mask, the canvas eye band, the headband and its tails
     const skull = (this.skull = G()); head.add(skull); skull.position.y = 0.2;
@@ -676,16 +778,26 @@ class Anime implements AnimeFigure {
     const plate = this.add(skull, g.plate, mPlate, thin); plate.position.set(0, 0.18, 0.255); plate.rotation.x = -0.2;
     skull.add(this.tails); this.tails.position.set(0, 0.16, -0.26);
     for (let s = -1; s <= 1; s += 2) { const tl = this.add(this.tails, g.tail, this.mAccent, thin); tl.position.set(s * 0.05, -0.12, -0.09); tl.rotation.set(-1.0, 0, s * 0.35); tl.scale.set(1.6, 1, 0.4); }
-    this.add(skull, g.hair, this.mHair, 1);
+    this.add(skull, fg ? fg.hair : g.hair, this.mHair, 1);
+    if (fg) {
+      // her ponytail on its own pivot (it sways), tied with an accent band
+      const pony = (this.pony = G());
+      skull.add(pony);
+      pony.position.set(PONY_AT[0], PONY_AT[1], PONY_AT[2]);
+      this.add(pony, fg.pony, this.mHair, 1);
+      this.add(pony, g.knot, this.mAccent, smallThick).scale.set(1.1, 1.1, 0.9);
+    }
 
-    // arms: sculpted deltoid, bicep, forearm; accent wristbands; rounded fists with a thumb. L is -X.
+    // arms: sculpted deltoid, bicep, forearm; accent wristbands (hers longer); rounded fists with a thumb. L is -X.
     const arm = (side: number): [THREE.Group, THREE.Group] => {
-      const sh = G(); chest.add(sh); sh.position.set(side * 0.31, 0.3, 0);
+      const sh = G(); chest.add(sh); sh.position.set(side * (female ? 0.29 : 0.31), 0.3, 0);
       this.add(sh, g.deltoid, this.mSkin, 1).scale.set(1.05, 0.95, 0.95);
       this.add(sh, g.upperArm, this.mSkin, 1);
       const el = G(); sh.add(el); el.position.y = -0.27;
       this.add(el, g.foreArm, this.mSkin, 1);
-      this.add(el, g.wrist, this.mAccent, smallThick).position.y = -0.175;
+      const wrap = this.add(el, g.wrist, this.mAccent, smallThick);
+      wrap.position.y = female ? -0.16 : -0.175;
+      if (female) wrap.scale.y = 1.5;
       const hand = G(); el.add(hand); hand.position.y = -0.255;
       this.add(hand, g.hand, this.mSkin, 1);
       if (g.thumb) { const th = this.add(hand, g.thumb, this.mSkin, thin); th.position.set(-side * 0.055, 0, 0.045); th.rotation.set(0.3, 0, side * 0.9); }
@@ -823,6 +935,27 @@ class Anime implements AnimeFigure {
     }
   }
 
+  hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength = 1): void {
+    if (this.disposed || this.state === "killed" || !HIT_KINDS.includes(kind)) return;
+    animeHitCharge(this.chg, kind, strength);
+    this.chargeNow = chargeLevel(this.chg);
+    // the new hit chains (throwing stars), turns on from the weight already on and blends in from the pose on
+    // screen, so a hit that lands mid-reaction or mid-hit never pops
+    const prev = this.hitPlan;
+    this.hitPlan = planHit(kind, strength, prev, this.hitT, prev ? this.hs.turn : 0);
+    this.hitT = 0;
+    this.hitSnap.set(this.out);
+    this.hitAtCam = !(from && Number.isFinite(from.x) && Number.isFinite(from.y) && Number.isFinite(from.z));
+    if (!this.hitAtCam) this.hitFrom.copy(from);
+    this.hitCam = camera ?? null;
+    if (this.reaction) this.endReaction(); // a hit replaces a stare or an outburst
+    if (kind === "bolt") this.flash = 0.6;
+  }
+
+  get charge(): number {
+    return this.chargeNow;
+  }
+
   setIdleSeconds(_sec: number): void {
     // the anime figure has no idle props; the office worker uses this
   }
@@ -840,14 +973,19 @@ class Anime implements AnimeFigure {
     this.eyeKeyNow = -1;
   }
 
-  update(_tSec: number, dt: number, motion: boolean): void {
+  update(tSec: number, dt: number, motion: boolean): void {
     if (this.disposed) return;
     const d = motion && Number.isFinite(dt) ? Math.min(Math.max(dt, 0), 0.1) : 0;
     this.life += d;
     this.stateT += d;
     this.blendT += d;
     this.kS = motion ? this.kS + (this.k - this.kS) * (1 - Math.exp(-d * 3)) : this.k;
-    const tempo = tempoFor(this.state, this.kS);
+    // ---- the charge decays on the wall clock (under reduced motion too, where the frame's dt is 0)
+    const dc = tSec > this.clockAt ? Math.min(tSec - this.clockAt, 5) : d;
+    if (Number.isFinite(tSec)) this.clockAt = tSec;
+    this.chargeNow = chargeLevel(decayCharge(this.chg, dc));
+    // supercharged: the activity runs faster
+    const tempo = tempoFor(this.state, this.kS) * chargeTempo(this.chargeNow);
     this.actT += d * tempo;
     if (!motion) this.shot = null;
     if (this.shot) {
@@ -863,6 +1001,13 @@ class Anime implements AnimeFigure {
     if (this.reaction) {
       this.reactT += d;
       if (sampleReaction(this.reaction, this.reactT, rs).done) this.endReaction();
+    }
+    // ---- the hit layer's clock (P-VIZ.6): dropped like a reaction (the charge it left stays)
+    const hs = this.hs;
+    if (this.hitPlan && (!motion || this.state === "killed")) this.endHit();
+    if (this.hitPlan) {
+      this.hitT += d;
+      if (sampleHit(this.hitPlan, this.hitT, hs, this.hitPose).done) this.endHit();
     }
 
     // ---- the pose: a clip sample, blended from the last change
@@ -884,10 +1029,10 @@ class Anime implements AnimeFigure {
         for (let i = 0; i < POSE_LEN; i++) this.cur[i] = this.from[i]! + (this.tgt[i]! - this.from[i]!) * w;
       }
     }
-    const emotion = rs.emotion ?? (this.shot ? info.emotion : stateEmotion(this.state, info.emotion));
+    const emotion = hs.emotion ?? rs.emotion ?? (this.shot ? info.emotion : stateEmotion(this.state, info.emotion));
 
-    // ---- effect weights
-    const live = onActivity && this.shot === null;
+    // ---- effect weights (a hit holding the body puts the activity's effects away)
+    const live = onActivity && this.shot === null && hs.body < 0.5;
     const act = this.activity;
     const actClipT = clipTime(CLIPS[act], motion ? this.actT : STILL_T[act]);
     const speed = act === "dash" ? dashSpeed(actClipT) : 0;
@@ -899,7 +1044,8 @@ class Anime implements AnimeFigure {
     // (widened to ClipName so this reads the same before and after MiniActivity carries "supervise")
     const supervising = (act as ClipName) === "supervise";
     this.wCheck = approach(this.wCheck, live && supervising ? 1 : 0, rate);
-    const auraT = Math.max(this.shot === "powerup" ? auraLevel(this.shotT) : 0, rs.aura);
+    // the charge keeps a small aura burning (the hits flare it)
+    const auraT = Math.max(this.shot === "powerup" ? auraLevel(this.shotT) : 0, rs.aura, hs.aura, CHARGE_AURA * this.chargeNow);
     this.wAura = approach(this.wAura, auraT, rate * 2);
     this.wSmoke = approach(this.wSmoke, this.state === "killed" && this.stateT > 0.5 ? 1 : 0, motion ? d / 1.2 : 1);
     this.wPause = approach(this.wPause, this.state === "paused" ? 1 : 0, motion ? d / 0.8 : 1);
@@ -935,9 +1081,13 @@ class Anime implements AnimeFigure {
     o[O_HEAD] += 0.2 * this.wPause;
     o[1] -= 0.02 * this.wPause;
     if (rs.turn > 0.001 || rs.rage > 0.001) this.layerReaction(o);
+    if (hs.body > 0.001) this.layerHit(o, motion);
     this.apply(o);
+    // the energy balls grow him
+    this.body.scale.setScalar(ANIME_SCALE * this.size * orbScale(this.chg));
     const sway = motion ? 1 : 0;
     this.tails.rotation.set(0.12 * Math.sin(this.life * 3.1) * sway + 0.35 * this.wDash + 0.3 * this.dead, 0.18 * Math.sin(this.life * 2.3 + 1) * sway, 0);
+    if (this.pony) this.pony.rotation.set(0.08 * Math.sin(this.life * 2.6 + 0.4) * sway + 0.3 * this.wDash + 0.25 * this.dead, 0.14 * Math.sin(this.life * 1.9 + 2) * sway, 0);
 
     // ---- eyes: redrawn only when the emotion, the blink step or the gaze bucket changes
     if (motion) {
@@ -950,8 +1100,9 @@ class Anime implements AnimeFigure {
     } else this.blinkAge = 99;
     const emo = EMOTIONS[emotion];
     // a reaction owns the lids (no natural blinks, only the stare's slow one) and looks straight down the turn
-    const bl = emo.shape !== "open" ? 0 : rs.emotion !== null ? rs.blink : blinkStep(this.blinkAge);
-    const gb = gazeBucket(info.gaze * (1 - rs.turn));
+    // (so does a hit: no blinks while it owns the eyes)
+    const bl = emo.shape !== "open" || hs.emotion !== null ? 0 : rs.emotion !== null ? rs.blink : blinkStep(this.blinkAge);
+    const gb = gazeBucket(info.gaze * (1 - Math.max(rs.turn, hs.turn * hs.body)));
     const key = eyeKey(emotion, bl, gb);
     if (key !== this.eyeKeyNow) {
       this.eyeKeyNow = key;
@@ -976,7 +1127,10 @@ class Anime implements AnimeFigure {
       this.rageFx.geo.dispose();
     }
     this.reactCam = null;
+    this.hitPlan = null;
+    this.hitCam = null;
     releaseGeo(this.detail);
+    if (this.female) releaseFemaleGeo(this.detail);
   }
 
   // ------------------------------------------------------------------------------------------ internals
@@ -1028,8 +1182,16 @@ class Anime implements AnimeFigure {
     const cam = this.reactCam;
     const w = rs.turn;
     if (w <= 0.001 || !cam) return;
-    // the camera in the body's frame (lab units, facing +Z); the last render's matrices are current enough
-    const v = this.body.worldToLocal(cam.getWorldPosition(this.v1));
+    cam.getWorldPosition(this.v1);
+    this.turnToward(o, w, GLARE_DIP, 0.06); // glaring from under the brows, with a slight suspicious tilt
+  }
+
+  /** The turn toward the world point in `v1` by weight `w`: the yaw spread over spine, chest, neck and head (the
+   *  root takes what they cannot), the head pitched to the point's height less `dip`, tilted by `tilt` (null keeps
+   *  the pose's own tilt). */
+  private turnToward(o: Float32Array, w: number, dip: number, tilt: number | null): void {
+    // the point in the body's frame (lab units, facing +Z); the last render's matrices are current enough
+    const v = this.body.worldToLocal(this.v1);
     const horiz = Math.hypot(v.x, v.z), dy = v.y - EYE_Y;
     let need = Math.atan2(v.x, v.z) - o[O_ROOT + 1]! - o[O_HIPS + 1]!;
     need -= Math.round(need / TAU) * TAU;
@@ -1042,9 +1204,31 @@ class Anime implements AnimeFigure {
     o[O_NECK + 1] += (y[3]! - o[O_NECK + 1]!) * w;
     o[O_HEAD + 1] += (y[4]! - o[O_HEAD + 1]!) * w;
     const lean = o[O_HIPS]! + o[O_SPINE]! + o[O_CHEST]! + o[O_NECK]!;
-    const headX = Math.min(0.9, Math.max(-0.9, -Math.atan2(dy, horiz) - lean + GLARE_DIP));
+    const headX = Math.min(0.9, Math.max(-0.9, -Math.atan2(dy, horiz) - lean + dip));
     o[O_HEAD] += (headX - o[O_HEAD]!) * w;
-    o[O_HEAD + 2] += (0.06 - o[O_HEAD + 2]!) * w; // a slight suspicious tilt
+    if (tilt !== null) o[O_HEAD + 2] += (tilt - o[O_HEAD + 2]!) * w;
+  }
+
+  private endHit(): void {
+    this.hitPlan = null;
+    this.hitCam = null;
+    clearHit(this.hs);
+  }
+
+  /** The hit over the pose: the hit clip's pose (already in hitPose) turned toward the throw (keeping the clip's
+   *  head tilt), blended in from the pose on screen when it landed, then laid over the activity by its weight. */
+  private layerHit(o: Float32Array, motion: boolean): void {
+    const hs = this.hs, hp = this.hitPose, snap = this.hitSnap;
+    const cam = this.hitAtCam ? this.hitCam : null;
+    if (hs.turn > 0.001 && (cam || !this.hitAtCam)) {
+      if (cam) cam.getWorldPosition(this.v1);
+      else this.v1.copy(this.hitFrom);
+      this.turnToward(hp, hs.turn, HIT_DIP, null);
+    }
+    if (hs.blend < 1) for (let i = 0; i < POSE_LEN; i++) hp[i] = snap[i]! + (hp[i]! - snap[i]!) * hs.blend;
+    const w = hs.body;
+    for (let i = 0; i < POSE_LEN; i++) o[i] = o[i]! + (hp[i]! - o[i]!) * w;
+    if (motion && hs.shake > 0) o[0] += 0.035 * Math.sin(this.life * 83) * hs.shake;
   }
 
   private ensureRageFx(): void {
@@ -1155,9 +1339,11 @@ class Anime implements AnimeFigure {
     this.dead = approach(this.dead, st === "killed" && this.stateT > 0.4 ? 1 : 0, motion ? d : 1);
     this.flash = motion ? this.flash * Math.exp(-d * 5) : 0;
     const acc = this.cAccNow.copy(this.cAccent).lerp(DEAD_GRAY, 0.75 * this.dead);
+    // supercharged: the accent burns brighter while the charge lasts, flaring white-hot as a bolt strikes
+    if (this.hs.crackle > 0) acc.lerp(WHITE, 0.5 * this.hs.crackle);
     this.mAccent.color.copy(acc);
     this.mAccent.emissive.copy(acc);
-    this.mAccent.emissiveIntensity = (this.glow + this.flash) * (1 - this.dead);
+    this.mAccent.emissiveIntensity = (this.glow + this.flash + 0.6 * this.chargeNow + 0.5 * this.hs.crackle) * (1 - this.dead);
     // the powerup: the hair glows the accent
     this.mHair.emissive.copy(acc);
     this.mHair.emissiveIntensity = 0.35 * this.wAura;
@@ -1230,8 +1416,22 @@ class Anime implements AnimeFigure {
     this.aura.visible = this.wAura > 0.01 || auraT > 0.01;
     if (this.aura.visible) {
       const u = this.mAura.uniforms;
-      u.uT!.value = (u.uT!.value as number) + d;
-      u.uA!.value = this.wAura;
+      // a boost (the bolt, the Storm) crackles: the flames run faster and shimmer; under reduced motion they hold still
+      const crackle = motion ? Math.max(this.hs.crackle, this.chg.boost) : 0;
+      u.uT!.value = (u.uT!.value as number) + d * (1 + 1.5 * crackle);
+      u.uA!.value = this.wAura * (1 - 0.18 * crackle * (0.5 + 0.5 * Math.sin(this.life * 37) * Math.sin(this.life * 23)));
+    }
+
+    // the energy ball held between the hands while he absorbs it (the ki ball's meshes, not firing)
+    const ab = this.hs.absorb;
+    if (ab > 0.001) {
+      const mid = this.hands[0]!.getWorldPosition(this.v1).add(this.hands[1]!.getWorldPosition(this.v2)).multiplyScalar(0.5);
+      this.body.worldToLocal(mid);
+      ki.visible = true;
+      ki.position.copy(mid);
+      ki.scale.setScalar(Math.max(0.001, 0.9 * ab * (1 + (motion ? 0.08 * Math.sin(this.life * 18) : 0))));
+      this.mKiCore.opacity = ab;
+      for (let i = 0; i < this.mKiHalo.length; i++) this.mKiHalo[i]!.opacity = HALO_ALPHA[i]! * ab;
     }
 
     // power-down smoke rising
@@ -1249,6 +1449,7 @@ class Anime implements AnimeFigure {
   }
 }
 
-export function createAnimeFigure(o: { look: MiniLook; detail: AnimeDetail; flat: boolean }): AnimeFigure {
-  return new Anime(o.look, o.detail, o.flat);
+/** `seed`: the node's id hash (viz_scene), which picks the ninja or the kunoichi stably for the node. */
+export function createAnimeFigure(o: { look: MiniLook; detail: AnimeDetail; flat: boolean; seed?: number }): AnimeFigure {
+  return new Anime(o.look, o.detail, o.flat, o.seed ?? Number.NaN);
 }

@@ -1734,3 +1734,8 @@ demo-P-SPACING.1: ## P-SPACING.1 (ADR-0633): Settings spacing audit in a running
 demo-P-FLEET.HEAD2: ## P-FLEET.HEAD2 (ADR-0634): the Fleet header keeps one window control (Minimize); pill restore; Escape closes the More menu before the panel; header spacing clean. Needs LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for a running QA instance
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
 	node desktop/scripts/demo_p_fleet_head_2.mjs
+
+.PHONY: demo-P-VIZ.6
+demo-P-VIZ.6: ## P-VIZ.6 (ADR-0635..0638): Visualize session ledger, throwables and Storm, a mixed cast, email and calendar connectors. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_6.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_ledger_model.test.ts desktop/renderer/viz_throw_math.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/mcp_catalog.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_6.mjs

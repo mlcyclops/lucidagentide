@@ -22,9 +22,20 @@
 // salt-and-pepper hair. Who is on duty is a seeded coin flip per Visualize open (a rebuild keeps the cast), and
 // the managers hand over every MANAGER_SWAP_MIN_S to MANAGER_SWAP_MAX_S: the one at the desk stands, walks off
 // to the side and dissolves, the other walks in and sits down (managerSwapAt()). Never mid-reaction.
+//
+// P-VIZ.6 (ADR-0637): the workers are a mixed cast. workerCast() gives each node a seeded gender (the same as its
+// anime figure's, viz_anime_pose.seededGender), a hairstyle and a top (men: a short-sleeve shirt or a V-neck
+// sweater with the persona tie; women: a blouse, a cardigan or a blazer with a persona necklace). Hits from the
+// throw tray play as one-shot clips over the activity (planOfficeHit / sampleOfficeHit, the anime figure's hit
+// rules): a paper ball, a rubber band, an energy drink (which leaves a charge), the Storm; the anime throwables
+// are a generic flinch here.
 
-import { bump, clamp01, ease, fract, type AnimeState, type Ease } from "./viz_anime_pose.ts";
+import {
+  addBoost, bump, clamp01, DRINK_CHARGE, DRINK_S, ease, fract, HIT_BLEND_S, HIT_OUT_S, HIT_TURN_S, seededGender, smoothEase,
+  type AnimeState, type Charge, type Ease, type FigureGender,
+} from "./viz_anime_pose.ts";
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
+import type { HitKind } from "./viz_throw_kinds.ts";
 
 export type OfficeState = AnimeState;
 export const OFFICE_STATES: readonly OfficeState[] = ["idle", "working", "paused", "ended", "killed", "failed"];
@@ -62,6 +73,8 @@ export const OFFICE_EMOTIONS = {
   blank: E("open", 0.95, 0, 0, 0.3, 0, 0, "flat"),
   pain: E("strain", 1, 0.3, 0, 1, -0.45, 0.06, "frown", true),
   ko: E("x", 1, 0, 0, 1, -0.3, 0.05, "wavy"),
+  // P-VIZ.6 (ADR-0637): wide awake after the energy drink
+  energized: E("open", 1.05, 0.2, 0.05, 0.55, 0.45, 0.12, "smile"),
 } satisfies Record<string, OfficeEmotion>;
 export type OfficeEmotionName = keyof typeof OFFICE_EMOTIONS;
 export const OFFICE_EMOTION_NAMES = Object.keys(OFFICE_EMOTIONS) as OfficeEmotionName[];
@@ -84,6 +97,24 @@ export interface OfficeLook {
   /** The hair's base color; `grey` the streaks through it (the managers' salt and pepper), null for plain hair. */
   hair: string; grey: string | null;
   glasses: boolean;
+  /** The mouth line: ink for the men, a lip color for the women. */
+  lip: string;
+}
+
+/** The workers' hairstyles (viz_office builds each per detail tier, shared and ref-counted). */
+export type WorkerHair = "crop" | "swept" | "curly" | "buzz" | "bob" | "ponytail" | "bun" | "long";
+export const MALE_HAIRS: readonly WorkerHair[] = ["crop", "swept", "curly", "buzz"];
+export const FEMALE_HAIRS: readonly WorkerHair[] = ["bob", "ponytail", "bun", "long"];
+/** What a worker wears over the slacks: the men a short-sleeve shirt or a V-neck sweater (both with the persona
+ *  tie); the women a blouse, a cardigan or a blazer (with a persona necklace). */
+export type WorkerTop = "shirt" | "sweater" | "blouse" | "cardigan" | "blazer";
+const MALE_TOPS: readonly WorkerTop[] = ["shirt", "shirt", "sweater"];
+const FEMALE_TOPS: readonly WorkerTop[] = ["blouse", "cardigan", "blazer"];
+export interface WorkerCast { readonly gender: FigureGender; readonly hair: WorkerHair; readonly top: WorkerTop }
+
+/** Long sleeves (the jacket rig) or short ones with bare forearms. */
+export function longSleeves(top: WorkerTop): boolean {
+  return top === "sweater" || top === "cardigan" || top === "blazer";
 }
 
 type Rgb = readonly [number, number, number];
@@ -91,8 +122,12 @@ const toHex = (c: Rgb): string => `#${c.map((v) => Math.round(Math.min(255, Math
 const mixRgb = (a: Rgb, b: Rgb, t: number): Rgb => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const WHITE: Rgb = [255, 255, 255];
 const CHARCOAL: Rgb = [0x2b, 0x30, 0x3a];
-export const OFFICE_SKINS: readonly string[] = ["#f3c9a1", "#e8b48a", "#c98c5e", "#8d5a3b", "#f6d6b8"];
-export const OFFICE_HAIRS: readonly string[] = ["#2b2118", "#4a3020", "#7a5230", "#c99a4a", "#1c1c22", "#8a3b22"];
+export const OFFICE_SKINS: readonly string[] = ["#f3c9a1", "#e8b48a", "#c98c5e", "#8d5a3b", "#f6d6b8", "#a86c43", "#6b4028"];
+export const OFFICE_HAIRS: readonly string[] = ["#2b2118", "#4a3020", "#7a5230", "#c99a4a", "#1c1c22", "#8a3b22", "#d8b878", "#b5672f"];
+const LIPS: readonly string[] = ["#9c4552", "#b0505e", "#8a3e48", "#a85a4a"];
+const INK_LINE = "#0a0a12";
+const CREAM: Rgb = [0xf6, 0xf1, 0xe8];
+const FEMALE_SLACKS: readonly string[] = ["#3c4250", "#2f2a33", "#5b5048", "#2c3446"];
 /** The managers' salt and pepper: a dark base with grey streaks (denser at the temples, see viz_office). */
 export const MANAGER_HAIR: Readonly<Record<ManagerVariant, { readonly base: string; readonly grey: string }>> = {
   man: { base: "#2f2924", grey: "#b8bcc2" },
@@ -110,21 +145,34 @@ function hash32(x: number): number {
 /** The office outfit from a mini look. The persona color is the tie (and tints the worker's shirt pastel);
  *  skin, hair and glasses vary by `seed` so a fleet is a cast, not clones. The boss is `variant`: the man wears
  *  a charcoal suit with a white shirt and the persona tie (reading glasses most of the time); the woman a navy
- *  blazer over a cream blouse with the persona scarf (glasses some of the time). Both have salt-and-pepper hair. */
+ *  blazer over a cream blouse with the persona scarf (glasses some of the time). Both have salt-and-pepper hair.
+ *  A worker's top follows workerCast(seed): a shirt or blouse shows on its own as a persona pastel; a sweater,
+ *  cardigan or blazer goes over a white shirt or cream blouse. */
 export function officeLook(l: MiniLook, seed: number, role: OfficeRole, variant: ManagerVariant = "man"): OfficeLook {
   const accent = parseHex(l.accent) ?? [0x41, 0xff, 0x8b];
   const h = hash32(Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 2147483647 : 0);
   if (role !== "boss") {
+    const cast = workerCast(seed);
+    const female = cast.gender === "female";
+    // the shirt or blouse is the light layer (a pastel of the persona when it shows on its own); the outer layer
+    // is a muted persona sweater or cardigan, or a dark blazer
+    const pastel = toHex(mixRgb(accent, WHITE, female ? 0.72 : 0.78));
+    const shirt = cast.top === "shirt" || cast.top === "blouse" ? pastel : toHex(female ? CREAM : WHITE);
+    const jacket = cast.top === "sweater" ? toHex(mixRgb(CHARCOAL, accent, 0.4))
+      : cast.top === "cardigan" ? toHex(mixRgb(accent, CHARCOAL, 0.35))
+      : cast.top === "blazer" ? toHex(mixRgb(NAVY, accent, 0.12))
+      : toHex(mixRgb(CHARCOAL, accent, 0.1));
     return {
-      shirt: toHex(mixRgb(accent, WHITE, 0.78)),
+      shirt,
       tie: toHex(accent),
-      slacks: "#3c4250",
-      jacket: toHex(mixRgb(CHARCOAL, accent, 0.1)),
-      shoe: "#1d1a19",
+      slacks: female ? FEMALE_SLACKS[(h >>> 20) % FEMALE_SLACKS.length]! : "#3c4250",
+      jacket,
+      shoe: female ? "#2a1c1a" : "#1d1a19",
       skin: OFFICE_SKINS[h % OFFICE_SKINS.length]!,
       hair: OFFICE_HAIRS[(h >>> 8) % OFFICE_HAIRS.length]!,
       grey: null,
       glasses: ((h >>> 16) & 1) === 1,
+      lip: female ? LIPS[(h >>> 24) % LIPS.length]! : INK_LINE,
     };
   }
   const woman = variant === "woman";
@@ -140,7 +188,18 @@ export function officeLook(l: MiniLook, seed: number, role: OfficeRole, variant:
     hair: MANAGER_HAIR[woman ? "woman" : "man"].base,
     grey: MANAGER_HAIR[woman ? "woman" : "man"].grey,
     glasses: woman ? ((hv >>> 18) & 3) === 0 : ((hv >>> 16) & 3) !== 0,
+    lip: woman ? LIPS[0]! : INK_LINE,
   };
+}
+
+/** A worker's gender, hairstyle and top from the node's seed: stable for the node (rebuilds and style switches),
+ *  the gender shared with its anime figure, about half and half over a fleet. */
+export function workerCast(seed: number): WorkerCast {
+  const gender = seededGender(seed);
+  const h = hash32(((Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 2147483647 : 0) ^ 0x2f6b1d3) | 0);
+  const hairs = gender === "female" ? FEMALE_HAIRS : MALE_HAIRS;
+  const tops = gender === "female" ? FEMALE_TOPS : MALE_TOPS;
+  return { gender, hair: hairs[h % hairs.length]!, top: tops[(h >>> 8) % tops.length]! };
 }
 
 // ------------------------------------------------------------------------------------------ pose vectors
@@ -207,6 +266,20 @@ export const OFFICE_POSES = {
   slamWind: { emotion: "angry", rootY: 0.02, spine: [-0.15, 0, 0], chest: [-0.1, 0, 0], head: [-0.15, 0, 0], shL: [-2.7, 0, -0.2], elL: [-0.6, 0, 0], shR: [-2.7, 0, 0.2], elR: [-0.6, 0, 0] },
   slamDown: { emotion: "furious", rootY: 0.03, spine: [0.4, 0, 0], chest: [0.15, 0, 0], head: [0.05, 0, 0], shL: [-1.5, 0, -0.25], elL: [-0.25, 0, 0], shR: [-1.5, 0, 0.25], elR: [-0.25, 0, 0] },
   shout: { emotion: "furious", rootY: 0.03, spine: [-0.2, 0, 0], chest: [-0.05, 0, 0], head: [-0.25, 0, 0], shL: [-1.9, 0, -0.45], elL: [-1.6, 0, 0], shR: [-1.9, 0, 0.45], elR: [-1.6, 0, 0] },
+
+  // ---- P-VIZ.6 (ADR-0637): hit reactions (OFFICE_HIT_CLIPS)
+  hitJolt: { emotion: "surprised", spine: [-0.18, 0, 0], head: [-0.22, 0, 0.18], shL: [-0.35, 0, -0.35], elL: [-0.7, 0, 0], shR: [-0.35, 0, 0.35], elR: [-0.7, 0, 0] },
+  rubHead: { emotion: "annoyed", spine: [0.12, 0, 0], head: [0.28, 0, -0.12], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.65, 0, 0.3], elR: [-1.9, 0, 0] },
+  // the rubber band stung his neck: the left hand clapped to it, shoulders hunched, head cocked
+  owClutch: { emotion: "pain", spine: [0.1, 0, 0], chest: [0.05, 0.2, 0], head: [0.05, 0.2, 0.28], shL: [-1.35, 0, 0.6], elL: [-2.2, 0, 0], shR: [-0.25, 0, 0.18], elR: [-0.6, 0, 0] },
+  // the energy drink: caught one-handed overhead, chugged (the sip, mirrored), then a fist up
+  catchCan: { emotion: "surprised", spine: [-0.08, 0, 0], head: [-0.2, 0, 0], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.3, 0, -0.1], elR: [-0.35, 0, 0] },
+  chug: { emotion: "calm", spine: [-0.15, 0, 0], head: [-0.45, 0, 0], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-1.3, 0, -0.55], elR: [-2.0, 0, 0] },
+  pumped: { emotion: "energized", spine: [-0.05, 0, 0], head: [-0.05, 0, 0], shL: [-0.6, 0, 0.28], elL: [-1.05, 0, 0], shR: [-1.5, 0, 0.35], elR: [-2.2, 0, 0] },
+  // Storm: ducking low over the desk and holding on, then smoothing the hair and the tie back down
+  duck: { emotion: "strain", rootY: -0.02, spine: [0.7, 0, 0], chest: [0.2, 0, 0], neck: [0.1, 0, 0], head: [0.1, 0, 0], shL: [-1.6, 0, 0.35], elL: [-0.6, 0, 0], shR: [-1.6, 0, -0.35], elR: [-0.6, 0, 0] },
+  smoothHair: { emotion: "skeptical", spine: [0.02, 0, 0], head: [-0.05, 0, 0.1], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.7, 0, 0.25], elR: [-1.6, 0, 0] },
+  smoothTie: { emotion: "content", head: [0.3, 0, 0], shL: [-0.6, 0, 0.35], elL: [-1.9, 0, 0], shR: [-0.6, 0, -0.35], elR: [-1.9, 0, 0] },
 } as const satisfies Record<string, OfficePoseDef>;
 export type OfficePoseName = keyof typeof OFFICE_POSES;
 
@@ -485,6 +558,116 @@ export function lookAngles(dx: number, dy: number, dz: number, out: LookAngles):
   const pitch = -Math.atan2(dy, Math.hypot(dx, dz));
   out.yaw = Math.max(-LOOK_YAW_MAX, Math.min(LOOK_YAW_MAX, yaw));
   out.pitch = Math.max(-LOOK_PITCH_MAX, Math.min(LOOK_PITCH_MAX, pitch));
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------ hits (P-VIZ.6)
+//
+// The anime figure's hit rules (viz_anime_pose: full weight over the activity from the start, blended in from the
+// pose on screen over HIT_BLEND_S, turned toward the throw over HIT_TURN_S, handed back over the last HIT_OUT_S).
+//   paper: a jolt, rub the head, look round for who threw it with annoyed eyes, back to work.
+//   band: a sharp "ow", the hand clapped to the neck, a glare toward the thrower.
+//   drink: caught overhead, chugged, a fist up; the charge (DRINK_CHARGE over DRINK_S) speeds the work up.
+//   storm: papers fly off the pile, he ducks and holds the desk, then smooths the hair and the tie (no turn).
+//   flinch: the anime throwables (stars, bolt, orb) here: a jolt and an annoyed look.
+
+export type OfficeHit = "paper" | "band" | "drink" | "storm" | "flinch";
+/** drink: the can is in the hand between these hit times; the chug tilts it over CHUG_AT..CHUG_END. */
+export const CAN_GRAB_S = 0.12;
+export const CAN_DROP_S = 2.1;
+const CHUG_AT = 0.7;
+const CHUG_END = 1.55;
+/** storm: the papers leave the pile at this hit time. */
+export const STORM_PAPERS_AT = 0.1;
+
+export const OFFICE_HIT_CLIPS: Readonly<Record<OfficeHit, OfficeClip>> = {
+  paper: {
+    len: 2.0, loop: false,
+    keys: [K(0, "hitJolt"), K(0.08, "hitJolt", "snap"), K(0.45, "rubHead"), K(1.1, "rubHead"), K(1.35, "sitBack", "smooth", { emotion: "annoyed" }), K(2.0, "sitBack", "smooth", { emotion: "annoyed" })],
+  },
+  band: { len: 1.8, loop: false, keys: [K(0, "hitJolt"), K(0.06, "owClutch", "snap"), K(0.7, "owClutch"), K(1.0, "owClutch", "smooth", { emotion: "glare" }), K(1.8, "owClutch", "smooth", { emotion: "glare" })] },
+  drink: {
+    len: 2.4, loop: false,
+    keys: [K(0, "sitBack"), K(CAN_GRAB_S, "catchCan", "snap"), K(0.5, "catchCan", "smooth", { emotion: "happy" }), K(CHUG_AT, "chug"), K(CHUG_END, "chug"), K(1.7, "pumped", "snap"), K(2.4, "pumped")],
+  },
+  storm: {
+    len: 3.0, loop: false,
+    keys: [K(0, "hitJolt"), K(0.12, "duck", "snap"), K(1.4, "duck"), K(1.8, "smoothHair"), K(2.3, "smoothTie"), K(3.0, "smoothTie")],
+  },
+  flinch: { len: 1.6, loop: false, keys: [K(0, "hitJolt"), K(0.08, "hitJolt", "snap"), K(0.6, "sitBack", "smooth", { emotion: "annoyed" }), K(1.6, "sitBack", "smooth", { emotion: "annoyed" })] },
+};
+
+export interface OfficeHitPlan {
+  readonly kind: HitKind;
+  readonly play: OfficeHit;
+  readonly len: number;
+  readonly turns: boolean;
+  readonly turnFrom: number;
+  readonly strength: number;
+}
+
+export interface OfficeHitSample {
+  body: number; blend: number; turn: number;
+  emotion: OfficeEmotionName | null;
+  /** drink: the can is in the hand, and how far it is tipped up to drink (0..1). */
+  can: boolean; tilt: number;
+  /** storm: the flying papers' progress 0..1 (paperFlight), -1 when none fly. */
+  papers: number;
+  shake: number;
+  done: boolean;
+}
+
+export function clearOfficeHit(out: OfficeHitSample): OfficeHitSample {
+  out.body = 0; out.blend = 1; out.turn = 0; out.emotion = null; out.can = false; out.tilt = 0; out.papers = -1; out.shake = 0; out.done = true;
+  return out;
+}
+
+export function newOfficeHitSample(): OfficeHitSample {
+  return clearOfficeHit({ body: 0, blend: 1, turn: 0, emotion: null, can: false, tilt: 0, papers: -1, shake: 0, done: true });
+}
+
+export function officeHitPlay(kind: HitKind): OfficeHit {
+  return kind === "paper" || kind === "band" || kind === "drink" || kind === "storm" ? kind : "flinch";
+}
+
+/** Plans a hit; `prevTurn` is the turn weight of a hit still playing (0 when none), so the new one turns on
+ *  without a jump. */
+export function planOfficeHit(kind: HitKind, strength: number, prevTurn: number): OfficeHitPlan {
+  const play = officeHitPlay(kind);
+  const s = Number.isFinite(strength) ? clamp01(strength) : 1;
+  const turnFrom = clamp01(Number.isFinite(prevTurn) ? prevTurn : 0);
+  return { kind, play, len: OFFICE_HIT_CLIPS[play].len, turns: play !== "storm", turnFrom, strength: s };
+}
+
+/** The office figure's charge from a hit: only the energy drink leaves one. */
+export function officeHitCharge(c: Charge, kind: HitKind, strength: number): Charge {
+  const s = Number.isFinite(strength) ? clamp01(strength) : 1;
+  return kind === "drink" ? addBoost(c, DRINK_CHARGE * s, DRINK_S) : c;
+}
+
+const HIT_SCRATCH = new Float32Array(OFFICE_POSE_LEN);
+const HIT_INFO: OfficeClipSample = { emotion: "neutral", gaze: 0 };
+
+/** The hit `t` seconds in: weights and effects into `out`, the clip's pose into `pose` (when given). Past `len`
+ *  it is cleared and `done`. */
+export function sampleOfficeHit(p: OfficeHitPlan, t: number, out: OfficeHitSample, pose?: Float32Array): OfficeHitSample {
+  const tt = Number.isFinite(t) ? Math.max(0, t) : 0;
+  if (tt >= p.len) return clearOfficeHit(out);
+  out.done = false;
+  const outAt = p.len - HIT_OUT_S;
+  out.body = tt < outAt ? 1 : Math.max(0, 1 - smoothEase((tt - outAt) / HIT_OUT_S));
+  out.blend = smoothEase(tt / HIT_BLEND_S);
+  const tu = smoothEase(tt / HIT_TURN_S);
+  // the turn hands back with the body: holding it at full weight to the end snapped the figure round at `len`
+  out.turn = (p.turns ? p.turnFrom + (1 - p.turnFrom) * tu : p.turnFrom * (1 - tu)) * out.body;
+  sampleOfficeClip(OFFICE_HIT_CLIPS[p.play], tt, pose ?? HIT_SCRATCH, HIT_INFO);
+  out.emotion = tt < p.len - HIT_OUT_S * 0.5 ? HIT_INFO.emotion : null;
+  out.can = p.play === "drink" && tt >= CAN_GRAB_S && tt < CAN_DROP_S;
+  out.tilt = p.play === "drink" ? bump(tt, CHUG_AT, CHUG_AT + 0.2, CHUG_END - 0.15, CHUG_END) : 0;
+  const pp = tt - STORM_PAPERS_AT;
+  out.papers = p.play === "storm" && pp >= 0 && pp < PAPER_S ? pp / PAPER_S : -1;
+  const kick = p.play === "storm" ? 0.3 : p.play === "drink" ? 0.15 : 0.25;
+  out.shake = tt < kick ? (p.play === "drink" ? 0.3 : 0.7) * p.strength * (1 - tt / kick) : 0;
   return out;
 }
 

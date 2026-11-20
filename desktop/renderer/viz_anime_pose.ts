@@ -16,8 +16,13 @@
 //
 // P-VIZ.4 (ADR-0628): the `supervise` clip (the hub watching his team, with a ticking holo checklist), the glare
 // and angry eyes, and the reaction timeline (stare / outburst) the figure layers over its activity.
+//
+// P-VIZ.6 (ADR-0637): who a node is (seededGender, shared with the office cast so a node keeps its gender across
+// styles), the hit reactions (planHit / sampleHit: a one-shot clip per hit, turned toward the throw, replaced
+// cleanly by the next hit) and the charge a bolt, an energy ball or an energy drink leaves behind (Charge).
 
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
+import type { HitKind } from "./viz_throw_kinds.ts";
 
 export type AnimeState = "idle" | "working" | "paused" | "ended" | "killed" | "failed";
 export const ANIME_STATES: readonly AnimeState[] = ["idle", "working", "paused", "ended", "killed", "failed"];
@@ -46,6 +51,8 @@ export const EMOTIONS = {
   // P-VIZ.4 (ADR-0628) reactions: the narrowed, annoyed stare at the camera and the outburst's sharp V brows
   glare: E("open", 0.42, 0.5, 0.42, 0.4, 0.85, -0.14),
   angry: E("open", 0.55, 0.7, 0.3, 0.36, 1.05, -0.2),
+  // P-VIZ.6 (ADR-0637): the caught throwing star, heavy-lidded and pleased with himself
+  smug: E("open", 0.42, -0.15, 0.4, 0.85, -0.25, 0.1),
 } satisfies Record<string, Emotion>;
 export type EmotionName = keyof typeof EMOTIONS;
 export const EMOTION_NAMES = Object.keys(EMOTIONS) as EmotionName[];
@@ -146,6 +153,23 @@ export const POSES = {
   superviseCheck: { emotion: "focused", chest: [0.06, -0.15, 0], head: [0.38, -0.4, 0], ...CROSSED, ...WIDE_FEET },
   // The outburst's upper body (layered over whatever he is doing): leaning in, both fists raised beside the face.
   outburst: { emotion: "angry", spine: [0.06, 0, 0], chest: [0.1, 0, 0], shL: [-1.45, 0, -0.4], elL: [-1.75, 0, 0], shR: [-1.45, 0, 0.4], elR: [-1.75, 0, 0] },
+
+  // ---- P-VIZ.6 (ADR-0637): hit reactions (HIT_CLIPS, played by the figure's hit layer over the activity)
+  // knocked back by something small: head snapped back, arms flung up and out
+  hitRecoil: { emotion: "surprised", rootY: 0.02, spine: [-0.28, 0, 0], head: [-0.35, 0, 0.15], shL: [-0.35, 0, -0.45], elL: [-0.7, 0, 0], shR: [-0.35, 0, 0.45], elR: [-0.7, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  // rubbing the sore spot: the right hand up at the brow (the scan's shading arm, folded further back)
+  rubHead: { emotion: "glare", spine: [0.12, 0, 0], head: [0.28, 0, -0.12], shL: [0.1, 0, -0.25], elL: [-0.5, 0, 0], shR: [-3.0, 0, 0.42], elR: [0.78, 0, -0.95], hipL: [0, 0, -0.1], hipR: [0, 0, 0.1] },
+  // throwing stars: a forearm up across the face on alternate sides (leaning out of the line), then one caught
+  starBlockR: { emotion: "determined", rootY: -0.05, root: [0, 0.25, 0], spine: [-0.08, 0, -0.06], chest: [0, 0.3, 0], head: [0, -0.2, 0], shL: [-1.0, 0, 0.4], elL: [-1.9, 0, 0], shR: [-1.55, 0, -0.15], elR: [-1.95, 0, 0], ...KATA_LEGS },
+  starBlockL: { emotion: "determined", rootY: -0.05, root: [0, -0.25, 0], spine: [-0.08, 0, 0.12], chest: [0, -0.3, 0], head: [0, 0.2, 0], shL: [-1.55, 0, 0.15], elL: [-1.95, 0, 0], shR: [-1.0, 0, -0.4], elR: [-1.9, 0, 0], ...KATA_LEGS },
+  starCatch: { emotion: "smug", chest: [-0.05, 0.15, 0], head: [-0.05, 0.1, 0.08], shL: [0.15, 0, -0.55], elL: [-1.7, 0, 0], shR: [-2.0, 0, -0.25], elR: [-1.1, 0, 0], hipL: [0, 0, -0.15], hipR: [0, 0, 0.15] },
+  // struck by lightning: rigid, arms thrown out, head back
+  boltStruck: { emotion: "strain", rootY: 0.04, spine: [-0.3, 0, 0], chest: [-0.15, 0, 0], head: [-0.45, 0, 0], shL: [0.1, 0, -1.25], elL: [-0.25, 0, 0], shR: [0.1, 0, 1.25], elR: [-0.25, 0, 0], hipL: [0, 0, -0.22], hipR: [0, 0, 0.22] },
+  // the energy ball: both hands out to take it, then drawn in to the chest
+  orbReach: { emotion: "determined", spine: [0.1, 0, 0], chest: [0.08, 0, 0], head: [0.05, 0, 0], shL: [-1.4, 0, 0.32], elL: [-0.35, 0, 0], shR: [-1.4, 0, -0.32], elR: [-0.35, 0, 0], hipL: [-0.3, 0, -0.2], kneeL: [0.35, 0, 0], hipR: [0.2, 0, 0.2], kneeR: [0.2, 0, 0] },
+  orbAbsorb: { emotion: "calm", spine: [-0.05, 0, 0], chest: [-0.12, 0, 0], head: [-0.12, 0, 0], shL: [-0.85, 0, 0.42], elL: [-2.2, 0, 0], shR: [-0.85, 0, -0.42], elR: [-2.2, 0, 0], hipL: [0, 0, -0.18], hipR: [0, 0, 0.18] },
+  // Storm: a wide power-up stance, chest and face up to the sky, fists low and out
+  stormSky: { emotion: "determined", rootY: -0.06, chest: [-0.28, 0, 0], neck: [-0.25, 0, 0], head: [-0.5, 0, 0], shL: [0.25, 0, -0.65], elL: [-0.55, 0, 0], shR: [0.25, 0, 0.65], elR: [-0.55, 0, 0], hipL: [-0.25, 0, -0.32], kneeL: [0.4, 0, 0], hipR: [-0.25, 0, 0.32], kneeR: [0.4, 0, 0] },
 } as const satisfies Record<string, PoseDef>;
 export type PoseName = keyof typeof POSES;
 export const LAB_POSES: readonly PoseName[] = ["stance", "typing", "powerup", "kiblast", "dash", "meditate", "portrait", "victory", "powerdown"];
@@ -551,5 +575,230 @@ export function distributeYaw(need: number, out: Float32Array): Float32Array {
     rest -= v;
   }
   out[0] = rest;
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------ who a node is (P-VIZ.6)
+
+export type FigureGender = "male" | "female";
+
+function mix32(x: number): number {
+  let h = (x + 0x9e3779b9) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** A node's gender from its seed (viz_scene's id hash): stable for the id, about half and half over a fleet, and
+ *  the same in both styles (the office worker and the anime figure read it from the same seed). */
+export function seededGender(seed: number): FigureGender {
+  const s = Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 4294967296 : 0;
+  return mix32((s ^ 0x5bd1e995) | 0) >>> 31 === 1 ? "female" : "male";
+}
+
+// ------------------------------------------------------------------------------------------ charge (P-VIZ.6)
+//
+// What a hit leaves behind: `boost` (a bolt, an energy drink, the anime Storm) falls linearly to 0 by the time the
+// longest boost still running ends; `orbs` (energy balls absorbed, up to ORB_MAX) fall linearly to 0 over
+// ORB_DECAY_S from the last one. The figure decays it on the wall clock in update(); `charge` is chargeLevel().
+
+export const HIT_KINDS: readonly HitKind[] = ["paper", "band", "drink", "stars", "bolt", "orb", "storm"];
+export const BOLT_CHARGE = 1;
+export const BOLT_S = 15;
+export const DRINK_CHARGE = 0.6;
+export const DRINK_S = 12;
+export const STORM_CHARGE = 0.5;
+export const STORM_CHARGE_S = 6;
+export const ORB_MAX = 3;
+export const ORB_DECAY_S = 60;
+/** Each absorbed energy ball grows the figure this much (3 stacks: +12 percent). */
+export const ORB_GROW = 0.04;
+
+export interface Charge { boost: number; boostRate: number; orbs: number; orbRate: number }
+
+export function newCharge(): Charge {
+  return { boost: 0, boostRate: 0, orbs: 0, orbRate: 0 };
+}
+
+/** A boost of `level` (0..1) lasting `dur` seconds: the level is the higher of the two, and it runs out when the
+ *  longer of the two would have. */
+export function addBoost(c: Charge, level: number, dur: number): Charge {
+  const l = Number.isFinite(level) ? clamp01(level) : 0;
+  if (l <= 0 || !(dur > 0)) return c;
+  const left = c.boostRate > 0 ? c.boost / c.boostRate : 0;
+  c.boost = Math.max(c.boost, l);
+  c.boostRate = c.boost / Math.max(left, dur);
+  return c;
+}
+
+/** One more energy ball (never more than ORB_MAX): the growth decays to 0 over ORB_DECAY_S from now. */
+export function addOrb(c: Charge): Charge {
+  c.orbs = Math.min(ORB_MAX, c.orbs + 1);
+  c.orbRate = c.orbs / ORB_DECAY_S;
+  return c;
+}
+
+export function decayCharge(c: Charge, dt: number): Charge {
+  const d = Number.isFinite(dt) && dt > 0 ? dt : 0;
+  c.boost = Math.max(0, c.boost - c.boostRate * d);
+  if (c.boost === 0) c.boostRate = 0;
+  c.orbs = Math.max(0, c.orbs - c.orbRate * d);
+  if (c.orbs === 0) c.orbRate = 0;
+  return c;
+}
+
+/** 0..1: the stronger of the boost and the absorbed balls (each ball a third). */
+export function chargeLevel(c: Charge): number {
+  return clamp01(Math.max(c.boost, c.orbs / ORB_MAX));
+}
+
+/** The figure's size factor from the absorbed balls: 1 .. 1 + ORB_MAX * ORB_GROW. */
+export function orbScale(c: Charge): number {
+  return 1 + ORB_GROW * Math.min(ORB_MAX, Math.max(0, c.orbs));
+}
+
+/** The activity clock's speed-up while energized: up to 1.8x at full charge. */
+export function chargeTempo(level: number): number {
+  return 1 + 0.8 * (Number.isFinite(level) ? clamp01(level) : 0);
+}
+
+/** The anime figure's charge from a hit: the bolt supercharges, an energy ball stacks, the Storm powers up a little.
+ *  The office throwables are only a flinch here, so they leave no charge. */
+export function animeHitCharge(c: Charge, kind: HitKind, strength: number): Charge {
+  const s = Number.isFinite(strength) ? clamp01(strength) : 1;
+  if (kind === "bolt") return addBoost(c, BOLT_CHARGE * s, BOLT_S);
+  if (kind === "orb") return addOrb(c);
+  if (kind === "storm") return addBoost(c, STORM_CHARGE * s, STORM_CHARGE_S);
+  return c;
+}
+
+// ------------------------------------------------------------------------------------------ hits (P-VIZ.6)
+//
+// A hit is a one-shot clip the figure plays OVER its activity at full weight: it blends in over HIT_BLEND_S from
+// the pose on screen when the hit landed (so a hit that replaces a stare, an outburst or another hit never pops),
+// turns the body toward the throw over HIT_TURN_S, and hands back to the activity over the last HIT_OUT_S. The
+// activity clock keeps running underneath, so the figure returns to whatever it was doing.
+//   flinch: the office throwables (paper, band, drink) on the anime figure: recoil, rub the head, glare.
+//   stars: the scene sends three ~0.15 s apart; each one within STAR_CHAIN_S of the last is the next in the chain:
+//     block with the right forearm, block with the left (a dodge lean), catch the third, smug.
+//   bolt: struck rigid, then the power-up stance (the charge runs ~15 s). orb: hands out, absorb it to the chest,
+//   power up (and grow). storm: a power-up stance with the face to the sky (no turn).
+
+export type AnimeHit = "flinch" | "starBlockR" | "starBlockL" | "starCatch" | "bolt" | "orb" | "storm";
+export const HIT_BLEND_S = 0.12;
+export const HIT_TURN_S = 0.3;
+export const HIT_OUT_S = 0.45;
+export const STAR_CHAIN_S = 0.7;
+const STAR_CHAIN: readonly AnimeHit[] = ["starBlockR", "starBlockL", "starCatch"];
+
+export const HIT_CLIPS: Readonly<Record<AnimeHit, Clip>> = {
+  flinch: {
+    len: 2.0, loop: false,
+    keys: [K(0, "hitRecoil"), K(0.08, "hitRecoil", "snap"), K(0.4, "flinch"), K(0.9, "rubHead"), K(1.5, "rubHead"), K(2.0, "portrait", "smooth", { emotion: "glare" })],
+  },
+  starBlockR: { len: 0.9, loop: false, keys: [K(0, "stance"), K(0.1, "starBlockR", "snap"), K(0.9, "starBlockR")] },
+  starBlockL: { len: 0.9, loop: false, keys: [K(0, "starBlockR"), K(0.1, "starBlockL", "snap"), K(0.9, "starBlockL")] },
+  starCatch: { len: 2.2, loop: false, keys: [K(0, "starBlockL"), K(0.1, "starCatch", "snap", { emotion: "surprised" }), K(0.45, "starCatch"), K(2.2, "starCatch")] },
+  bolt: {
+    len: 2.4, loop: false,
+    keys: [K(0, "boltStruck"), K(0.06, "boltStruck", "snap"), K(0.55, "boltStruck"), K(0.8, "powerupWind"), K(0.92, "powerup", "snap"), K(1.7, "powerup"), K(2.4, "stance", "smooth", { emotion: "determined" })],
+  },
+  orb: {
+    len: 2.4, loop: false,
+    keys: [K(0, "orbReach", "smooth", { emotion: "surprised" }), K(0.15, "orbReach", "snap"), K(0.7, "orbAbsorb"), K(1.35, "orbAbsorb"), K(1.55, "powerup", "snap", { emotion: "determined" }), K(2.4, "powerup", "smooth", { emotion: "determined" })],
+  },
+  storm: { len: 3.0, loop: false, keys: [K(0, "powerupWind"), K(0.3, "stormSky", "snap"), K(3.0, "stormSky")] },
+};
+
+export interface HitPlan {
+  readonly kind: HitKind;
+  readonly play: AnimeHit;
+  /** stars: 0..2, the place in the chain; -1 for anything else. */
+  readonly star: number;
+  readonly len: number;
+  /** Does it turn toward the throw (everything but the Storm)? */
+  readonly turns: boolean;
+  /** The turn weight already on when this hit landed (a replaced hit's): it eases on from there. */
+  readonly turnFrom: number;
+  readonly strength: number;
+}
+
+export interface HitSample {
+  /** Weight of the hit pose over the activity: 1 from the start, out over the last HIT_OUT_S. */
+  body: number;
+  /** How far the hit pose has blended from the pose on screen when the hit landed (0..1). */
+  blend: number;
+  /** Weight of the turn toward the throw. */
+  turn: number;
+  /** The hit's eyes (the clip's), or null for the activity's own. */
+  emotion: EmotionName | null;
+  /** Aura flare, bolt crackle, the energy ball held between the hands (0..1) and a short shake. */
+  aura: number;
+  crackle: number;
+  absorb: number;
+  shake: number;
+  done: boolean;
+}
+
+export function clearHit(out: HitSample): HitSample {
+  out.body = 0; out.blend = 1; out.turn = 0; out.emotion = null; out.aura = 0; out.crackle = 0; out.absorb = 0; out.shake = 0; out.done = true;
+  return out;
+}
+
+export function newHitSample(): HitSample {
+  return clearHit({ body: 0, blend: 1, turn: 0, emotion: null, aura: 0, crackle: 0, absorb: 0, shake: 0, done: true });
+}
+
+/** Plans a hit. `prev` is the hit still playing (null when none) and `prevT` how far into it; `prevTurn` its
+ *  current turn weight, so the new hit turns on without a jump. */
+export function planHit(kind: HitKind, strength: number, prev: HitPlan | null, prevT: number, prevTurn: number): HitPlan {
+  const s = Number.isFinite(strength) ? clamp01(strength) : 1;
+  let play: AnimeHit, star = -1;
+  if (kind === "stars") {
+    star = prev && prev.kind === "stars" && prevT >= 0 && prevT < STAR_CHAIN_S ? (prev.star + 1) % STAR_CHAIN.length : 0;
+    play = STAR_CHAIN[star]!;
+  } else play = kind === "bolt" || kind === "orb" || kind === "storm" ? kind : "flinch";
+  const turnFrom = clamp01(Number.isFinite(prevTurn) ? prevTurn : 0);
+  return { kind, play, star, len: HIT_CLIPS[play].len, turns: play !== "storm", turnFrom, strength: s };
+}
+
+const HIT_SCRATCH = new Float32Array(POSE_LEN);
+const HIT_INFO: ClipSample = { emotion: "neutral", gaze: 0 };
+
+/** The hit `t` seconds in: weights and effect levels into `out`, the hit clip's pose into `pose` (when given).
+ *  Past `len` it is cleared and `done`. */
+export function sampleHit(p: HitPlan, t: number, out: HitSample, pose?: Float32Array): HitSample {
+  const tt = Number.isFinite(t) ? Math.max(0, t) : 0;
+  if (tt >= p.len) return clearHit(out);
+  out.done = false;
+  const outAt = p.len - HIT_OUT_S;
+  out.body = tt < outAt ? 1 : Math.max(0, 1 - smoothEase((tt - outAt) / HIT_OUT_S));
+  out.blend = smoothEase(tt / HIT_BLEND_S);
+  const tu = smoothEase(tt / HIT_TURN_S);
+  // the turn hands back with the body: holding it at full weight to the end snapped the figure round at `len`
+  out.turn = (p.turns ? p.turnFrom + (1 - p.turnFrom) * tu : p.turnFrom * (1 - tu)) * out.body;
+  sampleClip(HIT_CLIPS[p.play], tt, pose ?? HIT_SCRATCH, HIT_INFO);
+  out.emotion = tt < p.len - HIT_OUT_S * 0.5 ? HIT_INFO.emotion : null;
+  const s = p.strength;
+  out.aura = 0; out.crackle = 0; out.absorb = 0; out.shake = 0;
+  switch (p.play) {
+    case "bolt":
+      out.crackle = s * bump(tt, 0, 0.04, 0.5, 0.8);
+      out.aura = s * bump(tt, 0.75, 0.9, 1.7, 2.3);
+      out.shake = tt < 0.5 ? s * (1 - tt / 0.5) : 0;
+      break;
+    case "orb":
+      out.absorb = bump(tt, 0.05, 0.2, 1.3, 1.6);
+      out.aura = s * bump(tt, 1.45, 1.6, 2.0, 2.4);
+      break;
+    case "storm":
+      out.aura = s * bump(tt, 0.25, 0.45, 2.4, 3.0);
+      break;
+    case "flinch":
+      out.shake = tt < 0.25 ? 0.6 * s * (1 - tt / 0.25) : 0;
+      break;
+    default:
+      out.shake = tt < 0.12 ? 0.4 * s * (1 - tt / 0.12) : 0;
+  }
   return out;
 }

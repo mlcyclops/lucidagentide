@@ -35,20 +35,34 @@
 // the three shared canvases (code, clipboard checklist, the sleeping "Z") are shared per detail tier and
 // ref-counted; materials, the face canvas and the per-figure screen texture (a clone sharing the code canvas's
 // GPU upload) are per figure and freed by dispose(). update() allocates nothing.
+//
+// P-VIZ.6 (ADR-0637): the workers are men and women (viz_office_pose.workerCast, seeded per node): a hairstyle
+// from four per gender (crop, swept, curly, buzz; bob, ponytail, bun, long; each built once per detail tier,
+// shared and ref-counted), a short-sleeve shirt or blouse, or long sleeves (a sweater, cardigan or blazer over a
+// shirt or blouse, on the boss's jacket rig), the persona tie for the men and a persona necklace for the women,
+// lashes and a lip color for the women, slightly narrower shoulders. hit() plays the throw tray's reactions over
+// the activity (turning toward the throw; the drink in hand; the Storm's papers off the pile) and the energy
+// drink's charge speeds the work up and warms the tie, trim and screen until it decays.
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { BLINK_LEVELS, blinkStep, bump, fract, gazeBucket, gazeOfBucket, nextBlinkDelay, tapCurve } from "./viz_anime_pose.ts";
+import {
+  BLINK_LEVELS, blinkStep, bump, chargeLevel, chargeTempo, decayCharge, fract, gazeBucket, gazeOfBucket, HIT_KINDS, newCharge, nextBlinkDelay,
+  tapCurve,
+} from "./viz_anime_pose.ts";
 import {
   crtOff, ENTER_SLAM_S, enterTapBoost, lookAngles, mugHeld, OFFICE_CLIPS, OFFICE_EMOTIONS, OFFICE_POSE_LEN, OFFICE_STATES, OFFICE_STILL_T,
   officeClipDone, officeClipFor, officeClipTime, officeFaceKey, officeJointOffset, OFFICE_JOINTS, officeLook, officeTempo, officeTransitionShot,
   OUTBURST_S, pageFlipAt, paperFlight, printHeld, reactAt, sampleOfficeClip, stareHold, tapRate, zedAt,
   applyManagerSwap, MANAGER_HAIR, MANAGER_VARIANTS, managerSwapAt, managerSwapDue, managerSwapReady, openManagerCast, otherManager, recastManager,
+  clearOfficeHit, longSleeves, newOfficeHitSample, officeHitCharge, planOfficeHit, sampleOfficeHit, workerCast,
   type Crt, type LookAngles, type ManagerCast, type ManagerMemo, type ManagerVariant, type MouthShape, type OfficeClipName, type OfficeClipSample,
-  type OfficeEmotion, type OfficeRole, type OfficeState, type Paper, type ReactKind, type ReactSample, type SwapSample, type Zed,
+  type OfficeEmotion, type OfficeHitPlan, type OfficeRole, type OfficeState, type Paper, type ReactKind, type ReactSample, type SwapSample,
+  type WorkerCast, type WorkerHair, type Zed,
 } from "./viz_office_pose.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
+import type { HitKind } from "./viz_throw_kinds.ts";
 
 export type { ManagerVariant, OfficeRole, OfficeState } from "./viz_office_pose.ts";
 export type OfficeDetail = "full" | "reduced" | "minimal";
@@ -66,6 +80,13 @@ export interface OfficeFigure {
   react(kind: ReactKind, camera: THREE.Camera): void;
   /** Seconds the agent has been idle: coffee under 60 s, head down on the desk after. */
   setIdleSeconds(sec: number): void;
+  /** Something reached him (P-VIZ.6): a paper ball, a rubber band, an energy drink or the Storm (the anime
+   *  throwables are a generic flinch). `from` is the world point the throw came from (he turns toward it);
+   *  `strength` 0..1 scales the effect. A hit replaces any reaction or hit playing; a no-op once disposed, when
+   *  killed, or mid-handover. */
+  hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength?: number): void;
+  /** 0..1: how energized he is right now (the energy drink); decays inside update(). */
+  readonly charge: number;
   /** The boss only (a worker ignores it): "man" or "woman" pins that manager (handed over at the next quiet
    *  moment, animated under motion), "auto" (the default) alternates them every 8 to 15 minutes. */
   setManagerVariant(v: ManagerVariant | "auto"): void;
@@ -83,7 +104,8 @@ export interface OfficeFigureOptions {
   detail: OfficeDetail;
   flat: boolean;
   role: OfficeRole;
-  /** Varies skin, hair and glasses across a fleet (viz_scene passes the node's id hash). */
+  /** Picks a worker's gender, hairstyle, top, skin, hair color and glasses, stably per node (viz_scene passes the
+   *  node's id hash). */
   seed: number;
   /** 3D only: build the low fabric cubicle around the desk; its top edges are drawn with `status` (owned and
    *  recolored by the caller, never disposed here). */
@@ -440,7 +462,8 @@ interface GeoSet {
   pelvis: THREE.BufferGeometry; torso: THREE.BufferGeometry; belt: THREE.BufferGeometry | null; collar: THREE.BufferGeometry | null;
   tieKnot: THREE.BufferGeometry; tieBlade: THREE.BufferGeometry; vee: THREE.BufferGeometry; neck: THREE.BufferGeometry;
   head: THREE.BufferGeometry; face: THREE.BufferGeometry; ear: THREE.BufferGeometry | null; nose: THREE.BufferGeometry;
-  hair: THREE.BufferGeometry;
+  /** The women workers' persona necklace (chest frame) and the energy drink can (in the right hand). */
+  necklace: THREE.BufferGeometry; can: THREE.BufferGeometry;
   shoulderCap: THREE.BufferGeometry; sleeve: THREE.BufferGeometry; upperArm: THREE.BufferGeometry; foreArm: THREE.BufferGeometry;
   jacketCap: THREE.BufferGeometry; jacketUpper: THREE.BufferGeometry; jacketFore: THREE.BufferGeometry; hand: THREE.BufferGeometry;
   thigh: THREE.BufferGeometry; shin: THREE.BufferGeometry; shoe: THREE.BufferGeometry;
@@ -467,12 +490,12 @@ function buildGeo(t: Tier): GeoSet {
     star.push(placed(new THREE.BoxGeometry(0.028, 0.022, 0.2), Math.sin(a) * 0.1, 0.045, Math.cos(a) * 0.1 - 0.02, 0, a));
     star.push(placed(new THREE.SphereGeometry(0.022, S[0], S[1]), Math.sin(a) * 0.2, 0.022, Math.cos(a) * 0.2 - 0.02));
   }
-  const hairCap = new THREE.SphereGeometry(0.163, t.head[0], t.head[1] >> 1, 0, TAU, 0, Math.PI / 2);
-  hairCap.rotateX(-0.45);
-  hairCap.translate(0, 0.01, -0.01);
-  const tuft = new THREE.SphereGeometry(0.07, S[0], S[1]);
-  tuft.scale(1.4, 0.55, 1);
-  placed(tuft, 0.05, 0.14, 0.06, 0, 0, -0.3);
+  // the necklace: a fine loop around the collar, dipping in front onto the blouse, with a pendant
+  const chain = new THREE.TorusGeometry(0.072, 0.0055, 4, Math.max(12, L + 4));
+  chain.rotateX(Math.PI / 2 + 0.5);
+  chain.scale(1, 1, 1.85);
+  chain.translate(0, 0.185, 0);
+  const pendant = placed(new THREE.SphereGeometry(0.014, S[0], S[1]), 0, 0.137, 0.12);
   const mug = new THREE.CylinderGeometry(0.035, 0.032, 0.075, L);
   mug.translate(0, 0.0375, 0);
   const handle = placed(new THREE.TorusGeometry(0.022, 0.007, 5, 10, Math.PI), 0.034, 0.04, 0, 0, 0, -Math.PI / 2);
@@ -500,7 +523,8 @@ function buildGeo(t: Tier): GeoSet {
     face: new THREE.SphereGeometry(0.1575, t.head[0], t.head[1], Math.PI / 2 - 0.9, 1.8, Math.PI * 0.3, Math.PI * 0.42),
     ear: t.extras ? (() => { const g = new THREE.SphereGeometry(0.035, S[0], S[1]); g.scale(0.5, 1, 0.8); return g; })() : null,
     nose: (() => { const g = new THREE.SphereGeometry(0.042, S[0], S[1]); g.scale(0.9, 0.8, 1.1); return g; })(),
-    hair: merge([hairCap, tuft]),
+    necklace: merge([chain, pendant]),
+    can: new THREE.CylinderGeometry(0.024, 0.024, 0.085, L),
     shoulderCap: new THREE.SphereGeometry(0.062, S[0], S[1]),
     sleeve: placed(new THREE.CylinderGeometry(0.062, 0.056, 0.1, L), 0, -0.04, 0),
     upperArm: placed(new THREE.CylinderGeometry(0.042, 0.038, 0.2, L), 0, -0.1, 0),
@@ -572,12 +596,21 @@ interface ManagerGeo {
   scarf: THREE.BufferGeometry | null; earrings: THREE.BufferGeometry | null;
 }
 
+/** Hair building blocks (skull frame) at a tier's resolution: a ball for volume, a shell band around the head
+ *  open over the face by `open` on each side (from polar angle `from`, `len` long), and the top cap. */
+function hairBall(t: Tier, r: number): THREE.SphereGeometry {
+  return new THREE.SphereGeometry(r, Math.max(8, t.head[0] >> 1), Math.max(6, t.head[1] >> 1));
+}
+function hairBand(t: Tier, r: number, open: number, from: number, len: number): THREE.SphereGeometry {
+  return new THREE.SphereGeometry(r, t.head[0], Math.max(4, t.head[1] >> 1), Math.PI / 2 + open, TAU - 2 * open, from, len);
+}
+function hairCap(t: Tier, r: number): THREE.SphereGeometry {
+  return new THREE.SphereGeometry(r, t.head[0], Math.max(4, t.head[1] >> 1), 0, TAU, 0, Math.PI / 2);
+}
+
 function buildManagerGeo(t: Tier, v: ManagerVariant): ManagerGeo {
-  const H = t.head, S = t.small, L = t.limb;
-  const ball = (r: number): THREE.SphereGeometry => new THREE.SphereGeometry(r, Math.max(8, H[0] >> 1), Math.max(6, H[1] >> 1));
-  const band = (r: number, open: number, from: number, len: number): THREE.SphereGeometry =>
-    new THREE.SphereGeometry(r, H[0], Math.max(4, H[1] >> 1), Math.PI / 2 + open, TAU - 2 * open, from, len);
-  const cap = new THREE.SphereGeometry(v === "man" ? 0.168 : 0.17, H[0], Math.max(4, H[1] >> 1), 0, TAU, 0, Math.PI / 2);
+  const S = t.small, L = t.limb;
+  const cap = hairCap(t, v === "man" ? 0.168 : 0.17);
   let hair: THREE.BufferGeometry;
   if (v === "man") {
     // a full head: the cap swept up off the forehead, combed over from the part on his left (-X) with volume at
@@ -585,21 +618,21 @@ function buildManagerGeo(t: Tier, v: ManagerVariant): ManagerGeo {
     cap.scale(1.03, 1.1, 1.04);
     cap.rotateX(-0.38);
     cap.translate(0, 0.012, -0.012);
-    const sweep = ball(0.1);
+    const sweep = hairBall(t, 0.1);
     sweep.scale(1.35, 0.5, 1.05);
     placed(sweep, 0.035, 0.13, 0.05, -0.2, 0, -0.22);
-    const side = ball(0.07);
+    const side = hairBall(t, 0.07);
     side.scale(0.9, 0.5, 1.25);
     placed(side, -0.1, 0.115, 0.02, -0.1, 0, 0.55);
-    hair = merge([cap, sweep, side, band(0.171, 1.75, Math.PI * 0.42, Math.PI * 0.22)]);
+    hair = merge([cap, sweep, side, hairBand(t, 0.171, 1.75, Math.PI * 0.42, Math.PI * 0.22)]);
   } else {
     // a chin-length bob, open over the face, its hem curving under at the jaw, and a side-swept fringe
     cap.scale(1.05, 1.1, 1.05);
     cap.rotateX(-0.3);
     cap.translate(0, 0.01, -0.008);
-    const bob = band(0.178, 0.95, Math.PI * 0.28, Math.PI * 0.42);
+    const bob = hairBand(t, 0.178, 0.95, Math.PI * 0.28, Math.PI * 0.42);
     bob.scale(1.06, 1, 1.02);
-    const fringe = ball(0.085);
+    const fringe = hairBall(t, 0.085);
     fringe.scale(1.55, 0.42, 0.9);
     placed(fringe, 0.03, 0.118, 0.09, -0.32, 0, -0.3);
     hair = merge([cap, bob, fringe]);
@@ -643,6 +676,111 @@ function releaseManagerGeo(detail: OfficeDetail, v: ManagerVariant): void {
   if (!set || --set.refs > 0) return;
   for (const x of Object.values(set)) if (x instanceof THREE.BufferGeometry || x instanceof THREE.Texture) x.dispose();
   MANAGER_GEO.delete(key);
+}
+
+/** A worker's hairstyle (skull frame, a plain toon color; see viz_office_pose.workerCast). Original toon cuts:
+ *  crop (short with a tuft swept up at the front), swept (combed over the other way), curly (a crown of curls),
+ *  buzz (close-cropped); bob (chin length with a side fringe), ponytail (a high tie, the tail down the back),
+ *  bun (a round bun at the crown), long (past the jaw, center fringe). */
+function buildWorkerHair(t: Tier, style: WorkerHair): THREE.BufferGeometry {
+  const S = t.small;
+  const small = (r: number): THREE.SphereGeometry => new THREE.SphereGeometry(r, S[0], S[1]);
+  const female = (r: number): THREE.SphereGeometry => {
+    const cap = hairCap(t, r);
+    cap.scale(1.04, 1.09, 1.04);
+    cap.rotateX(-0.32);
+    cap.translate(0, 0.01, -0.008);
+    return cap;
+  };
+  switch (style) {
+    case "crop": {
+      const cap = hairCap(t, 0.163);
+      cap.rotateX(-0.45);
+      cap.translate(0, 0.01, -0.01);
+      const tuft = small(0.07);
+      tuft.scale(1.4, 0.55, 1);
+      return merge([cap, placed(tuft, 0.05, 0.14, 0.06, 0, 0, -0.3)]);
+    }
+    case "swept": {
+      const cap = hairCap(t, 0.165);
+      cap.rotateX(-0.4);
+      cap.translate(0, 0.012, -0.01);
+      const sweep = hairBall(t, 0.095);
+      sweep.scale(1.45, 0.5, 1.05);
+      return merge([cap, placed(sweep, -0.03, 0.128, 0.05, -0.2, 0, 0.25)]);
+    }
+    case "curly": {
+      const cap = hairCap(t, 0.166);
+      cap.rotateX(-0.42);
+      cap.translate(0, 0.012, -0.012);
+      const parts: THREE.BufferGeometry[] = [cap, placed(small(0.05), 0, 0.175, -0.01)];
+      for (let k = 0; k < 7; k++) {
+        const az = (k / 7) * TAU;
+        parts.push(placed(small(0.046), Math.sin(az) * 0.093, 0.147, Math.cos(az) * 0.093 - 0.01));
+      }
+      for (const x of [-0.06, 0, 0.06]) parts.push(placed(small(0.036), x, 0.13 + (x === 0 ? 0.01 : 0), 0.11));
+      return merge(parts);
+    }
+    case "buzz": {
+      const cap = hairCap(t, 0.159);
+      cap.rotateX(-0.5);
+      cap.translate(0, 0.008, -0.012);
+      return cap;
+    }
+    case "bob": {
+      const bob = hairBand(t, 0.178, 0.95, Math.PI * 0.28, Math.PI * 0.42);
+      bob.scale(1.06, 1, 1.02);
+      const fringe = hairBall(t, 0.085);
+      fringe.scale(1.55, 0.42, 0.9);
+      return merge([female(0.17), bob, placed(fringe, -0.03, 0.118, 0.09, -0.32, 0, 0.3)]);
+    }
+    case "ponytail": {
+      const fringe = hairBall(t, 0.08);
+      fringe.scale(1.6, 0.38, 0.85);
+      const tail = new THREE.CapsuleGeometry(0.042, 0.2, Math.max(2, S[1] >> 1), Math.max(6, S[0]));
+      tail.scale(1, 1, 0.75);
+      return merge([female(0.168), placed(fringe, 0, 0.122, 0.095, -0.35), placed(small(0.026), 0, 0.07, -0.165), placed(tail, 0, -0.06, -0.19, 0.22)]);
+    }
+    case "bun": {
+      const fringe = hairBall(t, 0.08);
+      fringe.scale(1.6, 0.38, 0.85);
+      const bun = hairBall(t, 0.062);
+      bun.scale(1, 0.9, 1);
+      return merge([female(0.168), placed(fringe, 0.02, 0.12, 0.095, -0.35, 0, -0.2), placed(bun, 0, 0.13, -0.12)]);
+    }
+    case "long": {
+      const back = hairBand(t, 0.178, 1.1, Math.PI * 0.3, Math.PI * 0.5);
+      back.scale(1.06, 1.45, 1.03);
+      const parts: THREE.BufferGeometry[] = [female(0.17), back];
+      for (const s of [-1, 1]) {
+        const f = hairBall(t, 0.065);
+        f.scale(1.3, 0.4, 0.85);
+        parts.push(placed(f, s * 0.05, 0.12, 0.1, -0.32, 0, s * 0.3));
+      }
+      return merge(parts);
+    }
+  }
+}
+
+const WORKER_HAIR = new Map<string, { refs: number; geo: THREE.BufferGeometry }>();
+
+function acquireWorkerHair(detail: OfficeDetail, style: WorkerHair): THREE.BufferGeometry {
+  const key = `${detail}:${style}`;
+  let set = WORKER_HAIR.get(key);
+  if (!set) {
+    set = { refs: 0, geo: buildWorkerHair(TIERS[detail], style) };
+    WORKER_HAIR.set(key, set);
+  }
+  set.refs++;
+  return set.geo;
+}
+
+function releaseWorkerHair(detail: OfficeDetail, style: WorkerHair): void {
+  const key = `${detail}:${style}`;
+  const set = WORKER_HAIR.get(key);
+  if (!set || --set.refs > 0) return;
+  set.geo.dispose();
+  WORKER_HAIR.delete(key);
 }
 
 /** The cast the last boss left with, so a rebuild (a style, 2D/3D or detail switch) keeps the manager; while a
@@ -781,6 +919,24 @@ class Office implements OfficeFigure {
   private readonly zeds: THREE.Sprite[] = [];
   private readonly pileAt = new THREE.Vector3();
   private readonly smokeAt = new THREE.Vector3();
+  /** The energy drink, in the right hand while a drink hit plays. */
+  private readonly can: THREE.Mesh | null = null;
+
+  // P-VIZ.6: who the worker is (null for the boss) and the hit layer (a one-shot over the activity) and charge
+  private readonly worker: WorkerCast | null;
+  private hitPlan: OfficeHitPlan | null = null;
+  private hitT = 0;
+  private readonly hs = newOfficeHitSample();
+  private readonly hitPose = new Float32Array(OFFICE_POSE_LEN);
+  /** The pose on screen when the hit landed: the hit blends in from it. */
+  private readonly hitSnap = new Float32Array(OFFICE_POSE_LEN);
+  private readonly hitFrom = new THREE.Vector3();
+  /** The throw had no usable origin: turn toward `hitCam` instead. */
+  private hitAtCam = false;
+  private hitCam: THREE.Camera | null = null;
+  private readonly chg = newCharge();
+  private chargeNow = 0;
+  private clockAt = Number.NaN;
 
   // animation state
   private activity: MiniActivity = "typing";
@@ -850,6 +1006,9 @@ class Office implements OfficeFigure {
     this.blinkIn = nextBlinkDelay(this.random());
     this.group.name = boss ? "office-boss" : "office-worker";
     this.mini = o.look;
+    const worker = (this.worker = boss ? null : workerCast(this.seed));
+    const long = worker !== null && longSleeves(worker.top);
+    const woman = worker?.gender === "female";
     if (boss) {
       // who opens: the live or just-gone boss's cast (a rebuild), else a fresh seeded coin flip
       const now = performance.now() / 1000;
@@ -878,7 +1037,7 @@ class Office implements OfficeFigure {
     this.mSlacks = person();
     this.mJacket = person();
     this.mSkin = person();
-    this.mHair = person(boss ? { side: THREE.DoubleSide } : {}); // the managers' hair has open shells (the bob, the nape)
+    this.mHair = person({ side: THREE.DoubleSide }); // hair has open shells (the bobs, the long cut, the nape)
     this.mShoe = person({ color: "#1d1a19" });
     this.mPlate = boss ? toon({ emissiveIntensity: 0.15 }) : null;
     this.mWall = toon();
@@ -895,6 +1054,7 @@ class Office implements OfficeFigure {
     const mBoard = toon({ color: "#9a6a3a" });
     const mCheck = toon({ map: g.checkTex, side: THREE.DoubleSide });
     const mPen = toon({ color: "#1d3c8a" });
+    const mCan = toon({ color: "#b9f227" });
     const cv = document.createElement("canvas");
     cv.width = Math.round(FW * t.faceScale);
     cv.height = Math.round(FH * t.faceScale);
@@ -999,16 +1159,20 @@ class Office implements OfficeFigure {
     const hips = (this.hips = G()), spine = G(), chest = (this.chest = G()), neck = G(), head = G();
     root.add(hips); hips.position.y = HIP_Y; hips.add(spine); spine.add(chest); chest.position.y = 0.16; chest.add(neck); neck.position.y = 0.17; neck.add(head); head.position.y = 0.05;
     this.add(hips, g.pelvis, this.mSlacks, 1);
-    this.torso = this.add(spine, g.torso, boss ? this.mJacket : this.mShirt, 1);
-    this.torso.scale.set(1, 1, 0.78); // the boss's suit and blazer: showVariant()
-    if (g.belt && !boss) this.add(spine, g.belt, this.mShoe, 0).scale.set(1, 0.8, 1);
+    // the boss's suit and blazer and a worker's sweater, cardigan or blazer are the jacket; a shirt or blouse alone
+    this.torso = this.add(spine, g.torso, boss || long ? this.mJacket : this.mShirt, 1);
+    if (woman) this.torso.scale.set(0.95, 1, 0.76);
+    else this.torso.scale.set(1, 1, 0.78); // the boss's: showVariant()
+    if (g.belt && !boss && !long) this.add(spine, g.belt, this.mShoe, 0).scale.set(1, 0.8, 1);
     if (g.collar) this.add(chest, g.collar, this.mShirt, thin).scale.set(1, 0.85, 1);
-    if (boss) {
+    if (boss || long) {
       const vee = this.add(chest, g.vee, this.mShirt, 0);
       vee.rotation.set(Math.PI, Math.PI / 6 + Math.PI, 0);
       vee.position.set(0, 0.1, 0.118);
       vee.scale.set(1, 1, 0.2);
-    } else {
+    }
+    if (woman) this.add(chest, g.necklace, this.mTie, 0);
+    else if (!boss) {
       // the boss's tie is the man's own part (buildManager)
       this.add(chest, g.tieKnot, this.mTie, thin).position.set(0, 0.162, 0.108);
       const blade = this.add(chest, g.tieBlade, this.mTie, 0);
@@ -1027,12 +1191,13 @@ class Office implements OfficeFigure {
     this.skull.add(faceMesh);
     this.add(this.skull, g.nose, this.mSkin, thin).position.set(0, -0.025, 0.148);
     if (g.ear) for (let s = -1; s <= 1; s += 2) this.add(this.skull, g.ear, this.mSkin, thin).position.set(s * 0.153, -0.01, 0);
-    if (!boss) this.add(this.skull, g.hair, this.mHair, 1);
+    if (worker) this.add(this.skull, acquireWorkerHair(this.detail, worker.hair), this.mHair, 1);
 
-    // arms (L is -X): the worker's short sleeves and bare forearms, the boss's jacket sleeves
+    // arms (L is -X): short sleeves and bare forearms, or the jacket's sleeves (the boss, a long top)
+    const sleeves = boss || long;
     const arm = (side: number): [THREE.Group, THREE.Group, THREE.Group] => {
-      const sh = G(); chest.add(sh); sh.position.set(side * (boss ? 0.19 : 0.17), 0.14, 0);
-      if (boss) {
+      const sh = G(); chest.add(sh); sh.position.set(side * (boss ? 0.19 : woman ? 0.16 : 0.17), 0.14, 0);
+      if (sleeves) {
         this.add(sh, g.jacketCap, this.mJacket, 1);
         this.add(sh, g.jacketUpper, this.mJacket, 1);
       } else {
@@ -1041,7 +1206,7 @@ class Office implements OfficeFigure {
         this.add(sh, g.sleeve, this.mShirt, 1);
       }
       const el = G(); sh.add(el); el.position.y = -0.2;
-      this.add(el, boss ? g.jacketFore : g.foreArm, boss ? this.mJacket : this.mSkin, 1);
+      this.add(el, sleeves ? g.jacketFore : g.foreArm, sleeves ? this.mJacket : this.mSkin, 1);
       const hand = G(); el.add(hand); hand.position.y = -0.19;
       this.add(hand, g.hand, this.mSkin, thin).position.y = -0.035;
       return [sh, el, hand];
@@ -1066,6 +1231,9 @@ class Office implements OfficeFigure {
     this.handMug.visible = false;
     this.add(this.handMug, g.mug, mMug, thin);
     this.handMug.add(new THREE.Mesh(g.coffee, mCoffee));
+    const can = (this.can = this.add(handR, g.can, mCan, thin));
+    can.position.y = -0.05;
+    can.visible = false;
     if (boss) {
       // the report and the clipboard are held in front of the chest (the hands are posed onto them)
       const rep = (this.report = G());
@@ -1196,12 +1364,12 @@ class Office implements OfficeFigure {
     this.mSkin.color.copy(this.cSkin);
     // the managers' hair is their salt-and-pepper texture (white keeps it as painted)
     this.mHair.color.set(lk.grey ? "#ffffff" : lk.hair);
-    const f = this.face, woman = this.boss && this.variant === "woman";
+    const f = this.face, woman = this.boss ? this.variant === "woman" : this.worker?.gender === "female";
     f.glasses = !lk.glasses ? "none" : this.boss && !woman ? "readers" : "frames";
     f.brow = !this.boss ? INK : woman ? "#4a3a30" : "#4b4540";
-    f.browW = !this.boss ? 11 : woman ? 10 : 15;
+    f.browW = !this.boss ? (woman ? 9 : 11) : woman ? 10 : 15;
     f.lashes = woman;
-    f.lip = woman ? "#9c4552" : INK;
+    f.lip = lk.lip;
     // the cubicle fabric: office blue-gray with a hint of the persona; the trim is the persona color
     this.mWall.color.set("#76839a").lerp(this.cTie, 0.12);
     this.mTrim.color.copy(this.cTie);
@@ -1218,6 +1386,27 @@ class Office implements OfficeFigure {
     this.reactT = 0;
     this.reactHold = stareHold(this.random());
     this.reactCam = camera;
+  }
+
+  hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength = 1): void {
+    // (mid-handover there is nobody at the desk to hit)
+    if (this.disposed || this.state === "killed" || this.swapT >= 0 || !HIT_KINDS.includes(kind)) return;
+    officeHitCharge(this.chg, kind, strength);
+    this.chargeNow = chargeLevel(this.chg);
+    // the new hit turns on from the weight already on and blends in from the pose on screen, so nothing pops
+    this.hitPlan = planOfficeHit(kind, strength, this.hitPlan ? this.hs.turn : 0);
+    this.hitT = 0;
+    this.hitSnap.set(this.out);
+    this.hitAtCam = !(from && Number.isFinite(from.x) && Number.isFinite(from.y) && Number.isFinite(from.z));
+    if (!this.hitAtCam) this.hitFrom.copy(from);
+    this.hitCam = camera ?? null;
+    // a hit replaces a stare or an outburst
+    this.reactKind = null;
+    this.reactCam = null;
+  }
+
+  get charge(): number {
+    return this.chargeNow;
   }
 
   setIdleSeconds(sec: number): void {
@@ -1256,8 +1445,13 @@ class Office implements OfficeFigure {
     this.stateT += d;
     this.blendT += d;
     this.kS = motion ? this.kS + (this.k - this.kS) * (1 - Math.exp(-d * 3)) : this.k;
-    const tempo = officeTempo(this.state, this.kS);
-    if (!motion) { this.shot = null; this.reactKind = null; }
+    // ---- the charge decays on the wall clock (under reduced motion too, where the frame's dt is 0)
+    const dc = tSec > this.clockAt ? Math.min(tSec - this.clockAt, 5) : d;
+    if (Number.isFinite(tSec)) this.clockAt = tSec;
+    this.chargeNow = chargeLevel(decayCharge(this.chg, dc));
+    // energized (the energy drink): the work runs faster
+    const tempo = officeTempo(this.state, this.kS) * chargeTempo(this.chargeNow);
+    if (!motion) { this.shot = null; this.reactKind = null; this.endHit(); }
     if (this.shot) {
       this.shotT += d;
       if (officeClipDone(OFFICE_CLIPS[this.shot], this.shotT)) {
@@ -1295,7 +1489,13 @@ class Office implements OfficeFigure {
       }
     }
     const baseT = officeClipTime(clip, motion ? this.clipT : OFFICE_STILL_T[base]);
-    const live = this.shot === null && sw === null;
+    // ---- a hit plays over everything (P-VIZ.6); while it holds the body the activity's props are put away
+    const hs = this.hs;
+    if (this.hitPlan) {
+      this.hitT += d;
+      if (sampleOfficeHit(this.hitPlan, this.hitT, hs, this.hitPose).done) this.endHit();
+    }
+    const live = this.shot === null && sw === null && hs.body < 0.5;
     const frantic = this.shot === "frantic";
 
     // ---- the reaction on top
@@ -1344,13 +1544,14 @@ class Office implements OfficeFigure {
     }
     if (rs && motion && rs.shake > 0) o[0] += 0.018 * Math.sin(this.life * 90) * rs.shake;
     if (rs && rs.look > 0.001) this.lookAtCamera(o, rs);
+    if (hs.body > 0.001) this.layerHit(o, motion);
     if (sw) applyManagerSwap(o, sw);
     this.apply(o);
     if (sw) this.hips.position.set(sw.x, HIP_Y + sw.lift, sw.z);
     this.backPivot.rotation.x = Math.min(0, o[O_SPINE]!) * 0.8;
 
     // ---- the face: redrawn only when the emotion, the blink step or the gaze bucket changes
-    const emotion = sw ? "content" : rs?.emotion ?? info.emotion;
+    const emotion = sw ? "content" : hs.emotion ?? rs?.emotion ?? info.emotion;
     if (motion) {
       this.blinkIn -= d;
       this.blinkAge += d;
@@ -1360,9 +1561,9 @@ class Office implements OfficeFigure {
       }
     } else this.blinkAge = 99;
     const emo = OFFICE_EMOTIONS[emotion];
-    const staring = rs !== null && rs.look > 0.5;
-    const bl = emo.shape === "open" && !staring ? blinkStep(this.blinkAge) : 0; // a stare never blinks
-    const gb = gazeBucket(sw ? 0 : info.gaze * (1 - (rs?.look ?? 0)));
+    const staring = (rs !== null && rs.look > 0.5) || hs.emotion !== null;
+    const bl = emo.shape === "open" && !staring ? blinkStep(this.blinkAge) : 0; // a stare (or a hit) never blinks
+    const gb = gazeBucket(sw ? 0 : info.gaze * (1 - Math.max(rs?.look ?? 0, hs.turn * hs.body)));
     const key = officeFaceKey(emotion, bl, gb);
     if (key !== this.faceKeyNow) {
       this.faceKeyNow = key;
@@ -1382,7 +1583,11 @@ class Office implements OfficeFigure {
     for (const m of this.mats) m.dispose();
     this.faceTex.dispose();
     this.screenTex.dispose();
+    this.hitPlan = null;
+    this.hitCam = null;
+    this.reactCam = null;
     releaseGeo(this.detail);
+    if (this.worker) releaseWorkerHair(this.detail, this.worker.hair);
     if (this.boss) {
       liveBosses = Math.max(0, liveBosses - 1);
       this.remember(performance.now() / 1000);
@@ -1427,7 +1632,7 @@ class Office implements OfficeFigure {
     const to = this.want;
     if (to === null) return null;
     if (to === this.variant) { this.want = null; return null; }
-    if (!managerSwapReady(this.state, this.reactKind !== null, this.shot !== null)) return null;
+    if (!managerSwapReady(this.state, this.reactKind !== null || this.hitPlan !== null, this.shot !== null)) return null;
     this.want = null;
     this.cast = recastManager(this.cast, to, now);
     this.remember(now);
@@ -1527,25 +1732,52 @@ class Office implements OfficeFigure {
   /** Turn the neck and head to the camera (last frame's matrices, in the body frame), lifting a slumped torso.
    *  The parents' turn is subtracted so the face, not the neck, ends up on the camera. */
   private lookAtCamera(o: Float32Array, rs: ReactSample): void {
-    const lift = 1 - 0.7 * rs.lift;
-    o[O_SPINE] = o[O_SPINE]! * lift;
-    o[O_CHEST] = o[O_CHEST]! * lift;
     const cam = this.reactCam;
-    if (!cam) return;
+    if (cam) cam.getWorldPosition(this.v1);
+    this.lookToward(o, cam ? rs.look : 0, rs.lift);
+  }
+
+  /** Turn the neck and head by weight `w` toward the world point in `v1` (last frame's matrices, in the body frame),
+   *  lifting a slumped torso by `lift`. The parents' turn is subtracted so the face, not the neck, ends up on it. */
+  private lookToward(o: Float32Array, w: number, lift: number): void {
+    const k = 1 - 0.7 * lift;
+    o[O_SPINE] = o[O_SPINE]! * k;
+    o[O_CHEST] = o[O_CHEST]! * k;
+    if (w <= 0) return;
     this.skull.getWorldPosition(this.v2); // refreshes the body's world matrix too (its ancestors are updated)
     this.body.worldToLocal(this.v2);
-    cam.getWorldPosition(this.v1);
     this.body.worldToLocal(this.v1);
     lookAngles(this.v1.x - this.v2.x, this.v1.y - this.v2.y, this.v1.z - this.v2.z, this.look);
     const yaw = this.look.yaw - (o[O_ROOT + 1]! + o[O_SPINE + 1]! + o[O_CHEST + 1]!);
     const pitch = this.look.pitch - (o[O_SPINE]! + o[O_CHEST]!);
-    const w = rs.look;
     o[O_NECK] = o[O_NECK]! + (pitch * 0.35 - o[O_NECK]!) * w;
     o[O_NECK + 1] = o[O_NECK + 1]! + (yaw * 0.35 - o[O_NECK + 1]!) * w;
     o[O_NECK + 2] = o[O_NECK + 2]! * (1 - w);
     o[O_HEAD] = o[O_HEAD]! + (pitch * 0.65 - o[O_HEAD]!) * w;
     o[O_HEAD + 1] = o[O_HEAD + 1]! + (yaw * 0.65 - o[O_HEAD + 1]!) * w;
     o[O_HEAD + 2] = o[O_HEAD + 2]! * (1 - w);
+  }
+
+  private endHit(): void {
+    this.hitPlan = null;
+    this.hitCam = null;
+    clearOfficeHit(this.hs);
+  }
+
+  /** The hit over the pose: the hit clip's pose (already in hitPose) with the head turned toward the throw, blended
+   *  in from the pose on screen when it landed, then laid over the activity by the hit's weight. */
+  private layerHit(o: Float32Array, motion: boolean): void {
+    const hs = this.hs, hp = this.hitPose, snap = this.hitSnap;
+    const cam = this.hitAtCam ? this.hitCam : null;
+    if (hs.turn > 0.001 && (cam || !this.hitAtCam)) {
+      if (cam) cam.getWorldPosition(this.v1);
+      else this.v1.copy(this.hitFrom);
+      this.lookToward(hp, hs.turn, 0);
+    }
+    if (hs.blend < 1) for (let i = 0; i < OFFICE_POSE_LEN; i++) hp[i] = snap[i]! + (hp[i]! - snap[i]!) * hs.blend;
+    const w = hs.body;
+    for (let i = 0; i < OFFICE_POSE_LEN; i++) o[i] = o[i]! + (hp[i]! - o[i]!) * w;
+    if (motion && hs.shake > 0) o[0] += 0.02 * Math.sin(this.life * 90) * hs.shake;
   }
 
   /** Keep a hand-held prop upright in the body frame (tilted by `rx`), whatever the hand's own angle. */
@@ -1562,21 +1794,22 @@ class Office implements OfficeFigure {
     this.dead = approach(this.dead, st === "killed" && this.stateT > 0.4 ? 1 : 0, motion ? d : 1);
     const glowT = st === "killed" ? 0 : st === "working" ? 0.12 + 0.2 * this.kS : 0.08;
     this.glow += (glowT - this.glow) * r;
+    // energized (the energy drink): the tie, the nameplate and the cubicle trim burn brighter while it lasts
+    const lit = this.glow + 0.45 * this.chargeNow * (1 - this.dead);
     this.mTie.color.copy(this.cTie).lerp(DEAD_GRAY, 0.75 * this.dead);
     this.mTie.emissive.copy(this.mTie.color);
-    this.mTie.emissiveIntensity = this.glow;
+    this.mTie.emissiveIntensity = lit;
     if (this.mPlate) {
       this.mPlate.color.copy(this.mTie.color);
       this.mPlate.emissive.copy(this.mTie.color);
-      this.mPlate.emissiveIntensity = this.glow;
+      this.mPlate.emissiveIntensity = lit;
     }
-    this.mTrim.emissiveIntensity = (0.12 + this.glow) * (1 - 0.8 * this.dead);
-    // the outburst's red face; the worker's face catches the screen's glow while he works
+    this.mTrim.emissiveIntensity = (0.12 + lit) * (1 - 0.8 * this.dead);
+    // the outburst's red face; the worker's face catches the screen's glow while he works, and everyone a faint
+    // persona glow while energized
     this.mSkin.color.copy(this.cSkin).lerp(RAGE, 0.55 * (rs?.red ?? 0));
-    if (this.screen) {
-      this.mSkin.emissive.copy(this.cTie);
-      this.mSkin.emissiveIntensity = 0.06 * this.scr * (1 - this.dead);
-    }
+    this.mSkin.emissive.copy(this.cTie);
+    this.mSkin.emissiveIntensity = ((this.screen ? 0.06 * this.scr : 0) + 0.1 * this.chargeNow) * (1 - this.dead);
   }
 
   private updateProps(d: number, motion: boolean, base: OfficeClipName, baseT: number, live: boolean, rs: ReactSample | null): void {
@@ -1607,6 +1840,11 @@ class Office implements OfficeFigure {
       this.deskClipboard.visible = !inHand;
       this.pen.visible = inHand;
     }
+    // the energy drink: in the right hand from the catch to the fist pump, tipped up to chug it
+    if (this.can) {
+      this.can.visible = motion && this.hs.can;
+      if (this.can.visible) this.orient(this.can, -1.4 * this.hs.tilt);
+    }
     // the Enter slam: the keyboard hops
     this.kbHit = motion ? this.kbHit * Math.exp(-d * 9) : 0;
     if (this.keyboard) this.keyboard.position.y = DESK_Y + 0.01 + 0.012 * this.kbHit * Math.abs(Math.sin(this.life * 40));
@@ -1627,7 +1865,7 @@ class Office implements OfficeFigure {
       this.flash = motion ? this.flash * Math.exp(-d * 6) : 0;
       this.mScreen.color.copy(this.cTie).multiplyScalar(Math.min(1.6, this.scr + 0.8 * this.flash));
       const speed = st === "working" ? (0.08 + 0.35 * this.kS) * (frantic ? 4 : 1) : st === "idle" ? 0.01 : 0;
-      this.scroll += d * speed;
+      this.scroll += d * speed * chargeTempo(this.chargeNow);
       this.screenTex.offset.y = 1 - fract(this.scroll);
       const c = killed ? crtOff(this.stateT - 0.15, this.crtS) : null;
       this.crt.visible = c !== null && c.a > 0.001;
@@ -1664,8 +1902,8 @@ class Office implements OfficeFigure {
       }
     }
 
-    // outburst papers flying off the pile
-    const pu = rs?.papers ?? -1;
+    // papers flying off the pile: the outburst's slams, the Storm's gust
+    const pu = Math.max(rs?.papers ?? -1, this.hs.papers);
     this.papers.visible = pu >= 0 && motion;
     if (this.papers.visible) {
       const n = this.paperMeshes.length;

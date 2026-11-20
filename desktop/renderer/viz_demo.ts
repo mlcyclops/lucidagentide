@@ -9,6 +9,8 @@
 // an error and respawns, Main delegates two subagent runs and an agent delegates one. The view feeds it
 // through the SAME model calls a real fleet uses (applyFleet, applyRuns, applyEvent), so the demo exercises
 // the real rules instead of a parallel fake. The node action menu acts on the demo too, locally.
+// P-VIZ.6 (ADR-0635): it also reports measured usage, makes a few edits and writes (one of them fails), and
+// says which folder each agent works in, so the session ledger fills through the same calls.
 
 import type { VizBusEvent } from "./viz_bus.ts";
 import { HUB_ID, type VizAsk, type VizLaneInput, type VizRunInput } from "./viz_model.ts";
@@ -38,6 +40,19 @@ const SURGES: readonly [string, number, number, number][] = [
   [HUB_ID, 12, 13.2, 220], [HUB_ID, 36, 37, 180], ["demo-1", 6, 7, 260], ["demo-2", 15, 15.8, 200],
 ];
 
+/** P-VIZ.6 (ADR-0635): the folder each demo agent works in (the session ledger's repo column). */
+const CWD: Record<string, string> = {
+  [HUB_ID]: "/work/lucid_live_demo", "demo-1": "/work/lucid_api", "demo-2": "/work/lucid_live_demo", "demo-3": "/work/lucid_auth", "demo-4": "/work/lucid_docs",
+};
+
+const demoLines = (word: string, n: number): string => Array.from({ length: n }, (_, i) => `${word} ${i + 1}\n`).join("");
+const demoTool = (id: string, name: string, path: string, code: Record<string, string>, status?: "open") =>
+  ({ type: "tool", id, name, detail: path.slice(path.lastIndexOf("/") + 1), code: { path, ...code }, ...(status ? { status } : {}) });
+/** An edit replacing `del` lines with `add` new ones (Main's chat tool events carry no status; a lane's say "open"). */
+const demoEdit = (id: string, path: string, status: "open" | undefined, del: number, add: number) =>
+  demoTool(id, "edit", path, { oldText: demoLines("old", del), newText: demoLines("new", add) }, status);
+const demoWrite = (id: string, path: string, lines: number) => demoTool(id, "write", path, { content: demoLines("line", lines) }, "open");
+
 export interface DemoStep { events: VizBusEvent[]; asks: { id: string; ask: VizAsk }[] }
 
 export interface VizDemo {
@@ -47,6 +62,8 @@ export interface VizDemo {
   step(prev: number, now: number): DemoStep;
   /** The node menu's action on a demo agent: it powers down for DEMO_ACT_MS, then comes back. */
   act(id: string, ask: VizAsk, now: number): void;
+  /** P-VIZ.6 (ADR-0635): the folder a demo agent (or Main) works in; null for an unknown id. */
+  cwd(id: string): string | null;
 }
 
 export function createDemo(t0: number): VizDemo {
@@ -86,6 +103,17 @@ export function createDemo(t0: number): VizDemo {
     [18.5, "demo-3", "cancel"],
     [23, "demo-2", { type: "tool-meta", id: `demo-t2-${k}`, name: "edit", ok: false }],
     [40, HUB_ID, { type: "done" }],
+    // P-VIZ.6 (ADR-0635): measured usage and authored code, so the session ledger has real-shaped rows. The
+    // edit opened at 21 is the one whose tool-meta fails at 23: the ledger takes its lines back.
+    ...[HUB_ID, ...LANES.map((l) => l.id)].map((id, i): [number, string, { type: string; [key: string]: unknown }] =>
+      [1 + i * 0.5, id, { type: "usage", used: 12_000 + i * 6_000 + k * 3_000, size: 200_000, cost: 0.05 * (i + 1) * (k + 1) }]),
+    [3, "demo-1", demoEdit(`demo-e1-${k}`, "/work/lucid_api/src/routes.ts", "open", 2, 6)],
+    [4, "demo-1", { type: "tool", id: `demo-e1-${k}`, name: "edit", detail: "routes.ts", status: "done" }],
+    [7, "demo-2", demoWrite(`demo-w1-${k}`, "/work/lucid_live_demo/test/api.test.ts", 24)],
+    [11, HUB_ID, demoEdit(`demo-m1-${k}`, "/work/lucid_live_demo/README.md", undefined, 3, 5)],
+    [14, "demo-4", demoWrite(`demo-w2-${k}`, "/work/lucid_docs/guide/agents.md", 40)],
+    [16, "demo-3", demoEdit(`demo-e3-${k}`, "/work/lucid_auth/src/session.ts", "open", 8, 3)],
+    [21, "demo-2", demoEdit(`demo-t2-${k}`, "/work/lucid_live_demo/test/flaky.test.ts", "open", 4, 9)],
   ];
 
   return {
@@ -137,5 +165,6 @@ export function createDemo(t0: number): VizDemo {
     act(id, ask, now) {
       if (LANES.some((l) => l.id === id)) acts.set(id, { ask, at: now });
     },
+    cwd: (id) => CWD[id] ?? null,
   };
 }

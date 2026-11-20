@@ -36,17 +36,27 @@
 // it. The header measures itself (a ResizeObserver) and takes the widest density that fits on one row: wide;
 // medium (no subtitle, one census chip, icon-only Record and Recordings); narrow (icon segments, an icon Auto
 // camera toggle, Record and Recordings inside the View menu). The close X is always at the far right.
+//
+// P-VIZ.6 (ADR-0635): the session ledger (viz_ledger.ts over viz_ledger_model.ts) sits in the stage's lower
+// right. Every event the model takes counts in it too, the fleet poll brings each lane's session, repo and
+// measured usage, and it repaints with the census. It outlives a close and starts over on a new hub session.
+//
+// P-VIZ.6 (ADR-0636): the throw tray (viz_throw.mountThrowTray) sits at the stage's bottom center with the
+// style's three throwables and Storm. While one is armed a click on a node throws it (scene.throwAt) instead of
+// opening the panel, and Esc puts it down before it closes anything else.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
-import type { LaneEvent, LaneView, LucidBridge } from "./bridge.ts";
+import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridge.ts";
 import { hubLanes } from "./orbit_layout.ts";
 import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
+import { mountLedger, type LedgerView } from "./viz_ledger.ts";
+import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
   applyEvent, applyFleet, applyRuns, census, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
   isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
@@ -54,6 +64,7 @@ import {
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountVizScene, type SceneHit, type SceneNode, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
+import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
 
 export interface VizDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -117,6 +128,8 @@ let rec: ActiveRec | null = null;
 let recPop: { close: () => void } | null = null;
 let viewPop: { node: HTMLElement; close: () => void } | null = null;
 let killArm: { id: string; until: number } | null = null;
+/** P-VIZ.6 (ADR-0636): the throw tray (bottom center of the stage), built with the view. */
+let tray: ThrowTray | null = null;
 const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 
 /** P-VIZ.4 (ADR-0625): lanes whose background subagent runs are polled per cycle, at most. */
@@ -130,6 +143,13 @@ const outputs = new Map<string, VizOutput>();
 /** Lanes with a prompt from the panel in flight (a second send stages instead). */
 const sending = new Set<string>();
 let lastLanes: readonly LaneView[] = [];
+/** P-VIZ.6 (ADR-0635): the session ledger. It outlives a close (reopening keeps this hub session's totals; it
+ *  counts what streams while Visualize is open) and starts over on a new hub session, or between demo and real. */
+let ledger = createLedger();
+let ledgerIsDemo = false;
+let ledgerView: LedgerView | null = null;
+/** Main's folder (the current workspace), applied to Main's entry on every repaint. */
+let mainFolder: string | null = null;
 
 interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle }
 function loadPrefs(): Prefs {
@@ -187,6 +207,16 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   demoPrev = now;
   ($("[data-viz-demo]", view) as HTMLElement).hidden = !demo;
   if (!demo) offBus = vizBus.on(onBus);
+  // P-VIZ.6: the demo (and only the demo, through the URL) exposes where each node is on screen, so a real-UI
+  // check (desktop/scripts/demo_p_viz_6.mjs) can click an agent the way a user would. Read-only.
+  if (demo) (window as unknown as { __vizProbe?: unknown }).__vizProbe = {
+    nodes: () => (model ? [...model.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, box: scene?.screenBoxOf(n.id) ?? null })) : []),
+  };
+  if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
+  loadMainFolder();
+  ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
+  const rows = ledgerRows(ledger); // what this session already counted; the scene's nodes join on the first tick
+  ledgerView.paint(rows, ledgerSummary(rows));
   paintToggles();
   paintQuality();
   paintRecs();
@@ -206,7 +236,9 @@ export function closeViz(): void {
   if (!view || !opened) return;
   if (rec) stopRec("closed");
   closePanel(); closePlayer(); recPop?.close(); recPop = null; viewPop?.close(); viewPop = null; hideAutoHint();
+  tray?.disarm();
   offBus?.(); offBus = null;
+  ledgerView?.destroy(); ledgerView = null;
   headRo?.disconnect(); headRo = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
@@ -295,6 +327,7 @@ function buildView(): HTMLElement {
     const t = ev.target as HTMLElement;
     if (t.matches("[data-viz-panel-input]") && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); void sendFromPanel(); }
   });
+  tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, prefs.style); // P-VIZ.6 (ADR-0636)
   return v;
 }
 
@@ -304,7 +337,7 @@ function onViewClick(ev: Event): void {
   const vb = t.closest("[data-viz-view]") as HTMLElement | null;
   if (vb) { prefs.view = vb.dataset.vizView === "2d" ? "2d" : "3d"; savePrefs(); paintToggles(); scene?.setView(prefs.view); return; }
   const sb = t.closest("[data-viz-style]") as HTMLElement | null;
-  if (sb) { prefs.style = sb.dataset.vizStyle === "professional" ? "professional" : "anime"; savePrefs(); paintToggles(); scene?.setStyle(prefs.style); return; }
+  if (sb) { prefs.style = sb.dataset.vizStyle === "professional" ? "professional" : "anime"; savePrefs(); paintToggles(); scene?.setStyle(prefs.style); tray?.setStyle(prefs.style); return; }
   if (t.closest("[data-viz-fit]")) { if (autoCam) setAutoCamera(false, true); scene?.fit(); return; }
   const vm = t.closest("[data-viz-viewmenu]") as HTMLElement | null;
   if (vm) { openViewMenu(vm); return; }
@@ -488,6 +521,7 @@ function mount(): void {
   scene.onDoublePick(onDoublePick);
   scene.onUserCamera(onUserCamera);
   scene.setStyle(prefs.style);
+  tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
   syncScene();
   requestAnimationFrame(() => requestAnimationFrame(() => { loading.hidden = true; }));
@@ -532,10 +566,34 @@ function syncScene(): void {
 /** One tapped event: the model takes it (or drops a second stream's copy), and a lane's panel output
  *  follows exactly what the model took. */
 function onBus(ev: VizBusEvent): void {
-  if (!model || !applyEvent(model, ev, Date.now()) || ev.source === HUB_ID) return;
+  if (!model || !applyEvent(model, ev, Date.now())) return;
+  noteLedger(ev);
+  if (ev.source === HUB_ID) return;
   let out = outputs.get(ev.source);
   if (!out) { out = createOutput(); outputs.set(ev.source, out); }
   foldOutput(out, ev.e);
+}
+
+/** P-VIZ.6 (ADR-0635): an event the model took also counts in the session ledger, on the node it came from. */
+function noteLedger(ev: VizBusEvent): void {
+  const n = model?.nodes.get(ev.source);
+  if (n) ledgerEvent(ledger, n, ev.e, Date.now());
+}
+
+/** The ledger follows the scene's nodes and repaints (twice a second, with the census). */
+function paintLedger(now: number): void {
+  if (!model || !ledgerView) return;
+  syncLedger(ledger, model.nodes.values(), now);
+  ledgerFolder(ledger, HUB_ID, mainFolder);
+  const rows = ledgerRows(ledger);
+  ledgerView.paint(rows, ledgerSummary(rows));
+}
+
+/** Main works in the current workspace (the demo: its scripted folder). Read on every open and on a new hub
+ *  session, so a workspace switch shows up. */
+function loadMainFolder(): void {
+  if (demo) { mainFolder = demo.cwd(HUB_ID); return; }
+  void bridge.workspace().then((w) => { if (w?.current && !demo) mainFolder = w.current; }).catch(() => { /* the folder stays as it was */ });
 }
 
 function startTimers(): void {
@@ -556,7 +614,7 @@ function onTick(): void {
     const st = demo.step(demoPrev, now);
     demoPrev = now;
     for (const a of st.asks) markAsked(model, a.id, a.ask);
-    for (const e of st.events) applyEvent(model, e, now);
+    for (const e of st.events) if (applyEvent(model, e, now)) noteLedger(e);
   }
   tick(model, now);
   const fresh = drainEvents(model);
@@ -565,6 +623,7 @@ function onTick(): void {
   if (now - censusAt >= 500) {
     censusAt = now;
     paintCensus(now);
+    paintLedger(now);
     if (hover) paintTip(hover.hit, hover.x, hover.y);
     if (panel) paintPanel();
     if (view && themeSig && JSON.stringify(readTheme(view)) !== themeSig) remount(); // a theme switch while open
@@ -580,7 +639,10 @@ async function pollFleet(): Promise<void> {
   window.clearTimeout(fleetTimer);
   const tier = deps.perf.tier();
   if (demo) {
-    applyFleet(m, demo.lanes(Date.now()), Date.now(), "anthropic/claude-opus-4.6");
+    const now = Date.now(), lanes = demo.lanes(now);
+    applyFleet(m, lanes, now, "anthropic/claude-opus-4.6");
+    syncLedger(ledger, m.nodes.values(), now);
+    ledgerFleet(ledger, lanes.map((l) => ({ id: l.id, session: null, folder: demo!.cwd(l.id) })), now);
     fleetTimer = window.setTimeout(() => void pollFleet(), 500);
     return;
   }
@@ -592,6 +654,12 @@ async function pollFleet(): Promise<void> {
   if (st) {
     const mine = hubLanes(st.lanes, st.hub);
     applyFleet(m, mine.map((l) => ({ id: l.id, name: l.name, model: l.model, status: l.status, ...(l.usage ? { usage: l.usage } : {}) })), Date.now(), st.masterModel);
+    // P-VIZ.6 (ADR-0635): a new hub session starts the ledger over (Main's folder is fetched again); each lane
+    // brings its session, its repo (else its folder) and its measured usage.
+    const now = Date.now();
+    if (ledgerHub(ledger, st.hub)) loadMainFolder();
+    syncLedger(ledger, m.nodes.values(), now);
+    ledgerFleet(ledger, mine.map((l) => ({ id: l.id, session: l.sessionId, folder: l.repo?.repo?.root ?? l.cwd, ...(l.usage ? { usage: l.usage } : {}) })), now);
     lastLanes = mine;
     syncWatches(mine);
   }
@@ -720,8 +788,10 @@ function placeIn(node: HTMLElement, x: number, y: number): void {
 }
 
 /** A click on a node: its figure stares at you (an interruption) and its panel opens beside it. Empty space
- *  closes the panel. */
+ *  closes the panel. P-VIZ.6 (ADR-0636): while a throwable is armed the click throws it instead (at a node; on
+ *  empty space nothing happens). */
 function onPick(hit: SceneHit | null): void {
+  if (tray?.release(hit)) return;
   if (!hit || hit.kind !== "node") { closePanel(); return; }
   scene?.reactNode(hit.id, "stare");
   openPanel(hit.id);
@@ -1024,9 +1094,11 @@ function onKey(e: KeyboardEvent): void {
   const active = document.activeElement;
   if (active && active !== document.body && !view.contains(active)) return; // a layer above us owns this Esc
   e.preventDefault(); e.stopPropagation();
+  if (ledgerView?.ownsFocus()) { ledgerView.collapse(); return; } // P-VIZ.6: Esc inside the ledger folds it back
   if (viewPop) { viewPop.close(); viewPop = null; return; }
   if (playerOpen()) { closePlayer(); return; }
   if (recPop) { recPop.close(); recPop = null; return; }
+  if (tray?.disarm()) return; // P-VIZ.6 (ADR-0636): Esc puts an armed throwable down first
   if (panel) { closePanel(); return; }
   closeViz();
 }

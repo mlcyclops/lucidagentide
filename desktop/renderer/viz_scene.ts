@@ -38,6 +38,11 @@
 // zooms (a real pointer move or wheel, not a click), auto turns off and the view is told (onUserCamera);
 // setAuto(true) glides back from wherever the user left the camera.
 //
+// P-VIZ.6 (ADR-0636): throwAt flies a throwable at a node (viz_throw.createThrowFx: projectiles, impacts) and
+// calls the figure's hit() on arrival; storm() plays the style's storm and hits every figure, staggered along
+// the storm front. A figure's `charge` (a drink, a bolt, absorbed energy balls) brightens its node's edges and
+// plate while it lasts. Reduced motion: no flight and no flashes, the hit lands at once.
+//
 // Resource contract (the orbit canvas's, ADR-0522): a DPR-capped canvas sized by a ResizeObserver, a frame
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
 // nothing moves and parks entirely when hidden or under reduced motion with nothing changing. destroy()
@@ -57,6 +62,9 @@ import { createOfficeFigure, type OfficeFigure } from "./viz_office.ts";
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
 import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
+import { createThrowFx, skyAbove } from "./viz_throw.ts";
+import type { HitKind, ThrowKind } from "./viz_throw_kinds.ts";
+import { launchPx, stormSchedule, volley } from "./viz_throw_math.ts";
 import { CUBE, frameInterval, IDLE_FPS, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
 
 export type VizViewMode = "2d" | "3d";
@@ -97,6 +105,18 @@ export interface VizSceneHandle {
    *  Still reported when the node is off to a side (the panel docks at that edge); null when it is behind the
    *  camera or gone. The node panel sits beside it. */
   screenBoxOf(id: string): { x: number; y: number; r: number } | null;
+  /** P-VIZ.6 (ADR-0636): throw `kind` at the node: it flies (an arc from `from`, stage px where the throw
+   *  started, or the viewer's side; the bolt strikes from above) and the figure reacts on arrival. Reduced
+   *  motion: no flight, the hit lands at once. False when there is no such node. */
+  throwAt(nodeId: string, kind: ThrowKind, from?: { x: number; y: number }): boolean;
+  /** P-VIZ.6: the style's storm (anime: dark sky and lightning strikes; professional: a gust of papers) and every
+   *  figure hit("storm") as the front reaches it. The caller rate limits it (viz_throw tray). */
+  storm(): void;
+  /** P-VIZ.6: the node under client (x, y), or null. */
+  nodeAt(x: number, y: number): string | null;
+  /** P-VIZ.6: a throwable is armed (`cursor`, a CSS cursor showing it) or not (null). While armed every click is
+   *  delivered to onPick at once (no double click wait). */
+  setThrowArmed(cursor: string | null): void;
   onLost(cb: () => void): void;
   destroy(): void;
 }
@@ -166,6 +186,9 @@ const EMBER = new THREE.Color("#5dff9a");
 const DEAD = new THREE.Color("#2a2d33");
 const WHITE = new THREE.Color("#ffffff");
 const SPARK = new THREE.Color("#ffae42");
+/** P-VIZ.6: an energized node's edges lean toward these (anime: electric cyan; professional: warm gold). */
+const CHARGE_ANIME = new THREE.Color("#8fe3ff");
+const CHARGE_PRO = new THREE.Color("#ffd166");
 
 // KIND_SCALE and CUBE (the glass cube's side before the kind's scale) live in viz_model: the layout spaces
 // the cubes by them.
@@ -520,7 +543,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
     const fig = office
       ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, cubicle: { status: edgeMat } })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false });
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false, seed: obj.seed });
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
     holder.add(fig.group);
@@ -579,7 +602,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     // same way with his desk (P-VIZ.4).
     const fig = style === "professional"
       ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true });
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true, seed: obj.seed });
     const holder = new THREE.Group();
     holder.rotation.x = -Math.PI / 2;
     holder.position.set(0, FIG_2D_Y, FIG_2D_FEET_Z);
@@ -917,6 +940,40 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     obj.cracks = null;
   }
 
+  // ------------------------------------------------------------------ P-VIZ.6 (ADR-0636): throws and Storm
+  const throwFx = createThrowFx(scene, {
+    target(id, out) { const n = nodes.get(id); if (!n) return false; nodeHead(n, out); return true; },
+    arrive: hitFigure,
+    sparks: spawnFx,
+    burst: burstAt,
+    bolt: boltBetween,
+  }, { detail: o.detail, motion: o.motion, light: theme.light });
+  throwFx.setFlat(mode === "2d");
+  const throwTo = new THREE.Vector3(), throwFrom = new THREE.Vector3(), stormDir = new THREE.Vector3(), stormCenter = new THREE.Vector3();
+  const throwPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  let throwCursor: string | null = null;
+
+  /** Something reached the node's figure: it reacts (viz_anime / viz_office hit), with frames for the reaction. */
+  function hitFigure(id: string, kind: HitKind, from: THREE.Vector3): void {
+    const obj = nodes.get(id);
+    const slot = obj?.d3 ?? obj?.d2;
+    if (!slot) return;
+    slot.fig.hit(kind, from, camera);
+    effectsUntil = Math.max(effectsUntil, clock.now + REACT_MS);
+    kick();
+  }
+
+  /** Where a throw starting at stage px `px` begins in the world: along the view ray, a third of the way to the
+   *  target (3D: from the viewer's side), or on a plane just above the target (2D). */
+  function launchFrom(px: { x: number; y: number }, target: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
+    if (!W || !H) return out.copy(target).add(tmpC.set(0, 2, 2));
+    ndc.set((px.x / W) * 2 - 1, -(px.y / H) * 2 + 1);
+    rc.setFromCamera(ndc, camera);
+    if (mode === "3d") return rc.ray.at(rc.ray.origin.distanceTo(target) * 0.3, out);
+    throwPlane.constant = -(target.y + 0.4);
+    return rc.ray.intersectPlane(throwPlane, out) ?? out.copy(target);
+  }
+
   // ------------------------------------------------------------------ per-frame update
   const tmpColor = new THREE.Color();
   const tintTarget = new THREE.Color();
@@ -973,13 +1030,21 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       // P-VIZ.5: a manager handover is a 3.4 s walk-off; at the idle cadence it would stutter.
       if ("handingOver" in slot.fig && slot.fig.handingOver) busyNodes = true;
     }
+    // P-VIZ.6 (ADR-0636): energized (a drink, a bolt, absorbed energy balls): brighter edges and plate while the
+    // figure's charge lasts (it decays inside the figure's update, so the frames keep coming until it is gone).
+    const charge = slot && st !== "killed" && st !== "ended" && !flicker ? slot.fig.charge : 0;
+    if (charge > 0.01) {
+      tmpColor.lerp(style === "professional" ? CHARGE_PRO : CHARGE_ANIME, 0.6 * charge);
+      level += 1.6 * charge;
+      busyNodes = true;
+    }
 
     if (obj.d3) {
       const d = obj.d3;
       d.edgeMat.color.copy(tmpColor).multiplyScalar(level);
       d.edgeMat.opacity = st === "killed" ? 0.35 : st === "ended" ? 0.5 : 0.95;
       d.plateMat.emissive.copy(flickOn ? RED : obj.base);
-      d.plateMat.emissiveIntensity = flickOn ? 0.6 : st === "ended" || st === "killed" ? 0.02 : 0.03 + 0.07 * obj.power;
+      d.plateMat.emissiveIntensity = flickOn ? 0.6 : st === "ended" || st === "killed" ? 0.02 : 0.03 + 0.07 * obj.power + 0.25 * charge;
       // glass: frosted when ended, dark gray when killed, icy when paused
       const g = d.glassMat;
       g.roughness = 0.04 + obj.tone.frost * 0.45;
@@ -1001,7 +1066,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     }
     if (obj.d2) {
       const d = obj.d2;
-      d.rimMat.color.copy(tmpColor).multiplyScalar(Math.min(1.4, level));
+      d.rimMat.color.copy(tmpColor).multiplyScalar(Math.min(1.4 + charge, level));
       d.rimMat.opacity = st === "killed" ? 0.4 : st === "ended" ? 0.55 : 0.95;
       tileTint.copy(tintTarget).lerp(bgColor, 0.6);
       d.tileMat.color.copy(obj.tileBase).lerp(tileTint, obj.tone.tint).lerp(bgColor, obj.tone.dim * 0.5);
@@ -1248,7 +1313,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     pointer.dirty = false;
     const hit = hitAt(pointer.x, pointer.y);
     const key = hit ? (hit.kind === "node" ? `n:${hit.id}` : `e:${hit.from}>${hit.to}`) : "";
-    canvas.style.cursor = hit?.kind === "node" ? "pointer" : "";
+    canvas.style.cursor = throwCursor ?? (hit?.kind === "node" ? "pointer" : "");
     if (key || lastHitKey) hoverCb?.(hit, pointer.x, pointer.y);
     lastHitKey = key;
   }
@@ -1269,8 +1334,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const quick = performance.now() - down.at < 650;
     down = null;
     if (moved >= 6 || !quick || e.button !== 0) return;
-    // P-VIZ.4: a click waits DOUBLE_MS for a second one near it; a pair is one double click, never a single.
     const x = e.clientX, y = e.clientY;
+    if (throwCursor) { // P-VIZ.6: armed, every click is a throw, delivered now (no double click wait)
+      if (clickWait) { window.clearTimeout(clickWait.timer); clickWait = null; }
+      pickCb?.(hitAt(x, y), x, y);
+      return;
+    }
+    // P-VIZ.4: a click waits DOUBLE_MS for a second one near it; a pair is one double click, never a single.
     if (clickWait && Math.hypot(x - clickWait.x, y - clickWait.y) < 12) {
       window.clearTimeout(clickWait.timer);
       const hit = clickWait.hit;
@@ -1308,10 +1378,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (n.status === "active" || t < n.fx.failUntil) busyNodes = true;
     }
     updateFlow(t, dt);
+    const throwLive = throwFx.update(t, dt); // before the sparks, so an impact's sparks move this frame
     const fxLive = updateFx(dt);
     const boltLive = updateBolts(t);
     const burstLive = updateBursts(t);
-    if (fxLive || boltLive || burstLive) effectsUntil = Math.max(effectsUntil, t + 50);
+    if (fxLive || boltLive || burstLive || throwLive) effectsUntil = Math.max(effectsUntil, t + 50);
     pointScale();
     hoverNow();
     aimLights();
@@ -1412,6 +1483,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       interacting = false;
       for (const obj of nodes.values()) ensureParts(obj);
       edgeFx.setFlat(mode === "2d");
+      throwFx.setFlat(mode === "2d");
       fit();
     },
     setStyle(next) {
@@ -1458,6 +1530,58 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const tx = r.left + ((anchorAt.x + 1) / 2) * r.width, ty = r.top + ((1 - anchorAt.y) / 2) * r.height;
       return { x, y, r: Math.max(8, Math.hypot(tx - x, ty - y)) };
     },
+    throwAt(nodeId, kind, from) {
+      const obj = nodes.get(nodeId);
+      if (!obj) return false;
+      clock.now = performance.now(); // the loop may have been parked: the flight starts now, on the rAF timeline
+      nodeHead(obj, throwTo);
+      const shots = volley(kind);
+      for (let i = 0; i < shots.length; i++) {
+        if (kind === "bolt") skyAbove(throwTo, mode === "2d", throwFrom);
+        else launchFrom(from ? { x: from.x + (i - (shots.length - 1) / 2) * 14, y: from.y } : launchPx(W, H, i, shots.length), throwTo, throwFrom);
+        // Reduced motion: no flight, no flash; the hit lands at once (the stars' three, in order).
+        if (!o.motion) hitFigure(nodeId, kind, throwFrom);
+        else if (!throwFx.launch(nodeId, kind, throwFrom, shots[i]!, clock.now)) break; // THROW_CAP
+      }
+      effectsUntil = Math.max(effectsUntil, clock.now + REACT_MS);
+      kick();
+      return true;
+    },
+    storm() {
+      if (!nodes.size) return;
+      clock.now = performance.now();
+      // The front sweeps left to right across the screen: the camera's right vector, on the ground.
+      stormDir.set(1, 0, 0).applyQuaternion(camera.quaternion).setY(0);
+      if (stormDir.lengthSq() < 1e-6) stormDir.set(1, 0, 0);
+      stormDir.normalize();
+      const hits = stormSchedule([...nodes.values()].map((n) => ({ id: n.id, x: n.cur.x, z: n.cur.z })), stormDir);
+      if (!o.motion) { // reduced motion: no sky, no strikes, no papers; every figure hit at once
+        for (const h of hits) {
+          const n = nodes.get(h.id);
+          if (!n) continue;
+          nodeHead(n, throwTo);
+          if (style === "anime") skyAbove(throwTo, mode === "2d", throwFrom); else throwFrom.copy(throwTo).addScaledVector(stormDir, -3);
+          hitFigure(h.id, "storm", throwFrom);
+        }
+        return;
+      }
+      stormCenter.set(0, 0, 0);
+      for (const n of nodes.values()) stormCenter.add(n.cur);
+      stormCenter.divideScalar(nodes.size);
+      const until = throwFx.storm(style, hits, stormDir, stormCenter, sceneRadius(), clock.now);
+      effectsUntil = Math.max(effectsUntil, until + REACT_MS);
+      kick();
+    },
+    nodeAt(x, y) {
+      const hit = hitAt(x, y);
+      return hit?.kind === "node" ? hit.id : null;
+    },
+    setThrowArmed(cursor) {
+      throwCursor = cursor;
+      canvas.style.cursor = cursor ?? "";
+      if (pointer) pointer.dirty = true; // the hover pass restores the node pointer once disarmed
+      kick();
+    },
     onLost(cb) { lostCb = cb; },
     destroy() {
       stopped = true;
@@ -1475,6 +1599,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       nodes.clear();
       for (const ed of [...edges.values()]) dropEdge(ed);
       edgeFx.dispose();
+      throwFx.dispose();
       const mats = new Set<THREE.Material>();
       const sharedGeo = new Set<THREE.BufferGeometry>(geo.values());
       scene.traverse((x) => {

@@ -754,6 +754,8 @@ const SUB_CLEAR = 1.45;
 const SUB_RING_AGENT = 2.4, SUB_RING_HUB = 3.6, SUB_SPHERE = 2.1;
 /** A lane's helpers fan this far apart (radians) on the arc facing away from the hub, up to SUB_FAN_MAX. */
 const SUB_FAN_STEP = 0.8, SUB_FAN_MAX = Math.PI * 1.4;
+/** Orbit helpers alternate between two heights this far apart: more than a helper cube (0.87) plus a gap. */
+const SUB_RISE = 1.1;
 
 /** The ring radius around a parent: at least `floor`, clear of the parent's cube, and wide enough that two
  *  helpers `step` radians apart on it are SUB_CLEAR apart (chord = 2 r sin(step / 2)). */
@@ -798,9 +800,12 @@ export function layoutPositions(nodes: readonly { id: string; kind: VizKind; par
       const base = aroundHub ? -Math.PI / 2 : Math.atan2(c[2], c[0]);
       const step = n < 2 ? 0 : aroundHub ? (Math.PI * 2) / n : Math.min(SUB_FAN_MAX, SUB_FAN_STEP * (n - 1)) / (n - 1);
       const r = subRing(parentKind, aroundHub ? SUB_RING_HUB : SUB_RING_AGENT, step);
+      // P-VIZ.6: every other helper rides SUB_RISE higher. From the usual low 3D camera the fan's depth is
+      // foreshortened, so neighbours on one height overlapped on screen even with clear 3D gaps; the 2D view
+      // looks straight down and ignores the height, so its spacing is unchanged.
       kids.forEach((k, i) => {
         const ang = aroundHub ? base + i * step : base + (i - (n - 1) / 2) * step;
-        pos.set(k.id, [c[0] + Math.cos(ang) * r, c[1] + 0.35, c[2] + Math.sin(ang) * r]);
+        pos.set(k.id, [c[0] + Math.cos(ang) * r, c[1] + 0.35 + (i % 2) * SUB_RISE, c[2] + Math.sin(ang) * r]);
       });
     } else {
       const pts = fibonacciSphere(n);
