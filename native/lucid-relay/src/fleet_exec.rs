@@ -457,8 +457,12 @@ impl Frames {
             new.drain(..dropped);
         }
         self.st.lock().audit_pushed = head;
+        if dropped > 0 {
+            self.console.logger.ops("fleet.audit-dropped", &Fields::new().with("dropped", dropped as u64), Level::Warn);
+        }
         if !new.is_empty() {
-            self.events.send("audit", json!({ "entries": new, "dropped": dropped }));
+            // AC-2a 9.3: `{entries}` only (any other key makes the console refuse the frame).
+            self.events.send("audit", json!({ "entries": new }));
         }
     }
 

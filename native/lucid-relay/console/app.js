@@ -5742,7 +5742,9 @@
           : v.product === "meet" && (!v.name || !(Number.isInteger(v.days) && v.days >= 1 && v.days <= 30)) ? FMSG.cols.name : ""),
       run: (v) => (v.product === "meet"
         ? fleetPost("fleet/people/invite", { product: "meet", relay: v.relay, email: v.email, name: v.name, role: "member", days: v.days }, { action: "people.invite", target: v.email }, [v.relay])
-        : post("fleet/people/invite", { product: "console", email: v.email, role: v.role }, { action: "admins.invite", target: v.email })),
+        // Console accounts are AC-1's `admins/invite` with the console's own step-up (fleet/people/invite takes only
+        // Meeting Hub people, with a fleet step-up).
+        : post("admins/invite", { email: v.email, role: v.role }, { action: "admins.invite", target: v.email })),
       done: (r) => showLink(r, r && r.mailed ? r.email || null : null),
     });
   }
