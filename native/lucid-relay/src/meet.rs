@@ -1435,8 +1435,9 @@ impl Relay {
 /// AC-2b-D 6.4, 8.7: the start before anything is read or opened: `profile.lock` first (refused: exit 78), a High
 /// relay never with `fleet_pki` (`cli.deploy-pki-high`, exit 78), the 2.2 start checks, then `fleet.lock` and a waiting
 /// handoff applied before the TLS files, `client_ca`, CRL or license are read; a `fleet_pki` relay with no
-/// `pki/current/relay.crt` after that exits 78 (`cli.deploy-no-cert`).
-pub fn deploy_start(s: &Settings, lock: &Path) -> Result<(), crate::server::StartRefused> {
+/// `pki/current/relay.crt` after that exits 78 (`cli.deploy-no-cert`). Ok(true) when the apply wrote the folder's first
+/// AC-1 state (`GateConfig::audit_by_deploy`).
+pub fn deploy_start(s: &Settings, lock: &Path) -> Result<bool, crate::server::StartRefused> {
     use crate::server::StartRefused;
     let dir = (!s.state_dir.is_empty()).then(|| PathBuf::from(&s.state_dir));
     let logger = crate::console_meet::logger();
@@ -1448,7 +1449,7 @@ pub fn deploy_start(s: &Settings, lock: &Path) -> Result<(), crate::server::Star
     }
     fleet_start_checks(s).map_err(|words| StartRefused { status: 1, words })?;
     let Some(dir) = dir else {
-        return if s.fleet_pki { Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-cert"))) } else { Ok(()) };
+        return if s.fleet_pki { Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-cert"))) } else { Ok(false) };
     };
     let license = if s.license.trim().is_empty() { dir.join(crate::meet_license::LICENSE_FILE) } else { PathBuf::from(s.license.trim()) };
     let local = crate::fleet_agent::LocalDeploy {
@@ -1462,15 +1463,17 @@ pub fn deploy_start(s: &Settings, lock: &Path) -> Result<(), crate::server::Star
         admins: s.admins.clone(),
     };
     let proxy = (!s.fleet_proxy.trim().is_empty()).then(|| s.fleet_proxy.trim().to_string());
+    let ac1_before = crate::meet_license::has_ac1_state(&dir);
     crate::server::apply_before_listeners(crate::server::BeforeListeners { product: crate::license::Product::Meet, state_dir: &dir, logger, proxy, local }).map_err(|words| StartRefused { status: 1, words })?;
     if s.fleet_pki && !crate::fleet_agent::pki_current(&dir).join("relay.crt").exists() {
         return Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-cert")));
     }
-    Ok(())
+    // the apply's headless console seals and audits even when the apply fails
+    Ok(!ac1_before && crate::meet_license::has_ac1_state(&dir))
 }
 
 fn serve(settings: Settings) -> ! {
-    deploy_start(&settings, Path::new(crate::server::MEET_PROFILE_LOCK)).unwrap_or_else(|r| r.exit());
+    let audit_by_deploy = deploy_start(&settings, Path::new(crate::server::MEET_PROFILE_LOCK)).unwrap_or_else(|r| r.exit());
     let secret = match std::fs::read(&settings.turn_secret_file) {
         Ok(b) => {
             let t = String::from_utf8_lossy(&b).trim_matches(|c: char| c.is_ascii_whitespace()).as_bytes().to_vec();
@@ -1545,7 +1548,7 @@ fn serve(settings: Settings) -> ! {
         log_warn(notice);
     }
     let license_file = if settings.license.trim().is_empty() { state_file(&settings, crate::meet_license::LICENSE_FILE) } else { Some(PathBuf::from(settings.license.trim())) };
-    let gate_cfg = crate::meet_license::GateConfig { state_dir: state_dir.clone(), license_file, client_ca: PathBuf::from(&settings.client_ca) };
+    let gate_cfg = crate::meet_license::GateConfig { state_dir: state_dir.clone(), license_file, client_ca: PathBuf::from(&settings.client_ca), audit_by_deploy };
     let gate = crate::meet_license::MeetGate::open(gate_cfg, &hub, crate::meet_time::clock()).unwrap_or_else(|e| die(&e));
     hub.set_gate(gate.clone());
     std::thread::Builder::new()
@@ -2455,7 +2458,7 @@ mod tests {
         let current = crate::fleet_agent::pki_current(&state);
         std::fs::create_dir_all(&current).unwrap();
         std::fs::write(current.join("relay.crt"), "placed").unwrap();
-        assert_eq!(deploy_start(&s, &absent), Ok(()));
+        assert_eq!(deploy_start(&s, &absent), Ok(false));
         let none = Settings { state_dir: String::new(), fleet_pki: true, ..Settings::default() };
         assert_eq!(deploy_start(&none, &absent).unwrap_err().status, 78);
     }

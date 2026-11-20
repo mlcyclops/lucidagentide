@@ -1980,7 +1980,7 @@ mod tests {
             admin_console: std::sync::OnceLock::new(),
             fleet: std::sync::OnceLock::new(),
         });
-        let cfg = crate::meet_license::GateConfig { state_dir: Some(dir.clone()), license_file: Some(dir.join(crate::meet_license::LICENSE_FILE)), client_ca: dir.join("client_ca.pem") };
+        let cfg = crate::meet_license::GateConfig { state_dir: Some(dir.clone()), license_file: Some(dir.join(crate::meet_license::LICENSE_FILE)), client_ca: dir.join("client_ca.pem"), audit_by_deploy: false };
         let gate = MeetGate::open(cfg, &relay.hub, crate::meet_time::testclock::FakeClock::new(now)).unwrap();
         relay.hub.set_gate(gate);
         let section = MeetSection::new(Arc::downgrade(&relay), MeetBlocks::open(&dir.join(BLOCKS_FILE)).unwrap(), T0);

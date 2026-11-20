@@ -41,7 +41,8 @@ pub const NO_LICENSE: &str = "This relay has no Meeting Hub license.";
 /// R42-4: the one-time upgrade period is 2 days.
 pub const UPGRADE_DAYS: i64 = 2;
 /// The AC-1 state files: any of them next to a missing meet-license-state.json means no upgrade period.
-const AC1_FILES: [&str; 4] = [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, "console.json", "console-audit-head.json"];
+const AC1_FILES: [&str; 4] = [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, "console.json", AUDIT_HEAD];
+const AUDIT_HEAD: &str = crate::console_audit::HEAD_FILE;
 /// Checks at most this often (the license file, the seats); a principal never seen before checks at once.
 const CHECK_EVERY_MS: i64 = 10_000;
 const GATE_LOG_MS: i64 = 3_600_000;
@@ -357,7 +358,17 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
 /// "From before AC-1": the state folder holds Meeting Hub state (a device store with at least one device record) and
 /// no AC-1 state file.
 pub fn from_before_ac1(dir: &Path) -> bool {
-    if AC1_FILES.iter().any(|f| dir.join(f).exists()) {
+    before_ac1(dir, false)
+}
+
+/// Any AC-1 state file in `dir`.
+pub fn has_ac1_state(dir: &Path) -> bool {
+    AC1_FILES.iter().any(|f| dir.join(f).exists())
+}
+
+/// `from_before_ac1`, the audit head not counted when `audit_by_deploy` (GateConfig).
+fn before_ac1(dir: &Path, audit_by_deploy: bool) -> bool {
+    if AC1_FILES.iter().any(|f| !(audit_by_deploy && *f == AUDIT_HEAD) && dir.join(f).exists()) {
         return false;
     }
     let Ok(raw) = std::fs::read(dir.join("state.json")) else { return false };
@@ -392,6 +403,9 @@ pub struct GateConfig {
     /// relay.json `license`, else state_dir/license.lic.
     pub license_file: Option<PathBuf>,
     pub client_ca: PathBuf,
+    /// AC-2b-D 6.4: this start's apply before the listeners wrote the first AC-1 state (its headless console's audit
+    /// log) into a folder that held none, so the audit head is not evidence of earlier AC-1 state.
+    pub audit_by_deploy: bool,
 }
 
 /// The service gate, the upgrade period and the seats of one Meet relay (I13).
@@ -423,12 +437,13 @@ impl MeetGate {
             crate::meet_time::live_check_folder(d)?;
         }
         // decided before this start writes any state file
-        let before = dir.as_deref().map(from_before_ac1).unwrap_or(false);
+        let by_deploy = cfg.audit_by_deploy;
+        let before = dir.as_deref().is_some_and(|d| before_ac1(d, by_deploy));
         // R6-L1: an absent meet-seats.json or meet-time.json next to other AC-1 state stops the start (recreating them
         // would forget the seat clock, lastLicense or the high-water mark)
         if let Some(d) = dir.as_deref() {
-            let has = |f: &str| d.join(f).exists();
-            let others = |skip: &str| [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, crate::meet_time::TIME_FILE, "console.json", "console-audit-head.json"].iter().any(|f| *f != skip && has(f));
+            let has = |f: &str| d.join(f).exists() && !(by_deploy && f == AUDIT_HEAD);
+            let others = |skip: &str| [LICENSE_STATE_FILE, crate::meet_seats::SEATS_FILE, crate::meet_time::TIME_FILE, "console.json", AUDIT_HEAD].iter().any(|f| *f != skip && has(f));
             for f in [crate::meet_seats::SEATS_FILE, crate::meet_time::TIME_FILE] {
                 if !has(f) && others(f) {
                     return Err(format!("{f} is missing next to this relay's other Admin Console state; the relay will not start until it is restored"));
@@ -1055,7 +1070,7 @@ mod tests {
     }
 
     fn cfg(d: &Path) -> GateConfig {
-        GateConfig { state_dir: Some(d.to_path_buf()), license_file: Some(d.join(LICENSE_FILE)), client_ca: d.join("client_ca.pem") }
+        GateConfig { state_dir: Some(d.to_path_buf()), license_file: Some(d.join(LICENSE_FILE)), client_ca: d.join("client_ca.pem"), audit_by_deploy: false }
     }
 
     fn old_state(d: &Path) {
@@ -1391,6 +1406,25 @@ mod tests {
         drop(MeetGate::open(cfg(&d), &hub(&d), FakeClock::new(T0)).unwrap());
         std::fs::remove_file(d.join(crate::meet_time::TIME_FILE)).unwrap();
         assert!(MeetGate::open(cfg(&d), &hub(&d), FakeClock::new(T0)).is_err(), "meet-time.json missing beside AC-1 state");
+    }
+
+    #[test]
+    fn an_audit_head_written_by_this_starts_deploy_apply_is_not_earlier_ac1_state() {
+        // AC-2b-D 6.4: the apply before the listeners audits into a fresh folder before the gate opens
+        let d = dir("deploy-audit");
+        std::fs::write(d.join(AUDIT_HEAD), b"{}").unwrap();
+        assert!(MeetGate::open(cfg(&d), &hub(&d), FakeClock::new(T0)).is_err(), "an audit head alone is AC-1 state");
+        let g = MeetGate::open(GateConfig { audit_by_deploy: true, ..cfg(&d) }, &hub(&d), FakeClock::new(T0)).unwrap();
+        assert_eq!(g.upgrade().retired.as_deref(), Some("absent"));
+        drop(g);
+        // later starts find the gate's own files
+        drop(MeetGate::open(cfg(&d), &hub(&d), FakeClock::new(T0 + 1000)).unwrap());
+        // a relay from before AC-1 keeps its upgrade period when a deploy apply audited first
+        let d = dir("deploy-audit-old");
+        old_state(&d);
+        std::fs::write(d.join(AUDIT_HEAD), b"{}").unwrap();
+        let g = MeetGate::open(GateConfig { audit_by_deploy: true, ..cfg(&d) }, &hub(&d), FakeClock::new(T0)).unwrap();
+        assert!(g.upgrade().ends.is_some());
     }
 
     #[test]
