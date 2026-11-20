@@ -25,7 +25,7 @@ export interface LoopBlock {
   iter: number;
   tool: string;
   tier: RiskTier;
-  reason: "risk-dial" | "catastrophic" | "security-gate" | "call-budget";
+  reason: "risk-dial" | "catastrophic" | "managed-deny" | "security-gate" | "call-budget";
 }
 
 export interface IterStat {
@@ -198,6 +198,7 @@ export function mermaidBar(title: string, xLabels: (string | number)[], values: 
 const BLOCK_REASON_LABEL: Record<LoopBlock["reason"], string> = {
   "risk-dial": "Risk dial",
   catastrophic: "Catastrophic (T4)",
+  "managed-deny": "Denied by your organization's policy",
   "security-gate": "Security gate (scanner)",
   "call-budget": "Whitelist call budget",
 };

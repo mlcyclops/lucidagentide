@@ -18,8 +18,9 @@
 //   deny          → block, no persistence.
 //
 // Fail-closed: anything unparseable / compound-ambiguous / simply unknown is classified RISKY; a
-// non-silenceable catastrophic ALWAYS_PROMPT set (sudo, rm -rf, pipe-to-shell, dd/mkfs, fork bomb,
-// git reset --hard / clean -f / push --force) prompts regardless of ANY standing allow or danger mode.
+// catastrophic ALWAYS_PROMPT set (sudo, rm -rf, pipe-to-shell, dd/mkfs, fork bomb, git reset --hard /
+// clean -f / push --force) prompts despite a standing program allow or this-turn scope. Full auto (danger mode;
+// a T4 loop dial; Fleet full auto-mode) runs it too: P-AUTO.FULL1 (ADR-0639). Only managed policy stops full auto.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -74,8 +75,8 @@ const GIT_READONLY = new Set([
 // Shell control operators that make a command compound / write-capable → risky and un-pinnable (key=null).
 const COMPOUND = /[|;&]|&&|\|\||\$\(|`|>>|>|<\(/;
 
-// Non-silenceable catastrophic patterns (T4). Each ALWAYS prompts (interactive) / ALWAYS blocks
-// (unattended), regardless of any standing allow or danger mode — mirroring an egress ask-site pin.
+// Catastrophic patterns (T4). Each prompts (interactive) / blocks (unattended) despite a standing program allow
+// or this-turn scope; only full auto runs them unasked (ADR-0639), and managed policy can still deny them.
 /** `benign` (P-FLEET.AUTO1, ADR-0610) clears a match the pattern alone cannot tell apart from the danger it names. */
 interface Catastrophic { re: RegExp; why: string; benign?: (cmd: string) => boolean }
 const ALWAYS_PROMPT: Catastrophic[] = [
@@ -373,12 +374,15 @@ export const TOOL_TYPE_TIER: Record<DialType, RiskTier> = {
   subagent: "T2",     // spawns more agent work
 };
 
-/** Pure loop decision: may a command of `tier` auto-run under a dial set to `dialMax`? Fail-closed:
- *  T4 ALWAYS blocks (no human, never auto-runnable); otherwise auto iff tier ≤ dialMax. An absent dial
- *  defaults to T0 (the safest, most-blocking posture). */
+/** Pure loop decision: may a command of `tier` auto-run under a dial set to `dialMax`? Auto iff tier ≤ dialMax,
+ *  so T4 (catastrophic) runs only under a T4 "full auto" dial. An absent dial defaults to T0 (the safest,
+ *  most-blocking posture). */
 export function loopVerdict(dialMax: RiskTier | undefined, tier: RiskTier): "auto" | "block" {
-  if (tier === "T4") return "block";
   const ceil = dialMax ?? "T0";
+  // P-AUTO.FULL1 (ADR-0639): a dial at T4 ("full auto") auto-runs everything, the catastrophic tier included;
+  // below it T4 still blocks. The managed loop ceiling clamps the dial first (clampDialRow), so an org that caps
+  // loops below T4 keeps the block.
+  if (tier === "T4" && ceil !== "T4") return "block";
   return TIER_ORDER[tier] <= TIER_ORDER[ceil] ? "auto" : "block";
 }
 
@@ -403,13 +407,16 @@ export function execVerdict(
 ): ExecVerdict {
   if (cls.risk === "safe") return "allow";
   const gate: ExecVerdict = opts.unattended ? "block" : "prompt";
-  // Catastrophic: never silenceable by any standing allow/danger/turn scope.
-  if (cls.alwaysPrompt) return gate;
   // A managed denylisted program can never be auto-allowed (overrides danger + pins, like an egress deny).
   if (cls.key && (store.denyPrograms ?? []).includes(cls.key)) return gate;
+  // P-AUTO.FULL1 (ADR-0639): danger mode is FULL auto: it runs the catastrophic patterns too (sudo, ssh into
+  // sudo, rm -rf, pipe-to-shell), attended or not. Only the organization's managed policy still stops it: a
+  // denylisted program (above) or `disableDangerMode` (clampExec turns danger off).
+  if (store.dangerMode) return "allow";
+  // Catastrophic: never silenced by the narrower standing scopes (this turn, an allowed program).
+  if (cls.alwaysPrompt) return gate;
   if (opts.turnAllowed) return "allow";
   if (cls.key && (store.allowPrograms ?? []).includes(cls.key)) return "allow";
-  if (store.dangerMode) return "allow";
   return gate;
 }
 
@@ -441,14 +448,14 @@ export function execCommand(toolCall: unknown, toolName: string = askToolName(to
 }
 
 /** #612: the floor a lane's session grant does not cross (Fleet FULL auto-mode keeps only its managed-deny part since
- *  P-FLEET.AUTO2, ADR-0611: execManagedDeny). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
+ *  P-FLEET.AUTO2, ADR-0611: execManagedDeny). It is the floor execVerdict keeps under allow-turn: a catastrophic
  *  command (ALWAYS_PROMPT) or a managed-denylisted program. Returns why the ask must reach a human, or null when
  *  it is not an exec ask or may run unasked. `requestTools` are the request-level tool names (#616). Pure apart
  *  from `store`. */
 export function execFloor(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
   const cls = classifyExecAsk(toolCall, requestTools);
   if (!cls) return null;
-  return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+  return execVerdict({ ...store, dangerMode: false }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
 }
 
 /** P-FLEET.AUTO2 (ADR-0611): the part of the floor Fleet FULL auto-mode still keeps: a program the organization's

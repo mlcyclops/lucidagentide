@@ -44,8 +44,9 @@ if (execVerdict(after, npm) !== "allow") fail("allow-program must auto-allow the
 ok("allow-program pins the program; it then auto-allows");
 
 const cata = classifyCommand("rm -rf build");
-if (execVerdict({ dangerMode: true, allowPrograms: ["rm"] }, cata) !== "prompt") fail("catastrophic must prompt even under danger + pin");
-ok("a catastrophic command still prompts even under danger mode / a program pin");
+if (execVerdict({ allowPrograms: ["rm"] }, cata) !== "prompt") fail("catastrophic must prompt even under a program pin");
+if (execVerdict({ dangerMode: true }, cata) !== "allow") fail("danger mode is full auto (ADR-0639): catastrophic runs too");
+ok("a catastrophic command still prompts under a program pin; danger mode (full auto) runs it");
 
 // 4. Managed denylist (ADR-0068) can never be auto-allowed.
 const clamped = clampExec({ allowPrograms: ["npm"], dangerMode: true }, { denylist: ["npm"] });

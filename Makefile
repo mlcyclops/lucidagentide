@@ -1739,3 +1739,10 @@ demo-P-FLEET.HEAD2: ## P-FLEET.HEAD2 (ADR-0634): the Fleet header keeps one wind
 demo-P-VIZ.6: ## P-VIZ.6 (ADR-0635..0638): Visualize session ledger, throwables and Storm, a mixed cast, email and calendar connectors. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_6.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_ledger_model.test.ts desktop/renderer/viz_throw_math.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/mcp_catalog.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_viz_6.mjs
+
+.PHONY: demo-P-AUTO.FULL1
+demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic set (danger mode, a T4 loop dial, Fleet full auto); only managed policy stops it. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_auto_full_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/exec_policy.test.ts desktop/fleet_lanes.test.ts desktop/loop_report.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_exec_1.ts
+	$(BUN) run desktop/scripts/demo_p_goal_13.ts
+	node --check desktop/scripts/demo_p_auto_full_1.mjs

@@ -15636,9 +15636,9 @@ function openGoalForm(): void {
         </div>
         <div class="goal-ckr-why" id="goalCkrWhy"></div>
         <details class="goal-dial" id="goalDial">
-          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) ALWAYS block, whatever the dial.")}</summary>
+          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only with the dial at T4, full auto; your organization's policy can still block them.")}</summary>
           <div class="goal-dial-grid" id="goalDialGrid"></div>
-          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) always block. Default is the safest (T0) posture.</div>
+          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only at T4, full auto. Default is the safest (T0) posture.</div>
         </details>
       </section>
       <section class="goal-step" data-step="5">
@@ -16817,8 +16817,11 @@ const GOAL_DIAL_ROWS: [keyof NonNullable<GoalDial>, string][] = [
   ["shell", "Shell"], ["edit", "Edit files"], ["delete", "Delete"],
   ["web-fetch", "Web fetch"], ["web-search", "Web search"], ["subagent", "Subagents"],
 ];
-const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3"] as const;
-const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive" };
+// P-AUTO.FULL1 (ADR-0639): T4 is "full auto": the loop runs everything, sudo and other catastrophic commands
+// included; only the organization's managed policy (its loop ceiling and denylist) still stops a command.
+const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3", "T4"] as const;
+const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive", T4: "full auto" };
+const GOAL_DIAL_MAX = GOAL_DIAL_TIERS.length - 1;
 function loadGoalDial(): GoalDial {
   try { const v = JSON.parse(localStorage.getItem("lucid.goalDial") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
@@ -16833,7 +16836,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const idx = Math.max(0, GOAL_DIAL_TIERS.indexOf(tierOf(k)));
     return `<div class="goal-dial-row">
       <span class="goal-dial-name">${esc(label)}</span>
-      <input type="range" class="goal-dial-slider" min="0" max="3" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / 3}" aria-label="${esc(label)} auto-run ceiling"/>
+      <input type="range" class="goal-dial-slider" min="0" max="${GOAL_DIAL_MAX}" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / GOAL_DIAL_MAX}" aria-label="${esc(label)} auto-run ceiling"/>
       <span class="goal-dial-tier" data-dt="${esc(String(k))}">${GOAL_DIAL_TIERS[idx]}<i>${GOAL_DIAL_TIER_LABEL[GOAL_DIAL_TIERS[idx]!]}</i></span>
     </div>`;
   }).join("");
@@ -16844,7 +16847,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const tier = GOAL_DIAL_TIERS[Number(s.value)] ?? "T0";
     dial[k] = tier;
     try { localStorage.setItem("lucid.goalDial", JSON.stringify(dial)); } catch { /* private mode */ }
-    s.style.setProperty("--dial", String(Number(s.value) / 3));
+    s.style.setProperty("--dial", String(Number(s.value) / GOAL_DIAL_MAX));
     const badge = $(`[data-dt="${k}"]`, ov) as HTMLElement | null;
     if (badge) badge.innerHTML = `${tier}<i>${GOAL_DIAL_TIER_LABEL[tier]}</i>`;
   });
