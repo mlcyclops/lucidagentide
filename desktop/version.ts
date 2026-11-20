@@ -802,4 +802,11 @@
 //            (#643, ADR-0612); "agent" is the one word for a fleet worker (#643, ADR-0614); Share session gets its
 //            own animated glyph and Relay setup offers the LUCID relay (#644, ADR-0613). PRERELEASE: never marked
 //            Latest; the Homebrew cask and stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.7";
+// v2.5.4-beta.8 = 2.5.4-beta.7 plus (#647): the Settings window with categories and official MCP Quick connect,
+//            email and calendar connectors, and the UX review gate (ADR-0615..0619, ADR-0638); the titlebar
+//            magnifier (ADR-0620); the preview curtain (ADR-0621); Visualize with the anime and office casts, the
+//            session ledger, things to throw and Storm (ADR-0622..0631, ADR-0635..0637); the Ask Lucid "+" menu in
+//            every dock mode (ADR-0632); one Settings spacing standard (ADR-0633); the Fleet header keeps Minimize
+//            only (ADR-0634); full auto means full auto, only managed policy stops it (ADR-0639). PRERELEASE: never
+//            marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
+export const APP_VERSION = "2.5.4-beta.8";

@@ -6377,3 +6377,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** danger mode runs sudo, ssh into sudo, rm -rf and the rest of the catastrophic set, attended or unattended; the /goal dial gains a T4 "full auto" stop; loops check the managed denylist first; a lane's session grant keeps its floor; `desktop/scripts/demo_p_auto_full_1.mjs` passed in the live window.
 - **stubbed:** nothing; the Tahiti add-on restores a floor through managed policy (ExecDenylist, disableDangerMode, LoopMaxAutoTier).
 - **next:** cut 2.5.4-beta.8 and try full auto with real sudo and ssh work in Fleet and Orbit.
+## Release cut: v2.5.4-beta.8 (prerelease): Settings window, Visualize, full auto
+- **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
+- **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
+- **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
