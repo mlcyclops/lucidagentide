@@ -2305,6 +2305,9 @@
     const methods = j.methods || [];
     let plan;
     if (methods.length > 1) plan = await chooseMethod(steps, methods);
+    // A single method: the break-glass account's is "password-totp" (a password and an authenticator app, never a
+    // passkey); otherwise a passkey or security key, after the password when the profile requires one.
+    else if (methods[0] === "password-totp") plan = ["password", "totp"];
     else plan = (j.password === "required" ? ["password"] : []).concat(methods[0] === "security-key" ? ["security-key"] : ["passkey"]);
     let last = null;
     for (const s of plan) last = await joinStep(s, token, j, steps);

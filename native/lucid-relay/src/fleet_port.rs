@@ -856,7 +856,11 @@ impl PortState {
                         }
                     }
                     Err(e) => {
-                        frame_refused(&self.logger, &relay, e.why);
+                        if e.op.is_empty() {
+                            frame_refused(&self.logger, &relay, e.why);
+                        } else {
+                            self.logger.security("fleet.frame-refused", &Fields::new().with("relay", &relay).with("why", e.why).with("op", e.op), Level::Warn);
+                        }
                         if let Some(id) = e.id {
                             chan.send(w::res_err_text(id, &Refusal::of("fleet-op")));
                         }

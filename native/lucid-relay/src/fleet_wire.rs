@@ -556,6 +556,8 @@ pub enum Frame {
 pub struct FrameError {
     pub id: Option<u32>,
     pub why: &'static str,
+    /// The frame's op once known (a `body` refusal names it in the log), else "".
+    pub op: &'static str,
 }
 
 fn frame_id(v: Option<&Value>) -> Option<u32> {
@@ -596,7 +598,8 @@ pub fn frame_limit(at: Side) -> usize {
 
 /// Parse and shape-check one text frame received at `at` (4.8 steps 1 and 2: size, `t`, `op`, direction, exact keys).
 pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
-    let bad = |id, why| Err(FrameError { id, why });
+    let bad = |id, why| Err(FrameError { id, why, op: "" });
+    let bad_body = |id, op| Err(FrameError { id, why: "body", op });
     if text.len() > frame_limit(at) {
         return bad(None, "size");
     }
@@ -613,7 +616,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(id, "body") };
             if !exact_opt(body, spec.keys, spec.opt) {
-                return bad(id, "body");
+                return bad_body(id, spec.op);
             }
             Ok(Frame::Req { id: id.unwrap_or_default(), op: spec.op, body: body.clone() })
         }
@@ -627,7 +630,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(None, "body") };
             if !exact_opt(body, spec.keys, spec.opt) || !event_values_ok(spec.op, body) {
-                return bad(None, "body");
+                return bad_body(None, spec.op);
             }
             Ok(Frame::Evt { op: spec.op, body: body.clone() })
         }
