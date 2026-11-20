@@ -1708,3 +1708,6 @@ demo-P-VIZ.1: ## P-VIZ.1 (ADR-0622): Visualize, a three.js view of Main, agents 
 .PHONY: demo-P-VIZ.2
 demo-P-VIZ.2: ## P-VIZ.2 (ADR-0623): Visualize nodes are mini Lucid (pixel typing in 2D, a procedural 3D ninja with eight activities, rapid bursts and power-down states in 3D) in translucent glass cubes; a camera director frames where the action is and Auto camera unchecks itself when the user grabs the camera. Rendering is checked in a browser with ?vizDemo=1
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_director.test.ts desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+.PHONY: demo-P-VIZ.3
+demo-P-VIZ.3: ## P-VIZ.3 (ADR-0624): Visualize figures are the anime LUCID mascot (option B, ninja mask) in 3D and flat 2D; emotion and effort live in a canvas-drawn eye band (focused, determined, strain, happy, calm, surprised, tired, pain, KO); keyframed activities with snappy strikes and procedural breathing. Rendering is checked in a browser with ?vizDemo=1
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_mini_look.test.ts desktop/renderer/viz_director.test.ts desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts

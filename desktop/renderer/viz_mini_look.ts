@@ -1,18 +1,18 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_mini_look.ts - P-VIZ.2 (ADR-0623): what each mini Lucid wears and does.
+// desktop/renderer/viz_mini_look.ts - P-VIZ.2 (ADR-0623), P-VIZ.3 (ADR-0624): what each mini Lucid wears and does.
 //
-// PURE (no three, no DOM). The Visualize view gives every node its own mini Lucid: the persona color becomes
-// his accent (headband, belt, scarf) and the gi is tinted toward it but kept dark, so the accent always reads
-// against the suit. Each persona has a repertoire of activities (a coder mostly types, a guard runs kata and
-// staff drills) and `activityAt` rotates through it every MINI_ACTIVITY_MS like mascot.ts `workActivity`,
-// with a per-node seed so a fleet never moves in lockstep. An idle node meditates.
+// PURE (no three, no DOM). The Visualize view gives every node its own anime mini Lucid (viz_anime.ts): the
+// persona color becomes his accent (headband, belt, wraps) and the gi is tinted toward it but kept dark, so the
+// accent always reads against the suit. Each persona has a repertoire of activities (a coder mostly types, a
+// guard runs kata and dashes) and `activityAt` rotates through it every MINI_ACTIVITY_MS like mascot.ts
+// `workActivity`, with a per-node seed so a fleet never moves in lockstep. An idle node meditates.
 
-export type MiniActivity = "typing" | "shuriken" | "kata" | "meditate" | "scan" | "staff" | "scroll" | "dash";
-export const MINI_ACTIVITIES: readonly MiniActivity[] = ["typing", "shuriken", "kata", "meditate", "scan", "staff", "scroll", "dash"];
+export type MiniActivity = "typing" | "kiblast" | "kata" | "meditate" | "scan" | "dash";
+export const MINI_ACTIVITIES: readonly MiniActivity[] = ["typing", "kiblast", "kata", "meditate", "scan", "dash"];
 
-/** CSS hex colors. accent = headband/belt/scarf glow; gi/giShadow/giHighlight = the suit. */
+/** CSS hex colors. accent = headband/belt/wraps glow; gi/giShadow/giHighlight = the suit. */
 export interface MiniLook { accent: string; accentDeep: string; gi: string; giShadow: string; giHighlight: string }
 
 export type MiniKind = "hub" | "agent" | "subagent";
@@ -102,16 +102,16 @@ export function lookFor(personaColor: string): MiniLook {
 // visible change.
 const HUB: readonly MiniActivity[] = ["typing", "meditate", "typing", "kata", "typing", "scan"];
 const REPERTOIRES: Readonly<Record<string, readonly MiniActivity[]>> = {
-  coder: ["typing", "scan", "typing", "staff", "typing", "kata"],
-  tester: ["shuriken", "scan", "typing", "shuriken", "scan", "kata"],
-  guard: ["kata", "staff", "scan", "kata", "staff", "dash"],
-  writer: ["scroll", "typing", "scroll", "meditate", "typing", "scan"],
-  researcher: ["scroll", "scan", "typing", "scan", "scroll", "meditate"],
-  reviewer: ["scan", "typing", "scroll", "scan", "typing", "kata"],
-  planner: ["meditate", "scroll", "typing", "scroll", "meditate", "scan"],
-  lead: ["meditate", "kata", "scroll", "kata", "meditate", "staff"],
-  builder: ["typing", "staff", "typing", "shuriken", "typing", "kata"],
-  scout: ["scan", "dash", "scan", "shuriken", "typing", "dash"],
+  coder: ["typing", "scan", "typing", "kata", "typing", "kiblast"],
+  tester: ["kiblast", "scan", "kiblast", "typing", "scan", "kata"],
+  guard: ["kata", "dash", "scan", "kata", "dash", "kiblast"],
+  writer: ["typing", "meditate", "typing", "scan", "typing", "meditate"],
+  researcher: ["scan", "typing", "scan", "meditate", "scan", "typing"],
+  reviewer: ["scan", "typing", "kata", "scan", "typing", "meditate"],
+  planner: ["meditate", "scan", "typing", "meditate", "scan", "kata"],
+  lead: ["meditate", "kata", "scan", "kata", "meditate", "kiblast"],
+  builder: ["typing", "kata", "typing", "kiblast", "typing", "dash"],
+  scout: ["scan", "dash", "scan", "kiblast", "typing", "dash"],
 };
 
 /** The rotation a node works through. The hub is the coding seat (typing-heavy, with its lead's calm); an

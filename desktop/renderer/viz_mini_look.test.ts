@@ -1,14 +1,14 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_mini_look.test.ts - P-VIZ.2 (ADR-0623): mini Lucid's suit, repertoires and rotation.
-// The accent must read against the gi for every persona and any input; each role gets its own repertoire;
-// the rotation is deterministic, switches on the ~6.5 s beat and is de-synchronized across a fleet. The 3D
-// figure stays inside its per-tier triangle budgets and never produces a non-finite transform.
+// desktop/renderer/viz_mini_look.test.ts - P-VIZ.2 (ADR-0623), P-VIZ.3 (ADR-0624): mini Lucid's suit,
+// repertoires and rotation. The accent must read against the gi for every persona and any input; each role gets
+// its own repertoire; the rotation is deterministic, switches on the ~6.5 s beat and is de-synchronized across a
+// fleet. The anime figure stays inside its per-tier triangle budgets and never produces a non-finite transform.
 
 import { describe, expect, test } from "bun:test";
 import { PERSONAS } from "./viz_model.ts";
-import { createMini3D, miniTriangles, type MiniDetail, type MiniState } from "./viz_mini3d.ts";
+import { animeTriangles, createAnimeFigure, type AnimeDetail, type AnimeState } from "./viz_anime.ts";
 import {
   activitiesFor, activityAt, BRAND_ACCENT, contrastRatio, lookFor, MIN_ACCENT_CONTRAST, MINI_ACTIVITIES, MINI_ACTIVITY_MS,
   parseHex, relativeLuminance, type MiniKind,
@@ -58,13 +58,15 @@ describe("activitiesFor", () => {
   const share = (list: readonly string[], a: string) => list.filter((x) => x === a).length / list.length;
 
   test("each role gets its signature moves", () => {
-    has("tester", "agent", "shuriken", "scan");
-    has("guard", "agent", "kata", "staff");
-    has("writer", "agent", "scroll", "typing");
-    has("researcher", "subagent", "scroll", "scan");
+    has("coder", "agent", "typing");
+    has("tester", "agent", "kiblast", "scan");
+    has("guard", "agent", "kata", "dash");
+    has("writer", "agent", "typing", "meditate");
+    has("researcher", "subagent", "scan", "typing");
     has("reviewer", "agent", "scan", "typing");
-    has("planner", "agent", "meditate", "scroll");
+    has("planner", "agent", "meditate", "scan");
     has("lead", "agent", "meditate", "kata");
+    has("scout", "agent", "scan", "dash");
   });
 
   test("coders and the hub are typing-heavy; an unknown persona works like a coder", () => {
@@ -119,39 +121,59 @@ describe("activityAt", () => {
   });
 });
 
-describe("mini Lucid 3D budgets", () => {
-  const BUDGET: Record<MiniDetail, number> = { full: 25_000, reduced: 8_000, minimal: 2_000 };
+describe("anime mini Lucid budgets", () => {
+  const BUDGET: Record<AnimeDetail, number> = { full: 60_000, reduced: 20_000, minimal: 8_000 };
   const finite = (o: { position: { x: number; y: number; z: number }; quaternion: { x: number; y: number; z: number; w: number }; scale: { x: number; y: number; z: number } }) =>
     [o.position.x, o.position.y, o.position.z, o.quaternion.x, o.quaternion.y, o.quaternion.z, o.quaternion.w, o.scale.x, o.scale.y, o.scale.z].every(Number.isFinite);
 
+  /** bun has no DOM: a canvas whose 2D context accepts every call is enough to build the figure and draw its eyes.
+   *  The fake document lives only for the construction (the figure keeps its context). */
+  function withCanvas<T>(fn: () => T): T {
+    const g = globalThis as { document?: unknown };
+    const had = "document" in g;
+    const prev = g.document;
+    const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (target, key) => (key in target ? target[key] : () => ({ addColorStop() {} })),
+      set: (target, key, value) => { target[key] = value; return true; },
+    });
+    g.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) };
+    try {
+      return fn();
+    } finally {
+      if (had) g.document = prev;
+      else delete g.document;
+    }
+  }
+
   for (const detail of ["full", "reduced", "minimal"] as const) {
-    test(`${detail}: every activity stays under ${BUDGET[detail]} triangles with finite transforms`, () => {
-      const mini = createMini3D({ look: lookFor("#38bdf8"), detail });
-      mini.setIntensity(1);
+    test(`${detail}: every activity, burst and state stays under ${BUDGET[detail]} triangles with finite transforms`, () => {
+      const fig = withCanvas(() => createAnimeFigure({ look: lookFor("#38bdf8"), detail, flat: detail === "minimal" }));
+      fig.setIntensity(1);
       let worst = 0;
       let t = 0;
       for (const a of MINI_ACTIVITIES) {
-        mini.setActivity(a);
-        for (let f = 0; f < 150; f++) {
-          if (f === 40) mini.burst();
+        fig.setActivity(a);
+        for (let f = 0; f < 240; f++) {
+          if (f === 40) fig.burst();
           t += 1 / 60;
-          mini.update(t, 1 / 60, true);
-          worst = Math.max(worst, miniTriangles(mini.group));
+          fig.update(t, 1 / 60, true);
+          worst = Math.max(worst, animeTriangles(fig.group));
         }
-        mini.group.traverse((o) => expect(finite(o)).toBe(true));
+        fig.group.traverse((o) => expect(finite(o)).toBe(true));
       }
-      for (const s of ["paused", "failed", "ended", "killed", "idle"] as MiniState[]) {
-        mini.setState(s);
+      for (const s of ["working", "idle", "working", "paused", "failed", "working", "ended", "killed"] as AnimeState[]) {
+        fig.setState(s);
         for (let f = 0; f < 120; f++) {
           t += 1 / 30;
-          mini.update(t, 1 / 30, true);
+          fig.update(t, 1 / 30, true);
+          worst = Math.max(worst, animeTriangles(fig.group));
         }
-        mini.update(t, 0, false);
-        mini.group.traverse((o) => expect(finite(o)).toBe(true));
+        fig.update(t, 0, false);
+        fig.group.traverse((o) => expect(finite(o)).toBe(true));
       }
       expect(worst).toBeGreaterThan(0);
       expect(worst).toBeLessThan(BUDGET[detail]);
-      mini.dispose();
+      fig.dispose();
     });
   }
 });

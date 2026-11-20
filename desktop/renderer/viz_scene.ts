@@ -1,18 +1,22 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_scene.ts - P-VIZ.1 (ADR-0622), P-VIZ.2 (ADR-0623): the Visualize view's three.js scene.
+// desktop/renderer/viz_scene.ts - P-VIZ.1 (ADR-0622), P-VIZ.2 (ADR-0623), P-VIZ.3 (ADR-0624): the Visualize
+// view's three.js scene.
 //
-// Every node is a mini Lucid, dressed in its persona's color (viz_mini_look.lookFor).
-//   3D: a procedural 3D mini Lucid (viz_mini3d.createMini3D, built at the perf tier's detail) inside a
-//       translucent glass CUBE: a transmissive (or, below the full tier, clear reflective) rounded box with a
-//       faint iridescence, thin bright accent edges and a dark floor plate he stands on. He runs his persona's
-//       rotation of activities while the node works (viz_mini_look.activityAt), faster with the node's smoothed
-//       est. tok/s, throws a rapid burst move on a surge, and plays the node's power-downs (failed, paused,
-//       ended, killed). Subagents get smaller cubes, the hub a larger one. The role and task caption is a crisp
-//       canvas sprite on the cube's lower front edge.
-//   2D: the PIXEL mini Lucid typing (viz_mini2d.createMini2D, nearest-neighbor, never blurred) as a
-//       camera-facing sprite on a flat rounded tile in the persona color, the caption on the tile's lower edge.
+// Every node is the anime mini Lucid (viz_anime.createAnimeFigure, built at the perf tier's detail), dressed in
+// its persona's color (viz_mini_look.lookFor). He runs his persona's rotation of activities while the node works
+// (viz_mini_look.activityAt), faster with the node's smoothed est. tok/s, powers up on a surge, hits a victory
+// when a working turn ends, and plays the node's power-downs (failed, paused, ended, killed) with his eyes.
+//   3D: the toon-shaded figure (3 steps, thin ink) inside a translucent glass CUBE: a clear rounded box with a
+//       faint iridescence, thin bright accent edges and a dark floor plate he stands on, turning to face the
+//       camera. Subagents get smaller cubes, the hub a larger one. The role and task caption is a crisp canvas
+//       sprite on the cube's lower front edge.
+//   2D: the same figure in the flat cel style (2 steps, thick ink), standing upright with his front turned up
+//       to the top-down camera, filling about 80 percent of a flat rounded tile in the persona color; the
+//       caption on the tile's lower edge.
+// Lighting follows the camera like the anime lab's sheet: a key from the upper front right, a cool rim light
+// from behind, and the hemisphere fill.
 //
 // Tokens are GPU points (one ShaderMaterial, additive) flowing along each active edge from the producer to
 // its parent; count and speed follow the node's est. tok/s. A surge throws a jagged regenerated lightning
@@ -41,9 +45,8 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
-import { createMini2D, type Mini2D } from "./viz_mini2d.ts";
-import { createMini3D, type Mini3D, type MiniActivity, type MiniLook, type MiniState } from "./viz_mini3d.ts";
-import { activityAt, lookFor } from "./viz_mini_look.ts";
+import { ANIME_HEIGHT, createAnimeFigure, type AnimeFigure, type AnimeState } from "./viz_anime.ts";
+import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import { frameInterval, IDLE_FPS, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizTierOpts } from "./viz_model.ts";
 
 export type VizViewMode = "2d" | "3d";
@@ -145,11 +148,19 @@ const KIND_SCALE: Record<VizKind, number> = { hub: 1.35, agent: 1, subagent: 0.5
 const CUBE = 1.5;
 const FLOOR_Y = -CUBE / 2;
 const PLATE_H = 0.045;
-/** The 2D tile's side and the pixel figure's height on it (before the kind's scale). */
+/** The 2D tile's side (before the kind's scale). */
 const TILE = 1.5;
-const FIG_2D = 1.18;
-/** 2D layers above the node's plane: the tile covers the edge ends, the sprites sit on the tile. */
-const TILE_Y = 0.1, SPRITE_Y = 0.13;
+/** The 2D figure fills about 80 percent of the tile's height, his feet a little above the caption. */
+const FIG_2D_SCALE = (TILE * 0.8) / ANIME_HEIGHT;
+/** In 3D he stands about 0.85 of the cube's height, so he reads as the subject and not a figurine in a box. */
+const FIG_3D_SCALE = 1.15;
+const FIG_2D_FEET_Z = 0.56;
+/** 2D layers above the node's plane: the tile covers the edge ends; the figure lies face up high enough that
+ *  his hair and the spikes behind his head clear the tile; the caption sits above the figure. */
+const TILE_Y = 0.1, FIG_2D_Y = 0.55, LABEL_2D_Y = 1.6;
+/** Camera-relative lights (the anime lab's sheet): key from the upper front right, rim from behind. */
+const KEY_DIR = new THREE.Vector3(2.5, 3, 3);
+const RIM_DIR = new THREE.Vector3(-2, 1.5, -3);
 /** A tool failure: the figure flinches this long, then goes back to its status. */
 const FAIL_MS = 900;
 /** The figure's intensity follows the node's est. tok/s with this time constant (seconds). */
@@ -180,14 +191,16 @@ const FLOW_SPAWN_MAX = 420; // particles per second on a full-intensity edge at 
 
 interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
 
+/** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. */
+interface FigureSlot { fig: AnimeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null }
+
 /** The 3D parts of a node: the figure in its glass cube. */
-interface Node3D {
-  mini: Mini3D; holder: THREE.Group; glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial;
-  activity: MiniActivity | null; state: MiniState | null;
+interface Node3D extends FigureSlot {
+  glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial;
 }
 
-/** The 2D parts of a node: the pixel figure on its tile. */
-interface Node2D { mini: Mini2D; tile: THREE.Mesh; tileMat: THREE.MeshBasicMaterial; rimMat: THREE.LineBasicMaterial; figMat: THREE.SpriteMaterial }
+/** The 2D parts of a node: the flat figure on its tile. */
+interface Node2D extends FigureSlot { tile: THREE.Mesh; tileMat: THREE.MeshBasicMaterial; rimMat: THREE.LineBasicMaterial }
 
 interface NodeObj {
   id: string; kind: VizKind; persona: Persona; size: number; seed: number;
@@ -235,10 +248,27 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   room.dispose();
   pmrem.dispose();
   scene.environment = envRT.texture;
-  scene.add(new THREE.HemisphereLight(0xc8d8ff, 0x1c1420, theme.light ? 1.1 : 0.7));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-  sun.position.set(5, 10, 7);
+  // The anime figures are toon shaded (MeshToonMaterial steps each directional light), so the lights follow the
+  // camera like the lab's sheet: whichever way the view turns, the key lights his face from the upper front
+  // right and the rim outlines him from behind. One cool rim for the whole scene (a per-node accent rim would
+  // cost a light per node in every shader).
+  const hemi = new THREE.HemisphereLight(0xc8d8ff, 0x1c1420, 1);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(0xffffff, 2.2);
   scene.add(sun);
+  const rimLight = new THREE.DirectionalLight(0xa8c8ff, 1.6);
+  scene.add(rimLight);
+  const lightDir = new THREE.Vector3();
+  /** Aim the key and the rim from the camera's frame and set the mode's levels (3D: the lab's 3D sheet; 2D: the
+   *  flat sheet, rim nearly off). */
+  function aimLights(): void {
+    const flat = mode === "2d";
+    sun.position.copy(lightDir.copy(KEY_DIR).applyQuaternion(camera.quaternion));
+    rimLight.position.copy(lightDir.copy(RIM_DIR).applyQuaternion(camera.quaternion));
+    sun.intensity = flat ? 1.6 : 2.2;
+    rimLight.intensity = flat ? 0.6 : 1.6;
+    hemi.intensity = flat ? 1.0 : theme.light ? 1.1 : 0.95;
+  }
   const world = new THREE.Group();
   scene.add(world);
 
@@ -455,10 +485,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function build3d(obj: NodeObj): Node3D {
     // The figure rides a holder of ours (standing on the plate; the kill implosion scales it), so the figure's
     // own transforms stay the figure's.
-    const mini = createMini3D({ look: obj.look, detail: o.detail });
+    const fig = createAnimeFigure({ look: obj.look, detail: o.detail, flat: false });
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
-    holder.add(mini.group);
+    holder.add(fig.group);
     obj.pivot.add(holder);
 
     // The glass: CLEAR, not transmissive. Transmission rendered the dark space behind it as a milky gray slab that
@@ -483,11 +513,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
     plate.position.y = FLOOR_Y + PLATE_H / 2;
     obj.pivot.add(plate);
-    return { mini, holder, glass, glassMat, edgeMat, plateMat, activity: null, state: null };
+    return { fig, holder, glass, glassMat, edgeMat, plateMat, activity: null, state: null };
   }
 
   function build2d(obj: NodeObj): Node2D {
-    const mini = createMini2D(obj.look);
     const tileMat = new THREE.MeshBasicMaterial({ color: obj.tileBase.clone(), toneMapped: false });
     const tile = new THREE.Mesh(shared("tile", () => new THREE.ShapeGeometry(roundRectShape(TILE, TILE, 0.2), 6).rotateX(-Math.PI / 2)), tileMat);
     tile.position.y = TILE_Y;
@@ -498,13 +527,16 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const rim = new THREE.LineLoop(shared("tile-rim", () => new THREE.BufferGeometry().setFromPoints(roundRectShape(TILE, TILE, 0.2).getPoints(6).map((p) => new THREE.Vector3(p.x, 0, -p.y)))), rimMat);
     rim.position.y = TILE_Y + 0.004;
     obj.pivot.add(rim);
-    const figMat = new THREE.SpriteMaterial({ map: mini.texture, transparent: true, alphaTest: 0.5, toneMapped: false, depthWrite: false });
-    const fig = new THREE.Sprite(figMat);
-    fig.scale.set(FIG_2D * mini.aspect, FIG_2D, 1);
-    fig.position.set(0, SPRITE_Y, -0.08);
-    fig.renderOrder = 9;
-    obj.pivot.add(fig);
-    return { mini, tile, tileMat, rimMat, figMat };
+    // The figure stands upright in its own frame; the holder tips him back so his front faces the top-down
+    // camera, his head toward the top of the screen (the ortho camera's up is -Z).
+    const fig = createAnimeFigure({ look: obj.look, detail: o.detail, flat: true });
+    const holder = new THREE.Group();
+    holder.rotation.x = -Math.PI / 2;
+    holder.position.set(0, FIG_2D_Y, FIG_2D_FEET_Z);
+    holder.scale.setScalar(FIG_2D_SCALE);
+    holder.add(fig.group);
+    obj.pivot.add(holder);
+    return { fig, holder, tile, tileMat, rimMat, activity: null, state: null };
   }
 
   /** Remove `x` from the node and dispose every material it holds (the geometries are shared or the figure's). */
@@ -520,7 +552,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const d = obj.d3;
     if (!d) return;
     obj.pivot.remove(d.holder);
-    d.mini.dispose();
+    d.fig.dispose();
     for (const x of [...obj.pivot.children]) if (x === d.glass || (x as THREE.Mesh).material === d.edgeMat || (x as THREE.Mesh).material === d.plateMat) detach(obj, x);
     obj.d3 = null;
   }
@@ -528,17 +560,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function drop2d(obj: NodeObj): void {
     const d = obj.d2;
     if (!d) return;
-    for (const x of [...obj.pivot.children]) {
-      const m = (x as THREE.Mesh).material;
-      if (x === d.tile || m === d.rimMat || m === d.figMat) detach(obj, x);
-    }
-    d.mini.dispose();
+    obj.pivot.remove(d.holder);
+    d.fig.dispose();
+    for (const x of [...obj.pivot.children]) if (x === d.tile || (x as THREE.Mesh).material === d.rimMat) detach(obj, x);
     obj.d2 = null;
   }
 
   function placeLabel(obj: NodeObj): void {
     if (mode === "3d") obj.label.position.set(0, FLOOR_Y, CUBE / 2 + 0.02);
-    else obj.label.position.set(0, SPRITE_Y + 0.01, TILE / 2 - 0.06);
+    else obj.label.position.set(0, LABEL_2D_Y, TILE / 2 - 0.06);
   }
 
   function paintLabel(obj: NodeObj, text: string): void {
@@ -756,10 +786,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     attr.needsUpdate = true;
   }
 
-  /** Where a node's effects start: the figure's chest in 3D (the cube is centered on the node), just above
-   *  the tile in 2D. */
+  /** Where a node's effects start: the figure's chest in 3D (the cube is centered on the node), just above the
+   *  face-up figure in 2D (under the caption), so the figure never hides them from the top-down camera. */
   function nodeHead(obj: NodeObj, out: THREE.Vector3): THREE.Vector3 {
-    return out.copy(obj.cur).setY(obj.cur.y + (mode === "3d" ? -0.18 : 0.2) * obj.size);
+    return out.copy(obj.cur).setY(obj.cur.y + (mode === "3d" ? -0.18 : LABEL_2D_Y - 0.1) * obj.size);
   }
 
   const fxAt = new THREE.Vector3(), fxTo = new THREE.Vector3();
@@ -777,7 +807,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (ev.kind === "surge") {
       obj.fx.colorUntil = now + (o.motion ? 260 : 600);
       if (!o.motion) { effectsUntil = Math.max(effectsUntil, now + 700); return; }
-      obj.d3?.mini.burst();
+      (obj.d3 ?? obj.d2)?.fig.burst();
       const hot = color.clone().lerp(WHITE, 0.45).multiplyScalar(2.2);
       nodeHead(obj, fxAt);
       const parent = [...edges.values()].find((e) => !e.ring && e.from === obj.id);
@@ -883,7 +913,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const flowColor = new THREE.Color();
 
   /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
-  function miniState(obj: NodeObj, t: number): MiniState {
+  function figureState(obj: NodeObj, t: number): AnimeState {
     switch (obj.status) {
       case "paused": return "paused";
       case "ended": return "ended";
@@ -919,15 +949,18 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     else if (st === "idle") level = 0.6;
     else level = 0.85 + 1.1 * obj.power;
     if (t < obj.fx.colorUntil) { tmpColor.copy(WHITE); level = 2; }
-    const stateNow = miniState(obj, t);
+    const slot = obj.d3 ?? obj.d2;
+    if (slot) {
+      const stateNow = figureState(obj, t);
+      if (stateNow !== slot.state) { slot.fig.setState(stateNow); slot.state = stateNow; }
+      const act = activityAt(obj.persona, obj.kind, obj.seed, t, st === "active");
+      if (act !== slot.activity) { slot.fig.setActivity(act); slot.activity = act; }
+      slot.fig.setIntensity(obj.power);
+      slot.fig.update(t / 1000, dt, o.motion);
+    }
 
     if (obj.d3) {
       const d = obj.d3;
-      if (stateNow !== d.state) { d.mini.setState(stateNow); d.state = stateNow; }
-      const act = activityAt(obj.persona, obj.kind, obj.seed, t, st === "active");
-      if (act !== d.activity) { d.mini.setActivity(act); d.activity = act; }
-      d.mini.setIntensity(obj.power);
-      d.mini.update(t / 1000, dt, o.motion);
       d.edgeMat.color.copy(tmpColor).multiplyScalar(level);
       d.edgeMat.opacity = st === "killed" ? 0.35 : st === "ended" ? 0.5 : 0.95;
       d.plateMat.emissive.copy(flickOn ? RED : obj.base);
@@ -949,16 +982,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         const age = (t - obj.fx.implodeAt) / 1000;
         scale = age < 0.18 ? 1 - 0.55 * easeIn(age / 0.18) : age < 0.6 ? 0.45 + 0.55 * easeOut((age - 0.18) / 0.42) : 1;
       }
-      d.holder.scale.setScalar(scale);
+      d.holder.scale.setScalar(scale * FIG_3D_SCALE);
     }
     if (obj.d2) {
       const d = obj.d2;
-      d.mini.update(t, stateNow, obj.power);
       d.rimMat.color.copy(tmpColor).multiplyScalar(Math.min(1.4, level));
       d.rimMat.opacity = st === "killed" ? 0.4 : st === "ended" ? 0.55 : 0.95;
       tileTint.copy(tintTarget).lerp(bgColor, 0.6);
       d.tileMat.color.copy(obj.tileBase).lerp(tileTint, obj.tone.tint).lerp(bgColor, obj.tone.dim * 0.5);
-      d.figMat.color.setRGB(1, flickOn ? 0.55 : 1, flickOn ? 0.55 : 1);
     }
     obj.labelMat.opacity = st === "ended" || st === "killed" ? 0.6 : 1;
 
@@ -1306,7 +1337,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (fxLive || boltLive || burstLive) effectsUntil = Math.max(effectsUntil, t + 50);
     pointScale();
     hoverNow();
-    // No bloom in 2D: the flat map is pixel art on tiles and renders plain.
+    aimLights();
+    // No bloom in 2D: the flat map is cel-shaded figures on tiles and renders plain.
     if (composer && renderPass && mode === "3d") { renderPass.camera = camera; composer.render(dt); }
     else renderer.render(scene, camera);
   }
