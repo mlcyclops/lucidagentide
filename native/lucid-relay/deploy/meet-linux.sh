@@ -111,6 +111,8 @@ main() {
 			if ($4 == "lucid-relay" || $4 == "turnserver" || $4 == "sshd") next
 			if ($4 == "systemd" && index(sp, " " $2 " ")) next
 			if ($1 == "udp" && ($2 == "68" || $2 == "546")) next
+			# systemd-resolved LLMNR and mDNS, on by default on Debian and Ubuntu cloud images: closing them is harmless.
+			if ($4 == "systemd-resolve" && ($2 == "5355" || $2 == "5353")) next
 			print $4 " (" $1 " " $2 ")"
 		}' | sort -u | paste -sd, - | sed 's/,/, /g'
 	}
