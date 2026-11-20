@@ -345,7 +345,7 @@ export function openFleetGrid(): void {
   </div>`);
   document.body.appendChild(dock);
   const more = $("[data-fleet-more]", dock) as HTMLElement | null;
-  if (more) mountPlusMenu(more, moreMenuItems, "Fleet options");
+  if (more) mountPlusMenu(more, moreMenuItems, "Fleet options", "below");
   applyShape();
   wireDrag();
   wireResize();

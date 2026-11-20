@@ -64,10 +64,18 @@ Tick a box only when it is true. Each item names what a reviewer should be able 
     run `cd desktop && bun run build-renderer`, boot the engine, fetch `/app.js` and `/styles.css`, grep a
     marker the change introduced (and one retired marker that must be absent). Attach a screenshot or
     short recording of the running app, both themes when color changed.
+11. **Real-UI check.** Unit tests cannot see layering. Drive the changed control with real input
+    (puppeteer-core over CDP against an isolated QA engine or a second instance) in every layout it
+    lives in: Ask Lucid docked right, docked bottom and floating; the Fleet window docked and free; a
+    narrow and a wide window. Assert what the user sees: `document.elementFromPoint` at each control's
+    center hits that control, menus stay inside the window, Esc closes only the topmost overlay. Keep the
+    check as a re-runnable `desktop/scripts/demo_<id>.mjs` (pattern: `demo_p_askplus_1.mjs`) and run it
+    once against the old behavior to prove it fails. ADR-0632: the Ask Lucid "+" menu opened behind its
+    own panel while every unit test passed.
 
 ## Reviewer notes
 
-- A checked box is a claim. Reviewers spot-check items 1, 2 and 10 on every UI PR.
+- A checked box is a claim. Reviewers spot-check items 1, 2, 10 and 11 on every UI PR.
 - If a PR cannot meet an item, say so in the PR body and link the follow-up; do not tick it.
 - When the complexity count goes up with no removal, the justification goes in the PR body and the
   new number goes into `docs/UX-REVIEW.md`.

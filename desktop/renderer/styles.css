@@ -8090,6 +8090,10 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 html.ask-r .body,html.ask-r .statusbar{margin-right:var(--ask-r-app,0px)}
 html.ask-b .statusbar{margin-bottom:var(--ask-b-app,0px)}
 html.ask-r #toasts{right:calc(var(--ask-r,0px) + 18px)}
+/* P-ASKPLUS.1: the full-window views (Visualize, Fleet Orbit) give way too, so a docked Ask Lucid never covers
+   their header controls (Close, View, the style switch). */
+html.ask-r .viz-view,html.ask-r .orbit-view{right:var(--ask-r-app,0px)}
+html.ask-b .viz-view,html.ask-b .orbit-view{bottom:var(--ask-b-app,0px)}
 body.ald-dragging{user-select:none;-webkit-user-select:none}
 body.ald-dragging iframe{pointer-events:none}
 

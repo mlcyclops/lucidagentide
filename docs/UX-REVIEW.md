@@ -74,7 +74,7 @@ Every overlay a PR adds names its tier here. Settings currently has no tier: it 
 | Sheet | 110, 111, 115, 120, 121 | `.fb-scrim`/`.fb` (4935-4939), `.plg-layer` (1975), `#toasts` (3004), `.dod-scrim`/`.fb.dod` (5657) |
 | Coach | 142 | `.coach-card` tour (3572) |
 | Modal | 200 | `.modal-ov` (4130), `.figma-scrim` (1853), `.mkt-scrim` (1937), `.goal-scrim` (2127) |
-| Ask Lucid | 250 | `.ald`, `.ald-pill` (7999, 8050) |
+| Ask Lucid | 250 | `.ald`, `.ald-pill` (7999, 8050); popovers opened from inside it lift to 251 (`popoverLayer`, ADR-0632); when docked, `.viz-view` and `.orbit-view` end at its edge |
 | Cinematic | 300 | `.boot-cine` (3539), `.about-ov` (4177) |
 | Context menu | 400 | `.ctx-menu` (5299) |
 | Tooltip | 1200 | `#tip` (2865) |

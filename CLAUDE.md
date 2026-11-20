@@ -44,6 +44,13 @@
    identifier that must be ABSENT. This is the ADR-0303 vacuous-green trap in
    its most expensive form, because everything looks green and the user sees no
    change at all.
+1. **If you touched a UI control, prove it in the running UI, not just in unit tests.** Drive the real
+   control with real input (puppeteer-core over CDP against an isolated QA engine or a second instance)
+   in EVERY layout it lives in (for example Ask Lucid docked right, docked bottom and floating; a narrow
+   and a wide window), and assert what the user sees: `document.elementFromPoint` at the control's
+   center must hit the control, not a panel on top of it. Keep the check as a re-runnable
+   `desktop/scripts/demo_<id>.mjs` (pattern: `demo_p_askplus_1.mjs`) and show it failing against the
+   old behavior once. A menu that opens behind its own panel passes every unit test (ADR-0632).
 1. Append exactly 3 lines to PROGRESS.md: shipped / stubbed / next.
 
 Do not start the next increment in the same session. A half-finished second

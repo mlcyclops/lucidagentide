@@ -1718,3 +1718,9 @@ demo-P-VIZ.4: ## P-VIZ.4 (ADR-0625..0628): Visualize below the titlebar (header 
 .PHONY: demo-P-VIZ.5
 demo-P-VIZ.5: ## P-VIZ.5 (ADR-0629..0631): the node panel beside its node, a self-measuring Visualize header, distinct Fleet layout icons, thin plasma with token particles, higher arcs, a thin professional line with red streaks, spaced subagents, and two alternating salt-and-pepper managers
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_panel_place.test.ts desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_office_pose.test.ts desktop/renderer/viz_anime_pose.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-ASKPLUS.1
+demo-P-ASKPLUS.1: ## P-ASKPLUS.1 (ADR-0632): the Ask Lucid "+" menu opens in front of the panel and above the bar in every dock mode; Esc closes only the menu; Visualize and Orbit give way to a docked Ask Lucid. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_askplus_1.mjs against a QA instance
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/popover_place.test.ts desktop/renderer/attach_ui.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_pvoice2.ts
+	node --check desktop/scripts/demo_p_askplus_1.mjs

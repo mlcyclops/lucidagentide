@@ -18933,7 +18933,9 @@ function wire(): void {
       askLucid().toggle();
       return;
     }
-    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald")) {
+    // P-ASKPLUS.1: a menu opened from Ask Lucid (the "+" Knowledge picker leaves focus on the "+") is the
+    // topmost overlay, so Escape closes that menu first (ui.ts popover() consumes it) and Ask Lucid stays.
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald") && !document.querySelector(".popover.show")) {
       e.preventDefault(); e.stopImmediatePropagation();
       askLucidPanel?.close();
     }

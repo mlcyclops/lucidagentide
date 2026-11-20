@@ -26,6 +26,7 @@ export const UX_CHECKLIST: readonly { key: string; text: string }[] = [
   { key: "Light and dark themes", text: "checked in both themes" },
   { key: "New-user path", text: "a first-run user can reach and understand the change without reading docs" },
   { key: "Served bytes", text: "build-renderer, then a marker grepped in the served /app.js or /styles.css; screenshot or recording attached" },
+  { key: "Real-UI check", text: "the changed control driven with real input in every layout it lives in; elementFromPoint proves it is on top; kept as desktop/scripts/demo_<id>.mjs" },
 ];
 
 const EM_DASH = "\u2014";
