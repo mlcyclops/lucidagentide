@@ -32,6 +32,8 @@ const RAW: Record<string, string> = {
   sliders: P("M5 8h7") + P("M16 8h3") + P("M5 16h3") + P("M12 16h7") + P("M14 6v4") + P("M8 14v4"),
   // search
   search: P("M11 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12z") + P("M20 20l-4.4-4.4"),
+  // text zoom: the search magnifier with a plus in the lens (P-SETUX.1: the titlebar zoom trigger)
+  zoom: P("M11 4.5a6 6 0 1 0 0 12 6 6 0 0 0 0-12z") + P("M20 20l-4.4-4.4") + P("M11 7.8v5.4") + P("M8.3 10.5h5.4"),
   // send (paper plane)
   send: P("M5 12 20 5l-4.5 14.5-3.8-5.7z") + P("M11.7 13.8 20 5"),
   // P-TUI.2: a terminal window with a prompt (the Fleet view's Terminal hub button)

@@ -443,23 +443,29 @@ function buildShell(): void {
       </button>
       <!-- P-REPO.1 (ADR-0406): the repo the composer's session works on, and where its commits go. -->
       <button class="tb-chip repo-chip" id="tbRepo" type="button" hidden aria-label="Repository and push target"></button>
-      <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
+      <!-- AskSage Persona lives in the titlebar (full-width, so it doesn't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-      <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-      <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <!-- P-SETUX.1 (ADR-0620): shown ONLY while a skill is active, named after it. Picking a skill is in the composer "+" menu. -->
+      <button class="ctool tb-chip" id="ctSkill" data-tip="Active skill|Click to switch or clear it" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0219: AskSage RAG Datasets picker, AskSage users only (ADR-0620). Short name shown; full name on hover. -->
       <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
-      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Skills / Knowledge fold in here. -->
-      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Skills and Knowledge, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
+      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Datasets / the active skill fold in here. -->
+      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Datasets and the active skill, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
       <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
       <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
         <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
         <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
       </div>
       <div class="tb-spacer"></div>
-      <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
-        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+      <!-- P-SETUX.1 (ADR-0620): text zoom is one magnifier icon; hovering (or focusing / clicking) it drops the
+           zoom out / reset / zoom in controls down beneath it. -->
+      <div class="zoom-wrap" id="zoomWrap">
+        <button class="zoom-btn" id="zoomBtn" type="button" aria-label="Text zoom" aria-haspopup="true" aria-expanded="false" aria-controls="zoomGroup">${icon("zoom", 16)}</button>
+        <div class="zoom" id="zoomGroup" role="group" aria-label="Text zoom">
+          <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
+          <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
+          <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+        </div>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
       <label class="agent-tier-control" id="agentTierControl" hidden data-tip="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
@@ -14164,21 +14170,17 @@ const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_
 function updateDatasetButton(): void {
   const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
   const span = $("#ctDatasetName", btn);
-  btn.hidden = false; // ADR-0220: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
-  if (state.asksage?.configured) {
-    const n = state.asksage?.datasets?.length ?? 0;
-    if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
-    btn.classList.toggle("on", n > 0);
-    btn.setAttribute("data-tip", "Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover.");
-  } else {
-    if (span) span.textContent = "Knowledge";
-    btn.classList.remove("on");
-    btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
-  }
+  // P-SETUX.1 (ADR-0620): only the AskSage gateway gets a titlebar chip (its RAG datasets). Local Knowledge is no
+  // longer a titlebar chip: it lives in the composer "+" menu (Knowledge) and the left rail's Knowledge graph.
+  btn.hidden = !state.asksage?.configured;
+  if (btn.hidden) return;
+  const n = state.asksage?.datasets?.length ?? 0;
+  if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+  btn.classList.toggle("on", n > 0);
 }
-// ADR-0220: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
-// compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
-// importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
+// ADR-0220: the entry to local RAG (the user's own notes/docs compiled into a KG, searched by the agent's
+// knowledge_search tool), opened from the "+" menus. Routes to the existing self-contained importKgFlow (add an
+// Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
 function openKnowledgeMenu(anchor: HTMLElement): void {
   cfgClose?.();
   const html = `<div class="cfg-sec"><div class="cfg-lbl">Knowledge <span class="cur">ground on your own notes</span></div>
@@ -14328,18 +14330,19 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
 }
 
 // P-IDE.2 (ADR-0029): skills come from TWO sources behind one picker - BUNDLED (skills.ts, trusted
-// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The
-// Skills button is always available (bundled skills always exist).
+// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The picker
+// opens from the composer "+" menu (Skills) and the command palette; the left rail holds the directory.
 async function loadSkills(): Promise<void> {
   state.skills = (await bridge.skills()) ?? [];
-  const btn = $("#ctSkill"); if (btn) (btn as HTMLElement).hidden = false;
   updateSkillButton();
 }
-/** Reflect the active bundled skill on the composer's Skills button. */
+/** P-SETUX.1 (ADR-0620): the titlebar no longer carries a permanent Skills chip. It appears only while a skill
+ *  is active, named after it, so an active skill stays visible and one click away from being cleared. */
 function updateSkillButton(): void {
-  const btn = $("#ctSkill"); if (!btn) return;
+  const btn = $("#ctSkill") as HTMLElement | null; if (!btn) return;
   const span = btn.querySelector("span"); if (span) span.textContent = state.activeSkill?.name ?? "Skills";
   btn.classList.toggle("on", !!state.activeSkill);
+  btn.hidden = !state.activeSkill;
 }
 /** Project (omp-native) skill: prepend /skill:<name> to the composer (omp expands it server-side). */
 function useSkill(name: string): void {
@@ -18684,6 +18687,13 @@ function wire(): void {
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
   $("#zoomLvl")!.addEventListener("click", () => resetZoom());
+  // P-SETUX.1 (ADR-0620): hover shows the controls (CSS); a click or Enter pins them open for keyboard and touch,
+  // and a click elsewhere or Esc unpins.
+  const zoomWrap = $("#zoomWrap")!, zoomBtn = $("#zoomBtn")!;
+  const pinZoom = (open: boolean): void => { zoomWrap.classList.toggle("open", open); zoomBtn.setAttribute("aria-expanded", String(open)); };
+  zoomBtn.addEventListener("click", () => pinZoom(!zoomWrap.classList.contains("open")));
+  document.addEventListener("pointerdown", (e) => { if (zoomWrap.classList.contains("open") && !zoomWrap.contains(e.target as Node)) pinZoom(false); });
+  zoomWrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && zoomWrap.classList.contains("open")) { e.stopPropagation(); pinZoom(false); zoomBtn.focus(); } });
   window.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
@@ -18709,7 +18719,7 @@ function wire(): void {
   // P-TITLEBAR.1 (ADR-0603): the model name stays whole; the optional chips fold into More when the bar is full.
   $("#tbMore")!.addEventListener("click", () => openTitlebarMore($("#tbMore")!));
   installTitlebarFit({
-    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $(".titlebar .zoom"),
+    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $("#zoomWrap"),
     keep: $("#modelName")!, shrinkFirst: $("#tbRepo"), shrinkFloorPx: 240, spacer: $(".titlebar .tb-spacer"),
   });
   $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle

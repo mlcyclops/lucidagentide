@@ -1061,7 +1061,7 @@ button{font-family:inherit}
 .titlebar .model-badge>.dot,.titlebar .model-badge>.ic{flex:none}
 .titlebar .model-badge #modelName{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .titlebar .tb-chip.tb-folded{display:none}
-.titlebar.tb-fold-zoom .zoom{display:none}
+.titlebar.tb-fold-zoom .zoom-wrap{display:none}
 .titlebar.tb-fold-zoom{gap:8px}
 .titlebar .repo-chip .rc-branch{flex:0 .5 auto;min-width:3ch}
 /* Persona + Skills pills in the titlebar (moved out of the composer so they never squish). Match the model-badge family. */
@@ -1091,6 +1091,18 @@ button{font-family:inherit}
   transition:color var(--t-fast) var(--ease)}
 .zoom .lvl:hover{color:var(--txt)}
 .zoom .lvl:active{transform:scale(.94)}
+/* P-SETUX.1 (ADR-0620): the zoom group drops down from one magnifier icon on hover, focus, or a click that pins
+   it. The ::after strip bridges the gap so the pointer can travel from the icon into the controls. */
+.zoom-wrap{-webkit-app-region:no-drag;position:relative;flex:none;display:flex;align-items:center}
+.zoom-btn{width:28px;height:28px;display:grid;place-items:center;border:1px solid transparent;border-radius:8px;
+  background:transparent;color:var(--txt-3);cursor:pointer;
+  transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease)}
+.zoom-wrap:hover .zoom-btn,.zoom-wrap:focus-within .zoom-btn,.zoom-wrap.open .zoom-btn{background:var(--bg-3);border-color:var(--line);color:var(--txt)}
+.zoom-wrap::after{content:"";position:absolute;left:-8px;right:-8px;top:100%;height:8px;display:none}
+.zoom-wrap .zoom{position:absolute;top:calc(100% + 6px);right:0;z-index:60;display:none;
+  box-shadow:var(--shadow-md),inset 0 1px 1px rgb(var(--sh-rgb) / .3)}
+.zoom-wrap:hover::after,.zoom-wrap.open::after{display:block}
+.zoom-wrap:hover .zoom,.zoom-wrap:focus-within .zoom,.zoom-wrap.open .zoom{display:flex}
 
 .win-ctrls{-webkit-app-region:no-drag;display:flex;gap:2px;margin-left:4px}
 /* Mis-click safety (reported live): Close destroys the window with no undo, and it used to sit 2px
