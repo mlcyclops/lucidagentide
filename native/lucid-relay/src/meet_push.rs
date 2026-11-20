@@ -109,13 +109,13 @@ impl Channel {
 /// An alert push's (fallback words, category, sound) by kind (3.4). `remind` is never a push.
 pub fn alert_words(kind: &str) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match kind {
-        "msg" => ("New message", "msg", "chime.wav"),
-        "call" => ("Incoming call", "call", "ring-classic.wav"),
-        "live" => ("Invitation to join a call", "call", "ring-classic.wav"),
-        "missed" => ("Missed call", "missed", "chime.wav"),
-        "invite" => ("New meeting invite", "mtg", "chime.wav"),
-        "update" => ("Meeting changed", "mtg", "chime.wav"),
-        "cancel" => ("Meeting canceled", "mtg", "chime.wav"),
+        "msg" => ("New message", "msg", "msg-lucid.wav"),
+        "call" => ("Incoming call", "call", "ring-lucid.wav"),
+        "live" => ("Invitation to join a call", "call", "ring-lucid.wav"),
+        "missed" => ("Missed call", "missed", "msg-lucid.wav"),
+        "invite" => ("New meeting invite", "mtg", "msg-lucid.wav"),
+        "update" => ("Meeting changed", "mtg", "msg-lucid.wav"),
+        "cancel" => ("Meeting canceled", "mtg", "msg-lucid.wav"),
         _ => return None,
     })
 }
@@ -460,7 +460,7 @@ pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str
             (payload, headers)
         }
         Channel::Alert => {
-            let (body, category, sound) = alert_words(&kind).unwrap_or(("New message", "msg", "chime.wav"));
+            let (body, category, sound) = alert_words(&kind).unwrap_or(("New message", "msg", "msg-lucid.wav"));
             let call = kind == "call" || kind == "live";
             let meeting = matches!(kind.as_str(), "invite" | "update" | "cancel");
             let tid = tag(person_key, if meeting { b"meetings".as_slice() } else { conv.as_bytes() });
@@ -1187,6 +1187,9 @@ impl State {
 
     /// drop_serials: the registrations made with a revoked certificate go.
     pub(super) fn pu_drop_serials(&mut self, serials: &HashSet<String>) {
+        let revoked = |e: &Value| e.get("serial").and_then(Value::as_str).map(|s| serials.contains(s)).unwrap_or(false);
+        let affected: Vec<String> = self.push_tokens.iter().filter(|(_, d)| as_obj(Some(d)).map(|d| d.values().any(&revoked)).unwrap_or(false)).map(|(p, _)| p.clone()).collect();
+        let before: Vec<_> = affected.iter().map(|p| self.pstate(p)).collect();
         let mut dropped = Vec::new();
         for (principal, devices) in self.push_tokens.iter_mut() {
             let Some(devices) = devices.as_object_mut() else { continue };
@@ -1205,6 +1208,9 @@ impl State {
         self.dirty = true;
         for (principal, device) in dropped {
             log_info(&format!("push_drop principal={principal} device={} why=revoked", kv(&device)));
+        }
+        for (p, b) in affected.iter().zip(&before) {
+            self.presence_changed(p, b);
         }
     }
 
@@ -1292,6 +1298,11 @@ impl Hub {
         let Some(Value::Bool(callkit)) = body.get("callkit") else { return bad(BAD_CALLKIT) };
         let callkit = *callkit;
         let seal_b64 = pj::b64(&seal);
+        // PR-1 1.4: whoever loses this token to the new registration, and the caller, may change presence
+        let holds = |d: &Value| as_obj(Some(d)).map(|d| d.values().any(|e| e.get("token").and_then(Value::as_str) == Some(token.as_str()))).unwrap_or(false);
+        let mut holders: Vec<String> = st.push_tokens.iter().filter(|(p, d)| **p != who.principal && holds(d)).map(|(p, _)| p.clone()).collect();
+        holders.push(who.principal.clone());
+        let before: Vec<_> = holders.iter().map(|p| st.pstate(p)).collect();
         let old = as_obj(st.push_tokens.get(&who.principal)).and_then(|d| as_obj(d.get(&who.device))).cloned();
         let (seal_prev, sk_prev) = match &old {
             Some(o) if pj::text_of(o, "seal") != seal_b64 => (pj::text_of(o, "seal"), pj::text_of(o, "sk")),
@@ -1322,8 +1333,12 @@ impl Hub {
         }
         devices.as_object_mut().expect("a device map").insert(who.device.clone(), Value::Object(entry));
         st.dirty = true;
+        for (p, b) in holders.iter().zip(&before) {
+            st.presence_changed(p, b);
+        }
         let key = st.pu_person_key(&who.principal);
         drop(st);
+        self.wake();
         log_info(&format!("push_register principal={} device={} env={env} voip={}", who.principal, kv(&who.device), if rings { "yes" } else { "no" }));
         Ok(obj([("ok", Value::Bool(true)), ("key", Value::from(pj::b64(&key))), ("voip", Value::Bool(rings))]))
     }
@@ -1344,8 +1359,11 @@ impl Hub {
         if !who.own_device() {
             return forbidden(m::FINISH_SETUP);
         }
+        let before = st.pstate(&who.principal);
         let removed = st.pu_forget(&who.principal, &who.device);
+        st.presence_changed(&who.principal, &before);
         drop(st);
+        self.wake();
         if removed {
             log_info(&format!("push_unregister principal={} device={}", who.principal, kv(&who.device)));
         }
@@ -1368,9 +1386,14 @@ impl Hub {
             st.dirty = true;
             drop(st);
             log_info(&format!("push_voip_dropped principal={principal} device={} why={why}", kv(device)));
-        } else if st.pu_forget(principal, device) {
-            drop(st);
-            log_info(&format!("push_drop principal={principal} device={} why={why}", kv(device)));
+        } else {
+            let before = st.pstate(principal);
+            if st.pu_forget(principal, device) {
+                st.presence_changed(principal, &before);
+                drop(st);
+                self.wake();
+                log_info(&format!("push_drop principal={principal} device={} why={why}", kv(device)));
+            }
         }
     }
 
@@ -1988,6 +2011,67 @@ mod tests {
         (k, answer)
     }
 
+    fn shown(h: &Hub, p: &str) -> (&'static str, bool) {
+        h.st.lock().presence_of(p)
+    }
+
+    /// PR-1 1.2: available, away, away (mobile) and offline.
+    #[test]
+    fn presence_follows_activity_and_push_registrations() {
+        let (h, _rx) = hub_on();
+        let (ann, ben, ben_pc) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", IPHONE), who("ben@x", "cccccccccccccccc"));
+        let a = session(&h, &ann);
+        assert_eq!(shown(&h, "ben@x"), ("offline", false));
+        // hello: active by default; false opens it away; a bad value is refused
+        let phone = h.hello_active(&ben, "", &Obj::new(), false).unwrap()["session"].as_str().unwrap().to_string();
+        assert_eq!(shown(&h, "ben@x"), ("away", false));
+        assert_eq!(error(crate::meet_hub::parse_active(Some(&json!("yes")), Some(true))), "400 active must be true or false");
+        assert_eq!(error(h.activity(&phone, &ben, None)), "400 active must be true or false");
+        // two sessions, one idle: available; both idle: away; every session hears it
+        let pc = session(&h, &ben_pc);
+        assert_eq!(shown(&h, "ben@x"), ("available", false));
+        let answer = h.activity(&pc, &ben_pc, Some(&json!(false))).unwrap();
+        assert_eq!((&answer["presence"], &answer["mobile"]), (&json!("away"), &json!(false)));
+        let last = events_of(&h, &a, &ann, "presence").last().cloned().unwrap();
+        assert_eq!((&last["principal"], &last["online"], &last["presence"], &last["mobile"]), (&json!("ben@x"), &json!(true), &json!("away"), &json!(false)));
+        // no event when nothing changed
+        let count = events_of(&h, &a, &ann, "presence").len();
+        h.activity(&pc, &ben_pc, Some(&json!(false))).unwrap();
+        assert_eq!(events_of(&h, &a, &ann, "presence").len(), count);
+        h.activity(&phone, &ben, Some(&json!(true))).unwrap();
+        assert_eq!(shown(&h, "ben@x"), ("available", false));
+        // gone without a push registration: offline; with one (device seen lately): away (mobile)
+        h.bye(&pc, &ben_pc).unwrap();
+        h.bye(&phone, &ben).unwrap();
+        assert_eq!(shown(&h, "ben@x"), ("offline", false));
+        let phone = session(&h, &ben);
+        register(&h, &ben, TOKEN, None, false);
+        h.bye(&phone, &ben).unwrap();
+        assert_eq!(shown(&h, "ben@x"), ("away", true));
+        let last = events_of(&h, &a, &ann, "presence").last().cloned().unwrap();
+        assert_eq!((&last["online"], &last["presence"], &last["mobile"]), (&json!(false), &json!("away"), &json!(true)));
+        let people = h.hello(&who("ann@x", "dddddddddddddddd"), "", &Obj::new()).unwrap()["people"].clone();
+        let entry = people.as_array().unwrap().iter().find(|p| p["principal"] == json!("ben@x")).cloned().unwrap();
+        assert_eq!((&entry["online"], &entry["presence"], &entry["mobile"]), (&json!(false), &json!("away"), &json!(true)));
+        // the device not seen for more than PRESENCE_MOBILE_DAYS: offline
+        {
+            let mut st = h.st.lock();
+            let old = pj::now() - crate::meet_hub::PRESENCE_MOBILE_DAYS * 86400.0 - 60.0;
+            st.directory["ben@x"]["devices"][IPHONE]["last_seen"] = json!(old);
+            assert_eq!(st.presence_of("ben@x"), ("offline", false));
+            st.directory["ben@x"]["devices"][IPHONE]["last_seen"] = json!(pj::now());
+            // push off on the relay: offline
+            let sender = st.pu.sender.take();
+            assert_eq!(st.presence_of("ben@x"), ("offline", false));
+            st.pu.sender = sender;
+        }
+        // unregister announces offline
+        h.push_unregister(&ben).unwrap();
+        assert_eq!(shown(&h, "ben@x"), ("offline", false));
+        let last = events_of(&h, &a, &ann, "presence").last().cloned().unwrap();
+        assert_eq!((&last["presence"], &last["mobile"]), (&json!("offline"), &json!(false)));
+    }
+
     #[test]
     fn register_takes_the_seal_key_and_the_voip_token() {
         let h = hub();
@@ -2174,7 +2258,7 @@ mod tests {
         let tid = tag(&person, b"dm:ann@x");
         assert_eq!(tid, h.st.lock().pu_id("ben@x", "dm:ann@x"));
         let p = payload_of(j);
-        assert_eq!(p["aps"], json!({"alert": {"title": "Lucid Meet", "body": "New message"}, "badge": 1, "sound": "chime.wav", "thread-id": tid, "mutable-content": 1, "category": "msg", "interruption-level": "active"}));
+        assert_eq!(p["aps"], json!({"alert": {"title": "Lucid Meet", "body": "New message"}, "badge": 1, "sound": "msg-lucid.wav", "thread-id": tid, "mutable-content": 1, "category": "msg", "interruption-level": "active"}));
         assert_eq!(p.as_object().unwrap().keys().collect::<Vec<_>>(), ["aps", "c", "s", "sk", "o"]);
         assert_eq!((p["c"].as_str(), p["s"].as_str().map(str::len)), (Some(tid.as_str()), Some(3540)));
         assert_eq!(header(j, "apns-push-type").as_deref(), Some("alert"));
@@ -2379,7 +2463,7 @@ mod tests {
         let a = &jobs[1];
         assert!(!a.voip);
         let p = payload_of(a);
-        assert_eq!((&p["aps"]["alert"]["body"], &p["aps"]["category"], &p["aps"]["sound"], &p["aps"]["interruption-level"]), (&json!("Incoming call"), &json!("call"), &json!("ring-classic.wav"), &json!("time-sensitive")));
+        assert_eq!((&p["aps"]["alert"]["body"], &p["aps"]["category"], &p["aps"]["sound"], &p["aps"]["interruption-level"]), (&json!("Incoming call"), &json!("call"), &json!("ring-lucid.wav"), &json!("time-sensitive")));
         assert_eq!((header(a, "apns-expiration").as_deref(), header(a, "apns-collapse-id")), (Some("0"), Some(tag(&person, format!("invite:{id}").as_bytes()))));
         assert_eq!(inner_of(&h, a, &pad_key)["k"], json!("call"));
         // someone else seated: a live invitation, with how many are there

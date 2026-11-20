@@ -75,7 +75,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -86,7 +86,7 @@
     "sk": "d197f269",
     "o": "bdf202ed05bf3c6b0f270da227524b01"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -154,7 +154,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -165,7 +165,7 @@
     "sk": "d197f269",
     "o": "cdf30acb039550882637f12b9385e29c"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -208,7 +208,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "e779621182dd2e5174db5fa0ea5b5360",
      "mutable-content": 1,
      "category": "msg",
@@ -219,7 +219,7 @@
     "sk": "d197f269",
     "o": "fff96cee8eb0f70c12f4f93a0113038c"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -262,7 +262,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -273,7 +273,7 @@
     "sk": "9acdc8c0",
     "o": "9d44ea9066bb41bbbb71f67eb723ca5b"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -393,7 +393,7 @@
       "body": "Incoming call"
      },
      "badge": 3,
-     "sound": "ring-classic.wav",
+     "sound": "ring-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "call",
@@ -404,7 +404,7 @@
     "sk": "d197f269",
     "o": "19634d4bff71599fc948e01c270ecfeb"
    },
-   "payload_len": 3864,
+   "payload_len": 3862,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -446,7 +446,7 @@
       "body": "Invitation to join a call"
      },
      "badge": 3,
-     "sound": "ring-classic.wav",
+     "sound": "ring-lucid.wav",
      "thread-id": "4edd85efecaf74c7b377cddbbfd42424",
      "mutable-content": 1,
      "category": "call",
@@ -457,7 +457,7 @@
     "sk": "d197f269",
     "o": "a8270caaa242e186b2886c3d912a0c16"
    },
-   "payload_len": 3876,
+   "payload_len": 3874,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -498,7 +498,7 @@
       "body": "Missed call"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "missed",
@@ -509,7 +509,7 @@
     "sk": "d197f269",
     "o": "cda2950627e4788ab2da3bf00eacf81d"
    },
-   "payload_len": 3849,
+   "payload_len": 3853,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -550,7 +550,7 @@
       "body": "Missed call"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "missed",
@@ -561,7 +561,7 @@
     "sk": "d197f269",
     "o": "3bac292ca998e20b63b248998a79ed21"
    },
-   "payload_len": 3849,
+   "payload_len": 3853,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -602,7 +602,7 @@
       "body": "New meeting invite"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "b8b1c8afae687f81e7a8dfbd135eeb02",
      "mutable-content": 1,
      "category": "mtg",
@@ -613,7 +613,7 @@
     "sk": "d197f269",
     "o": "565db6aa884812898d1cbaf484b90309"
    },
-   "payload_len": 3861,
+   "payload_len": 3865,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -654,7 +654,7 @@
       "body": "New meeting invite"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "b8b1c8afae687f81e7a8dfbd135eeb02",
      "mutable-content": 1,
      "category": "mtg",
@@ -665,7 +665,7 @@
     "sk": "d197f269",
     "o": "2a8c1ac25bb5a0f62912e19f359ae75c"
    },
-   "payload_len": 3853,
+   "payload_len": 3857,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -706,7 +706,7 @@
       "body": "Meeting changed"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "b8b1c8afae687f81e7a8dfbd135eeb02",
      "mutable-content": 1,
      "category": "mtg",
@@ -717,7 +717,7 @@
     "sk": "d197f269",
     "o": "2160ceb8fe2b9aa9dc98c1fe26513d3a"
    },
-   "payload_len": 3858,
+   "payload_len": 3862,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -758,7 +758,7 @@
       "body": "Meeting canceled"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "b8b1c8afae687f81e7a8dfbd135eeb02",
      "mutable-content": 1,
      "category": "mtg",
@@ -769,7 +769,7 @@
     "sk": "d197f269",
     "o": "a4afe528edc45ae8d20e0e070880cd64"
    },
-   "payload_len": 3851,
+   "payload_len": 3855,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -852,7 +852,7 @@
       "body": "New message"
      },
      "badge": 99999,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "bba4accec151ad8c6779a45ab49ae568",
      "mutable-content": 1,
      "category": "msg",
@@ -863,7 +863,7 @@
     "sk": "d197f269",
     "o": "6fb0f4424ba80293e65c626bbecf4cd4"
    },
-   "payload_len": 3850,
+   "payload_len": 3854,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -983,7 +983,7 @@
       "body": "New meeting invite"
      },
      "badge": 99999,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "b8b1c8afae687f81e7a8dfbd135eeb02",
      "mutable-content": 1,
      "category": "mtg",
@@ -994,7 +994,7 @@
     "sk": "d197f269",
     "o": "01b5541a22635e64a0f89e8ea1818458"
    },
-   "payload_len": 3865,
+   "payload_len": 3869,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1055,7 +1055,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1066,7 +1066,7 @@
     "sk": "d197f269",
     "o": "0df202ed05bf3c6b0f270da227524b01"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1126,7 +1126,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1137,7 +1137,7 @@
     "sk": "00000000",
     "o": "bdf202ed05bf3c6b0f270da227524b01"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1267,7 +1267,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "d4110b12319eb2d97d44bd94b7ce655d",
      "mutable-content": 1,
      "category": "msg",
@@ -1278,7 +1278,7 @@
     "sk": "d197f269",
     "o": "6aa6c1c4f593a3cf5a3f5ed2a177e5cd"
    },
-   "payload_len": 1798,
+   "payload_len": 1802,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1388,7 +1388,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "c48e0827b338859ad4d75cff6595330d",
      "mutable-content": 1,
      "category": "msg",
@@ -1399,7 +1399,7 @@
     "sk": "d197f269",
     "o": "acc5667ea4468c4bfbbb9e2263b931b0"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1439,7 +1439,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1450,7 +1450,7 @@
     "sk": "d197f269",
     "o": "b3fbbbfd0481578a79218ca5b6f2c9d2"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1510,7 +1510,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1521,7 +1521,7 @@
     "sk": "d197f269",
     "o": "3112914bd5553a932c2be0e4e0ea9eb0"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1581,7 +1581,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1592,7 +1592,7 @@
     "sk": "d197f269",
     "o": "2acd98ed5f25543abe778d1dbe6092f7"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1652,7 +1652,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1663,7 +1663,7 @@
     "sk": "d197f269",
     "o": "5367cf04f52029207a7644ff8f157910"
    },
-   "payload_len": 3842,
+   "payload_len": 3846,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1812,7 +1812,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1823,7 +1823,7 @@
     "sk": "d197f269",
     "o": "e10fb3ef83fa0a890731e579b0406963"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",
@@ -1883,7 +1883,7 @@
       "body": "New message"
      },
      "badge": 3,
-     "sound": "chime.wav",
+     "sound": "msg-lucid.wav",
      "thread-id": "0a412069c3e58bfd5b94821b161fbbed",
      "mutable-content": 1,
      "category": "msg",
@@ -1894,7 +1894,7 @@
     "sk": "d197f269",
     "o": "bdf202ed05bf3c6b0f270da227524b01"
    },
-   "payload_len": 3846,
+   "payload_len": 3850,
    "headers": {
     "apns-push-type": "alert",
     "apns-topic": "com.lucid.LucidMeet",

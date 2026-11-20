@@ -1649,6 +1649,7 @@ impl Hub {
             address: address.to_string(),
             client: obj([("app", Value::from("service"))]),
             waiters: 0,
+            active: true,
         };
         let sid = session.session_id.clone();
         st.sessions.insert(sid.clone(), session);

@@ -76,6 +76,9 @@ mod pc_docs;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
+/// PR-1 1.2: a push-registered person whose device was seen within this many days shows away (mobile).
+pub const PRESENCE_MOBILE_DAYS: f64 = 7.0;
+const ACTIVE_ERROR: &str = "active must be true or false";
 const CHAT_KEEP: usize = 200;
 const QUEUE_KEEP: usize = 500;
 const PEER_MAX_PER_ROOM: usize = 8;
@@ -383,6 +386,8 @@ pub struct Session {
     pub address: String,
     pub client: Obj,
     waiters: i64,
+    /// PR-1 1.1: the person is using this device (hello `active`, `/v1/activity`).
+    pub active: bool,
 }
 
 fn push(seq: &mut i64, events: &mut VecDeque<Obj>, event: &Obj) {
@@ -422,7 +427,17 @@ struct GoneQueue {
 }
 
 type Lines = IndexMap<String, Vec<Obj>>;
-type PState = (bool, String, Vec<(String, String, String)>);
+/// PR-1 1.1: a hello's or `/v1/activity`'s `active`; a missing one is `absent` (hello: true) or refused (None).
+pub fn parse_active(v: Option<&Value>, absent: Option<bool>) -> R<bool> {
+    match (v, absent) {
+        (None, Some(d)) => Ok(d),
+        (Some(Value::Bool(b)), _) => Ok(*b),
+        _ => bad(ACTIVE_ERROR),
+    }
+}
+
+/// (online, room, devices, presence, mobile).
+type PState = (bool, String, Vec<(String, String, String)>, &'static str, bool);
 
 pub struct State {
     pub peers: IndexMap<String, Peer>,
@@ -448,6 +463,8 @@ pub struct State {
     gone: HashMap<String, GoneQueue>,
     pub dirty: bool,
     last_prune: f64,
+    /// PR-1 1.4: when (wall seconds) the reaper last looked for an away (mobile) that ran out.
+    mobile_checked: f64,
     history_s: f64,
     mail_s: f64,
     /// relay.json `recording_enabled` and `organizations` (principal -> {id, label}), set at start.
@@ -796,6 +813,8 @@ impl State {
             ("devices", Self::devices_value(&state.2)),
             ("org", self.org(principal)),
             ("status", self.status_of(principal)),
+            ("presence", Value::from(state.3)),
+            ("mobile", Value::Bool(state.4)),
         ])
     }
 
@@ -1024,13 +1043,74 @@ impl State {
 
     fn pstate(&self, principal: &str) -> PState {
         let devices = self.devices(principal);
+        let (presence, mobile) = self.presence_of(principal);
         if let Some(p) = self.peers.values().find(|p| p.who.principal == principal) {
-            return (true, p.room.clone(), devices);
+            return (true, p.room.clone(), devices, presence, mobile);
         }
         if self.sessions.values().any(|s| s.who.principal == principal) {
-            return (true, String::new(), devices);
+            return (true, String::new(), devices, presence, mobile);
         }
-        (false, String::new(), devices)
+        (false, String::new(), devices, presence, mobile)
+    }
+
+    /// PR-1 1.2: a person's automatic `(presence, mobile)`.
+    fn presence_of(&self, principal: &str) -> (&'static str, bool) {
+        if self.peers.values().any(|p| p.who.principal == principal) {
+            return ("available", false);
+        }
+        let mut live = self.sessions.values().filter(|s| s.who.principal == principal).peekable();
+        if live.peek().is_some() {
+            return if live.any(|s| s.active) { ("available", false) } else { ("away", false) };
+        }
+        if self.pu_on() && self.mobile_seen(principal) >= pj::now() - PRESENCE_MOBILE_DAYS * 86400.0 {
+            return ("away", true);
+        }
+        ("offline", false)
+    }
+
+    /// The newest directory `last_seen` of this person's push-registered devices (-inf without one).
+    fn mobile_seen(&self, principal: &str) -> f64 {
+        let Some(registered) = self.push_tokens.get(principal).and_then(Value::as_object) else { return f64::NEG_INFINITY };
+        let seen = self.directory.get(principal).and_then(|e| e.get("devices")).and_then(Value::as_object);
+        registered
+            .keys()
+            .filter_map(|d| seen.and_then(|s| s.get(d)).and_then(Value::as_object).map(|i| pj::num(i, "last_seen")))
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    /// A `presence` event about this person to every session when their state changed since `before` (a push
+    /// registration added or removed, an away (mobile) that ran out).
+    pub(crate) fn presence_changed(&mut self, principal: &str, before: &PState) {
+        if self.pstate(principal) != *before {
+            self.tell_presence(principal);
+        }
+    }
+
+    /// PR-1 1.4: at most once an hour, the people whose away (mobile) ran out since the last check (their newest
+    /// registered device passed PRESENCE_MOBILE_DAYS) are announced.
+    fn mobile_expire(&mut self) {
+        let now = pj::now();
+        if now - self.mobile_checked < PRUNE_EVERY {
+            return;
+        }
+        let (from, to) = (self.mobile_checked - PRESENCE_MOBILE_DAYS * 86400.0, now - PRESENCE_MOBILE_DAYS * 86400.0);
+        self.mobile_checked = now;
+        if !self.pu_on() {
+            return;
+        }
+        let ran_out: Vec<String> = self
+            .push_tokens
+            .keys()
+            .filter(|p| !self.peers.values().any(|x| x.who.principal == **p) && !self.sessions.values().any(|s| s.who.principal == **p))
+            .filter(|p| {
+                let seen = self.mobile_seen(p);
+                seen >= from && seen < to
+            })
+            .cloned()
+            .collect();
+        for p in ran_out {
+            self.tell_presence(&p);
+        }
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
@@ -1117,6 +1197,9 @@ impl State {
             e.insert("devices".into(), Self::devices_value(&self.devices(principal)));
             e.insert("org".into(), self.org(principal));
             e.insert("status".into(), self.status_of(principal));
+            let (presence, mobile) = self.presence_of(principal);
+            e.insert("presence".into(), Value::from(presence));
+            e.insert("mobile".into(), Value::Bool(mobile));
         }
         out
     }
@@ -1816,6 +1899,7 @@ impl Hub {
             gone: HashMap::new(),
             dirty: false,
             last_prune: pj::mono(),
+            mobile_checked: pj::now(),
             history_s: history_hours * 3600.0,
             mail_s: mail_days * 86400.0,
             recording_enabled: true,
@@ -2077,6 +2161,7 @@ impl Hub {
         st.moved.retain(|_, v| now - v.at <= PEER_TIMEOUT);
         // a status whose `until` came goes back to automatic
         st.pa_status_sweep();
+        st.mobile_expire();
         let wall = pj::now();
         let rooms: Vec<String> = st.stages.keys().cloned().collect();
         for room in rooms {
@@ -3299,7 +3384,13 @@ impl Hub {
 
     // ── presence ─────────────────────────────────────────────────────────────────────────────────────────────
 
+    #[cfg(test)]
     pub fn hello(&self, who: &Identity, address: &str, client: &Obj) -> R<Obj> {
+        self.hello_active(who, address, client, true)
+    }
+
+    /// hello with PR-1 1.1's `active` (false: the app opens its session while not on screen).
+    pub fn hello_active(&self, who: &Identity, address: &str, client: &Obj, active: bool) -> R<Obj> {
         if who.seed {
             return forbidden(m::FINISH_SETUP);
         }
@@ -3331,6 +3422,7 @@ impl Hub {
                 address: address.to_string(),
                 client: client.clone(),
                 waiters: 0,
+                active,
             };
             let sid = session.session_id.clone();
             st.sessions.insert(sid.clone(), session);
@@ -3346,6 +3438,7 @@ impl Hub {
                     let e = e.as_object().cloned().unwrap_or_default();
                     let on = online.get(p);
                     let name = pj::s(&e, "name");
+                    let (presence, mobile) = st.presence_of(p);
                     Value::Object(obj([
                         ("principal", Value::from(p.clone())),
                         ("name", Value::from(if name.is_empty() { p.clone() } else { name })),
@@ -3354,6 +3447,8 @@ impl Hub {
                         ("devices", on.and_then(|o| o.get("devices").cloned()).unwrap_or(Value::Array(Vec::new()))),
                         ("org", st.org(p)),
                         ("status", st.status_of(p)),
+                        ("presence", Value::from(presence)),
+                        ("mobile", Value::Bool(mobile)),
                     ]))
                 })
                 .collect();
@@ -3447,6 +3542,30 @@ impl Hub {
         drop(st);
         self.wake();
         Ok(obj([("ok", Value::Bool(true))]))
+    }
+
+    /// PR-1 1.1 `POST /v1/activity {session, active}`: whether the person is using this device. `{ok, presence,
+    /// mobile}` (the caller's own); every session hears a `presence` event when that changed the person's state.
+    pub fn activity(&self, session: &str, who: &Identity, active: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        let active = parse_active(active, None)?;
+        let before = st.pstate(&who.principal);
+        let changed = match st.sessions.get_mut(session) {
+            Some(s) if s.active != active => {
+                s.active = active;
+                true
+            }
+            _ => false,
+        };
+        st.announce(who, &before);
+        let (presence, mobile) = st.presence_of(&who.principal);
+        drop(st);
+        self.wake();
+        if changed {
+            log_info(&format!("activity principal={} session={session} active={}", who.principal, if active { "yes" } else { "no" }));
+        }
+        Ok(obj([("ok", Value::Bool(true)), ("presence", Value::from(presence)), ("mobile", Value::Bool(mobile))]))
     }
 
     // ── direct messages and reactions ────────────────────────────────────────────────────────────────────────

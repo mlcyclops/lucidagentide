@@ -267,6 +267,10 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/typing" => typing,
         "/v1/stage" => stage,
         "/v1/status" => status,
+        "/v1/activity" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.activity(&session, &who, b.get("active"))
+        },
         "/v1/admin/organizations" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))
@@ -1206,7 +1210,8 @@ fn recording_consent(c: &mut Ctx) -> R<Obj> {
 fn hello(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     let client = m::client(b.get("client"));
-    let mut reply = c.relay.hub.hello(&who, &c.address, &client)?;
+    let active = crate::meet_hub::parse_active(b.get("active"), Some(true))?;
+    let mut reply = c.relay.hub.hello_active(&who, &c.address, &client, active)?;
     if let Some(info) = c.relay.outdated(&who, &client) {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
