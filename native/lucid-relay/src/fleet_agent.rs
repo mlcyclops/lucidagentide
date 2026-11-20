@@ -3148,7 +3148,10 @@ impl Agent {
         let leaf_hash = crate::meet_x509::Cert::from_der(&leaf).map(|c| hex(&sha256(&c.spki))).unwrap_or_default();
         let mut http = match Http::over(tls, link.fleet_url()).await {
             Ok(h) => h,
-            Err(c) => return End::Failed(c),
+            Err(c) => {
+                self.logger.security("fleet.channel-ended", &Fields::new().with("stage", "http").with("category", c.as_str()), Level::Warn);
+                return End::Failed(c);
+            }
         };
         // The leaf must be listed, not revoked, in a manifest fresh at T, before anything else is sent.
         let t = self.clock.lock().now();
@@ -3172,7 +3175,10 @@ impl Agent {
                 Ok(()) => End::Again,
                 Err(c) => End::Failed(c),
             },
-            Err((c, _)) => End::Failed(c),
+            Err((c, status)) => {
+                self.logger.security("fleet.channel-ended", &Fields::new().with("stage", "upgrade").with("status", status), Level::Warn);
+                End::Failed(c)
+            }
         }
     }
 
@@ -3354,10 +3360,27 @@ impl Agent {
         let started = Instant::now();
         let frames = self.frames_for(link.relay_id());
         let (mut tx, mut rx) = wire.split();
-        if !tx.text(w::evt_text("hello", self.hello(link, &*frames))).await {
+        let hello = w::evt_text("hello", self.hello(link, &*frames));
+        let hello_bytes = hello.len();
+        if !tx.text(hello).await {
+            self.logger.security("fleet.channel-ended", &Fields::new().with("stage", "hello").with("bytes", hello_bytes), Level::Warn);
             return End::Failed(Category::Closed);
         }
-        match tokio::time::timeout(w::IDLE, rx.next()).await {
+        let first = tokio::time::timeout(w::IDLE, rx.next()).await;
+        if !matches!(&first, Ok(In::Text(t)) if matches!(w::parse_frame(t, Side::Relay), Ok(Frame::Evt { op: "welcome", .. }))) {
+            let got = match &first {
+                Err(_) => "timeout".to_owned(),
+                Ok(In::Text(t)) => match w::parse_frame(t, Side::Relay) {
+                    Ok(Frame::Evt { op, .. }) => format!("evt {op}"),
+                    Ok(_) => "another frame".to_owned(),
+                    Err(e) => format!("refused frame: {} {}", e.why, e.op),
+                },
+                Ok(In::Pong(_)) => "pong".to_owned(),
+                Ok(other) => format!("{other:?}"),
+            };
+            self.logger.security("fleet.channel-ended", &Fields::new().with("stage", "welcome").with("got", got.as_str()).with("helloBytes", hello_bytes), Level::Warn);
+        }
+        match first {
             Ok(In::Text(t)) if matches!(w::parse_frame(&t, Side::Relay), Ok(Frame::Evt { op: "welcome", .. })) => {
                 // AC-2b-D 8.7: the CA the console says it holds
                 if let (Some(h), Ok(Frame::Evt { body, .. })) = (self.meet(), w::parse_frame(&t, Side::Relay)) {
