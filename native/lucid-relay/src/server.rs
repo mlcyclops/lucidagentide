@@ -586,8 +586,10 @@ pub fn apply_before_listeners(b: BeforeListeners) -> Result<bool, String> {
     if !crate::fleet_agent::has_handoff(b.state_dir) {
         return Ok(false);
     }
+    // 7.3 freshness before the headless console seals and writes its audit log into the same folder
+    let fresh = crate::fleet_agent::is_fresh(b.state_dir);
     let console = crate::console::open_headless(b.product, b.state_dir, b.logger.clone())?;
-    let applied = crate::fleet_agent::apply_before_listeners(&console, b.product, b.state_dir, &b.logger, b.proxy.as_deref(), &b.local);
+    let applied = crate::fleet_agent::apply_before_listeners(&console, b.product, b.state_dir, &b.logger, b.proxy.as_deref(), &b.local, fresh);
     drop(console);
     Ok(applied.unwrap_or(false))
 }

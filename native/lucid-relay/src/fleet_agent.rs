@@ -811,6 +811,9 @@ pub struct DeployApply<'a> {
     pub local: &'a LocalDeploy,
     /// The handoff's `deploy` object (None after a plain `enroll`).
     pub handoff: Option<&'a Value>,
+    /// The state folder was fresh (7.3) when this start began, before the headless console that carries the apply
+    /// sealed and wrote its first audit segment.
+    pub fresh: bool,
     pub logger: &'a Logger,
 }
 
@@ -2441,7 +2444,7 @@ fn recheck_local(d: &DeployApply, dv: &Value, code: &Code, state_dir: &Path, pro
     if accepted && (ci.is_none() || !fresh) {
         return bad();
     }
-    if fresh && !is_fresh(state_dir) {
+    if fresh && !d.fresh {
         return bad();
     }
     // a Meeting Hub relay that takes its certificate from the console needs the CA placed, or delivered to a
@@ -2555,8 +2558,9 @@ pub struct LocalDeploy {
 /// AC-2b-D 6.4 (f-relay calls it at every start, under `fleet.lock`, before reading its TLS files, `client_ca`, CRL,
 /// `--root` or license): takes a waiting handoff and applies it in this process within 60 s. Ok(true) when an
 /// enrollment was applied, Ok(false) when none waited; Err (already logged `fleet.enroll-failed` with its `why`) when
-/// it failed; the relay then continues its normal start.
-pub fn apply_before_listeners(console: &Arc<Console>, product: Product, state_dir: &Path, logger: &Arc<Logger>, proxy: Option<&str>, local: &LocalDeploy) -> Result<bool, String> {
+/// it failed; the relay then continues its normal start. `fresh` is `is_fresh(state_dir)` taken before `console` was
+/// opened: opening it seals and appends to the audit log, so the folder is never fresh afterwards.
+pub fn apply_before_listeners(console: &Arc<Console>, product: Product, state_dir: &Path, logger: &Arc<Logger>, proxy: Option<&str>, local: &LocalDeploy, fresh: bool) -> Result<bool, String> {
     if !has_handoff(state_dir) {
         return Ok(false);
     }
@@ -2571,7 +2575,7 @@ pub fn apply_before_listeners(console: &Arc<Console>, product: Product, state_di
     };
     let code = check_code(h.code.expose(), product).map_err(|why| failed(&why))?;
     let proxy = proxy.map(str::to_owned).or_else(|| std::env::var(PROXY_ENV).ok()).filter(|p| !p.is_empty());
-    let d = DeployApply { local, handoff: h.deploy.as_ref(), logger: logger.as_ref() };
+    let d = DeployApply { local, handoff: h.deploy.as_ref(), fresh, logger: logger.as_ref() };
     let a = Apply {
         console: console.as_ref(),
         state_dir,
