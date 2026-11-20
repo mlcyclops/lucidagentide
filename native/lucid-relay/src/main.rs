@@ -378,7 +378,7 @@ fn console_cli(args: &[String]) -> ! {
         }
         ["break-glass"] => {
             let email = email.unwrap_or_else(|| die("break-glass needs --email <email>: the break-glass account's own address"));
-            console_auth::Offline::BreakGlass { email, replace, origin: None }
+            console_auth::Offline::BreakGlass { email, replace, origin: serve_origin(Path::new(&dir)) }
         }
         ["two-person", "off"] => console_auth::Offline::TwoPersonOff,
         _ => die(USAGE),
@@ -391,6 +391,15 @@ fn console_cli(args: &[String]) -> ! {
         }
         Err(e) => die(&e),
     }
+}
+
+/// A fleet console's browser origin from the `console-serve.json` its last start wrote (AC-2a 5.2): `public`, with
+/// `port` unless 443. None for a relay's own console, whose book records its origin (AC-1 3.2).
+fn serve_origin(dir: &Path) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("console-serve.json")).ok()?).ok()?;
+    let public = v.get("public").and_then(serde_json::Value::as_str).filter(|p| !p.is_empty())?;
+    let port = v.get("port").and_then(serde_json::Value::as_str).unwrap_or("443");
+    Some(if public.contains(':') || port == "443" { format!("https://{public}") } else { format!("https://{public}:{port}") })
 }
 
 /// `lucid-relay license-time reset --state <dir>` (R7-M1, 8.1 `cli.license-time-reset`): with the relay stopped
