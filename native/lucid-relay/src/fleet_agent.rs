@@ -886,22 +886,32 @@ pub async fn apply(a: Apply<'_>, code: &Code) -> Result<Value, String> {
     if crate::fleet_trust::roster_duplicate(&roster) {
         return Err(Refusal::of("fleet-roster-duplicate").error);
     }
-    let untrusted = || Category::ServerUntrusted.words().to_owned();
+    // the words stay `server-untrusted`; the apply before the listeners logs which check failed
+    let untrusted_because = |why: &str| {
+        if let Some(d) = a.deploy {
+            d.logger.security("fleet.enroll-answer-refused", &Fields::new().with("why", why), Level::Warn);
+        }
+        Category::ServerUntrusted.words().to_owned()
+    };
+    let untrusted = || untrusted_because("no-cert");
     let cert = w::b64u_of(answer.get("cert")).ok_or_else(untrusted)?;
     let ca_cert = w::b64u_of(answer.get("caCert")).ok_or_else(untrusted)?;
     if ca_cert != ca_seen || x509::pin_hex(&ca_cert).as_deref() != Some(code.pin_hex().as_str()) {
         return Err(Refusal::of("fleet-pin").error);
     }
-    let (relay_id, _, issued) = x509::relay_leaf(&cert, &ca_cert, wall).map_err(|_| untrusted())?;
-    if issued.spki != spki || answer.get("relayId").and_then(Value::as_str) != Some(relay_id.as_str()) {
-        return Err(untrusted());
+    let (relay_id, _, issued) = x509::relay_leaf(&cert, &ca_cert, wall).map_err(|e| untrusted_because(&format!("leaf: {e}")))?;
+    if issued.spki != spki {
+        return Err(untrusted_because("leaf-key"));
+    }
+    if answer.get("relayId").and_then(Value::as_str) != Some(relay_id.as_str()) {
+        return Err(untrusted_because("relay-id"));
     }
     let manifest = answer.get("trust").cloned().unwrap_or(Value::Null);
     let generation = manifest.get("caGeneration").and_then(Value::as_u64).unwrap_or(1);
     let pins = vec![Pin { generation, pin: code.pin_hex(), state: "active".into(), ca_cert: Some(ca_cert.clone()) }];
     let leaf_hash = crate::meet_x509::Cert::from_der(&leaf).map(|c| hex(&sha256(&c.spki))).unwrap_or_default();
     let console_id = answer["console"]["id"].as_str().unwrap_or_default().to_owned();
-    let stored = accept_manifest(&manifest, &pins, &|_| None, Some(&console_id), None, Mode::Refresh, wall, wall, Some(&leaf_hash)).map_err(|_| untrusted())?;
+    let stored = accept_manifest(&manifest, &pins, &|_| None, Some(&console_id), None, Mode::Refresh, wall, wall, Some(&leaf_hash)).map_err(|why| untrusted_because(&format!("manifest: {why}")))?;
     let pins = apply_next_ca(&pins, &manifest);
     // AC-2b-D 6.5: the Meeting Hub certificates are checked (and written into the new folder) before anything else
     // is kept; any failure discards everything (the new folder goes with `requests`).
