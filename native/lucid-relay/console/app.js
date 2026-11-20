@@ -5928,7 +5928,7 @@
       const id = await spkiId("n_", der);
       confirmDialog({
         spec: fspec("spokes-root"), vals: { id }, name: id, id,
-        run: () => post("fleet/spokes-root", { pem: text }, { action: "fleet.spokes-root.set", target: id || "-" }),
+        run: () => post("fleet/spokes-root", { pem: text }, { action: "fleet.spokes-root.set", target: "-" }),
       });
     }, "primary");
     return section("spokes-root-h", FW["spokes-root.title"], el("p", null, FW["spokes-root.help"]),
@@ -5980,7 +5980,7 @@
         run: (v) => post("fleet/meet-ca/import", { caPem, keyPem, issuedJson: issued.got.text || null, crlPem: crl.got.text || null, signerUrl: url || null,
           noHighRelay: true, maxLifetimeDays: 400, reason: v.reason },
           // The key never goes into the step-up binding (8.2: no route or log ever carries it).
-          { action: "fleet.meet-ca.import", target: id || "-", params: { signerUrl: url || null, noHighRelay: true, maxLifetimeDays: 400 } }),
+          { action: "fleet.meet-ca.import", target: "-", params: { signerUrl: url || null, noHighRelay: true, maxLifetimeDays: 400 } }),
       });
     }, "primary");
     if (!allowed) setEnabled(importBtn, false);
@@ -6043,7 +6043,7 @@
       }
       confirmDialog({
         spec: caSpec(FW["meet-ca.max-lifetime"], String(n), FMSG.deploy.saveDays), name: ca.id, id: ca.id, two: true, fields: [{ kind: "reason" }],
-        run: (v) => post("fleet/meet-ca/max-lifetime", { days: n, reason: v.reason }, { action: "fleet.meet-ca.max-lifetime", target: ca.id }),
+        run: (v) => post("fleet/meet-ca/max-lifetime", { days: n, reason: v.reason }, { action: "fleet.meet-ca.max-lifetime", target: "-" }),
       });
     }))];
     // The certificate server's revocation check (8.4, R4-M1), with the relays that confirm or disagree.
@@ -6055,7 +6055,7 @@
         on.checked = !want;
         confirmDialog({
           spec: caSpec(FW["meet-ca.signer-enforced"], FW["meet-ca.signer-enforced-help"], FMSG.deploy.saveDays), name: ca.signerUrl, id: ca.id, fields: [{ kind: "reason" }],
-          run: (v) => post("fleet/meet-ca/signer-enforced", { on: want, reason: v.reason }, { action: "fleet.meet-ca.signer-enforced", target: ca.id }),
+          run: (v) => post("fleet/meet-ca/signer-enforced", { on: want, reason: v.reason }, { action: "fleet.meet-ca.signer-enforced", target: "-" }),
         });
       });
       kids.push(el("label", { class: "inline", for: sid }, on, FW["meet-ca.signer-enforced"]), el("p", { class: "note", id: sid + "-n" }, FW["meet-ca.signer-enforced-help"]),
@@ -6068,7 +6068,7 @@
     kids.push(el("label", { class: "inline", for: eid }, elsewhere, fillText(FW["meet-ca.remove-elsewhere"], { date: dayAny(finalEnds) })),
       el("div", null, btn(FW["meet-ca.remove"], () => confirmDialog({
         spec: fspec("meet-ca-remove"), vals: { date: dayAny(finalEnds) }, name: ca.id, id: ca.id, two: true, danger: true, fields: [{ kind: "reason" }],
-        run: (v) => post("fleet/meet-ca/remove", { elsewhere: !!elsewhere.checked, reason: v.reason }, { action: "fleet.meet-ca.remove", target: ca.id }),
+        run: (v) => post("fleet/meet-ca/remove", { elsewhere: !!elsewhere.checked, reason: v.reason }, { action: "fleet.meet-ca.remove", target: "-" }),
       }), "danger")));
     out.push(panel(null, ...kids));
     return out;
@@ -6091,7 +6091,7 @@
       spec: caSpec(FW["meet-ca.prune"], fillText(FW["meet-ca.prune-help"], { days: ca.maxLifetimeDays || 400 }), FW["meet-ca.prune"]), name: serial, id: serial, two: true,
       fields: [{ kind: "textarea", key: "certPem", label: FMSG.deploy.certPem, required: true }, { kind: "reason" }],
       check: (v) => (!pemDer(v.certPem, "CERTIFICATE") ? FMSG.deploy.certPem : ""),
-      run: (v) => post("fleet/meet-ca/prune", { certPem: v.certPem, reason: v.reason }, { action: "fleet.meet-ca.prune", target: serial }),
+      run: (v) => post("fleet/meet-ca/prune", { certPem: v.certPem, reason: v.reason }, { action: "fleet.meet-ca.prune", target: "-" }),
     });
   }
   // The license library (5.3): licenses kept on the console for installing on relays.
