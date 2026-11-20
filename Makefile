@@ -1729,3 +1729,8 @@ demo-P-ASKPLUS.1: ## P-ASKPLUS.1 (ADR-0632): the Ask Lucid "+" menu opens in fro
 demo-P-SPACING.1: ## P-SPACING.1 (ADR-0633): Settings spacing audit in a running QA instance (both layouts, every category, every card and disclosure open): no touching boxes, stacked fields share a width, even card rhythm. Needs LUCID_DEMO_CDP_URL=ws://... and LUCID_DEMO_URL=http://127.0.0.1:<port>/
 	$(BUN) test $(TEST_IGNORES) tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
 	node desktop/scripts/demo_p_spacing_1.mjs
+
+.PHONY: demo-P-FLEET.HEAD2
+demo-P-FLEET.HEAD2: ## P-FLEET.HEAD2 (ADR-0634): the Fleet header keeps one window control (Minimize); pill restore; Escape closes the More menu before the panel; header spacing clean. Needs LUCID_DEMO_CDP_URL and LUCID_DEMO_URL for a running QA instance
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	node desktop/scripts/demo_p_fleet_head_2.mjs

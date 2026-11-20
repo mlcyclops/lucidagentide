@@ -48,7 +48,7 @@ Settings as it exists on master and say which ones the rework closes.
 | Distinct overlay z-index values | 18 (55 to 1200) | section 3 |
 | Icon-only controls in the primary shell | 35 (19 rail, 4 composer + Add, 3 window, 2 zoom, send, new session, collapse, agent toggle, inspector collapse, rail expand); 2 carry an `aria-label` (`#ctPlus`, `#sessSpokes`) | `app.ts:434-600` |
 | First-run gates before the first prompt | up to 4 modals (role, email, gov/CUI, provider) + a 4 to 7 step tour | `app.ts:4774-4780`, `tour.ts` |
-| Fleet dock header controls | 5 + headroom readout; 9 more behind "More" | `fleet_grid.ts:311-321`, `251-262` |
+| Fleet dock header controls | 5 + headroom readout at baseline; 4 after ADR-0634 (Ask, Agent, More, Minimize, plus Next only when an agent needs you: Close removed, it hid the panel like Minimize but left no pill); 9 more behind "More" | `fleet_grid.ts:311-321`, `251-262` |
 | Plugins flyout tabs | 3 (Premium, Free, Installed) | `plugins_flyout.ts:293` |
 | Creator Studio sections | 3 (Integrations in 6 groups, Recent jobs, Track library) | `creator_studio.ts:83-90`, `288-319` |
 | Knowledge graph header controls | 4 + close (search, Auto, Personal views menu, Data menu) | `app.ts:632-644` |

@@ -329,7 +329,6 @@ export function openFleetGrid(): void {
       <button class="btn-mini fleet-add-btn" data-fleet-add data-tip="New agent|Start a new local agent in this grid. The Orbit map's + Agent does the same thing.">${icon("plus", 12)} Agent</button>
       <button class="btn-mini fleet-add-btn fleet-more-btn" data-fleet-more type="button" data-tip="More|Orbit view, layouts, boards, group by repo, the default view and the classic hub">More<span class="fleet-more-chev">${icon("chevron", 11)}</span></button>
       <button class="share-dock-btn" data-dock-min aria-label="Minimize to pill" data-tip="Minimize (agents keep running)">${UP_ARROW}</button>
-      <button class="share-dock-btn" data-fleet-close aria-label="Close the fleet panel" data-tip="Close (agents keep running)">${icon("close", 15)}</button>
     </div>
     <div class="fleet-boards" data-fleet-boards role="tablist" aria-label="Boards"></div>
     <button class="fleet-boards-handle" data-fleet-boards-toggle type="button" hidden aria-expanded="false" aria-label="Show boards"><span class="fleet-boards-handle-chev">${icon("chevron", 9)}</span><i class="fleet-board-dot" data-board-handle-dot hidden></i></button>
@@ -1039,9 +1038,10 @@ const onWinResize = (): void => {
   persist();
 };
 // Escape MINIMIZES (non-destructive - the lanes keep running), and only when focus is inside this dock,
-// mirroring the join dock's convention.
+// mirroring the join dock's convention. An Escape a menu already consumed (ui.ts popover(), ADR-0632) closes
+// only that menu.
 const onKey = (e: KeyboardEvent): void => {
-  if (e.key === "Escape" && dock && !dock.hidden && dock.contains(document.activeElement)) { e.preventDefault(); minimize(); }
+  if (e.key === "Escape" && !e.defaultPrevented && dock && !dock.hidden && dock.contains(document.activeElement)) { e.preventDefault(); minimize(); }
 };
 
 function minimize(): void {
@@ -3062,7 +3062,6 @@ function openGroupMenu(run: LaneRun, anchor: HTMLElement): void {
 
 function onClick(ev: Event): void {
   const t = ev.target as HTMLElement;
-  if (t.closest("[data-fleet-close]")) { closeFleetGrid(); return; }
   if (t.closest("[data-dock-min]")) { minimize(); return; }
   // P-FLEET-BOARDS.1: Next that needs you, and the board tabs. Orbit, layouts, By repo, the default view and the
   // classic hub live in the More menu (P-FLEET.HEAD1), which handles its own clicks.

@@ -6365,3 +6365,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** Settings cards 12px apart with 14px padding and 10px between blocks, one header height with or without a subtitle, stacked fields share a width (`.prov-grid`) in Workspace, Profile, MCP, Remote agents, Semantic search, whitelist auth and provider key/config rows; `desktop/scripts/demo_p_spacing_1.mjs` found 33 faults before and passes 120 Settings states after (both layouts, every card and disclosure, dark and light themes); AGENTS/CLAUDE ritual, checklist item 12 and a "Spacing" PR gate box make it standing.
 - **stubbed:** nothing; surfaces outside Settings are audited with `auditBoxes` as they are touched, not swept in this increment.
 - **next:** run `auditBoxes` over the Fleet window, Ask Lucid and the Visualize node panel and fix what it finds.
+## P-FLEET.HEAD2: the Fleet window keeps one window control, Minimize (ADR-0634)
+- **shipped (2026-11-20):** the Fleet header's Close button is gone (it hid the panel like Minimize but left no pill); Escape with the More menu open now closes only the menu; `desktop/scripts/demo_p_fleet_head_2.mjs` passed in the live window (one control, pill restore, Escape order, header spacing) and failed as expected with Close injected and against the pre-fix bundle.
+- **stubbed:** nothing.
+- **next:** check the Share and Join docks for the same Minimize/Close duplication.
