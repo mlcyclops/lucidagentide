@@ -8,7 +8,7 @@
 > voice mailboxes until they move over the spoke; the rest of this file is the 2026-09 handoff, kept as history.
 > vLLM listens on port 8000; 8080 is the platform's planned proxy.
 
-- **Source:** TL187 Private AI Platform (formerly DGX Loader) repo (sibling checkout: `..\..\15-DGX\dgx`),
+- **Source:** TL187 Private AI Platform (formerly DGX Loader) repo (a sibling checkout of the dgx repo),
   its ADRs 0001 to 0018, and its `docs/LUCID-INTEGRATION.md` voice contract
   plus `docs/HANDOFF-LUCID-MODEL-PICKER.md` (the model-picker contract).
 - **Date:** 2026-09-05, with an addendum on 2026-09-17 (see the bottom

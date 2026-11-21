@@ -277,12 +277,12 @@ describe("toFileUrl", () => {
     expect(toFileUrl("/home/n/game.html")).toBe("file:///home/n/game.html");
   });
   test("percent-encodes spaces per segment (OneDrive-style dirs used to produce broken URLs)", () => {
-    expect(toFileUrl("C:/Users/x/OneDrive/Apps AI Vibe/app.html")).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
-    expect(toFileUrl("C:\\Users\\x\\OneDrive\\Apps AI Vibe\\app.html")).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
+    expect(toFileUrl("C:/Users/x/OneDrive/My Projects/app.html")).toBe("file:///C:/Users/x/OneDrive/My%20Projects/app.html");
+    expect(toFileUrl("C:\\Users\\x\\OneDrive\\My Projects\\app.html")).toBe("file:///C:/Users/x/OneDrive/My%20Projects/app.html");
     expect(toFileUrl("/home/n/my app/x.html")).toBe("file:///home/n/my%20app/x.html");
   });
   test("the Windows drive segment stays LITERAL (never C%3A, which breaks drive letters)", () => {
-    const u = toFileUrl("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    const u = toFileUrl("C:/Users/x/OneDrive/My Projects/app.html");
     expect(u.startsWith("file:///C:/")).toBe(true);
     expect(u).not.toContain("%3A");
   });
@@ -292,8 +292,8 @@ describe("toFileUrl", () => {
   });
   test("round-trips through toFsPath (preview_file.ts) back to the original OS path", () => {
     for (const p of [
-      "C:/Users/x/OneDrive/Apps AI Vibe/app.html",
-      "C:/Users/operator/OneDrive/Desktop/Apps AI Vibe/10-COVERT AGENT IDE/game.html",
+      "C:/Users/x/OneDrive/My Projects/app.html",
+      "C:/Users/operator/OneDrive/Desktop/My Projects/Agent IDE/game.html",
       "/home/n/my app/x.html",
       "C:/Users/n/100% done/x.html",
     ]) {
@@ -310,9 +310,9 @@ describe("resolvePreview (fail-safe)", () => {
     expect(r.label).toBe("hormuz-minesweeper.html"); // label stays human-readable (no %20)
   });
   test("an OneDrive-style path with spaces resolves to a loadable, encoded src", () => {
-    const r = resolvePreview("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    const r = resolvePreview("C:/Users/x/OneDrive/My Projects/app.html");
     expect(r.kind).toBe("local");
-    expect(r.src).toBe("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html");
+    expect(r.src).toBe("file:///C:/Users/x/OneDrive/My%20Projects/app.html");
     expect(r.src).not.toContain("%3A"); // drive colon stays literal
   });
   test("a QUOTED local path is unwrapped, then rendered", () => {
