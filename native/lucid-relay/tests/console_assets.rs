@@ -771,6 +771,14 @@ fn fleet_setup_resumes_and_relays_people_and_charts_fit_a_phone() {
     run_harness("fleet", path.to_str().unwrap());
 }
 
+#[test]
+fn settings_ai_renders_the_contract_words_and_approve_only_after_a_pass() {
+    // AI-1 section 9 in the DOM double: who may use AI, the presets, a save waiting for the device's signature, cards
+    // with Run benchmark and Approve only on the card that passed, the 80% warning, the hold, and the archive section
+    // of a small organization without and with an archive and of a big one.
+    run_harness("ai", "");
+}
+
 /// The script harness: qr.js against the vector, and app.js in a small DOM double built from index.html.
 const HARNESS_JS: &str = r##""use strict";
 const fs = require("fs");
@@ -1557,7 +1565,83 @@ async function fleetMain(v) {
   console.log("fleet: setup, resume, relays, people and charts ok");
 }
 
+// ---- AI-1 section 9: Settings > AI on a Meeting Hub relay ----
+async function aiMain() {
+  const host = { host: "relay.acme.example", version: "0.98.0", uptimeSeconds: 100, fips: false };
+  const me = {
+    ok: true, product: "meet", profile: "standard", origin: "https://relay.acme.example", relay: host,
+    sections: ["overview", "meet", "approvals", "admins"], idle: { minutes: 15, maxHours: 12 },
+    user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+      methods: { webauthn: [], password: false, totp: false }, mustSetPassword: false, sessions: 1, mail: [] },
+  };
+  const presets = [
+    { id: "device", label: "This computer only", order: ["device"], access: "none" },
+    { id: "org-first", label: "Org servers first", order: ["org", "device", "frontier"], access: "org" },
+    { id: "device-org-frontier", label: "This computer, then org servers, then frontier", order: ["device", "org", "frontier"], access: "org" },
+  ];
+  const card = (id, approvable) => ({ gateway: "https://ai.acme.example:8443", card_id: id, tier: "org", model: "llama-3.3-70b", precision: { weights: "fp8-e4m3" }, hardware: { gpu: "H100" },
+    throughput: {}, quality: {}, status: "pending", retire_after: "2027-06-01", bench: null, approvable });
+  const base = {
+    "GET me": me, "GET settings": { ok: true, twoPerson: "on", profile: "standard", links: [] }, "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "meet", relay: host, cards: [], attention: [], approvals: { waiting: 0, mine: 0 }, requests: { waiting: 0 }, links: [], banners: [] },
+    "GET meet/ai": {
+      ok: true, org: "acme", orgs: [{ id: "acme", label: "Acme" }], presets, default: "device-org-frontier", advanced: "Advanced",
+      ai: { v: 1, enabled: true, who: { groups: ["g-1"] }, order: ["device"], frontier: { access: "none" } }, preset: "device",
+      map: { who_principals: ["bob@acme.example"] }, staged: null, saving: [{ step: "map", request: "rq_0000000000000001", principal: "ann@acme.example" }],
+      waiting: [], gateways: [], edition: "standard", lacks: null, reviewers: ["rev@acme.example"], consoleSpki: "a".repeat(64), results: [],
+    },
+    "GET meet/ai/cards": { ok: true, cards: [card("passed-card", true), card("unbenched-card", false)], errors: [] },
+    "GET meet/ai/usage": { ok: true, requests: 12, refusals: { budget: 2 }, spend: { month_usd_micro: 900, month_limit_usd_micro: 1000, warning: "AI spend has reached 80% of this month's budget." }, cards: [], missing_rids: ["0f".repeat(16)],
+      audit: { personal: { requests: 3, by_provider: { anthropic: { key: 1, oauth: 2 } }, plans: { anthropic: { business: 2, not_business: 0, unknown: 1 } }, tokens_in: 160, tokens_out: 26 },
+        dropped: { count: 1, by_reason: { encoding: 1 }, latest: [{ rid: "d".repeat(32), ts: 5, reason: "encoding" }] }, other: 0, partial: false } },
+    "GET meet/ai/archive": { ok: true, size: "small", archive: null, add: "Add an archive", notice: "No archive. AI history stays on each person's devices; a legal hold cannot retrieve it." },
+  };
+  boot(base, { hash: "#/meet/ai" });
+  for (let i = 0; i < 4; i++) await settle();
+  const text = view();
+  for (const w of ["Who may use AI", "This computer only", "Waiting for ", "Run benchmark", "Place a legal hold", "Add an archive",
+    "No archive. AI history stays on each person's devices; a legal hold cannot retrieve it.", "AI spend has reached 80% of this month's budget.", "bob@acme.example",
+    "Personal access (people's own accounts)", "anthropic: key 1, OAuth 2", "anthropic: business 2, not business 0, unknown 1", "160 / 26",
+    "AI history records that could not be saved", "encoding 1", "d".repeat(32)]) {
+    if (!text.includes(w)) fail("Settings > AI does not show " + JSON.stringify(w) + ":\n" + text);
+  }
+  if (text.includes("\u2014") || text.includes("\u2013")) fail("a long dash on Settings > AI");
+  // Approve only after a pass: one Approve, on the passed card's row
+  // the row menus of the table (the stacked phone cards repeat them)
+  const approves = doc.querySelectorAll("td.actions button").filter((b) => b.textContent === "Approve");
+  if (approves.length !== 1) fail("Approve is offered " + approves.length + " times; only the card that passed may offer it");
+  const benches = doc.querySelectorAll("td.actions button").filter((b) => b.textContent === "Run benchmark");
+  if (benches.length !== 2) fail("Run benchmark is offered " + benches.length + " times, not on every card");
+  // the presets in the Review dialog carry the contract's labels
+  find("button", "Review changes").click();
+  await settle();
+  const options = doc.querySelectorAll("option").map((o) => o.textContent);
+  for (const w of ["This computer only", "Org servers first", "This computer, then org servers, then frontier", "Advanced"]) {
+    if (!options.includes(w)) fail("the route order choices lack " + w + ": " + options.join(" | "));
+  }
+  // a big organization: offline copy, shares and the Recoverable state
+  const big = Object.assign({}, base, { "GET meet/ai/archive": { ok: true, size: "big", lacks: "A big organization's AI needs the organization archive with at least 3 archive reviewers.", archive: "https://archive.acme.example:9443",
+    offline_copy: { enabled: true, schedule: "daily" }, shares: [{ reviewer: "rev@acme.example", device: "0123456789abcdef" }], reviewers: [], state: "Recoverable", note: "" } });
+  boot(big, { hash: "#/meet/ai" });
+  for (let i = 0; i < 4; i++) await settle();
+  const t2 = view();
+  for (const w of ["Recoverable", "Offline copy", "Reviewers' shares", "A big organization's AI needs the organization archive with at least 3 archive reviewers."]) {
+    if (!t2.includes(w)) fail("the big organization's archive section lacks " + w + ":\n" + t2);
+  }
+  // a small organization with an archive: the recovery code shown once and its confirmation
+  const small = Object.assign({}, base, { "GET meet/ai/archive": { ok: true, size: "small", archive: "https://archive.acme.example:9443", recovery_code: "unconfirmed", state: "Not tested",
+    code: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567-ABCD-EFGH-IJKL-MNOP-QRST", confirm: { first: 2, second: 8 } } });
+  boot(small, { hash: "#/meet/ai" });
+  for (let i = 0; i < 4; i++) await settle();
+  const t3 = view();
+  for (const w of ["Not tested", "ABCD-EFGH-IJKL", "Confirm the recovery code", "Replace the recovery code"]) {
+    if (!t3.includes(w)) fail("the small organization's archive section lacks " + w + ":\n" + t3);
+  }
+  console.log("ai: Settings > AI ok");
+}
+
 if (mode === "dom") main().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "ai") aiMain().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "fleet") fleetMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else fail("unknown mode " + mode);
 "##;

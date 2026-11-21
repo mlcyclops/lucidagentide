@@ -26,15 +26,15 @@ const LIFE_MAX: i64 = 90 * 86400; // expires - issued
 const SKEW: i64 = 300; // a policy dated this far in the future is still taken
 const SIGNED_MAX: usize = 64 * 1024; // the whole signed object
 pub const RELAY_MAX: usize = 64; // org policies one relay holds
-const RETENTION_KINDS: &[&str] = &["dm", "group", "channel", "files", "canvas"];
+const RETENTION_KINDS: &[&str] = &["dm", "group", "channel", "files", "canvas", "ai"];
 const RETENTION_MAX: i64 = 3650;
-const APP_TYPES: &[&str] = &["bot", "webhook", "workflows"];
+const APP_TYPES: &[&str] = &["bot", "webhook", "workflows", "ai"];
 const SCOPES: &[&str] = &["mentions", "all"];
 const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention", "notify",
+    "workflows", "external_archives", "external_apps", "retention", "notify", "ai",
 ];
 /// NT-1 section 3.9: the only `notify` the policy may carry.
 const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
@@ -362,6 +362,10 @@ pub struct SignerTerms {
     pub org_domains: IndexMap<String, Vec<String>>,
     pub org_admins: IndexMap<String, Vec<String>>,
     pub intermediate_serial: String,
+    /// The signer policy says `enclave` (AI-1 1.2: frontier only through AskSage).
+    pub enclave: bool,
+    /// `sso_services`: (serial, orgs, domains) of each registered SSO service (AI-1 6.4 binds its posts to them).
+    pub sso_services: Vec<(String, Vec<String>, Vec<String>)>,
 }
 
 impl SignerTerms {
@@ -417,6 +421,7 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
         org_admins.insert(org.clone(), kept);
     }
     let services = list(policy.get("sso_services").unwrap_or(&empty_list), "sso_services", 100, 0)?;
+    let mut sso_services = Vec::new();
     for svc in services {
         let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_KEYS, "an SSO service")?;
         if !o["serial"].as_str().is_some_and(|s| hex_ok(s, 1, 40)) {
@@ -435,6 +440,8 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
         if domains.iter().any(|d| !d.as_str().is_some_and(|d| allowed.contains(d))) {
             return Err("an SSO service names a domain outside its organizations".into());
         }
+        let texts = |l: &[Value]| l.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+        sso_services.push((pj::py_str(&o["serial"]), texts(orgs), texts(domains)));
     }
     // the relay checks the SSO terms (the signer and the SSO service apply them) but keeps none of them
     let raw_sso = policy.get("sso").unwrap_or(&empty_obj).as_object().ok_or("sso must be an object")?;
@@ -459,7 +466,8 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     if !matches!(policy.get("enclave"), None | Some(Value::Bool(_))) {
         return Err("enclave must be true or false".into());
     }
-    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial })
+    let enclave = policy.get("enclave") == Some(&Value::Bool(true));
+    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services })
 }
 
 // ---- the org policy -------------------------------------------------------------------------------------------
@@ -546,7 +554,7 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
         text(&a["name"], "an app's name", LABEL_MAX)?;
         let kind = a["type"].as_str();
         if !kind.is_some_and(|t| APP_TYPES.contains(&t)) {
-            return Err(bad("an app's type must be bot, webhook or workflows"));
+            return Err(bad("an app's type must be bot, webhook, workflows or ai"));
         }
         if !a["scope"].as_str().is_some_and(|s| SCOPES.contains(&s)) {
             return Err(bad("an app's scope must be mentions or all"));
@@ -615,7 +623,695 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             return Err(bad(NOTIFY_SHAPE));
         }
     }
+    if let Some(a) = p.get("ai") {
+        check_ai(a, terms)?;
+    }
     Ok(())
+}
+
+// ---- AI-1: the `ai` key, its gates and the members-only AI map (docs/ai/contract.md 1, 2) ----------------------
+
+const AI_KEYS: &[&str] = &[
+    "v", "enabled", "who", "order", "classes", "cui_classes", "default_class", "frontier_classes",
+    "redact_for_frontier", "frontier", "models", "device_models", "embedding", "deadlines_ms", "budgets", "org_index",
+    "map_sha256",
+];
+const AI_ROUTES: &[&str] = &["device", "org", "frontier"];
+const AI_ACCESS: &[&str] = &["org", "personal", "either", "none"];
+const AI_PLANS: &[&str] = &["business", "any"];
+const AI_LIST_MAX: usize = 50;
+const AI_TEXT_MAX: usize = 128;
+const AI_CLASSES_MAX: usize = 8;
+const AI_PROVIDERS_MAX: usize = 16;
+/// The Lucid IDE provider ids personal access may name (5.2).
+pub const AI_PROVIDERS: &[&str] = &["anthropic", "openai", "google", "xai", "azure", "google-vertex", "amazon-bedrock", "asksage"];
+pub const AI_FRONTIER_DISAGREE: &str = "ai.order and ai.frontier.access disagree about frontier.";
+pub const AI_ENCLAVE: &str = "An enclave org cannot use frontier models except through AskSage.";
+pub const AI_CUI: &str = "CUI cannot go to commercial frontier models.";
+pub const AI_ASKSAGE: &str = "Under the AskSage lockdown, personal access must be AskSage.";
+/// The AI-1a release of the Hub and the iPhone (older ones refuse the whole policy for its unknown key).
+const AI_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.0"), ("ios", "0.98.0")];
+pub const AI_TOO_SOON: &str =
+    "AI rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.";
+pub const AI_BIG_ORG: &str = "A big organization's AI needs the organization archive with at least 3 archive reviewers.";
+pub const AI_ONE_REVIEWER: &str = "With an archive, at least one archive reviewer is needed.";
+
+/// 1 to `limit` printable ASCII characters.
+fn ascii_text(v: &Value, limit: usize) -> bool {
+    v.as_str().is_some_and(|s| (1..=limit).contains(&s.len()) && s.bytes().all(|b| (0x20..0x7f).contains(&b)))
+}
+
+/// `sha256:` + 64 lower-case hex.
+fn digest_ok(v: &Value) -> bool {
+    v.as_str().and_then(|s| s.strip_prefix("sha256:")).is_some_and(|h| hex_ok(h, 64, 64))
+}
+
+/// `[a-z0-9-]{1,32}` as a full match.
+fn ai_label(v: &Value) -> Option<&str> {
+    v.as_str().filter(|s| !s.ends_with('\n') && slug_ok(s))
+}
+
+/// 0 to `most` distinct strings, each passing `ok`; None otherwise.
+fn ai_strs<'a>(v: Option<&'a Value>, low: usize, most: usize, ok: impl Fn(&Value) -> bool) -> Option<Vec<&'a str>> {
+    let a = v?.as_array().filter(|a| (low..=most).contains(&a.len()))?;
+    let out: Vec<&str> = a.iter().filter(|x| ok(x)).filter_map(Value::as_str).collect();
+    (out.len() == a.len() && !has_dup(&out)).then_some(out)
+}
+
+/// `_ai_list(..., distinct=False)`: 0 to `most` strings, each passing `ok`.
+fn ai_strs_any(v: Option<&Value>, most: usize, ok: impl Fn(&Value) -> bool) -> bool {
+    v.and_then(Value::as_array).is_some_and(|a| a.len() <= most && a.iter().all(|x| x.is_string() && ok(x)))
+}
+
+fn ai_obj<'a>(v: Option<&'a Value>, allowed: &[&str], required: &[&str], words: &str) -> Result<&'a Obj, PolicyError> {
+    v.and_then(Value::as_object)
+        .filter(|o| o.keys().all(|k| allowed.contains(&k.as_str())) && required.iter().all(|k| o.contains_key(*k)))
+        .ok_or_else(|| bad(words))
+}
+
+fn ai_bool(v: Option<&Value>, words: &str) -> Result<bool, PolicyError> {
+    v.and_then(Value::as_bool).ok_or_else(|| bad(words))
+}
+
+fn ai_int(v: Option<&Value>, low: i64, high: i64, words: &str) -> Result<i64, PolicyError> {
+    pj::as_int(v).filter(|n| (low..=high).contains(n)).ok_or_else(|| bad(words))
+}
+
+/// Contract AI-1 1.2: every field and limit of the `ai` key, then the cross-field rules, each with its own words.
+pub fn check_ai(ai: &Value, terms: &SignerTerms) -> Result<(), PolicyError> {
+    let a = keys(ai, AI_KEYS, &[], "ai")?;
+    if pj::as_int(a.get("v")) != Some(1) {
+        return Err(bad("ai.v must be 1"));
+    }
+    ai_bool(a.get("enabled"), "ai.enabled must be true or false")?;
+    const WHO: &str = "ai.who.groups must list immutable group ids";
+    let w = ai_obj(a.get("who"), &["groups"], &["groups"], WHO)?;
+    let group_ok = |x: &Value| ascii_text(x, AI_TEXT_MAX) && !x.as_str().is_some_and(|s| s.starts_with("name:"));
+    ai_strs(w.get("groups"), 0, AI_LIST_MAX, group_ok).ok_or_else(|| bad(WHO))?;
+    let order = ai_strs(a.get("order"), 1, 3, |x| x.as_str().is_some_and(|s| AI_ROUTES.contains(&s)))
+        .ok_or_else(|| bad("ai.order must list device, org or frontier, each once"))?;
+    let classes = ai_strs(a.get("classes"), 1, AI_CLASSES_MAX, |x| ai_label(x).is_some())
+        .ok_or_else(|| bad("ai.classes must be 1 to 8 distinct labels"))?;
+    let of_classes = |key: &str, words: &str| -> Result<Vec<&str>, PolicyError> {
+        match a.get(key) {
+            None => Ok(Vec::new()),
+            v => ai_strs(v, 0, AI_CLASSES_MAX, |x| x.as_str().is_some_and(|s| classes.contains(&s))).ok_or_else(|| bad(words)),
+        }
+    };
+    let cui = of_classes("cui_classes", "ai.cui_classes must be classes")?;
+    if !a.get("default_class").and_then(Value::as_str).is_some_and(|d| classes.contains(&d)) {
+        return Err(bad("ai.default_class must be one of ai.classes"));
+    }
+    let frontier_classes = of_classes("frontier_classes", "ai.frontier_classes must be classes")?;
+    let f = ai_obj(a.get("frontier"), &["access", "personal"], &["access"], "ai.frontier.access must be org, personal, either or none")?;
+    let Some(access) = f.get("access").and_then(Value::as_str).filter(|s| AI_ACCESS.contains(s)) else {
+        return Err(bad("ai.frontier.access must be org, personal, either or none"));
+    };
+    let wants_personal = access == "personal" || access == "either";
+    if wants_personal != f.contains_key("personal") {
+        return Err(bad("ai.frontier.personal is needed only for personal or either"));
+    }
+    let mut personal_classes: Vec<&str> = Vec::new();
+    let mut personal_providers: Vec<&str> = Vec::new();
+    if let Some(pv) = f.get("personal") {
+        let pk = &["api_keys", "oauth", "providers", "classes", "plans"];
+        let po = ai_obj(Some(pv), pk, &[], "ai.frontier.personal is needed only for personal or either")?;
+        let (keys_ok, oauth) = (po.get("api_keys").and_then(Value::as_bool), po.get("oauth").and_then(Value::as_bool));
+        if keys_ok.is_none() || oauth.is_none() || (keys_ok == Some(false) && oauth == Some(false)) {
+            return Err(bad("ai.frontier.personal must allow keys, OAuth or both"));
+        }
+        personal_providers = ai_strs(po.get("providers"), 1, AI_PROVIDERS_MAX, |x| x.as_str().is_some_and(|s| AI_PROVIDERS.contains(&s)))
+            .ok_or_else(|| bad("ai.frontier.personal.providers must be provider ids"))?;
+        personal_classes = ai_strs(po.get("classes"), 0, AI_CLASSES_MAX, |x| x.as_str().is_some_and(|s| classes.contains(&s)))
+            .ok_or_else(|| bad("ai.frontier.personal.classes must be classes"))?;
+        if !po.get("plans").and_then(Value::as_str).is_some_and(|p| AI_PLANS.contains(&p)) {
+            return Err(bad("ai.frontier.personal.plans must be business or any"));
+        }
+    }
+    if let Some(r) = a.get("redact_for_frontier") {
+        let ok = |x: &Value| x.as_str().is_some_and(|s| frontier_classes.contains(&s) || personal_classes.contains(&s));
+        ai_strs(Some(r), 0, AI_CLASSES_MAX, ok).ok_or_else(|| bad("ai.redact_for_frontier must be frontier classes"))?;
+    }
+    const MODELS_WORDS: &str = "ai.models must use the Lucid IDE models fields";
+    let mut asksage_only = false;
+    if let Some(mv) = a.get("models") {
+        let mo = ai_obj(Some(mv), &["asksageOnly", "allowed", "denied", "lock"], &[], MODELS_WORDS)?;
+        for k in ["asksageOnly", "lock"] {
+            if let Some(b) = mo.get(k) {
+                let b = ai_bool(Some(b), MODELS_WORDS)?;
+                if k == "asksageOnly" {
+                    asksage_only = b;
+                }
+            }
+        }
+        for k in ["allowed", "denied"] {
+            if mo.contains_key(k) && !ai_strs_any(mo.get(k), AI_LIST_MAX, |x| ascii_text(x, AI_TEXT_MAX)) {
+                return Err(bad(MODELS_WORDS));
+            }
+        }
+    }
+    if let Some(dv) = a.get("device_models") {
+        const W: &str = "ai.device_models.allow_digests must be sha256 digests";
+        let d = ai_obj(Some(dv), &["allow_digests"], &["allow_digests"], W)?;
+        if !ai_strs_any(d.get("allow_digests"), AI_LIST_MAX, digest_ok) {
+            return Err(bad(W));
+        }
+    }
+    if let Some(ev) = a.get("embedding") {
+        const W: &str = "ai.embedding must name a model, digest and dims";
+        let e = ai_obj(Some(ev), &["model", "digest", "dims"], &["model", "digest", "dims"], W)?;
+        if !ascii_text(&e["model"], AI_TEXT_MAX) || !digest_ok(&e["digest"]) {
+            return Err(bad(W));
+        }
+        ai_int(e.get("dims"), 64, 4096, W)?;
+    }
+    {
+        const W: &str = "ai.deadlines_ms must be 2000 to 300000";
+        let d = ai_obj(a.get("deadlines_ms"), &["search", "catch_up"], &["search", "catch_up"], W)?;
+        for v in d.values() {
+            ai_int(Some(v), 2000, 300_000, W)?;
+        }
+    }
+    {
+        const W: &str = "ai.budgets must be whole dollars";
+        const B: &[&str] = &["frontier_usd_month", "frontier_usd_user_day"];
+        let b = ai_obj(a.get("budgets"), B, B, W)?;
+        ai_int(b.get("frontier_usd_month"), 0, 10_000_000, W)?;
+        ai_int(b.get("frontier_usd_user_day"), 0, 100_000, W)?;
+    }
+    if let Some(v) = a.get("org_index") {
+        ai_bool(Some(v), "ai.org_index must be true or false")?;
+    }
+    if !a.get("map_sha256").and_then(Value::as_str).is_some_and(|h| !h.ends_with('\n') && hex_ok(h, 64, 64)) {
+        return Err(bad("ai.map_sha256 must name the AI map"));
+    }
+    // cross-field rules
+    let frontier_in_order = order.contains(&"frontier");
+    if frontier_in_order != (access != "none") {
+        return Err(bad(AI_FRONTIER_DISAGREE));
+    }
+    if terms.enclave && frontier_in_order && !asksage_only {
+        return Err(bad(AI_ENCLAVE));
+    }
+    if !asksage_only && cui.iter().any(|c| frontier_classes.contains(c) || personal_classes.contains(c)) {
+        return Err(bad(AI_CUI));
+    }
+    if asksage_only && f.contains_key("personal") && personal_providers != ["asksage"] {
+        return Err(bad(AI_ASKSAGE));
+    }
+    Ok(())
+}
+
+fn version_ready(clients: &[(&str, &str)], minimums: &Obj) -> bool {
+    clients.iter().all(|(app, least)| {
+        minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false)
+    })
+}
+
+/// ai_gate (1.3): a policy with `ai`, or with `retention.ai`, is taken only once the relay's minimums reach the AI-1a
+/// release of both the Hub and the iPhone.
+pub fn ai_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let p = policy.and_then(Value::as_object);
+    let wants = p.is_some_and(|p| p.contains_key("ai") || p.get("retention").and_then(|r| r.get("ai")).is_some());
+    if wants && !version_ready(&AI_CLIENTS, minimums) {
+        return Err(AI_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// ai_edition_gate (1.5): with `ai.enabled` true, a big organization (`enterprise`) needs the archive and at least 3
+/// archive reviewers; a small one (`standard`) with an archive needs at least one reviewer. Any edition other than
+/// `standard`, and no license at all (`None`), is big.
+pub fn ai_edition_gate(policy: &Obj, edition: Option<&str>) -> Result<(), String> {
+    let enabled = policy.get("ai").and_then(|a| a.get("enabled")).and_then(Value::as_bool) == Some(true);
+    if !enabled {
+        return Ok(());
+    }
+    let reviewers = policy.get("archive_reviewers").and_then(Value::as_array).map_or(0, Vec::len);
+    let archive = policy.contains_key("archive");
+    let small = edition == Some("standard");
+    if !small && (!archive || reviewers < 3) {
+        return Err(AI_BIG_ORG.into());
+    }
+    if small && archive && reviewers < 1 {
+        return Err(AI_ONE_REVIEWER.into());
+    }
+    Ok(())
+}
+
+const AI_MAP_LABEL: &str = "lucid-meet-org-ai-v1";
+/// The whole signed AI map.
+const AI_MAP_MAX: usize = 256 * 1024;
+const AI_MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "gateways", "channel_classes", "excluded_channels", "who_principals"];
+const AI_MAP_REQUIRED: &[&str] = &["v", "org", "seq", "issued"];
+const AI_GATEWAY_KEYS: &[&str] = &["url", "principal", "device", "spki", "region"];
+const AI_GATEWAY_REQUIRED: &[&str] = &["url", "principal", "device", "spki"];
+const AI_GATEWAYS_MAX: usize = 8;
+const AI_URL_MAX: usize = 256;
+const AI_CHANNELS_MAX: usize = 5000;
+const AI_PEOPLE_MAX: usize = 5000;
+/// Orgs whose AI maps one relay holds.
+pub const AI_MAP_ORGS_MAX: usize = 64;
+
+const AI_MAP_V: &str = "the AI map must be version 1";
+const AI_MAP_ORG_ID: &str = "the AI map's org must be 1 to 32 of a-z, 0-9 and -";
+const AI_MAP_GATEWAYS: &str = "the AI map's gateways must be 0 to 8 gateways {url, principal, device, spki}";
+const AI_MAP_URL: &str = "a gateway url must be https:// with a DNS name or IP and a port";
+const AI_MAP_PRINCIPAL: &str = "a gateway principal must be <name>@apps.<one of the policy's domains>";
+const AI_MAP_DEVICE: &str = "a gateway must be an ai app of the policy, with its device";
+const AI_MAP_SPKI: &str = "a gateway spki must be 64 lower-case hex digits";
+const AI_MAP_REGION: &str = "a gateway region must be 1 to 32 of a-z, 0-9 and -";
+const AI_MAP_NEEDS_GATEWAY: &str = "the AI map needs a gateway for the org route";
+const AI_MAP_CLASSES: &str = "channel_classes must map ch: cids to the policy's classes";
+const AI_MAP_EXCLUDED: &str = "excluded_channels must list ch: cids";
+const AI_MAP_WHO: &str = "who_principals must list people of the policy's domains, each once";
+const AI_MAP_ORG: &str = "the AI map is for another organization";
+pub const AI_MAP_NOT_NAMED: &str = "{label}'s AI map is not the one its policy names, so it was not used.";
+
+/// AI_CID_RE: `ch:[a-z0-9-]{1,64}` (a full match).
+fn ai_cid_ok(s: &str) -> bool {
+    s.strip_prefix("ch:").is_some_and(|r| (1..=64).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+}
+
+/// `[0-9a-f]{n}` as a full match.
+fn hex_full(v: &Value, n: usize) -> bool {
+    v.as_str().is_some_and(|s| !s.ends_with('\n') && hex_ok(s, n, n))
+}
+
+/// `_ai_url`: `https://` + a DNS name, IPv4 address or bracketed IPv6 address + `:port` (1 to 65535, no leading
+/// zero), nothing after it, at most 256 characters.
+fn gateway_url_ok(v: &Value) -> bool {
+    let Some(s) = v.as_str().filter(|s| s.chars().count() <= AI_URL_MAX) else { return false };
+    let Some(rest) = s.strip_prefix("https://") else { return false };
+    let Some((host, port)) = rest.rsplit_once(':') else { return false };
+    let port_ok = !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && !port.starts_with('0')
+        && port.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n));
+    if !port_ok {
+        return false;
+    }
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return inner.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    is_domain(host) || ipv4_strict(host)
+}
+
+/// Python's `ipaddress.IPv4Address`: four decimal octets, no leading zeros.
+fn ipv4_strict(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 4
+        && parts.iter().all(|p| {
+            (1..=3).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) && !(p.len() > 1 && p.starts_with('0')) && p.parse::<u16>().is_ok_and(|n| n <= 255)
+        })
+}
+
+/// `_ai_gateway_domain`: the org domain of an app principal `<name>@apps.<domain>` ("" when it is not one).
+fn gateway_domain(v: &Value) -> &str {
+    match split_value(v) {
+        Ok((local, domain)) if slug_ok(local) && local != "archive" => domain.strip_prefix(APPS_PREFIX).unwrap_or(""),
+        _ => "",
+    }
+}
+
+/// `ai_needs_gateway`: the policy's `ai` routes to the org (`org` in `order`) or the org frontier (`access` org or
+/// either).
+pub fn ai_needs_gateway(policy: &Obj) -> bool {
+    let Some(ai) = policy.get("ai").and_then(Value::as_object) else { return false };
+    let access = ai.get("frontier").and_then(|f| f.get("access")).and_then(Value::as_str);
+    ai.get("order").and_then(Value::as_array).is_some_and(|o| o.iter().any(|x| x.as_str() == Some("org"))) || matches!(access, Some("org" | "either"))
+}
+
+/// Contract AI-1 2: the AI map's field rules (Bad). With the org's `policy` also: the same org, each gateway an `ai`
+/// app of the policy (principal and device) on one of its domains, a gateway when the policy needs one,
+/// `channel_classes` values among `ai.classes` and `who_principals` inside its `domains`. A relay stores a map with
+/// the shape checks only; devices and the gateway pass the policy.
+pub fn check_ai_map(ai_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyError> {
+    let m = keys(ai_map, AI_MAP_KEYS, AI_MAP_REQUIRED, "the AI map")?;
+    canonical_json(ai_map)?;
+    if !matches!(&m["v"], Value::Number(n) if n.as_i64() == Some(1)) {
+        return Err(bad(AI_MAP_V));
+    }
+    let Some(org) = m["org"].as_str().filter(|o| slug_ok(o)) else { return Err(bad(AI_MAP_ORG_ID)) };
+    int(&m["seq"], "seq", 1, MAX_INT)?;
+    int(&m["issued"], "issued", 1, MAX_INT)?;
+    let empty_list = Value::Array(Vec::new());
+    let Some(gateways) = m.get("gateways").unwrap_or(&empty_list).as_array().filter(|g| g.len() <= AI_GATEWAYS_MAX) else {
+        return Err(bad(AI_MAP_GATEWAYS));
+    };
+    for g in gateways {
+        let ok = g.as_object().is_some_and(|o| o.keys().all(|k| AI_GATEWAY_KEYS.contains(&k.as_str())) && AI_GATEWAY_REQUIRED.iter().all(|k| o.contains_key(*k)));
+        if !ok {
+            return Err(bad(AI_MAP_GATEWAYS));
+        }
+        if !gateway_url_ok(&g["url"]) {
+            return Err(bad(AI_MAP_URL));
+        }
+        if gateway_domain(&g["principal"]).is_empty() {
+            return Err(bad(AI_MAP_PRINCIPAL));
+        }
+        if !hex_full(&g["device"], 16) {
+            return Err(bad(AI_MAP_DEVICE));
+        }
+        if !hex_full(&g["spki"], 64) {
+            return Err(bad(AI_MAP_SPKI));
+        }
+        if g.get("region").is_some_and(|r| ai_label(r).is_none()) {
+            return Err(bad(AI_MAP_REGION));
+        }
+    }
+    let urls: Vec<&Value> = gateways.iter().map(|g| &g["url"]).collect();
+    let devices: Vec<&Value> = gateways.iter().map(|g| &g["device"]).collect();
+    if has_dup(&urls) || has_dup(&devices) {
+        return Err(bad(AI_MAP_GATEWAYS));
+    }
+    let empty_obj = Value::Object(Obj::new());
+    let classes_ok = m.get("channel_classes").unwrap_or(&empty_obj).as_object().filter(|o| {
+        o.len() <= AI_CHANNELS_MAX && o.iter().all(|(k, v)| ai_cid_ok(k) && ai_label(v).is_some())
+    });
+    let Some(channel_classes) = classes_ok else { return Err(bad(AI_MAP_CLASSES)) };
+    ai_strs(Some(m.get("excluded_channels").unwrap_or(&empty_list)), 0, AI_CHANNELS_MAX, |v| v.as_str().is_some_and(ai_cid_ok))
+        .ok_or_else(|| bad(AI_MAP_EXCLUDED))?;
+    let person = |v: &Value| split_value(v).is_ok_and(|(_, d)| !d.starts_with(APPS_PREFIX));
+    let who = ai_strs(Some(m.get("who_principals").unwrap_or(&empty_list)), 0, AI_PEOPLE_MAX, person).ok_or_else(|| bad(AI_MAP_WHO))?;
+    let Some(policy) = policy else { return Ok(()) };
+    if policy.get("org").and_then(Value::as_str) != Some(org) {
+        return Err(bad(AI_MAP_ORG));
+    }
+    let domains: Vec<&str> = policy.get("domains").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    for g in gateways {
+        if !domains.contains(&gateway_domain(&g["principal"])) {
+            return Err(bad(AI_MAP_PRINCIPAL));
+        }
+        let named = policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| {
+            a.get("type").and_then(Value::as_str) == Some("ai") && a.get("principal") == Some(&g["principal"]) && a.get("device") == Some(&g["device"])
+        });
+        if !named {
+            return Err(bad(AI_MAP_DEVICE));
+        }
+    }
+    if gateways.is_empty() && ai_needs_gateway(policy) {
+        return Err(bad(AI_MAP_NEEDS_GATEWAY));
+    }
+    let classes: Vec<&Value> = policy.get("ai").and_then(|a| a.get("classes")).and_then(Value::as_array).into_iter().flatten().collect();
+    if channel_classes.values().any(|v| !classes.contains(&v)) {
+        return Err(bad(AI_MAP_CLASSES));
+    }
+    if who.iter().any(|p| !p.split_once('@').is_some_and(|(_, d)| domains.contains(&d))) {
+        return Err(bad(AI_MAP_WHO));
+    }
+    Ok(())
+}
+
+/// `check_ai_map_named`: a device uses only the map its pinned policy names (Refused).
+pub fn check_ai_map_named(policy: &Obj, map_hash: &str) -> Result<(), PolicyError> {
+    let named = policy.get("ai").and_then(|a| a.get("map_sha256")).and_then(Value::as_str);
+    if named != Some(map_hash) {
+        return Err(PolicyError::Refused(AI_MAP_NOT_NAMED.replace("{label}", &pj::s(policy, "label"))));
+    }
+    Ok(())
+}
+
+// ---- AI-1 6.4: who may use org AI ------------------------------------------------------------------------------
+
+const AI_GROUPS_KEYS: &[&str] = &["org", "provider", "records", "sso_attestation"];
+const AI_GROUP_RECORD_KEYS: &[&str] = &["principal", "listed", "read_at"];
+const AI_GROUPS_RECORDS_MAX: usize = 1000;
+const AI_ATTESTATION_MAX: usize = 16384;
+/// ID-1 `poll_minutes` + `outage_minutes` defaults (seconds).
+pub const AI_GROUPS_FRESH_S: i64 = (15 + 30) * 60;
+const AI_GROUPS_SHAPE: &str = "ai-groups must be {org, provider, records, sso_attestation}";
+const AI_GROUPS_RECORD: &str = "each record must be {principal, listed, read_at}";
+const AI_GROUPS_UNLISTED: &str = "listed may name only groups in ai.who.groups";
+const AI_GROUPS_FUTURE: &str = "read_at is in the future";
+
+/// One stored `ai-groups` record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiGroupRecord {
+    pub principal: String,
+    pub listed: Vec<String>,
+    pub read_at: i64,
+}
+
+fn same_keys(v: &Value, keys: &[&str]) -> bool {
+    v.as_object().is_some_and(|o| o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k)))
+}
+
+/// `check_ai_groups`: the records of `POST /v1/sso/c/ai-groups` to store, all or nothing. `policy`: the org's current
+/// policy; `held`: the stored `read_at` per principal. Bad (shape, 400) or Refused (the service, a principal, a
+/// `read_at` not newer than the held one, 403).
+pub fn check_ai_groups(
+    post: &Value,
+    caller_serial: &str,
+    terms: &SignerTerms,
+    policy: Option<&Obj>,
+    held: &dyn Fn(&str) -> i64,
+    now: f64,
+) -> Result<Vec<AiGroupRecord>, PolicyError> {
+    if !same_keys(post, AI_GROUPS_KEYS) {
+        return Err(bad(AI_GROUPS_SHAPE));
+    }
+    let (org, provider, records, att) = (&post["org"], &post["provider"], &post["records"], &post["sso_attestation"]);
+    let shape_ok = org.as_str().is_some_and(slug_ok)
+        && provider.as_str().is_some_and(slug_ok)
+        && att.as_str().is_some_and(|a| (1..=AI_ATTESTATION_MAX).contains(&a.chars().count()) && pj::printable(a))
+        && records.as_array().is_some_and(|r| (1..=AI_GROUPS_RECORDS_MAX).contains(&r.len()));
+    if !shape_ok {
+        return Err(bad(AI_GROUPS_SHAPE));
+    }
+    let org = org.as_str().unwrap_or_default();
+    let serial = caller_serial.to_lowercase();
+    let served: Vec<&(String, Vec<String>, Vec<String>)> =
+        terms.sso_services.iter().filter(|(s, orgs, _)| *s == serial && orgs.iter().any(|o| o == org)).collect();
+    if serial.is_empty() || served.is_empty() {
+        return Err(PolicyError::Refused(format!("this sign-in service is not registered for {org}")));
+    }
+    let service_domains: Vec<&str> = served.iter().flat_map(|(_, _, d)| d.iter().map(String::as_str)).collect();
+    let groups: Vec<&str> = policy
+        .filter(|p| p.get("org").and_then(Value::as_str) == Some(org))
+        .and_then(|p| p.get("ai"))
+        .and_then(|a| a.get("who"))
+        .and_then(|w| w.get("groups"))
+        .and_then(Value::as_array)
+        .map(|g| g.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let (Some(policy), false) = (policy, groups.is_empty()) else {
+        return Err(PolicyError::Refused(format!("{org}'s policy lists no AI groups")));
+    };
+    let mut out: Vec<AiGroupRecord> = Vec::new();
+    for rec in records.as_array().into_iter().flatten() {
+        if !same_keys(rec, AI_GROUP_RECORD_KEYS) {
+            return Err(bad(AI_GROUPS_RECORD));
+        }
+        let Some((principal, domain)) = rec["principal"].as_str().and_then(|p| split_principal(p).ok().map(|(_, d)| (p, d))) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if out.iter().any(|r| r.principal == principal) {
+            return Err(PolicyError::Bad(format!("a record names {principal} twice")));
+        }
+        if !service_domains.contains(&domain) || !covers(policy, principal) {
+            return Err(PolicyError::Refused(format!("{principal} is not a person this sign-in service serves for {org}")));
+        }
+        let Some(listed) = ai_strs(Some(&rec["listed"]), 0, AI_LIST_MAX, |x| ascii_text(x, AI_TEXT_MAX)) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if listed.iter().any(|g| !groups.contains(g)) {
+            return Err(bad(AI_GROUPS_UNLISTED));
+        }
+        let Some(read_at) = pj::as_int(Some(&rec["read_at"])).filter(|n| (1..=MAX_INT).contains(n)) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if read_at as f64 > now + SKEW as f64 {
+            return Err(bad(AI_GROUPS_FUTURE));
+        }
+        if read_at <= held(principal) {
+            return Err(PolicyError::Refused(format!("the record for {principal} is not newer than the one held")));
+        }
+        let mut sorted: Vec<String> = listed.iter().map(|s| s.to_string()).collect();
+        sorted.sort();
+        out.push(AiGroupRecord { principal: principal.to_string(), listed: sorted, read_at });
+    }
+    Ok(out)
+}
+
+/// `ai_allowed` (6.4) at answer time: `(allowed, read_at)`. Allowed when the stored `listed` meets the current
+/// policy's `who.groups` and `read_at` is at most `fresh_s` old, or when the principal is in the current AI map's
+/// `who_principals` (then `read_at` is the map's `issued`).
+pub fn ai_allowed(principal: &str, policy: Option<&Obj>, ai_map: Option<&Obj>, record: Option<&AiGroupRecord>, now: f64, fresh_s: i64) -> (bool, i64) {
+    let read_at = record.map_or(0, |r| r.read_at);
+    let Some(policy) = policy.filter(|p| p.get("ai").is_some_and(Value::is_object) && covers(p, principal)) else {
+        return (false, read_at);
+    };
+    let groups: Vec<&str> = policy["ai"].get("who").and_then(|w| w.get("groups")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    if let Some(r) = record {
+        if r.listed.iter().any(|g| groups.contains(&g.as_str())) && now - read_at as f64 <= fresh_s as f64 {
+            return (true, read_at);
+        }
+    }
+    if let Some(m) = ai_map {
+        if m.get("who_principals").and_then(Value::as_array).is_some_and(|w| w.iter().any(|p| p.as_str() == Some(principal))) {
+            return (true, pj::as_int(m.get("issued")).unwrap_or(0));
+        }
+    }
+    (false, read_at)
+}
+
+/// `lp("lucid-meet-org-ai-v1", canonical JSON of the map)` (empty JSON for a map canonical JSON refuses: every caller
+/// checks the map first).
+pub fn ai_map_bytes(ai_map: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(ai_map, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[AI_MAP_LABEL.as_bytes(), &json])
+}
+
+/// Hex SHA-256 of the AI map's signed bytes (what `ai.map_sha256` names).
+pub fn ai_map_hash(ai_map: &Obj) -> String {
+    sha256_hex(&ai_map_bytes(ai_map))
+}
+
+/// A verified signed AI map.
+#[derive(Clone, Debug)]
+pub struct VerifiedAiMap {
+    pub wire: Obj,
+    pub org: String,
+    pub seq: i64,
+    pub hash: String,
+    /// "root" or the intermediate's serial (hex).
+    pub signer: String,
+}
+
+/// A relay's or device's check of a signed AI map, as `verify` checks a policy: the root-signed signer policy, the
+/// signature by the root or the signer's current (or previous) intermediate valid at `issued` and not in the root's
+/// CRL, `check_ai_map` (with the org's `policy` when given), then an org the root assigned domains to. A device then
+/// calls `check_ai_map_named` and pins the `seq`.
+pub fn verify_ai_map(
+    wire: &Value,
+    root: &Cert,
+    signer_policy: &Obj,
+    root_crl: Option<&Crl>,
+    previous_serial: &str,
+    now: f64,
+    policy: Option<&Obj>,
+) -> Result<VerifiedAiMap, PolicyError> {
+    let w = keys(wire, WIRE_MAP_KEYS, WIRE_MAP_KEYS, "the signed AI map")?;
+    if canonical_json(wire)?.len() > AI_MAP_MAX {
+        return Err(bad("the signed AI map is larger than 256 KB"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let m = keys(&w["map"], AI_MAP_KEYS, AI_MAP_REQUIRED, "the AI map")?;
+    let issued = int(&m["issued"], "issued", 1, MAX_INT)?;
+    if issued as f64 > now + SKEW as f64 {
+        return Err(refused("the AI map is dated in the future"));
+    }
+    let sig = pj::b64_strict(&pj::py_str(&w["sig"])).ok_or("sig must be base64")?;
+    canonical_json(&w["map"])?;
+    let data = ai_map_bytes(m);
+    let chain = match &w["chain"] {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    let signer = match &inter {
+        Some(c) => check_intermediate(c, root, &terms, previous_serial, issued, root_crl)?,
+        None => "root".to_string(),
+    };
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    if !ecdsa_sha256_verified(spki, &data, &sig) {
+        return Err(refused("the AI map's signature does not verify"));
+    }
+    check_ai_map(&w["map"], policy)?;
+    let org = pj::text_of(m, "org");
+    if !terms.org_domains.contains_key(&org) {
+        return Err(refused(DOMAIN_REFUSED));
+    }
+    Ok(VerifiedAiMap { wire: w.clone(), org, seq: pj::as_int(m.get("seq")).unwrap_or(0), hash: sha256_hex(&data), signer })
+}
+
+const WIRE_MAP_KEYS: &[&str] = &["map", "sig", "chain"]; // a policy's wire has `policy` in place of `map`
+
+/// What a relay keeps (AI-1 2): per org the newest AI map and the one the org's current policy names by
+/// `ai.map_sha256` (at most 2 per org, 64 orgs).
+#[derive(Default)]
+pub struct AiMapStore {
+    pub newest: IndexMap<String, VerifiedAiMap>,
+    pub kept: IndexMap<String, IndexMap<String, VerifiedAiMap>>,
+}
+
+impl AiMapStore {
+    /// Verify and keep one signed map. `named`: the `ai.map_sha256` of the org's current policy ("" when none). A
+    /// `seq` not above the newest is refused unless it is that named map.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+        named: &str,
+    ) -> Result<VerifiedAiMap, PolicyError> {
+        let vm = verify_ai_map(wire, root, signer_policy, root_crl, previous_serial, now, None)?;
+        if let Some(held) = self.kept.get(&vm.org).and_then(|h| h.get(&vm.hash)) {
+            return Ok(held.clone());
+        }
+        match self.newest.get(&vm.org) {
+            None if !self.kept.contains_key(&vm.org) && self.kept.len() >= AI_MAP_ORGS_MAX => {
+                return Err(refused("this relay already holds the AI maps of 64 organizations"));
+            }
+            Some(cur) if vm.seq <= cur.seq && vm.hash != named => {
+                return Err(PolicyError::Refused(format!("that AI map's seq is not higher than {}", cur.seq)));
+            }
+            _ => {}
+        }
+        if self.newest.get(&vm.org).is_none_or(|cur| vm.seq > cur.seq) {
+            self.newest.insert(vm.org.clone(), vm.clone());
+        }
+        self.kept.entry(vm.org.clone()).or_default().insert(vm.hash.clone(), vm.clone());
+        self.prune(&vm.org, named);
+        Ok(vm)
+    }
+
+    /// Keep only the org's newest map and the one its current policy names.
+    pub fn prune(&mut self, org: &str, named: &str) {
+        let newest = self.newest.get(org).map(|v| v.hash.clone()).unwrap_or_default();
+        if let Some(held) = self.kept.get_mut(org) {
+            held.retain(|h, _| *h == newest || h == named);
+        }
+    }
+
+    /// `GET /v1/org/ai?org=` (the newest) or `&sha256=` (that kept map).
+    pub fn get(&self, org: &str, sha256: &str) -> Option<&VerifiedAiMap> {
+        if sha256.is_empty() {
+            self.newest.get(org)
+        } else {
+            self.kept.get(org).and_then(|h| h.get(&sha256.to_lowercase()))
+        }
+    }
+
+    /// Every kept map, by org and `seq` (what `ext["pc"]["ai_maps"]` holds).
+    pub fn persisted(&self) -> Vec<Value> {
+        let mut orgs: Vec<&String> = self.kept.keys().collect();
+        orgs.sort();
+        let mut out = Vec::new();
+        for org in orgs {
+            let mut maps: Vec<&VerifiedAiMap> = self.kept[org].values().collect();
+            maps.sort_by_key(|v| v.seq);
+            out.extend(maps.into_iter().map(|v| Value::Object(v.wire.clone())));
+        }
+        out
+    }
 }
 
 /// NT-1 section 3.9: the policy turns message previews off for the people it covers.
@@ -1039,5 +1735,106 @@ mod tests {
             assert_eq!(notify_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
         }
         assert_eq!(notify_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
+    }
+
+    // ---- AI-1: tests/vectors/ai_policy_v1.json of Meeting Hub (copied here as tests/ai_policy_v1.json) ----
+
+    const AI_VECTORS: &str = include_str!("../tests/ai_policy_v1.json");
+
+    fn verdict<T, E: std::fmt::Display>(r: Result<T, E>) -> String {
+        r.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into())
+    }
+
+    #[test]
+    fn the_ai_policy_vectors_give_the_expected_verdicts() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let sp = doc["signer_policy"].as_object().unwrap();
+        assert!(verify_signer_policy(&root, sp));
+        let terms = signer_terms(sp).unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        let mut seen = 0;
+        for c in doc["policies"].as_array().unwrap() {
+            let t = SignerTerms { enclave: c["enclave"].as_bool().unwrap(), ..terms.clone() };
+            assert_eq!(verdict(check_policy(&c["policy"], &t)), c["expect"].as_str().unwrap(), "policies/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["gates"].as_array().unwrap() {
+            let got = verdict(ai_gate(Some(&c["policy"]), c["min_client"].as_object().unwrap()));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "gates/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["editions"].as_array().unwrap() {
+            let edition = c["license"].get("edition").and_then(Value::as_str);
+            let got = verdict(ai_edition_gate(c["policy"].as_object().unwrap(), edition));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "editions/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["maps"].as_array().unwrap() {
+            let policy = c["policy"].as_object().unwrap();
+            let label = pj::s(policy, "label");
+            let got = (|| -> Result<(), PolicyError> {
+                let vm = verify_ai_map(&c["signed"], &root, sp, None, "", now, Some(policy))?;
+                check_ai_map_named(policy, &vm.hash)?;
+                // AiMapPins.apply against a pin of `pinned_seq` with another hash
+                let pinned = c["pinned_seq"].as_i64().unwrap();
+                if pinned > 0 && vm.seq < pinned {
+                    return Err(PolicyError::Refused(format!("{label}'s AI map was rolled back, so it was not used.")));
+                }
+                if pinned > 0 && vm.seq == pinned {
+                    return Err(PolicyError::Refused(format!("{label}'s AI map could not be verified: two different versions were seen.")));
+                }
+                Ok(())
+            })();
+            assert_eq!(verdict(got), c["expect"].as_str().unwrap(), "maps/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["sso_ai_groups"].as_array().unwrap() {
+            let org = c["post"].get("org");
+            let policy = c["policies"].as_array().unwrap().iter().filter_map(Value::as_object).find(|p| p.get("org") == org);
+            let stored = c["stored"].as_object().unwrap();
+            let held = |p: &str| stored.get(p).and_then(Value::as_i64).unwrap_or(0);
+            let got = verdict(check_ai_groups(&c["post"], c["caller_serial"].as_str().unwrap(), &terms, policy, &held, c["now"].as_f64().unwrap()));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "sso_ai_groups/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["allowed"].as_array().unwrap() {
+            let record = c["record"].as_object().map(|r| AiGroupRecord {
+                principal: c["principal"].as_str().unwrap().into(),
+                listed: r["listed"].as_array().unwrap().iter().map(|g| g.as_str().unwrap().to_string()).collect(),
+                read_at: r["read_at"].as_i64().unwrap(),
+            });
+            let (allowed, read_at) = ai_allowed(
+                c["principal"].as_str().unwrap(),
+                c["policy"].as_object(),
+                c["map"].as_object(),
+                record.as_ref(),
+                c["now"].as_f64().unwrap(),
+                AI_GROUPS_FRESH_S,
+            );
+            assert_eq!(json!({"allowed": allowed, "read_at": read_at}), c["expect"], "allowed/{}", c["name"]);
+            seen += 1;
+        }
+        assert!(seen > 50, "only {seen} cases");
+        assert!(doc["ai_max_bytes"].as_u64().unwrap() < 32 * 1024);
+    }
+
+    #[test]
+    fn the_ai_map_store_keeps_the_newest_and_the_named_map() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let sp = doc["signer_policy"].as_object().unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        let ok: Vec<&Value> = doc["maps"].as_array().unwrap().iter().filter(|c| c["expect"] == "ok").collect();
+        assert!(!ok.is_empty());
+        let mut store = AiMapStore::default();
+        let v = store.accept_at(&ok[0]["signed"], &root, sp, None, "", now, "").unwrap();
+        // the same map again is kept once
+        assert_eq!(store.accept_at(&ok[0]["signed"], &root, sp, None, "", now, "").unwrap().hash, v.hash);
+        assert_eq!(store.get(&v.org, "").map(|m| m.hash.clone()), Some(v.hash.clone()));
+        assert_eq!(store.get(&v.org, &v.hash.to_uppercase()).map(|m| m.seq), Some(v.seq));
+        assert!(store.get(&v.org, &"0".repeat(64)).is_none());
+        assert_eq!(store.persisted(), vec![Value::Object(v.wire.clone())]);
+        assert_eq!(ai_map_hash(v.wire["map"].as_object().unwrap()), v.hash);
     }
 }

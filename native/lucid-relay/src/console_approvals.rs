@@ -121,6 +121,8 @@ fn summary(action: &str, target: &str, params: &Value) -> String {
         "meet.holds.place" => "Place a legal hold".to_owned(),
         "meet.holds.release" => format!("Release the hold {target}"),
         "meet.release.set" => format!("Publish Lucid Meeting Hub {target}"),
+        "meet.ai.save" => format!("Save the AI settings of {target}"),
+        "meet.ai.approve" => format!("Approve the AI model card {target}"),
         _ => format!("{action} {target}"),
     }
 }
