@@ -1179,7 +1179,10 @@ impl Relay {
             return m::forbidden("sign from one of your devices");
         }
         // NT-1 section 3.9: `notify` waits until every Hub and iPhone runs the NT-1 release
-        crate::meet_org_policy::notify_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        let minimums = self.minimums(&self.release());
+        crate::meet_org_policy::notify_gate(policy, &minimums).map_err(E::Conflict)?;
+        // SD-1 13.5: `storage` waits until every Hub and iPhone runs the SD-1b release
+        crate::meet_org_policy::storage_gate(policy, &minimums).map_err(E::Conflict)?;
         let body = obj([
             ("policy", policy.cloned().unwrap_or(Value::Null)),
             ("proof", Value::from(pj::str_or(proof))),
@@ -1190,6 +1193,26 @@ impl Relay {
         self.pc_revoked(&answer, "");
         let out = self.hub.pc_take_signed(answer.get("signed"))?;
         log_info(&format!("org_policy_signed org={} seq={} by={}", pj::s(&out, "org"), pj::as_int(out.get("seq")).unwrap_or(0), who.principal));
+        Ok(out)
+    }
+
+    /// `POST /v1/org/storage/sign {session, map, proof, ts}` (SD-1 13.5): an org admin's device asks the signer
+    /// (`sign_org_storage` with the caller's certificate); the signed map is kept and answered `{org, seq, hash,
+    /// signed}`.
+    pub fn sd_sign_storage(&self, session: &str, who: &Identity, storage_map: Option<&Value>, proof: Option<&Value>, ts: Option<&Value>) -> R<Obj> {
+        self.hub.check_session(session, who)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("sign from one of your devices");
+        }
+        let body = obj([
+            ("map", storage_map.cloned().unwrap_or(Value::Null)),
+            ("proof", Value::from(pj::str_or(proof))),
+            ("ts", proof_ts(ts)),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+        ]);
+        let answer = self.pc_call("sign_org_storage", &body)?;
+        let out = self.hub.sd_storage_take_signed(answer.get("signed"))?;
+        log_info(&format!("org_storage_signed org={} seq={} by={}", pj::s(&out, "org"), pj::as_int(out.get("seq")).unwrap_or(0), who.principal));
         Ok(out)
     }
 

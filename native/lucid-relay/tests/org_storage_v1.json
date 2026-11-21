@@ -1,0 +1,4529 @@
+{
+ "gate_cases": [
+  {
+   "expect": "Storage rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {},
+   "name": "no_minimums",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   }
+  },
+  {
+   "expect": "Storage rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {
+    "hub": "0.98.0"
+   },
+   "name": "hub_only",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   }
+  },
+  {
+   "expect": "Storage rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.97.9"
+   },
+   "name": "ios_below",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.98.0"
+   },
+   "name": "both_at_release",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "1.0.0",
+    "ios": "0.98.1"
+   },
+   "name": "both_above",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "min_client": {},
+   "name": "no_storage_no_gate",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "v": 1
+   }
+  }
+ ],
+ "map_cases": [
+  {
+   "expect": "ok",
+   "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+   "name": "root_signed",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCICS7PXPBR4hLhqVV9zY67cGORudAkI/Tf2lwGuLrVFrlAiBNU3XIUtnpgg4kF4p7ut2QrWh1I3Sr1f5j+htHPzbzLw=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+   "name": "intermediate_signed",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBlTCCATqgAwIBAgICIAEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5MzEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARCSy+nmhtd\nD8T1aIcjUI0vynPDg5SF+8Z6UHOst+uRASE7sYRB+hAmP+4aqsPL01hm1qL2kgzQ\nQK50S8bcIHVZo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBTYZRn0PY3Ar5fMQCVTS70NmFrwvzAKBggqhkjOPQQDAgNJ\nADBGAiEA8XPkbQyCvogtLSWecgRFJNgS/OnKZh7EmGN4/fW/UPYCIQC5wzK8Wb61\nUb3LaRuOsp00hCEdSphAdaDX22LX3WojFA==\n-----END CERTIFICATE-----\n"
+    ],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCID/Z/VKs0Q4JW2U7vj7/F4plx9VMmFR1IgT5kqSWsrVLAiBCexTEtREMIzz99DskKkVhf7LllLBbpRR+uN4hhg1Q1g=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "2001",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQD+ICAFul3CsX/YFZ6wAMJbaLoD1PeAjfBQIYa6fvibugIgJO73NosJjZBAV7Sa47W41FiRBRQ2tACJdh9RTlBYvDQ=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the storage map's signature does not verify",
+   "name": "edited_after_signing",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "other-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEYCIQDuzfDicjhU5wnoiEEFTAlaNWChq4AV1OKeWNIdy9xl3AIhAMrs93SOuM+UJt/KsA1bdoaMFGcC6qHlyfjbkSUBNIBa"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "an end-entity certificate never signs a policy",
+   "name": "person_certificate_signed",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBnjCCAUOgAwIBAgICMAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjYxMjA2\nMjEyMDAwWjATMREwDwYDVQQDDAhBbm4gQWJsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABKrWxaUJXDSgmkFeCnc3VaJLiHfSmbaPtO+D5OWUCWFBS7HkawlLWnGs\nmn6QzLmUXPoCRek2HbxysJ1P19SfDi+jcjBwMAwGA1UdEwEB/wQCMAAwPwYDVR0R\nBDgwNoEMYW5uQGFjbWUuY29thiZ1cm46bHVjaWQtbWVldDpkZXZpY2U6YTFhMWEx\nYTFhMWExYTFhMTAfBgNVHSMEGDAWgBTYZRn0PY3Ar5fMQCVTS70NmFrwvzAKBggq\nhkjOPQQDAgNJADBGAiEAm6WV4gTyhHtjUdMrpiUhagETIDW38K66G4nBpbC7bK8C\nIQCBPRm9WJiqAOiuJ2x1KH1D2YC+lvlJM+vxiyG1IIvTQA==\n-----END CERTIFICATE-----\n"
+    ],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCIFi5KKf1FciuldZq17vJEIvJT1xUJCOc2VW238jSMhJcAiBy7wJeDRFbeZZ6eTo+6DZyfd2lTisHAqwR4Ts6CVAWcQ=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "3000",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWrevk4UGO1jaa/Eh0ppx6auBi9x/6+SsIsOTQQZYjfwIgWdPt1lYYsbzMHBctS+enlB/xs50Nuc+RF7UGLJxPl3g=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the policy's signing certificate was revoked",
+   "name": "revoked_intermediate",
+   "signed": {
+    "chain": [
+     "-----BEGIN CERTIFICATE-----\nMIIBlTCCATqgAwIBAgICIAMwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NTEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQyAN2T19mp\need1nDEyuh2YzoVXqZ72mJjZscxICGaejxYA0LeWBmsShMtzccXpjuHRV7B6IPyH\nVKHJHquBZ6BCo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBTYZRn0PY3Ar5fMQCVTS70NmFrwvzAKBggqhkjOPQQDAgNJ\nADBGAiEA1Iq0HtxvujNVlRiEHE4cY8pMbPsuTtntiGZXyGHO9ocCIQD0xxa1IvUd\nR7AAQhlgXYj0ooxlLeK1qWzemb1Box59Yg==\n-----END CERTIFICATE-----\n"
+    ],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQDn9JfRDFz96pq7LBixpFNJPERSawT4XradRF213+LVVwIgfnpEaj8OouD5wj1s8+y01UmGS0zR22c9o9bVwuU4JR4="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "intermediate_serial": "2003",
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEQCIH2hE00gAbDEXqovTS42DiwAjcTtGc1ursdyAgyx9Vp2AiBuaJaV+iTrZylREm2PMRpcVIzNMLpemGf3P4w3QZ0N8A==",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the storage map is dated in the future",
+   "name": "dated_in_the_future",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794003900,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCIAtHaIXkqrGU1k5pjnmThtev2EaifcRIURTchU0q8G2LAiBzAtjCPoCPNvksNGarbII8apnUzwJnnJHLc31Wanitlw=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "that domain is not assigned to this organization",
+   "name": "org_without_domains",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "gamma",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEYCIQCIw1SafdrRHxenYBlbndmjisSOTPxikNt015ZIjqD1wgIhAMFcbWtErcly+/NzOMiyZTF+RvO7Js1N+NMjD9zfrXY5"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "the storage map has unknown fields: quota",
+   "name": "unknown_map_key",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "quota": 1,
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIBoaHujpdbquru0ivoHq4JxOgS/R3fYtXD0UPo73hyRbAiEA/h2jNJXre2KXHeBftyp/rgdvwGaEfY/hzjw+UeCg6/k="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage connectors are not available on this relay yet",
+   "name": "connector_set",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {
+        "device": "c4c4c4c4c4c4c4c4",
+        "principal": "storage@apps.acme.com",
+        "url": "https://connector.acme.internal:9443"
+       },
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCICFBcVs/ANYpbE5Qs0KWDOiMkVKS1M5ZjPtsUL/d/cfIAiEAwfVBG2bqeT2OcP6vu+LnD2RkdrSrTpFF9vTiih+Uk0I="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-bucket.connector.url must be an https:// origin",
+   "name": "connector_not_https",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {
+        "device": "c4c4c4c4c4c4c4c4",
+        "principal": "storage@apps.acme.com",
+        "url": "http://connector.acme.internal"
+       },
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCIFMRkfvmtMr9yHPOhUX9VgH0EeX9YQrNAc4m7wVxXR7QAiBojw2PtUlHcbgL4y/74ZjiZnfidXmZ2t2GiwvQqJfxQg=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-bucket.connector.principal must be storage@apps.<one of the policy's domains>",
+   "name": "connector_not_a_storage_app",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {
+        "device": "c4c4c4c4c4c4c4c4",
+        "principal": "files@apps.acme.com",
+        "url": "https://connector.acme.internal:9443"
+       },
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEQCIHlrD8nBYN9gwRxN4fqY30nh6OnGUdohHd9pZc/HAdrXAiA+baoPzLfUyIHKlAV6koc2swZ4TLz1ZDBdzTv5hVORmw=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "microsoft (client_id and tenant) is required for a sharepoint place",
+   "name": "sharepoint_without_microsoft",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQCawCp3nsCPv38cJLWInXOvwSk93vPvp1KR+ocb8312HQIgJw8ykW2qWcWfu7Bx+DrtNKUyxFLHj9y8dR30PU8KfrU="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "microsoft.tenant must be a lower-case GUID",
+   "name": "tenant_upper_case",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCICFwmago0H2IS2oSkh/Sxu2SXk1CtRzPRohhK49v+e2aAiEA5eI0JBbvzisnPYuxCPKXoCULznkpoMzBuRHwxsMJmVg="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "microsoft.tenant cannot be the personal Microsoft accounts tenant",
+   "name": "personal_accounts_tenant",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "9188040d-6c67-4c5b-b112-36a304b66dad"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQDT9f/JIVs9K9Ci/CcCQj0ZtWkktaHzdZQLqQRnmr2peQIgQjVA2Qadge/vTKk1kekSA71BYo2VKvuOhXFPqkluoI4="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.onedrive: onedrive is a built-in place id",
+   "name": "builtin_place_id",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "onedrive",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIHiZvZ43lA0pTKbdajBH5YD2JUWA0Y3gEbHmA6liffrfAiEAzIYqKm3xcfuEZEyONjGgMf+gsmnT9sGoAicAZxUsUpE="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places lists acme-nas twice",
+   "name": "place_twice",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "other-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEYCIQD7k6zQEyImpjulBmmNXvgs85ks7jggizFLHc2LD1IwPgIhAKHKFBr+EUD44vjlxQdJgH+4qXMSjcYGUpnfhdxvJbc0"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-box.provider must be one of sharepoint, gdrive, dropbox, s3, relay_share",
+   "name": "provider_unknown",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-box",
+       "provider": "box",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEYCIQCC4RjEYW7axH15sFAn7VkCW08Nk78i2jYFb3twQ1fvgAIhAJOcY0Gis/hnQ81yehHV5mo3meOQSWgikiJ9lriauzY4"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-bucket.kms_key is needed with sse kms, and only then",
+   "name": "kms_without_key",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQDrjggRs3aBLHxljhWEYJtDanXDFAnuZi5pziHMf1roOAIgZPo179mR1iQC8j634qNyCUEIO/FPMebtMchlSaN5ViM="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-bucket.endpoint must be an https:// origin",
+   "name": "endpoint_with_a_path",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.example.com/acme",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQCorFQjxxWkS6lksUcj8poJutC+31tKuCzwcXiNB9H7AAIgaAiTcrVk1jl8Nl6GNfLQhcE7LNyjzsVB4b2fcAF8jgY="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places.acme-nas.folder must not hold a .. segment",
+   "name": "folder_with_dot_dot",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "channels": {
+        "c0ffee00c0ffee00c0ffee00c0ffee00": {
+         "channel": "19:general@thread.tacv2",
+         "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+        }
+       },
+       "connector": {},
+       "groups": {
+        "0f0f0f0f-1111-4222-8333-444444444444": {
+         "drive": "b!acmeDriveId",
+         "folder": "Lucid Meet",
+         "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+        }
+       },
+       "id": "acme-team-sites",
+       "provider": "sharepoint",
+       "site": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      {
+       "bucket": "acme-meetings",
+       "connector": {},
+       "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+       "id": "acme-bucket",
+       "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+       "prefix": "lucid",
+       "provider": "s3",
+       "region": "us-gov-west-1",
+       "sse": "kms"
+      },
+      {
+       "folder": "meetings/../other",
+       "id": "acme-nas",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEUCIQCEhOUl4hLJJ2FaFr9O4I5AkzYbL7BYCvfnX2rtkRBHLwIgCBjdxH1fcZ4NcEiyqzJL+iPKnSnwT+QRrVYpdQH13S0="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "places must be a list of 0 to 64 entries",
+   "name": "too_many_places",
+   "signed": {
+    "chain": [],
+    "map": {
+     "issued": 1794000000,
+     "microsoft": {
+      "client_id": "11111111-2222-4333-8444-555555555555",
+      "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+     },
+     "org": "acme",
+     "places": [
+      {
+       "id": "share-0",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-1",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-2",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-3",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-4",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-5",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-6",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-7",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-8",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-9",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-10",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-11",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-12",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-13",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-14",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-15",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-16",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-17",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-18",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-19",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-20",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-21",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-22",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-23",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-24",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-25",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-26",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-27",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-28",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-29",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-30",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-31",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-32",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-33",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-34",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-35",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-36",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-37",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-38",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-39",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-40",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-41",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-42",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-43",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-44",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-45",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-46",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-47",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-48",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-49",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-50",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-51",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-52",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-53",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-54",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-55",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-56",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-57",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-58",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-59",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-60",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-61",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-62",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-63",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      },
+      {
+       "id": "share-64",
+       "provider": "relay_share",
+       "share": "acme-nas"
+      }
+     ],
+     "seq": 3,
+     "v": 1
+    },
+    "sig": "MEYCIQCMciqCsyNo2qz/xma2udrNh5y6VJkQcgWN9/6tccUJiAIhALagoBd7oMdByE5Ba3yibIsrphxEvMPhmiZrREJwOHN9"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  }
+ ],
+ "now": 1794000300,
+ "pair_cases": [
+  {
+   "expect": "ok",
+   "map": {
+    "issued": 1794000000,
+    "microsoft": {
+     "client_id": "11111111-2222-4333-8444-555555555555",
+     "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    },
+    "org": "acme",
+    "places": [
+     {
+      "channels": {
+       "c0ffee00c0ffee00c0ffee00c0ffee00": {
+        "channel": "19:general@thread.tacv2",
+        "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+       }
+      },
+      "connector": {},
+      "groups": {
+       "0f0f0f0f-1111-4222-8333-444444444444": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      "id": "acme-team-sites",
+      "provider": "sharepoint",
+      "site": {
+       "drive": "b!acmeDriveId",
+       "folder": "Lucid Meet",
+       "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+      }
+     },
+     {
+      "bucket": "acme-meetings",
+      "connector": {},
+      "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+      "id": "acme-bucket",
+      "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+      "prefix": "lucid",
+      "provider": "s3",
+      "region": "us-gov-west-1",
+      "sse": "kms"
+     },
+     {
+      "id": "acme-nas",
+      "provider": "relay_share",
+      "share": "acme-nas"
+     }
+    ],
+    "seq": 3,
+    "v": 1
+   },
+   "name": "fits",
+   "storage": {
+    "cloud": "global",
+    "expire_days": {
+     "recording": 120,
+     "transcript": 120
+    },
+    "form": {
+     "chat_file": "sealed",
+     "notes": "sealed",
+     "recording": "plain",
+     "transcript": "plain"
+    },
+    "group": {
+     "recording": "acme-team-sites",
+     "transcript": "acme-team-sites"
+    },
+    "keep_local_days": 7,
+    "labels": {
+     "acme-nas": "Acme NAS",
+     "acme-team-sites": "Acme SharePoint"
+    },
+    "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+    "own": {
+     "notes": "onedrive",
+     "recording": "onedrive",
+     "transcript": "onedrive"
+    },
+    "people_choose": [
+     "notes",
+     "export"
+    ],
+    "providers": [
+     "onedrive",
+     "sharepoint",
+     "relay_share",
+     "local",
+     "synced_folder"
+    ]
+   }
+  },
+  {
+   "expect": "storage.group.recording: acme-files is not a place of the storage map",
+   "map": {
+    "issued": 1794000000,
+    "microsoft": {
+     "client_id": "11111111-2222-4333-8444-555555555555",
+     "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    },
+    "org": "acme",
+    "places": [
+     {
+      "channels": {
+       "c0ffee00c0ffee00c0ffee00c0ffee00": {
+        "channel": "19:general@thread.tacv2",
+        "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+       }
+      },
+      "connector": {},
+      "groups": {
+       "0f0f0f0f-1111-4222-8333-444444444444": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      "id": "acme-team-sites",
+      "provider": "sharepoint",
+      "site": {
+       "drive": "b!acmeDriveId",
+       "folder": "Lucid Meet",
+       "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+      }
+     },
+     {
+      "bucket": "acme-meetings",
+      "connector": {},
+      "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+      "id": "acme-bucket",
+      "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+      "prefix": "lucid",
+      "provider": "s3",
+      "region": "us-gov-west-1",
+      "sse": "kms"
+     },
+     {
+      "id": "acme-nas",
+      "provider": "relay_share",
+      "share": "acme-nas"
+     }
+    ],
+    "seq": 3,
+    "v": 1
+   },
+   "name": "named_place_not_in_map",
+   "storage": {
+    "cloud": "global",
+    "expire_days": {
+     "recording": 120,
+     "transcript": 120
+    },
+    "form": {
+     "chat_file": "sealed",
+     "notes": "sealed",
+     "recording": "plain",
+     "transcript": "plain"
+    },
+    "group": {
+     "recording": "acme-files"
+    },
+    "keep_local_days": 7,
+    "labels": {
+     "acme-files": "Acme Files"
+    },
+    "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+    "own": {
+     "notes": "onedrive",
+     "recording": "onedrive",
+     "transcript": "onedrive"
+    },
+    "people_choose": [
+     "notes",
+     "export"
+    ],
+    "providers": [
+     "onedrive",
+     "sharepoint",
+     "relay_share",
+     "local",
+     "synced_folder"
+    ]
+   }
+  },
+  {
+   "expect": "storage.group.recording: the provider of acme-team-sites is not in storage.providers",
+   "map": {
+    "issued": 1794000000,
+    "microsoft": {
+     "client_id": "11111111-2222-4333-8444-555555555555",
+     "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    },
+    "org": "acme",
+    "places": [
+     {
+      "channels": {
+       "c0ffee00c0ffee00c0ffee00c0ffee00": {
+        "channel": "19:general@thread.tacv2",
+        "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+       }
+      },
+      "connector": {},
+      "groups": {
+       "0f0f0f0f-1111-4222-8333-444444444444": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      "id": "acme-team-sites",
+      "provider": "sharepoint",
+      "site": {
+       "drive": "b!acmeDriveId",
+       "folder": "Lucid Meet",
+       "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+      }
+     },
+     {
+      "bucket": "acme-meetings",
+      "connector": {},
+      "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+      "id": "acme-bucket",
+      "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+      "prefix": "lucid",
+      "provider": "s3",
+      "region": "us-gov-west-1",
+      "sse": "kms"
+     },
+     {
+      "id": "acme-nas",
+      "provider": "relay_share",
+      "share": "acme-nas"
+     }
+    ],
+    "seq": 3,
+    "v": 1
+   },
+   "name": "provider_outside_providers",
+   "storage": {
+    "cloud": "global",
+    "expire_days": {
+     "recording": 120,
+     "transcript": 120
+    },
+    "form": {
+     "chat_file": "sealed",
+     "notes": "sealed",
+     "recording": "plain",
+     "transcript": "plain"
+    },
+    "group": {
+     "recording": "acme-team-sites",
+     "transcript": "acme-team-sites"
+    },
+    "keep_local_days": 7,
+    "labels": {
+     "acme-nas": "Acme NAS",
+     "acme-team-sites": "Acme SharePoint"
+    },
+    "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+    "own": {
+     "notes": "onedrive",
+     "recording": "onedrive",
+     "transcript": "onedrive"
+    },
+    "people_choose": [
+     "notes",
+     "export"
+    ],
+    "providers": [
+     "onedrive",
+     "relay_share"
+    ]
+   }
+  },
+  {
+   "expect": "storage.labels.acme-old is not a place of the storage map",
+   "map": {
+    "issued": 1794000000,
+    "microsoft": {
+     "client_id": "11111111-2222-4333-8444-555555555555",
+     "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    },
+    "org": "acme",
+    "places": [
+     {
+      "channels": {
+       "c0ffee00c0ffee00c0ffee00c0ffee00": {
+        "channel": "19:general@thread.tacv2",
+        "team": "8c6b5a1e-0000-4000-8000-00000000000a"
+       }
+      },
+      "connector": {},
+      "groups": {
+       "0f0f0f0f-1111-4222-8333-444444444444": {
+        "drive": "b!acmeDriveId",
+        "folder": "Lucid Meet",
+        "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+       }
+      },
+      "id": "acme-team-sites",
+      "provider": "sharepoint",
+      "site": {
+       "drive": "b!acmeDriveId",
+       "folder": "Lucid Meet",
+       "site": "acme.sharepoint.com,5c0d6a1e-0000-4000-8000-000000000001,5c0d6a1e-0000-4000-8000-000000000002"
+      }
+     },
+     {
+      "bucket": "acme-meetings",
+      "connector": {},
+      "endpoint": "https://s3.us-gov-west-1.amazonaws.com",
+      "id": "acme-bucket",
+      "kms_key": "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/acme",
+      "prefix": "lucid",
+      "provider": "s3",
+      "region": "us-gov-west-1",
+      "sse": "kms"
+     },
+     {
+      "id": "acme-nas",
+      "provider": "relay_share",
+      "share": "acme-nas"
+     }
+    ],
+    "seq": 3,
+    "v": 1
+   },
+   "name": "label_of_no_place",
+   "storage": {
+    "cloud": "global",
+    "expire_days": {
+     "recording": 120,
+     "transcript": 120
+    },
+    "form": {
+     "chat_file": "sealed",
+     "notes": "sealed",
+     "recording": "plain",
+     "transcript": "plain"
+    },
+    "group": {
+     "recording": "acme-team-sites",
+     "transcript": "acme-team-sites"
+    },
+    "keep_local_days": 7,
+    "labels": {
+     "acme-old": "Old NAS",
+     "acme-team-sites": "Acme SharePoint"
+    },
+    "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+    "own": {
+     "notes": "onedrive",
+     "recording": "onedrive",
+     "transcript": "onedrive"
+    },
+    "people_choose": [
+     "notes",
+     "export"
+    ],
+    "providers": [
+     "onedrive",
+     "sharepoint",
+     "relay_share",
+     "local",
+     "synced_folder"
+    ]
+   }
+  },
+  {
+   "expect": "the storage map needs microsoft (client_id and tenant) for onedrive",
+   "map": {
+    "issued": 1794000000,
+    "org": "acme",
+    "places": [
+     {
+      "id": "acme-nas",
+      "provider": "relay_share",
+      "share": "acme-nas"
+     }
+    ],
+    "seq": 4,
+    "v": 1
+   },
+   "name": "onedrive_needs_microsoft",
+   "storage": {
+    "cloud": "global",
+    "expire_days": {
+     "recording": 120,
+     "transcript": 120
+    },
+    "form": {
+     "chat_file": "sealed",
+     "notes": "sealed",
+     "recording": "plain",
+     "transcript": "plain"
+    },
+    "group": {
+     "recording": "acme-nas"
+    },
+    "keep_local_days": 7,
+    "labels": {
+     "acme-nas": "Acme NAS"
+    },
+    "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+    "own": {
+     "notes": "onedrive",
+     "recording": "onedrive",
+     "transcript": "onedrive"
+    },
+    "people_choose": [
+     "notes",
+     "export"
+    ]
+   }
+  }
+ ],
+ "policy_cases": [
+  {
+   "expect": "ok",
+   "name": "storage_full",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme NAS",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "storage_empty",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "storage_builtins_only",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "own": {
+      "notes": "local"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "label_letters_digits_marks",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme NAS",
+      "acme-team-sites": "\u00c9quipe (Paris) & Co.'s-sites 2"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "cloud_matches_the_entra_provider",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "usgov-high"
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "identity_providers": [
+     {
+      "allowed_domains": [
+       "acme.com"
+      ],
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/v2.0",
+      "kind": "entra",
+      "org": "acme",
+      "sso_serial": "ab12"
+     }
+    ],
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEQCIA7A0mpUeSVER3HAiLfAOClTawnAAQKy4VqNvco+L9CmAiA4pLX29uajc1QrwCwm2LcAUCsb8XqrTItTz+tXTjF86w==",
+    "sso": {},
+    "sso_services": [
+     {
+      "domains": [
+       "acme.com"
+      ],
+      "orgs": [
+       "acme"
+      ],
+      "serial": "ab12"
+     }
+    ],
+    "v": 3
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "notify_previews_off",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "notify": {
+     "previews": "off"
+    },
+    "org": "acme",
+    "seq": 7,
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "notify must be {\"previews\": \"off\"}",
+   "name": "notify_other_value",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "notify": {
+     "previews": "on"
+    },
+    "org": "acme",
+    "seq": 7,
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "sharing rules are not available on this relay yet",
+   "name": "sharing_refused",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "sharing": {
+     "link_default": "org"
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage has unknown fields: quota",
+   "name": "unknown_storage_key",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "quota": 1
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.providers may list only onedrive, sharepoint, gdrive, dropbox, s3, relay_share, local, synced_folder",
+   "name": "provider_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "providers": [
+      "box"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.providers lists an entry twice",
+   "name": "provider_twice",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "providers": [
+      "local",
+      "local"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.own has unknown fields: video",
+   "name": "own_unknown_kind",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "own": {
+      "video": "local"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.own.notes must be a place id (1 to 32 of a-z, 0-9 and -)",
+   "name": "own_bad_place_id",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "own": {
+      "notes": "Acme NAS"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.own.notes: onedrive is not in storage.providers",
+   "name": "own_builtin_outside_providers",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "own": {
+      "notes": "onedrive"
+     },
+     "providers": [
+      "local"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels needs a label for acme-nas",
+   "name": "map_place_without_label",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "group": {
+      "recording": "acme-nas"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0"
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.map_sha256 is required when own or group names a map place",
+   "name": "map_place_without_map_sha256",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "group": {
+      "recording": "acme-nas"
+     },
+     "labels": {
+      "acme-nas": "Acme NAS"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas must not contain Unicode format characters",
+   "name": "label_bidi_override",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme\u202eSAN",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas must not contain Unicode format characters",
+   "name": "label_zero_width",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme\u200bNAS",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas must be 1 to 64 characters",
+   "name": "label_too_long",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas must be 1 to 64 characters",
+   "name": "label_empty",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas may hold only letters, digits, spaces and .,()&'-",
+   "name": "label_symbol",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme NAS!",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.acme-nas may hold only letters, digits, spaces and .,()&'-",
+   "name": "label_tab",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "global",
+     "expire_days": {
+      "recording": 120,
+      "transcript": 120
+     },
+     "form": {
+      "chat_file": "sealed",
+      "notes": "sealed",
+      "recording": "plain",
+      "transcript": "plain"
+     },
+     "group": {
+      "recording": "acme-team-sites",
+      "transcript": "acme-team-sites"
+     },
+     "keep_local_days": 7,
+     "labels": {
+      "acme-nas": "Acme\tNAS",
+      "acme-team-sites": "Acme SharePoint"
+     },
+     "map_sha256": "51fc30f900e088ba6b67e64ac588f31a478b71f7f8bc5991237aa4dc8faa78d0",
+     "own": {
+      "notes": "onedrive",
+      "recording": "onedrive",
+      "transcript": "onedrive"
+     },
+     "people_choose": [
+      "notes",
+      "export"
+     ],
+     "providers": [
+      "onedrive",
+      "sharepoint",
+      "relay_share",
+      "local",
+      "synced_folder"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.labels.Acme must be a place id (1 to 32 of a-z, 0-9 and -)",
+   "name": "label_key_not_a_place_id",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "labels": {
+      "Acme": "Acme"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.people_choose may list only recording, audio, transcript, notes, attendance, chat_file, canvas, slides, export",
+   "name": "people_choose_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "people_choose": [
+      "video"
+     ]
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.form.notes must be sealed or plain",
+   "name": "form_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "form": {
+      "notes": "open"
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.keep_local_days must be a whole number from -1 to 3650",
+   "name": "keep_local_days_below",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "keep_local_days": -2
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.keep_local_days must be a whole number from -1 to 3650",
+   "name": "keep_local_days_above",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "keep_local_days": 3651
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.expire_days.recording must be a whole number from 1 to 3650",
+   "name": "expire_days_zero",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "expire_days": {
+      "recording": 0
+     }
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.cloud must be global, usgov-high or usgov-dod",
+   "name": "cloud_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "cloud": "public"
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "storage.cloud must be usgov-high, the cloud of Acme's Microsoft sign-in",
+   "name": "cloud_differs_from_the_entra_provider",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {},
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "identity_providers": [
+     {
+      "allowed_domains": [
+       "acme.com"
+      ],
+      "cloud": "usgov-high",
+      "id": "entra",
+      "iss": "https://login.microsoftonline.us/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/v2.0",
+      "kind": "entra",
+      "org": "acme",
+      "sso_serial": "ab12"
+     }
+    ],
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEQCIA7A0mpUeSVER3HAiLfAOClTawnAAQKy4VqNvco+L9CmAiA4pLX29uajc1QrwCwm2LcAUCsb8XqrTItTz+tXTjF86w==",
+    "sso": {},
+    "sso_services": [
+     {
+      "domains": [
+       "acme.com"
+      ],
+      "orgs": [
+       "acme"
+      ],
+      "serial": "ab12"
+     }
+    ],
+    "v": 3
+   }
+  },
+  {
+   "expect": "storage.map_sha256 must be 64 lower-case hex digits",
+   "name": "map_sha256_upper_case",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "seq": 7,
+    "storage": {
+     "map_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "v": 1
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQDWbmJcm5mkrt/R8nkI0xnVsYtlsbIs+xOOwBJSWi0/ggIgXFJ6i4irwRrrymzNkKsU4gP8+Hu7d0oTfn5oqwS5tfA=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  }
+ ],
+ "root_crl_pem": "-----BEGIN X509 CRL-----\nMIHGMG4CAQEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEO\nMAwGA1UECgwFTHVjaWQXDTI2MTEwNjIxMTkwMFoXDTI3MDMwNjIxMjAwMFowFTAT\nAgIgAxcNMjYxMTA2MjExOTAwWjAKBggqhkjOPQQDAgNIADBFAiBG5UVeWXG4LxcA\n+TwKarCYZ2hNS4zKnZbiDuXY3nbNuAIhAOyA0z8RM8phyFEA9NwAe6Q7zeKtip5n\ngFkirA+CXGgD\n-----END X509 CRL-----\n",
+ "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhDCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNe0IQk5MIfrVrPp8a2cU6ngYGP7\nlePNZUQ2XplNtQCfBWH+LlsMx39LCxvO9bAHrs875+lILm+6+FP9u9gzyRqjRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBTY\nZRn0PY3Ar5fMQCVTS70NmFrwvzAKBggqhkjOPQQDAgNHADBEAiBkVt0fDhuidlpu\nwO0pWOuwXcp541xnKjm9kHX8pQMtmAIgI1MJRMUay2A27pVOki4FAE6+/6Mj7hiQ\nKLCEy9qqNvs=\n-----END CERTIFICATE-----\n",
+ "v": 1
+}

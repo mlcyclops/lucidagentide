@@ -4,8 +4,9 @@
 // from the signed policies, legal holds (`/v1/admin/holds`, the hold store and its hash-chained audit), the SSO
 // service's asks and pending adds, and the enclave. A child module of meet_hub: it shares the hub's one lock. Persisted
 // in state.json as the Python keeps it: `ext["pc"]` = {v, policies: [signed], holds, kept, sso, adds, docs,
-// signer_policy, audit}; the hold store is state_dir/holds (a temporary folder without a state folder), app icons
-// state_dir/app-icons/<sha256>.png (in memory without a state folder).
+// signer_policy, audit, maps: [signed storage maps] (SD-1 13.5, `/v1/org/storage`)}; the hold store is
+// state_dir/holds (a temporary folder without a state folder), app icons state_dir/app-icons/<sha256>.png (in
+// memory without a state folder).
 
 use super::*;
 use crate::meet_org_policy as op;
@@ -70,6 +71,10 @@ pub(crate) const SIGNER_CRL_AGE: f64 = 6.0 * 3600.0;
 pub(crate) const CRL_CHECK_EVERY: f64 = 3600.0;
 /// A 64 KB signed policy and its request.
 pub(crate) const POLICY_BODY_MAX: usize = 128 * 1024;
+/// SD-1 13.5: a 256 KB signed storage map and its request (`/v1/org/storage`, `/v1/org/storage/sign`).
+pub(crate) const MAP_BODY_MAX: usize = 320 * 1024;
+/// Every refused or missing `GET /v1/org/storage`.
+const SD_NOT_FOUND: &str = "not found";
 pub(crate) const ICON_MAX: usize = 64 * 1024;
 const ICON_DIR: &str = "app-icons";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -431,6 +436,8 @@ pub struct Pc {
     crl_files: Vec<PathBuf>,
     minimums: Option<Minimums>,
     store: Option<op::Store>,
+    /// SD-1 13.5: the org storage maps (rebuilt from `ext["pc"]["maps"]` like the policy store).
+    maps: Option<op::MapStore>,
     signer: Option<Arc<SignerClient>>,
     sso_out: IndexMap<String, SsoOut>,
     sso_answered: HashMap<(String, String), f64>,
@@ -449,6 +456,7 @@ impl Pc {
             crl_files: Vec::new(),
             minimums: None,
             store: None,
+            maps: None,
             signer: None,
             sso_out: IndexMap::new(),
             sso_answered: HashMap::new(),
@@ -470,6 +478,7 @@ impl Hub {
         let root_part = crl_parts(s).map(|(root, _)| root);
         st.pc.crl_files = [(!s.crl.is_empty()).then(|| PathBuf::from(&s.crl)), root_part, crl_path(s)].into_iter().flatten().collect();
         st.pc.store = None;
+        st.pc.maps = None;
         st.pc.signer = self.signer.clone();
     }
 
@@ -502,7 +511,7 @@ impl State {
             self.ext.insert("pc".into(), Value::Object(obj([("v", Value::from(1))])));
         }
         let part = self.ext.get_mut("pc").and_then(Value::as_object_mut).expect("ext pc");
-        for (key, list) in [("policies", true), ("holds", true), ("kept", false), ("sso", false), ("adds", true), ("docs", false)] {
+        for (key, list) in [("policies", true), ("holds", true), ("kept", false), ("sso", false), ("adds", true), ("docs", false), ("maps", true)] {
             let ok = match part.get(key) {
                 Some(Value::Array(_)) => list,
                 Some(Value::Object(_)) => !list,
@@ -670,6 +679,7 @@ impl State {
         log_info(&format!("signer policy taken v={} issued={}", kv_of(policy.get("v")), kv_of(policy.get("issued"))));
         self.pc_part().insert("signer_policy".into(), Value::Object(policy));
         self.pc.store = None;
+        self.pc.maps = None; // and every storage map
         self.dirty = true;
         Ok(true)
     }
@@ -690,11 +700,92 @@ impl State {
         }
         let kept: Vec<Value> = store.by_hash.values().cloned().map(Value::Object).collect();
         self.pc_part().insert("policies".into(), Value::Array(kept));
+        // SD-1 13.5: the org's maps are its newest and the one this policy names
+        if self.pc.maps.as_ref().is_some_and(|m| m.kept.contains_key(&v.org)) {
+            let named = self.sd_named(&v.org);
+            if let Some(maps) = self.pc.maps.as_mut() {
+                maps.prune(&v.org, &named);
+            }
+            self.sd_keep();
+        }
         self.dirty = true;
         let everyone = self.pc_everyone();
         self.tell(&everyone, &obj([("type", Value::from("org_policy")), ("org", Value::from(v.org.clone())), ("seq", Value::from(v.seq)), ("hash", Value::from(v.hash.clone()))]), None);
         log_info(&format!("org_policy org={} seq={} hash={} signer={}", v.org, v.seq, v.hash, v.signer));
         Ok((v, true))
+    }
+
+    // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──
+
+    /// _sd_named: `storage.map_sha256` of the org's newest policy ("" when none).
+    fn sd_named(&mut self, org: &str) -> String {
+        let policy = self.pc_store().and_then(|s| s.newest.get(org)).map(|v| v.policy.clone());
+        policy.and_then(|p| p.get("storage").and_then(Value::as_object).map(|s| pj::s(s, "map_sha256"))).unwrap_or_default()
+    }
+
+    /// _sd_maps: the storage map store; the first time after a start or a new root or signer policy it is rebuilt from
+    /// `ext["pc"]["maps"]` (by org and seq) and every map is verified again. None before the relay knows its root.
+    fn sd_maps(&mut self) -> Option<&mut op::MapStore> {
+        if self.pc.maps.is_none() && !self.pc.ca_file.is_empty() {
+            self.pc.maps = Some(op::MapStore::default());
+            let wires: Vec<Obj> = self.pc_list("maps").iter().filter_map(Value::as_object).cloned().collect();
+            if !wires.is_empty() {
+                match self.pc_verify_args() {
+                    // kept in ext["pc"]; loaded again with the next root or signer policy
+                    Err(e) => log_warn(&format!("storage maps not loaded: {}", e.message())),
+                    Ok((root, signer_policy, crl, previous)) => {
+                        let key = |w: &Obj| {
+                            let m = w.get("map").and_then(Value::as_object);
+                            (m.map(|m| pj::text_of(m, "org")).unwrap_or_default(), pc_int(m.and_then(|m| m.get("seq"))))
+                        };
+                        let mut sorted = wires;
+                        sorted.sort_by_key(key);
+                        let mut named: HashMap<String, String> = HashMap::new();
+                        for w in &sorted {
+                            let org = key(w).0;
+                            if !named.contains_key(&org) {
+                                let digest = self.sd_named(&org);
+                                named.insert(org, digest);
+                            }
+                        }
+                        let now = pj::now();
+                        let maps = self.pc.maps.as_mut().expect("the maps");
+                        for w in sorted {
+                            let org = key(&w).0;
+                            let digest = named.get(&org).cloned().unwrap_or_default();
+                            if let Err(e) = maps.accept_at(&Value::Object(w), &root, &signer_policy, crl.as_ref(), &previous, now, &digest) {
+                                log_warn(&format!("org storage map dropped: {}", policy_words(&e)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.pc.maps.as_mut()
+    }
+
+    /// _sd_keep: `ext["pc"]["maps"]` = the kept maps.
+    fn sd_keep(&mut self) {
+        let kept = self.pc.maps.as_ref().map(op::MapStore::persisted).unwrap_or_default();
+        self.pc_part().insert("maps".into(), Value::Array(kept));
+        self.dirty = true;
+    }
+
+    /// _sd_accept: check and keep one signed storage map: 403 for a refusal (its words: the signature, the org, a seq
+    /// not above the newest unless the org's policy names that map), 400 for its shape.
+    fn sd_accept(&mut self, wire: Option<&Value>) -> R<op::VerifiedMap> {
+        if self.sd_maps().is_none() {
+            return Err(E::Unavailable(NO_POLICIES.into()));
+        }
+        let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
+        let wire = wire.cloned().unwrap_or(Value::Null);
+        let org = wire.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let named = self.sd_named(&org);
+        let maps = self.pc.maps.as_mut().expect("the maps");
+        let vm = maps.accept_at(&wire, &root, &signer_policy, crl.as_ref(), &previous, pj::now(), &named).map_err(policy_error)?;
+        self.sd_keep();
+        log_info(&format!("org_storage org={} seq={} hash={} signer={}", vm.org, vm.seq, vm.hash, vm.signer));
+        Ok(vm)
     }
 
     /// _pc_hello: what `/v1/hello` adds: the signer policy, every org's newest policy, whether legal holds are on, and
@@ -1542,6 +1633,46 @@ impl Hub {
         let Some(wire) = wire else { return Err(E::NotFound(NO_POLICY.into())) };
         let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
         Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
+    }
+
+    // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──
+
+    /// `POST /v1/org/storage {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
+    /// `{org, seq, hash}`.
+    pub fn sd_storage_upload(&self, session: &str, who: &Identity, signed: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<op::VerifiedMap> {
+            st.check_admin(session, who)?;
+            st.sd_accept(signed)
+        })();
+        drop(st);
+        self.wake();
+        let vm = r?;
+        log_info(&format!("org_storage_upload org={} seq={} by={}", vm.org, vm.seq, who.principal));
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
+    }
+
+    /// A map the signer just signed (`POST /v1/org/storage/sign`): `{org, seq, hash, signed}`.
+    pub fn sd_storage_take_signed(&self, wire: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = st.sd_accept(wire);
+        drop(st);
+        self.wake();
+        let vm = r?;
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash)), ("signed", Value::Object(vm.wire))]))
+    }
+
+    /// `GET /v1/org/storage?org=<id>[&sha256=<hex>]` -> `{signed}`: the org's newest map, or that exact kept map,
+    /// only to a person whose domain is in the org's current policy `domains`. Anyone else, and a map the relay does
+    /// not hold, get the same 404 `{"error": "not found"}`.
+    pub fn sd_storage_get(&self, who: &Identity, org: &str, sha256: &str) -> R<Obj> {
+        let mut st = self.st.lock();
+        let covered = st.pc_current().iter().any(|p| pj::text_of(p, "org") == org && op::covers(p, &who.principal));
+        let wire = if covered { st.sd_maps().and_then(|m| m.get(org, sha256)).cloned() } else { None };
+        match wire {
+            Some(w) => Ok(obj([("signed", Value::Object(w))])),
+            None => Err(E::NotFound(SD_NOT_FOUND.into())),
+        }
     }
 
     // ── apps directory ──

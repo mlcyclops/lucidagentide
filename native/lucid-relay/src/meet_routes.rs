@@ -213,6 +213,11 @@ fn get_route(path: &str) -> Option<Route> {
             c.who(false)?;
             c.relay.hub.pc_policy_get(&c.q("org", ""), &c.q("sha256", ""))
         },
+        // SD-1 13.5: org storage maps, only to people the org's current policy covers
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.sd_storage_get(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
         "/v1/apps" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -623,6 +628,15 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/org/policy/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
             c.relay.pc_sign_policy(&pj::s(&b, "session"), &who, b.get("policy"), b.get("proof"), b.get("ts"))
+        },
+        // SD-1 13.5: org storage maps (a relay admin uploads; an org admin's device signs through the signer)
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.hub.sd_storage_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        "/v1/org/storage/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.sd_sign_storage(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
         },
         "/v1/apps/icon" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);
