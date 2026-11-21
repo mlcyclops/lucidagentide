@@ -210,12 +210,16 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   if (!demo) offBus = vizBus.on(onBus);
   // P-VIZ.6: the demo (and only the demo, through the URL) exposes where each node is on screen, so a real-UI
   // check (desktop/scripts/demo_p_viz_6.mjs) can click an agent the way a user would. Read-only.
-  if (demo) (window as unknown as { __vizProbe?: unknown }).__vizProbe = {
+  // P-VIZ.7 (ADR-0641): ?vizScript=1 (a recorded walkthrough over real agents) gets the same read-only probe plus
+  // scripted camera shots. Neither is reachable without the URL flag.
+  const scripted = new URLSearchParams(location.search).get("vizScript") === "1";
+  if (demo || scripted) (window as unknown as { __vizProbe?: unknown }).__vizProbe = {
     // P-VIZ.7 (ADR-0641): the sponsor and size class each figure wears, and whether it is committing right now.
     nodes: () => (model ? [...model.nodes.values()].map((n) => {
       const b = vizBrandFor(n.model);
-      return { id: n.id, kind: n.kind, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()) };
+      return { id: n.id, kind: n.kind, name: n.name, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()) };
     }) : []),
+    ...(scripted ? { shot: (id: string | null, opts?: Parameters<VizSceneHandle["scriptShot"]>[1]) => scene?.scriptShot(id, opts) } : {}),
   };
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();

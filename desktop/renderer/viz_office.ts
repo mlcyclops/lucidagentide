@@ -45,7 +45,7 @@
 // drink's charge speeds the work up and warms the tie, trim and screen until it decays.
 //
 // P-VIZ.7 (ADR-0641): every figure is a sponsored athlete. The node's model picks a VizBrand (viz_brand): its
-// emblem spins on a coin orbiting the desk at monitor height (held still under reduced motion) and hangs on a
+// emblem spins slowly on a coin hovering just above one spot of the desk (held still under reduced motion) and hangs on a
 // lanyard ID badge with the sponsor's word (TL187 for a private model; no brand, no emblem); its size class scales
 // the person and the chair (the desk set stays); its variant 0..3 (else the seed's) picks the worker's outfit (the
 // cast's own top, a vest, rolled-up sleeves or a cardigan, a hoodie), the desk set (a plant, a framed photo,
@@ -707,12 +707,15 @@ const STAPLER = { len: 0.145, w: 0.042, baseH: 0.012, bodyH: 0.026, tilt: -0.03 
 /** The TPS stack (the desk's pile): its box and where the stapler sits on it (the pile's frame). */
 const PILE = { w: 0.15, h: 0.03, d: 0.19 } as const;
 const STAPLER_ON_PILE = { x: 0.012, z: 0.038, yaw: 0.55 } as const;
-/** The coin: radius and thickness; the orbit around the desk (radius and height per role), its period, the spin's. */
-const COIN_R = 0.09;
+/** The coin: radius and thickness. */
+const COIN_R = 0.075;
 const COIN_T = 0.008;
-const ORBIT = { worker: { r: 0.62, y: 0.88 }, boss: { r: 0.76, y: 0.92 } } as const;
-const ORBIT_S = 16;
-const SPIN_S = 3;
+/** P-VIZ.7: the coin hovers in one spot on the desk (the owner: "an inch above their desk in one spot in a slow
+ *  rotation"): its center (desk frame, x across, z toward the front) per role, clear of the pile, mug and monitor;
+ *  its lowest point this far above the desk top; one turn about its own axis every SPIN_S seconds. */
+const HOVER = { worker: { x: 0.38, z: 0.64 }, boss: { x: -0.3, z: 0.62 } } as const;
+const HOVER_GAP = 0.025;
+const SPIN_S = 9;
 /** The copier's sheets: where a copy starts (in the slot) and lands (on the tray), copier frame; the stack's step. */
 const SHEET_FROM = [0, 0.415, 0.12] as const;
 const SHEET_TO = [0, 0.412, 0.31] as const;
@@ -1299,8 +1302,8 @@ class Office implements OfficeFigure {
   private readonly scale: number;
   /** Per-figure textures (the emblem on the coin, the badge, the nameplate), freed by dispose(). */
   private readonly ownTex: THREE.Texture[] = [];
-  /** The orbit (a pivot over the desk's center) and the coin on it. */
-  private readonly orbit = new THREE.Group();
+  /** The coin's spot above the desk and the coin spinning on it. */
+  private readonly coinSpot = new THREE.Group();
   private readonly coin = new THREE.Group();
   private readonly deskCenter = new THREE.Vector2();
   private readonly copier = new THREE.Group();
@@ -1810,12 +1813,12 @@ class Office implements OfficeFigure {
       this.zeds.push(z);
     }
 
-    // ---- P-VIZ.7: the sponsor's coin orbiting the desk (both faces the emblem, the rim the second color)
-    this.body.add(this.orbit);
-    this.orbit.position.set(this.deskCenter.x, (boss ? ORBIT.boss : ORBIT.worker).y, this.deskCenter.y);
-    this.orbit.add(this.coin);
-    this.coin.position.x = (boss ? ORBIT.boss : ORBIT.worker).r;
-    this.orbit.visible = brand !== null;
+    // ---- P-VIZ.7: the sponsor's coin hovering over its spot on the desk (both faces the emblem, the rim the second color)
+    this.body.add(this.coinSpot);
+    const spot = boss ? HOVER.boss : HOVER.worker;
+    this.coinSpot.position.set(spot.x, DESK_Y + COIN_R + HOVER_GAP, spot.z);
+    this.coinSpot.add(this.coin);
+    this.coinSpot.visible = brand !== null;
     if (brand) {
       // (transparent: the round badge's margin shows the rim's color inside the coin, not black)
       const mEmblem = basic({ map: this.brandTex(emblemCanvas(brand, 256, 256, { word: false })), transparent: true });
@@ -2580,16 +2583,15 @@ class Office implements OfficeFigure {
     }
   }
 
-  /** P-VIZ.7: the sponsor's coin: a slow orbit around the desk and a spin about its own axis; still (facing the
-   *  camera side, front right of the desk) under reduced motion. */
+  /** P-VIZ.7: the sponsor's coin: a slow spin about its own axis over its spot on the desk, with a slight bob;
+   *  still (turned toward the camera side) under reduced motion. */
   private updateEmblem(motion: boolean): void {
-    if (!this.orbit.visible) return;
+    if (!this.coinSpot.visible) return;
     if (motion) {
-      this.orbit.rotation.y = this.phase - (this.life / ORBIT_S) * TAU;
-      this.coin.rotation.y = (this.life / SPIN_S) * TAU;
+      this.coin.rotation.y = this.phase + (this.life / SPIN_S) * TAU;
+      this.coin.position.y = 0.006 * Math.sin(this.life * 1.3 + this.phase); // a slight bob, so it reads as hovering
     } else {
-      this.orbit.rotation.y = -0.7;
-      this.coin.rotation.y = 0.7;
+      this.coin.rotation.y = 0.5;
     }
   }
 

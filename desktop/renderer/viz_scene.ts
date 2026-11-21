@@ -115,6 +115,11 @@ export interface VizSceneHandle {
   /** P-VIZ.6: the style's storm (anime: dark sky and lightning strikes; professional: a gust of papers) and every
    *  figure hit("storm") as the front reaches it. The caller rate limits it (viz_throw tray). */
   storm(): void;
+  /** P-VIZ.7 (ADR-0641): a scripted camera shot for recorded demos (the view exposes it only with ?vizScript=1).
+   *  The camera springs to `offset` in the node's own frame (its desk, its stapler, the cloud above it) at `dist`,
+   *  `polar` and `az` (radians; az relative to the way the figure faces), drifting `azSpeed` radians a second; the
+   *  node stops turning to the camera while it is the subject. null hands the camera back (to auto, if it is on). */
+  scriptShot(id: string | null, opts?: { offset?: Vec3; dist?: number; polar?: number; az?: number; azSpeed?: number }): void;
   /** P-VIZ.6: the node under client (x, y), or null. */
   nodeAt(x: number, y: number): string | null;
   /** P-VIZ.6: a throwable is armed (`cursor`, a CSS cursor showing it) or not (null). While armed every click is
@@ -496,6 +501,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** The user really moved the camera (not a click, not the director): auto hands it over. */
   function userGrab(): void {
     userMoved = true;
+    shot = null; // P-VIZ.7: the user's hand always beats a scripted shot
     if (!auto) return;
     auto = false;
     userCamCb?.();
@@ -990,6 +996,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const tintTarget = new THREE.Color();
   const tileTint = new THREE.Color();
   const camPos = new THREE.Vector3();
+  // P-VIZ.7: the scripted shot (scriptShot); while set it drives the camera instead of the director.
+  let shot: { id: string; offset: THREE.Vector3; dist: number; polar: number; az: number; azSpeed: number; at: number } | null = null;
 
   /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
   function figureState(obj: NodeObj, t: number): AnimeState {
@@ -1068,7 +1076,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const face = Math.atan2(camPos.x - obj.cur.x, camPos.z - obj.cur.z);
       let dy = face - d.holder.rotation.y;
       dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      d.holder.rotation.y += dy * (o.motion ? 1 - Math.exp(-dt * 3) : 1);
+      if (shot?.id !== obj.id) d.holder.rotation.y += dy * (o.motion ? 1 - Math.exp(-dt * 3) : 1); // a scripted shot's subject holds still
       g.color.copy(obj.base).lerp(WHITE, 0.85).lerp(tintTarget, Math.max(obj.tone.tint, st === "ended" ? 0.25 : 0)).multiplyScalar(1 - obj.tone.dim * 0.3);
       // killed: a quick implosion of the figure (the figure's own slump plays inside it)
       let scale = 1;
@@ -1241,6 +1249,27 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       return r;
     };
     if (f) aim.copy(f.cur); else aim.set(0, 0, 0);
+    const sn = shot ? nodes.get(shot.id) : undefined;
+    if (shot && sn?.d3 && mode === "3d") {
+      // P-VIZ.7: the scripted shot: a point in the subject's own frame, framed at the asked distance and angles.
+      const h = sn.d3.holder;
+      h.updateMatrixWorld();
+      aim.copy(shot.offset);
+      h.localToWorld(aim);
+      const az = h.rotation.y + shot.az + shot.azSpeed * (sec - shot.at);
+      [rig.tx, rig.vx] = track(rig.tx, rig.vx, aim.x);
+      [rig.ty, rig.vy] = track(rig.ty, rig.vy, aim.y);
+      [rig.tz, rig.vz] = track(rig.tz, rig.vz, aim.z);
+      [rig.dist, rig.vd] = track(rig.dist, rig.vd, shot.dist);
+      [rig.az, rig.va] = track(rig.az, rig.va, rig.az + angleDelta(rig.az, az));
+      [rig.polar, rig.vp] = track(rig.polar, rig.vp, shot.polar);
+      rig.dist = Math.max(0.05, rig.dist);
+      const sp = Math.sin(rig.polar);
+      persp.position.set(rig.tx + rig.dist * sp * Math.sin(rig.az), rig.ty + rig.dist * Math.cos(rig.polar), rig.tz + rig.dist * sp * Math.cos(rig.az));
+      controls.target.set(rig.tx, rig.ty, rig.tz);
+      rig.settled = shot.azSpeed === 0 && moving < 1e-3;
+      return;
+    }
     if (mode === "3d") {
       const wantDist = f ? frameDistance(CUBE * f.size * FRAME_PAD, persp.fov, FILL) : (sceneRadius() / Math.sin((persp.fov * Math.PI) / 360)) * 0.78;
       const wantAz = rig.az + angleDelta(rig.az, SWAY_AZ * sway);
@@ -1384,7 +1413,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     clock.now = t;
     if (needFit && nodes.size) fit();
     busyCam = false;
-    if (auto && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled; }
+    if ((auto || shot) && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled; }
     controls.update();
     busyNodes = false;
     for (const n of nodes.values()) {
@@ -1564,6 +1593,16 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       effectsUntil = Math.max(effectsUntil, clock.now + REACT_MS);
       kick();
       return true;
+    },
+    scriptShot(id, opts = {}) {
+      if (!id || !nodes.has(id)) { shot = null; kick(); return; }
+      const off = opts.offset ?? [0, 0.5, 0];
+      shot = {
+        id, offset: new THREE.Vector3(off[0], off[1], off[2]), dist: opts.dist ?? 1.6, polar: opts.polar ?? FOCUS_POLAR,
+        az: opts.az ?? 0, azSpeed: o.motion ? (opts.azSpeed ?? 0) : 0, at: performance.now() / 1000,
+      };
+      rig.settled = false;
+      kick();
     },
     storm() {
       if (!nodes.size) return;
