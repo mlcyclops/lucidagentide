@@ -74,6 +74,12 @@ pub(crate) const ICON_MAX: usize = 64 * 1024;
 const ICON_DIR: &str = "app-icons";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 const ICON_CACHE: &str = "public, max-age=31536000, immutable";
+/// BG-1 section 3: a team background is a JPEG of at most 1.5 MB, its request body at most 2.2 MB.
+pub(crate) const BACKGROUND_MAX: usize = 1_572_864;
+pub(crate) const BACKGROUND_BODY_MAX: usize = 2_200_000;
+const BACKGROUND_DIR: &str = "org-backgrounds";
+const JPEG: &[u8] = b"\xff\xd8\xff";
+const BACKGROUND_BAD: &str = "a team background is a JPEG of at most 1.5 MB";
 /// `GET /v1/apps/c/events` holds at most this long.
 pub(crate) const EVENTS_WAIT: f64 = 30.0;
 const POLS_MAX: usize = 64;
@@ -435,6 +441,7 @@ pub struct Pc {
     sso_out: IndexMap<String, SsoOut>,
     sso_answered: HashMap<(String, String), f64>,
     icons_mem: HashMap<String, Vec<u8>>,
+    backgrounds_mem: HashMap<String, Vec<u8>>,
     state_dir: Option<PathBuf>,
     /// Without a state folder: the hold store's temporary folder.
     tmp: Option<PathBuf>,
@@ -453,6 +460,7 @@ impl Pc {
             sso_out: IndexMap::new(),
             sso_answered: HashMap::new(),
             icons_mem: HashMap::new(),
+            backgrounds_mem: HashMap::new(),
             state_dir: state_dir.map(Path::to_path_buf),
             tmp: None,
         }
@@ -1618,6 +1626,74 @@ impl Hub {
             }
         }
         log_info(&format!("app_icon sha256={digest} by={} bytes={}", who.principal, data.len()));
+        Ok(obj([("sha256", Value::from(digest))]))
+    }
+
+    fn pc_background_path(st: &State, digest: &str) -> Option<PathBuf> {
+        st.pc.state_dir.as_ref().map(|d| d.join(BACKGROUND_DIR).join(format!("{digest}.jpg")))
+    }
+
+    fn pc_team_image(policy: &Obj) -> Option<&str> {
+        policy.get("video").and_then(|v| v.get("team_image")).and_then(Value::as_str)
+    }
+
+    /// BG-1 section 3, `GET /v1/org/background?sha256=`: the JPEG a current policy's `video.team_image` names (404
+    /// otherwise), with the answer's headers.
+    pub fn pc_background_get(&self, digest: &str) -> R<parity::EmojiFile> {
+        let digest = digest.to_lowercase();
+        let gone = || E::NotFound("no such background".into());
+        let data = {
+            let mut st = self.st.lock();
+            let named = st.pc_current().iter().any(|p| Self::pc_team_image(p) == Some(digest.as_str()));
+            if !hex64(&digest) || !named {
+                return Err(gone());
+            }
+            match Self::pc_background_path(&st, &digest) {
+                Some(path) => read_bytes(&path),
+                None => st.pc.backgrounds_mem.get(&digest).cloned().unwrap_or_default(),
+            }
+        };
+        if data.is_empty() || crate::codec::sha256_hex(&data) != digest {
+            return Err(gone());
+        }
+        let headers = vec![
+            ("Content-Type", "image/jpeg".to_string()),
+            ("Content-Length", data.len().to_string()),
+            ("X-Content-Type-Options", "nosniff".to_string()),
+            ("Content-Security-Policy", "default-src 'none'".to_string()),
+            ("Cache-Control", ICON_CACHE.to_string()),
+        ];
+        Ok((headers, data))
+    }
+
+    /// BG-1 section 3, `POST /v1/org/background {jpeg}` (base64, a JPEG of at most 1.5 MB): a relay admin, or an
+    /// admin (policy `admins` or signer `org_admins`) of an org whose current policy names that digest.
+    pub fn pc_background_put(&self, session: &str, who: &Identity, jpeg: Body) -> R<Obj> {
+        let Some(data) = pj::b64_strict(&pj::str_or(jpeg)) else { return bad(BACKGROUND_BAD) };
+        if data.is_empty() || data.len() > BACKGROUND_MAX || !data.starts_with(JPEG) {
+            return bad(BACKGROUND_BAD);
+        }
+        let digest = crate::codec::sha256_hex(&data);
+        {
+            let mut st = self.st.lock();
+            st.session(session, who)?;
+            let terms = st.pc_terms();
+            let mine = st.pc_current().iter().any(|p| {
+                Self::pc_team_image(p) == Some(digest.as_str())
+                    && (strings(p.get("admins")).contains(&who.principal)
+                        || terms.org_admins.get(&pj::text_of(p, "org")).is_some_and(|l| l.contains(&who.principal)))
+            });
+            if !st.admins.contains(&who.principal) && !mine {
+                return forbidden(HOLD_WHO);
+            }
+            match Self::pc_background_path(&st, &digest) {
+                Some(path) => write_atomic(&path, &data).map_err(|e| E::Internal(e.to_string()))?,
+                None => {
+                    st.pc.backgrounds_mem.insert(digest.clone(), data.clone());
+                }
+            }
+        }
+        log_info(&format!("org_background sha256={digest} by={} bytes={}", who.principal, data.len()));
         Ok(obj([("sha256", Value::from(digest))]))
     }
 
