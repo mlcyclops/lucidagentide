@@ -1,0 +1,77 @@
+# Meeting Hub relay conformance against the Rust relay (workspace ADR-0326).
+#
+# The Rust relay (native/lucid-relay) is the only production Meet relay. Its gate is the
+# Meeting Hub repo's conformance suite (tests/test_meet_relay_conformance*.py), run here
+# against a debug dev-license build: the suite signs its own development license for the CA it
+# makes, so no real license or key is involved.
+#
+# The suite lives in TechLead187/MeetingHubaddon (private). The checkout needs a read-only
+# token in the MEET_CONFORMANCE_TOKEN secret; without it the job says so and stops green.
+
+name: Meet relay conformance
+
+on:
+  push:
+    branches: [master]
+    paths: ["native/lucid-relay/**", ".github/workflows/meet-relay-conformance.yml"]
+  pull_request:
+    branches: [master]
+    paths: ["native/lucid-relay/**", ".github/workflows/meet-relay-conformance.yml"]
+  workflow_dispatch:
+    inputs:
+      meet_ref:
+        description: "MeetingHubaddon ref holding the conformance suite"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meet-conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: Meet conformance (Rust relay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HAVE_TOKEN: ${{ secrets.MEET_CONFORMANCE_TOKEN != '' }}
+    steps:
+      - name: Token check
+        if: env.HAVE_TOKEN != 'true'
+        run: echo "::notice::MEET_CONFORMANCE_TOKEN is not set; the Meet conformance suite was not run."
+
+      - uses: actions/checkout@v7
+        if: env.HAVE_TOKEN == 'true'
+
+      - uses: actions/checkout@v7
+        if: env.HAVE_TOKEN == 'true'
+        with:
+          repository: TechLead187/MeetingHubaddon
+          ref: ${{ inputs.meet_ref || 'main' }}
+          token: ${{ secrets.MEET_CONFORMANCE_TOKEN }}
+          path: meet
+
+      - uses: actions/setup-python@v6
+        if: env.HAVE_TOKEN == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install the suite's Python dependencies
+        if: env.HAVE_TOKEN == 'true'
+        working-directory: meet
+        run: python -m pip install --require-hashes -r src/requirements.lock -r src/requirements-dev.lock
+
+      - name: Build the relay (debug, dev-license)
+        if: env.HAVE_TOKEN == 'true'
+        working-directory: native/lucid-relay
+        run: cargo build --locked --features dev-license
+
+      - name: Conformance suite against the Rust relay
+        if: env.HAVE_TOKEN == 'true'
+        working-directory: meet
+        env:
+          LUCID_TEST_MEET_RELAY_BIN: ${{ github.workspace }}/native/lucid-relay/target/debug/lucid-relay
+        run: python -m pytest -q tests/test_meet_relay_conformance*.py
