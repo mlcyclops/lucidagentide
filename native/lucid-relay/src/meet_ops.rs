@@ -1179,7 +1179,10 @@ impl Relay {
             return m::forbidden("sign from one of your devices");
         }
         // NT-1 section 3.9: `notify` waits until every Hub and iPhone runs the NT-1 release
-        crate::meet_org_policy::notify_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        let minimums = self.minimums(&self.release());
+        crate::meet_org_policy::notify_gate(policy, &minimums).map_err(E::Conflict)?;
+        // LS-1 section 2: `lan_scope` waits for the LS-1 release the same way
+        crate::meet_org_policy::lan_scope_gate(policy, &minimums).map_err(E::Conflict)?;
         let body = obj([
             ("policy", policy.cloned().unwrap_or(Value::Null)),
             ("proof", Value::from(pj::str_or(proof))),

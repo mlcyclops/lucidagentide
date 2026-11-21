@@ -35,7 +35,11 @@ const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
     "workflows", "external_archives", "external_apps", "retention", "notify",
+    "lan_scope",
 ];
+/// LS-1 section 2: the keys of `lan_scope` and its one refusal.
+const LAN_SCOPE_KEYS: &[&str] = &["networks", "ttl", "anchors"];
+const LAN_SCOPE_SHAPE: &str = "lan_scope must list 1 to 32 private IPv4 networks, a ttl of 1 to 16 and anchors inside those networks";
 /// NT-1 section 3.9: the only `notify` the policy may carry.
 const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
@@ -615,7 +619,80 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             return Err(bad(NOTIFY_SHAPE));
         }
     }
+    if let Some(s) = p.get("lan_scope") {
+        if !lan_scope_ok(s) {
+            return Err(bad(LAN_SCOPE_SHAPE));
+        }
+    }
     Ok(())
+}
+
+/// LS-1 section 2: a canonical IPv4 dotted quad (no leading zeros), as a u32.
+fn ipv4(s: &str) -> Option<u32> {
+    let a: std::net::Ipv4Addr = s.parse().ok()?;
+    (a.to_string() == s).then(|| u32::from(a))
+}
+
+/// LS-1 section 2: a canonical private IPv4 CIDR, prefix 8 to 32, host bits zero, inside one private block.
+fn lan_network(s: &str) -> Option<(u32, u32)> {
+    let (addr, len) = s.split_once('/')?;
+    let base = ipv4(addr)?;
+    let n: u32 = len.parse().ok()?;
+    if n.to_string() != len || !(8..=32).contains(&n) {
+        return None;
+    }
+    let mask = u32::MAX << (32 - n);
+    if base & !mask != 0 {
+        return None;
+    }
+    let inside = LAN_BLOCKS.iter().any(|(b, bn)| {
+        let bm = u32::MAX << (32 - bn);
+        n >= *bn && base & bm == *b
+    });
+    inside.then_some((base, mask))
+}
+
+const LAN_BLOCKS: [(u32, u32); 4] = [(0x0A00_0000, 8), (0xAC10_0000, 12), (0xC0A8_0000, 16), (0x6440_0000, 10)];
+
+fn lan_scope_ok(s: &Value) -> bool {
+    let Some(o) = s.as_object() else { return false };
+    if o.keys().any(|k| !LAN_SCOPE_KEYS.contains(&k.as_str())) {
+        return false;
+    }
+    let Some(nets) = o.get("networks").and_then(Value::as_array) else { return false };
+    if nets.is_empty() || nets.len() > 32 {
+        return false;
+    }
+    let mut parsed = Vec::new();
+    let mut seen = HashSet::new();
+    for n in nets {
+        let Some(t) = n.as_str() else { return false };
+        let Some(net) = lan_network(t) else { return false };
+        if !seen.insert(t) {
+            return false;
+        }
+        parsed.push(net);
+    }
+    if let Some(ttl) = o.get("ttl") {
+        if !ttl.as_i64().is_some_and(|t| (1..=16).contains(&t)) {
+            return false;
+        }
+    }
+    if let Some(anchors) = o.get("anchors") {
+        let Some(list) = anchors.as_array() else { return false };
+        if list.len() > 16 {
+            return false;
+        }
+        let mut seen = HashSet::new();
+        for a in list {
+            let Some(t) = a.as_str() else { return false };
+            let Some(ip) = ipv4(t) else { return false };
+            if !seen.insert(t) || !parsed.iter().any(|(b, m)| ip & m == *b) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// NT-1 section 3.9: the policy turns message previews off for the people it covers.
@@ -630,10 +707,23 @@ pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy 
 /// notify_gate: a policy with `notify` is signed only once the relay's minimums (`min_client` and the release's) reach
 /// the NT-1 release of both the Hub and the iPhone.
 pub fn notify_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
-    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key("notify"));
-    let ready = NOTIFY_CLIENTS.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+    client_gate(policy, minimums, "notify", &NOTIFY_CLIENTS, NOTIFY_TOO_SOON)
+}
+
+/// LS-1 section 2: the Hub and iPhone releases that accept `lan_scope`.
+const LAN_SCOPE_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.0"), ("ios", "0.98.0")];
+pub const LAN_SCOPE_TOO_SOON: &str = "Own-network reach across networks can be set by policy once every Hub and iPhone runs 0.98.0 or later";
+
+/// lan_scope_gate: a policy with `lan_scope` is signed only once the relay's minimums reach the LS-1 release.
+pub fn lan_scope_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    client_gate(policy, minimums, "lan_scope", &LAN_SCOPE_CLIENTS, LAN_SCOPE_TOO_SOON)
+}
+
+fn client_gate(policy: Option<&Value>, minimums: &Obj, key: &str, clients: &[(&str, &str)], too_soon: &str) -> Result<(), String> {
+    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key(key));
+    let ready = clients.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
     if wants && !ready {
-        return Err(NOTIFY_TOO_SOON.into());
+        return Err(too_soon.into());
     }
     Ok(())
 }
@@ -1039,5 +1129,41 @@ mod tests {
             assert_eq!(notify_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
         }
         assert_eq!(notify_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
+        // LS-1 section 2: lan_scope
+        let scope = json!({"networks": ["10.0.0.0/8", "192.168.1.0/24", "100.64.0.0/10"], "ttl": 4, "anchors": ["192.168.1.10"]});
+        assert_eq!(check(json!({ "lan_scope": scope.clone() })), "");
+        assert_eq!(check(json!({"lan_scope": {"networks": ["172.16.4.0/22"]}})), "");
+        for refused in [
+            json!({"networks": ["8.8.8.0/24"]}),
+            json!({"networks": ["10.0.0.0/7"]}),
+            json!({"networks": ["172.0.0.0/8"]}),
+            json!({"networks": ["10.0.0.1/8"]}),
+            json!({"networks": ["10.0.0.0/8", "10.0.0.0/8"]}),
+            json!({"networks": ["010.0.0.0/8"]}),
+            json!({"networks": ["10.0.0.0/08"]}),
+            json!({"networks": []}),
+            json!({"networks": ["192.168.1.0/24"], "anchors": ["192.168.2.1"]}),
+            json!({"networks": ["192.168.1.0/24"], "anchors": ["192.168.1.1", "192.168.1.1"]}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": 0}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": 17}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": true}),
+            json!({"networks": ["10.0.0.0/8"], "x": 1}),
+            json!({"ttl": 4}),
+            json!("10.0.0.0/8"),
+        ] {
+            assert_eq!(check(json!({ "lan_scope": refused })), LAN_SCOPE_SHAPE);
+        }
+        // a float cannot be in a signed policy at all (canonical JSON), as in Python
+        assert_eq!(check(json!({"lan_scope": {"networks": ["10.0.0.0/8"], "ttl": 4.0}})),
+                   "only objects, arrays, strings, integers and booleans (no null)");
+        let mut scoped = base.clone();
+        scoped.insert("lan_scope".into(), scope);
+        let with_scope = Value::Object(scoped);
+        assert_eq!(lan_scope_gate(Some(&with_scope), &mins(json!({"hub": "0.98.0", "ios": "0.98.0"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0", "ios": "0.97.9"}), json!({"hub": "0.97.0", "ios": "0.98.0"})] {
+            assert_eq!(lan_scope_gate(Some(&with_scope), &mins(early)).unwrap_err(), LAN_SCOPE_TOO_SOON);
+        }
+        assert_eq!(lan_scope_gate(Some(&with_notify), &Obj::new()), Ok(()));
+        assert_eq!(notify_gate(Some(&with_scope), &Obj::new()), Ok(()));
     }
 }
