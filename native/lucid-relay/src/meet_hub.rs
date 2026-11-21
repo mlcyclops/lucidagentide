@@ -371,6 +371,9 @@ pub struct Peer {
     /// to the relay ("" until it publishes). Live only, never logged.
     epk: String,
     epk_sig: String,
+    /// CD-1: the presence session id its join proved (`session`), "" when none. Copy detection skips this peer for
+    /// a request that proves the same live session. Live only.
+    session: String,
 }
 
 impl Peer {
@@ -1136,17 +1139,28 @@ impl State {
         }
     }
 
-    /// _check_copy: a device certificate active right now from another address is refused (409).
-    fn check_copy(&mut self, who: &Identity, address: &str) -> R<()> {
+    /// CD-1: `proof` if it names a live presence session of this principal and device, else "".
+    fn proven_session(&self, who: &Identity, proof: &str) -> String {
+        match self.sessions.get(proof) {
+            Some(s) if !proof.is_empty() && !who.device.is_empty() && s.who.principal == who.principal && s.who.device == who.device => proof.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// _check_copy: a device certificate active right now from another address is refused (409). CD-1: `proof` (a
+    /// join's `session`, a hello's `resume`) naming a live session of this principal and device exempts that session
+    /// and the peers joined with it; any other value is ignored.
+    fn check_copy(&mut self, who: &Identity, address: &str, proof: &str) -> R<()> {
         if who.device.is_empty() || address.is_empty() {
             return Ok(());
         }
+        let proof = self.proven_session(who, proof);
         let now = pj::mono();
         let others: Vec<(String, String, f64, String)> = self
             .sessions
             .values()
-            .map(|s| (s.who.principal.clone(), s.who.device.clone(), s.last_seen, s.address.clone()))
-            .chain(self.peers.values().map(|p| (p.who.principal.clone(), p.who.device.clone(), p.last_seen, p.address.clone())))
+            .map(|s| (s.who.principal.clone(), s.who.device.clone(), s.last_seen, if !proof.is_empty() && s.session_id == proof { String::new() } else { s.address.clone() }))
+            .chain(self.peers.values().map(|p| (p.who.principal.clone(), p.who.device.clone(), p.last_seen, if !proof.is_empty() && p.session == proof { String::new() } else { p.address.clone() })))
             .collect();
         let labels: Vec<String> = self.sessions.values().map(|s| s.who.device_label.clone()).chain(self.peers.values().map(|p| p.who.device_label.clone())).collect();
         for (i, (p, d, last, addr)) in others.iter().enumerate() {
@@ -2221,7 +2235,9 @@ impl Hub {
 
     #[allow(clippy::too_many_arguments)]
     fn join_locked(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, client: &Obj, ext: &Obj) -> R<(Obj, String)> {
-        st.check_copy(who, address)?;
+        let proof = ext.get("session").and_then(Value::as_str).unwrap_or("");
+        st.check_copy(who, address, proof)?;
+        let joined_session = st.proven_session(who, proof);
         st.wave3_may_join(room, who, ext)?;
         let mine: Vec<String> = st.peers.values().filter(|p| p.who.principal == who.principal && p.room == room).map(|p| p.peer_id.clone()).collect();
         let cap = st.wave3_cap(room);
@@ -2280,6 +2296,7 @@ impl Hub {
             e2ee: ext.get("e2ee") == Some(&Value::Bool(true)),
             epk: String::new(),
             epk_sig: String::new(),
+            session: joined_session,
         };
         let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
@@ -3397,6 +3414,12 @@ impl Hub {
 
     /// hello with PR-1 1.1's `active` (false: the app opens its session while not on screen).
     pub fn hello_active(&self, who: &Identity, address: &str, client: &Obj, active: bool) -> R<Obj> {
+        self.hello_resume(who, address, client, active, "")
+    }
+
+    /// hello with CD-1's `resume`: the session id this device held before; a live one of this principal and device is
+    /// exempt from copy detection, is replaced, and its peers move to the new session.
+    pub fn hello_resume(&self, who: &Identity, address: &str, client: &Obj, active: bool, resume: &str) -> R<Obj> {
         if who.seed {
             return forbidden(m::FINISH_SETUP);
         }
@@ -3409,7 +3432,8 @@ impl Hub {
         let client = m::client(Some(&Value::Object(client.clone())));
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
-            st.check_copy(who, address)?;
+            st.check_copy(who, address, resume)?;
+            let resumed = st.proven_session(who, resume);
             let before = st.pstate(&who.principal);
             if who.own_device() {
                 let old: Vec<String> = st.sessions.values().filter(|s| s.who.principal == who.principal && s.who.device == who.device).map(|s| s.session_id.clone()).collect();
@@ -3432,6 +3456,11 @@ impl Hub {
             };
             let sid = session.session_id.clone();
             st.sessions.insert(sid.clone(), session);
+            if !resumed.is_empty() {
+                for p in st.peers.values_mut().filter(|p| p.session == resumed) {
+                    p.session = sid.clone();
+                }
+            }
             st.announce(who, &before);
             let now = pj::now();
             let online = st.online();
@@ -5289,5 +5318,73 @@ mod tests {
         let c = h.fleet_counts();
         assert_eq!((c.calls_active, c.participants), (1, 2));
         assert!(c.online.contains("ann@x"));
+    }
+
+    // ── CD-1: copy detection with a session proof ───────────────────────────────────────────────────────────
+
+    const COPY: &str = "409 this device's certificate is already signed in from another computer";
+
+    fn conflicts(h: &Hub) -> usize {
+        h.st.lock().sessions.values().flat_map(|s| s.events.iter()).filter(|e| pj::text_of(e, "type") == "device_conflict").count()
+    }
+
+    fn sid(o: &Obj) -> String {
+        o["session"].as_str().unwrap().to_string()
+    }
+
+    fn body(session: &str) -> Obj {
+        obj([("session", Value::from(session))])
+    }
+
+    #[test]
+    fn cd1_a_join_from_another_address_with_the_live_session_is_accepted() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let s = sid(&h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap());
+        let p = peer_of(&h.join("ops", &ben, "203.0.113.9", false, Some(&body(&s))).unwrap());
+        assert_eq!(conflicts(&h), 0);
+        assert_eq!(h.st.lock().peers[&p].session, s);
+        // a non-string session is ignored like an absent one
+        let b = obj([("session", json!(5))]);
+        assert_eq!(refusal(h.join("ops2", &ben, "192.0.2.7", false, Some(&b))), COPY);
+    }
+
+    #[test]
+    fn cd1_a_join_from_another_address_without_the_session_is_refused() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap();
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, None)), COPY);
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, Some(&body("nope")))), COPY);
+        assert!(conflicts(&h) > 0);
+    }
+
+    #[test]
+    fn cd1_a_hello_with_resume_replaces_the_session_and_moves_its_peers() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let s1 = sid(&h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap());
+        let p = peer_of(&h.join("ops", &ben, "203.0.113.9", false, Some(&body(&s1))).unwrap());
+        let s2 = sid(&h.hello_resume(&ben, "192.0.2.7", &Obj::new(), true, &s1).unwrap());
+        assert_eq!(conflicts(&h), 0);
+        let st = h.st.lock();
+        assert!(!st.sessions.contains_key(&s1));
+        assert!(st.sessions.contains_key(&s2));
+        assert_eq!(st.peers[&p].session, s2);
+    }
+
+    #[test]
+    fn cd1_a_resume_of_someone_elses_session_does_not_help() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let cy = who("cy@x", "cccccccccccccccc");
+        let ben_other = who("ben@x", "dddddddddddddddd");
+        h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap();
+        let theirs = sid(&h.hello(&cy, "192.0.2.7", &Obj::new()).unwrap());
+        let other_device = sid(&h.hello(&ben_other, "192.0.2.8", &Obj::new()).unwrap());
+        assert_eq!(refusal(h.hello_resume(&ben, "203.0.113.9", &Obj::new(), true, &theirs)), COPY);
+        assert_eq!(refusal(h.hello_resume(&ben, "203.0.113.9", &Obj::new(), true, &other_device)), COPY);
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, Some(&body(&theirs)))), COPY);
+        assert!(conflicts(&h) > 0);
     }
 }

@@ -1341,7 +1341,8 @@ fn hello(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     let client = m::client(b.get("client"));
     let active = crate::meet_hub::parse_active(b.get("active"), Some(true))?;
-    let mut reply = c.relay.hub.hello_active(&who, &c.address, &client, active)?;
+    let resume = b.get("resume").and_then(Value::as_str).unwrap_or("");
+    let mut reply = c.relay.hub.hello_resume(&who, &c.address, &client, active, resume)?;
     if let Some(info) = c.relay.outdated(&who, &client) {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
