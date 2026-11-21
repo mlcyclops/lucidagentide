@@ -167,6 +167,9 @@ export interface GuiSettings {
   // fix/v2.5.1-provider-default-models: the explicit-choice marker written by setChosenModel. Absent on
   // values written before the fix; chosenModel() then refuses to restore a LOCAL value (read-time migration).
   chosenModelSource?: "user";
+  // P-AUTH.RELOGIN1 (ADR-0640): OAuth providers LUCID has seen signed in, and the model each one displaced
+  // when its sign-in was lost (desktop/oauth_relogin.ts). Lets a vanished login be told apart from a fresh install.
+  oauthMemory?: { seen: string[]; displaced: Record<string, string> };
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -1088,6 +1091,14 @@ export function setChosenModel(model: string): GuiSettings {
   const s = load(); const m = (model ?? "").trim();
   if (m) { s.chosenModel = m; s.chosenModelSource = "user"; } else { delete s.chosenModel; delete s.chosenModelSource; }
   save(s); return s;
+}
+/** P-AUTH.RELOGIN1 (ADR-0640): the OAuth sign-ins LUCID has seen, and the model each lost one displaced. */
+export function oauthMemory(): { seen: string[]; displaced: Record<string, string> } {
+  const m = load().oauthMemory;
+  return { seen: Array.isArray(m?.seen) ? m.seen : [], displaced: m?.displaced && typeof m.displaced === "object" ? m.displaced : {} };
+}
+export function setOauthMemory(m: { seen: string[]; displaced: Record<string, string> }): void {
+  const s = load(); s.oauthMemory = m; save(s);
 }
 /** Every configured Local Provider's omp prefix, enabled or not (a disabled one is still LOCAL), for
  *  isLocalModel. The implicit engines (Ollama, llama.cpp, LM Studio, ...) are covered by isLocalModel itself. */

@@ -6381,3 +6381,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-AUTH.RELOGIN1 (ADR-0640): lost sign-in notice, Login in the model picker, model restore after re-login
+- **shipped (2026-11-21):** oauth_relogin.ts flags a sign-in omp disabled after a failed refresh (or one LUCID saw that vanished) on /api/auth, with the update it followed and the model it displaced; a callout under the model pill with Log in / Not now and an OAuth tooltip; a Login row under the picker's model name; signing back in restores the displaced model as the sticky pick (the "stuck on Terra 6.1" fix); demo_p_auth_relogin_1.mjs passes narrow and wide and fails on the old bundle.
+- **stubbed:** nothing; `missing` (vanished row) detection starts after first run because the seen-memory starts empty, `expired` works immediately.
+- **next:** rebuild the installed app and confirm the callout appears on the owner's machine the next time omp drops the Claude sign-in.
