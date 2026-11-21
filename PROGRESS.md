@@ -6391,3 +6391,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-21):** viz_brand.ts (original sponsor emblems per provider, TL187 for private models, size classes, variants); commit/push detection in viz_model; anime patches, four variant weapons and a Raiden-style bolt into a storm cloud on commit; office sponsor coin and lanyard, outfits and desk sets, elbows-at-palm typing and mug-at-mouth sip, Milton's stapler on the TPS stack, and a copier with TPS Reports on commit; demo_p_viz_7.mjs passes narrow and wide.
 - **stubbed:** nothing; the idle sip is proven by the geometry test and the copier frames, not caught in an idle camera close-up.
 - **next:** try both styles with a real fleet commit and push in the installed app, and tune the cloud and bubble sizes at the user's usual zoom.
+## P-VIZ.REC1 (ADR-0643): Visualize header buttons work again (Record, Recordings, View, Auto camera)
+- **shipped (2026-11-21):** the header's width density moved from data-viz-fit to data-viz-density, so the click router no longer runs Fit for every header button; demo_p_viz_rec_1.mjs records, lists, saves and opens View, and fails on master.
+- **stubbed:** nothing.
+- **next:** record and export a live fleet session in Visualize with the fix in.
