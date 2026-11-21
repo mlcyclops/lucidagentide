@@ -1746,3 +1746,8 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-VIZ.REC1
+demo-P-VIZ.REC1: ## P-VIZ.REC1 (ADR-0643): the Visualize header's Record, Recordings, View and Auto camera work (the header no longer shares the Fit button's data-viz-fit hook). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_rec_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_rec_1.mjs

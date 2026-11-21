@@ -6381,3 +6381,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-VIZ.REC1 (ADR-0643): Visualize header buttons work again (Record, Recordings, View, Auto camera)
+- **shipped (2026-11-21):** the header's width density moved from data-viz-fit to data-viz-density, so the click router no longer runs Fit for every header button; demo_p_viz_rec_1.mjs records, lists, saves and opens View, and fails on master.
+- **stubbed:** nothing.
+- **next:** record and export a live fleet session in Visualize with the fix in.

@@ -263,7 +263,7 @@ export function closeViz(): void {
 function buildView(): HTMLElement {
   const v = el(`<div id="vizView" class="viz-view" role="dialog" aria-modal="true" aria-label="Visualize: agents, subagents and token flow" hidden>
     <div class="orbit-nebula" aria-hidden="true"></div>
-    <header class="orbit-head viz-head" data-viz-head data-viz-fit="wide">
+    <header class="orbit-head viz-head" data-viz-head data-viz-density="wide">
       <div class="orbit-title">${icon("visualize", 17)}<b>Visualize</b><span class="orbit-sub">agents and token flow</span><span class="viz-demo" data-viz-demo hidden>DEMO</span></div>
       <div class="viz-census" data-viz-census aria-live="polite"></div>
       <span class="orbit-headgap"></span>
@@ -393,7 +393,9 @@ function fitHead(): void {
   if (!head?.clientWidth) return;
   for (const f of HEAD_FITS) {
     headFit = f;
-    head.dataset.vizFit = f;
+    // Not "data-viz-fit": that is the Fit button's hook, and the click router's closest("[data-viz-fit]") matched
+    // this header, so every header button below the toggles (Record, Recordings, View) ran Fit instead.
+    head.dataset.vizDensity = f;
     if (head.scrollWidth <= head.clientWidth + 1) break;
   }
   const narrow = headFit === "narrow";
