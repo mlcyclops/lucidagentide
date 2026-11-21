@@ -24,6 +24,8 @@ mod collab_auth;
 mod collab_presence;
 #[path = "../console.rs"]
 mod console;
+#[path = "../console_ai.rs"]
+mod console_ai;
 #[path = "../console_approvals.rs"]
 mod console_approvals;
 #[path = "../console_audit.rs"]

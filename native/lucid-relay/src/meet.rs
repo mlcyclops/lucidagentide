@@ -293,6 +293,9 @@ pub struct Settings {
     /// NT-1 section 3.1: false turns message previews off for everyone on this relay (no `env` or `wrap` in any push,
     /// hello's `notify_previews: false`).
     pub notify_previews: bool,
+    /// AI-1 1.5: the organization size ("standard" or "enterprise") used while no license is installed ("": none,
+    /// a big organization).
+    pub license_edition: String,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -314,13 +317,13 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 60] = [
+const SETTINGS_FIELDS: [&str; 61] = [
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
-    "with_console", "fleet_proxy", "fleet_pki",
+    "with_console", "fleet_proxy", "fleet_pki", "license_edition",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -401,6 +404,7 @@ impl Default for Settings {
             enclave_networks: Vec::new(),
             legal_holds: false,
             notify_previews: true,
+            license_edition: String::new(),
         }
     }
 }
@@ -471,6 +475,12 @@ fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
         None => {}
         Some(Value::Bool(b)) => s.legal_holds = *b,
         Some(_) => return Err("legal_holds must be true or false".into()),
+    }
+    // AI-1 1.5: the organization size while no license is installed
+    match raw.get("license_edition") {
+        None => {}
+        Some(Value::String(e)) if ["", "standard", "enterprise"].contains(&e.as_str()) => s.license_edition = e.clone(),
+        Some(_) => return Err("license_edition must be \"standard\", \"enterprise\" or \"\"".into()),
     }
     if let Some(v) = raw.get("push") {
         let Value::Object(o) = v else { return Err(SHAPE.into()) };

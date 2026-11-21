@@ -51,7 +51,7 @@ const ARCHIVE_THERE: &str = "that archive is already in this conversation";
 const ARCHIVE_NOT_THERE: &str = "that archive is not in this conversation";
 const APP_THERE: &str = "that app is already in this conversation";
 const APP_NOT_LINKED: &str = "that app is not linked to this conversation";
-const POLS_UNKNOWN: &str = "pols names a policy this relay does not hold";
+pub(crate) const POLS_UNKNOWN: &str = "pols names a policy this relay does not hold";
 const NO_SIGNER_POLICY: &str = "this relay has no signer policy yet";
 const SIGNER_POLICY_FROM_SIGNER: &str = "this relay takes its signer policy from its certificate server";
 const SIGNER_POLICY_BAD: &str = "that signer policy is not signed by this relay's root";
@@ -70,6 +70,10 @@ pub(crate) const SIGNER_CRL_AGE: f64 = 6.0 * 3600.0;
 pub(crate) const CRL_CHECK_EVERY: f64 = 3600.0;
 /// A 64 KB signed policy and its request.
 pub(crate) const POLICY_BODY_MAX: usize = 128 * 1024;
+/// AI-1 2: a 256 KB signed AI map and its request (`/v1/org/ai`, `/v1/org/ai/sign`).
+pub(crate) const AI_MAP_BODY_MAX: usize = 320 * 1024;
+/// Every refused or missing `GET /v1/org/ai` and `GET /v1/ai/allowed?principal=`.
+pub(crate) const AI_NOT_FOUND: &str = "not found";
 pub(crate) const ICON_MAX: usize = 64 * 1024;
 const ICON_DIR: &str = "app-icons";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -100,14 +104,14 @@ pub(crate) const ORG_URI_PREFIX: &str = "urn:lucid-meet:org:";
 const KIND_URIS: [(&str, &str); 5] = [("connector", m::CONNECTOR_URI), ("app", APP_URI), ("archive", ARCHIVE_URI), ("sso", SSO_URI), ("console", m::CONSOLE_URI)];
 /// Service principals are `<name>@apps.<domain>`.
 const APPS_PREFIX: &str = "apps.";
-const APP_GET: [&str; 11] = ["/v1/whoami", "/v1/crl", "/v1/org/policy", "/v1/chat/devices", "/v1/chat/keys", "/v1/chat/log", "/v1/channels/history", "/v1/dm/history", "/v1/files/get", "/v1/files/list", "/v1/apps/c/events"];
+const APP_GET: [&str; 14] = ["/v1/whoami", "/v1/crl", "/v1/org/policy", "/v1/chat/devices", "/v1/chat/keys", "/v1/chat/log", "/v1/channels/history", "/v1/dm/history", "/v1/files/get", "/v1/files/list", "/v1/apps/c/events", "/v1/org/ai", "/v1/ai/allowed", "/v1/ai/history"];
 const APP_POST: [&str; 15] = [
     "/v1/chat/devices", "/v1/chat/keys", "/v1/chat/log", "/v1/dm", "/v1/channels/post", "/v1/chat/edit", "/v1/chat/delete", "/v1/chat/event", "/v1/files/start", "/v1/files/chunk", "/v1/files/finish", "/v1/files/delete", "/v1/apps/c/hello",
     "/v1/apps/c/ack", "/v1/apps/c/renew",
 ];
 const ARCHIVE_POST: [&str; 5] = ["/v1/chat/devices", "/v1/chat/log", "/v1/apps/c/hello", "/v1/apps/c/ack", "/v1/apps/c/renew"];
 const SSO_GET: [&str; 1] = ["/v1/crl"];
-const SSO_POST: [&str; 5] = ["/v1/sso/c/hello", "/v1/sso/c/sign", "/v1/sso/c/revoke", "/v1/sso/c/org-member", "/v1/sso/c/pending-add"];
+const SSO_POST: [&str; 6] = ["/v1/sso/c/hello", "/v1/sso/c/sign", "/v1/sso/c/revoke", "/v1/sso/c/org-member", "/v1/sso/c/pending-add", "/v1/sso/c/ai-groups"];
 /// Person routes that make bridges, refused in an enclave like every /v1/bridge/c/* route.
 pub(crate) const ENCLAVE_BRIDGE_ROUTES: [&str; 2] = ["/v1/bridge/code", "/v1/bridge/dm-code"];
 
@@ -261,6 +265,16 @@ pub(crate) fn covering<'a>(policies: &'a [Obj], principal: &str) -> Option<&'a O
     policies.iter().find(|p| op::covers(p, principal))
 }
 
+/// _ai_app: the policy names `who` (principal and device) as an app of type `ai`.
+pub(crate) fn ai_app_of(policy: &Obj, who: &Identity) -> bool {
+    who.kind == "app"
+        && policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| {
+            a.get("type").and_then(Value::as_str) == Some("ai")
+                && a.get("principal").and_then(Value::as_str) == Some(who.principal.as_str())
+                && a.get("device").and_then(Value::as_str) == Some(who.device.as_str())
+        })
+}
+
 /// CE_HASH_RE: 64 lower-case hex.
 fn hex64(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
@@ -394,7 +408,7 @@ fn sorted_keys(v: &Value) -> Value {
     }
 }
 
-fn policy_error(e: op::PolicyError) -> E {
+pub(crate) fn policy_error(e: op::PolicyError) -> E {
     match e {
         op::PolicyError::Refused(m) => E::Forbidden(m),
         op::PolicyError::Bad(m) => E::Bad(m),
@@ -425,12 +439,16 @@ struct SsoOut {
 pub struct Pc {
     enclave: bool,
     holds: bool,
+    /// AI-1 1.5: relay.json `license_edition`, the organization size while no license is installed ("": none).
+    license_edition: String,
     /// The root org policies are checked against (relay.json client_ca).
     ca_file: String,
     /// Where the root's CRL is.
     crl_files: Vec<PathBuf>,
     minimums: Option<Minimums>,
     store: Option<op::Store>,
+    /// AI-1 2: the org AI maps (rebuilt from `ext["ai"]["maps"]` like the policy store).
+    ai_maps: Option<op::AiMapStore>,
     signer: Option<Arc<SignerClient>>,
     sso_out: IndexMap<String, SsoOut>,
     sso_answered: HashMap<(String, String), f64>,
@@ -445,10 +463,12 @@ impl Pc {
         Pc {
             enclave: false,
             holds: false,
+            license_edition: String::new(),
             ca_file: String::new(),
             crl_files: Vec::new(),
             minimums: None,
             store: None,
+            ai_maps: None,
             signer: None,
             sso_out: IndexMap::new(),
             sso_answered: HashMap::new(),
@@ -466,11 +486,27 @@ impl Hub {
         let mut st = self.st.lock();
         st.pc.enclave = s.enclave;
         st.pc.holds = s.legal_holds;
+        st.pc.license_edition = s.license_edition.clone();
         st.pc.ca_file = s.client_ca.clone();
         let root_part = crl_parts(s).map(|(root, _)| root);
         st.pc.crl_files = [(!s.crl.is_empty()).then(|| PathBuf::from(&s.crl)), root_part, crl_path(s)].into_iter().flatten().collect();
         st.pc.store = None;
+        st.pc.ai_maps = None;
         st.pc.signer = self.signer.clone();
+    }
+
+    /// AI-1 1.5: the organization size: the installed license's `edition`, else relay.json `license_edition`; None
+    /// (a big organization) with neither. A dev-license (test) build lets relay.json `license_edition` override the
+    /// license, as the test-only Python relay reads it.
+    pub fn ai_edition(&self) -> Option<String> {
+        let configured = Some(self.st.lock().pc.license_edition.clone()).filter(|e| !e.is_empty());
+        if cfg!(feature = "dev-license") && configured.is_some() {
+            return configured;
+        }
+        if let Some((l, _)) = self.gate().and_then(|g| g.license()) {
+            return Some(l.edition);
+        }
+        configured
     }
 
     /// The relay server's version minimums, for the service gate.
@@ -573,7 +609,7 @@ impl State {
 
     /// _pc_store: the org policy store; the first time after a start or a new root or signer policy it is rebuilt from
     /// `ext["pc"]` and every policy is verified again. None before the relay knows its root (nothing yet).
-    fn pc_store(&mut self) -> Option<&mut op::Store> {
+    pub(crate) fn pc_store(&mut self) -> Option<&mut op::Store> {
         if self.pc.store.is_none() && !self.pc.ca_file.is_empty() {
             self.pc.store = Some(op::Store::default());
             let wires: Vec<Obj> = self.pc_list("policies").iter().filter_map(Value::as_object).filter(|w| w.get("policy").map(Value::is_object).unwrap_or(false)).cloned().collect();
@@ -606,7 +642,7 @@ impl State {
     }
 
     /// _pc_terms: the PC-1 terms of the signer policy (empty without one).
-    fn pc_terms(&mut self) -> op::SignerTerms {
+    pub(crate) fn pc_terms(&mut self) -> op::SignerTerms {
         self.pc_signer_policy().map(|sp| op::signer_terms(&sp).unwrap_or_default()).unwrap_or_default()
     }
 
@@ -620,7 +656,7 @@ impl State {
     }
 
     /// _pc_policy_app: the app entry (plus `org` and `label`) a current policy gives `principal`.
-    fn pc_policy_app(&mut self, principal: &str) -> Option<Obj> {
+    pub(crate) fn pc_policy_app(&mut self, principal: &str) -> Option<Obj> {
         for policy in self.pc_current() {
             for app in policy.get("apps").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
                 if app.get("principal").and_then(Value::as_str) == Some(principal) {
@@ -670,6 +706,7 @@ impl State {
         log_info(&format!("signer policy taken v={} issued={}", kv_of(policy.get("v")), kv_of(policy.get("issued"))));
         self.pc_part().insert("signer_policy".into(), Value::Object(policy));
         self.pc.store = None;
+        self.pc.ai_maps = None; // and every AI map
         self.dirty = true;
         Ok(true)
     }
@@ -690,6 +727,14 @@ impl State {
         }
         let kept: Vec<Value> = store.by_hash.values().cloned().map(Value::Object).collect();
         self.pc_part().insert("policies".into(), Value::Array(kept));
+        // AI-1 2: the org's AI maps are its newest and the one this policy names
+        if self.pc.ai_maps.as_ref().is_some_and(|m| m.kept.contains_key(&v.org)) {
+            let named = self.ai_named(&v.org);
+            if let Some(maps) = self.pc.ai_maps.as_mut() {
+                maps.prune(&v.org, &named);
+            }
+            self.ai_keep_maps();
+        }
         self.dirty = true;
         let everyone = self.pc_everyone();
         self.tell(&everyone, &obj([("type", Value::from("org_policy")), ("org", Value::from(v.org.clone())), ("seq", Value::from(v.seq)), ("hash", Value::from(v.hash.clone()))]), None);
@@ -697,12 +742,108 @@ impl State {
         Ok((v, true))
     }
 
-    /// _pc_hello: what `/v1/hello` adds: the signer policy, every org's newest policy, whether legal holds are on, and
-    /// whether this relay is an enclave.
+    // ── AI-1: org AI maps (docs/ai/contract.md 2) ──
+
+    /// _ai_named: `ai.map_sha256` of the org's newest policy ("" when none).
+    pub(crate) fn ai_named(&mut self, org: &str) -> String {
+        let policy = self.pc_store().and_then(|s| s.newest.get(org)).map(|v| v.policy.clone());
+        policy.and_then(|p| p.get("ai").and_then(Value::as_object).map(|a| pj::s(a, "map_sha256"))).unwrap_or_default()
+    }
+
+    /// _ai_maps: the AI map store; rebuilt from `ext["ai"]["maps"]` (by org and seq) the first time after a start
+    /// or a new root or signer policy. None before the relay knows its root.
+    pub(crate) fn ai_maps(&mut self) -> Option<&mut op::AiMapStore> {
+        if self.pc.ai_maps.is_none() && !self.pc.ca_file.is_empty() {
+            self.pc.ai_maps = Some(op::AiMapStore::default());
+            let wires: Vec<Obj> = self.ext.get("ai").and_then(|a| a.get("maps")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).cloned().collect();
+            if !wires.is_empty() {
+                match self.pc_verify_args() {
+                    Err(e) => log_warn(&format!("AI maps not loaded: {}", e.message())),
+                    Ok((root, signer_policy, crl, previous)) => {
+                        let key = |w: &Obj| {
+                            let m = w.get("map").and_then(Value::as_object);
+                            (m.map(|m| pj::text_of(m, "org")).unwrap_or_default(), pc_int(m.and_then(|m| m.get("seq"))))
+                        };
+                        let mut sorted = wires;
+                        sorted.sort_by_key(key);
+                        let mut named: HashMap<String, String> = HashMap::new();
+                        for w in &sorted {
+                            let org = key(w).0;
+                            if !named.contains_key(&org) {
+                                let digest = self.ai_named(&org);
+                                named.insert(org, digest);
+                            }
+                        }
+                        let now = pj::now();
+                        let maps = self.pc.ai_maps.as_mut().expect("the AI maps");
+                        for w in sorted {
+                            let digest = named.get(&key(&w).0).cloned().unwrap_or_default();
+                            if let Err(e) = maps.accept_at(&Value::Object(w), &root, &signer_policy, crl.as_ref(), &previous, now, &digest) {
+                                log_warn(&format!("org AI map dropped: {}", policy_words(&e)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        self.pc.ai_maps.as_mut()
+    }
+
+    /// The AI maps were loaded since the last start or new root or signer policy.
+    pub(crate) fn pc_ai_maps_loaded(&self) -> bool {
+        self.pc.ai_maps.is_some()
+    }
+
+    /// _ai_policy_gates (AI-1 1.3 and 1.5) before a policy is stored: 409 with the contract's words while the relay's
+    /// minimum apps are older than AI-1a, or when the organization's size (the license `edition`; None: no license,
+    /// a big organization) needs an archive or reviewers the policy lacks.
+    pub(crate) fn ai_policy_gates(&self, policy: Option<&Value>, edition: Option<&str>) -> R<()> {
+        let mins = self.pc.minimums.as_ref().map(|f| f()).unwrap_or_default();
+        op::ai_gate(policy, &mins).map_err(E::Conflict)?;
+        if let Some(p) = policy.and_then(Value::as_object) {
+            op::ai_edition_gate(p, edition).map_err(E::Conflict)?;
+        }
+        Ok(())
+    }
+
+    /// `ext["ai"]["maps"]` = the kept maps.
+    fn ai_keep_maps(&mut self) {
+        let kept = self.pc.ai_maps.as_ref().map(op::AiMapStore::persisted).unwrap_or_default();
+        self.ai_part().insert("maps".into(), Value::Array(kept));
+        self.dirty = true;
+    }
+
+    /// _ai_accept: check and keep one signed AI map (403 for a refusal, 400 for its shape).
+    pub(crate) fn ai_accept(&mut self, wire: Option<&Value>) -> R<op::VerifiedAiMap> {
+        if self.ai_maps().is_none() {
+            return Err(E::Unavailable(NO_POLICIES.into()));
+        }
+        let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
+        let wire = wire.cloned().unwrap_or(Value::Null);
+        let org = wire.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let named = self.ai_named(&org);
+        let maps = self.pc.ai_maps.as_mut().expect("the AI maps");
+        let vm = maps.accept_at(&wire, &root, &signer_policy, crl.as_ref(), &previous, pj::now(), &named).map_err(policy_error)?;
+        self.ai_keep_maps();
+        log_info(&format!("org_ai org={} seq={} hash={} signer={}", vm.org, vm.seq, vm.hash, vm.signer));
+        Ok(vm)
+    }
+
+    /// The AI map the org's current policy names (the one devices and the gateway use), if the relay holds it.
+    pub(crate) fn ai_current_map(&mut self, org: &str) -> Option<Obj> {
+        let named = self.ai_named(org);
+        if named.is_empty() {
+            return None;
+        }
+        self.ai_maps()?.get(org, &named).and_then(|v| v.wire.get("map")).and_then(Value::as_object).cloned()
+    }
+
+    /// _pc_hello: what `/v1/hello` adds: the signer policy, every org's newest policy, whether legal holds are on,
+    /// whether this relay is an enclave, and (AI-1 7.6) that it keeps AI history.
     pub(crate) fn pc_hello(&mut self) -> Obj {
         let policies = self.pc_store().map(|s| s.current()).unwrap_or_default();
         let signer_policy = self.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
-        obj([("signer_policy", signer_policy), ("org_policies", Value::Array(policies)), ("holds", Value::Bool(self.pc.holds)), ("enclave", Value::Bool(self.pc.enclave))])
+        obj([("signer_policy", signer_policy), ("org_policies", Value::Array(policies)), ("holds", Value::Bool(self.pc.holds)), ("enclave", Value::Bool(self.pc.enclave)), ("ai_history", Value::Bool(true))])
     }
 
     // ── app and archive sessions ──
@@ -774,6 +915,9 @@ impl State {
                 return bad(ADD_NAMES);
             }
             let Some(app) = self.pc_policy_app(p) else { return forbidden(format!("{p} is not an app in a current organization policy")) };
+            if pj::text_of(&app, "type") == "ai" {
+                return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+            }
             if pj::text_of(&app, "scope") != "all" && pj::text_of(&app, "type") == "bot" {
                 return bad(LINK_MENTIONS);
             }
@@ -835,6 +979,9 @@ impl State {
         let linked = self.pc_linked(cid);
         if op_name == "link_app" {
             let Some(app) = self.pc_policy_app(&target) else { return forbidden(format!("{target} is not an app in a current organization policy")) };
+            if pj::text_of(&app, "type") == "ai" {
+                return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+            }
             if pj::text_of(&app, "scope") != "mentions" {
                 return bad(ADD_ALL);
             }
@@ -938,6 +1085,12 @@ impl State {
         let target = pj::text_of(to, "principal");
         let kind = service_kind(&target);
         let scope = cid.split_once(':').map(|(s, _)| s).unwrap_or(cid);
+        if self.ai_is_ai_app(&target) || self.ai_is_ai_app(sender) {
+            return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+        }
+        if scope == "ai" {
+            return self.ai_wrap_ok(cid, sender, to, pols); // AI-1 7.1
+        }
         if scope == "room" && (!kind.is_empty() || !service_kind(sender).is_empty()) {
             return forbidden(NO_ROOM_SERVICES);
         }
@@ -987,8 +1140,14 @@ impl State {
     /// _pc_dm_peer: the directory entry of a DM's other side that is not a person: an app of a current policy (a
     /// person's own DM with an app). Never an archive; an app takes part only in DMs with people.
     pub(crate) fn pc_dm_peer(&mut self, who: &Identity, other: &str) -> R<Option<Obj>> {
-        match service_kind(other) {
-            "archive" => forbidden(NO_ARCHIVE_DM),
+        let kind = service_kind(other);
+        if kind == "archive" {
+            return forbidden(NO_ARCHIVE_DM);
+        }
+        if self.ai_is_ai_app(other) || self.ai_is_ai_app(&who.principal) {
+            return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+        }
+        match kind {
             "app" => {
                 if who.is_service() {
                     return forbidden(APP_DMS);
@@ -1036,7 +1195,7 @@ impl State {
     /// _pc_retention_s: how long a conversation's `kind` (dm, group, channel, files) is kept: the longest of its
     /// people's signed org retention (a person no current policy covers, or a policy without that kind: the relay's
     /// setting), never longer than the relay's `cap`.
-    fn pc_retention_s(&mut self, kind: &str, people: &[String], cap: f64) -> f64 {
+    pub(crate) fn pc_retention_s(&mut self, kind: &str, people: &[String], cap: f64) -> f64 {
         let policies = self.pc_current();
         if policies.is_empty() {
             return cap;
@@ -1148,6 +1307,16 @@ impl State {
                 return (now - self.pc_retention_s("dm", pair, cap)) * 1000.0;
             }
         }
+        if scope == "ai" {
+            // AI-1 7.4: retention.ai
+            let mut owner = self.ai_owner(&cid);
+            if owner.is_empty() {
+                owner = r.get("from").and_then(|f| f.get("principal")).and_then(Value::as_str).unwrap_or_default().to_string();
+            }
+            if !owner.is_empty() {
+                return (now - self.ai_keep_s(&owner)) * 1000.0;
+            }
+        }
         0.0
     }
 
@@ -1205,6 +1374,12 @@ impl State {
                 None => self.pc_dm_pairs().get(cid).cloned(),
             };
             people.extend(pair.unwrap_or_default());
+        } else if scope == "ai" {
+            // AI-1 7.6: people holds cover ai:
+            let owner = self.ai_owner(cid);
+            if !owner.is_empty() {
+                people.push(owner);
+            }
         }
         for item in items {
             for key in ["by", "from", "to"] {
@@ -1513,6 +1688,7 @@ impl Hub {
     /// `POST /v1/org/policy {signed, signer_policy?}`: the issuer PC's upload (a relay admin). `signer_policy` (the
     /// root-signed v2 policy of the issuer-PC path) is taken only by a relay without a signer.
     pub fn pc_policy_upload(&self, session: &str, who: &Identity, signed: Body, signer_policy: Body) -> R<Obj> {
+        let edition = self.ai_edition();
         let mut st = self.st.lock();
         let r = (|| -> R<op::Verified> {
             st.check_admin(session, who)?;
@@ -1522,6 +1698,7 @@ impl Hub {
                 }
                 st.pc_set_signer_policy(Some(sp), true)?;
             }
+            st.ai_policy_gates(signed.and_then(|s| s.get("policy")), edition.as_deref())?; // AI-1 1.3 and 1.5
             Ok(st.pc_accept(signed)?.0)
         })();
         drop(st);
@@ -1542,6 +1719,57 @@ impl Hub {
         let Some(wire) = wire else { return Err(E::NotFound(NO_POLICY.into())) };
         let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
         Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
+    }
+
+    // ── AI-1: org AI maps (docs/ai/contract.md 2) ──
+
+    /// `POST /v1/org/ai {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
+    /// `{org, seq, hash}`.
+    pub fn pc_ai_upload(&self, session: &str, who: &Identity, signed: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<op::VerifiedAiMap> {
+            st.check_admin(session, who)?;
+            st.ai_accept(signed)
+        })();
+        drop(st);
+        self.wake();
+        let vm = r?;
+        log_info(&format!("org_ai_upload org={} seq={} by={}", vm.org, vm.seq, who.principal));
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
+    }
+
+    /// A map the signer just signed (`POST /v1/org/ai/sign`): `{org, seq, hash, signed}`.
+    pub fn pc_ai_take_signed(&self, wire: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = st.ai_accept(wire);
+        drop(st);
+        self.wake();
+        let vm = r?;
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash)), ("signed", Value::Object(vm.wire))]))
+    }
+
+    /// The org's newest AI map, or that exact kept map, with the signer policy: `{signed, signer_policy}` (no
+    /// membership check: the console's in-process read). 404 `not found` when the relay does not hold it.
+    pub fn pc_ai_get(&self, org: &str, sha256: &str) -> R<Obj> {
+        let mut st = self.st.lock();
+        let wire = st.ai_maps().and_then(|m| m.get(org, sha256)).map(|v| v.wire.clone());
+        let Some(wire) = wire else { return Err(E::NotFound(AI_NOT_FOUND.into())) };
+        let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
+        Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
+    }
+
+    /// `GET /v1/org/ai?org=<id>[&sha256=<hex>]`: only to a person the org's current policy covers, or that org's `ai`
+    /// app; anyone else, and a map the relay does not hold, get the same 404 `{"error": "not found"}`.
+    pub fn pc_ai_get_for(&self, who: &Identity, org: &str, sha256: &str) -> R<Obj> {
+        let allowed = {
+            let mut st = self.st.lock();
+            let policy = st.ai_newest(org);
+            policy.as_ref().is_some_and(|p| (super::ai::ai_person(who) && op::covers(p, &who.principal)) || State::ai_app_of(who, Some(p)))
+        };
+        if !allowed {
+            return Err(E::NotFound(AI_NOT_FOUND.into()));
+        }
+        self.pc_ai_get(org, sha256)
     }
 
     // ── apps directory ──

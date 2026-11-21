@@ -1087,8 +1087,11 @@ impl State {
             if to_principal != who.principal {
                 return forbidden("a share goes to your own device");
             }
-            if !["dm:", "ch:", "room:"].iter().any(|p| cid.starts_with(p)) {
-                return bad("cid must be dm:, ch: or room:");
+            if !["dm:", "ch:", "room:", "ai:"].iter().any(|p| cid.starts_with(p)) {
+                return bad("cid must be dm:, ch:, room: or ai:");
+            }
+            if cid.starts_with("ai:") && cid != super::ai::ai_cid(&who.principal) {
+                return forbidden(super::ai::AI_NOT_YOURS);
             }
             out.insert("share".into(), Value::Bool(true));
         } else {
@@ -1097,11 +1100,13 @@ impl State {
             out.insert("log_hash".into(), Value::from(hash_of(w.get("log_hash"), "log_hash")?));
             let mut named: Vec<String> = Vec::new();
             if let Some(p) = &pols {
-                if !cid.starts_with("dm:") {
-                    return bad("pols is only for direct messages");
+                if !cid.starts_with("dm:") && !cid.starts_with("ai:") {
+                    return bad("pols is only for direct messages and AI history");
                 }
                 named = pc::pols(Some(p))?;
                 out.insert("pols".into(), Value::Array(named.iter().cloned().map(Value::from).collect()));
+            } else if cid.starts_with("ai:") {
+                return bad("an AI history wrap carries pols"); // CE-1 revision 8
             }
             let to = as_obj(out.get("to")).cloned().unwrap_or_default();
             self.pc_wrap_in_conv(&cid, &who.principal, &to, &named)?;
@@ -1135,7 +1140,7 @@ impl State {
 }
 
 /// _ce_add_event: an edit, delete or event kept on its target (at most EVENTS_MAX).
-fn add_event(target: &mut Obj, eid: &str, who: &Identity, env: Obj, now: f64) -> R<Obj> {
+pub(super) fn add_event(target: &mut Obj, eid: &str, who: &Identity, env: Obj, now: f64) -> R<Obj> {
     let events = target.entry("events").or_insert_with(|| Value::Array(Vec::new()));
     if !events.is_array() {
         *events = Value::Array(Vec::new());
@@ -1390,6 +1395,7 @@ impl Hub {
                 return Err(E::Conflict(NO_SHARES.into()));
             }
             let rows = items.iter().map(|w| st.ce_wrap(w, who, share)).collect::<R<Vec<Obj>>>()?;
+            st.ai_wrap_sets(who, &rows)?; // AI-1 7.6: the covering archives read ai:
             let rts = now_ms();
             let mut seq = pj::as_int(st.ce_store().get("seq")).unwrap_or(0);
             let mut told: IndexMap<(String, String), i64> = IndexMap::new();
@@ -1466,6 +1472,9 @@ impl Hub {
                 "dm" => {
                     st.session(p.session.as_deref().unwrap_or_default(), who)?;
                     let other = m::principal(p.to);
+                    if st.ai_is_ai_app(&who.principal) {
+                        return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+                    }
                     // PC-1: a person's own DM with an app of a current policy; never an archive
                     let entry = match st.directory.get(&other).filter(|e| pj::truthy(Some(*e))).cloned() {
                         Some(e) => Some(e.as_object().cloned().unwrap_or_default()),

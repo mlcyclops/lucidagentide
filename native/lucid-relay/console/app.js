@@ -970,14 +970,48 @@
 
   const PAGES = {
     spokes: ["hubs", "spokes", "relays", "seats", "license", "logs", "requests"],
-    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests"],
+    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai"],
     admins: ["people", "sessions", "audit", "settings", "account"],
+  };
+  // Settings > AI (contract AI-1 section 9). The contract's own words are verbatim; the rest are the page's labels.
+  const AIW = {
+    page: "AI",
+    // ends with the scheme so the asset test reads it as words, not a link
+    url: "Address with its port; it must start with https://",
+    presets: { device: "This computer only", "org-first": "Org servers first", "device-org-frontier": "This computer, then org servers, then frontier", advanced: "Advanced" },
+    who: "Who may use AI", groups: "Groups (immutable ID-1 group ids, one per line)", people: "People (one email per line, for organizations without single sign-on or as well)",
+    routing: "Routing", preset: "Route order", advancedAi: "Advanced: the ai key (every field of the policy's ai settings)", advancedMap: "Advanced: the AI map's channel_classes and excluded_channels",
+    review: "Review changes", save: "Save", staged: "Staged change", noStage: "Nothing is staged.",
+    signing: { map: "Waiting for <principal> to sign the AI map from their device.", policy: "Waiting for <principal> to sign the policy that names the AI map." },
+    gateways: "AI gateways", enroll: "Enroll a gateway", remove: "Remove", consoleSpki: "This console's key for the gateway's admin_spki",
+    cards: "Model cards", bench: "Run benchmark", approve: "Approve",
+    usage: "Usage", requests: "Requests", refusals: "Refusals by code", spend: "Spend this month", budgets: "Budgets", health: "Card health", missing: "Request ids missing from the archive",
+    personal: "Personal access (people's own accounts)", byProvider: "Requests by provider and method", plans: "Business-plan answers", tokens: "Tokens in and out",
+    dropped: "AI history records that could not be saved", droppedLatest: "Latest", droppedCount: "Records", reasons: "Reasons", partial: "Only the first 20,000 device audit records of the last 30 days are counted.",
+    hold: "Place a legal hold", reviewer: "Archive reviewer who signs",
+    archive: "Archive", addArchive: "Add an archive", offlineCopy: "Offline copy", shares: "Reviewers' shares", recoverable: "Recoverable", notTested: "Not tested",
+    code: "Recovery code", makeCode: "Make a recovery code", replaceCode: "Replace the recovery code", confirmCode: "Confirm the recovery code",
+    codeOnce: "Write this code down now. It is shown only once.", group: "Group <n>",
+    noArchive: "No archive. AI history stays on each person's devices; a legal hold cannot retrieve it.",
+    noCopy: "No offline copy. Legal holds depend on restoring this archive server from your own backups.",
+    dlg: {
+      save: { title: "Save the AI settings of <org>?", body: ["The AI map is signed first, then the policy that names it, from your device."], button: ["Save", "Ask for approval"] },
+      approve: { title: "Approve the model card <card>?", body: ["It passed its benchmark. Approved cards can carry the classes you list."], button: ["Approve", "Ask for approval"] },
+      enroll: { title: "Enroll a gateway for <org>?", body: ["It is listed in the next AI map you save."], button: ["Enroll"] },
+      hold: { title: "Place a legal hold on <principal>?", body: ["A reviewer signs the archive hold; the relay hold and the archive hold are placed together."], button: ["Place a legal hold"] },
+      archive: { title: "Add an archive for <org>?", body: ["The console reaches the archive at this address and checks its key."], button: ["Add an archive"] },
+      copy: { title: "Change the offline copy settings of <org>?", body: ["A reviewer signs the change before the archive takes it."], button: ["Save"] },
+      code: { title: "Make a recovery code for <org>?", body: ["A new code replaces the old one for new copies. A reviewer signs the request."], button: ["Make a recovery code"] },
+      confirm: { title: "Confirm the recovery code", body: ["Type groups <first> and <second> of the code."], button: ["Confirm"] },
+      bench: { title: "Run the benchmark of <card>?", body: ["The gateway measures the card again (3.2)."], button: ["Run benchmark"] },
+    },
   };
   const PAGE_LABEL = {
     spokes: Object.fromEntries(PAGES.spokes.map((id, i) => [id, W["nav.spokes.pages"][i]])),
     meet: Object.fromEntries(PAGES.meet.map((id, i) => [id, W["nav.meet.pages"][i]])),
     admins: Object.fromEntries(PAGES.admins.map((id, i) => [id, W["nav.admins.pages"][i]])),
   };
+  PAGE_LABEL.meet.ai = AIW.page;
   // What each role below admin may open (2.3, 7.2): user managers the people lists and seats, viewers health and lists.
   const ROLE_PAGES = {
     "user-manager": { spokes: ["hubs", "spokes", "seats"], meet: ["people", "seats"], admins: ["people", "account"] },
@@ -3381,6 +3415,206 @@
         },
       }] : []),
     }))];
+  };
+
+  // Settings > AI (AI-1 section 9): the staged save signed map first then policy, gateways and cards, usage, the hold
+  // on a person and the archive by organization size. Every write goes through the relay, which re-checks it.
+  const lines = (t) => [...new Set(String(t || "").split(/[\n,]+/).map((x) => x.trim()).filter(Boolean))];
+  const aiQ = (org) => (org ? "?org=" + encodeURIComponent(org) : "");
+  function aiJSON(text) {
+    try {
+      const v = JSON.parse(text);
+      return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function aiSettings(d) {
+    const ai = d.ai || {};
+    const map = d.map || {};
+    const presetOptions = (d.presets || []).map((p) => [p.id, AIW.presets[p.id] || p.label]).concat([["advanced", AIW.presets.advanced]]);
+    confirmDialog({
+      spec: AIW.dlg.save, vals: { org: d.org }, name: d.org, id: d.org,
+      fields: [
+        { kind: "textarea", key: "groups", label: AIW.groups, value: ((ai.who || {}).groups || []).join("\n") },
+        { kind: "textarea", key: "people", label: AIW.people, value: (map.who_principals || []).join("\n") },
+        { kind: "select", key: "preset", label: AIW.preset, options: presetOptions, value: d.preset || d.default },
+        { kind: "textarea", key: "ai", label: AIW.advancedAi, value: JSON.stringify(Object.assign({}, ai.v ? ai : {}), null, 2) },
+        { kind: "textarea", key: "map", label: AIW.advancedMap, value: JSON.stringify({ channel_classes: map.channel_classes || {}, excluded_channels: map.excluded_channels || [] }, null, 2) },
+      ],
+      specFor: () => Object.assign({}, AIW.dlg.save, { button: [AIW.review] }),
+      check: (v) => (v.preset === "advanced" && (!aiJSON(v.ai || "{}") || !aiJSON(v.map || "{}")) ? MSG.unreadable : ""),
+      run: (v) => {
+        const fields = v.preset === "advanced" ? aiJSON(v.ai || "{}") || {} : {};
+        delete fields.map_sha256;
+        fields.who = Object.assign({}, fields.who || ai.who || {}, { groups: lines(v.groups) });
+        const mapFields = Object.assign(v.preset === "advanced" ? aiJSON(v.map || "{}") || {} : {}, { who_principals: lines(v.people) });
+        return post("meet/ai/stage", { org: d.org, preset: v.preset, ai: fields, map: mapFields }, { action: "meet.ai.stage", target: d.org });
+      },
+    });
+  }
+  function aiSave(d) {
+    const s = d.staged;
+    confirmDialog({
+      spec: AIW.dlg.save, vals: { org: d.org }, name: d.org, id: s.id, two: true, fields: [{ kind: "reason" }],
+      params: [[AIW.preset, AIW.presets[s.preset] || s.preset], ["map_sha256", s.map_sha256]],
+      body: () => [el("p", null, AIW.dlg.save.body[0]), lineDiff(d.ai, s.ai)],
+      run: (v) => post("meet/ai/save", { org: d.org, stage: s.id, reason: v.reason }, { action: "meet.ai.save", target: d.org }),
+    });
+  }
+  function aiEnroll(d) {
+    confirmDialog({
+      spec: AIW.dlg.enroll, vals: { org: d.org }, name: d.org, id: d.org,
+      fields: [{ key: "url", label: AIW.url }, { key: "principal", label: "Principal (ai@apps.<domain>)" }, { key: "device", label: "Device (16 hex)" },
+        { key: "spki", label: "SPKI SHA-256 (64 hex)" }, { key: "region", label: "Region (optional)" }, { kind: "reason" }],
+      run: (v) => {
+        const body = { org: d.org, url: v.url, principal: v.principal, device: v.device, spki: v.spki, reason: v.reason };
+        if (v.region) body.region = v.region;
+        return post("meet/ai/gateways", body, { action: "meet.ai.gateway", target: d.org });
+      },
+    });
+  }
+  function aiCardsPanel(d, c) {
+    return panel(AIW.cards, dataTable({
+      caption: AIW.cards, rows: c.cards || [], empty: MSG.noneYet, text: (r) => [r.card_id, r.tier, r.model, r.status].join(" "), name: (r) => r.card_id,
+      cols: [{ key: "card_id", label: W["dialog.id"], cell: (r) => code(r.card_id) }, { key: "tier", label: "Tier" }, { key: "model", label: "Model", cell: (r) => u(r.model) },
+        { key: "precision", label: "Precision", cell: (r) => u(JSON.stringify(r.precision || null)), sortable: false },
+        { key: "hardware", label: "Hardware", cell: (r) => u(JSON.stringify(r.hardware || null)), sortable: false },
+        { key: "throughput", label: "Tested throughput", cell: (r) => u(JSON.stringify(r.throughput || null)), sortable: false },
+        { key: "quality", label: "Quality", cell: (r) => u(JSON.stringify(r.quality || null)), sortable: false },
+        { key: "status", label: "Status", cell: (r) => stateWord(r.status) }, { key: "retire_after", label: "Retire after", cell: (r) => u(r.retire_after) }],
+      actions: (r) => (isAdmin() ? [{
+        label: AIW.bench, run: () => confirmDialog({
+          spec: AIW.dlg.bench, vals: { card: r.card_id }, name: r.card_id, id: r.gateway,
+          run: () => post("meet/ai/cards/bench", { org: d.org, gateway: r.gateway, card_id: r.card_id }, { action: "meet.ai.bench", target: r.card_id }),
+        }),
+      }].concat(r.approvable ? [{
+        label: AIW.approve, run: () => confirmDialog({
+          spec: AIW.dlg.approve, vals: { card: r.card_id }, name: r.card_id, id: r.gateway, two: true,
+          fields: [{ kind: "textarea", key: "classes", label: "Classes (one per line)" }, { key: "override", label: "Retention override reason (optional)" }, { kind: "reason" }],
+          run: (v) => {
+            const body = { org: d.org, gateway: r.gateway, card_id: r.card_id, for_classes: lines(v.classes), reason: v.reason };
+            if (v.override) body.retention_override = v.override;
+            return post("meet/ai/cards/approve", body, { action: "meet.ai.approve", target: r.card_id });
+          },
+        }),
+      }] : []) : []),
+    }), (c.errors || []).map((e) => el("p", { class: "empty" }, u(e.gateway + ": " + e.error))));
+  }
+  function aiUsagePanel(g) {
+    const sp = g.spend || {};
+    const usd = (m) => "$" + (Number(m || 0) / 1e6).toFixed(2);
+    const refusals = Object.entries(g.refusals || {}).map(([k, n]) => k + " " + n).join(", ");
+    const missing = g.missing_rids == null ? "" : (g.missing_rids.length ? g.missing_rids.join(" ") : "0");
+    return panel(AIW.usage, sp.warning ? banner("warn", MSG.sev.warn, u(sp.warning)) : null, pairs([
+      [AIW.requests, String(g.requests || 0)], [AIW.refusals, refusals], [AIW.spend, usd(sp.month_usd_micro) + " / " + usd(sp.month_limit_usd_micro)],
+      [AIW.budgets, JSON.stringify(g.budgets || null)], [AIW.health, (g.cards || []).map((c) => c.card_id + " " + (c.healthy ? "ok" : stateWord(c.status))).join(", ")],
+      [AIW.missing, missing]]), aiAuditPart(g.audit));
+  }
+  // The devices' own audit lines (6.6): counts only, no content exists in them.
+  function aiAuditPart(a) {
+    if (!a) return null;
+    const p = a.personal || {};
+    const byProvider = Object.entries(p.by_provider || {}).map(([k, m]) => k + ": key " + (m.key || 0) + ", OAuth " + (m.oauth || 0)).join("; ");
+    const plans = Object.entries(p.plans || {}).map(([k, m]) => k + ": business " + (m.business || 0) + ", not business " + (m.not_business || 0) + ", unknown " + (m.unknown || 0)).join("; ");
+    const d = a.dropped || {};
+    const reasons = Object.entries(d.by_reason || {}).map(([k, n]) => k + " " + n).join(", ");
+    return [
+      sub(AIW.personal, pairs([[AIW.requests, String(p.requests || 0)], [AIW.byProvider, byProvider], [AIW.plans, plans], [AIW.tokens, (p.tokens_in || 0) + " / " + (p.tokens_out || 0)]])),
+      sub(AIW.dropped, pairs([[AIW.droppedCount, String(d.count || 0)], [AIW.reasons, reasons]]),
+        (d.latest || []).length ? genericTable(AIW.droppedLatest, d.latest.slice().reverse(), MSG.noneYet) : null),
+      a.partial ? el("p", { class: "empty" }, AIW.partial) : null,
+    ];
+  }
+  function aiHold(d) {
+    const reviewers = d.reviewers || [];
+    confirmDialog({
+      spec: AIW.dlg.hold, vals: { principal: "" }, vals2: (v) => ({ principal: v.principal || "" }),
+      fields: [{ key: "principal", label: "Person (email)" }].concat(reviewers.length ? [{ kind: "select", key: "reviewer", label: AIW.reviewer, options: reviewers.map((r) => [r, r]) }] : []).concat([{ kind: "reason" }]),
+      check: (v) => (!String(v.principal || "").includes("@") ? "Name the person (their email)." : ""),
+      run: (v) => post("meet/ai/hold", { org: d.org, principal: v.principal, reviewer: v.reviewer || "", reason: v.reason }, { action: "meet.ai.hold", target: v.principal }),
+    });
+  }
+  function aiArchivePanel(d, a) {
+    const kids = [];
+    if (a.lacks) kids.push(banner("warn", MSG.sev.warn, u(a.lacks)));
+    if (a.error) kids.push(el("p", { class: "empty" }, u(a.error)));
+    const state = a.state ? el("p", null, el("strong", null, a.state)) : null;
+    const reviewers = d.reviewers || [];
+    const reviewerField = reviewers.length ? [{ kind: "select", key: "reviewer", label: AIW.reviewer, options: reviewers.map((r) => [r, r]) }] : [{ key: "reviewer", label: AIW.reviewer }];
+    const addArchive = () => confirmDialog({
+      spec: AIW.dlg.archive, vals: { org: d.org }, name: d.org, id: d.org,
+      fields: [{ key: "url", label: AIW.url }, { key: "spki", label: "SPKI SHA-256 (64 hex)" }, { kind: "reason" }],
+      run: (v) => post("meet/ai/archive", { org: d.org, url: v.url, spki: v.spki, reason: v.reason }, { action: "meet.ai.archive", target: d.org }),
+    });
+    if (a.size === "big") {
+      kids.push(state, sub(AIW.offlineCopy, objPairs(a.offline_copy || {}), isAdmin() ? btn(AIW.offlineCopy, () => confirmDialog({
+        spec: AIW.dlg.copy, vals: { org: d.org }, name: d.org, id: d.org,
+        fields: reviewerField.concat([{ kind: "textarea", key: "copy", label: "offline_copy (JSON)", value: JSON.stringify(a.offline_copy || { enabled: true, schedule: "daily", target: { type: "path", path: "" }, keep: 30 }, null, 2) }, { kind: "reason" }]),
+        check: (v) => (aiJSON(v.copy) ? "" : MSG.unreadable),
+        run: (v) => post("meet/ai/archive/copy", { org: d.org, reviewer: v.reviewer, offline_copy: aiJSON(v.copy), reason: v.reason }, { action: "meet.ai.archive.copy", target: d.org }),
+      })) : null), sub(AIW.shares, genericTable(AIW.shares, a.shares || [], MSG.noneYet), el("p", null, u(a.note || ""))));
+      if (!a.archive && isAdmin()) kids.push(btn(AIW.addArchive, addArchive, "primary"));
+      return panel(AIW.archive, ...kids);
+    }
+    if (a.notice) {
+      kids.push(el("p", null, a.notice));
+      if (isAdmin()) kids.push(btn(AIW.addArchive, addArchive, "primary"));
+      return panel(AIW.archive, ...kids);
+    }
+    kids.push(state);
+    if (a.code) kids.push(banner("warn", MSG.sev.warn, AIW.codeOnce, " ", code(a.code)));
+    const makeCode = () => confirmDialog({
+      spec: AIW.dlg.code, vals: { org: d.org }, name: d.org, id: d.org, fields: reviewerField.concat([{ kind: "reason" }]),
+      run: (v) => post("meet/ai/archive/code", { org: d.org, reviewer: v.reviewer, reason: v.reason }, { action: "meet.ai.archive.code", target: d.org }),
+    });
+    const sub2 = [pairs([[AIW.code, stateWord(a.recovery_code)]])];
+    if (isAdmin()) {
+      if (a.confirm) {
+        sub2.push(btn(AIW.confirmCode, () => confirmDialog({
+          spec: AIW.dlg.confirm, vals: { first: a.confirm.first, second: a.confirm.second }, name: d.org, id: d.org,
+          fields: [{ key: "first", label: fillText(AIW.group, { n: a.confirm.first }) }, { key: "second", label: fillText(AIW.group, { n: a.confirm.second }) }],
+          run: (v) => post("meet/ai/archive/code/confirm", { org: d.org, first: v.first, second: v.second }, { action: "meet.ai.archive.code.confirm", target: d.org }),
+        }), "primary"));
+      }
+      sub2.push(btn(a.recovery_code === "none" ? AIW.makeCode : AIW.replaceCode, makeCode));
+    }
+    kids.push(sub(AIW.code, ...sub2));
+    if (!a.archive && isAdmin()) kids.push(btn(AIW.addArchive, addArchive));
+    return panel(AIW.archive, ...kids);
+  }
+  pages.meet_ai = async () => {
+    const want = (location.hash.split("?org=")[1] || "").split("&")[0];
+    const d = await api("GET", "meet/ai" + aiQ(decodeURIComponent(want)));
+    const q = aiQ(d.org);
+    const [c, g, a] = await Promise.all([api("GET", "meet/ai/cards" + q).catch((e) => ({ cards: [], errors: [{ gateway: "", error: e.message }] })),
+      api("GET", "meet/ai/usage" + q).catch(() => ({})), api("GET", "meet/ai/archive" + q).catch((e) => ({ error: e.message }))]);
+    const orgPick = (d.orgs || []).length > 1 ? el("nav", { class: "chips" }, d.orgs.map((o) => el("a", { href: "#/meet/ai?org=" + encodeURIComponent(o.id) }, u(o.label || o.id)))) : null;
+    const ai = d.ai || {};
+    const kids = [head(PAGE_LABEL.meet.ai, orgPick)];
+    if (d.lacks) kids.push(banner("warn", MSG.sev.warn, u(d.lacks)));
+    for (const s of d.saving || []) kids.push(banner("info", MSG.sev.info, fill(AIW.signing[s.step] || AIW.signing.map, { principal: s.principal })));
+    kids.push(panel(AIW.who, pairs([[AIW.groups, ((ai.who || {}).groups || []).join(", ")], [AIW.people, ((d.map || {}).who_principals || []).join(", ")]])));
+    kids.push(panel(AIW.routing, pairs([[AIW.preset, AIW.presets[d.preset] || AIW.presets.advanced], ["order", (ai.order || []).join(", ")], ["frontier.access", (ai.frontier || {}).access || ""]]),
+      isAdmin() ? btn(AIW.review, () => aiSettings(d), "primary") : null));
+    kids.push(panel(AIW.staged, d.staged ? [lineDiff(ai, d.staged.ai), isAdmin() ? btn(AIW.save, () => aiSave(d), "primary") : null] : emptyLine(AIW.noStage)));
+    kids.push(panel(AIW.gateways, dataTable({
+      caption: AIW.gateways, rows: d.gateways || [], empty: MSG.noneYet, text: (r) => [r.url, r.principal].join(" "), name: (r) => r.url,
+      cols: [{ key: "url", label: "URL", cell: (r) => u(r.url) }, { key: "principal", label: "Principal", cell: (r) => u(r.principal) }, { key: "device", label: "Device", cell: (r) => code(r.device) },
+        { key: "spki", label: "SPKI", cell: (r) => code(r.spki) }, { key: "region", label: "Region", cell: (r) => u(r.region || "") }],
+      actions: (r) => (isAdmin() ? [{
+        label: AIW.remove, run: () => confirmDialog({
+          spec: AIW.dlg.enroll, vals: { org: d.org }, name: r.url, id: r.device, danger: true, fields: [{ kind: "reason" }],
+          specFor: () => Object.assign({}, AIW.dlg.enroll, { button: [AIW.remove] }),
+          run: (v) => post("meet/ai/gateways", { org: d.org, url: r.url, remove: true, reason: v.reason }, { action: "meet.ai.gateway", target: d.org }),
+        }),
+      }] : []),
+    }), d.consoleSpki ? pairs([[AIW.consoleSpki, code(d.consoleSpki)]]) : null, isAdmin() ? btn(AIW.enroll, () => aiEnroll(d)) : null));
+    kids.push(aiCardsPanel(d, c), aiUsagePanel(g));
+    kids.push(panel(AIW.hold, isAdmin() ? btn(AIW.hold, () => aiHold(d), "primary") : null,
+      genericTable(AIW.hold, (d.results || []).filter((r) => r.op === "hold").map((r) => ({ at: r.at, reviewer: r.reviewer, placed: r.placed ? "yes" : "no" })), MSG.noneYet)));
+    kids.push(aiArchivePanel(d, a));
+    return kids;
   };
 
   // Releases (4.9): one admin only for the same minimums, or raising one back to what a lowering in the last 24 h replaced.

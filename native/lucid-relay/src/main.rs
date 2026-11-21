@@ -15,6 +15,8 @@
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
+//   lucid-relay ai [serve | card-add | cards | bench | approve | usage | audit-verify] --config <file>   the
+//               organization's AI gateway (contract AI-1, slice AI-1d; src/ai_gateway.rs).
 //   lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] |
 //               reset --first-admin <email>   [--state <dir>]   with the relay stopped (console.lock): the Admin
 //               Console's book, offline (AC-1 3.2).
@@ -31,11 +33,21 @@
 //   lucid-relay console serve ... [--fleet-serve-dev]   a `dev-license` build hands out its own program too (AC-2b-D
 //               4.2; default off).
 
+mod ai_gateway;
+mod ai_gateway_admit;
+mod ai_gateway_ask;
+mod ai_gateway_audit;
+mod ai_gateway_backend;
+mod ai_gateway_bench;
+mod ai_gateway_cards;
+mod ai_gateway_policy;
+mod ai_gateway_suite;
 mod codec;
 mod collab;
 mod collab_auth;
 mod collab_presence;
 mod console;
+mod console_ai;
 mod console_approvals;
 mod console_audit;
 mod console_auth;
@@ -635,6 +647,10 @@ fn main() {
     // Phase C: the Meeting Hub rendezvous relay (relay/meet_relay.py; src/meet.rs).
     if args.first().map(String::as_str) == Some("meet") {
         meet::main(&args[1..]);
+    }
+    // Contract AI-1 (slice AI-1d): the organization's AI gateway (src/ai_gateway.rs).
+    if args.first().map(String::as_str) == Some("ai") {
+        ai_gateway::main(&args[1..]);
     }
     // The Admin Console's book, offline (console.lock refuses while a relay runs).
     if args.first().map(String::as_str) == Some("console") {
