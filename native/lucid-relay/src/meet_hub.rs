@@ -73,6 +73,9 @@ pub mod pc;
 // PC-1 section 2: canvases and lists (/v1/docs/*).
 #[path = "meet_pc_docs.rs"]
 mod pc_docs;
+// AI-1: who may use org AI, the personal-access audit and AI history (`ai:` conversations).
+#[path = "meet_ai.rs"]
+pub mod ai;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -1582,6 +1585,7 @@ impl State {
         self.ce_prune(now);
         self.pa_prune(now);
         self.pc_prune(now);
+        self.ai_prune(now);
     }
 
     /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.

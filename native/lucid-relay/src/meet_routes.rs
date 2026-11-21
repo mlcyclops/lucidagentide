@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, ce, files, parity, pc, push, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{ai, bridge, ce, files, parity, pc, push, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -19,6 +19,15 @@ fn get_route(path: &str) -> Option<Route> {
             let session = c.q("session", "");
             c.relay.hub.check_admin(&session, &who)?;
             Ok(crate::console_meet::requests_for(c.relay, &who.principal))
+        },
+        // AI-1 6.6: the kept personal-access audit records, for the Admin Console's Usage
+        "/v1/admin/ai/audit" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            let since = m::number(Some(&Value::from(c.q("since", "0"))), "since")?.trunc() as i64;
+            let cursor = c.q("cursor", "");
+            c.relay.hub.ai_audit_list(&c.q("org", ""), since, Some(cursor.as_str()))
         },
         // AC-2a 5.7 (F13): whether this relay runs its own console and which Lucid Admin Console manages it
         "/v1/admin/console/where" => |c: &mut Ctx| {
@@ -212,6 +221,21 @@ fn get_route(path: &str) -> Option<Route> {
         "/v1/org/policy" => |c: &mut Ctx| {
             c.who(false)?;
             c.relay.hub.pc_policy_get(&c.q("org", ""), &c.q("sha256", ""))
+        },
+        // AI-1 2: org AI maps, only to people the org's current policy covers and its ai app
+        "/v1/org/ai" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_ai_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
+        // AI-1 6.4 and 7.6: who may use org AI, and AI history
+        "/v1/ai/allowed" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.ai_allowed(&who, &c.q("principal", ""))
+        },
+        "/v1/ai/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let limit = ai::HISTORY_LIMIT.to_string();
+            c.relay.hub.ai_history_get(&c.q("session", ""), &who, &c.q("cid", ""), &c.q("after", "0"), &c.q("limit", &limit))
         },
         "/v1/apps" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -451,6 +475,12 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
             crate::console_meet::decline(c.relay, &who.principal, b.get("id"), b.get("reason"))
         },
+        // AI-1 9: an admin's device answers a console AI signing request
+        "/v1/admin/console/requests/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::ai_request_signed(c.relay, &who, b.get("id"), b.get("sig"))
+        },
         "/v1/admin/signer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.signer_install(&pj::s(&b, "session"), &who, &b)
@@ -629,6 +659,32 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/org/policy/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
             c.relay.pc_sign_policy(&pj::s(&b, "session"), &who, b.get("policy"), b.get("proof"), b.get("ts"))
+        },
+        // AI-1 2: org AI maps (a relay admin uploads; an org admin's device signs through the signer)
+        "/v1/org/ai" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            c.relay.hub.pc_ai_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        "/v1/org/ai/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            c.relay.pc_sign_ai(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
+        },
+        // AI-1 6.4, 6.6 and 7.6
+        "/v1/sso/c/ai-groups" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.ai_groups_post(&who, &b)
+        },
+        "/v1/ai/audit" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.ai_audit_post(&who, &b)
+        },
+        "/v1/ai/history" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.relay.hub.ai_history_post(&pj::s(&b, "session"), &who, b.get("id"), b.get("enc"))
+        },
+        "/v1/ai/history/delete" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.relay.hub.ai_history_delete(&pj::s(&b, "session"), &who, b.get("id"), b.get("event"), b.get("enc"))
         },
         "/v1/apps/icon" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);

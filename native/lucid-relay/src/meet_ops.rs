@@ -1180,16 +1180,48 @@ impl Relay {
         }
         // NT-1 section 3.9, BG-1 section 2.2: `notify` and `video` wait until every Hub and iPhone reads them
         crate::meet_org_policy::client_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        self.pc_ai_gates(policy)?;
         let body = obj([
             ("policy", policy.cloned().unwrap_or(Value::Null)),
             ("proof", Value::from(pj::str_or(proof))),
             ("ts", proof_ts(ts)),
             ("cert_pem", Value::from(who.cert_pem.clone())),
+            // AI-1 1.3: the signer applies ai_gate with the relay's minimums
+            ("min_client", Value::Object(self.minimums(&self.release()))),
         ]);
         let answer = self.pc_call("sign_org_policy", &body)?;
         self.pc_revoked(&answer, "");
         let out = self.hub.pc_take_signed(answer.get("signed"))?;
         log_info(&format!("org_policy_signed org={} seq={} by={}", pj::s(&out, "org"), pj::as_int(out.get("seq")).unwrap_or(0), who.principal));
+        Ok(out)
+    }
+
+    /// AI-1 1.3 and 1.5: `ai_gate` (the relay's minimum app versions) and `ai_edition_gate` (the license edition) of a
+    /// policy about to be signed; 409 with their words (as `notify_gate`).
+    pub fn pc_ai_gates(&self, policy: Option<&Value>) -> R<()> {
+        crate::meet_org_policy::ai_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        if let Some(p) = policy.and_then(Value::as_object) {
+            crate::meet_org_policy::ai_edition_gate(p, self.hub.ai_edition().as_deref()).map_err(E::Conflict)?;
+        }
+        Ok(())
+    }
+
+    /// `POST /v1/org/ai/sign {map, proof, ts}`: an org admin's device asks the signer (`sign_org_ai` with the caller's
+    /// certificate); the signed map is stored and answered `{org, seq, hash, signed}`.
+    pub fn pc_sign_ai(&self, session: &str, who: &Identity, map: Option<&Value>, proof: Option<&Value>, ts: Option<&Value>) -> R<Obj> {
+        self.hub.check_session(session, who)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("sign from one of your devices");
+        }
+        let body = obj([
+            ("map", map.cloned().unwrap_or(Value::Null)),
+            ("proof", Value::from(pj::str_or(proof))),
+            ("ts", proof_ts(ts)),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+        ]);
+        let answer = self.pc_call("sign_org_ai", &body)?;
+        let out = self.hub.pc_ai_take_signed(answer.get("signed"))?;
+        log_info(&format!("org_ai_signed org={} seq={} by={}", pj::s(&out, "org"), pj::as_int(out.get("seq")).unwrap_or(0), who.principal));
         Ok(out)
     }
 

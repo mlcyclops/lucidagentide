@@ -7,6 +7,7 @@
 // observe `meet.*` requests, the 4.10 routes of the main port and the offline `meet console` commands.
 
 use crate::console::{AdminRule, ApiError, Approved, Console, ConsoleConfig, Filter, LicenseCandidate, LicenseRecord, LicenseState, LicenseView, Need, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall, ServiceView};
+use crate::console_ai as ai;
 use crate::console_limits::Limit;
 use crate::console_spokes::{clean, reason_of};
 use crate::license::{license_standing, license_token_of, License, LicenseStateName, Product};
@@ -51,7 +52,7 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-pub static ROUTES: [RouteSpec; 26] = [
+pub static ROUTES: [RouteSpec; 40] = [
     RouteSpec { method: "GET", path: "meet/people", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     // 2.4 seats and trusted time (R4-2, R3-M3): allowed in every license state
     RouteSpec { method: "GET", path: "meet/seats", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
@@ -79,7 +80,24 @@ pub static ROUTES: [RouteSpec; 26] = [
     RouteSpec { method: "GET", path: "meet/calls", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "GET", path: "meet/servers", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "POST", path: "meet/files/start", role: Role::Admin, action: "meet.files.start", target: "-", stepup: true, need: Need::Product, security: false, keys: &[], body_max: 1024 },
+    // Settings > AI (AI-1 section 9): reads, the staged save, gateways and cards, usage, the hold on a person, the archive
+    RouteSpec { method: "GET", path: "meet/ai", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/ai/stage", role: Role::Admin, action: "meet.ai.stage", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "preset", "ai", "map"], body_max: AI_STAGE_BODY_MAX },
+    RouteSpec { method: "POST", path: "meet/ai/save", role: Role::Admin, action: "meet.ai.save", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "stage", "reason"], body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/ai/gateways", role: Role::Admin, action: "meet.ai.gateway", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "url", "principal", "device", "spki", "region", "remove", "reason"], body_max: 4096 },
+    RouteSpec { method: "GET", path: "meet/ai/cards", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/ai/cards/bench", role: Role::Admin, action: "meet.ai.bench", target: "card_id", stepup: true, need: Need::Product, security: false, keys: &["org", "gateway", "card_id", "files"], body_max: 16 * 1024 },
+    RouteSpec { method: "POST", path: "meet/ai/cards/approve", role: Role::Admin, action: "meet.ai.approve", target: "card_id", stepup: true, need: Need::Product, security: false, keys: &["org", "gateway", "card_id", "for_classes", "retention_override", "reason"], body_max: 4096 },
+    RouteSpec { method: "GET", path: "meet/ai/usage", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/ai/hold", role: Role::Admin, action: "meet.ai.hold", target: "principal", stepup: true, need: Need::Any, security: true, keys: &["org", "principal", "reviewer", "reason"], body_max: 4096 },
+    RouteSpec { method: "GET", path: "meet/ai/archive", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/ai/archive", role: Role::Admin, action: "meet.ai.archive", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "url", "spki", "remove", "reason"], body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/ai/archive/copy", role: Role::Admin, action: "meet.ai.archive.copy", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "reviewer", "offline_copy", "reason"], body_max: 8192 },
+    RouteSpec { method: "POST", path: "meet/ai/archive/code", role: Role::Admin, action: "meet.ai.archive.code", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "reviewer", "reason"], body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/ai/archive/code/confirm", role: Role::Admin, action: "meet.ai.archive.code.confirm", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "first", "second"], body_max: 1024 },
 ];
+/// A staged AI change carries the whole map draft (the signed map is at most 256 KiB, 2).
+const AI_STAGE_BODY_MAX: usize = 300 * 1024;
 
 /// AC-2a 4.11: the aggregate route served only through the fleet proxy (`read-health`). Not in ROUTES, so the relay's
 /// own console answers 404; fleet_exec takes this spec and calls `route` with it.
@@ -95,8 +113,8 @@ pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value 
     json!({ "signer": signer, "files": files, "push": push })
 }
 
-const SECURITY_ACTIONS: [&str; 5] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place"];
-const PAGES: [&str; 15] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests"];
+const SECURITY_ACTIONS: [&str; 6] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place", "meet.ai.hold"];
+const PAGES: [&str; 16] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai"];
 const LOCKED_PAGES: [&str; 5] = ["security", "seats", "license", "logs", "requests"];
 
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1023,6 +1041,8 @@ impl MeetSection {
                 let done = Self::gate(&relay)?.confirm_clock(browser).map_err(|w| ApiError::with("clock-disagree", w))?;
                 Ok(json!({"ok": true, "old": done.old, "new": done.new, "credited": done.credited}))
             }
+            "meet.ai.save" => Self::ai_save_run(&relay, &p, &who.principal, t),
+            "meet.ai.approve" => Self::ai_approve_run(&relay, &p, &who.principal),
             "meet.files.start" => {
                 relay.console.start_files_now().map_err(|why| stale(&why))?;
                 let f = relay.console.files();
@@ -1298,6 +1318,20 @@ impl ProductSection for MeetSection {
             ("POST", "meet/holds/release") => self.holds_release(&relay, call),
             ("POST", "meet/release") => self.release_set(&relay, call),
             ("POST", "meet/files/start") => self.files_start(call),
+            ("GET", "meet/ai") => read(self.ai_view(&relay, call)),
+            ("GET", "meet/ai/cards") => read(self.ai_cards(&relay, call)),
+            ("GET", "meet/ai/usage") => read(self.ai_usage(&relay, call)),
+            ("GET", "meet/ai/archive") => read(self.ai_archive(&relay, call)),
+            ("POST", "meet/ai/stage") => self.ai_stage(&relay, call),
+            ("POST", "meet/ai/save") => self.ai_save(&relay, call),
+            ("POST", "meet/ai/gateways") => self.ai_gateway_set(&relay, call),
+            ("POST", "meet/ai/cards/bench") => self.ai_bench(&relay, call),
+            ("POST", "meet/ai/cards/approve") => self.ai_approve(&relay, call),
+            ("POST", "meet/ai/hold") => self.ai_hold(&relay, call),
+            ("POST", "meet/ai/archive") => self.ai_archive_set(&relay, call),
+            ("POST", "meet/ai/archive/copy") => self.ai_archive_copy(&relay, call),
+            ("POST", "meet/ai/archive/code") => self.ai_archive_code(&relay, call),
+            ("POST", "meet/ai/archive/code/confirm") => self.ai_archive_code_confirm(&relay, call),
             _ => Err(not_found("page")),
         }
     }
@@ -1388,6 +1422,649 @@ impl ProductSection for MeetSection {
             gate.check(true);
         }
     }
+}
+
+// ── Settings > AI (contract AI-1 section 9; the rules are console_ai.rs) ────────────────────────────────────────
+
+/// The console's AI record per org (owner-only): `{v, orgs: {<org>: {gateways: [map entries], archive: {url, spki}
+/// or null, code_gen}}}`. Staged changes, saves in flight, reviewer asks and a new recovery code live in memory only.
+pub const AI_FILE: &str = "console-ai.json";
+const AI_TIMEOUT: f64 = 20.0;
+const AI_RESULTS_MAX: usize = 50;
+/// Pages of 1000 device audit records the usage panel reads at most (30 days).
+const AI_AUDIT_PAGES: usize = 20;
+const AI_SIGN_KIND: &str = "meet.ai.sign";
+const AI_REVIEWER_KIND: &str = "meet.ai.reviewer-sign";
+
+struct AiSave {
+    staged: ai::Staged,
+    principal: String,
+    step: ai::SignStep,
+    request: String,
+}
+
+struct ReviewerAsk {
+    request: String,
+    org: String,
+    op: &'static str,
+    body: Value,
+    /// The admin who asked (the relay hold runs as them).
+    by: String,
+}
+
+#[derive(Default)]
+pub struct AiState {
+    loaded: bool,
+    book: Obj,
+    stages: ai::Stages,
+    saves: Vec<AiSave>,
+    asks: Vec<ReviewerAsk>,
+    codes: Vec<ai::PendingCode>,
+    results: Vec<Value>,
+}
+
+static AI_STATES: std::sync::LazyLock<Mutex<HashMap<String, Arc<Mutex<AiState>>>>> = std::sync::LazyLock::new(Default::default);
+
+/// The AI state of the relay's state folder (shared by its console section and the main port's sign route).
+fn ai_state(relay: &Relay) -> Arc<Mutex<AiState>> {
+    AI_STATES.lock().entry(relay.settings.state_dir.clone()).or_default().clone()
+}
+
+impl AiState {
+    fn org(&mut self, relay: &Relay, org: &str) -> Obj {
+        if !self.loaded {
+            self.loaded = true;
+            if let Some(text) = m::state_file(&relay.settings, AI_FILE).and_then(|p| read_text(&p)) {
+                if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&text) {
+                    self.book = o;
+                }
+            }
+        }
+        self.book.get("orgs").and_then(|o| o.get(org)).and_then(Value::as_object).cloned().unwrap_or_default()
+    }
+
+    fn set_org(&mut self, relay: &Relay, org: &str, entry: Obj) -> Result<(), ApiError> {
+        self.org(relay, org);
+        let mut orgs = self.book.get("orgs").and_then(Value::as_object).cloned().unwrap_or_default();
+        orgs.insert(org.into(), Value::Object(entry));
+        let next = obj([("v", Value::from(1)), ("orgs", Value::Object(orgs))]);
+        let path = m::state_file(&relay.settings, AI_FILE).ok_or_else(|| ApiError::of("write-failed"))?;
+        write_private(&path, format!("{}\n", Value::Object(next.clone())).as_bytes()).map_err(|e| {
+            crate::meet::log_error(&format!("console-ai.json cannot be written: {e}"));
+            ApiError::of("write-failed")
+        })?;
+        self.book = next;
+        Ok(())
+    }
+
+    fn result(&mut self, v: Value) {
+        self.results.push(v);
+        if self.results.len() > AI_RESULTS_MAX {
+            self.results.remove(0);
+        }
+    }
+}
+
+/// The org's current signed policy (unsigned body), or null.
+fn ai_policy(relay: &Relay, org: &str) -> Value {
+    relay.hub.pc_policy_get(org, "").ok().and_then(|p| p.get("signed").map(|s| s.get("policy").cloned().unwrap_or_else(|| s.clone()))).unwrap_or(Value::Null)
+}
+
+/// The AI map with this hash the relay holds (unsigned body).
+fn ai_map(relay: &Relay, org: &str, sha256: &str) -> Option<Value> {
+    if sha256.is_empty() {
+        return None;
+    }
+    relay.hub.pc_ai_get(org, sha256).ok().and_then(|p| p.get("signed").and_then(|s| s.get("map")).cloned())
+}
+
+fn ai_policy_hash(policy: &Value) -> String {
+    policy.get("ai").and_then(|a| a.get("map_sha256")).and_then(Value::as_str).unwrap_or("").to_owned()
+}
+
+/// What the save was built on now: (policy seq, map seq).
+fn ai_base(relay: &Relay, org: &str) -> (i64, i64) {
+    let policy = ai_policy(relay, org);
+    let map_seq = ai_map(relay, org, &ai_policy_hash(&policy)).and_then(|m| m.get("seq").and_then(Value::as_i64)).unwrap_or(0);
+    (policy.get("seq").and_then(Value::as_i64).unwrap_or(0), map_seq)
+}
+
+fn ai_edition(relay: &Relay) -> Option<String> {
+    relay.hub.gate().and_then(|g| g.license().map(|(l, _)| l.edition.clone()))
+}
+
+/// SHA-256 of the console certificate's public key: the gateway's `admin_spki` entry for this console.
+fn console_spki(relay: &Relay) -> Option<String> {
+    let pem = String::from_utf8_lossy(&std::fs::read(&relay.settings.console_cert).ok()?).into_owned();
+    crate::meet_x509::Cert::from_pem(&pem).map(|c| crate::codec::sha256_hex(&c.spki))
+}
+
+/// One HTTPS call from the console to a gateway or an archive: the console's certificate as the client, the server
+/// pinned by the SHA-256 of its public key; `ca` the roots (the Meet CA for a gateway, the public roots otherwise).
+fn ai_https(relay: &Relay, url: &str, spki: &str, ca: Option<&str>, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+    let (host, port) = ai::endpoint(url).ok_or_else(|| invalid("url is https:// with a host and a port"))?;
+    let cfg = crate::meet_tls::client_config(ca, Some((relay.settings.console_cert.as_str(), relay.settings.console_key.as_str()))).map_err(|e| ApiError::with("state-unreadable", format!("The console's certificate cannot be used: {e}.")))?;
+    let pin = spki.to_owned();
+    let check = move |der: &[u8]| -> Result<(), String> {
+        let c = crate::meet_x509::Cert::from_der(der).ok_or("the server's certificate does not read")?;
+        if crate::codec::sha256_hex(&c.spki) == pin {
+            Ok(())
+        } else {
+            Err("the server's key is not the enrolled key".into())
+        }
+    };
+    let bytes = body.map(|b| b.to_string().into_bytes());
+    let headers = [("Content-Type", "application/json".to_string())];
+    let r = crate::meet_tls::https_request(&cfg, &host, port, AI_TIMEOUT, method, path, &headers, bytes.as_deref(), &check)
+        .map_err(|e| ApiError::with("relay-offline", format!("{url} did not answer ({}).", e.unwrap_or_else(|x| x))))?;
+    let v: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+    if r.status >= 400 {
+        let why = v.get("error").and_then(Value::as_str).map(clean).unwrap_or_else(|| format!("{url} answered {}", r.status));
+        return Err(stale(&why));
+    }
+    Ok(v)
+}
+
+fn ai_gateways(entry: &Obj) -> Vec<Value> {
+    entry.get("gateways").and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
+fn ai_gateway_call(relay: &Relay, g: &Value, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+    let s = |k: &str| g.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    ai_https(relay, &s("url"), &s("spki"), Some(relay.settings.client_ca.as_str()), method, path, body)
+}
+
+fn ai_archive_call(relay: &Relay, entry: &Obj, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+    let a = entry.get("archive").and_then(Value::as_object).ok_or_else(|| stale("no archive is added for this organization"))?;
+    ai_https(relay, &pj::s(a, "url"), &pj::s(a, "spki"), None, method, path, body)
+}
+
+fn ai_org_of(b: &Value) -> Result<String, ApiError> {
+    let org = pj::str_or(b.get("org")).trim().to_string();
+    if org.is_empty() {
+        return Err(invalid("org is required"));
+    }
+    Ok(org)
+}
+
+impl MeetSection {
+    fn ai_org_query(relay: &Relay, call: &SectionCall) -> Result<String, ApiError> {
+        let f = filters(call.query, &["org"])?;
+        let who = Self::who(relay, &call.caller.email)?;
+        if let Some(o) = f.get("org").filter(|o| !o.is_empty()) {
+            return Ok(o.clone());
+        }
+        let orgs = relay.hub.admin_organizations("", &who).map_err(from_hub)?;
+        orgs.get("organizations").and_then(Value::as_array).and_then(|a| a.first()).and_then(|o| o.get("id")).and_then(Value::as_str).map(str::to_owned).ok_or_else(|| not_found("organization"))
+    }
+
+    /// GET meet/ai?org=: the org's AI settings, the presets, what is staged and in flight, the enrolled gateways.
+    fn ai_view(&self, relay: &Relay, call: &SectionCall) -> Result<Value, ApiError> {
+        let org = Self::ai_org_query(relay, call)?;
+        let who = Self::who(relay, &call.caller.email)?;
+        let orgs = relay.hub.admin_organizations("", &who).map_err(from_hub)?;
+        let list: Vec<Value> = orgs.get("organizations").and_then(Value::as_array).into_iter().flatten().map(|o| json!({"id": o.get("id"), "label": o.get("label")})).collect();
+        let policy = ai_policy(relay, &org);
+        let map = ai_map(relay, &org, &ai_policy_hash(&policy));
+        let edition = ai_edition(relay);
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let entry = s.org(relay, &org);
+        let saving: Vec<Value> = s.saves.iter().filter(|x| x.staged.org == org).map(|x| json!({"step": x.step.as_str(), "request": x.request, "principal": x.principal, "map_sha256": x.staged.map_sha256})).collect();
+        let waiting: Vec<Value> = s.asks.iter().filter(|x| x.org == org).map(|x| json!({"op": x.op, "request": x.request, "reviewer": x.body.get("reviewer")})).collect();
+        let presets: Vec<Value> = ai::PRESETS.iter().map(|p| json!({"id": p.id, "label": p.label, "order": p.order, "access": p.access})).collect();
+        Ok(json!({
+            "ok": true, "org": org, "orgs": list, "presets": presets, "default": ai::DEFAULT_PRESET, "advanced": ai::ADVANCED,
+            "ai": policy.get("ai").cloned().unwrap_or(Value::Null), "preset": policy.get("ai").map(ai::preset_of),
+            "map": map, "staged": s.stages.get(&org, call.t).map(ai::Staged::view), "saving": saving, "waiting": waiting,
+            "gateways": ai_gateways(&entry), "edition": edition, "lacks": ai::edition_lacks(edition.as_deref(), &policy),
+            "reviewers": policy.get("archive_reviewers").cloned().unwrap_or(json!([])), "consoleSpki": console_spki(relay),
+            "results": s.results.iter().filter(|r| r.get("org").and_then(Value::as_str) == Some(org.as_str())).cloned().collect::<Vec<_>>(),
+        }))
+    }
+
+    /// POST meet/ai/stage {org, preset, ai, map}: build and check the change (the relay's own check_policy,
+    /// check_ai_map, ai_gate and ai_edition_gate) and keep it staged; nothing is signed.
+    fn ai_stage(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        Self::who(relay, &call.caller.email)?;
+        let policy = ai_policy(relay, &org);
+        let map = ai_map(relay, &org, &ai_policy_hash(&policy));
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let entry = s.org(relay, &org);
+        // the gateways come from enrollment only
+        let mut draft = call.body.clone();
+        let mut map_draft = draft.get("map").and_then(Value::as_object).cloned().unwrap_or_default();
+        map_draft.insert("gateways".into(), Value::Array(ai_gateways(&entry)));
+        draft["map"] = Value::Object(map_draft);
+        let minimums = relay.minimums(&relay.release());
+        let edition = ai_edition(relay);
+        let check = |p: &Value, mp: &Value| -> Result<(), String> {
+            crate::meet_org_policy::check_policy(p, &crate::meet_org_policy::SignerTerms::default()).map_err(|e| e.to_string())?;
+            crate::meet_org_policy::check_ai_map(mp, p.as_object()).map_err(|e| e.to_string())?;
+            crate::meet_org_policy::ai_gate(Some(p), &minimums)?;
+            crate::meet_org_policy::ai_edition_gate(p.as_object().ok_or("the policy is not an object")?, edition.as_deref())
+        };
+        let staged = ai::stage(&org, &call.caller.email, &policy, map.as_ref(), &draft, call.t, &check)?;
+        let id = staged.id.clone();
+        let view = s.stages.put(staged, call.t);
+        Ok(SectionAnswer::Done { answer: json!({"ok": true, "staged": view, "before": policy.get("ai").cloned().unwrap_or(Value::Null)}), target: org, detail: json!({"stage": id}) })
+    }
+
+    /// POST meet/ai/save {org, stage, reason}: the AC-1 staged save; a second admin under the two-person rule.
+    fn ai_save(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let stage = pj::str_or(call.body.get("stage"));
+        let reason = reason_of(call.body.get("reason")).map_err(invalid)?;
+        let st = ai_state(relay);
+        if st.lock().stages.get(&org, call.t).map(|s| s.id != stage).unwrap_or(true) {
+            return Err(ApiError::with("gone", ai::STAGE_GONE));
+        }
+        Ok(SectionAnswer::Second { target: org.clone(), params: json!({"org": org, "stage": stage, "reason": reason}), detail: json!({"stage": stage}) })
+    }
+
+    /// The approved save: take the stage (stale when the policy or map moved), then ask the requester's device to
+    /// sign the AI map; the policy is asked for only once the relay holds that map (`ai_request_signed`).
+    fn ai_save_run(relay: &Relay, p: &Obj, principal: &str, t: i64) -> Result<Value, ApiError> {
+        let org = pj::s(p, "org");
+        let book = request_book(relay).ok_or_else(|| ApiError::of("state-unreadable"))?;
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let staged = s.stages.take(&pj::s(p, "stage"), &org, ai_base(relay, &org), t)?;
+        let target = ai::sign_target(&staged, principal, ai::SignStep::Map).ok_or_else(|| ApiError::of("state-unreadable"))?;
+        let r = book.new_request(principal, AI_SIGN_KIND, target, &pj::s(p, "reason"), t)?;
+        let id = pj::py_str(r.get("id").unwrap_or(&Value::Null));
+        s.saves.retain(|x| x.staged.org != org);
+        s.saves.push(AiSave { staged, principal: principal.into(), step: ai::SignStep::Map, request: id.clone() });
+        Ok(json!({"ok": true, "request": id, "step": "map"}))
+    }
+
+    /// POST meet/ai/gateways {org, url, principal, device, spki, region | remove}: enroll a gateway for the next map.
+    fn ai_gateway_set(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        reason_of(call.body.get("reason")).map_err(invalid)?;
+        Self::who(relay, &call.caller.email)?;
+        let remove = call.body.get("remove") == Some(&Value::Bool(true));
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let mut entry = s.org(relay, &org);
+        let mut list = ai_gateways(&entry);
+        let url = pj::str_or(call.body.get("url")).trim().to_string();
+        if remove {
+            let before = list.len();
+            list.retain(|g| g.get("url").and_then(Value::as_str) != Some(url.as_str()));
+            if list.len() == before {
+                return Err(not_found("gateway"));
+            }
+        } else {
+            let g = ai::gateway_of(call.body)?;
+            list.retain(|x| x.get("url") != g.get("url"));
+            if list.len() >= 8 {
+                return Err(invalid("an AI map lists at most 8 gateways"));
+            }
+            list.push(g);
+        }
+        entry.insert("gateways".into(), Value::Array(list.clone()));
+        s.set_org(relay, &org, entry)?;
+        Ok(SectionAnswer::Done { answer: json!({"ok": true, "gateways": list}), target: org, detail: json!({"url": url, "remove": remove}) })
+    }
+
+    /// The card rows of every enrolled gateway (a gateway that does not answer is listed with its error).
+    fn ai_card_rows(relay: &Relay, org: &str) -> (Vec<(Value, Value)>, Vec<Value>) {
+        let st = ai_state(relay);
+        let entry = st.lock().org(relay, org);
+        let (mut rows, mut errors) = (Vec::new(), Vec::new());
+        for g in ai_gateways(&entry) {
+            match ai_gateway_call(relay, &g, "GET", "/v1/ai/admin/cards", None) {
+                Ok(v) => rows.extend(v.get("cards").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().map(|r| (g.clone(), r))),
+                Err(e) => errors.push(json!({"gateway": g.get("url"), "error": e.message})),
+            }
+        }
+        (rows, errors)
+    }
+
+    fn ai_cards(&self, relay: &Relay, call: &SectionCall) -> Result<Value, ApiError> {
+        let org = Self::ai_org_query(relay, call)?;
+        let (rows, errors) = Self::ai_card_rows(relay, &org);
+        let cards: Vec<Value> = rows.iter().map(|(g, r)| ai::card_view(g.get("url").and_then(Value::as_str).unwrap_or(""), r)).collect();
+        Ok(json!({"ok": true, "org": org, "cards": cards, "errors": errors}))
+    }
+
+    fn ai_find_card(relay: &Relay, org: &str, gateway: &str, card_id: &str) -> Result<(Value, Value), ApiError> {
+        let (rows, errors) = Self::ai_card_rows(relay, org);
+        if let Some(found) = rows.into_iter().find(|(g, r)| g.get("url").and_then(Value::as_str) == Some(gateway) && r.get("card").and_then(|c| c.get("card_id")).and_then(Value::as_str) == Some(card_id)) {
+            return Ok(found);
+        }
+        match errors.into_iter().find(|e| e.get("gateway").and_then(Value::as_str) == Some(gateway)) {
+            Some(e) => Err(ApiError::with("relay-offline", pj::py_str(e.get("error").unwrap_or(&Value::Null)))),
+            None => Err(not_found("model card")),
+        }
+    }
+
+    /// POST meet/ai/cards/bench {org, gateway, card_id, files?}: Run benchmark (3.2).
+    fn ai_bench(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let (gateway, card_id) = (pj::str_or(call.body.get("gateway")), pj::str_or(call.body.get("card_id")));
+        let (g, _) = Self::ai_find_card(relay, &org, &gateway, &card_id)?;
+        let mut body = json!({"card_id": card_id});
+        if let Some(files) = call.body.get("files").filter(|f| f.is_array()) {
+            body["files"] = files.clone();
+        }
+        let answer = ai_gateway_call(relay, &g, "POST", "/v1/ai/admin/bench", Some(&body))?;
+        Ok(SectionAnswer::Done { answer: json!({"ok": true, "bench": answer}), target: card_id, detail: json!({"gateway": gateway}) })
+    }
+
+    /// POST meet/ai/cards/approve {org, gateway, card_id, for_classes, retention_override?, reason}: refused before a
+    /// passing benchmark; then step-up and the two-person rule; checked again when it runs.
+    fn ai_approve(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        reason_of(call.body.get("reason")).map_err(invalid)?;
+        let (gateway, card_id) = (pj::str_or(call.body.get("gateway")), pj::str_or(call.body.get("card_id")));
+        let (_, row) = Self::ai_find_card(relay, &org, &gateway, &card_id)?;
+        ai::approve_allowed(&row)?;
+        Ok(SectionAnswer::Second { target: card_id, params: call.body.clone(), detail: json!({"gateway": gateway}) })
+    }
+
+    fn ai_approve_run(relay: &Relay, p: &Obj, principal: &str) -> Result<Value, ApiError> {
+        let (org, gateway, card_id) = (pj::s(p, "org"), pj::s(p, "gateway"), pj::s(p, "card_id"));
+        let (g, row) = Self::ai_find_card(relay, &org, &gateway, &card_id)?;
+        ai::approve_allowed(&row)?;
+        let mut body = json!({"card_id": card_id, "by": principal, "for_classes": p.get("for_classes").cloned().unwrap_or(json!([]))});
+        if let Some(r) = p.get("retention_override").filter(|r| r.as_str().is_some_and(|s| !s.trim().is_empty())) {
+            body["retention_override"] = r.clone();
+        }
+        let answer = ai_gateway_call(relay, &g, "POST", "/v1/ai/admin/approve", Some(&body))?;
+        Ok(json!({"ok": true, "card": answer.get("card").cloned().unwrap_or(Value::Null)}))
+    }
+
+    /// GET meet/ai/usage?org=: the last 30 days from every gateway, against the archive's `ai` rids.
+    fn ai_usage(&self, relay: &Relay, call: &SectionCall) -> Result<Value, ApiError> {
+        let org = Self::ai_org_query(relay, call)?;
+        let since = call.t.div_euclid(1000) - 30 * 86_400;
+        let st = ai_state(relay);
+        let entry = st.lock().org(relay, &org);
+        let mut usages = Vec::new();
+        let mut errors = Vec::new();
+        for g in ai_gateways(&entry) {
+            match ai_gateway_call(relay, &g, "GET", &format!("/v1/ai/admin/usage?since={since}"), None) {
+                Ok(v) => usages.push(v),
+                Err(e) => errors.push(json!({"gateway": g.get("url"), "error": e.message})),
+            }
+        }
+        let held: Option<HashSet<String>> = if entry.get("archive").is_some_and(Value::is_object) {
+            match ai_archive_call(relay, &entry, "GET", &format!("/v1/ai/rids?since={since}"), None) {
+                Ok(v) => Some(v.get("rids").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect()),
+                Err(e) => {
+                    errors.push(json!({"archive": true, "error": e.message}));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // the devices' own audit lines (6.6): personal access and dropped history, read page by page from the relay
+        let mut records: Vec<Value> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut more = false;
+        for page in 0..AI_AUDIT_PAGES {
+            let answer = relay.hub.ai_audit_list(&org, since * 1000, cursor.as_deref()).map_err(from_hub)?;
+            records.extend(answer.get("records").and_then(Value::as_array).cloned().unwrap_or_default());
+            cursor = answer.get("next").and_then(Value::as_str).map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+            more = page + 1 == AI_AUDIT_PAGES;
+        }
+        let policy = ai_policy(relay, &org);
+        let mut v = ai::usage_view(&usages, held.as_ref());
+        v["audit"] = ai::audit_view(&records);
+        v["audit"]["partial"] = Value::Bool(more);
+        v["ok"] = Value::Bool(true);
+        v["org"] = Value::from(org);
+        v["budgets"] = policy.get("ai").and_then(|a| a.get("budgets")).cloned().unwrap_or(Value::Null);
+        v["errors"] = Value::Array(errors);
+        Ok(v)
+    }
+
+    /// Ask a reviewer's device to sign an archive request (7.5, 7.8): an AC-1 request to that reviewer.
+    fn ai_ask_reviewer(relay: &Relay, org: &str, reviewer: &str, by: &str, op: &'static str, body: Value, reason: &str, t: i64) -> Result<Value, ApiError> {
+        let policy = ai_policy(relay, org);
+        let reviewers: Vec<&str> = policy.get("archive_reviewers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+        if !reviewers.contains(&reviewer) {
+            return Err(invalid(format!("{} is not an archive reviewer of this organization", clean(reviewer))));
+        }
+        let label = match op {
+            "hold" => ai::HOLD_LABEL,
+            "recovery_code" => ai::RECOVERY_CODE_LABEL,
+            _ => ai::CONFIG_LABEL,
+        };
+        let book = request_book(relay).ok_or_else(|| ApiError::of("state-unreadable"))?;
+        let target = json!({"principal": reviewer, "org": org, "op": op, "label": label, "body": body});
+        let r = book.new_request(by, AI_REVIEWER_KIND, target, reason, t)?;
+        let id = pj::py_str(r.get("id").unwrap_or(&Value::Null));
+        ai_state(relay).lock().asks.push(ReviewerAsk { request: id.clone(), org: org.into(), op, body, by: by.into() });
+        Ok(json!({"ok": true, "request": id, "reviewer": reviewer, "op": op}))
+    }
+
+    /// POST meet/ai/hold {org, principal, reviewer, reason}: "Place a legal hold" on a person. With an archive, a
+    /// reviewer signs first and both holds are placed when the signature arrives; with none (a small organization)
+    /// only the relay hold exists, and the answer says so.
+    fn ai_hold(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let principal = m::principal(call.body.get("principal"));
+        let reason = reason_of(call.body.get("reason")).map_err(invalid)?;
+        if !principal.contains('@') {
+            return Err(invalid("name the person (their email)"));
+        }
+        if !relay.hub.pc_may_hold_people(&call.caller.email, std::slice::from_ref(&principal)) {
+            return Err(ApiError::with("role", "Only an admin of these people's organization (org_admins) can hold them."));
+        }
+        let entry = ai_state(relay).lock().org(relay, &org);
+        let policy = ai_policy(relay, &org);
+        let has_archive = policy.get("archive").is_some_and(|a| a.as_object().is_some_and(|o| !o.is_empty()));
+        if !has_archive || !entry.get("archive").is_some_and(Value::is_object) {
+            if has_archive {
+                return Err(stale("add the archive's address first, so the archive hold can be placed with the relay hold"));
+            }
+            let who = Self::who(relay, &call.caller.email)?;
+            let out = relay.hub.pc_holds_place("", &who, Some(&json!("people")), Some(&json!([principal])), None, Some(&Value::from(reason.as_str()))).map_err(from_hub)?;
+            let answer = json!({"ok": true, "placed": true, "relay": {"ok": true, "id": out.get("id")}, "archive": Value::Null, "notice": ai::NO_ARCHIVE});
+            return Ok(SectionAnswer::Done { answer, target: principal, detail: json!({"org": org, "archive": false}) });
+        }
+        let reviewer = m::principal(call.body.get("reviewer"));
+        let body = ai::hold_body(std::slice::from_ref(&principal), &reason, &reviewer);
+        let answer = Self::ai_ask_reviewer(relay, &org, &reviewer, &call.caller.email, "hold", body, &reason, call.t)?;
+        Ok(SectionAnswer::Done { answer, target: principal, detail: json!({"org": org, "reviewer": reviewer}) })
+    }
+
+    /// GET meet/ai/archive?org=: the archive section by organization size; a new recovery code is shown once.
+    fn ai_archive(&self, relay: &Relay, call: &SectionCall) -> Result<Value, ApiError> {
+        let org = Self::ai_org_query(relay, call)?;
+        let policy = ai_policy(relay, &org);
+        let st = ai_state(relay);
+        let entry = st.lock().org(relay, &org);
+        let url = entry.get("archive").and_then(|a| a.get("url")).and_then(Value::as_str).map(str::to_owned);
+        let (status, error) = match &url {
+            Some(_) => match ai_archive_call(relay, &entry, "GET", "/v1/recovery", None) {
+                Ok(v) => (Some(v), Value::Null),
+                Err(e) => (None, Value::from(e.message)),
+            },
+            None => (None, Value::Null),
+        };
+        let edition = ai_edition(relay);
+        let mut v = ai::archive_view(edition.as_deref(), &policy, url.as_deref(), status.as_ref(), entry.get("code_gen").and_then(Value::as_i64));
+        let mut s = st.lock();
+        if let Some(code) = s.codes.iter_mut().find(|c| c.org == org) {
+            if code.shown {
+                v["confirm"] = json!({"first": code.ask.0 + 1, "second": code.ask.1 + 1});
+            } else {
+                code.shown = true;
+                v["code"] = Value::from(code.groups.join("-"));
+                v["confirm"] = json!({"first": code.ask.0 + 1, "second": code.ask.1 + 1});
+            }
+        }
+        v["ok"] = Value::Bool(true);
+        v["org"] = Value::from(org);
+        v["error"] = error;
+        v["reviewersList"] = policy.get("archive_reviewers").cloned().unwrap_or(json!([]));
+        Ok(v)
+    }
+
+    /// POST meet/ai/archive {org, url, spki | remove}: "Add an archive" (its admin address and pinned key).
+    fn ai_archive_set(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        reason_of(call.body.get("reason")).map_err(invalid)?;
+        Self::who(relay, &call.caller.email)?;
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let mut entry = s.org(relay, &org);
+        let remove = call.body.get("remove") == Some(&Value::Bool(true));
+        if remove {
+            entry.insert("archive".into(), Value::Null);
+        } else {
+            let url = pj::str_or(call.body.get("url")).trim().to_string();
+            let spki = pj::str_or(call.body.get("spki")).trim().to_lowercase();
+            if url.len() > 256 || ai::endpoint(&url).is_none() {
+                return Err(invalid("url is https:// with a host and a port"));
+            }
+            if !ai::hex64(&spki) {
+                return Err(invalid("spki is the SHA-256 of the archive server's public key, 64 hex digits"));
+            }
+            entry.insert("archive".into(), json!({"url": url, "spki": spki}));
+        }
+        s.set_org(relay, &org, entry)?;
+        Ok(SectionAnswer::Done { answer: json!({"ok": true}), target: org, detail: json!({"remove": remove}) })
+    }
+
+    /// POST meet/ai/archive/copy {org, reviewer, offline_copy, reason}: big organizations' offline copy settings,
+    /// signed by a reviewer.
+    fn ai_archive_copy(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let reason = reason_of(call.body.get("reason")).map_err(invalid)?;
+        let copy = ai::offline_copy_of(call.body.get("offline_copy").unwrap_or(&Value::Null))?;
+        let reviewer = m::principal(call.body.get("reviewer"));
+        let body = json!({"op": "offline_copy", "offline_copy": copy, "reviewer": reviewer});
+        let answer = Self::ai_ask_reviewer(relay, &org, &reviewer, &call.caller.email, "offline_copy", body, &reason, call.t)?;
+        Ok(SectionAnswer::Done { answer, target: org, detail: json!({"reviewer": reviewer}) })
+    }
+
+    /// POST meet/ai/archive/code {org, reviewer, reason}: make (or replace) the small organization's recovery code.
+    fn ai_archive_code(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let reason = reason_of(call.body.get("reason")).map_err(invalid)?;
+        if ai_edition(relay).as_deref() != Some("standard") {
+            return Err(stale("a big organization recovers with its reviewers' shares, not a recovery code"));
+        }
+        let reviewer = m::principal(call.body.get("reviewer"));
+        let body = json!({"op": "recovery_code", "reviewer": reviewer});
+        let answer = Self::ai_ask_reviewer(relay, &org, &reviewer, &call.caller.email, "recovery_code", body, &reason, call.t)?;
+        Ok(SectionAnswer::Done { answer, target: org, detail: json!({"reviewer": reviewer}) })
+    }
+
+    /// POST meet/ai/archive/code/confirm {org, first, second}: the owner typed back the two asked groups.
+    fn ai_archive_code_confirm(&self, relay: &Relay, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let org = ai_org_of(call.body)?;
+        let st = ai_state(relay);
+        let mut s = st.lock();
+        let i = s.codes.iter().position(|c| c.org == org).ok_or_else(|| ApiError::of("gone"))?;
+        s.codes[i].confirm(&pj::str_or(call.body.get("first")), &pj::str_or(call.body.get("second")))?;
+        let code = s.codes.remove(i);
+        let mut entry = s.org(relay, &org);
+        entry.insert("code_gen".into(), Value::from(code.gen));
+        s.set_org(relay, &org, entry)?;
+        Ok(SectionAnswer::Done { answer: json!({"ok": true, "gen": code.gen}), target: org, detail: json!({"gen": code.gen}) })
+    }
+}
+
+/// The relay's view of a save's map and policy, for `console_ai::after_signed`.
+fn ai_observed(relay: &Relay, s: &ai::Staged) -> ai::Observed {
+    let policy = ai_policy(relay, &s.org);
+    let named = policy.get("seq").and_then(Value::as_i64).map(|seq| (ai_policy_hash(&policy), seq));
+    ai::Observed { map_stored: ai_map(relay, &s.org, &s.map_sha256).is_some(), policy: named }
+}
+
+fn api_e(e: ApiError) -> E {
+    E::Status(e.status, e.message, false)
+}
+
+/// `POST /v1/admin/console/requests/sign {session, id, sig?}`: the device of the request's principal reports a
+/// `meet.ai.*` request done. `meet.ai.sign`: the relay must now hold what the step signed (the map, then the policy
+/// naming it); the next step is asked for, or the save is done. `meet.ai.reviewer-sign`: `sig` is `{ts, sig}` over
+/// the request's label and body with `ts`; the console then delivers the archive request (and, for a hold, places
+/// the relay hold with it).
+pub fn ai_request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig: Option<&Value>) -> R<Obj> {
+    let id = id.and_then(Value::as_str).filter(|i| request_id_ok(i)).ok_or_else(|| E::Bad(DECLINE_ID.into()))?.to_string();
+    let book = request_book(relay).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+    let t = (pj::now() * 1000.0) as i64;
+    let request = book.requests_waiting("meet.ai.", t).into_iter().find(|r| r.get("id").and_then(Value::as_str) == Some(id.as_str())).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+    let target = request.get("target").cloned().unwrap_or(Value::Null);
+    if target.get("principal").and_then(Value::as_str) != Some(who.principal.as_str()) {
+        return Err(E::NotFound(NO_REQUEST.into()));
+    }
+    let kind = pj::py_str(request.get("kind").unwrap_or(&Value::Null));
+    let st = ai_state(relay);
+    let mut s = st.lock();
+    let close = || book.observe_requests(&kind, &who.principal, t, &|x: &Value| *x == target);
+    if kind == AI_SIGN_KIND {
+        let i = s.saves.iter().position(|x| x.request == id).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+        let next = ai::after_signed(&s.saves[i].staged, s.saves[i].step, &ai_observed(relay, &s.saves[i].staged)).map_err(api_e)?;
+        close();
+        if next == ai::SignStep::Done {
+            let save = s.saves.remove(i);
+            s.result(json!({"org": save.staged.org, "at": t, "op": "save", "ok": true, "map_sha256": save.staged.map_sha256}));
+            return Ok(obj([("ok", Value::Bool(true)), ("step", Value::from("done"))]));
+        }
+        let principal = s.saves[i].principal.clone();
+        let next_target = ai::sign_target(&s.saves[i].staged, &principal, next).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+        let r = book.new_request(&principal, AI_SIGN_KIND, next_target, "Sign the AI settings that name the signed AI map", t).map_err(api_e)?;
+        let next_id = pj::py_str(r.get("id").unwrap_or(&Value::Null));
+        s.saves[i].step = next;
+        s.saves[i].request = next_id.clone();
+        return Ok(obj([("ok", Value::Bool(true)), ("step", Value::from(next.as_str())), ("request", Value::from(next_id))]));
+    }
+    let i = s.asks.iter().position(|x| x.request == id).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+    let sig = sig.ok_or_else(|| E::Bad("sig is {ts, sig}".into()))?;
+    let ts = sig.get("ts").and_then(Value::as_i64).ok_or_else(|| E::Bad("sig is {ts, sig}".into()))?;
+    let body = ai::signed_body(&s.asks[i].body, ts, sig.get("sig").and_then(Value::as_str).unwrap_or(""), t.div_euclid(1000)).map_err(api_e)?;
+    let ask = s.asks.remove(i);
+    close();
+    let entry = s.org(relay, &ask.org);
+    let outcome = match ask.op {
+        "hold" => {
+            let by = MeetSection::who(relay, &ask.by).map_err(api_e)?;
+            let r = || {
+                relay.hub.pc_holds_place("", &by, body.get("on"), body.get("principals"), None, body.get("reason")).map(|o| pj::s(&o, "id")).map_err(from_hub)
+            };
+            ai::place_both(r, || ai_archive_call(relay, &entry, "POST", "/v1/holds", Some(&body)))
+        }
+        "recovery_code" => match ai_archive_call(relay, &entry, "POST", "/v1/recovery/code", Some(&body)) {
+            Ok(v) => match ai::code_groups(v.get("code").and_then(Value::as_str).unwrap_or("")) {
+                Some(groups) => {
+                    let r = crate::console_auth::random_bytes(2).map_err(api_e)?;
+                    let ask_two = ai::pick_two([r[0], r[1]], groups.len());
+                    let gen = v.get("gen").and_then(Value::as_i64).unwrap_or(0);
+                    s.codes.retain(|c| c.org != ask.org);
+                    s.codes.push(ai::PendingCode { org: ask.org.clone(), gen, groups, ask: ask_two, shown: false });
+                    json!({"ok": true, "gen": gen})
+                }
+                None => json!({"ok": false, "error": "The archive's recovery code does not read."}),
+            },
+            Err(e) => json!({"ok": false, "error": e.message}),
+        },
+        _ => match ai_archive_call(relay, &entry, "POST", "/v1/recovery/offline_copy", Some(&body)) {
+            Ok(v) => json!({"ok": true, "offline_copy": v.get("offline_copy")}),
+            Err(e) => json!({"ok": false, "error": e.message}),
+        },
+    };
+    let mut row = json!({"org": ask.org, "at": t, "op": ask.op, "by": ask.by, "reviewer": who.principal});
+    if let (Some(r), Some(o)) = (row.as_object_mut(), outcome.as_object()) {
+        r.extend(o.clone());
+    }
+    s.result(row);
+    let mut out = outcome.as_object().cloned().unwrap_or_default();
+    out.insert("ok".into(), Value::Bool(true));
+    Ok(out)
 }
 
 // ── the hub's hooks ──────────────────────────────────────────────────────────────────────────────────────────
@@ -1657,7 +2334,11 @@ pub fn requests_for(relay: &Relay, principal: &str) -> Obj {
         Some(c) => c
             .requests_waiting("meet.", t)
             .into_iter()
-            .filter(|r| r.get("kind").and_then(Value::as_str) != Some("meet.console-invite") || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal))
+            .filter(|r| {
+                // a console invite and the AI signing asks (AI-1 9) go only to the device of their principal
+                let kind = r.get("kind").and_then(Value::as_str).unwrap_or_default();
+                (kind != "meet.console-invite" && !kind.starts_with("meet.ai.")) || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal)
+            })
             .collect(),
     };
     obj([("ok", Value::Bool(true)), ("requests", Value::Array(list))])
