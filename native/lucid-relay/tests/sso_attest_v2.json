@@ -1,0 +1,132 @@
+{
+ "attestations": [
+  {
+   "expect": true,
+   "fields": {
+    "auth_time": 1794000000,
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "email": "ann@acme.gov",
+    "iss": "https://acme.okta.com/oauth2/default",
+    "methods": [
+     "acr:phr",
+     "pwd"
+    ],
+    "provider": "okta",
+    "req": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "sub": "00u1"
+   },
+   "name": "v2",
+   "sig": "MEUCIQChgn+XFKWvoGLPKeAlTRs02GOzJNl6n1chU+eQ1SmaxQIgJa2wXfGrVSAl6D55FX5wE2bIc6nt9SXJJQHJDvkOlZM="
+  },
+  {
+   "expect": false,
+   "fields": {
+    "auth_time": 1794000000,
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "email": "ann@acme.gov",
+    "iss": "https://acme.okta.com/oauth2/default",
+    "methods": [
+     "acr:phr",
+     "pwd"
+    ],
+    "provider": "okta",
+    "req": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "sub": "00u1"
+   },
+   "name": "v1_bytes_refused",
+   "sig": "MEYCIQDu1f0baT0Ry++ju8k8lLxOazax8NEe6Z1niEgtQdRqBAIhANTAF4b596h9M/gMTKiJ08MYHa6Q3745LeUnrIl8ytu5"
+  },
+  {
+   "expect": false,
+   "fields": {
+    "auth_time": 1794000000,
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "email": "ann@acme.gov",
+    "iss": "https://acme.okta.com/oauth2/default",
+    "methods": [
+     "acr:phr",
+     "pwd"
+    ],
+    "provider": "okta",
+    "req": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "sub": "00u1"
+   },
+   "name": "joined_methods_refused",
+   "sig": "MEQCIDuSrU46FcHE8OBKG6421oAIwzkou/C6YFsjMWeEkYAJAiARU7SFZLbg/xZIou8rIqy3RagL/0kYSZk3Q1I1mpeeuA=="
+  }
+ ],
+ "layouts": [
+  {
+   "fields": {
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "org": "acme",
+    "provider": "okta",
+    "ts": 1794000000
+   },
+   "hex": "000000176c756369642d6d6565742d73736f2d626567696e2d763200000040616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261620000000461636d65000000046f6b746100000008000000006aee4480",
+   "name": "begin_v2"
+  },
+  {
+   "fields": {
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "provider": "okta",
+    "req": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+   },
+   "name": "nonce_v2",
+   "value": "J4TViJqgIW2CfUx4ZwN1J92dSTBKNVtnx9E_qqxMQWE"
+  },
+  {
+   "fields": {
+    "auth_time": 1794000000,
+    "csr_sha256": "abababababababababababababababababababababababababababababababab",
+    "email": "ann@acme.gov",
+    "iss": "https://acme.okta.com/oauth2/default",
+    "methods": [
+     "acr:phr",
+     "pwd"
+    ],
+    "provider": "okta",
+    "req": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+    "sub": "00u1"
+   },
+   "hex": "000000186c756369642d6d6565742d73736f2d6174746573742d7632000001107b22617574685f74696d65223a313739343030303030302c226373725f736861323536223a2261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162616261626162222c22656d61696c223a22616e6e4061636d652e676f76222c22697373223a2268747470733a2f2f61636d652e6f6b74612e636f6d2f6f61757468322f64656661756c74222c226d6574686f6473223a5b226163723a706872222c22707764225d2c2270726f7669646572223a226f6b7461222c22726571223a223066306630663066306630663066306630663066306630663066306630663066222c22737562223a2230307531227d",
+   "name": "attest_v2"
+  },
+  {
+   "fields": {
+    "at": 1794000000,
+    "org": "acme",
+    "principal": "ann@acme.gov",
+    "provider": "okta"
+   },
+   "hex": "000000196c756369642d6d6565742d73736f2d73757370656e642d76310000004b7b226174223a313739343030303030302c226f7267223a2261636d65222c227072696e636970616c223a22616e6e4061636d652e676f76222c2270726f7669646572223a226f6b7461227d",
+   "name": "suspend_v1"
+  },
+  {
+   "fields": {
+    "at": 1794000000,
+    "org": "acme",
+    "principal": "ann@acme.gov",
+    "provider": "okta"
+   },
+   "hex": "0000001b6c756369642d6d6565742d73736f2d756e73757370656e642d76310000004b7b226174223a313739343030303030302c226f7267223a2261636d65222c227072696e636970616c223a22616e6e4061636d652e676f76222c2270726f7669646572223a226f6b7461227d",
+   "name": "unsuspend_v1"
+  },
+  {
+   "fields": {
+    "fresh": [
+     {
+      "principal": "ann@acme.gov",
+      "stale_at": 1794004500
+     }
+    ],
+    "org": "acme",
+    "provider": "okta"
+   },
+   "hex": "000000186c756369642d6d6565742d73736f2d7374617475732d76310000005d7b226672657368223a5b7b227072696e636970616c223a22616e6e4061636d652e676f76222c227374616c655f6174223a313739343030343530307d5d2c226f7267223a2261636d65222c2270726f7669646572223a226f6b7461227d",
+   "name": "status_batch_v1"
+  }
+ ],
+ "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0SeoUHkm8liCLfvegDlhnOgoqNTA\nFDD2sotNmBlSPcoYQwd3c7UG8linnm+hwqKgOT8qQOUngW1rBkVli1aRsg==\n-----END PUBLIC KEY-----\n",
+ "v": 1
+}

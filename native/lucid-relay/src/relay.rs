@@ -10,20 +10,43 @@ use crate::codec::{as_object, exact_keys, js_number_string, parse_json, safe_int
 use crate::console::{Console, CONSOLE_OFF};
 use crate::console_spokes::{observes, Block, BlockPath, Blocks, LicenseClock, Observed, UncountedRing, BLOCKS_FILE, NODE_BLOCKED, REQUESTS_REFUSED};
 use crate::der::{ecdsa_verify, CertNames};
-use crate::identity::{is_node_id, DirectoryHolder, NodeCert, TrustStore, LOOPBACK_HOSTS};
+use crate::identity::{
+    is_node_id, is_renewed_leaf, parse_bundle, DirectoryHolder, NodeCert, TrustStore, BUNDLE_ITEMS, LEAF_TOKEN_MAX, LEGACY_HEADER_CERT_MAX, LOOPBACK_HOSTS,
+};
 use crate::license::{
     license_keys, license_state, license_user_of, migrate_license_file, verify_license, Admission, License, LicenseStateName, LicenseUsers, LICENSE_USERS_FILE, LICENSE_USERS_FILE_OLD,
     LICENSE_V1_SEATS_FILE, LICENSE_V1_SEATS_FILE_OLD, seat_problem, UNCOUNTED_REASON, UNLICENSED_DIRECTORY_REASON,
 };
 use crate::log::{Fields, Level, Logger};
-use crate::store::{make_dir, read_text, remove, write_in_place, write_private};
+use crate::store::{make_dir, read_text, remove, write_private};
 use indexmap::IndexMap;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const BODY_BYTES: usize = 320 * 1024;
+/// Every request body and every inbox reply (ID-1 contract 5.5, carriers rows 3 and 16): an envelope with a
+/// 65,536-character `cert` and a maximum plaintext is 331,798 bytes, so it fits.
+pub const BODY_BYTES: usize = 393_216;
+/// A `POST /v1/node/cert` body: a 65,536-character leaf plus 4,096.
+pub const REGISTER_BODY_BYTES: usize = 69_632;
+/// Registered certificates, in memory and on disk alike (contract 5.5, N-M2): the default and the ceiling. An
+/// operator may lower it, never below CERT_STORE_MIN_BYTES.
+pub const CERT_STORE_BYTES: i64 = 256 * 1024 * 1024;
+pub const CERT_STORE_MIN_BYTES: i64 = 16 * 1024 * 1024;
+/// Registered certificates per node: a renewal overlaps at most two leaves.
+const CERTS_PER_NODE: usize = 2;
+/// Rows per `GET /v1/presence` page (each page also stays within BODY_BYTES).
+const PRESENCE_PAGE: usize = 4_000;
+/// The registration route, and the files that keep registered certificates under the state directory.
+pub const REGISTER_PATH: &str = "/v1/node/cert";
+const NODE_CERTS_DIR: &str = "node-certs";
+const NODE_CERTS_INDEX: &str = "node-certs.json";
+/// Registered certificates past their exp are swept at most this often (the store may hold many thousands).
+const CERT_SWEEP_MS: i64 = 60_000;
+/// The lowest certificate store budget a relay starts with. Only tests move it, so eviction can be shown with a few
+/// certificates instead of 16 MiB of them (relay.ts setCertStoreFloorForTest).
+static CERT_STORE_FLOOR: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(CERT_STORE_MIN_BYTES);
 const MAILBOX_MESSAGES: usize = 1000;
 const SENDS_PER_MINUTE: usize = 120;
 pub const MESSAGE_TTL_MS: i64 = 72 * 3_600_000;
@@ -58,6 +81,12 @@ pub struct Options {
     pub users_file: Option<PathBuf>,
     pub store_bytes: i64,
     pub sender_bytes: i64,
+    /// Total bytes of registered certificates (contract 5.5, N-M2): CERT_STORE_MIN_BYTES to CERT_STORE_BYTES, any
+    /// other value stops the start.
+    pub cert_store_bytes: i64,
+    /// The directory that holds `node-certs/` and `node-certs.json` (the `--state` directory). None: the directory of
+    /// `crl_file`; without either, registered certificates are memory only, under the same budget.
+    pub cert_dir: Option<PathBuf>,
     /// The control panel (src/console.rs), when it is on: /v1/logs and /v1/console/invite go to it.
     pub console: Option<Arc<Console>>,
     /// The --state folder: with the console on, its block list (console-blocks.json) lives there.
@@ -111,6 +140,25 @@ pub fn lanes_of(body: &str) -> Option<(u8, u8, u8)> {
         let small = |k: &str| l.get(k).and_then(Value::as_u64).filter(|n| *n <= 8).map(|n| n as u8);
         Some((small("busy")?, small("live")?, small("max")?))
     })
+}
+
+/// A registered certificate: the `node-certs.json` entry and, in memory, its token.
+struct Registered {
+    node: String,
+    cert_sha256: String,
+    exp: i64,
+    bytes: i64,
+    registered_at: i64,
+    token: String,
+}
+
+/// A cached verify_cert success for a registered certificate (contract 5.5, N-M1): good only under the same
+/// `trust.cache_key()` and while the clock is before both `valid_until` and the certificate's exp.
+struct Verified {
+    key: String,
+    cert: NodeCert,
+    public_key: crate::der::P256Key,
+    valid_until: i64,
 }
 
 struct Licensed {
@@ -253,6 +301,14 @@ pub struct State {
     fleet: Option<FleetLink>,
     /// 5.7 (F20): endorsement attempts per certificate serial within the hour.
     endorse_tries: HashMap<String, Vec<i64>>,
+    /// Registered certificates by cert_sha256 (contract 5.5 "Certificate registration"), their bytes and budget.
+    certs: IndexMap<String, Registered>,
+    /// Cached verifications, one per registered certificate at most (N-M1). The request signature is never cached.
+    verified: HashMap<String, Verified>,
+    cert_bytes: i64,
+    cert_cap: i64,
+    certs_swept_at: i64,
+    cert_dir: Option<PathBuf>,
 }
 
 fn store_name(to: &str, id: &str) -> String {
@@ -264,6 +320,54 @@ fn parse_store_name(name: &str) -> Option<(&str, &str)> {
     let stem = name.strip_suffix(".json")?;
     let (to, id) = stem.split_once('.')?;
     (is_node_id(to) && crate::identity::is_serial(id)).then_some((to, id))
+}
+
+/// /^[0-9a-f]{64}$/
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/: a compact token's shape.
+fn is_compact(s: &str) -> bool {
+    let part = |p: &str| !p.is_empty() && p.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+    s.split_once('.').is_some_and(|(a, b)| part(a) && part(b))
+}
+
+/// The node a certificate names, read without trusting it (for log lines only).
+fn claimed_node(token: &str) -> Option<String> {
+    unb64u(token.split('.').next().unwrap_or(""))
+        .and_then(|b| parse_json(&utf8_lossy(&b)))
+        .and_then(|v| str_of(v.get("node")).filter(|n| is_node_id(n)).map(str::to_owned))
+}
+
+/// URLSearchParams of a request path's query: every (name, value) pair, decoded, in order.
+fn query_pairs(path: &str) -> Vec<(String, String)> {
+    let Some((_, q)) = path.split_once('?') else { return Vec::new() };
+    let decode = |s: &str| {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(b.len());
+        let mut i = 0;
+        while i < b.len() {
+            let hex = |c: u8| (c as char).to_digit(16);
+            match b[i] {
+                b'+' => out.push(b' '),
+                b'%' if i + 2 < b.len() => match (hex(b[i + 1]), hex(b[i + 2])) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 2;
+                    }
+                    _ => out.push(b'%'),
+                },
+                c => out.push(c),
+            }
+            i += 1;
+        }
+        utf8_lossy(&out)
+    };
+    q.split('&').filter(|p| !p.is_empty()).map(|p| {
+        let (k, v) = p.split_once('=').unwrap_or((p, ""));
+        (decode(k), decode(v))
+    }).collect()
 }
 
 /// `/\.tmp-\d+$/`: a torn write.
@@ -285,7 +389,8 @@ pub fn parse_envelope(v: Option<&Value>) -> Option<(&Map<String, Value>, String,
     let to = str_of(o.get("to")).filter(|s| is_node_id(s))?;
     let id = str_of(o.get("id")).filter(|s| crate::identity::is_serial(s))?;
     safe_int(o.get("ts"))?;
-    let cert = str_of(o.get("cert"))?;
+    // A renewed sign-in leaf is up to LEAF_TOKEN_MAX characters (contract 5.5, carriers row 4); open() judges it.
+    let cert = str_of(o.get("cert")).filter(|c| crate::codec::utf16_len(c) <= LEAF_TOKEN_MAX)?;
     let b64u_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
     let (a, b) = cert.split_once('.')?;
     if a.is_empty() || b.is_empty() || !a.bytes().all(b64u_char) || !b.bytes().all(b64u_char) {
@@ -319,10 +424,38 @@ fn relays_over_cap(license: Option<&License>, relays: usize) -> Option<String> {
 impl State {
     /// Load everything a restarted relay needs and judge the license; Err is why the relay does not start.
     pub fn new(opts: Options, logger: Arc<Logger>) -> Result<State, String> {
+        let cert_cap = opts.cert_store_bytes;
+        let floor = CERT_STORE_FLOOR.load(std::sync::atomic::Ordering::Relaxed);
+        if cert_cap < floor || cert_cap > CERT_STORE_BYTES {
+            return Err(format!("the certificate store budget {cert_cap} is not 16 MiB to 256 MiB ({CERT_STORE_MIN_BYTES} to {CERT_STORE_BYTES} bytes)"));
+        }
         let mut trust = TrustStore::new(opts.root);
         if let Some(file) = opts.crl_file.as_ref().filter(|f| f.exists()) {
+            // The bundle items persisted beside the CRL (contract 5.4) are taken with it, all or nothing; a CRL alone
+            // goes through accept_crl exactly as before.
             let text = read_text(file).unwrap_or_default();
-            if let Err(reason) = trust.accept_crl(&text) {
+            let dir = file.parent().unwrap_or(Path::new(""));
+            let mut bundle = Map::new();
+            bundle.insert("crl".into(), Value::from(text.as_str()));
+            for (key, name) in BUNDLE_ITEMS {
+                if let Some(v) = read_text(&dir.join(name)).filter(|v| !v.is_empty()) {
+                    bundle.insert(key.into(), Value::from(v));
+                }
+            }
+            // Items that no longer apply leave every IdP-bound certificate refused until the next bundle, and the start
+            // goes on with the CRL alone.
+            let whole = (bundle.len() > 1).then(|| match parse_bundle(Some(&Value::Object(bundle))) {
+                Some(b) => trust.accept_bundle(&b).map_err(|r| r.reason),
+                None => Err("malformed bundle".to_owned()),
+            });
+            if let Some(Err(reason)) = &whole {
+                logger.security("crl.stored-items-refused", &Fields::new().with("reason", reason), Level::Warn);
+            }
+            let accepted = match whole {
+                Some(Ok(changed)) => Ok(changed),
+                _ => trust.accept_crl(&text),
+            };
+            if let Err(reason) = accepted {
                 // Fail closed: never start without the revocations we had.
                 logger.security("crl.stored-refused", &Fields::new().with("reason", &reason), Level::Error);
                 return Err(format!("stored CRL refused: {reason}"));
@@ -430,6 +563,12 @@ impl State {
             mail_at: HashMap::new(),
             fleet: None,
             endorse_tries: HashMap::new(),
+            certs: IndexMap::new(),
+            verified: HashMap::new(),
+            cert_bytes: 0,
+            cert_cap,
+            certs_swept_at: 0,
+            cert_dir: None,
         };
         // R7-M1: an offline `license-time reset` is audited at the next start.
         if let Some((before, after)) = st.clock.take_reset() {
@@ -440,6 +579,7 @@ impl State {
                 c.record(r, now);
             }
         }
+        st.cert_dir = opts.cert_dir.or_else(|| st.crl_file.as_ref().and_then(|f| f.parent()).map(Path::to_path_buf));
         if let Some(stored) = st.directory_file.as_deref().and_then(read_text).filter(|s| !s.is_empty()) {
             // Not fatal, unlike the CRL; one naming more relays than the license covers is not loaded either.
             let t = now.div_euclid(1000);
@@ -475,6 +615,7 @@ impl State {
         if st.store.is_some() {
             st.restore_store()?;
         }
+        st.restore_certs();
         st.check_license(crate::codec::now_ms())?;
         st.tell_console_revoked();
         st.observe_crl(now);
@@ -546,6 +687,178 @@ impl State {
         Ok(())
     }
 
+    // ── Registered certificates (contract 5.5 "Certificate registration", N-M2) ─────────────────────────────────────
+    // One file per certificate under node-certs/ plus the node-certs.json index, both written atomically; the same
+    // entries and budget in memory when there is no state directory. A dropped certificate costs its hub one more
+    // registration (the client registers again after a 401), never access.
+
+    fn cert_path(dir: &Path, sha: &str) -> PathBuf {
+        dir.join(NODE_CERTS_DIR).join(format!("{sha}.cert"))
+    }
+
+    fn save_cert_index(&self) {
+        let Some(dir) = &self.cert_dir else { return };
+        let entries: Vec<Value> = self
+            .certs
+            .values()
+            .map(|e| json!({ "node": e.node, "cert_sha256": e.cert_sha256, "exp": e.exp, "bytes": e.bytes, "registered_at": e.registered_at }))
+            .collect();
+        let text = format!("{}\n", stringify(&json!({ "certs": entries })));
+        if let Err(e) = write_private(&dir.join(NODE_CERTS_INDEX), text.as_bytes()) {
+            self.logger.ops("node-certs.write-failed", &Fields::new().with("reason", e.to_string()), Level::Warn);
+        }
+    }
+
+    fn drop_cert(&mut self, sha: &str) {
+        let Some(e) = self.certs.shift_remove(sha) else { return };
+        self.verified.remove(sha);
+        self.cert_bytes -= e.bytes;
+        if let Some(dir) = &self.cert_dir {
+            remove(&Self::cert_path(dir, sha));
+        }
+    }
+
+    /// Make room for `e` and hold it: expired entries go, then the node's oldest-expiring ones past CERTS_PER_NODE - 1,
+    /// then the earliest-expiring of all until the total fits the budget. Returns how many entries it dropped.
+    fn admit_cert(&mut self, e: Registered, t_sec: i64) -> usize {
+        let mut dropped = 0;
+        let expired: Vec<String> = self.certs.values().filter(|old| old.exp <= t_sec).map(|old| old.cert_sha256.clone()).collect();
+        for sha in expired {
+            self.drop_cert(&sha);
+            dropped += 1;
+        }
+        let mut mine: Vec<(i64, String)> = self.certs.values().filter(|old| old.node == e.node).map(|old| (old.exp, old.cert_sha256.clone())).collect();
+        mine.sort_by_key(|(exp, _)| *exp);
+        let mut mine = mine.into_iter();
+        let mut left = self.certs.values().filter(|old| old.node == e.node).count();
+        while left >= CERTS_PER_NODE {
+            let Some((_, sha)) = mine.next() else { break };
+            self.drop_cert(&sha);
+            dropped += 1;
+            left -= 1;
+        }
+        if self.cert_bytes + e.bytes > self.cert_cap {
+            let mut by_exp: Vec<(i64, String)> = self.certs.values().map(|old| (old.exp, old.cert_sha256.clone())).collect();
+            by_exp.sort_by_key(|(exp, _)| *exp);
+            for (_, sha) in by_exp {
+                if self.cert_bytes + e.bytes <= self.cert_cap {
+                    break;
+                }
+                self.drop_cert(&sha);
+                dropped += 1;
+            }
+        }
+        self.cert_bytes += e.bytes;
+        self.certs.insert(e.cert_sha256.clone(), e);
+        dropped
+    }
+
+    /// Hold a certificate that just passed registration; None when stored (or already held), else why not.
+    fn register_cert(&mut self, token: &str, c: &NodeCert, t: i64) -> Option<String> {
+        let sha = sha256_hex(token.as_bytes());
+        if self.certs.contains_key(&sha) {
+            return None;
+        }
+        // On disk before the index names it and before the 200: a restart finds every entry the index lists.
+        if let Some(dir) = &self.cert_dir {
+            if let Err(e) = write_private(&Self::cert_path(dir, &sha), token.as_bytes()) {
+                return Some(e.to_string());
+            }
+        }
+        let e = Registered { node: c.node.clone(), cert_sha256: sha, exp: c.exp, bytes: token.len() as i64, registered_at: t, token: token.to_owned() };
+        let dropped = self.admit_cert(e, t.div_euclid(1000));
+        self.save_cert_index();
+        if dropped > 0 {
+            let f = Fields::new().with("node", &c.node).with("dropped", dropped).with("certs", self.certs.len()).with("bytes", self.cert_bytes).with("capBytes", self.cert_cap);
+            self.logger.ops("node-certs.dropped", &f, Level::Info);
+        }
+        None
+    }
+
+    /// A registered certificate, checked as every use requires (N-M1): the cached result only under the same
+    /// `trust.cache_key()` and while now is before both its valid_until and the certificate's exp; else the full
+    /// verify_cert against what the relay holds now, cached again when it passes.
+    fn check_registered(&mut self, sha: &str, t_sec: i64) -> Result<(NodeCert, crate::der::P256Key), String> {
+        let key = self.trust.cache_key();
+        if let Some(hit) = self.verified.get(sha) {
+            if hit.key == key && t_sec < hit.valid_until && t_sec < hit.cert.exp {
+                return Ok((hit.cert.clone(), hit.public_key.clone()));
+            }
+        }
+        self.verified.remove(sha);
+        let token = self.certs.get(sha).map(|e| Value::String(e.token.clone())).unwrap_or(Value::Null);
+        let c = self.trust.verify_cert(Some(&token), t_sec)?;
+        self.verified.insert(sha.to_owned(), Verified { key, cert: c.cert.clone(), public_key: c.key.clone(), valid_until: c.valid_until });
+        Ok((c.cert, c.key))
+    }
+
+    /// Reload and verify again at start, against the CRL and bundle just loaded. An entry whose file is missing, does
+    /// not hash to its name, or no longer verifies is dropped; files the index does not name are removed.
+    fn restore_certs(&mut self) {
+        let Some(dir) = self.cert_dir.clone() else { return };
+        let t = crate::codec::now_ms();
+        let t_sec = t.div_euclid(1000);
+        let index = read_text(&dir.join(NODE_CERTS_INDEX)).and_then(|s| parse_json(&s));
+        let listed: Vec<Value> = index.as_ref().and_then(as_object).and_then(|o| o.get("certs")).and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut found: Vec<Registered> = Vec::new();
+        const KEYS: [&str; 5] = ["node", "cert_sha256", "exp", "bytes", "registered_at"];
+        for v in &listed {
+            let Some(o) = v.as_object().filter(|o| exact_keys(o, &KEYS, &KEYS)) else { continue };
+            let (Some(node), Some(sha)) = (str_of(o.get("node")), str_of(o.get("cert_sha256")).filter(|s| is_sha256_hex(s))) else { continue };
+            let Some(registered_at) = safe_int(o.get("registered_at")) else { continue };
+            if found.iter().any(|f| f.cert_sha256 == sha) {
+                continue;
+            }
+            let token = std::fs::read(Self::cert_path(&dir, sha)).map(|b| utf8_lossy(&b)).unwrap_or_default();
+            if token.is_empty() || sha256_hex(token.as_bytes()) != sha {
+                continue;
+            }
+            let Ok(c) = self.trust.verify_cert(Some(&Value::String(token.clone())), t_sec) else { continue };
+            if c.cert.node != node {
+                continue;
+            }
+            found.push(Registered { node: c.cert.node, cert_sha256: sha.to_owned(), exp: c.cert.exp, bytes: token.len() as i64, registered_at: registered_at.min(t), token });
+        }
+        found.sort_by_key(|e| e.registered_at);
+        for e in found {
+            self.admit_cert(e, t_sec);
+        }
+        if let Ok(entries) = std::fs::read_dir(dir.join(NODE_CERTS_DIR)) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let held = name.strip_suffix(".cert").is_some_and(|sha| is_sha256_hex(sha) && self.certs.contains_key(sha));
+                if !held {
+                    remove(&entry.path());
+                }
+            }
+        }
+        if !listed.is_empty() || !self.certs.is_empty() {
+            self.save_cert_index();
+        }
+        self.certs_swept_at = t;
+        if !listed.is_empty() {
+            let f = Fields::new().with("restored", self.certs.len()).with("dropped", listed.len() - self.certs.len()).with("bytes", self.cert_bytes).with("capBytes", self.cert_cap);
+            self.logger.ops("node-certs.restored", &f, if listed.len() > self.certs.len() { Level::Warn } else { Level::Info });
+        }
+    }
+
+    /// Persist the held CRL and the bundle items that match it, atomically, beside the CRL file (contract 5.4); an
+    /// item the held bundle no longer carries is removed, so a restart never loads one that does not match.
+    fn save_bundle(&self) -> Result<(), String> {
+        let (Some(file), Some(b)) = (&self.crl_file, self.trust.bundle()) else { return Ok(()) };
+        let crl = str_of(b.get("crl")).unwrap_or_default();
+        write_private(file, format!("{crl}\n").as_bytes()).map_err(|e| e.to_string())?;
+        let dir = file.parent().unwrap_or(Path::new(""));
+        for (key, name) in BUNDLE_ITEMS {
+            let path = dir.join(name);
+            match str_of(b.get(key)) {
+                Some(v) => write_private(&path, format!("{v}\n").as_bytes()).map_err(|e| e.to_string())?,
+                None => remove(&path),
+            }
+        }
+        Ok(())
+    }
+
     /// How many relays a directory this mailbox carries may name (relay_cap_of).
     fn relay_cap(&self) -> i64 {
         relay_cap_of(self.licensed.as_ref().map(|l| &l.license))
@@ -582,13 +895,22 @@ impl State {
     /// A root-signed, newer CRL from a node (`POST /v1/crl`) or the console, as `take_directory` answers. A new one
     /// frees seats, latches the console's anchors (3.2) and completes the rs.revoke requests it lists (3.8).
     pub fn take_crl(&mut self, token: &str, t: i64, by: &Fields) -> Result<Result<i64, Taken>, String> {
-        match self.trust.accept_crl(token) {
+        let accepted = self.trust.accept_crl(token);
+        self.took_crl(accepted, t, by)
+    }
+
+    /// `POST /v1/crl`: a bare CRL or an anchored CRL bundle (ID-1 contract 5.4), then as `take_crl`.
+    pub fn take_crl_bundle(&mut self, b: &crate::identity::Bundle, t: i64, by: &Fields) -> Result<Result<i64, Taken>, String> {
+        let accepted = if b.items.is_empty() { self.trust.accept_crl(&b.crl) } else { self.trust.accept_bundle(b).map_err(|r| r.reason) };
+        self.took_crl(accepted, t, by)
+    }
+
+    fn took_crl(&mut self, accepted: Result<bool, String>, t: i64, by: &Fields) -> Result<Result<i64, Taken>, String> {
+        match accepted {
             Err(reason) => Ok(Err(Taken { status: 409, reason, event: "crl.refused" })),
             Ok(changed) => {
                 if changed {
-                    if let Some(file) = &self.crl_file {
-                        write_in_place(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
-                    }
+                    self.save_bundle()?;
                     self.logger.ops("crl.accepted", &by.clone().with("version", self.trust.crl_version()), Level::Info);
                     self.free_users(t)?; // a user whose every certificate is revoked frees its seat now
                     self.tell_console_revoked(); // and an admin a revoked hub invited is latched out
@@ -808,37 +1130,90 @@ impl State {
         }
         // R7-M1: the license clock's mark kept at least once a minute.
         self.clock.now(t);
+        if t - self.certs_swept_at >= CERT_SWEEP_MS {
+            self.certs_swept_at = t;
+            let gone: Vec<String> = self.certs.values().filter(|e| e.exp <= t.div_euclid(1000)).map(|e| e.cert_sha256.clone()).collect();
+            if !gone.is_empty() {
+                for sha in gone {
+                    self.drop_cert(&sha);
+                }
+                self.save_cert_index();
+            }
+        }
     }
 
     /// The caller's certificate, or why it was refused: (event, reason, claimed node).
-    fn authenticate(&mut self, r: &Request, t: i64, host_ok: bool) -> Result<NodeCert, (&'static str, String, Option<String>)> {
+    ///
+    /// Two header forms (contract 5.5). Legacy `{cert, ts, nonce, sig}` signs v2 and carries a certificate of at most
+    /// LEGACY_HEADER_CERT_MAX characters that is not a renewed leaf. The hash form `{cert_sha256, ts, nonce, sig}`
+    /// signs v3 and names a registered certificate, or, with `registering` (the body of `POST /v1/node/cert`), the one
+    /// being registered, which must hash to it.
+    fn authenticate(&mut self, r: &Request, t: i64, host_ok: bool, registering: Option<&str>) -> Result<NodeCert, (&'static str, String, Option<String>)> {
         let failed = |reason: &str, claimed: Option<String>| Err(("auth.failed", reason.to_owned(), claimed));
         let Some(token) = r.authorization.strip_prefix("LucidNode ") else { return failed("no signed authorization", None) };
         let parsed = unb64u(token).and_then(|b| parse_json(&utf8_lossy(&b)));
-        let Some(a) = parsed.as_ref().and_then(as_object).filter(|a| exact_keys(a, &["cert", "ts", "nonce", "sig"], &["cert", "ts", "nonce", "sig"])) else {
+        const LEGACY: [&str; 4] = ["cert", "ts", "nonce", "sig"];
+        const HASHED: [&str; 4] = ["cert_sha256", "ts", "nonce", "sig"];
+        let Some(a) = parsed.as_ref().and_then(as_object).filter(|a| exact_keys(a, &HASHED, &HASHED) || exact_keys(a, &LEGACY, &LEGACY)) else {
             return failed("malformed authorization", None);
         };
+        let hashed = a.contains_key("cert_sha256");
         let ts = a.get("ts").and_then(Value::as_f64).filter(|_| a.get("ts").is_some_and(Value::is_number));
         let nonce = str_of(a.get("nonce")).filter(|n| crate::identity::is_serial(n));
         let (Some(ts), Some(nonce), Some(sig)) = (ts, nonce, str_of(a.get("sig"))) else { return failed("malformed authorization", None) };
+        let sha = if hashed {
+            let Some(sha) = str_of(a.get("cert_sha256")).filter(|s| is_sha256_hex(s)) else { return failed("malformed authorization", None) };
+            Some(sha.to_owned())
+        } else {
+            None
+        };
         // Only now, for an authorization that parses, and at most once a second: junk never costs a sweep.
         if self.swept_at.is_none_or(|at| t - at >= SWEEP_EVERY_MS || t < at) {
             self.swept_at = Some(t);
             self.sweep(t);
         }
-        let claimed = str_of(a.get("cert"))
-            .and_then(|c| unb64u(c.split('.').next().unwrap_or("")))
-            .and_then(|b| parse_json(&utf8_lossy(&b)))
-            .and_then(|v| str_of(v.get("node")).filter(|n| is_node_id(n)).map(str::to_owned));
+        let t_sec = t.div_euclid(1000);
+        // The certificate the request is judged by: the one being registered, a registered one, or the header's own.
+        let mut token: Option<Value> = a.get("cert").cloned();
+        let mut held = false;
+        match (&sha, registering) {
+            (Some(sha), Some(reg)) => {
+                if sha256_hex(reg.as_bytes()) != *sha {
+                    return failed("the registered certificate does not hash to cert_sha256", claimed_node(reg));
+                }
+                token = Some(Value::from(reg));
+            }
+            (Some(sha), None) => {
+                let Some(e) = self.certs.get(sha) else { return failed("unknown certificate hash", None) };
+                token = Some(Value::String(e.token.clone()));
+                held = true;
+            }
+            (None, Some(reg)) => return failed("a registration needs the hash-form authorization", claimed_node(reg)),
+            (None, None) => {
+                if let Some(cert) = str_of(a.get("cert")) {
+                    if crate::codec::utf16_len(cert) > LEGACY_HEADER_CERT_MAX {
+                        return Err(("rs_auth_cert_too_large", format!("the header certificate is longer than {LEGACY_HEADER_CERT_MAX} characters"), claimed_node(cert)));
+                    }
+                    if is_renewed_leaf(cert) {
+                        return failed("a renewed certificate must be registered and named by its hash", claimed_node(cert));
+                    }
+                }
+            }
+        }
+        let claimed = token.as_ref().and_then(Value::as_str).and_then(claimed_node);
         if (t as f64 - ts).abs() > AUTH_WINDOW_MS {
             return failed("timestamp outside the window", claimed);
         }
-        let c = match self.trust.verify_cert(a.get("cert"), t.div_euclid(1000)) {
+        let checked = match (&sha, held) {
+            (Some(sha), true) => self.check_registered(sha, t_sec),
+            _ => self.trust.verify_cert(token.as_ref(), t_sec).map(|c| (c.cert, c.key)),
+        };
+        let (cert, key) = match checked {
             Ok(c) => c,
             Err(reason) => return Err((if reason == "certificate revoked" { "auth.revoked" } else { "auth.failed" }, reason, claimed)),
         };
         // A LAN mailbox carries mail for its spoke: its node id on a hub certificate is not that spoke.
-        if self.owner.as_deref() == Some(c.cert.node.as_str()) && c.cert.role != "spoke" {
+        if self.owner.as_deref() == Some(cert.node.as_str()) && cert.role != "spoke" {
             return failed(OWNER_NOT_SPOKE, claimed);
         }
         // RS-RELAY-03: the signature must name this mailbox: its owner, or the host the caller dialed.
@@ -849,21 +1224,43 @@ impl State {
             Some(o) => format!("lan:{o}"),
             None => format!("relay:{}", r.dialed.host),
         };
-        let signed = format!("lucid-relay-auth/v2\n{audience}\n{}\n{}\n{}\n{nonce}\n{}", r.method, r.path, js_number_string(ts), sha256_hex(r.body.as_bytes()));
-        let good = unb64u(sig).is_some_and(|s| ecdsa_verify(&c.key, signed.as_bytes(), &s));
+        let body_hash = sha256_hex(r.body.as_bytes());
+        let ts_text = js_number_string(ts);
+        let signed = match &sha {
+            None => format!("lucid-relay-auth/v2\n{audience}\n{}\n{}\n{ts_text}\n{nonce}\n{body_hash}", r.method, r.path),
+            // The hash form (contract 5.5, N-L1): the v2 lines under the label v3, plus the cert_sha256 the header names.
+            Some(sha) => format!("lucid-relay-auth/v3\n{audience}\n{}\n{}\n{ts_text}\n{nonce}\n{body_hash}\n{sha}", r.method, r.path),
+        };
+        let good = unb64u(sig).is_some_and(|s| ecdsa_verify(&key, signed.as_bytes(), &s));
         if !good {
             return failed("bad request signature", claimed);
         }
         if self.nonces.contains_key(nonce) {
-            return Err(("auth.replay", "nonce already used".into(), Some(c.cert.node)));
+            return Err(("auth.replay", "nonce already used".into(), Some(cert.node)));
         }
         self.nonces.insert(nonce.to_owned(), t);
-        Ok(c.cert)
+        Ok(cert)
     }
 
     /// Everything after the body is read: authenticate (sweeping the books, at most once a second), seat, route.
     pub fn serve(&mut self, r: &Request, t: i64, host_ok: bool) -> Result<Reply, String> {
-        let me = match self.authenticate(r, t, host_ok) {
+        // `POST /v1/node/cert {cert}` (contract 5.5): the certificate being registered, checked for shape before the
+        // authorization that must name it by hash.
+        let registering = if r.pathname == REGISTER_PATH && r.method == "POST" {
+            let parsed = parse_json(r.body);
+            let cert = parsed
+                .as_ref()
+                .and_then(as_object)
+                .filter(|b| exact_keys(b, &["cert"], &["cert"]))
+                .and_then(|b| str_of(b.get("cert")))
+                .filter(|c| crate::codec::utf16_len(c) <= LEAF_TOKEN_MAX && is_compact(c))
+                .map(str::to_owned);
+            let Some(cert) = cert else { return Ok(refuse(&self.logger, 400, "malformed", "cert.malformed", r.where_)) };
+            Some(cert)
+        } else {
+            None
+        };
+        let me = match self.authenticate(r, t, host_ok, registering.as_deref()) {
             Ok(c) => c,
             Err((event, reason, claimed)) => {
                 let f = r.where_.clone().with("status", 401u16).with("reason", reason).with("claimedNode", claimed);
@@ -891,6 +1288,15 @@ impl State {
         let body = || parse_json(r.body);
         let reply = match (r.pathname, r.method) {
             ("/v1/send", "POST") => self.send(&me, body(), t, &who),
+            (REGISTER_PATH, "POST") => {
+                // authenticate verified the certificate in full and its key's signature over the request.
+                let token = registering.unwrap_or_default();
+                if let Some(failed) = self.register_cert(&token, &me, t) {
+                    logger.ops("node-certs.write-failed", &who.clone().with("reason", failed), Level::Error);
+                    return Ok(json_reply(507, &json!({ "ok": false, "error": "relay certificate store failed" })));
+                }
+                json_reply(200, &json!({ "ok": true, "cert_sha256": sha256_hex(token.as_bytes()) }))
+            }
             ("/v1/inbox", "GET") => {
                 if me.role == "spoke" {
                     self.polls.insert(me.node.clone(), t);
@@ -898,9 +1304,25 @@ impl State {
                 if self.mailboxes.get(&me.node).is_some_and(|m| !m.is_empty()) {
                     self.note_mail(&me.node, t);
                 }
+                // Bounded by bytes as well as count (contract 5.5 "Inbox replies"): oldest first, the next envelope only
+                // while the reply stays within BODY_BYTES, and always the first one (it was taken under the same request
+                // limit). The size is reckoned with `more: false`, the longer of the two.
                 let mail = self.mailboxes.get(&me.node).map(Vec::as_slice).unwrap_or_default();
-                let messages: Vec<Value> = mail.iter().take(INBOX_BATCH).map(|m| m.env.clone()).collect();
-                json_reply(200, &json!({ "ok": true, "messages": messages, "more": mail.len() > INBOX_BATCH }))
+                let mut messages: Vec<Value> = Vec::new();
+                let mut size = stringify(&json!({ "ok": true, "messages": [], "more": false })).len();
+                for m in mail {
+                    if messages.len() >= INBOX_BATCH {
+                        break;
+                    }
+                    let add = stringify(&m.env).len() + usize::from(!messages.is_empty());
+                    if !messages.is_empty() && size + add > BODY_BYTES {
+                        break;
+                    }
+                    messages.push(m.env.clone());
+                    size += add;
+                }
+                let more = mail.len() > messages.len();
+                json_reply(200, &json!({ "ok": true, "messages": messages, "more": more }))
             }
             ("/v1/ack", "POST") => {
                 let parsed = body();
@@ -934,12 +1356,23 @@ impl State {
                     Ok(version) => json_reply(200, &json!({ "ok": true, "version": version })),
                 }
             }
-            ("/v1/crl", "GET") => json_reply(200, &json!({ "ok": true, "crl": self.trust.crl_token() })),
+            // The CRL travels with its anchored items as one bundle (contract 5.4 "Distribution"): `{crl}` alone is the
+            // old body and answer, unchanged; with items, all are taken or none (trust.accept_bundle).
+            ("/v1/crl", "GET") => {
+                let mut o = json!({ "ok": true });
+                match (self.trust.bundle(), o.as_object_mut()) {
+                    (Some(Value::Object(b)), Some(m)) => m.extend(b),
+                    (_, Some(m)) => {
+                        m.insert("crl".into(), self.trust.crl_token().map_or(Value::Null, Value::from));
+                    }
+                    _ => {}
+                }
+                json_reply(200, &o)
+            }
             ("/v1/crl", "POST") => {
                 let parsed = body();
-                let token = parsed.as_ref().and_then(as_object).filter(|b| exact_keys(b, &["crl"], &["crl"])).and_then(|b| str_of(b.get("crl")));
-                let Some(token) = token else { return Ok(refuse(&logger, 400, "malformed", "crl.malformed", &who)) };
-                match self.take_crl(token, t, &Fields::new().with("node", &me.node))? {
+                let Some(b) = parse_bundle(parsed.as_ref()) else { return Ok(refuse(&logger, 400, "malformed", "crl.malformed", &who)) };
+                match self.take_crl_bundle(&b, t, &Fields::new().with("node", &me.node))? {
                     Err(Taken { status, reason, event }) => refuse(&logger, status, &reason, event, &who),
                     Ok(version) => json_reply(200, &json!({ "ok": true, "version": version })),
                 }
@@ -969,8 +1402,41 @@ impl State {
                 if me.role != "hub" || !me.scopes.iter().any(|s| s == "recall") {
                     return Ok(refuse(&logger, 403, "presence needs a hub with the recall scope", "presence.refused", &who.clone().with("scopes", me.scopes.as_slice())));
                 }
-                let nodes: Vec<Value> = self.polls.iter().filter(|(_, at)| t - **at < PRESENCE_MS).map(|(node, at)| json!({ "node": node, "lastPollAt": at })).collect();
-                json_reply(200, &json!({ "ok": true, "nodes": nodes }))
+                // Paged by node id (contract review 7, L4), so a fleet of any size stays under the client's reply cap: at
+                // most PRESENCE_PAGE rows and BODY_BYTES per page; `next` names the last row when more follow.
+                let q = query_pairs(r.path);
+                let names: Vec<&str> = q.iter().map(|(k, _)| k.as_str()).collect();
+                let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+                let (after, limit_text) = (get("after"), get("limit"));
+                let limit_ok = |s: &str| (1..=9).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_digit()) && !s.starts_with('0');
+                let unique = names.iter().collect::<HashSet<_>>().len() == names.len();
+                if names.iter().any(|k| *k != "after" && *k != "limit") || !unique || after.is_some_and(|a| !is_node_id(a)) || limit_text.is_some_and(|l| !limit_ok(l)) {
+                    return Ok(refuse(&logger, 400, "malformed", "presence.malformed", &who));
+                }
+                let limit = limit_text.and_then(|l| l.parse::<usize>().ok()).unwrap_or(PRESENCE_PAGE).min(PRESENCE_PAGE);
+                let mut rows: Vec<(&String, i64)> = self.polls.iter().filter(|(node, at)| t - **at < PRESENCE_MS && after.is_none_or(|a| node.as_str() > a)).map(|(n, at)| (n, *at)).collect();
+                rows.sort_by(|a, b| a.0.cmp(b.0));
+                let mut nodes: Vec<Value> = Vec::new();
+                let mut size = stringify(&json!({ "ok": true, "nodes": [], "next": format!("n_{}", "0".repeat(32)) })).len();
+                for (node, last_poll_at) in &rows {
+                    if nodes.len() >= limit {
+                        break;
+                    }
+                    let row = json!({ "node": node, "lastPollAt": last_poll_at });
+                    let add = stringify(&row).len() + usize::from(!nodes.is_empty());
+                    if size + add > BODY_BYTES {
+                        break;
+                    }
+                    nodes.push(row);
+                    size += add;
+                }
+                let mut o = json!({ "ok": true, "nodes": nodes });
+                if rows.len() > nodes.len() && !nodes.is_empty() {
+                    if let Some(m) = o.as_object_mut() {
+                        m.insert("next".into(), Value::from(rows[nodes.len() - 1].0.as_str()));
+                    }
+                }
+                json_reply(200, &o)
             }
             ("/v1/license", "GET") => match &self.licensed {
                 // A spoke's LAN mailbox has none; hubs ask every mailbox, so that is an answer, not a refusal to log.
@@ -1769,11 +2235,218 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
             state_dir: None,
             license_file: None,
         };
         State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {}))))
+    }
+
+    // ── ID-1 contract 5.4 and 5.5: registration, the hash-form header, the cache bound, inbox bytes, the bundle ──
+
+    const AUDIENCE: &str = "relay:relay.example.com";
+
+    /// A root-signed certificate for `key` with this serial, label and expiry (seconds).
+    fn cert_for(root: &SigningKey, key: &SigningKey, serial: u32, role: &str, label: &str, exp: i64) -> String {
+        let spki = p256_spki_der(&key.verifying_key().into());
+        let p = json!({
+            "v": 1, "typ": "lucid-node-cert", "serial": format!("{serial:032x}"), "root": node_id_of(&p256_spki_der(&root.verifying_key().into())),
+            "node": node_id_of(&spki), "role": role, "label": label, "spki": b64u(&spki), "scopes": [], "iat": T0 / 1000 - 60, "exp": exp,
+        });
+        compact(root, &p)
+    }
+
+    enum Auth<'a> {
+        /// The legacy header with the certificate itself (signs v2).
+        Legacy(&'a str),
+        /// The hash form naming this certificate (signs `label`, v3 normally).
+        Hash(&'a str, &'a str),
+    }
+
+    /// A request signed by `key`: (status, answer).
+    #[allow(clippy::too_many_arguments)]
+    fn call(st: &mut State, key: &SigningKey, auth: Auth, method: &str, path: &str, body: &str, t: i64, nonce: u32) -> (u16, Value) {
+        let (status, text) = call_at(st, AUDIENCE, key, auth, method, path, body, t, nonce);
+        (status, parse_json(&text).unwrap_or(Value::Null))
+    }
+
+    /// `call` for this audience; the answer's text as sent.
+    #[allow(clippy::too_many_arguments)]
+    fn call_at(st: &mut State, audience: &str, key: &SigningKey, auth: Auth, method: &str, path: &str, body: &str, t: i64, nonce: u32) -> (u16, String) {
+        let nonce = format!("{nonce:032x}");
+        let ts = js_number_string(t as f64);
+        let body_hash = sha256_hex(body.as_bytes());
+        let a = match auth {
+            Auth::Legacy(cert) => {
+                let line = format!("lucid-relay-auth/v2\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}");
+                let sig: Signature = key.sign(line.as_bytes());
+                json!({ "cert": cert, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) })
+            }
+            Auth::Hash(sha, label) => {
+                let line = if label == "v3" {
+                    format!("lucid-relay-auth/v3\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}\n{sha}")
+                } else {
+                    format!("lucid-relay-auth/v2\n{audience}\n{method}\n{path}\n{ts}\n{nonce}\n{body_hash}")
+                };
+                let sig: Signature = key.sign(line.as_bytes());
+                json!({ "cert_sha256": sha, "ts": t, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) })
+            }
+        };
+        let authorization = format!("LucidNode {}", b64u(stringify(&a).as_bytes()));
+        let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+        let where_ = Fields::new();
+        let pathname = path.split('?').next().unwrap_or(path);
+        let r = Request { method, pathname, path, authorization: &authorization, seat: None, dialed: &d, body, where_: &where_ };
+        let reply = st.serve(&r, t, true).unwrap();
+        (reply.status, reply.body)
+    }
+
+    fn register(st: &mut State, key: &SigningKey, cert: &str, t: i64, nonce: u32) -> u16 {
+        let sha = sha256_hex(cert.as_bytes());
+        let body = stringify(&json!({ "cert": cert }));
+        call(st, key, Auth::Hash(&sha, "v3"), "POST", REGISTER_PATH, &body, t, nonce).0
+    }
+
+    #[test]
+    fn a_registered_certificate_is_named_by_its_hash_and_signs_v3() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let other = SigningKey::from_slice(&[3u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let cert = cert_for(&root, &key, 2, "hub", "hub", T0 / 1000 + 3600);
+        let sha = sha256_hex(cert.as_bytes());
+        // Unknown hash: a bare 401.
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0, 1).0, 401);
+        // A registration signed by another key, or whose body hashes to something else: refused.
+        let body = stringify(&json!({ "cert": cert }));
+        assert_eq!(call(&mut st, &other, Auth::Hash(&sha, "v3"), "POST", REGISTER_PATH, &body, T0, 2).0, 401);
+        assert_eq!(call(&mut st, &key, Auth::Hash(&"a".repeat(64), "v3"), "POST", REGISTER_PATH, &body, T0, 3).0, 401);
+        // Malformed registration bodies: 400 before any authorization.
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "POST", REGISTER_PATH, "{\"cert\":\"no dot\"}", T0, 4).0, 400);
+        // A registration through the legacy header is refused.
+        assert_eq!(call(&mut st, &key, Auth::Legacy(&cert), "POST", REGISTER_PATH, &body, T0, 5).0, 401);
+        let (status, answer) = call(&mut st, &key, Auth::Hash(&sha, "v3"), "POST", REGISTER_PATH, &body, T0, 6);
+        assert_eq!((status, answer["cert_sha256"].as_str()), (200, Some(sha.as_str())));
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0, 7).0, 200);
+        // The hash form signed with v2, or a replayed nonce: refused.
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v2"), "GET", "/v1/inbox", "", T0, 8).0, 401);
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0, 7).0, 401);
+        // A cert_sha256 changed in transit to another certificate of the same node: the signature covers it.
+        let second = cert_for(&root, &key, 9, "hub", "hub", T0 / 1000 + 7200);
+        assert_eq!(register(&mut st, &key, &second, T0, 9), 200);
+        let sha2 = sha256_hex(second.as_bytes());
+        let nonce = format!("{:032x}", 10);
+        let line = format!("lucid-relay-auth/v3\n{AUDIENCE}\nGET\n/v1/inbox\n{}\n{nonce}\n{}\n{sha}", js_number_string(T0 as f64), sha256_hex(b""));
+        let sig: Signature = key.sign(line.as_bytes());
+        let a = json!({ "cert_sha256": sha2, "ts": T0, "nonce": nonce, "sig": b64u(sig.to_der().as_bytes()) });
+        let authorization = format!("LucidNode {}", b64u(stringify(&a).as_bytes()));
+        let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+        let where_ = Fields::new();
+        let r = Request { method: "GET", pathname: "/v1/inbox", path: "/v1/inbox", authorization: &authorization, seat: None, dialed: &d, body: "", where_: &where_ };
+        assert_eq!(st.serve(&r, T0, true).unwrap().status, 401);
+    }
+
+    #[test]
+    fn a_legacy_header_takes_at_most_8192_characters() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let fits = |label_len: usize| cert_for(&root, &key, 2, "hub", &"x".repeat(label_len), T0 / 1000 + 3600);
+        let small = fits(10);
+        assert_eq!(call(&mut st, &key, Auth::Legacy(&small), "GET", "/v1/inbox", "", T0, 1).0, 200);
+        // A certificate over 8,192 characters in the header is refused (labels are at most 64 here, so pad the token).
+        let long = format!("{small}{}", "A".repeat(LEGACY_HEADER_CERT_MAX + 1 - small.len()));
+        assert_eq!(crate::codec::utf16_len(&long), LEGACY_HEADER_CERT_MAX + 1);
+        assert_eq!(call(&mut st, &key, Auth::Legacy(&long), "GET", "/v1/inbox", "", T0, 2).0, 401);
+    }
+
+    #[test]
+    fn a_node_keeps_two_registered_certificates_and_the_store_keeps_its_budget() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let soon = cert_for(&root, &key, 1, "hub", "hub", T0 / 1000 + 100);
+        let later = cert_for(&root, &key, 2, "hub", "hub", T0 / 1000 + 200);
+        let latest = cert_for(&root, &key, 3, "hub", "hub", T0 / 1000 + 300);
+        for (i, c) in [&soon, &later, &latest].into_iter().enumerate() {
+            assert_eq!(register(&mut st, &key, c, T0, i as u32 + 1), 200);
+        }
+        // The third registration dropped the node's oldest-expiring one.
+        assert!(!st.certs.contains_key(&sha256_hex(soon.as_bytes())));
+        assert_eq!(st.certs.len(), 2);
+        // Past the budget the earliest-expiring entries go until the new one fits; the total never passes it.
+        CERT_STORE_FLOOR.store(0, std::sync::atomic::Ordering::Relaxed);
+        st.cert_cap = (soon.len() * 2) as i64;
+        let k2 = SigningKey::from_slice(&[5u8; 32]).unwrap();
+        let theirs = cert_for(&root, &k2, 4, "hub", "hub", T0 / 1000 + 400);
+        assert_eq!(register(&mut st, &k2, &theirs, T0, 9), 200);
+        assert!(st.cert_bytes <= st.cert_cap);
+        assert!(st.certs.contains_key(&sha256_hex(theirs.as_bytes())) && !st.certs.contains_key(&sha256_hex(later.as_bytes())));
+        // The budget is 16 MiB to 256 MiB at start.
+        CERT_STORE_FLOOR.store(CERT_STORE_MIN_BYTES, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[test]
+    fn a_cached_verification_never_outlives_the_certificate() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let cert = cert_for(&root, &key, 2, "hub", "hub", T0 / 1000 + 10);
+        let sha = sha256_hex(cert.as_bytes());
+        assert_eq!(register(&mut st, &key, &cert, T0, 1), 200);
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0, 2).0, 200);
+        assert!(st.verified.contains_key(&sha), "a warm cache");
+        // The leaf expires while the CRL is unchanged: 401 on the next request, cache or not.
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0 + 10_000, 3).0, 401);
+    }
+
+    #[test]
+    fn the_inbox_reply_is_bounded_by_bytes_and_always_carries_one() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (key, cert, node) = node(&root, 2, "spoke");
+        let mut st = state(&root, None, None).unwrap();
+        // Envelopes of about 150 KB each: two fit under 393,216 bytes, three do not.
+        for i in 0..5u32 {
+            let env = json!({ "v": 1, "from": "n_00000000000000000000000000000000", "to": node, "id": format!("{i:032x}"), "ts": T0, "cert": "x", "epk": "x", "iv": "x", "ct": "A".repeat(150_000), "sig": "x" });
+            let bytes = stringify(&env).len() as i64;
+            st.mailboxes.entry(node.clone()).or_default().push(Stored { env, from: "n_00000000000000000000000000000000".into(), to: node.clone(), id: format!("{i:032x}"), at: T0, bytes });
+        }
+        let (status, a) = call(&mut st, &key, Auth::Legacy(&cert), "GET", "/v1/inbox", "", T0, 1);
+        assert_eq!(status, 200);
+        assert_eq!(a["messages"].as_array().unwrap().len(), 2);
+        assert_eq!(a["more"], json!(true));
+        assert!(stringify(&a).len() <= BODY_BYTES);
+        // One envelope larger than the reply budget still goes, alone.
+        let big = json!({ "v": 1, "from": "n_00000000000000000000000000000000", "to": node, "id": format!("{:032x}", 99), "ts": T0, "cert": "x", "epk": "x", "iv": "x", "ct": "A".repeat(BODY_BYTES), "sig": "x" });
+        st.mailboxes.insert(node.clone(), vec![Stored { env: big, from: "n_00000000000000000000000000000000".into(), to: node.clone(), id: format!("{:032x}", 99), at: T0, bytes: 1 }]);
+        let (_, a) = call(&mut st, &key, Auth::Legacy(&cert), "GET", "/v1/inbox", "", T0, 2);
+        assert_eq!((a["messages"].as_array().unwrap().len(), &a["more"]), (1, &json!(false)));
+    }
+
+    #[test]
+    fn the_crl_travels_as_a_bundle_and_items_need_anchors() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let (key, cert, _) = node(&root, 2, "hub");
+        let mut st = state(&root, None, None).unwrap();
+        let root_id = node_id_of(&p256_spki_der(&root.verifying_key().into()));
+        let crl = compact(&root, &json!({ "v": 1, "typ": "lucid-crl", "root": root_id, "version": 1, "serials": [], "iat": T0 / 1000, "nextUpdate": T0 / 1000 + 86_400 }));
+        let (_, got) = call(&mut st, &key, Auth::Legacy(&cert), "GET", "/v1/crl", "", T0, 1);
+        assert_eq!(got, json!({ "ok": true, "crl": null }));
+        let with_item = stringify(&json!({ "crl": crl, "idpMap": "a.b" }));
+        let (status, got) = call(&mut st, &key, Auth::Legacy(&cert), "POST", "/v1/crl", &with_item, T0, 2);
+        assert_eq!((status, got["error"].as_str()), (409, Some("the bundle carries items its revocation list does not name")));
+        assert_eq!(st.trust.crl_version(), 0, "nothing held changes on a refusal");
+        let alone = stringify(&json!({ "crl": crl }));
+        assert_eq!(call(&mut st, &key, Auth::Legacy(&cert), "POST", "/v1/crl", &alone, T0, 3).0, 200);
+        let (_, got) = call(&mut st, &key, Auth::Legacy(&cert), "GET", "/v1/crl", "", T0, 4);
+        assert_eq!(got, json!({ "ok": true, "crl": crl }));
+        // An equal version with another body is the two-versions alarm; the held one stays.
+        let twin = compact(&root, &json!({ "v": 1, "typ": "lucid-crl", "root": root_id, "version": 1, "serials": [format!("{:032x}", 7)], "iat": T0 / 1000, "nextUpdate": T0 / 1000 + 86_400 }));
+        let (status, _) = call(&mut st, &key, Auth::Legacy(&cert), "POST", "/v1/crl", &stringify(&json!({ "crl": twin })), T0, 5);
+        assert_eq!(status, 409);
+        assert!(!st.trust.is_revoked(&format!("{:032x}", 7)));
     }
 
     /// GET /v1/inbox signed by `key` and `cert` for `audience`: the status.
@@ -1788,6 +2461,10 @@ mod tests {
         let r = Request { method: "GET", pathname: "/v1/inbox", path: "/v1/inbox", authorization: &authorization, seat: None, dialed: &d, body: "", where_: &where_ };
         st.serve(&r, t, true).unwrap().status
     }
+
+    /// The console-era tests: their own `call` (a legacy-header request answering the whole reply) beside ID-1's.
+    mod console_era {
+    use super::*;
 
     /// A signed request by `key` and `cert` to relay.example.com: the reply.
     #[allow(clippy::too_many_arguments)]
@@ -1839,6 +2516,8 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
             state_dir: None,
             license_file: None,
@@ -2142,6 +2821,8 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
             state_dir: None,
             license_file: None,
@@ -2213,5 +2894,152 @@ mod tests {
         assert_eq!(junk(&mut st, &parses, t + 1000), 401);
         assert!(!st.nonces.contains_key("stale"));
         assert_eq!(st.swept_at, Some(t + 1000));
+    }
+
+    // ── The add-on's relay vectors (scripts/relay-idp-vectors.ts): node-cert-v1.json and inbox-batch-v1.json ─────
+
+    /// The release gates the add-on's vectors were made with.
+    const VECTOR_GATES: [&str; 4] = ["G-ENGINE", "G-PRES-PIV", "G-PRES-FIDO2", "G-OKTA-PHR"];
+
+    fn vector_file(name: &str) -> Value {
+        let path = format!("{}/tests/{name}", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}; copy it from the add-on's remote-spoke/test/vectors/"));
+        parse_json(&text).unwrap_or_else(|| panic!("{path} is JSON"))
+    }
+
+    fn pem_root(pem: &str) -> crate::der::P256Key {
+        crate::der::p256_from_spki(&crate::der::pem_blocks(pem, "PUBLIC KEY").remove(0)).expect("a P-256 root")
+    }
+
+    fn vector_state(root: crate::der::P256Key, owner: Option<String>, cert_store_bytes: i64) -> State {
+        let opts = Options {
+            root,
+            owner,
+            license: None,
+            crl_file: None,
+            store: None,
+            seen_file: None,
+            directory_file: None,
+            users_file: None,
+            store_bytes: STORE_BYTES,
+            sender_bytes: SENDER_BYTES,
+            cert_store_bytes,
+            cert_dir: None,
+            console: None,
+            state_dir: None,
+            license_file: None,
+        };
+        let mut st = State::new(opts, Arc::new(Logger::capture("relay", Box::new(|_, _| {})))).expect("the relay starts");
+        st.trust.set_gates(&VECTOR_GATES);
+        st
+    }
+
+    #[test]
+    fn node_certificate_vectors_get_the_same_answers() {
+        let v = vector_file("node-cert-v1.json");
+        let owner = v["owner"].as_str().unwrap().to_owned();
+        assert_eq!(v["audience"].as_str(), Some(format!("lan:{owner}").as_str()));
+        let limits = &v["limits"];
+        assert_eq!(limits["registerBodyBytes"].as_u64(), Some(REGISTER_BODY_BYTES as u64));
+        assert_eq!(limits["certsPerNode"].as_u64(), Some(CERTS_PER_NODE as u64));
+        assert_eq!(limits["certStoreBytes"].as_i64(), Some(CERT_STORE_BYTES));
+        assert_eq!(limits["certStoreMinBytes"].as_i64(), Some(CERT_STORE_MIN_BYTES));
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut st = vector_state(pem_root(c["root"]["pem"].as_str().unwrap()), Some(owner.clone()), CERT_STORE_BYTES);
+            // `testFloor`: a budget below the 16 MiB floor, so eviction shows with a few certificates (set directly,
+            // never through the shared floor other tests read).
+            if let Some(cap) = c["certStoreBytes"].as_i64() {
+                assert!(c["testFloor"] == true, "{name}");
+                st.cert_cap = cap;
+            }
+            assert_eq!(st.trust.root_id, c["root"]["id"].as_str().unwrap(), "{name}");
+            let b = parse_bundle(Some(&c["bundle"])).expect("a well-formed bundle");
+            st.trust.accept_bundle(&b).unwrap_or_else(|r| panic!("{name}: the bundle was refused: {}", r.reason));
+            for (i, s) in c["steps"].as_array().unwrap().iter().enumerate() {
+                let (method, path) = (s["method"].as_str().unwrap(), s["path"].as_str().unwrap());
+                let body = s["body"].as_str().unwrap_or("");
+                let d = Dialed { host: "relay.example.com".into(), hostname: "relay.example.com".into(), port: 443 };
+                let where_ = Fields::new();
+                let r = Request { method, pathname: path, path, authorization: s["authorization"].as_str().unwrap(), seat: None, dialed: &d, body, where_: &where_ };
+                let reply = st.serve(&r, s["at"].as_i64().unwrap(), true).unwrap();
+                assert_eq!(reply.status, s["expect"]["status"].as_u64().unwrap() as u16, "{name}, step {}: {}", i + 1, reply.body);
+                if let Some(want) = s["expect"].get("json") {
+                    assert_eq!(&parse_json(&reply.body).unwrap_or(Value::Null), want, "{name}, step {}", i + 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inbox_batch_vectors_get_the_same_replies() {
+        use p256::pkcs8::DecodePrivateKey;
+        let v = vector_file("inbox-batch-v1.json");
+        let limits = &v["limits"];
+        assert_eq!(limits["bodyBytes"].as_u64(), Some(BODY_BYTES as u64));
+        assert_eq!(limits["inboxBatch"].as_u64(), Some(INBOX_BATCH as u64));
+        let root = pem_root(v["root"]["pem"].as_str().unwrap());
+        let key = |who: &str| SigningKey::from_pkcs8_pem(v[who]["privatePem"].as_str().unwrap()).expect("a P-256 key");
+        let (hub, spoke) = (key("sender"), key("recipient"));
+        let (hub_cert, spoke_cert) = (v["sender"]["cert"].as_str().unwrap(), v["recipient"]["cert"].as_str().unwrap());
+        let base = v["envelope"]["base"].as_object().unwrap();
+        let leaf_sized = v["envelope"]["leafSized"].as_str().unwrap();
+        let envelope = |id: &str, cert: &str, ct: usize| {
+            let mut e = base.clone();
+            e.insert("id".into(), Value::from(id));
+            e.insert("cert".into(), Value::from(cert));
+            e.insert("ct".into(), Value::from("A".repeat(ct)));
+            stringify(&Value::Object(e))
+        };
+        let t = v["now"].as_i64().unwrap() * 1000;
+        let mut nonce = 0u32;
+        let mut next = || {
+            nonce += 1;
+            nonce
+        };
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            let mut st = vector_state(root.clone(), None, CERT_STORE_BYTES);
+            assert_eq!(call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "GET", "/v1/inbox", "", t, next()).0, 200, "{name}: the spoke's first poll");
+            let queue = c["queue"].as_array().unwrap();
+            let ids: Vec<&str> = queue.iter().map(|q| q["id"].as_str().unwrap()).collect();
+            for q in queue {
+                let cert = if q["cert"] == "leaf" { leaf_sized } else { hub_cert };
+                let body = envelope(q["id"].as_str().unwrap(), cert, q["ctChars"].as_u64().unwrap() as usize);
+                let (status, text) = call_at(&mut st, AUDIENCE, &hub, Auth::Legacy(hub_cert), "POST", "/v1/send", &body, t, next());
+                assert_eq!(status, 200, "{name}: send answered {text}");
+            }
+            let (mut replies, mut sizes) = (Vec::new(), Vec::new());
+            loop {
+                let (status, text) = call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "GET", "/v1/inbox", "", t, next());
+                assert_eq!(status, 200, "{name}");
+                assert!(text.len() <= BODY_BYTES, "{name}: a reply of {} bytes", text.len());
+                let reply = parse_json(&text).unwrap();
+                let got: Vec<&str> = reply["messages"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap()).collect();
+                let indices: Vec<usize> = got.iter().map(|id| ids.iter().position(|x| x == id).unwrap()).collect();
+                let more = reply["more"] == true;
+                replies.push(json!({ "indices": indices, "more": more }));
+                sizes.push(text.len());
+                let ack = stringify(&json!({ "ids": got }));
+                assert_eq!(call_at(&mut st, AUDIENCE, &spoke, Auth::Legacy(spoke_cert), "POST", "/v1/ack", &ack, t, next()).0, 200, "{name}: ack");
+                if !more || replies.len() > queue.len() {
+                    break;
+                }
+            }
+            assert_eq!(Value::Array(replies), c["expect"]["replies"], "{name}");
+            let want: Vec<usize> = c["replyBytes"].as_array().unwrap().iter().map(|b| b.as_u64().unwrap() as usize).collect();
+            assert_eq!(sizes, want, "{name}: reply bytes");
+        }
+        // env.cert: 65,536 characters is taken, one more is refused (a LAN mailbox, the spoke its owner).
+        let owner = v["recipient"]["node"].as_str().unwrap().to_owned();
+        let mut st = vector_state(root, Some(owner.clone()), CERT_STORE_BYTES);
+        for (i, k) in v["certLimit"]["cases"].as_array().unwrap().iter().enumerate() {
+            let n = k["certChars"].as_u64().unwrap() as usize;
+            let body = envelope(&format!("{:032x}", i + 1), &format!("{}.B", "A".repeat(n - 2)), 24);
+            let (status, text) = call_at(&mut st, &format!("lan:{owner}"), &hub, Auth::Legacy(hub_cert), "POST", "/v1/send", &body, t, next());
+            assert_eq!(u64::from(status), k["status"].as_u64().unwrap(), "{n} characters");
+            assert_eq!(parse_json(&text).unwrap(), k["json"], "{n} characters");
+        }
+    }
     }
 }

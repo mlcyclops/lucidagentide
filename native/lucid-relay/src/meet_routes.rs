@@ -242,6 +242,11 @@ fn get_route(path: &str) -> Option<Route> {
             let who = c.who(false)?;
             c.relay.hub.sd_storage_get(&who, &c.q("org", ""), &c.q("sha256", ""))
         },
+        // ID-1: the signed proposals for that org's admins
+        "/v1/org/proposals" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_proposals_get(&c.q("session", ""), &who, &c.q("org", ""))
+        },
         "/v1/apps" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -758,6 +763,43 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.pc_sso_pending_add(&who, b.get("principal"), b.get("cid"), b.get("idp"), b.get("group"))
         },
+        // ID-1 (contract section 8)
+        "/v1/sso/c/propose" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::PROPOSAL_BODY_MAX)?);
+            if who.kind != "sso" {
+                return m::forbidden(pc::SSO_ONLY);
+            }
+            let chain_pem = c.relay.pc_chain_pem(&who);
+            c.relay.hub.pc_sso_propose(&who, b.get("proposal"), b.get("sig"), &chain_pem)
+        },
+        "/v1/sso/c/suspend" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_suspend(&who, &b, false)
+        },
+        "/v1/sso/c/unsuspend" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_suspend(&who, &b, true)
+        },
+        "/v1/sso/c/status" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::STATUS_BODY_MAX)?);
+            c.relay.hub.pc_sso_status(&who, &b)
+        },
+        "/v1/org/proposals/dismiss" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_proposal_dismiss(&pj::s(&b, "session"), &who, b.get("org"), b.get("id"))
+        },
+        "/v1/org/proposals/read-again" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_proposal_read_again(&pj::s(&b, "session"), &who, b.get("org"), b.get("provider"))
+        },
+        "/v1/org/policy/lower" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
+            c.relay.pc_lower_policy(&pj::s(&b, "session"), &who, &b)
+        },
+        "/v1/org/policy/lower/cancel" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_cancel_lowering(&pj::s(&b, "session"), &who, &b)
+        },
         // canvases and lists
         "/v1/docs/post" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
@@ -832,6 +874,14 @@ fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
     }
     if words.is_empty() && s.enclave && (ctx.path.starts_with(bridge::C_PREFIX) || (method == "POST" && pc::ENCLAVE_BRIDGE_ROUTES.contains(&ctx.path.as_str()))) {
         return Some(m::E::Held(pc::ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
+    }
+    if words.is_empty() && kind == "person" && ctx.relay.hub.pc_pausing() {
+        // ID-1 (2.11): a suspended principal, or one past its status_stale_at, is refused on every route
+        if let Some(principal) = m::identity_from_cert(ctx.der).ok().map(|w| w.principal) {
+            if let Some(paused) = ctx.relay.hub.pc_paused(&principal) {
+                words = paused;
+            }
+        }
     }
     if words.is_empty() {
         None

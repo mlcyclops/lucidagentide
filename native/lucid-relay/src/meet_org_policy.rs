@@ -40,7 +40,7 @@ const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention", "notify", "video", "ai", "storage", "sharing",
+    "workflows", "external_archives", "external_apps", "retention", "identity", "notify", "video", "ai", "storage", "sharing",
     "lan_scope",
 ];
 /// BG-1 section 2.1: the camera background of the people the policy covers.
@@ -99,6 +99,42 @@ const APP_REQUIRED: &[&str] = &["principal", "device", "name", "type", "scope", 
 const COMMAND_KEYS: &[&str] = &["name", "description", "usage"];
 const WIRE_KEYS: &[&str] = &["policy", "sig", "chain"];
 const SSO_SERVICE_KEYS: &[&str] = &["serial", "orgs", "domains"];
+
+// ---- ID-1 (docs/identity/contract.md sections 1.5, 3.1 to 3.3 and 3.8) ----
+/// The Lucid password baseline `B` (owner decision 1, TechLead187/lucidagentIDEaddon#251): the Hub vault's 8.
+pub const PASSWORD_BASELINE: i64 = 8;
+/// Release gates the Rust relay build holds `verified` (2.12): none until G-RUST is verified and released.
+pub const RELAY_GATES: &[&str] = &[];
+const IDENTITY_KEYS: &[&str] = &[
+    "v", "min_password_length", "require_phishing_resistant", "session_max_minutes", "idle_max_minutes", "signin_max_days",
+    "passwordless_unlock", "providers", "imported",
+];
+const UNLOCK_KEYS: &[&str] = &["required", "enforce_at", "kinds", "exceptions"];
+const EXCEPTION_KEYS: &[&str] = &["id", "device", "until"];
+const IR_PROVIDER_KEYS: &[&str] = &["id", "iss", "phr_values"];
+const IMPORTED_KEYS: &[&str] = &["provider", "read_at", "proposal_sha256"];
+const IDENTITY_PROVIDER_KEYS: &[&str] = &["org", "id", "kind", "cloud", "iss", "sso_serial", "allowed_domains"];
+const IDENTITY_PROVIDER_REQUIRED: &[&str] = &["org", "id", "kind", "iss", "sso_serial", "allowed_domains"];
+const PROVIDER_KINDS: &[&str] = &["entra", "logingov", "okta", "google", "keycloak", "authentik", "jumpcloud", "ping", "saml"];
+const REGISTRY_MAX: usize = 64;
+const IR_PROVIDERS_MAX: usize = 8;
+/// Revision 5: at most 4 `phr_values` per provider.
+const PHR_MAX: usize = 4;
+/// Revision 6: each `phr_values` entry at most 128 characters.
+const PHR_LEN: usize = 128;
+const EXCEPTIONS_MAX: usize = 64;
+const IMPORTED_MAX: usize = 8;
+const EXCEPTION_LIFE: i64 = 14 * 86400;
+const EVIDENCE_MAX: usize = 32;
+const EVIDENCE_LEN: usize = 256;
+const EVIDENCE_PREFIXES: &[&str] = &["acr:", "acrs:", "aal:", "saml:", "saml-amr:"];
+const LOWERING_LABEL: &str = "lucid-identity-lowering-v1";
+const LOWERING_KEYS: &[&str] =
+    &["v", "typ", "org", "base_seq", "base_hash", "next_seq", "policy", "reason", "signed_at", "effective_at", "signers"];
+const LOWERING_WIRE_KEYS: &[&str] = &["lowering", "sig", "chain"];
+const LOWERING_SIGNER_KEYS: &[&str] = &["principal", "cert_sha256", "proof"];
+const LOWERING_NOTICE: i64 = 86400;
+const REASON_MAX: usize = 500;
 
 // Words (contract PC-1, exact).
 pub const DOMAIN_REFUSED: &str = "that domain is not assigned to this organization";
@@ -419,9 +455,36 @@ pub struct SignerTerms {
     pub enclave: bool,
     /// `sso_services`: (serial, orgs, domains) of each registered SSO service (AI-1 6.4 binds its posts to them).
     pub sso_services: Vec<(String, Vec<String>, Vec<String>)>,
+    /// The signer policy's version (1, 2 or 3); ID-1 needs 3.
+    pub version: i64,
+    /// Version 3: the root-signed provider registry (1.5).
+    pub identity_providers: Vec<IdentityProvider>,
+}
+
+/// One root-signed registry entry (signer policy v3 `identity_providers`); the relay checks `allowed_domains` but
+/// does not keep it (the signer and the SSO service apply it). `cloud` (an entra entry's, "" otherwise) is kept for
+/// SD-1's `storage.cloud` check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IdentityProvider {
+    pub org: String,
+    pub id: String,
+    pub kind: String,
+    pub iss: String,
+    pub sso_serial: String,
+    pub cloud: String,
 }
 
 impl SignerTerms {
+    /// The registry entry `(org, id)`.
+    pub fn provider(&self, org: &str, id: &str) -> Option<&IdentityProvider> {
+        self.identity_providers.iter().find(|p| p.org == org && p.id == id)
+    }
+
+    /// Every registry entry of `org`.
+    pub fn providers_of(&self, org: &str) -> Vec<&IdentityProvider> {
+        self.identity_providers.iter().filter(|p| p.org == org).collect()
+    }
+
     /// The org the root assigned `domain` to ("" when none).
     pub fn org_of(&self, domain: &str) -> String {
         self.org_domains.iter().find(|(_, names)| names.iter().any(|n| n == domain)).map(|(o, _)| o.clone()).unwrap_or_default()
@@ -433,10 +496,17 @@ impl SignerTerms {
 pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     let serial = pj::s(policy, "intermediate_serial").to_lowercase();
     if py_eq(policy.get("v"), 1) {
-        return Ok(SignerTerms { intermediate_serial: serial, ..SignerTerms::default() });
+        return Ok(SignerTerms { intermediate_serial: serial, version: 1, ..SignerTerms::default() });
     }
-    if !py_eq(policy.get("v"), 2) {
-        return Err("the signer policy is not version 1 or 2".into());
+    let version = if py_eq(policy.get("v"), 2) {
+        2
+    } else if py_eq(policy.get("v"), 3) {
+        3
+    } else {
+        return Err("the signer policy is not version 1, 2 or 3".into());
+    };
+    if version == 2 && policy.contains_key("identity_providers") {
+        return Err("identity_providers needs signer policy version 3".into());
     }
     let empty_obj = Value::Object(Obj::new());
     let empty_list = Value::Array(Vec::new());
@@ -475,7 +545,11 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     }
     let services = list(policy.get("sso_services").unwrap_or(&empty_list), "sso_services", 100, 0)?;
     let mut sso_services = Vec::new();
+    let mut service_orgs: Vec<(String, String)> = Vec::new();
     for svc in services {
+        if let (Some(serial), Some(orgs)) = (svc.get("serial").and_then(Value::as_str), svc.get("orgs").and_then(Value::as_array)) {
+            service_orgs.extend(orgs.iter().filter_map(Value::as_str).map(|o| (serial.to_string(), o.to_string())));
+        }
         let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_KEYS, "an SSO service")?;
         if !o["serial"].as_str().is_some_and(|s| hex_ok(s, 1, 40)) {
             return Err("an SSO service's serial must be lower-case hex".into());
@@ -520,7 +594,515 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
         return Err("enclave must be true or false".into());
     }
     let enclave = policy.get("enclave") == Some(&Value::Bool(true));
-    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services })
+    let identity_providers = registry_of(policy.get("identity_providers"), &org_domains, &service_orgs)?;
+    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services, version, identity_providers })
+}
+
+/// Signer policy v3 `identity_providers` (1.5): a canonical array sorted by `(org, id)`, unique by `(org, id)` and
+/// `(org, iss)`, at most 64.
+fn registry_of(v: Option<&Value>, org_domains: &IndexMap<String, Vec<String>>, services: &[(String, String)]) -> Res<Vec<IdentityProvider>> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    let what = "identity_providers";
+    let entries = list(v, what, REGISTRY_MAX, 0)?;
+    let mut out: Vec<IdentityProvider> = Vec::new();
+    for e in entries {
+        let o = keys(e, IDENTITY_PROVIDER_KEYS, IDENTITY_PROVIDER_REQUIRED, "an identity provider")?;
+        let s = |k: &str| o.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+        let p = IdentityProvider {
+            org: s("org"),
+            id: s("id"),
+            kind: s("kind"),
+            iss: s("iss"),
+            sso_serial: s("sso_serial"),
+            cloud: s("cloud"),
+        };
+        let Some(domains) = org_domains.get(&p.org) else {
+            return Err("an identity provider names an organization without domains".into());
+        };
+        if !o["id"].as_str().is_some_and(slug_ok) || re_core(&p.id) != p.id {
+            return Err("an identity provider's id must be 1 to 32 of a-z, 0-9 and -".into());
+        }
+        if !PROVIDER_KINDS.contains(&p.kind.as_str()) {
+            return Err(format!("{}: unknown identity provider kind", p.id));
+        }
+        match o.get("cloud") {
+            None if p.kind != "entra" => {}
+            Some(Value::String(c)) if p.kind == "entra" && ENTRA_CLOUDS.contains(&c.as_str()) => {}
+            _ => return Err(format!("{}: cloud is only for entra (global, usgov-high or usgov-dod)", p.id)),
+        }
+        if !o["iss"].as_str().is_some_and(|i| (1..=1024).contains(&i.chars().count()) && pj::printable(i)) {
+            return Err(format!("{}: iss must be 1 to 1024 characters", p.id));
+        }
+        if !o["sso_serial"].as_str().is_some_and(|x| hex_ok(x, 1, 40)) || !services.iter().any(|(serial, org)| *serial == p.sso_serial && *org == p.org) {
+            return Err(format!("{}: sso_serial must be an SSO service of {}", p.id, p.org));
+        }
+        let allowed = canonical_strings(&o["allowed_domains"], &format!("{}: allowed_domains", p.id), 20, 1, 1, 253)?;
+        if allowed.iter().any(|d| !domains.contains(d)) {
+            return Err(format!("{}: allowed_domains must be domains of {}", p.id, p.org));
+        }
+        if let Some(prev) = out.last() {
+            if (prev.org.as_bytes(), prev.id.as_bytes()) >= (p.org.as_bytes(), p.id.as_bytes()) {
+                return Err(format!("{what} must be sorted by (org, id), each once"));
+            }
+        }
+        if out.iter().any(|q| q.org == p.org && q.iss == p.iss) {
+            return Err(format!("{what} names one issuer twice for {}", p.org));
+        }
+        out.push(p);
+    }
+    Ok(out)
+}
+
+/// A signed string list (shared rule C2): strings sorted by UTF-8 bytes, each once, `low` to `high` entries of
+/// `min_len` to `max_len` characters. Never normalized.
+fn canonical_strings(v: &Value, what: &str, high: usize, low: usize, min_len: usize, max_len: usize) -> Res<Vec<String>> {
+    let Some(a) = v.as_array().filter(|a| (low..=high).contains(&a.len())) else {
+        return Err(format!("{what} must be a list of {low} to {high} entries"));
+    };
+    let mut out: Vec<String> = Vec::with_capacity(a.len());
+    for x in a {
+        let Some(s) = x.as_str().filter(|s| (min_len..=max_len).contains(&s.chars().count())) else {
+            return Err(format!("{what} must list strings of {min_len} to {max_len} characters"));
+        };
+        if out.last().is_some_and(|prev| prev.as_bytes() >= s.as_bytes()) {
+            return Err(format!("{what} must be sorted, each entry once"));
+        }
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+// ---- identity rules (IR-1, 3.1 to 3.3) ------------------------------------------------------------------------
+
+fn invalid(field: &str) -> PolicyError {
+    PolicyError::Bad(format!("the identity rules are not valid: {field}"))
+}
+
+const LOGINGOV_PHR: &[&str] =
+    &["aal:http://idmanagement.gov/ns/assurance/aal/2?hspd12=true", "aal:http://idmanagement.gov/ns/assurance/aal/2?phishing_resistant=true"];
+
+/// 2.10 (`PHR_RULES`): the `phr_values` prefixes and exact values a registry kind may use, and the gate that must be
+/// `verified` first.
+fn phr_rule(kind: &str) -> Option<(&'static [&'static str], &'static [&'static str], &'static str)> {
+    match kind {
+        "entra" => Some((&["acrs:"], &[], "G-ENTRA-ACRS")),
+        "logingov" => Some((&[], LOGINGOV_PHR, "G-LOGINGOV-AAL")),
+        "okta" => Some((&["acr:"], &[], "G-OKTA-PHR")),
+        "keycloak" => Some((&["acr:", "amr:"], &[], "G-KC-ACR")),
+        "authentik" => Some((&[], &["amr:sc", "amr:user"], "G-AK-AMR")),
+        _ => None,
+    }
+}
+
+/// `phr_allowed`: every value is allowed for the kind and, with `gates`, its gate is verified.
+fn phr_allowed(kind: &str, values: &[String], gates: Option<&[&str]>) -> bool {
+    let Some((prefixes, exact, gate)) = phr_rule(kind) else { return false };
+    values.iter().all(|v| exact.contains(&v.as_str()) || prefixes.iter().any(|p| v.starts_with(p) && v.len() > p.len())) && gates.is_none_or(|g| g.contains(&gate))
+}
+
+/// `provider_name`: the name the 3.7 words give a registry kind.
+pub fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "entra" => "Microsoft",
+        "logingov" => "Login.gov",
+        "okta" => "Okta",
+        "google" => "Google",
+        "keycloak" => "Keycloak",
+        "authentik" => "Authentik",
+        "jumpcloud" => "JumpCloud",
+        "ping" => "Ping Identity",
+        "saml" => "SAML",
+        _ => "your identity provider",
+    }
+}
+
+fn phr_unproven(name: &str) -> PolicyError {
+    PolicyError::Refused(format!("{name} cannot prove a phishing-resistant sign-in yet; nothing was signed"))
+}
+
+fn path(base: &str, key: &str) -> String {
+    if base.is_empty() {
+        key.to_string()
+    } else {
+        format!("{base}.{key}")
+    }
+}
+
+/// An object at `at` whose keys are all `allowed` ("unknown identity rule: <path>" otherwise).
+fn rule_obj<'a>(v: &'a Value, allowed: &[&str], required: &[&str], at: &str) -> Result<&'a Obj, PolicyError> {
+    let o = v.as_object().ok_or_else(|| invalid(at))?;
+    let mut extra: Vec<&String> = o.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    extra.sort();
+    if let Some(k) = extra.first() {
+        return Err(PolicyError::Bad(format!("unknown identity rule: {}", path(at, k))));
+    }
+    if let Some(k) = required.iter().find(|k| !o.contains_key(**k)) {
+        return Err(invalid(&path(at, k)));
+    }
+    Ok(o)
+}
+
+/// `_id_int`: an int (not a bool) from `low` to `high`.
+fn id_int(v: &Value, field: &str, low: i64, high: i64) -> Result<i64, PolicyError> {
+    pj::as_int(Some(v)).filter(|n| (low..=high).contains(n)).ok_or_else(|| invalid(field))
+}
+
+fn id_bool(v: &Value, field: &str) -> Result<bool, PolicyError> {
+    v.as_bool().ok_or_else(|| invalid(field))
+}
+
+/// `_id_text`: a printable string of `low` to `high` characters.
+fn id_text<'a>(v: &'a Value, field: &str, low: usize, high: usize) -> Result<&'a str, PolicyError> {
+    v.as_str().filter(|s| (low..=high).contains(&s.chars().count()) && pj::printable(s)).ok_or_else(|| invalid(field))
+}
+
+fn id_list<'a>(v: &'a Value, field: &str, high: usize) -> Result<&'a [Value], PolicyError> {
+    v.as_array().filter(|a| a.len() <= high).map(Vec::as_slice).ok_or_else(|| invalid(field))
+}
+
+/// `_id_strings`: a signed string list, sorted by UTF-8 bytes, unique, bounded.
+fn id_strings(v: &Value, field: &str, high: usize, low_len: usize, high_len: usize) -> Result<Vec<String>, PolicyError> {
+    let list = id_list(v, field, high)?;
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for item in list {
+        out.push(id_text(item, field, low_len, high_len)?.to_string());
+    }
+    if out.windows(2).any(|w| w[0].as_bytes() >= w[1].as_bytes()) {
+        return Err(invalid(field));
+    }
+    Ok(out)
+}
+
+fn name_ok(s: &str) -> bool {
+    slug_ok(s) && re_core(s) == s
+}
+
+/// EXCEPTION_DEVICE_RE: `urn:lucid-meet:device:<16 hex>` (Meeting Hub) or `n_<32 hex>` (Remote Spokes).
+fn exception_device_ok(s: &str) -> bool {
+    let hex = |t: &str, n: usize| t.len() == n && t.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    s.strip_prefix("urn:lucid-meet:device:").is_some_and(|t| hex(t, 16)) || s.strip_prefix("n_").is_some_and(|t| hex(t, 32))
+}
+
+/// `(id, iss, phr_values)` of an IR-1 provider entry.
+pub type IrProvider = (String, String, Vec<String>);
+
+/// `_check_rule_providers`: the shape of IR-1 `providers` (sorted by id, unique by id and iss).
+fn check_rule_providers(v: &Value) -> Result<Vec<IrProvider>, PolicyError> {
+    let list = id_list(v, "providers", IR_PROVIDERS_MAX)?;
+    let mut out: Vec<IrProvider> = Vec::with_capacity(list.len());
+    for (i, p) in list.iter().enumerate() {
+        let at = format!("providers[{i}]");
+        let o = rule_obj(p, IR_PROVIDER_KEYS, &["id", "iss"], &at)?;
+        let id = o["id"].as_str().filter(|s| name_ok(s)).ok_or_else(|| invalid(&path(&at, "id")))?;
+        let iss = id_text(&o["iss"], &path(&at, "iss"), 1, 1024)?;
+        let phr = match o.get("phr_values") {
+            None => Vec::new(),
+            Some(v) => id_strings(v, &path(&at, "phr_values"), PHR_MAX, 3, PHR_LEN)?,
+        };
+        out.push((id.to_string(), iss.to_string(), phr));
+    }
+    let mut isses: Vec<&str> = out.iter().map(|p| p.1.as_str()).collect();
+    isses.sort_unstable();
+    isses.dedup();
+    if out.windows(2).any(|w| w[0].0.as_bytes() >= w[1].0.as_bytes()) || isses.len() != out.len() {
+        return Err(invalid("providers"));
+    }
+    Ok(out)
+}
+
+/// `meet_org_policy.check_identity`: the IR-1 object of an org policy (3.1) against the root-signed registry and the
+/// release gates this build holds `verified`. `label` names the org in the 3.7 words; `issued` is the policy's.
+/// `stored`: the signer's stored effective provider set (an absent `providers` means it); None: the org's registry.
+#[allow(clippy::too_many_arguments)]
+pub fn check_identity(
+    identity: &Value,
+    terms: &SignerTerms,
+    org: &str,
+    label: &str,
+    issued: i64,
+    gates: Option<&[&str]>,
+    stored: Option<&[IrProvider]>,
+) -> Result<(), PolicyError> {
+    let (o, listed, require_phr) = identity_parts(identity, PASSWORD_BASELINE, label, issued, gates)?;
+    let registry = terms.providers_of(org);
+    let by_id = |id: &String| registry.iter().find(|e| e.id == *id).copied();
+    for (id, iss, _) in listed.iter().flatten() {
+        if by_id(id).is_none_or(|e| e.iss != *iss) {
+            return Err(PolicyError::Refused(format!("that identity provider is not registered for {label} by the root; nothing was signed")));
+        }
+    }
+    for (id, _, phr) in listed.iter().flatten() {
+        let kind = by_id(id).map(|e| e.kind.as_str()).unwrap_or_default();
+        if !phr.is_empty() && !phr_allowed(kind, phr, gates) {
+            return Err(phr_unproven(kind_name(kind)));
+        }
+    }
+    let Some(gates) = gates else { return Ok(()) };
+    let eff: Vec<IrProvider> = match (listed, stored) {
+        (Some(l), _) => l,
+        (None, Some(s)) => s.to_vec(),
+        (None, None) => registry.iter().map(|e| (e.id.clone(), e.iss.clone(), Vec::new())).collect(),
+    };
+    let kinds: Vec<&str> = eff.iter().map(|(id, iss, _)| by_id(id).filter(|e| e.iss == *iss).map(|e| e.kind.as_str()).unwrap_or_default()).collect();
+    if require_phr {
+        for ((id, _, phr), kind) in eff.iter().zip(&kinds) {
+            if phr.is_empty() || !phr_allowed(kind, phr, Some(gates)) {
+                let name = if kind.is_empty() || kind_name(kind) == "your identity provider" { id.as_str() } else { kind_name(kind) };
+                return Err(phr_unproven(name));
+            }
+        }
+    }
+    if kinds.contains(&"logingov") && o.get("signin_max_days").and_then(Value::as_i64).is_none_or(|d| d > 30) {
+        return Err(invalid("signin_max_days"));
+    }
+    Ok(())
+}
+
+/// ID-1 3.1, shape only: an IR-1 object a device reads from a carrier the root already checked, with no provider
+/// registry and no gates (orgrules.ts `identityProblem` with `gates: null` and no registry). `baseline`: the
+/// product's password baseline (Remote Spokes: 12). `issued`: the carrier's signing time.
+pub fn identity_shape(identity: &Value, baseline: i64, issued: i64) -> Result<(), PolicyError> {
+    identity_parts(identity, baseline, "this organization", issued, None).map(|_| ())
+}
+
+/// The IR-1 object, its listed providers and `require_phishing_resistant`.
+type IdentityParts<'a> = (&'a Obj, Option<Vec<IrProvider>>, bool);
+
+/// The registry-free part of `check_identity`.
+fn identity_parts<'a>(identity: &'a Value, baseline: i64, label: &str, issued: i64, gates: Option<&[&str]>) -> Result<IdentityParts<'a>, PolicyError> {
+    if !identity.is_object() {
+        return Err(invalid("identity"));
+    }
+    let o = rule_obj(identity, IDENTITY_KEYS, &["v"], "")?;
+    id_int(&o["v"], "v", 2, 2)?;
+    if let Some(v) = o.get("min_password_length") {
+        let floor = pj::as_int(Some(v)).filter(|n| *n <= 64).ok_or_else(|| invalid("min_password_length"))?;
+        if floor < baseline {
+            return Err(PolicyError::Refused(format!("the password minimum cannot be below Lucid's minimum of {baseline}")));
+        }
+    }
+    let require_phr = match o.get("require_phishing_resistant") {
+        None => false,
+        Some(v) => id_bool(v, "require_phishing_resistant")?,
+    };
+    for (key, low, high) in [("session_max_minutes", 5, 1440), ("idle_max_minutes", 1, 60), ("signin_max_days", 1, 90)] {
+        if let Some(v) = o.get(key) {
+            id_int(v, key, low, high)?;
+        }
+    }
+    if let Some(u) = o.get("passwordless_unlock") {
+        check_unlock(u, issued, label, gates)?;
+    }
+    let listed = match o.get("providers") {
+        None => None,
+        Some(v) => Some(check_rule_providers(v)?),
+    };
+    if let Some(v) = o.get("imported") {
+        check_imported(v)?;
+    }
+    Ok((o, listed, require_phr))
+}
+
+/// `_check_unlock`: IR-1 `passwordless_unlock`. Without `gates` (a device or the relay checking a policy the
+/// signer already checked) the gate and `issued` checks are skipped, as in Python.
+fn check_unlock(u: &Value, issued: i64, label: &str, gates: Option<&[&str]>) -> Result<(), PolicyError> {
+    let at = "passwordless_unlock";
+    let u = rule_obj(u, UNLOCK_KEYS, &[], at)?;
+    let required = match u.get("required") {
+        None => false,
+        Some(v) => id_bool(v, "passwordless_unlock.required")?,
+    };
+    match u.get("enforce_at") {
+        Some(v) => {
+            let when = id_int(v, "passwordless_unlock.enforce_at", 0, MAX_INT)?;
+            if gates.is_some() && when < issued {
+                return Err(invalid("passwordless_unlock.enforce_at"));
+            }
+        }
+        None if required => return Err(invalid("passwordless_unlock.enforce_at")),
+        None => {}
+    }
+    if let Some(k) = u.get("kinds") {
+        if gates.is_some_and(|g| !g.contains(&"G-KIND")) {
+            return Err(PolicyError::Refused(format!("{label} cannot require a particular kind of authenticator yet; nothing was signed")));
+        }
+        let kinds = id_strings(k, "passwordless_unlock.kinds", 8, 1, 32)?;
+        if kinds.is_empty() || !kinds.iter().all(|k| name_ok(k)) {
+            return Err(invalid("passwordless_unlock.kinds"));
+        }
+    }
+    let empty = Value::Array(Vec::new());
+    let list = id_list(u.get("exceptions").unwrap_or(&empty), "passwordless_unlock.exceptions", EXCEPTIONS_MAX)?;
+    for (i, e) in list.iter().enumerate() {
+        let at = format!("passwordless_unlock.exceptions[{i}]");
+        let x = rule_obj(e, EXCEPTION_KEYS, EXCEPTION_KEYS, &at)?;
+        if !x["id"].as_str().is_some_and(|s| hex_ok(s, 16, 16) && re_core(s) == s) {
+            return Err(invalid(&path(&at, "id")));
+        }
+        if !x["device"].as_str().is_some_and(exception_device_ok) {
+            return Err(invalid(&path(&at, "device")));
+        }
+        if id_int(&x["until"], &path(&at, "until"), 0, MAX_INT)? > issued + EXCEPTION_LIFE {
+            return Err(PolicyError::Refused(EXCEPTION_REFUSED.into()));
+        }
+    }
+    let ids: Vec<&str> = list.iter().map(|e| e["id"].as_str().unwrap_or_default()).collect();
+    let mut devices: Vec<&str> = list.iter().map(|e| e["device"].as_str().unwrap_or_default()).collect();
+    devices.sort_unstable();
+    devices.dedup();
+    if ids.windows(2).any(|w| w[0].as_bytes() >= w[1].as_bytes()) || devices.len() != list.len() {
+        return Err(invalid("passwordless_unlock.exceptions"));
+    }
+    Ok(())
+}
+
+/// `_check_imported`: IR-1 `imported`, sorted by `(provider, read_at)`, unique by `proposal_sha256`.
+fn check_imported(v: &Value) -> Result<(), PolicyError> {
+    let list = id_list(v, "imported", IMPORTED_MAX)?;
+    for (i, item) in list.iter().enumerate() {
+        let at = format!("imported[{i}]");
+        let x = rule_obj(item, IMPORTED_KEYS, IMPORTED_KEYS, &at)?;
+        if !x["provider"].as_str().is_some_and(name_ok) {
+            return Err(invalid(&path(&at, "provider")));
+        }
+        id_int(&x["read_at"], &path(&at, "read_at"), 0, MAX_INT)?;
+        if !x["proposal_sha256"].as_str().is_some_and(|h| hex_ok(h, 64, 64) && re_core(h) == h) {
+            return Err(invalid(&path(&at, "proposal_sha256")));
+        }
+    }
+    let keys: Vec<(&[u8], i64)> = list.iter().map(|x| (x["provider"].as_str().unwrap_or_default().as_bytes(), x["read_at"].as_i64().unwrap_or(0))).collect();
+    let mut hashes: Vec<&str> = list.iter().map(|x| x["proposal_sha256"].as_str().unwrap_or_default()).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    if keys.windows(2).any(|w| w[0] >= w[1]) || hashes.len() != list.len() {
+        return Err(invalid("imported"));
+    }
+    Ok(())
+}
+
+pub const EXCEPTION_REFUSED: &str =
+    "that computer already had its one unlock exception, or the exception lasts too long; use the two-administrator lowering; nothing was signed";
+
+// The relay signs nothing, so 3.2 and 3.3 run here only on the shared vectors (the signer and devices apply them).
+
+/// 3.2, normative: does one requirement match the attested method array.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn method_matches(requirement: &str, evidence: &[String]) -> bool {
+    let has = |x: &str| evidence.iter().any(|e| e == x);
+    if requirement.contains(':') {
+        if let Some(raw) = requirement.strip_prefix("amr:") {
+            return has(raw);
+        }
+        return has(requirement);
+    }
+    has(requirement) || ["acr:", "acrs:", "aal:"].iter().any(|p| has(&format!("{p}{requirement}")))
+}
+
+/// 3.2: an attested method array is a signed string list (sorted by UTF-8 bytes, each once, at most 32 entries of 1
+/// to 256 characters), and a value with ":" carries an evidence prefix (a raw `amr` value never has one).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn evidence_ok(evidence: &Value) -> bool {
+    match canonical_strings(evidence, "methods", EVIDENCE_MAX, 0, 1, EVIDENCE_LEN) {
+        Ok(list) => list.iter().all(|e| pj::printable(e) && (!e.contains(':') || EVIDENCE_PREFIXES.iter().any(|p| e.starts_with(p) && e.len() > p.len()))),
+        Err(_) => false,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn int_field(o: &Obj, key: &str) -> Option<i64> {
+    o.get(key).and_then(Value::as_i64)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn bool_field(o: &Obj, key: &str) -> bool {
+    matches!(o.get(key), Some(Value::Bool(true)))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn ir_list(v: Option<&Value>) -> Option<Vec<IrProvider>> {
+    let a = v?.as_array()?;
+    Some(
+        a.iter()
+            .filter_map(Value::as_object)
+            .map(|p| (pj::s(p, "id"), pj::s(p, "iss"), p.get("phr_values").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()))
+            .collect(),
+    )
+}
+
+/// 3.3, normative: Ok when `new` is stronger than or equal to `old`, else Err with the first rule it lowers (in the
+/// order of 3.3). `old` and `new` are the `identity` objects (None: absent, every field absent). `stored` is the
+/// signer's stored effective provider set (an absent list means it); `used_devices` and `used_ids` the devices and
+/// exception ids that ever had an exception for this org.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn identity_stronger_or_equal(
+    old: Option<&Obj>,
+    new: Option<&Obj>,
+    stored: &[IrProvider],
+    used_devices: &[String],
+    used_ids: &[String],
+) -> Result<(), &'static str> {
+    let empty = Obj::new();
+    let (old, new) = (old.unwrap_or(&empty), new.unwrap_or(&empty));
+    let min = |o: &Obj| int_field(o, "min_password_length").unwrap_or(PASSWORD_BASELINE);
+    if min(new) < min(old) {
+        return Err("min_password_length");
+    }
+    if bool_field(old, "require_phishing_resistant") && !bool_field(new, "require_phishing_resistant") {
+        return Err("require_phishing_resistant");
+    }
+    for key in ["session_max_minutes", "idle_max_minutes", "signin_max_days"] {
+        match (int_field(old, key), int_field(new, key)) {
+            (Some(_), None) => return Err(key),
+            (Some(a), Some(b)) if b > a => return Err(key),
+            _ => {}
+        }
+    }
+    let unlock = |o: &Obj| o.get("passwordless_unlock").and_then(Value::as_object).cloned().unwrap_or_default();
+    let (ou, nu) = (unlock(old), unlock(new));
+    if bool_field(&ou, "required") && !bool_field(&nu, "required") {
+        return Err("passwordless_unlock.required");
+    }
+    match (int_field(&ou, "enforce_at"), int_field(&nu, "enforce_at")) {
+        (Some(_), None) => return Err("passwordless_unlock.enforce_at"),
+        (Some(a), Some(b)) if b > a => return Err("passwordless_unlock.enforce_at"),
+        _ => {}
+    }
+    if bool_field(&ou, "required") {
+        let kinds = |u: &Obj| u.get("kinds").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
+        match (kinds(&ou), kinds(&nu)) {
+            (None, _) => {}
+            (Some(_), None) => return Err("passwordless_unlock.kinds"),
+            (Some(a), Some(b)) if !b.iter().all(|k| a.contains(k)) => return Err("passwordless_unlock.kinds"),
+            _ => {}
+        }
+    }
+    let resolve = |o: &Obj| ir_list(o.get("providers")).unwrap_or_else(|| stored.to_vec());
+    let (op, np) = (resolve(old), resolve(new));
+    if !np.iter().all(|(id, iss, _)| op.iter().any(|(i, s, _)| i == id && s == iss)) {
+        return Err("providers");
+    }
+    // phr_values may only shrink while phishing-resistant sign-in is required
+    if bool_field(old, "require_phishing_resistant") {
+        for (id, iss, phr) in &np {
+            let before = op.iter().find(|(i, s, _)| i == id && s == iss).map(|p| &p.2);
+            if before.is_some_and(|b| !phr.iter().all(|x| b.contains(x))) {
+                return Err("phr_values");
+            }
+        }
+    }
+    let exceptions = |u: &Obj| u.get("exceptions").and_then(Value::as_array).cloned().unwrap_or_default();
+    let before = exceptions(&ou);
+    for e in exceptions(&nu) {
+        if before.contains(&e) {
+            continue;
+        }
+        let device = e.get("device").and_then(Value::as_str).unwrap_or_default();
+        let id = e.get("id").and_then(Value::as_str).unwrap_or_default();
+        if used_devices.iter().any(|d| d == device) || used_ids.iter().any(|d| d == id) {
+            return Err("exceptions");
+        }
+    }
+    Ok(())
 }
 
 // ---- the org policy -------------------------------------------------------------------------------------------
@@ -670,6 +1252,12 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             int(days, &format!("retention.{kind}"), if kind == "canvas" { 0 } else { 1 }, RETENTION_MAX)?;
         }
     }
+    if let Some(identity) = p.get("identity") {
+        if terms.version < 3 {
+            return Err(refused("identity rules need the root's signer policy version 3; nothing was signed"));
+        }
+        check_identity(identity, terms, org, p["label"].as_str().unwrap_or(org), issued, None, None)?;
+    }
     if let Some(n) = p.get("notify") {
         let ok = n.as_object().is_some_and(|o| o.len() == 1 && o.get("previews").and_then(Value::as_str) == Some("off"));
         if !ok {
@@ -704,6 +1292,13 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
     }
     if let Some(s) = p.get("storage") {
         check_storage(s)?;
+        // SD-1 6.2: the cloud of the org's Entra provider in the root-signed registry (ID-1 signer policy v3)
+        let cloud = s.get("cloud").and_then(Value::as_str).unwrap_or("global");
+        let org = p["org"].as_str().unwrap_or_default();
+        if let Some(e) = terms.providers_of(org).into_iter().find(|e| e.kind == "entra" && e.cloud != cloud) {
+            let label = p["label"].as_str().unwrap_or(org);
+            return Err(PolicyError::Refused(format!("storage.cloud must be {}, the cloud of {label}'s Microsoft sign-in", e.cloud)));
+        }
     }
     if let Some(s) = p.get("lan_scope") {
         if !lan_scope_ok(s) {
@@ -2261,7 +2856,288 @@ pub fn verify(
 pub struct Store {
     pub newest: IndexMap<String, Verified>,
     pub by_hash: IndexMap<String, Obj>,
+    /// 3.8: the lowerings kept next to each org's newest policy.
+    pub book: Book,
 }
+
+/// A verified `lucid-identity-lowering-v1` wire.
+#[derive(Clone, Debug)]
+pub struct Lowering {
+    pub wire: Obj,
+    pub org: String,
+    pub base_seq: i64,
+    pub base_hash: String,
+    pub next_seq: i64,
+    pub effective_at: i64,
+    pub policy: Obj,
+    pub label: String,
+    /// SHA-256 of the signed lowering bytes (what a cancel names).
+    pub hash: String,
+}
+
+/// A verified `lucid-identity-lowering-cancel-v1` wire.
+#[derive(Clone, Debug)]
+pub struct Cancel {
+    pub wire: Obj,
+    pub org: String,
+    pub base_seq: i64,
+    pub next_seq: i64,
+    pub lowering_sha256: String,
+}
+
+/// Python's `_LoweringBook`: held lowerings per org in `next_seq` order, canceled hashes, cancel wires and
+/// conflicts.
+#[derive(Default)]
+pub struct Book {
+    pub held: IndexMap<String, Vec<Lowering>>,
+    pub canceled: IndexMap<String, HashSet<String>>,
+    /// lowering hash -> cancel wire
+    pub cancels: IndexMap<String, Obj>,
+    pub conflicts: IndexMap<String, String>,
+}
+
+impl Book {
+    fn latest(&self, org: &str, seq: i64, digest: &str) -> (i64, String) {
+        let mut best = (seq, digest.to_string());
+        for vl in self.held.get(org).into_iter().flatten() {
+            if vl.next_seq > best.0 {
+                best = (vl.next_seq, sha256_hex(&signed_bytes(&vl.policy)));
+            }
+        }
+        best
+    }
+
+    fn add(&mut self, vl: Lowering, seq: i64, digest: &str) -> Result<bool, PolicyError> {
+        let label = vl.label.clone();
+        if self.canceled.get(&vl.org).is_some_and(|c| c.contains(&vl.hash)) {
+            return Err(PolicyError::Refused(format!("that lowering of {label}'s rules was canceled")));
+        }
+        if vl.next_seq <= seq {
+            return Ok(false);
+        }
+        let held = self.held.get(&vl.org).cloned().unwrap_or_default();
+        if held.iter().any(|h| h.hash == vl.hash) {
+            return Ok(false);
+        }
+        if held.iter().any(|h| h.base_seq == vl.base_seq) {
+            let words = format!("Two different signed versions of {label}'s rules exist. Enforcement of new rules stopped; tell an administrator.");
+            self.conflicts.insert(vl.org.clone(), words.clone());
+            return Err(PolicyError::Refused(words));
+        }
+        if (vl.base_seq, vl.base_hash.clone()) != self.latest(&vl.org, seq, digest) {
+            return Err(PolicyError::Refused(lowering_base(&label)));
+        }
+        let list = self.held.entry(vl.org.clone()).or_default();
+        list.push(vl);
+        list.sort_by_key(|h| h.next_seq);
+        Ok(true)
+    }
+
+    fn cancel(&mut self, vc: &Cancel) -> bool {
+        self.canceled.entry(vc.org.clone()).or_default().insert(vc.lowering_sha256.clone());
+        self.cancels.insert(vc.lowering_sha256.clone(), vc.wire.clone());
+        let held = self.held.entry(vc.org.clone()).or_default();
+        let before = held.len();
+        held.retain(|h| h.hash != vc.lowering_sha256);
+        let changed = held.len() != before;
+        if changed {
+            self.conflicts.shift_remove(&vc.org);
+        }
+        changed
+    }
+
+    fn supersede(&mut self, org: &str, seq: i64) {
+        if let Some(held) = self.held.get_mut(org).filter(|h| !h.is_empty()) {
+            held.retain(|h| h.next_seq > seq);
+            self.conflicts.shift_remove(org);
+        }
+    }
+
+    /// The lowering in force at `now` above ordinary `seq` (None during a conflict).
+    pub fn effective(&self, org: &str, seq: i64, now: f64) -> Option<&Lowering> {
+        if self.conflicts.contains_key(org) {
+            return None;
+        }
+        self.held.get(org)?.iter().filter(|vl| vl.effective_at as f64 <= now && vl.next_seq > seq).max_by_key(|vl| vl.next_seq)
+    }
+
+    pub fn newest(&self, org: &str) -> Option<&Lowering> {
+        self.held.get(org)?.last()
+    }
+}
+
+fn lowering_base(label: &str) -> String {
+    format!("that lowering is not based on {label}'s current policy; nothing was signed")
+}
+
+/// The signer's signature (root, or its current or previous intermediate valid at `at` and not in the root's CRL)
+/// over `data`; `words` when it does not verify.
+#[allow(clippy::too_many_arguments)]
+fn check_signature(
+    chain: &Value,
+    sig: &Value,
+    data: &[u8],
+    root: &Cert,
+    terms: &SignerTerms,
+    previous_serial: &str,
+    at: i64,
+    root_crl: Option<&Crl>,
+    words: &str,
+) -> Result<(), PolicyError> {
+    let chain = match chain {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    if let Some(c) = &inter {
+        check_intermediate(c, root, terms, previous_serial, at, root_crl)?;
+    }
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    match pj::b64_strict(&pj::py_str(sig)) {
+        Some(raw) if ecdsa_sha256_verified(spki, data, &raw) => Ok(()),
+        _ => Err(refused(words)),
+    }
+}
+
+const LOWERING_BAD_SIG: &str = "the lowering's signature does not verify";
+pub const CANCEL_LABEL: &str = "lucid-identity-lowering-cancel-v1";
+const CANCEL_KEYS: &[&str] = &["typ", "org", "base_seq", "next_seq", "lowering_sha256"];
+const CANCEL_WIRE_KEYS: &[&str] = &["typ", "org", "base_seq", "next_seq", "lowering_sha256", "sig", "chain"];
+/// A signed lowering: the 64 KB policy and 16 KB more.
+const LOWERING_MAX: usize = SIGNED_MAX + 16 * 1024;
+
+/// True for a signed identity lowering `{lowering, sig, chain}` or its cancel.
+pub fn is_lowering_wire(wire: &Value) -> bool {
+    wire.as_object().is_some_and(|w| w.contains_key("lowering") || w.get("typ").and_then(Value::as_str) == Some(CANCEL_LABEL))
+}
+
+/// `lp("lucid-identity-lowering-cancel-v1", canonical_json(the cancel fields))`.
+fn cancel_bytes(w: &Obj) -> Res<Vec<u8>> {
+    let body: Obj = CANCEL_KEYS.iter().filter_map(|k| w.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+    Ok(lp(&[CANCEL_LABEL.as_bytes(), &canonical_json(&Value::Object(body))?]))
+}
+
+/// `lp("lucid-identity-lowering-v1", canonical_json(lowering))`.
+pub fn lowering_bytes(lowering: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(lowering, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[LOWERING_LABEL.as_bytes(), &json])
+}
+
+/// `check_lowering` (3.8), in the Python order: exact keys, `next_seq == base_seq + 1 == policy.seq`, `reason`,
+/// 24 hours' notice, exactly two distinct `org_admins` signers sorted by principal with distinct certificates, then
+/// the policy under every rule except 3.3. The signer checks the proofs (it holds the certificates).
+fn check_lowering(l: &Obj, terms: &SignerTerms) -> Result<(), PolicyError> {
+    keys(&Value::Object(l.clone()), LOWERING_KEYS, LOWERING_KEYS, "the lowering")?;
+    if !(py_eq(l.get("v"), 1) && l.get("typ").and_then(Value::as_str) == Some(LOWERING_LABEL)) {
+        return Err(bad("the lowering must be version 1 of lucid-identity-lowering-v1"));
+    }
+    let org = l["org"].as_str().filter(|o| slug_ok(o)).ok_or("org must be 1 to 32 of a-z, 0-9 and -")?;
+    let base = int(&l["base_seq"], "base_seq", 1, MAX_INT)?;
+    if !l["base_hash"].as_str().is_some_and(|h| hex_ok(h, 64, 64)) {
+        return Err(bad("base_hash must be 64 lower-case hex digits"));
+    }
+    let next = int(&l["next_seq"], "next_seq", 1, MAX_INT)?;
+    let policy = l["policy"].as_object();
+    if next != base + 1 || policy.is_none_or(|p| !py_eq(p.get("seq"), next) || !p.get("seq").is_some_and(Value::is_number)) {
+        return Err(bad("a lowering's next_seq and policy seq must be base_seq + 1"));
+    }
+    if policy.and_then(|p| p.get("org")).and_then(Value::as_str) != Some(org) {
+        return Err(bad("the lowered policy is for another organization"));
+    }
+    let reason = l["reason"].as_str().unwrap_or_default();
+    if reason.is_empty() || reason.chars().count() > REASON_MAX || !pj::printable(reason) {
+        return Err(bad("reason must be 1 to 500 characters without control characters"));
+    }
+    let signed_at = int(&l["signed_at"], "signed_at", 1, MAX_INT)?;
+    let effective_at = int(&l["effective_at"], "effective_at", 1, MAX_INT)?;
+    if effective_at < signed_at + LOWERING_NOTICE {
+        return Err(refused(LOWERING_REFUSED));
+    }
+    let signers = l["signers"].as_array().filter(|s| s.len() == 2).ok_or_else(|| refused(LOWERING_REFUSED))?;
+    let admins = terms.org_admins.get(org).cloned().unwrap_or_default();
+    for s in signers {
+        let o = keys(s, LOWERING_SIGNER_KEYS, LOWERING_SIGNER_KEYS, "a lowering signer")?;
+        if !o["principal"].as_str().is_some_and(|p| admins.iter().any(|a| a == p)) {
+            return Err(refused(LOWERING_REFUSED));
+        }
+        if !o["cert_sha256"].as_str().is_some_and(|h| hex_ok(h, 64, 64)) {
+            return Err(bad("cert_sha256 must be 64 lower-case hex digits"));
+        }
+        if !o["proof"].as_str().is_some_and(|p| !p.is_empty()) {
+            return Err(bad("each signer needs a proof"));
+        }
+    }
+    let (a, b) = (&signers[0], &signers[1]);
+    let principal = |s: &Value| s["principal"].as_str().unwrap_or_default().as_bytes().to_vec();
+    if principal(a) >= principal(b) || a["cert_sha256"] == b["cert_sha256"] {
+        return Err(refused(LOWERING_REFUSED));
+    }
+    check_policy(&l["policy"], terms)
+}
+
+/// `verify_lowering`: exact wire keys and size, the root-signed signer policy, the signature by the root or the
+/// signer's current (or previous) intermediate valid at `signed_at` (before the object's fields, so a stripped or
+/// changed field fails as a signature), then `check_lowering`. Whether it applies is the store's.
+pub fn verify_lowering(wire: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Result<Lowering, PolicyError> {
+    let w = keys(wire, LOWERING_WIRE_KEYS, LOWERING_WIRE_KEYS, "the signed lowering")?;
+    if canonical_json(wire)?.len() > LOWERING_MAX {
+        return Err(bad("the signed lowering is larger than 80 KB"));
+    }
+    let l = w["lowering"].as_object().ok_or("lowering must be an object")?;
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let at = pj::as_int(l.get("signed_at")).unwrap_or(0);
+    check_signature(&w["chain"], &w["sig"], &lowering_bytes(l), root, &terms, previous_serial, at, root_crl, LOWERING_BAD_SIG)?;
+    check_lowering(l, &terms)?;
+    if at as f64 > now + SKEW as f64 {
+        return Err(refused("the lowering is dated in the future"));
+    }
+    let policy = l["policy"].as_object().cloned().unwrap_or_default();
+    Ok(Lowering {
+        wire: w.clone(),
+        org: pj::text_of(l, "org"),
+        base_seq: pj::as_int(l.get("base_seq")).unwrap_or(0),
+        base_hash: pj::text_of(l, "base_hash"),
+        next_seq: pj::as_int(l.get("next_seq")).unwrap_or(0),
+        effective_at: pj::as_int(l.get("effective_at")).unwrap_or(0),
+        label: pj::text_of(&policy, "label"),
+        policy,
+        hash: sha256_hex(&lowering_bytes(l)),
+    })
+}
+
+/// `verify_cancel`: a signed cancel of a lowering (3.8); its signing certificate must be valid now.
+pub fn verify_cancel(wire: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Result<Cancel, PolicyError> {
+    let w = keys(wire, CANCEL_WIRE_KEYS, CANCEL_WIRE_KEYS, "the cancel")?;
+    if w["typ"].as_str() != Some(CANCEL_LABEL) {
+        return Err(bad("the cancel must be a lucid-identity-lowering-cancel-v1"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    check_signature(&w["chain"], &w["sig"], &cancel_bytes(w)?, root, &terms, previous_serial, now as i64, root_crl, "the cancel's signature does not verify")?;
+    let org = w["org"].as_str().filter(|o| slug_ok(o)).ok_or("org must be 1 to 32 of a-z, 0-9 and -")?;
+    let base_seq = int(&w["base_seq"], "base_seq", 1, MAX_INT)?;
+    if int(&w["next_seq"], "next_seq", 1, MAX_INT)? != base_seq + 1 {
+        return Err(bad("a cancel's next_seq must be base_seq + 1"));
+    }
+    let digest = w["lowering_sha256"].as_str().filter(|h| hex_ok(h, 64, 64)).ok_or("lowering_sha256 must be 64 lower-case hex digits")?;
+    Ok(Cancel { wire: w.clone(), org: org.to_string(), base_seq, next_seq: base_seq + 1, lowering_sha256: digest.to_string() })
+}
+
+/// 6.9 `policy_lowering_refused`.
+pub const LOWERING_REFUSED: &str = "This lowering needs two different administrators and at least 24 hours' notice. Nothing was signed.";
 
 impl Store {
     pub fn accept(
@@ -2302,7 +3178,97 @@ impl Store {
         }
         self.newest.insert(v.org.clone(), v.clone());
         self.by_hash.insert(v.hash.clone(), v.wire.clone());
+        self.book.supersede(&v.org, v.seq);
         Ok(v)
+    }
+
+    /// The `lucid-identity-lowering-v1` branch (3.8): the signer's signature over the lowering's bytes (checked before
+    /// anything else), every rule of 3.8, and its base equal to the org's newest policy. Kept next to it; the same wire
+    /// again is a no-op, a different one for that org is the two-versions conflict.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_lowering_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+    ) -> Result<Lowering, PolicyError> {
+        let vl = verify_lowering(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        let Some(cur) = self.newest.get(&vl.org) else { return Err(PolicyError::Refused(lowering_base(&vl.label))) };
+        let (seq, digest) = (cur.seq, cur.hash.clone());
+        self.book.add(vl.clone(), seq, &digest)?;
+        Ok(vl)
+    }
+
+    /// The signed cancel branch: the lowering it names goes (and is refused if it comes back).
+    pub fn cancel_lowering_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+    ) -> Result<Cancel, PolicyError> {
+        let vc = verify_cancel(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        self.book.cancel(&vc);
+        Ok(vc)
+    }
+
+    /// Per org the newest lowering held (before or after its `effective_at`).
+    pub fn pending(&self) -> impl Iterator<Item = (&String, &Lowering)> {
+        self.book.held.iter().filter_map(|(o, h)| h.last().map(|l| (o, l)))
+    }
+
+    /// `pending_lowering` of `GET /v1/org/policy?org=` (None when none is held).
+    pub fn pending_lowering(&self, org: &str) -> Option<&Obj> {
+        self.book.newest(org).map(|l| &l.wire)
+    }
+
+    /// The policy the relay enforces for `org`: the newest ordinary one, or a held lowering's policy from its
+    /// `effective_at` on (never during a conflict).
+    pub fn in_force(&self, org: &str, now: f64) -> Option<&Obj> {
+        let cur = self.newest.get(org)?;
+        Some(self.book.effective(org, cur.seq, now).map_or(&cur.policy, |l| &l.policy))
+    }
+
+    /// `{lowerings, canceled}` for `ext["pc"]["lowerings"]` (`restore_lowerings` reads it).
+    pub fn persisted_lowerings(&self) -> Value {
+        let mut orgs: Vec<&String> = self.book.held.keys().collect();
+        orgs.sort();
+        let lowerings: Vec<Value> = orgs.into_iter().flat_map(|o| self.book.held[o].iter().map(|h| Value::Object(h.wire.clone()))).collect();
+        let mut hashes: Vec<&String> = self.book.cancels.keys().collect();
+        hashes.sort();
+        let canceled: Vec<Value> = hashes.into_iter().map(|h| Value::Object(self.book.cancels[h].clone())).collect();
+        Value::Object(Obj::from_iter([("lowerings".to_string(), Value::Array(lowerings)), ("canceled".to_string(), Value::Array(canceled))]))
+    }
+
+    /// Re-verify `persisted_lowerings()` output after the policies: cancels, then lowerings by `next_seq`. A bad
+    /// wire is skipped (the reasons come back); a kept cancel that no longer verifies still cancels.
+    pub fn restore_lowerings(&mut self, doc: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Vec<String> {
+        let mut skipped = Vec::new();
+        let list = |k: &str| doc.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+        for wire in list("canceled") {
+            if let Err(e) = self.cancel_lowering_at(&wire, root, signer_policy, root_crl, previous_serial, now) {
+                skipped.push(format!("canceled: {e}"));
+                if let (Some(org), Some(h)) = (wire.get("org").and_then(Value::as_str), wire.get("lowering_sha256").and_then(Value::as_str)) {
+                    self.book.canceled.entry(org.to_string()).or_default().insert(h.to_string());
+                    if let Some(w) = wire.as_object() {
+                        self.book.cancels.insert(h.to_string(), w.clone());
+                    }
+                }
+            }
+        }
+        let mut lowerings: Vec<Value> = list("lowerings").into_iter().filter(Value::is_object).collect();
+        lowerings.sort_by_key(|w| w.get("lowering").and_then(|l| pj::as_int(l.get("next_seq"))).unwrap_or(0));
+        for wire in lowerings {
+            if let Err(e) = self.accept_lowering_at(&wire, root, signer_policy, root_crl, previous_serial, now) {
+                skipped.push(format!("lowerings: {e}"));
+            }
+        }
+        skipped
     }
 
     /// `GET /v1/org/policy?org=`: the newest.
@@ -2336,6 +3302,187 @@ mod tests {
     use serde_json::json;
 
     const VECTORS: &str = include_str!("../tests/org_policy_v1.json");
+    // ID-1 shared vectors (copied byte for byte from the Meeting Hub's tests/vectors/)
+    const IDENTITY_RULES: &str = include_str!("../tests/identity_rules_v2.json");
+    const METHOD_MATCH: &str = include_str!("../tests/method_match_v1.json");
+    const LOWERING: &str = include_str!("../tests/identity_lowering_v1.json");
+
+    const ORG: &str = "acme";
+
+    fn strs(v: &Value) -> Vec<String> {
+        v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+    }
+
+    fn ir(v: &Value) -> Option<Vec<IrProvider>> {
+        v.as_array().map(|a| a.iter().map(|p| (p["id"].as_str().unwrap().to_string(), p["iss"].as_str().unwrap().to_string(), strs(&p["phr_values"]))).collect())
+    }
+
+    fn registry_terms(registry: &Value) -> SignerTerms {
+        let identity_providers = registry
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| IdentityProvider {
+                org: ORG.into(),
+                id: r["id"].as_str().unwrap().into(),
+                kind: r["kind"].as_str().unwrap().into(),
+                iss: r["iss"].as_str().unwrap().into(),
+                sso_serial: "1a".into(),
+                cloud: r["cloud"].as_str().unwrap_or_default().into(),
+            })
+            .collect();
+        SignerTerms { version: 3, identity_providers, ..SignerTerms::default() }
+    }
+
+    #[test]
+    fn the_identity_rules_vectors_give_the_expected_words() {
+        let doc: Value = serde_json::from_str(IDENTITY_RULES).unwrap();
+        assert_eq!(doc["baseline"].as_i64(), Some(PASSWORD_BASELINE));
+        let cases = doc["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let ctx = &case["context"];
+            let terms = registry_terms(&ctx["registry"]);
+            let gates = strs(&ctx["gates"]);
+            let gates: Vec<&str> = gates.iter().map(String::as_str).collect();
+            let stored = ir(&ctx["effective"]);
+            let verdict = match check_identity(&case["identity"], &terms, ORG, ctx["label"].as_str().unwrap(), ctx["issued"].as_i64().unwrap(), Some(gates.as_slice()), stored.as_deref()) {
+                Ok(()) => "ok".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_stronger_or_equal_vectors_name_the_first_lowering() {
+        let doc: Value = serde_json::from_str(IDENTITY_RULES).unwrap();
+        let cases = doc["stronger"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let ctx = &case["context"];
+            let stored = ir(&ctx["effective"]).unwrap_or_default();
+            let r = identity_stronger_or_equal(case["old"].as_object(), case["new"].as_object(), &stored, &strs(&ctx["used_devices"]), &strs(&ctx["used_ids"]));
+            assert_eq!(r.is_ok(), case["expect"].as_bool().unwrap(), "{}", case["name"]);
+            assert_eq!(r.err().unwrap_or(""), case["reason"].as_str().unwrap_or(""), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_method_match_vectors_hold() {
+        let doc: Value = serde_json::from_str(METHOD_MATCH).unwrap();
+        for case in doc["cases"].as_array().unwrap() {
+            let got = method_matches(case["requirement"].as_str().unwrap(), &strs(&case["evidence"]));
+            assert_eq!(got, case["expect"].as_bool().unwrap(), "{}", case["name"]);
+        }
+        for case in doc["evidence"].as_array().unwrap() {
+            assert_eq!(evidence_ok(&case["methods"]), case["expect"].as_bool().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_lowering_vectors_keep_apply_and_cancel() {
+        let doc: Value = serde_json::from_str(LOWERING).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        // the root signs every wire here: no CRL is needed
+        let crl: Option<&Crl> = None;
+        let sp = doc["signer_policy"].as_object().unwrap();
+        let org = doc["base"]["policy"]["org"].as_str().unwrap();
+        for case in doc["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap_or_default();
+            let steps = case["steps"].as_array().unwrap();
+            let first = steps.first().and_then(|s| s["now"].as_f64()).unwrap();
+            let mut store = Store::default();
+            store.accept_at(&doc["base"], &root, sp, crl, "", first).unwrap();
+            for step in steps {
+                let now = step["now"].as_f64().unwrap();
+                if step["restart"].as_bool() == Some(true) {
+                    // a restart: the policies, then the kept cancels and lowerings, verified again
+                    let policies: Vec<Value> = store.newest.values().map(|v| Value::Object(v.wire.clone())).collect();
+                    let kept = store.persisted_lowerings();
+                    store = Store::default();
+                    for w in &policies {
+                        store.accept_at(w, &root, sp, crl, "", now).unwrap();
+                    }
+                    assert!(store.restore_lowerings(&kept, &root, sp, crl, "", now).is_empty(), "{name}");
+                    continue;
+                }
+                let wire = &step["wire"];
+                let r = if wire.get("lowering").is_some() {
+                    store.accept_lowering_at(wire, &root, sp, crl, "", now).map(|_| ())
+                } else if wire.get("typ").and_then(Value::as_str) == Some(CANCEL_LABEL) {
+                    store.cancel_lowering_at(wire, &root, sp, crl, "", now).map(|_| ())
+                } else {
+                    store.accept_at(wire, &root, sp, crl, "", now).map(|_| ())
+                };
+                let verdict = r.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
+                assert_eq!(verdict, step["expect"].as_str().unwrap(), "{name}");
+            }
+            for f in case["in_force"].as_array().into_iter().flatten() {
+                let seq = store.in_force(org, f["now"].as_f64().unwrap()).and_then(|p| pj::as_int(p.get("seq")));
+                assert_eq!(seq, f["seq"].as_i64(), "{name}");
+            }
+        }
+    }
+
+    fn okta_terms() -> SignerTerms {
+        registry_terms(&json!([{"id": "okta", "kind": "okta", "iss": "https://acme.okta.com"}, {"id": "lg", "kind": "logingov", "iss": "https://secure.login.gov/"}]))
+    }
+
+    fn check(identity: Value, gates: &[&str]) -> String {
+        check_identity(&identity, &okta_terms(), ORG, "Acme", 1_763_164_800, Some(gates), None).err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into())
+    }
+
+    #[test]
+    fn identity_rules_refuse_with_paths_and_the_3_7_words() {
+        let okta = |phr: Value| json!({"v": 2, "signin_max_days": 30, "providers": [{"id": "okta", "iss": "https://acme.okta.com", "phr_values": phr}]});
+        assert_eq!(check(json!({"v": 2, "signin_max_days": 30}), &[]), "ok");
+        assert_eq!(check(json!({"v": 2, "zz": 1}), &[]), "unknown identity rule: zz");
+        assert_eq!(check(json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"foo": 1}}), &[]), "unknown identity rule: passwordless_unlock.foo");
+        assert_eq!(check(json!({"v": 1}), &[]), "the identity rules are not valid: v");
+        assert_eq!(check(json!({"v": 2, "session_max_minutes": 4}), &[]), "the identity rules are not valid: session_max_minutes");
+        assert_eq!(check(json!({"v": 2, "min_password_length": 7}), &[]), "the password minimum cannot be below Lucid's minimum of 8");
+        assert_eq!(check(json!({"v": 2}), &[]), "the identity rules are not valid: signin_max_days");
+        // revision 5: at most 4 phr_values
+        assert_eq!(check(okta(json!(["acr:a", "acr:b", "acr:c", "acr:d"])), &["G-OKTA-PHR"]), "ok");
+        assert_eq!(check(okta(json!(["acr:a", "acr:b", "acr:c", "acr:d", "acr:e"])), &["G-OKTA-PHR"]), "the identity rules are not valid: providers[0].phr_values");
+        assert_eq!(check(okta(json!(["acr:b", "acr:a"])), &["G-OKTA-PHR"]), "the identity rules are not valid: providers[0].phr_values");
+        assert_eq!(check(okta(json!(["acr:phr"])), &[]), "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed");
+        assert_eq!(check(okta(json!(["amr:hwk"])), &["G-OKTA-PHR"]), "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed");
+        let other = json!({"v": 2, "providers": [{"id": "okta", "iss": "https://other.okta.com"}]});
+        assert_eq!(check(other, &[]), "that identity provider is not registered for Acme by the root; nothing was signed");
+        let kinds = json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"required": true, "enforce_at": 1_763_164_800, "kinds": ["fido2"]}});
+        assert_eq!(check(kinds, &[]), "Acme cannot require a particular kind of authenticator yet; nothing was signed");
+        let long = json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"exceptions": [{"id": "9f2c4e1a7b3d5f60", "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e", "until": 1_763_164_800 + 14 * 86400 + 1}]}});
+        assert_eq!(check(long, &[]), EXCEPTION_REFUSED);
+    }
+
+    #[test]
+    fn methods_match_by_prefix_and_raw_values_never_carry_a_colon() {
+        let ev = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(method_matches("phr", &ev(&["acr:phr"])));
+        assert!(method_matches("c1", &ev(&["acrs:c1"])));
+        assert!(method_matches("amr:hwk", &ev(&["hwk"])));
+        assert!(!method_matches("acr:hwk", &ev(&["hwk"])));
+        assert!(!method_matches("a,b", &ev(&["a", "b"])));
+        assert!(!method_matches("x", &ev(&["saml:x"])));
+        assert!(evidence_ok(&json!(["acr:phr", "hwk"])));
+        assert!(!evidence_ok(&json!(["hwk", "acr:phr"])));
+        assert!(!evidence_ok(&json!(["urn:x"])));
+    }
+
+    #[test]
+    fn stronger_or_equal_names_the_first_lowering() {
+        let old = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 720});
+        let o = old.as_object();
+        assert_eq!(identity_stronger_or_equal(o, o, &[], &[], &[]), Ok(()));
+        assert_eq!(identity_stronger_or_equal(o, None, &[], &[], &[]), Err("min_password_length"));
+        let longer = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 721});
+        assert_eq!(identity_stronger_or_equal(o, longer.as_object(), &[], &[], &[]), Err("session_max_minutes"));
+        let stored = vec![("okta".to_string(), "https://acme.okta.com".to_string(), vec!["acr:phr".to_string()])];
+        let added = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 720, "providers": [{"id": "okta", "iss": "https://acme.okta.com", "phr_values": ["acr:phr"]}, {"id": "z", "iss": "https://z"}]});
+        assert_eq!(identity_stronger_or_equal(o, added.as_object(), &stored, &[], &[]), Err("providers"));
+    }
 
     struct Doc {
         doc: Value,
@@ -2648,20 +3795,14 @@ mod tests {
     #[test]
     fn the_org_storage_vectors_give_the_expected_verdicts() {
         let d = storage_doc();
-        // the policy's `storage` and `sharing` as a device checks them; this relay's signer terms stop at version 2,
-        // so the version 3 cases (the registry cloud check) are the signer's and the devices'
-        let mut skipped: Vec<&str> = Vec::new();
+        // the policy's `storage` and `sharing` as a device checks them, the registry cloud check (signer policy v3)
+        // included
         for case in d.doc["policy_cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
-            let Ok(terms) = signer_terms(case["signer_policy"].as_object().unwrap()) else {
-                skipped.push(name);
-                continue;
-            };
+            let terms = signer_terms(case["signer_policy"].as_object().unwrap()).unwrap();
             let verdict = check_policy(&case["policy"], &terms).err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
             assert_eq!(verdict, case["expect"].as_str().unwrap(), "{name}");
         }
-        skipped.sort_unstable();
-        assert_eq!(skipped, ["cloud_differs_from_the_entra_provider", "cloud_matches_the_entra_provider"]);
         for case in d.doc["gate_cases"].as_array().unwrap() {
             let verdict = storage_gate(Some(&case["policy"]), case["min_client"].as_object().unwrap()).err().unwrap_or_else(|| "ok".into());
             assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);

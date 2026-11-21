@@ -54,11 +54,6 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write in place, 0600 when created (the CRL file: writeFileSync with a mode).
-pub fn write_in_place(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    open_private(path)?.write_all(data)
-}
-
 /// The file's text, trimmed, or None when it does not exist (files.ts readText).
 pub fn read_text(path: &Path) -> Option<String> {
     let bytes = fs::read(path).ok()?;

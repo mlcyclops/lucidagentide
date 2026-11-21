@@ -4193,7 +4193,7 @@ fn spoke_logs_are_bounded_and_rate_limited() {
 use crate::codec::{js_number_string, sha256_hex};
 use crate::der::p256_spki_der;
 use crate::identity::{node_id_of, user_id_of};
-use crate::relay::{Options, Request, State, SENDER_BYTES, STORE_BYTES};
+use crate::relay::{Options, Request, State, CERT_STORE_BYTES, SENDER_BYTES, STORE_BYTES};
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::{Signature, SigningKey};
 
@@ -4239,6 +4239,8 @@ fn relay(console: Option<Arc<Console>>, root: &SigningKey) -> State {
         users_file: None,
         store_bytes: STORE_BYTES,
         sender_bytes: SENDER_BYTES,
+        cert_store_bytes: CERT_STORE_BYTES,
+        cert_dir: None,
         console,
         state_dir: None,
         license_file: None,
@@ -4309,6 +4311,8 @@ fn a_malformed_license_at_start_shows_why_invalid_and_the_verifier_words() {
         users_file: None,
         store_bytes: STORE_BYTES,
         sender_bytes: SENDER_BYTES,
+        cert_store_bytes: CERT_STORE_BYTES,
+        cert_dir: None,
         console: Some(c.clone()),
         state_dir: None,
         license_file: None,

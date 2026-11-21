@@ -4,8 +4,9 @@
 // ExecStart and ENTRYPOINT arguments work unchanged.
 //
 //   lucid-relay [relay serve] --root <root.pub> --license <file> [--host 127.0.0.1] [--port 8787]
-//               [--tls-cert f --tls-key f] [--state <dir>] [--sender-mib 16]
-//     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _BEHIND_TLS=1;
+//               [--tls-cert f --tls-key f] [--state <dir>] [--sender-mib 16] [--cert-store-mib 256]
+//     (or LUCID_RELAY_ROOT_PUB, _LICENSE, _HOST, _PORT/PORT, _TLS_CERT, _TLS_KEY, _STATE, _SENDER_MIB, _CERT_STORE_MIB,
+//      _BEHIND_TLS=1;
 //      behind a TLS front LUCID_RELAY_PUBLIC_HOST=<host[:port]> is required: the one host the relay answers for)
 //               [--console 1]   the Admin Console at /console/ (or LUCID_RELAY_CONSOLE=1; needs --state; src/console.rs)
 //               [--console-sources <cidrs>] [--console-trusted-fronts <cidrs>] [--console-first-admin <email>]
@@ -81,6 +82,9 @@ mod fleet_wire;
 mod fleet_x509;
 mod http_client;
 mod identity;
+mod idp;
+#[cfg(test)]
+mod idp_vectors;
 mod license;
 mod log;
 mod meet;
@@ -99,23 +103,25 @@ mod meet_org_policy;
 mod meet_routes;
 mod meet_tls;
 mod meet_x509;
+mod presence;
 mod relay;
 mod server;
 mod store;
 #[cfg(test)]
 mod vectors;
+mod x509;
 
 use crate::codec::{js_is_integer, js_number, js_trim_start};
 use crate::license::{license_token_of, LICENSE_USERS_FILE};
 use crate::log::{Fields, Level, Logger};
-use crate::relay::{HostCheck, Options, State, LICENSE_CHECK_MS, SENDER_BYTES, STORE_BYTES};
+use crate::relay::{HostCheck, Options, State, CERT_STORE_BYTES, LICENSE_CHECK_MS, SENDER_BYTES, STORE_BYTES};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 15] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile", "with-console"];
+const FLAGS: [&str; 16] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "cert-store-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile", "with-console"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -178,6 +184,8 @@ struct Config {
     /// The license's file when --license (or LUCID_RELAY_LICENSE) names one rather than giving the armored text.
     license_file: Option<std::path::PathBuf>,
     sender_bytes: Option<i64>,
+    /// --cert-store-mib or LUCID_RELAY_CERT_STORE_MIB, 16 to 256 (ID-1 5.5: lowered, never raised).
+    cert_store_bytes: Option<i64>,
     owner: Option<String>,
 }
 
@@ -228,6 +236,15 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
             return Err(format!("the per-sender quota {text} is not 1 to 1024 MiB (--sender-mib or LUCID_RELAY_SENDER_MIB)"));
         }
     }
+    let cert_text = get("cert-store-mib", &["LUCID_RELAY_CERT_STORE_MIB"]);
+    let mut cert_store_bytes = None;
+    if let Some(text) = &cert_text {
+        let mib = text.parse::<i64>().ok().filter(|_| text.bytes().all(|c| c.is_ascii_digit())).filter(|m| (16..=256).contains(m));
+        let Some(mib) = mib else {
+            return Err(format!("the certificate store budget {text} is not 16 to 256 MiB (--cert-store-mib or LUCID_RELAY_CERT_STORE_MIB; it may be lowered, never raised)"));
+        };
+        cert_store_bytes = Some(mib * 1024 * 1024);
+    }
     let owner = flags.get("owner").filter(|v| !v.is_empty()).cloned();
     if let Some(o) = &owner {
         if !identity::is_node_id(o) {
@@ -252,6 +269,7 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
         license_file: license.as_ref().filter(|l| !js_trim_start(l).starts_with("-----BEGIN")).map(std::path::PathBuf::from),
         license: license.map(|l| pem_or_file(&l).map(|text| license_token_of(&text))).transpose()?,
         sender_bytes: sender_text.map(|_| sender_mib as i64 * 1024 * 1024),
+        cert_store_bytes,
         owner,
     })
 }
@@ -742,6 +760,9 @@ fn main() {
         users_file: if lan { None } else { at(LICENSE_USERS_FILE) },
         store_bytes: STORE_BYTES,
         sender_bytes: c.sender_bytes.unwrap_or(SENDER_BYTES),
+        cert_store_bytes: c.cert_store_bytes.unwrap_or(CERT_STORE_BYTES),
+        // node-certs/ and node-certs.json under --state (the CRL's directory); memory only without it.
+        cert_dir: None,
         console,
         state_dir: state.map(Path::to_path_buf),
         license_file: c.license_file.clone(),

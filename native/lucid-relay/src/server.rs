@@ -8,7 +8,7 @@ use crate::console::{Console, ConsoleReply, ConsoleRequest, ACTIVITY_HEADER, MAR
 use std::path::{Path, PathBuf};
 use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
-use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
+use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES, REGISTER_BODY_BYTES, REGISTER_PATH};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -222,9 +222,11 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     }
     // The body limit holds while the body streams in (RS-RELAY-02): a declared length over it is refused unread, and
     // a chunked body is read frame by frame and cut at the limit, never buffered whole.
+    // A registration has its own, smaller limit (ID-1 contract 5.5): one certificate and its wrapper.
+    let cap = if pathname == REGISTER_PATH && method == "POST" { REGISTER_BODY_BYTES } else { BODY_BYTES };
     let declared = parts.headers.get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()).map(js_number).unwrap_or(0.0);
     // The console's MDS3 upload takes up to 16 MiB (AC-1 3.5); the console checks each route's own limit after this.
-    let cap = if console.is_some() && pathname == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_BYTES) } else { BODY_BYTES };
+    let cap = if console.is_some() && pathname == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_BYTES) } else { cap };
     let mut over = if declared > cap as f64 { declared as usize } else { 0 };
     let mut text = String::new();
     if over == 0 && method != "GET" {
@@ -903,7 +905,7 @@ mod tests {
     }
 
     use crate::log::Logger;
-    use crate::relay::{Options, SENDER_BYTES, STORE_BYTES};
+    use crate::relay::{Options, CERT_STORE_BYTES, SENDER_BYTES, STORE_BYTES};
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -921,6 +923,8 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
             state_dir: None,
             license_file: None,
