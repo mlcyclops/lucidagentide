@@ -296,6 +296,21 @@ pub struct Settings {
     /// AI-1 1.5: the organization size ("standard" or "enterprise") used while no license is installed ("": none,
     /// a big organization).
     pub license_edition: String,
+    /// WA-1 web access (checked at start by meet_web_access): the SSO service's origin that verifies guests ("" =
+    /// method none only), the operator's guest rules, the US government baseline and extra government domains, the
+    /// captioner service's principal, the web port for members' browsers (0 = off) with its origin and certificate,
+    /// and what the web page reads before a session (`web_sso_url`, `web_orgs`). Kept as relay.json holds them.
+    pub guest_verify_url: Value,
+    pub guest_rules: Value,
+    pub gov_baseline: Value,
+    pub gov_domains: Value,
+    pub captioner_principal: Value,
+    pub web_port: Value,
+    pub web_public: Value,
+    pub web_cert: String,
+    pub web_key: String,
+    pub web_sso_url: Value,
+    pub web_orgs: Value,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -317,7 +332,8 @@ impl Default for PushSettings {
     }
 }
 
-const SETTINGS_FIELDS: [&str; 61] = [
+const SETTINGS_FIELDS: [&str; 72] = [
+    "guest_verify_url", "guest_rules", "gov_baseline", "gov_domains", "captioner_principal", "web_port", "web_public", "web_cert", "web_key", "web_sso_url", "web_orgs",
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
@@ -405,6 +421,17 @@ impl Default for Settings {
             legal_holds: false,
             notify_previews: true,
             license_edition: String::new(),
+            guest_verify_url: Value::from(""),
+            guest_rules: Value::Array(Vec::new()),
+            gov_baseline: Value::Bool(true),
+            gov_domains: Value::Array(Vec::new()),
+            captioner_principal: Value::from(""),
+            web_port: Value::from(0),
+            web_public: Value::from(""),
+            web_cert: String::new(),
+            web_key: String::new(),
+            web_sso_url: Value::from(""),
+            web_orgs: Value::Array(Vec::new()),
         }
     }
 }
@@ -650,6 +677,23 @@ impl Settings {
         }
         parity_settings(raw, &mut s)?;
         push_settings(raw, &mut s)?;
+        text("web_cert", &mut s.web_cert)?;
+        text("web_key", &mut s.web_key)?;
+        for (k, slot) in [
+            ("guest_verify_url", &mut s.guest_verify_url),
+            ("guest_rules", &mut s.guest_rules),
+            ("gov_baseline", &mut s.gov_baseline),
+            ("gov_domains", &mut s.gov_domains),
+            ("captioner_principal", &mut s.captioner_principal),
+            ("web_port", &mut s.web_port),
+            ("web_public", &mut s.web_public),
+            ("web_sso_url", &mut s.web_sso_url),
+            ("web_orgs", &mut s.web_orgs),
+        ] {
+            if let Some(v) = raw.get(k) {
+                *slot = v.clone();
+            }
+        }
         Ok(s)
     }
 }
@@ -696,9 +740,9 @@ pub const CONSOLE_RETIRED: &str = "this is the retired console's certificate; th
 pub const GUEST_DOMAIN: &str = "@guest.invalid";
 
 impl Identity {
-    /// An app, archive or SSO service: never a person of the directory or presence.
+    /// An app, archive, SSO service or captioner (WA-1): never a person of the directory or presence.
     pub fn is_service(&self) -> bool {
-        matches!(self.kind.as_str(), "app" | "archive" | "sso")
+        matches!(self.kind.as_str(), "app" | "archive" | "sso" | "captioner")
     }
 
     /// The Admin Console acting for a relay admin (never a certificate, never a person of presence).
@@ -763,7 +807,12 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         return forbidden("addresses ending @guest.invalid belong to web guests");
     }
     let principal = emails[0].trim().to_lowercase();
-    let service = if kind == "app" || kind == "archive" { kind.as_str() } else { "" };
+    // an app's, an archive's or a captioner's (WA-1, named like an app) email is under apps.
+    let service = match kind.as_str() {
+        "app" | "captioner" => "app",
+        "archive" => "archive",
+        _ => "",
+    };
     if pc::service_kind(&principal) != service {
         return forbidden(pc::APPS_EMAIL);
     }
@@ -1577,6 +1626,7 @@ fn serve(settings: Settings) -> ! {
     // AC-2a 2.1, 5.7: kept for the process's life (it holds fleet.lock)
     let _fleet = fleet_start(&relay).unwrap_or_else(|e| die(&e));
     crate::meet_guest_port::start(&settings, hub.clone(), relay.turn_secret.clone()).unwrap_or_else(|e| die(&e));
+    crate::meet_web_port::start(&settings, relay.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
         "listening on {}:{} (certificate server: {})",
@@ -1833,6 +1883,8 @@ fn one_request(relay: &Arc<Relay>, reader: &mut BufReader<Tls>, address: &str, d
         body_read: false,
         close: false,
         raw: None,
+        web: None,
+        preset: None,
     };
     let answer = crate::meet_routes::dispatch(&mut ctx, &head.method);
     let raw = ctx.raw.take();
@@ -1985,7 +2037,7 @@ pub struct RawFile {
 }
 
 /// Send a raw answer held in memory; false when the connection ends after it (the client went away).
-fn send_bytes(w: &mut Tls, headers: &[(&'static str, String)], body: &[u8], path: &str, der: Option<&[u8]>) -> bool {
+pub(crate) fn send_bytes(w: &mut Tls, headers: &[(&'static str, String)], body: &[u8], path: &str, der: Option<&[u8]>) -> bool {
     let mut head = format!("HTTP/1.1 200 {}\r\nServer: {SERVER_VERSION} \r\nDate: {}\r\n", reason_phrase(200), http_date());
     for (k, v) in headers {
         head.push_str(&format!("{k}: {v}\r\n"));
@@ -2006,7 +2058,7 @@ fn send_bytes(w: &mut Tls, headers: &[(&'static str, String)], body: &[u8], path
 
 /// Send a raw answer, FILE_SEND bytes at a time; false when the connection ends after it (a file shorter than
 /// promised, or a failure once the answer has begun: no JSON error can follow).
-fn send_file(w: &mut Tls, mut raw: RawFile, path: &str, der: Option<&[u8]>) -> bool {
+pub(crate) fn send_file(w: &mut Tls, mut raw: RawFile, path: &str, der: Option<&[u8]>) -> bool {
     let mut head = format!("HTTP/1.1 200 {}\r\nServer: {SERVER_VERSION} \r\nDate: {}\r\n", reason_phrase(200), http_date());
     for (k, v) in &raw.headers {
         head.push_str(&format!("{k}: {v}\r\n"));
@@ -2061,6 +2113,31 @@ pub struct Ctx<'a> {
     pub close: bool,
     /// Set by a route that answers raw bytes itself (its JSON answer is then not sent).
     pub raw: Option<Raw>,
+    /// WA-1 web port: the session's identity (no client certificate) and the body read already for its checks.
+    pub web: Option<Identity>,
+    pub preset: Option<Obj>,
+}
+
+impl<'a> Ctx<'a> {
+    /// A request of the web port (meet_web_port): the session's identity in place of a client certificate.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn web(relay: &'a Arc<Relay>, reader: &'a mut BufReader<Tls>, head: &Head, address: &str, path: String, query: &str, who: Identity, preset: Option<Obj>) -> Ctx<'a> {
+        Ctx {
+            relay,
+            address: address.to_string(),
+            der: None,
+            path,
+            query: parse_query(query),
+            content_length: head.header("content-length"),
+            transfer_encoding: head.header("transfer-encoding").filter(|v| !v.is_empty()),
+            reader,
+            body_read: false,
+            close: false,
+            raw: None,
+            web: Some(who),
+            preset,
+        }
+    }
 }
 
 impl Ctx<'_> {
@@ -2071,6 +2148,9 @@ impl Ctx<'_> {
 
     /// _who: the caller. A seed certificate may only use the routes that pass `seed_ok`.
     pub fn who(&self, seed_ok: bool) -> R<Identity> {
+        if let Some(w) = &self.web {
+            return Ok(w.clone());
+        }
         let mut who = identity_from_cert(self.der)?;
         if !who.serial.is_empty() && self.relay.hub.is_denied(&who.serial) {
             return forbidden("this certificate was revoked");
@@ -2095,6 +2175,9 @@ impl Ctx<'_> {
 
     /// _body(most): the JSON object a POST carries, of at most `most` bytes.
     pub fn body_max(&mut self, most: usize) -> R<Obj> {
+        if let Some(body) = self.preset.take() {
+            return Ok(body); // the web port read it already, for its stage check
+        }
         let text = self.content_length.clone().unwrap_or_default();
         let length = if text.trim().is_empty() { 0 } else { py_int(&text)? };
         if length <= 0 {

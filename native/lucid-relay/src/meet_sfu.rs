@@ -3,7 +3,8 @@
 // and the first joiner asked for a large call (join `large: true`), or the room is a scheduled meeting of
 // `sfu_threshold` or more people, or the call of a group chat or channel with that many members; else `mesh` (at most
 // PEER_MAX_PER_ROOM). The join answer says `media` and, for sfu, `sfu: {url, token, expires}`: a LiveKit access token
-// (JWT HS256 with the media server's API secret) for identity `<principal>|<peer>` in a LiveKit room of its own per
+// (JWT HS256 with the media server's API secret) for identity `<peer>` (WA-1 4.3: no email on the media server; the
+// captioner service only listens) in a LiveKit room of its own per
 // stay (`<room>.s<12 hex>`), valid TOKEN_TTL, publishing microphone and camera only (the presenter the relay names
 // also gets the screen). A peer leaving the relay room is removed from the media server too, the stay's LiveKit room
 // is deleted when the stay ends, and every SYNC_EVERY the relay removes any participant that is not a current seat
@@ -99,8 +100,9 @@ fn stay_room(name: &str) -> bool {
     !rest.contains(&b'\n') && tail.starts_with(b".s") && tail[2..].iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
 }
 
+/// The seat's LiveKit identity: its peer id only (WA-1 4.3; apps map peers to people from the member rows).
 fn identity(peer: &Peer) -> String {
-    format!("{}|{}", peer.who.principal, peer.peer_id)
+    peer.peer_id.clone()
 }
 
 /// A compact JWT, HS256 (what LiveKit verifies with the API secret).
@@ -167,9 +169,10 @@ fn e2ee_count(value: Body, what: &str) -> R<i64> {
     }
 }
 
-/// E2EE_CAPTION_RE (full match): `lme2:[0-9]+:[0-9]+:[A-Za-z0-9+/=]+`.
+/// E2EE_CAPTION_RE (full match): `lme[23]:[0-9]+:[0-9]+:[A-Za-z0-9+/=]+` (lme3: a captioner's line for another seat,
+/// WA-1 5.2).
 fn sealed_caption(text: &str) -> bool {
-    let Some(rest) = text.strip_prefix("lme2:") else { return false };
+    let Some(rest) = text.strip_prefix("lme2:").or_else(|| text.strip_prefix("lme3:")) else { return false };
     let mut parts = rest.splitn(3, ':');
     let (Some(epoch), Some(seq), Some(data)) = (parts.next(), parts.next(), parts.next()) else { return false };
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
@@ -317,7 +320,11 @@ impl State {
         let e2ee = m::flag(ext.get("e2ee"), "e2ee")?;
         let sfu = if self.stays.contains_key(room) { self.sfu.media.get(room) == Some(&"sfu") } else { !self.sfu_why(room, large).is_empty() };
         if sfu && who.guest {
-            return forbidden(E2EE_GUESTS);
+            // WA-1 4.3: a guest with its key, an admission and rules allowing large calls
+            let ok = self.guests.rec.get(&guests::guest_id(&who.principal)).is_some_and(|r| !r.key.is_empty() && !r.admission.is_null() && r.rules.as_ref().and_then(|x| x.get("large_calls")).and_then(Value::as_str) != Some("refuse"));
+            if !ok {
+                return forbidden(E2EE_GUESTS);
+            }
         }
         if sfu && !e2ee {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
@@ -470,9 +477,6 @@ impl State {
         if !self.sfu_encrypted(&peer.room) {
             return Err(E::Conflict(NOT_USED.into()));
         }
-        if peer.who.guest {
-            return forbidden(E2EE_GUESTS);
-        }
         if !peer.e2ee {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
         }
@@ -494,13 +498,14 @@ impl State {
         if self.sfu.presenter.get(&peer.room) == Some(&who) {
             sources.extend(["screen_share", "screen_share_audio"].map(Value::from));
         }
+        let publish = peer.who.kind != "captioner"; // WA-1 5.3: the captioner only listens
         let video = obj([
             ("room", Value::from(self.sfu.rooms.get(&peer.room).cloned().unwrap_or_default())),
             ("roomJoin", Value::Bool(true)),
-            ("canPublish", Value::Bool(true)),
+            ("canPublish", Value::Bool(publish)),
             ("canSubscribe", Value::Bool(true)),
             ("canPublishData", Value::Bool(false)),
-            ("canPublishSources", Value::Array(sources)),
+            ("canPublishSources", Value::Array(if publish { sources } else { Vec::new() })),
         ]);
         let claims = obj([
             ("iss", Value::from(cfg.key.clone())),
@@ -569,9 +574,6 @@ impl Hub {
         let peer = &st.peers[peer_id];
         if st.sfu.media.get(&peer.room) != Some(&"sfu") {
             return Err(E::Conflict(NOT_USED.into()));
-        }
-        if peer.who.guest {
-            return forbidden(E2EE_GUESTS);
         }
         if !peer.e2ee {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
@@ -830,7 +832,7 @@ mod tests {
             assert_eq!(refusal(h.caption(&ap, &ann, text, Some(&Value::from(1)), None, None)), E2EE_CAPTION_PLAIN, "{text}");
         }
         let lines = serde_json::json!([{"text": sealed, "cseq": 1}, {"text": "the budget is approved", "cseq": 2}]);
-        assert_eq!(refusal(h.captions(&ap, &ann, Some(&lines), None, None)), E2EE_CAPTION_PLAIN);
+        assert_eq!(refusal(h.captions(&ap, &ann, Some(&lines), None, None, None)), E2EE_CAPTION_PLAIN);
         assert!(events_of(&h, &bp, "caption").is_empty());
         assert_eq!(h.caption(&ap, &ann, &sealed, Some(&Value::from(1)), None, None).unwrap()["text"], Value::from(sealed.clone()));
 

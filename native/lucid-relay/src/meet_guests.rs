@@ -46,7 +46,7 @@ const NOT_WAITING: &str = "that person is not waiting in the lobby";
 /// The window each kind of rate-limit mark is kept for.
 fn window(kind: &str) -> f64 {
     match kind {
-        "knock" | "badlink" | "bad" => 60.0,
+        "knock" | "badlink" | "bad" | "webchal" | "websess" => 60.0,
         _ => 600.0,
     }
 }
@@ -114,31 +114,42 @@ struct Link {
     expires: i64,
     nonce: String,
     issued: f64,
+    /// v2 (WA-1 3.1): the host organization ("" for none, and for a v1 link).
+    org: String,
 }
 
 /// One lobby row: a web guest (`guest`) or a certificate holder the lobby holds (`member`).
 pub(super) struct Rec {
-    id: String,
-    kind: &'static str,
-    room: String,
+    pub(super) id: String,
+    pub(super) kind: &'static str,
+    pub(super) room: String,
     name: String,
     ts: f64,
     /// Monotonic: its last sign of life.
     seen: f64,
     /// waiting | admitted | in | ended
-    state: &'static str,
+    pub(super) state: &'static str,
     why: String,
-    exp: f64,
+    pub(super) exp: f64,
     nonce: String,
     /// SHA-256 (hex) of a guest's secret.
     secret: String,
     address: String,
-    peer: String,
+    pub(super) peer: String,
     principal: String,
     who: Identity,
     /// The latest poll (wait or events) of this pass: a newer one ends an older one.
     poll: u64,
     ice_at: f64,
+    /// WA-1: the page's key (SPKI DER, base64; "" before WA-1), its chat bundle, the checked sign-in (null without
+    /// one), the link's host organization, the resolved rules and the host app's admission (null until admitted by
+    /// one).
+    pub(super) key: String,
+    pub(super) dck: Value,
+    pub(super) verified: Value,
+    pub(super) host_org: String,
+    pub(super) rules: Option<Obj>,
+    pub(super) admission: Value,
 }
 
 /// In memory: the guest port's origin and link secret, the lobby rows, each room's lobby option (this stay), who the
@@ -147,7 +158,7 @@ pub struct Guests {
     public: String,
     state_dir: Option<PathBuf>,
     key: Vec<u8>,
-    rec: IndexMap<String, Rec>,
+    pub(super) rec: IndexMap<String, Rec>,
     modes: HashMap<String, &'static str>,
     let_in: HashMap<String, HashSet<String>>,
     hits: HashMap<(&'static str, String), VecDeque<f64>>,
@@ -201,10 +212,10 @@ impl Guests {
         crate::codec::b64u(aws_lc_rs::hmac::sign(&key, part.as_bytes()).as_ref())
     }
 
-    /// _guests_mint: a signed link to `room` until `expires`.
-    fn mint(&mut self, room: &str, expires: i64) -> String {
+    /// _guests_mint: a signed v2 link (WA-1 3.1) to `room` until `expires`; `o` names the host organization.
+    fn mint(&mut self, room: &str, expires: i64, org: &str) -> String {
         let issued = (pj::now() * 1000.0).round() / 1000.0;
-        let payload = obj([("e", Value::from(expires)), ("i", f(issued)), ("n", Value::from(pj::token_urlsafe(9))), ("r", Value::from(room)), ("v", Value::from(1))]);
+        let payload = obj([("e", Value::from(expires)), ("i", f(issued)), ("n", Value::from(pj::token_urlsafe(9))), ("o", Value::from(org)), ("r", Value::from(room)), ("v", Value::from(2))]);
         let part = crate::codec::b64u(pj::dumps_compact(&Value::Object(payload)).as_bytes());
         let sig = self.sign(&part);
         format!("{part}.{sig}")
@@ -224,7 +235,14 @@ impl Guests {
         }
         let payload = b64u_decode(part).and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).ok_or_else(bad)?;
         let p = payload.as_object().ok_or_else(bad)?;
-        let v_ok = matches!(p.get("v"), Some(Value::Bool(true))) || pj::as_num(p.get("v")) == Some(1.0);
+        let v = pj::as_num(p.get("v"));
+        let v_ok = v == Some(1.0) || v == Some(2.0);
+        // v2 (WA-1 3.1) names the host organization; a v1 link has none
+        let org = match (v == Some(2.0), p.get("o")) {
+            (false, _) | (true, None) => String::new(),
+            (true, Some(Value::String(o))) if o.is_empty() || wa::org_ok(o) => o.clone(),
+            _ => return Err(bad()),
+        };
         let room = p.get("r").and_then(Value::as_str).filter(|r| room_ok(r)).ok_or_else(bad)?;
         let expires = pj::as_int(p.get("e")).ok_or_else(bad)?;
         let issued = pj::as_num(p.get("i")).ok_or_else(bad)?;
@@ -235,7 +253,7 @@ impl Guests {
         if (expires as f64) <= now {
             return Err(E::Gone(EXPIRED.into()));
         }
-        Ok(Link { room: room.to_string(), expires, nonce: nonce.to_string(), issued })
+        Ok(Link { room: room.to_string(), expires, nonce: nonce.to_string(), issued, org })
     }
 
     /// _guests_count: the marks of one limit, older ones dropped (past HITS_MAX keys, a new key shares one overflow
@@ -269,7 +287,7 @@ impl Guests {
     }
 
     /// _guests_limit: check, then count this one.
-    fn limit(&mut self, kind: &'static str, key: &str, most: usize, message: &str) -> R<()> {
+    pub(super) fn limit(&mut self, kind: &'static str, key: &str, most: usize, message: &str) -> R<()> {
         self.check(kind, key, most, message)?;
         self.mark(kind, key);
         Ok(())
@@ -291,7 +309,7 @@ impl Guests {
 }
 
 /// _guests_id: the guest id in a guest's principal ("" for anyone else).
-fn guest_id(principal: &str) -> String {
+pub(super) fn guest_id(principal: &str) -> String {
     principal.strip_prefix("guest-").and_then(|r| r.strip_suffix(m::GUEST_DOMAIN)).filter(|id| id.len() == 16 && id.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))).unwrap_or_default().to_string()
 }
 
@@ -314,7 +332,7 @@ impl State {
     /// _bridge_guest_url: a guest link to `room` until `expires` with this slice's own tokens (the guest waits in the
     /// lobby until someone in the call lets them in). Callers check guests_on first.
     pub(super) fn guests_url(&mut self, room: &str, expires: i64) -> String {
-        let token = self.guests.mint(room, expires);
+        let token = self.guests.mint(room, expires, "");
         format!("{}/g/#t={token}", self.guests.public)
     }
 
@@ -372,17 +390,26 @@ impl State {
     fn guests_entries(&self, room: &str) -> Vec<Value> {
         let mut waiting: Vec<&Rec> = self.guests.rec.values().filter(|r| r.room == room && r.state == "waiting").collect();
         waiting.sort_by(|a, b| a.ts.partial_cmp(&b.ts).unwrap_or(std::cmp::Ordering::Equal));
-        waiting
-            .into_iter()
-            .map(|r| {
-                let mut out = obj([("guest", Value::from(r.id.clone())), ("name", Value::from(r.name.clone())), ("ts", f(r.ts)), ("kind", Value::from(r.kind))]);
-                if r.kind == "member" {
-                    out.insert("principal".into(), Value::from(r.principal.clone()));
-                    out.insert("org".into(), self.org(&r.principal));
-                }
-                Value::Object(out)
-            })
-            .collect()
+        waiting.into_iter().map(|r| Value::Object(self.guests_entry(&r.id))).collect()
+    }
+
+    /// _guests_entry: one lobby row as hosts see it; a guest with its key adds what the admitting app signs and
+    /// checks (WA-1 4.2).
+    pub(super) fn guests_entry(&self, id: &str) -> Obj {
+        let r = &self.guests.rec[id];
+        let mut out = obj([("guest", Value::from(r.id.clone())), ("name", Value::from(r.name.clone())), ("ts", f(r.ts)), ("kind", Value::from(r.kind))]);
+        if r.kind == "member" {
+            out.insert("principal".into(), Value::from(r.principal.clone()));
+            out.insert("org".into(), self.org(&r.principal));
+        } else if !r.key.is_empty() {
+            out.insert("principal".into(), Value::from(r.principal.clone()));
+            out.insert("key".into(), Value::from(r.key.clone()));
+            out.insert("dck".into(), r.dck.clone());
+            out.insert("verified".into(), r.verified.clone());
+            out.insert("rules".into(), r.rules.clone().map(Value::Object).unwrap_or(Value::Null));
+            out.insert("expires".into(), Value::from(r.exp as i64));
+        }
+        out
     }
 
     /// _guests_sees_lobby: the room's host, a co-organizer or a relay admin in it (never a guest, never while waiting
@@ -398,15 +425,18 @@ impl State {
     fn guests_host_view(&mut self, room: &str) -> Value {
         let mut view = self.stage_view_ext(room);
         let entries = self.guests_entries(room);
-        if let (Value::Object(v), false) = (&mut view, entries.is_empty()) {
-            v.insert("lobby".into(), Value::Array(entries));
+        if let Value::Object(v) = &mut view {
+            if !entries.is_empty() {
+                v.insert("lobby".into(), Value::Array(entries));
+            }
+            self.wa_host_view(room, v);
         }
         view
     }
 
     /// _guests_lobby_event: the stage event of a lobby change (`why: "lobby"`), per viewer: hosts and admins get the
     /// list, everyone else the count. `by` names the actor for everyone only when it is someone in the call.
-    fn guests_lobby_event(&mut self, room: &str, by: &str) {
+    pub(super) fn guests_lobby_event(&mut self, room: &str, by: &str) {
         let plain = self.stage_view_ext(room);
         let full = self.guests_host_view(room);
         let here = self.peers.values().any(|p| p.room == room && !p.admission_pending && p.who.principal == by);
@@ -452,7 +482,7 @@ impl State {
                 if self.guests.waiting(room) >= LOBBY_MAX {
                     return forbidden("the lobby of this meeting is full; try again later");
                 }
-                let id = self.guests_new("member", room, &who.name, who.clone(), "", 0.0, "", "");
+                let id = self.guests_new("member", room, &who.name, who.clone(), "", 0.0, "", "", "");
                 self.guests_lobby_event(room, &who.principal);
                 log_info(&format!("lobby_wait room={room} principal={} wait={id}", who.principal));
                 id
@@ -465,8 +495,9 @@ impl State {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn guests_new(&mut self, kind: &'static str, room: &str, name: &str, who: Identity, address: &str, exp: f64, nonce: &str, secret: &str) -> String {
-        let id = pj::token_hex(8);
+    fn guests_new(&mut self, kind: &'static str, room: &str, name: &str, who: Identity, address: &str, exp: f64, nonce: &str, secret: &str, gid: &str) -> String {
+        // a guest's id is the one its chat bundle names (WA-1 4.4); a held member's is new
+        let id = if gid.is_empty() { pj::token_hex(8) } else { gid.to_string() };
         let who = if kind == "guest" { Identity { principal: format!("guest-{id}{}", m::GUEST_DOMAIN), name: name.to_string(), guest: true, ..Default::default() } } else { who };
         let rec = Rec {
             id: id.clone(),
@@ -486,6 +517,12 @@ impl State {
             who,
             poll: 0,
             ice_at: 0.0,
+            key: String::new(),
+            dck: Value::Null,
+            verified: Value::Null,
+            host_org: String::new(),
+            rules: None,
+            admission: Value::Null,
         };
         self.guests.rec.insert(id.clone(), rec);
         id
@@ -670,6 +707,35 @@ impl State {
         Ok((r.peer.clone(), r.who.clone()))
     }
 
+    /// _guests_payload: a link's checked payload for the guest port. The token is checked before a knock is counted:
+    /// a bad, expired or turned-off one counts against the address's bad-link limit instead.
+    fn guests_payload(&mut self, token: Body, address: &str, knock: bool) -> R<Link> {
+        if !self.guests_on() {
+            return Err(E::Unavailable("this relay does not take guests".into()));
+        }
+        let addr = addr_key(address);
+        self.guests.check("badlink", &addr, BAD_LINKS_PER_ADDRESS, BUSY)?;
+        self.guests.check("knock", &addr, KNOCKS_PER_ADDRESS, BUSY)?;
+        let link = match self.guests.token(token, pj::now()) {
+            Ok(l) => l,
+            Err(e) => {
+                self.guests.mark("badlink", &addr);
+                return Err(e);
+            }
+        };
+        let blocked = as_obj(self.guests_store().get("blocked")).map(|b| b.contains_key(&link.nonce)).unwrap_or(false);
+        if blocked || link.issued <= self.guests_revoked(&link.room) {
+            self.guests.mark("badlink", &addr);
+            return forbidden("the host turned this guest link off");
+        }
+        if knock {
+            self.guests.limit("link", &link.nonce, KNOCKS_PER_LINK, "this guest link was used too often; wait a few minutes")?;
+            self.guests.limit("room", &link.room, KNOCKS_PER_ROOM, "this meeting has too many people knocking; wait a few minutes")?;
+            self.guests.mark("knock", &addr);
+        }
+        Ok(link)
+    }
+
     /// _guests_mine: the caller's own lobby row, by its wait id or by the room it waits for (the newest).
     fn guests_mine(&self, wait: &str, room: &str, who: &Identity) -> R<String> {
         let found = if !wait.is_empty() {
@@ -730,12 +796,29 @@ impl Hub {
         } else {
             return bad("say which call (peer) or session");
         }
+        // WA-1 3.1: the host organization is the link creator's, or the organizer's for a scheduled meeting's link;
+        // its policy may refuse links (3.5) and the "*" rules cap their life (3.3)
+        let organizer = as_obj(st.meetings.get(&room)).and_then(|m| as_obj(m.get("organizer"))).map(|o| pj::text_of(o, "principal"));
+        let maker = match (&session, organizer) {
+            (Some(_), Some(o)) => o,
+            _ => who.principal.clone(),
+        };
+        let org = st.wa_org_of(&maker);
+        if st.wa_guests_key(&org).get("links").and_then(Value::as_str) == Some("refuse") {
+            return forbidden(wa::LINKS_OFF);
+        }
+        let cap = st.wa_link_cap(&room, &org);
+        let minutes = minutes.min(cap as f64);
         let expires = (pj::now() + minutes * 60.0) as i64;
-        let token = st.guests.mint(&room, expires);
+        let token = st.guests.mint(&room, expires, &org);
         let public = st.guests.public.clone();
         drop(st);
         log_info(&format!("guest_link room={room} principal={} minutes={}", who.principal, fmt_g(minutes)));
-        Ok(obj([("url", Value::from(format!("{public}/g/#t={token}"))), ("expires", Value::from(expires)), ("room", Value::from(room))]))
+        let mut out = obj([("url", Value::from(format!("{public}/g/#t={token}"))), ("expires", Value::from(expires)), ("room", Value::from(room))]);
+        if (cap as f64) < MINUTES_MAX {
+            out.insert("max_minutes".into(), Value::from(cap));
+        }
+        Ok(out)
     }
 
     /// `GET /v1/lobby?peer=` (host or relay admin): `{lobby, mode}`.
@@ -838,14 +921,39 @@ impl Hub {
                     changed
                 }
                 "lobby_admit_all" => {
-                    let waiting: Vec<(String, bool)> = st.guests.rec.values().filter(|r| r.room == room && r.state == "waiting").map(|r| (r.id.clone(), r.kind == "guest")).collect();
-                    let encrypted = st.sfu_encrypted(&room);
-                    for (id, guest) in &waiting {
-                        if *guest && encrypted {
-                            st.guests_end(id, "e2ee"); // never into a large call
-                        } else {
-                            st.guests.admit(id);
+                    // WA-1 4.2: every waiting guest needs its own admission from the Lucid app
+                    let admissions = match body.get("admissions") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::Object(a)) => Some(a.clone()),
+                        Some(_) => return bad("admissions must map each guest to its admission"),
+                    };
+                    let waiting: Vec<(String, bool, f64)> = st.guests.rec.values().filter(|r| r.room == room && r.state == "waiting").map(|r| (r.id.clone(), r.kind == "guest", r.exp)).collect();
+                    let mut signed: HashMap<String, Obj> = HashMap::new();
+                    for (id, guest, exp) in &waiting {
+                        if !*guest {
+                            continue;
                         }
+                        let Some(got) = admissions.as_ref().and_then(|a| a.get(id)).filter(|v| !v.is_null()) else { return Err(E::Conflict(wa::ADMIT_EACH.into())) };
+                        signed.insert(id.clone(), st.wa_admission(got, peer_id, *exp)?);
+                    }
+                    for (id, guest, _) in &waiting {
+                        if !*guest {
+                            st.guests.admit(id);
+                            continue;
+                        }
+                        let admission = Value::Object(signed.remove(id).unwrap_or_default());
+                        match st.wa_admit_check(id, &admission) {
+                            Err(E::Forbidden(_)) => {
+                                st.guests_end(id, "e2ee"); // never into a large call
+                                continue;
+                            }
+                            Err(_) => continue, // recording is on: it waits for a person
+                            Ok(()) => {}
+                        }
+                        if let Some(r) = st.guests.rec.get_mut(id) {
+                            r.admission = admission;
+                        }
+                        st.guests.admit(id);
                     }
                     !waiting.is_empty()
                 }
@@ -873,8 +981,25 @@ impl Hub {
                         Some(_) => return bad("block must be true or false"),
                     };
                     if admit {
-                        if kind == "guest" && st.sfu_encrypted(&room) {
-                            return forbidden(sfu::E2EE_GUESTS);
+                        let yes = match body.get("admit") {
+                            None => true,
+                            Some(Value::Bool(b)) => *b,
+                            Some(_) => return bad("admit must be true or false"),
+                        };
+                        if !yes {
+                            // the host's app declined a verified_bypass (WA-1 3.3): a person decides; the guest waits
+                            log_info(&format!("guest_bypass room={room} guest={t} admit=no"));
+                            return Ok((obj([("ok", Value::Bool(true)), ("stage", st.guests_host_view(&room))]), room, target));
+                        }
+                        if kind == "guest" {
+                            let admission = match body.get("admission") {
+                                None | Some(Value::Null) => Value::Null,
+                                Some(a) => Value::Object(st.wa_admission(a, peer_id, exp)?),
+                            };
+                            st.wa_admit_check(t, &admission)?;
+                            if let Some(r) = st.guests.rec.get_mut(t) {
+                                r.admission = admission;
+                            }
                         }
                         st.guests.admit(t);
                     } else {
@@ -905,43 +1030,48 @@ impl Hub {
 
     // ── the guest port (no certificate; every call but knock carries X-Guest) ───────────────────────────────
 
-    /// `POST /g/v1/knock {token, name}` -> `{guest, secret, wait: true, room, expires, name}`; the guest waits in the
-    /// room's lobby.
-    pub fn guests_knock(&self, token: Body, name: Body, address: &str) -> R<Obj> {
+    /// `GET /g/v1/verify?t=` -> `{methods, verify_url}` (WA-1 2.4 step 1): what the link's "*" and `unverified` rules
+    /// accept, and where the SSO service is ("": none, so only `none` can be offered).
+    pub fn guests_verify(&self, token: &str, address: &str) -> R<Obj> {
         let mut st = self.st.lock();
-        let r = (|| -> R<(Obj, String, String)> {
-            if !st.guests_on() {
-                return Err(E::Unavailable("this relay does not take guests".into()));
-            }
+        let r = st.guests_payload(Some(&Value::from(token)), address, false).map(|link| st.wa_verify_view(&link.room, &link.org));
+        drop(st);
+        self.wake();
+        r
+    }
+
+    /// `POST /g/v1/knock {token, name, key, pop, pop_ts, dck, verified?}` -> `{guest, secret, wait: true, room,
+    /// expires, name, rules, verified}` (WA-1 2.6): the page's key and its proof over this link, its chat bundle, and
+    /// an SSO result the relay checks (an invalid one counts as absent); the guest's class and resolved rules decide,
+    /// and it waits in the room's lobby.
+    pub fn guests_knock(&self, body: &Obj, address: &str) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, String, String, String, String)> {
+            let link = st.guests_payload(body.get("token"), address, true)?;
             let addr = addr_key(address);
-            // the token is checked before a knock is counted: a bad or expired one counts against the address's
-            // bad-link limit instead
-            st.guests.check("badlink", &addr, BAD_LINKS_PER_ADDRESS, BUSY)?;
-            st.guests.check("knock", &addr, KNOCKS_PER_ADDRESS, BUSY)?;
-            let link = match st.guests.token(token, pj::now()) {
-                Ok(l) => l,
-                Err(e) => {
-                    st.guests.mark("badlink", &addr);
-                    return Err(e);
-                }
-            };
-            let blocked = as_obj(st.guests_store().get("blocked")).map(|b| b.contains_key(&link.nonce)).unwrap_or(false);
-            if blocked || link.issued <= st.guests_revoked(&link.room) {
-                st.guests.mark("badlink", &addr);
-                return forbidden("the host turned this guest link off");
-            }
-            st.guests.limit("link", &link.nonce, KNOCKS_PER_LINK, "this guest link was used too often; wait a few minutes")?;
-            st.guests.limit("room", &link.room, KNOCKS_PER_ROOM, "this meeting has too many people knocking; wait a few minutes")?;
-            st.guests.mark("knock", &addr);
-            let name = match name {
+            let name = match body.get("name") {
                 Some(Value::String(s)) => pj::squash(s),
                 _ => String::new(),
             };
             if name.is_empty() || pj::char_len(&name) > NAME_MAX || !pj::printable(&name) {
                 return bad(format!("say your name (1 to {NAME_MAX} characters)"));
             }
-            if st.sfu_encrypted(&link.room) {
-                return forbidden(sfu::E2EE_GUESTS);
+            let now = pj::now();
+            let (gid, key, key_sha) = wa::knock_page(body, &link.room, &link.nonce)?;
+            if st.guests.rec.contains_key(&gid) {
+                return Err(E::Conflict(wa::ID_USED.into()));
+            }
+            let given = body.get("verified").filter(|v| !v.is_null());
+            let verified = st.wa_verified(given, &link.room, &key_sha).map(Value::Object).unwrap_or(Value::Null);
+            let unchecked = given.is_some() && verified.is_null();
+            let rules = st.wa_rules_for(&link.room, &link.org, &verified, None);
+            // the class's link_max_minutes caps the pass from the link's issue time
+            let exp = (link.expires as f64).min(link.issued + pj::as_int(rules.get("link_max_minutes")).unwrap_or(1440) as f64 * 60.0);
+            if exp <= now {
+                return Err(E::Gone(EXPIRED.into()));
+            }
+            if let Some(refusal) = st.wa_refusal(&rules, &verified, unchecked, &link.room, false) {
+                return Err(refusal);
             }
             let live = st.guests.rec.values().filter(|r| r.state != "ended");
             if live.clone().count() >= TOTAL_MAX {
@@ -954,15 +1084,35 @@ impl Hub {
                 return Err(E::Busy("the lobby of this meeting is full; try again later".into(), 60));
             }
             let secret = pj::token_urlsafe(24);
-            let id = st.guests_new("guest", &link.room, &name, Identity::default(), address, link.expires as f64, &link.nonce, &secret);
+            let id = st.guests_new("guest", &link.room, &name, Identity::default(), address, exp, &link.nonce, &secret, &gid);
+            if let Some(r) = st.guests.rec.get_mut(&id) {
+                r.key = key;
+                r.dck = body.get("dck").cloned().unwrap_or(Value::Null);
+                r.verified = verified.clone();
+                r.host_org = link.org.clone();
+                r.rules = Some(rules.clone());
+            }
             st.guests_lobby_event(&link.room, "");
-            let out = obj([("guest", Value::from(id.clone())), ("secret", Value::from(secret)), ("wait", Value::Bool(true)), ("room", Value::from(link.room.clone())), ("expires", Value::from(link.expires)), ("name", Value::from(name))]);
-            Ok((out, link.room, id))
+            st.wa_bypass(&id);
+            let view = verified.as_object().map(wa::verified_view).unwrap_or(Value::Null);
+            let method = pj::str_or(verified.get("method"));
+            let out = obj([
+                ("guest", Value::from(id.clone())),
+                ("secret", Value::from(secret)),
+                ("wait", Value::Bool(true)),
+                ("room", Value::from(link.room.clone())),
+                ("expires", Value::from(exp as i64)),
+                ("name", Value::from(name)),
+                ("rules", Value::Object(State::wa_guest_view(&rules, &link.org))),
+                ("verified", view),
+            ]);
+            let class = pj::s(&rules, "class");
+            Ok((out, link.room, id, class, if method.is_empty() { "none".into() } else { method }))
         })();
         drop(st);
         self.wake();
-        let (out, room, id) = r?;
-        log_info(&format!("guest_knock room={room} guest={id}"));
+        let (out, room, id, class, method) = r?;
+        log_info(&format!("guest_knock room={room} guest={id} class={class} method={method}"));
         Ok(out)
     }
 
@@ -1018,11 +1168,13 @@ impl Hub {
     /// _guests_enter: the admitted guest takes its seat (a join with the lock held). It sees only the chat of this
     /// stay, never older history.
     fn guests_enter(&self, st: &mut State, id: &str) -> R<Obj> {
-        let (room, who, address, exp) = {
+        let (room, who, address, exp, keyed, log_hours) = {
             let r = &st.guests.rec[id];
-            (r.room.clone(), r.who.clone(), r.address.clone(), r.exp)
+            (r.room.clone(), r.who.clone(), r.address.clone(), r.exp, !r.key.is_empty(), r.rules.as_ref().and_then(|x| pj::as_int(x.get("log_hours"))))
         };
-        let ext = obj([("client", Value::Object(obj([("app", Value::from("guest")), ("platform", Value::from("web"))])))]);
+        let seated = pj::now();
+        // a guest with its key encrypts like a member (WA-1 4.3)
+        let ext = obj([("client", Value::Object(obj([("app", Value::from("guest")), ("platform", Value::from("web"))]))), ("e2ee", Value::Bool(keyed))]);
         let mut answer = match self.join_held(st, &room, &who, &address, false, &ext) {
             Ok(answer) => answer,
             Err(E::Forbidden(e)) if e == sfu::E2EE_GUESTS => {
@@ -1037,12 +1189,15 @@ impl Hub {
             r.peer = peer.clone();
             r.ice_at = pj::mono(); // the guest port adds fresh credentials
         }
+        if let Some(h) = log_hours {
+            st.wa_log_cap(&room, h);
+        }
         if st.stage_host(&room).as_deref() == Some(peer.as_str()) {
             st.guests_fix_host(&room);
             answer.insert("stage".into(), st.stage_view_ext(&room));
         }
-        let start = st.stays.get(&room).map(|s| s.start).unwrap_or_else(pj::now);
-        let chat: Vec<Value> = answer.get("chat").and_then(Value::as_array).into_iter().flatten().filter(|l| l.get("ts").and_then(|t| pj::as_num(Some(t))).unwrap_or(0.0) >= start).cloned().collect();
+        // only what was said from its seat time on (WA-1 4.4, 5.4)
+        let chat: Vec<Value> = answer.get("chat").and_then(Value::as_array).into_iter().flatten().filter(|l| l.get("ts").and_then(|t| pj::as_num(Some(t))).unwrap_or(0.0) >= seated).cloned().collect();
         answer.insert("chat".into(), Value::Array(chat));
         answer.insert("missed".into(), Value::Object(Obj::new()));
         answer.insert("admitted".into(), Value::Bool(true));
@@ -1144,9 +1299,14 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true))]))
     }
 
-    /// A room chat line from a guest (`guest: true`; no replies or mentions).
-    pub fn guests_chat(&self, header: &str, address: &str, text: Body) -> R<Obj> {
-        let text = m::text(text, "messages")?;
+    /// A room chat line from a guest (`guest: true`; no replies or mentions): plain `{text}`, or sealed `{id, enc,
+    /// reply_to?}` and its key wraps `{wraps}` (WA-1 4.4: the guest's device is its id, its `sr` "f" + the hex SHA-256
+    /// of its key).
+    pub fn guests_chat(&self, header: &str, address: &str, body: &Obj) -> R<Obj> {
+        if body.get("enc").is_some_and(|v| !v.is_null()) || body.get("wraps").is_some_and(|v| !v.is_null()) {
+            return self.guests_sealed(header, address, body);
+        }
+        let text = m::text(body.get("text"), "messages")?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, String)> {
             let (peer_id, who) = st.guests_live(header, address)?;
@@ -1156,7 +1316,7 @@ impl Hub {
             }
             let room = st.peers[peer_id.as_str()].room.clone();
             // "required": no chat while a guest is here
-            st.ce_room_open(&room)?;
+            st.ce_room_open(&room, false)?;
             let now = pj::now();
             let mut line = obj([
                 ("type", Value::from("chat")),
@@ -1181,6 +1341,94 @@ impl Hub {
         let (out, room, principal) = r?;
         log_info(&format!("chat room={room} principal={principal} chars={}", pj::char_len(&text)));
         Ok(out)
+    }
+
+    /// _guests_device: (peer id, the guest's chat identity): device = its id, serial = its `sr`. Only a verified guest
+    /// takes part in encrypted call chat (WA-1 4.4 revision 3).
+    fn guests_device(st: &mut State, header: &str, address: &str) -> R<(String, Identity)> {
+        let (peer_id, mut who) = st.guests_live(header, address)?;
+        let rec = st.guests.rec.get(&guest_id(&who.principal));
+        if !wa::chat_guest(rec) {
+            return forbidden(wa::SIGN_IN_CHAT);
+        }
+        let rec = rec.expect("a chat guest");
+        let spki = pj::b64_strict(&rec.key).unwrap_or_default();
+        who.device = rec.id.clone();
+        who.serial = format!("f{}", crate::codec::sha256_hex(&spki));
+        Ok((peer_id, who))
+    }
+
+    /// A guest's sealed call chat (WA-1 4.4): `wraps` of its sender key to the call's devices (room: cid only), then
+    /// `{id, enc}` as `/v1/chat` takes it.
+    fn guests_sealed(&self, header: &str, address: &str, body: &Obj) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<(Obj, String, Identity)> {
+            let (peer_id, who) = Self::guests_device(&mut st, header, address)?;
+            st.owned(&peer_id, &who)?;
+            let room = st.peers[peer_id.as_str()].room.clone();
+            let mut out = obj([("ok", Value::Bool(true))]);
+            if let Some(wraps) = body.get("wraps").filter(|v| !v.is_null()) {
+                let Some(items) = wraps.as_array().filter(|a| (1..=500).contains(&a.len())) else { return bad("wraps must be a list of 1 to 500") };
+                let rows = items.iter().map(|w| st.ce_wrap(w, &who, false)).collect::<R<Vec<Obj>>>()?;
+                if rows.iter().any(|r| !pj::text_of(r, "cid").starts_with(&format!("room:{room}:"))) {
+                    return forbidden("a guest wraps keys of its call's chat only");
+                }
+                out.insert("seq".into(), Value::from(st.ce_keep_wraps(&rows)));
+            }
+            Ok((out, peer_id, who))
+        })();
+        drop(st);
+        self.wake();
+        let (out, peer_id, who) = r?;
+        if body.get("enc").is_some_and(|v| !v.is_null()) {
+            let post = ce::Post { id: body.get("id"), enc: body.get("enc"), files: None, thread: None, reply_to: body.get("reply_to"), also_channel: None, session: None, peer: Some(peer_id), to: None, channel: None, plain: ce::plain_fields(body) };
+            return self.ce_post(&who, "room", post);
+        }
+        Ok(out)
+    }
+
+    /// `GET /g/v1/chat/devices` -> `{devices: [{peer, principal, device, dck}]}` (WA-1 4.4 revision 3, verified guests
+    /// only): the chat key of every seated certificate holder of the call (its newest kept CE-1 bundle for its seat's
+    /// device), so the page can wrap its sender key.
+    pub fn guests_chat_devices(&self, header: &str, address: &str) -> R<Obj> {
+        let mut st = self.st.lock();
+        let r = (|| -> R<Obj> {
+            let (peer_id, who) = Self::guests_device(&mut st, header, address)?;
+            st.owned(&peer_id, &who)?;
+            let room = st.peers[peer_id.as_str()].room.clone();
+            let now = pj::now();
+            let seats: Vec<(String, String, String)> = st.peers.values().filter(|p| p.room == room && !p.admission_pending && !p.who.guest && !p.who.is_service()).map(|p| (p.peer_id.clone(), p.who.principal.clone(), p.who.device.clone())).collect();
+            let bundles = st.ce_part("bundles").clone();
+            let mut out = Vec::new();
+            for (peer, principal, device) in seats {
+                let found = bundles.get(&principal).and_then(|d| d.get(&device)).and_then(Value::as_array).into_iter().flatten().filter(|b| pj::as_num(b.get("expires")).unwrap_or(0.0) > now).max_by(|a, b| pj::as_num(a.get("created")).unwrap_or(0.0).partial_cmp(&pj::as_num(b.get("created")).unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+                if let Some(b) = found {
+                    out.push(Value::Object(obj([("peer", Value::from(peer)), ("principal", Value::from(principal)), ("device", b.get("device").cloned().unwrap_or(Value::Null)), ("dck", b.get("dck").cloned().unwrap_or(Value::Null))])));
+                }
+            }
+            Ok(obj([("devices", Value::Array(out))]))
+        })();
+        drop(st);
+        self.wake();
+        r
+    }
+
+    /// `POST /g/v1/sfu/token {}`: an admitted guest's media server token (WA-1 4.3).
+    pub fn guests_sfu_token(&self, header: &str, address: &str) -> R<Obj> {
+        let (peer, who) = self.guests_seat(header, address)?;
+        self.sfu_token(&peer, &who)
+    }
+
+    /// `POST /g/v1/e2ee {epk, sig}`: the guest's ephemeral key, signed by its page key.
+    pub fn guests_e2ee(&self, header: &str, address: &str, epk: Body, sig: Body) -> R<Obj> {
+        let (peer, who) = self.guests_seat(header, address)?;
+        self.e2ee_publish(&peer, &who, epk, sig)
+    }
+
+    /// `POST /g/v1/e2ee/keys {epoch, to}`: the guest's sender key to each seat.
+    pub fn guests_e2ee_keys(&self, header: &str, address: &str, epoch: Body, to: Body) -> R<Obj> {
+        let (peer, who) = self.guests_seat(header, address)?;
+        self.e2ee_keys(&peer, &who, epoch, to)
     }
 
     /// A guest raises or lowers its own hand, or reacts; nothing else of the stage.
@@ -1249,13 +1497,13 @@ mod tests {
     #[test]
     fn links_are_signed_and_checked() {
         let mut g = Guests::new(None);
-        let token = g.mint("plan", (pj::now() + 60.0) as i64);
+        let token = g.mint("plan", (pj::now() + 60.0) as i64, "");
         let link = g.token(Some(&Value::from(token.clone())), pj::now()).unwrap();
         assert_eq!(link.room, "plan");
         let (part, sig) = token.split_once('.').unwrap();
         let flipped = format!("{part}.{}{}", &sig[..42], if sig.ends_with('A') { "B" } else { "A" });
         assert!(matches!(g.token(Some(&Value::from(flipped)), pj::now()), Err(E::Forbidden(m)) if m == BAD_LINK));
-        let old = g.mint("plan", (pj::now() - 1.0) as i64);
+        let old = g.mint("plan", (pj::now() - 1.0) as i64, "");
         assert!(matches!(g.token(Some(&Value::from(old)), pj::now()), Err(E::Gone(m)) if m == EXPIRED));
         assert_eq!(guest_origin("https://join.example.com/"), Some("https://join.example.com".into()));
         assert!(guest_origin("http://x").is_none() && guest_origin("https://x/p").is_none());
