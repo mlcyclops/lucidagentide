@@ -1748,6 +1748,6 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
 
 .PHONY: demo-P-VIZ.7
-demo-P-VIZ.7: ## P-VIZ.7 (ADR-0641): sponsors per model (TL187 for private models), size classes and variants, extra weapons and desk sets, the NORM's stapler on the TPS stack, and the git commit animation (anime lightning into a storm cloud; office copier and TPS reports). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_7.mjs
+demo-P-VIZ.7: ## P-VIZ.7 (ADR-0641): sponsors per model (TL187 for private models), size classes and variants, extra weapons and desk sets, Milton's stapler on the TPS stack, and the git commit animation (anime lightning into a storm cloud; office copier and TPS reports). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_7.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_brand.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_viz_7.mjs

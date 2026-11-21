@@ -52,8 +52,9 @@
 // headphones on a stand, a nameplate, a second monitor, a desk lamp, a desk phone) and the variant's own actions
 // (viz_office_pose.activityClip). The hands are solved onto their props per build (viz_office_pose's IK), so the
 // sip brings the rim to the lips and back to the coaster, and the typing palms rest on the keys. Every desk has a
-// short stack of TPS reports (a cover sheet canvas) with a glossy red stapler on it, "NORM's" in black marker on
-// its top (a decal canvas lifted off the body with a polygon offset, so a close zoom never z-fights). setCommit()
+// short stack of TPS reports (a cover sheet canvas) with a glossy red desktop stapler on it (a red base with a
+// steel anvil, a curved red arm hinged on a rear post over a steel magazine, a gap under it), "MILTON" in black
+// marker on the arm's top (a decal canvas lifted off the arm with a polygon offset, so a close zoom never z-fights). setCommit()
 // plays a git commit or push: the desk set shrinks away, a copier slides in, he stands at it, presses the button
 // and copies slide out one after another onto the tray (a pooled set of sheets with a chart-and-text canvas),
 // sipping his coffee and glancing around, a "TPS Reports" bubble over his head; it holds until setCommit(false)
@@ -369,8 +370,9 @@ function zedCanvas(): HTMLCanvasElement {
 const MARKER_FONT = "\"Segoe Print\", \"Bradley Hand\", \"Marker Felt\", \"Comic Sans MS\", cursive";
 const FORM_FONT = "system-ui, -apple-system, \"Segoe UI\", sans-serif";
 
-/** The stapler's top decal (transparent: the red body shows through): a gloss streak along its length and
- *  "NORM's" hand-lettered in black marker. A generic stapler: no maker's wordmark. */
+/** The stapler's top decal (transparent: the red arm shows through): a gloss streak along its length and
+ *  "MILTON" hand-lettered in black marker. A generic stapler: no maker's wordmark. Its aspect is the arm top's. */
+const STAPLER_NAME = "MILTON";
 function staplerCanvas(): HTMLCanvasElement {
   const cv = document.createElement("canvas");
   cv.width = 512; cv.height = 128;
@@ -378,10 +380,10 @@ function staplerCanvas(): HTMLCanvasElement {
   if (!c) return cv;
   const gloss = c.createLinearGradient(0, 0, 0, 128);
   gloss.addColorStop(0, "rgba(255,255,255,0)");
-  gloss.addColorStop(0.16, "rgba(255,255,255,0.6)");
+  gloss.addColorStop(0.16, "rgba(255,255,255,0.55)");
   gloss.addColorStop(0.3, "rgba(255,255,255,0)");
   c.fillStyle = gloss;
-  c.beginPath(); c.roundRect(20, 4, 472, 120, 40); c.fill();
+  c.beginPath(); c.roundRect(12, 4, 488, 120, 40); c.fill();
   // the name in fat black marker filling most of the top, slanted like a hurried hand
   c.save();
   c.translate(256, 70);
@@ -390,11 +392,11 @@ function staplerCanvas(): HTMLCanvasElement {
   c.font = `900 112px ${MARKER_FONT}`;
   c.textAlign = "center"; c.textBaseline = "middle";
   c.lineJoin = "round"; c.lineCap = "round";
-  const sx = Math.min(1.6, 440 / Math.max(1, c.measureText("NORM's").width));
+  const sx = Math.min(1.6, 450 / Math.max(1, c.measureText(STAPLER_NAME).width));
   c.scale(sx, 1);
   // a marker's stroke: the bleed and the body of the ink in one heavy pass, then the solid fill
-  c.strokeStyle = "#08080c"; c.lineWidth = 12 / sx; c.strokeText("NORM's", 0, 0);
-  c.fillStyle = "#08080c"; c.fillText("NORM's", 0, 0);
+  c.strokeStyle = "#08080c"; c.lineWidth = 12 / sx; c.strokeText(STAPLER_NAME, 0, 0);
+  c.fillStyle = "#08080c"; c.fillText(STAPLER_NAME, 0, 0);
   c.restore();
   return cv;
 }
@@ -675,8 +677,10 @@ interface GeoSet {
   walls: THREE.BufferGeometry; trim: THREE.BufferGeometry; statusLines: THREE.BufferGeometry;
   puff: THREE.BufferGeometry;
   codeTex: THREE.CanvasTexture; checkTex: THREE.CanvasTexture; zedTex: THREE.CanvasTexture;
-  // P-VIZ.7 (ADR-0641): the stapler (black base and hinge, red body, the NORM's decal) and the TPS cover sheet
-  staplerBase: THREE.BufferGeometry; staplerBody: THREE.BufferGeometry; staplerTop: THREE.BufferGeometry; tpsTop: THREE.BufferGeometry;
+  // P-VIZ.7 (ADR-0641): the stapler (red base, post and arm; steel anvil, hinge pin and magazine; a black rubber
+  // foot; the MILTON decal on the arm) and the TPS cover sheet
+  staplerRed: THREE.BufferGeometry; staplerSteel: THREE.BufferGeometry; staplerFoot: THREE.BufferGeometry;
+  staplerTop: THREE.BufferGeometry; tpsTop: THREE.BufferGeometry;
   // the sponsor: the coin (rim and a face per side), the lanyard (cord), the badge card and its face; the nameplate's
   coinRim: THREE.BufferGeometry; coinFace: THREE.BufferGeometry; lanyard: THREE.BufferGeometry; badge: THREE.BufferGeometry;
   badgeFace: THREE.BufferGeometry; plateFace: THREE.BufferGeometry;
@@ -702,8 +706,10 @@ function rod(a: readonly [number, number, number], b: readonly [number, number, 
   return g;
 }
 
-/** Stapler measures (its frame: the long axis +X toward the business end, the floor of its base at y 0). */
-const STAPLER = { len: 0.145, w: 0.042, baseH: 0.012, bodyH: 0.026, tilt: -0.03 } as const;
+/** Stapler measures (its frame: the long axis +X toward the business end, the floor of its base at y 0): length,
+ *  width, the base plate's height, the arm's rounding, and the arm top's straight run (where the decal sits),
+ *  rear end to front end, as [x, y] before the rounding grows the outline by `bevel`. */
+const STAPLER = { len: 0.16, w: 0.032, baseH: 0.009, bevel: 0.0025, topRun: [[-0.036, 0.044], [0.05, 0.035]] } as const;
 /** The TPS stack (the desk's pile): its box and where the stapler sits on it (the pile's frame). */
 const PILE = { w: 0.15, h: 0.03, d: 0.19 } as const;
 const STAPLER_ON_PILE = { x: 0.012, z: 0.038, yaw: 0.55 } as const;
@@ -775,9 +781,26 @@ function buildGeo(t: Tier): GeoSet {
   // ---- P-VIZ.7 (ADR-0641)
   const B1 = Math.min(1, B), R16 = Math.max(16, L * 2);
   const ST = STAPLER;
-  const bodyY = ST.baseH + 0.003 + ST.bodyH / 2;
-  // the decal on the body's flat top, lifted 1.2 mm along its normal (plus a polygon offset): no z-fighting up close
-  const topX = 0.003 + (ST.bodyH / 2 + 0.0012) * Math.sin(-ST.tilt), topY = bodyY + (ST.bodyH / 2 + 0.0012) * Math.cos(ST.tilt);
+  // the arm: a side profile (a high rounded heel over the hinge, a long straight top falling gently to a rounded
+  // nose over the anvil, a flat underside) extruded across the width with rounded edges
+  const half = ST.len / 2, [[rx, ry], [fx, fy]] = ST.topRun;
+  const armBottom = 0.024;
+  const prof = new THREE.Shape();
+  prof.moveTo(-half + 0.004, armBottom);
+  prof.lineTo(half - 0.018, armBottom);
+  prof.quadraticCurveTo(half - 0.008, armBottom, half - 0.008, armBottom + 0.006);
+  prof.quadraticCurveTo(half - 0.008, fy, fx, fy);
+  prof.lineTo(rx, ry);
+  prof.quadraticCurveTo(-half + 0.004, ry + 0.008, -half + 0.004, armBottom + 0.01);
+  prof.closePath();
+  const armDepth = ST.w - 2 * ST.bevel;
+  const arm = new THREE.ExtrudeGeometry(prof, { depth: armDepth, curveSegments: Math.max(4, L >> 1), bevelEnabled: B > 0, bevelThickness: ST.bevel, bevelSize: ST.bevel, bevelSegments: Math.max(1, B) });
+  arm.translate(0, 0, -armDepth / 2);
+  // the decal on the arm's straight top, lifted 1.2 mm along its normal (plus a polygon offset): no z-fighting up close
+  const slope = Math.atan2(fy - ry, fx - rx);
+  const lift = (B > 0 ? ST.bevel : 0) + 0.0012;
+  const topX = (rx + fx) / 2 - Math.sin(slope) * lift, topY = (ry + fy) / 2 + Math.cos(slope) * lift;
+  const topLen = Math.hypot(fx - rx, fy - ry) + 0.004;
   const zoomTex = (cv: HTMLCanvasElement): THREE.CanvasTexture => {
     const tex = canvasTex(cv);
     tex.anisotropy = 8;
@@ -867,12 +890,18 @@ function buildGeo(t: Tier): GeoSet {
     codeTex,
     checkTex: canvasTex(checklistCanvas()),
     zedTex: canvasTex(zedCanvas()),
-    staplerBase: merge([
-      placed(box(ST.len, ST.baseH, ST.w * 0.94, B1, 0.004), 0, ST.baseH / 2, 0),
-      placed(new THREE.CylinderGeometry(0.007, 0.007, ST.w * 0.9, L), -ST.len / 2 + 0.008, ST.baseH + 0.005, 0, Math.PI / 2),
+    staplerRed: merge([
+      placed(box(ST.len, ST.baseH - 0.002, ST.w * 0.95, B1, 0.0035), 0, 0.002 + (ST.baseH - 0.002) / 2, 0), // the base plate
+      placed(box(0.03, armBottom + 0.004 - ST.baseH, ST.w * 0.86, B1, 0.003), -half + 0.016, (ST.baseH + armBottom + 0.004) / 2, 0), // the rear post
+      arm,
     ]),
-    staplerBody: placed(box(ST.len - 0.006, ST.bodyH, ST.w, B, 0.009), 0.003, bodyY, 0, 0, 0, ST.tilt),
-    staplerTop: placed(new THREE.PlaneGeometry(ST.len - 0.02, ST.w - 0.008), topX, topY, 0, -Math.PI / 2, 0, ST.tilt),
+    staplerSteel: merge([
+      placed(box(0.02, 0.0014, 0.013, 0, 0), half - 0.016, ST.baseH + 0.0007, 0), // the anvil
+      placed(new THREE.CylinderGeometry(0.0032, 0.0032, ST.w * 1.04, L), -half + 0.011, 0.02, 0, Math.PI / 2), // the hinge pin
+      placed(box(ST.len - 0.034, 0.008, ST.w * 0.62, 0, 0), -0.003, armBottom - 0.002, 0), // the magazine, under the arm
+    ]),
+    staplerFoot: placed(box(ST.len - 0.004, 0.002, ST.w * 0.86, 0, 0), 0, 0.001, 0), // the black rubber foot
+    staplerTop: placed(new THREE.PlaneGeometry(topLen, ST.w - 0.01), topX, topY, 0, -Math.PI / 2, 0, slope),
     tpsTop: placed(new THREE.PlaneGeometry(PILE.w - 0.004, PILE.d - 0.004), 0, PILE.h / 2 + 0.0008, 0, -Math.PI / 2),
     coinRim: placed(new THREE.CylinderGeometry(COIN_R, COIN_R, COIN_T, R16, 1, true), 0, 0, 0, Math.PI / 2),
     coinFace: new THREE.CircleGeometry(COIN_R - 0.001, R16),
@@ -1475,6 +1504,7 @@ class Office implements OfficeFigure {
     const offset = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } as const;
     const mRed = toon({ color: "#d3151b", emissive: "#5a0306", emissiveIntensity: 0.35 });
     const mBlack = toon({ color: "#16171b" });
+    const mSteel = toon({ color: "#b8bec8", emissive: "#2a2e36", emissiveIntensity: 0.3 });
     const mDecal = basic({ map: g.staplerTex, transparent: true, depthWrite: false, ...offset });
     const mTps = toon({ map: g.tpsTex, ...offset });
     const cv = document.createElement("canvas");
@@ -1521,17 +1551,18 @@ class Office implements OfficeFigure {
     pile.position.set(boss ? 0.36 : -0.36, DESK_Y + 0.015, 0.44);
     pile.rotation.y = 0.12;
     this.pileAt.copy(pile.position);
-    // P-VIZ.7: the pile is a stack of TPS reports (the cover sheet on top), NORM's red stapler on it
+    // P-VIZ.7: the pile is a stack of TPS reports (the cover sheet on top), Milton's red stapler on it
     pile.add(new THREE.Mesh(g.tpsTop, mTps));
     const stapler = G();
     pile.add(stapler);
     stapler.position.set(STAPLER_ON_PILE.x, PILE.h / 2 + 0.0012, STAPLER_ON_PILE.z);
     stapler.rotation.y = STAPLER_ON_PILE.yaw;
-    this.add(stapler, g.staplerBase, mBlack, thin);
-    this.add(stapler, g.staplerBody, mRed, thin);
-    const norm = new THREE.Mesh(g.staplerTop, mDecal);
-    norm.renderOrder = 1;
-    stapler.add(norm);
+    this.add(stapler, g.staplerFoot, mBlack, 0);
+    this.add(stapler, g.staplerSteel, mSteel, thin);
+    this.add(stapler, g.staplerRed, mRed, thin);
+    const name = new THREE.Mesh(g.staplerTop, mDecal);
+    name.renderOrder = 1;
+    stapler.add(name);
     const loose = this.add(this.desk, g.sheet, mPaper, 0);
     loose.position.set(boss ? 0.16 : -0.14, DESK_Y + 0.002, 0.5);
     loose.rotation.set(-Math.PI / 2, 0, 0.3);
