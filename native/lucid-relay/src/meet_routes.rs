@@ -237,6 +237,11 @@ fn get_route(path: &str) -> Option<Route> {
             let limit = ai::HISTORY_LIMIT.to_string();
             c.relay.hub.ai_history_get(&c.q("session", ""), &who, &c.q("cid", ""), &c.q("after", "0"), &c.q("limit", &limit))
         },
+        // SD-1 13.5: org storage maps, only to people the org's current policy covers
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.sd_storage_get(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
         "/v1/apps" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -685,6 +690,15 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/ai/history/delete" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
             c.relay.hub.ai_history_delete(&pj::s(&b, "session"), &who, b.get("id"), b.get("event"), b.get("enc"))
+        },
+        // SD-1 13.5: org storage maps (a relay admin uploads; an org admin's device signs through the signer)
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.hub.sd_storage_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        "/v1/org/storage/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.sd_sign_storage(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
         },
         "/v1/apps/icon" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);

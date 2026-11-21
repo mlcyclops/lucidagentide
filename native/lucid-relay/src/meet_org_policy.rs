@@ -3,6 +3,12 @@
 // field rule and limit of an org policy, its verification (root or the signer's intermediate, the root's CRL) and
 // the relay's store of signed policies. The same bytes and the same words as the Python module; the issuer-side
 // signing helpers and the SSO byte layouts stay in Python (the relay never signs).
+//
+// SD-1 slice SD-1b (docs/storage/contract.md 6.2, 13.5): the `storage` key (`check_storage`, as a device checks
+// it), `sharing` refused, the older-client gate (`storage_gate`), and the org storage map (`check_storage_map`,
+// `verify_storage_map` over `lp("lucid-meet-org-storage-v1", canonical JSON)`, wire `{map, sig, chain}`) with the
+// relay's `MapStore`. This relay's signer terms stop at version 2, so the registry cloud check of `storage.cloud`
+// (ID-1 1.5) has no Entra provider to compare with here; the signer and devices apply it.
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -34,12 +40,51 @@ const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention", "notify", "video", "ai",
+    "workflows", "external_archives", "external_apps", "retention", "notify", "video", "ai", "storage", "sharing",
 ];
 /// BG-1 section 2.1: the camera background of the people the policy covers.
 const VIDEO_KEYS: &[&str] = &["background", "team_image", "change"];
 const VIDEO_BACKGROUNDS: &[&str] = &["none", "blur", "team"];
 const VIDEO_CHANGES: &[&str] = &["allow", "refuse"];
+// SD-1 6.2 and 13.5 (exact words and limits of relay/meet_org_policy.py)
+const STORAGE_PROVIDERS: &[&str] = &["onedrive", "sharepoint", "gdrive", "dropbox", "s3", "relay_share", "local", "synced_folder"];
+const STORAGE_KINDS: &[&str] = &["recording", "audio", "transcript", "notes", "attendance", "chat_file", "canvas", "slides", "export"];
+/// Built-in place ids (no map entry) and the provider each one is (the same names).
+const STORAGE_BUILTINS: &[&str] = &["onedrive", "gdrive", "dropbox", "local", "synced_folder"];
+const STORAGE_KEYS: &[&str] =
+    &["providers", "labels", "own", "group", "people_choose", "form", "keep_local_days", "expire_days", "cloud", "map_sha256"];
+const STORAGE_FORMS: &[&str] = &["sealed", "plain"];
+const STORAGE_DAYS_MAX: i64 = 3650;
+const ENTRA_CLOUDS: &[&str] = &["global", "usgov-high", "usgov-dod"];
+const PLACE_LABEL_MAX: usize = 64;
+const PLACE_LABEL_MARKS: &str = " .,()&'-";
+pub const SHARING_REFUSED: &str = "sharing rules are not available on this relay yet";
+/// The SD-1b release of the Hub and the iPhone (older ones refuse the whole policy for its unknown top key).
+const STORAGE_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.0"), ("ios", "0.98.0")];
+pub const STORAGE_TOO_SOON: &str =
+    "Storage rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.";
+const MAP_LABEL: &str = "lucid-meet-org-storage-v1";
+/// The whole signed map.
+const MAP_MAX: usize = 256 * 1024;
+const MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "microsoft", "places"];
+const MAP_REQUIRED: &[&str] = &["v", "org", "seq", "issued", "places"];
+const MAP_WIRE_KEYS: &[&str] = &["map", "sig", "chain"];
+const MAP_PLACES_MAX: usize = 64;
+/// `channels` and `groups` of one place.
+const MAP_ENTRIES_MAX: usize = 2000;
+const MAP_TEXT_MAX: usize = 256;
+/// `kms_key`.
+const MAP_KEY_MAX: usize = 2048;
+/// Orgs whose maps one relay holds.
+pub const MAP_ORGS_MAX: usize = 64;
+const MAP_PROVIDERS: &[&str] = &["sharepoint", "gdrive", "dropbox", "s3", "relay_share"];
+const CONNECTOR_KEYS: &[&str] = &["url", "principal", "device"];
+const SITE_KEYS: &[&str] = &["site", "drive", "folder"];
+const TEAM_KEYS: &[&str] = &["team", "channel"];
+const S3_SSE: &[&str] = &["s3", "kms", "none"];
+pub const CONNECTORS_REFUSED: &str = "storage connectors are not available on this relay yet";
+/// Personal Microsoft accounts.
+const PERSONAL_TENANT: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
 /// NT-1 section 3.9: the only `notify` the policy may carry.
 const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
@@ -649,6 +694,12 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
     }
     if let Some(a) = p.get("ai") {
         check_ai(a, terms)?;
+    }
+    if p.contains_key("sharing") {
+        return Err(refused(SHARING_REFUSED));
+    }
+    if let Some(s) = p.get("storage") {
+        check_storage(s)?;
     }
     Ok(())
 }
@@ -1355,6 +1406,558 @@ impl AiMapStore {
     }
 }
 
+// ---- SD-1: the `storage` key and the org storage map (docs/storage/contract.md 6.2) ------------------------------
+
+/// `_place_id`: `[a-z0-9-]{1,32}` (a full match: no trailing newline).
+fn place_ok(s: &str) -> bool {
+    !s.ends_with('\n') && slug_ok(s)
+}
+
+fn place_id<'a>(v: &'a Value, what: &str) -> Res<&'a str> {
+    v.as_str().filter(|s| place_ok(s)).ok_or_else(|| format!("{what} must be a place id (1 to 32 of a-z, 0-9 and -)"))
+}
+
+/// Unicode general category Cf (format characters: bidi controls, zero-width marks, tags).
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0xad | 0x600..=0x605 | 0x61c | 0x6dd | 0x70f | 0x890..=0x891 | 0x8e2 | 0x180e | 0x200b..=0x200f
+        | 0x202a..=0x202e | 0x2060..=0x2064 | 0x2066..=0x206f | 0xfeff | 0xfff9..=0xfffb | 0x110bd | 0x110cd
+        | 0x13430..=0x1343f | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0001 | 0xe0020..=0xe007f)
+}
+
+/// `check_place_label`: 1 to 64 characters of Unicode letters, digits, spaces and `.,()&'-`; no Unicode format
+/// characters. Rust's std has no general categories: letters and digits are `is_alphabetic` and `is_numeric`, a
+/// little wider than Python's L* and Nd (combining vowel signs, Roman numerals, superscripts also pass here).
+pub fn check_place_label(v: &Value, what: &str) -> Res<()> {
+    let Some(s) = v.as_str().filter(|s| (1..=PLACE_LABEL_MAX).contains(&s.chars().count())) else {
+        return Err(format!("{what} must be 1 to {PLACE_LABEL_MAX} characters"));
+    };
+    for c in s.chars() {
+        if is_format_char(c) {
+            return Err(format!("{what} must not contain Unicode format characters"));
+        }
+        if !(c.is_alphabetic() || c.is_numeric() || PLACE_LABEL_MARKS.contains(c)) {
+            return Err(format!("{what} may hold only letters, digits, spaces and .,()&'-"));
+        }
+    }
+    Ok(())
+}
+
+/// The map place ids `own` and `group` name (sorted, each once; built-in ids left out).
+fn storage_map_places(s: &Obj) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in ["own", "group"] {
+        for place in s.get(key).and_then(Value::as_object).into_iter().flat_map(|o| o.values()).filter_map(Value::as_str) {
+            if !STORAGE_BUILTINS.contains(&place) && !out.iter().any(|p| p == place) {
+                out.push(place.to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `check_storage` as a device runs it (no maps): 6.2's field table, `map_sha256` required when `own` or `group`
+/// names a map place. Bad naming the field.
+pub fn check_storage(storage: &Value) -> Result<(), PolicyError> {
+    let s = keys(storage, STORAGE_KEYS, &[], "storage")?;
+    let mut providers: Option<Vec<&str>> = None;
+    if let Some(p) = s.get("providers") {
+        let mut names = Vec::new();
+        for x in list(p, "storage.providers", STORAGE_PROVIDERS.len(), 0)? {
+            match x.as_str().filter(|x| STORAGE_PROVIDERS.contains(x)) {
+                Some(n) => names.push(n),
+                None => return Err(PolicyError::Bad(format!("storage.providers may list only {}", STORAGE_PROVIDERS.join(", ")))),
+            }
+        }
+        providers = Some(names);
+    }
+    for key in ["own", "group"] {
+        let Some(v) = s.get(key) else { continue };
+        for (kind, place) in keys(v, STORAGE_KINDS, &[], &format!("storage.{key}"))? {
+            let place = place_id(place, &format!("storage.{key}.{kind}"))?;
+            if STORAGE_BUILTINS.contains(&place) && providers.as_ref().is_some_and(|p| !p.contains(&place)) {
+                return Err(PolicyError::Bad(format!("storage.{key}.{kind}: {place} is not in storage.providers")));
+            }
+        }
+    }
+    let empty = Obj::new();
+    let mut labels = &empty;
+    if let Some(l) = s.get("labels") {
+        let Some(o) = l.as_object().filter(|o| o.len() <= MAP_PLACES_MAX + STORAGE_BUILTINS.len()) else {
+            return Err(bad("storage.labels must be an object of place ids to labels"));
+        };
+        for (place, label) in o {
+            if !place_ok(place) {
+                return Err(PolicyError::Bad(format!("storage.labels.{place} must be a place id (1 to 32 of a-z, 0-9 and -)")));
+            }
+            check_place_label(label, &format!("storage.labels.{place}"))?;
+        }
+        labels = o;
+    }
+    let named = storage_map_places(s);
+    let missing: Vec<&str> = named.iter().map(String::as_str).filter(|p| !labels.contains_key(*p)).collect();
+    if !missing.is_empty() {
+        return Err(PolicyError::Bad(format!("storage.labels needs a label for {}", missing.join(", "))));
+    }
+    if let Some(v) = s.get("people_choose") {
+        for kind in list(v, "storage.people_choose", STORAGE_KINDS.len(), 0)? {
+            if !kind.as_str().is_some_and(|k| STORAGE_KINDS.contains(&k)) {
+                return Err(PolicyError::Bad(format!("storage.people_choose may list only {}", STORAGE_KINDS.join(", "))));
+            }
+        }
+    }
+    if let Some(v) = s.get("form") {
+        for (kind, form) in keys(v, STORAGE_KINDS, &[], "storage.form")? {
+            if !form.as_str().is_some_and(|f| STORAGE_FORMS.contains(&f)) {
+                return Err(PolicyError::Bad(format!("storage.form.{kind} must be sealed or plain")));
+            }
+        }
+    }
+    if let Some(v) = s.get("keep_local_days") {
+        int(v, "storage.keep_local_days", -1, STORAGE_DAYS_MAX)?;
+    }
+    if let Some(v) = s.get("expire_days") {
+        for (kind, days) in keys(v, STORAGE_KINDS, &[], "storage.expire_days")? {
+            int(days, &format!("storage.expire_days.{kind}"), 1, STORAGE_DAYS_MAX)?;
+        }
+    }
+    if let Some(c) = s.get("cloud") {
+        if !c.as_str().is_some_and(|c| ENTRA_CLOUDS.contains(&c)) {
+            return Err(bad("storage.cloud must be global, usgov-high or usgov-dod"));
+        }
+    }
+    if let Some(d) = s.get("map_sha256") {
+        if !d.as_str().is_some_and(|d| !d.ends_with('\n') && hex_ok(d, 64, 64)) {
+            return Err(bad("storage.map_sha256 must be 64 lower-case hex digits"));
+        }
+    }
+    if !named.is_empty() && !s.contains_key("map_sha256") {
+        return Err(bad("storage.map_sha256 is required when own or group names a map place"));
+    }
+    Ok(())
+}
+
+/// SD-1 13.5 (SD1-R2): a policy with `storage` is signed only once the relay's minimums reach the SD-1b release of
+/// both the Hub and the iPhone (older apps refuse the whole policy for its unknown top key).
+pub fn storage_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key("storage"));
+    let ready = STORAGE_CLIENTS.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+    if wants && !ready {
+        return Err(STORAGE_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// A lower-case GUID (a full match).
+fn guid_ok(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+fn map_text<'a>(v: &'a Value, what: &str, limit: usize, path: bool) -> Res<&'a str> {
+    let t = text(v, what, limit)?;
+    if path && t.split(['/', '\\']).any(|part| part == "..") {
+        return Err(format!("{what} must not hold a .. segment"));
+    }
+    Ok(t)
+}
+
+/// `_https_origin`: what Python's `urlsplit` reads as an `https` URL with a host, no user, no path other than "/",
+/// no query or fragment, and a port (when given) from 1 to 65535.
+fn https_origin(v: &Value, what: &str) -> Res<()> {
+    let err = || format!("{what} must be an https:// origin");
+    let Some(s) = v.as_str().filter(|s| s.chars().count() <= MAP_TEXT_MAX) else { return Err(err()) };
+    let Some((scheme, rest)) = s.split_once(':') else { return Err(err()) };
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(err());
+    }
+    let Some(rest) = rest.strip_prefix("//") else { return Err(err()) };
+    let (rest, fragment) = rest.split_once('#').unwrap_or((rest, ""));
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (netloc, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    if !fragment.is_empty() || !query.is_empty() || !(path.is_empty() || path == "/") || netloc.contains('@') {
+        return Err(err());
+    }
+    let (host, port) = if let Some(inner) = netloc.strip_prefix('[') {
+        let Some((h, after)) = inner.split_once(']') else { return Err(err()) };
+        match after {
+            "" => (h, None),
+            a => match a.strip_prefix(':') {
+                Some(p) => (h, Some(p)),
+                None => return Err(err()),
+            },
+        }
+    } else {
+        match netloc.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (netloc, None),
+        }
+    };
+    if host.is_empty() {
+        return Err(err());
+    }
+    if let Some(p) = port.filter(|p| !p.is_empty()) {
+        let ok = p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u32>().is_ok_and(|n| (1..65536).contains(&n));
+        if !ok {
+            return Err(err());
+        }
+    }
+    Ok(())
+}
+
+/// `{}` (false) or `{url, principal, device}` (true, shape checked; refused by the caller until SD-1e).
+fn check_connector(v: &Value, what: &str, policy: Option<&Obj>) -> Res<bool> {
+    if v.as_object().is_some_and(Obj::is_empty) {
+        return Ok(false);
+    }
+    let con = keys(v, CONNECTOR_KEYS, CONNECTOR_KEYS, what)?;
+    https_origin(&con["url"], &format!("{what}.url"))?;
+    let (local, domain) = split_value(&con["principal"])?;
+    let domains = policy.and_then(|p| p.get("domains")).and_then(Value::as_array);
+    let ok = local == "storage"
+        && domain.strip_prefix(APPS_PREFIX).is_some_and(|rest| domains.is_none_or(|d| d.iter().any(|x| x.as_str() == Some(rest))));
+    if !ok {
+        return Err(format!("{what}.principal must be storage@apps.<one of the policy's domains>"));
+    }
+    check_device_id(&con["device"])?;
+    Ok(true)
+}
+
+fn check_site(v: &Value, what: &str) -> Res<()> {
+    let site = keys(v, SITE_KEYS, &["site", "drive"], what)?;
+    map_text(&site["site"], &format!("{what}.site"), MAP_TEXT_MAX, false)?;
+    map_text(&site["drive"], &format!("{what}.drive"), MAP_TEXT_MAX, false)?;
+    if let Some(f) = site.get("folder") {
+        map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+    }
+    Ok(())
+}
+
+/// The fields one map place of `provider` may have, and those it needs besides `id` and `provider`.
+fn place_keys(provider: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    const SHAREPOINT: &[&str] = &["id", "provider", "connector", "channels", "groups", "site"];
+    const SHAREPOINT_NEEDS: &[&str] = &["id", "provider"];
+    const GDRIVE: &[&str] = &["id", "provider", "connector", "drive", "folder"];
+    const GDRIVE_NEEDS: &[&str] = &["id", "provider", "drive"];
+    const DROPBOX: &[&str] = &["id", "provider", "connector", "folder"];
+    const DROPBOX_NEEDS: &[&str] = &["id", "provider", "folder"];
+    const S3: &[&str] = &["id", "provider", "connector", "endpoint", "region", "bucket", "prefix", "sse", "kms_key"];
+    const S3_NEEDS: &[&str] = &["id", "provider", "endpoint", "region", "bucket", "sse"];
+    const RELAY_SHARE: &[&str] = &["id", "provider", "share", "folder"];
+    const RELAY_SHARE_NEEDS: &[&str] = &["id", "provider", "share"];
+    match provider {
+        "sharepoint" => (SHAREPOINT, SHAREPOINT_NEEDS),
+        "gdrive" => (GDRIVE, GDRIVE_NEEDS),
+        "dropbox" => (DROPBOX, DROPBOX_NEEDS),
+        "s3" => (S3, S3_NEEDS),
+        _ => (RELAY_SHARE, RELAY_SHARE_NEEDS),
+    }
+}
+
+/// One map place: (id, provider, has a connector).
+fn check_place(place: &Value, policy: Option<&Obj>) -> Res<(String, String, bool)> {
+    let Some(po) = place.as_object() else { return Err("each place must be an object".into()) };
+    let null = Value::Null;
+    let pid = place_id(po.get("id").unwrap_or(&null), "a place's id")?;
+    let what = format!("places.{pid}");
+    if STORAGE_BUILTINS.contains(&pid) {
+        return Err(format!("{what}: {pid} is a built-in place id"));
+    }
+    let Some(provider) = po.get("provider").and_then(Value::as_str).filter(|p| MAP_PROVIDERS.contains(p)) else {
+        return Err(format!("{what}.provider must be one of {}", MAP_PROVIDERS.join(", ")));
+    };
+    let (allowed, required) = place_keys(provider);
+    keys(place, allowed, required, &what)?;
+    let connector = match po.get("connector") {
+        Some(c) => check_connector(c, &format!("{what}.connector"), policy)?,
+        None => false,
+    };
+    match provider {
+        "sharepoint" => {
+            if let Some(channels) = po.get("channels") {
+                let Some(c) = channels.as_object().filter(|c| c.len() <= MAP_ENTRIES_MAX) else {
+                    return Err(format!("{what}.channels must be an object of at most {MAP_ENTRIES_MAX} entries"));
+                };
+                for (cid, team) in c {
+                    let ok = (1..=64).contains(&cid.len()) && cid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+                    if !ok {
+                        return Err(format!("{what}.channels: {} is not a channel id", repr_str(cid)));
+                    }
+                    let t = keys(team, TEAM_KEYS, TEAM_KEYS, &format!("{what}.channels.{cid}"))?;
+                    map_text(&t["team"], &format!("{what}.channels.{cid}.team"), MAP_TEXT_MAX, false)?;
+                    map_text(&t["channel"], &format!("{what}.channels.{cid}.channel"), MAP_TEXT_MAX, false)?;
+                }
+            }
+            if let Some(groups) = po.get("groups") {
+                let Some(g) = groups.as_object().filter(|g| g.len() <= MAP_ENTRIES_MAX) else {
+                    return Err(format!("{what}.groups must be an object of at most {MAP_ENTRIES_MAX} entries"));
+                };
+                for (gid, site) in g {
+                    if !guid_ok(gid) {
+                        return Err(format!("{what}.groups: {} is not a lower-case GUID", repr_str(gid)));
+                    }
+                    check_site(site, &format!("{what}.groups.{gid}"))?;
+                }
+            }
+            if let Some(site) = po.get("site") {
+                check_site(site, &format!("{what}.site"))?;
+            }
+        }
+        "gdrive" => {
+            map_text(&po["drive"], &format!("{what}.drive"), MAP_TEXT_MAX, false)?;
+            if let Some(f) = po.get("folder") {
+                map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+            }
+        }
+        "dropbox" => {
+            map_text(&po["folder"], &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+        }
+        "s3" => {
+            https_origin(&po["endpoint"], &format!("{what}.endpoint"))?;
+            let region_ok = po["region"].as_str().is_some_and(|r| (1..=32).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+            if !region_ok {
+                return Err(format!("{what}.region must be 1 to 32 of a-z, 0-9 and -"));
+            }
+            let bucket_ok = po["bucket"].as_str().is_some_and(|b| {
+                let x = b.as_bytes();
+                let edge = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+                (3..=63).contains(&x.len()) && edge(&x[0]) && edge(&x[x.len() - 1]) && x.iter().all(|c| edge(c) || *c == b'.' || *c == b'-')
+            });
+            if !bucket_ok {
+                return Err(format!("{what}.bucket must be an S3 bucket name"));
+            }
+            if let Some(p) = po.get("prefix") {
+                map_text(p, &format!("{what}.prefix"), MAP_TEXT_MAX, true)?;
+            }
+            let sse = po["sse"].as_str().filter(|s| S3_SSE.contains(s));
+            if sse.is_none() {
+                return Err(format!("{what}.sse must be s3, kms or none"));
+            }
+            if (sse == Some("kms")) != po.contains_key("kms_key") {
+                return Err(format!("{what}.kms_key is needed with sse kms, and only then"));
+            }
+            if let Some(k) = po.get("kms_key") {
+                map_text(k, &format!("{what}.kms_key"), MAP_KEY_MAX, false)?;
+            }
+        }
+        _ => {
+            if !po["share"].as_str().is_some_and(place_ok) {
+                return Err(format!("{what}.share must be 1 to 32 of a-z, 0-9 and -"));
+            }
+            if let Some(f) = po.get("folder") {
+                map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+            }
+        }
+    }
+    Ok((pid.to_string(), provider.to_string(), connector))
+}
+
+/// 6.2's map rules (Bad naming the field). With the org's current `policy`: `org` must be the policy's and every
+/// `connector` principal an `apps.` name of its domains. A non-empty `connector` is then refused (until SD-1e).
+pub fn check_storage_map(storage_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyError> {
+    let m = keys(storage_map, MAP_KEYS, MAP_REQUIRED, "the storage map")?;
+    canonical_json(storage_map)?; // no null, no float anywhere
+    if pj::as_int(m.get("v")) != Some(1) {
+        return Err(bad("the storage map must be version 1"));
+    }
+    let Some(org) = m["org"].as_str().filter(|o| place_ok(o)) else {
+        return Err(bad("org must be 1 to 32 of a-z, 0-9 and -"));
+    };
+    if policy.is_some_and(|p| p.get("org").and_then(Value::as_str) != Some(org)) {
+        return Err(bad("the storage map's org is not the policy's"));
+    }
+    int(&m["seq"], "seq", 1, MAX_INT)?;
+    int(&m["issued"], "issued", 1, MAX_INT)?;
+    if let Some(ms) = m.get("microsoft") {
+        let ms = keys(ms, &["client_id", "tenant"], &["client_id", "tenant"], "microsoft")?;
+        for k in ["client_id", "tenant"] {
+            if !ms[k].as_str().is_some_and(guid_ok) {
+                return Err(PolicyError::Bad(format!("microsoft.{k} must be a lower-case GUID")));
+            }
+        }
+        if ms["tenant"].as_str() == Some(PERSONAL_TENANT) {
+            return Err(bad("microsoft.tenant cannot be the personal Microsoft accounts tenant"));
+        }
+    }
+    let mut ids: Vec<String> = Vec::new();
+    let (mut connectors, mut sharepoint) = (false, false);
+    for place in list(&m["places"], "places", MAP_PLACES_MAX, 0)? {
+        let (pid, provider, connector) = check_place(place, policy)?;
+        if ids.contains(&pid) {
+            return Err(PolicyError::Bad(format!("places lists {pid} twice")));
+        }
+        ids.push(pid);
+        connectors |= connector;
+        sharepoint |= provider == "sharepoint";
+    }
+    if sharepoint && !m.contains_key("microsoft") {
+        return Err(bad("microsoft (client_id and tenant) is required for a sharepoint place"));
+    }
+    if connectors {
+        return Err(refused(CONNECTORS_REFUSED));
+    }
+    Ok(())
+}
+
+/// `lp("lucid-meet-org-storage-v1", canonical JSON of the map)` (empty JSON for a map canonical JSON refuses: every
+/// caller checks the map first).
+pub fn storage_map_bytes(storage_map: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(storage_map, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[MAP_LABEL.as_bytes(), &json])
+}
+
+/// A verified signed org storage map.
+#[derive(Clone, Debug)]
+pub struct VerifiedMap {
+    pub wire: Obj,
+    pub org: String,
+    pub seq: i64,
+    pub hash: String,
+    /// "root" or the intermediate's serial (hex).
+    pub signer: String,
+}
+
+/// A relay's or device's check of a signed storage map, as `verify` checks a policy: the root-signed signer policy,
+/// the signature by the root or the signer's current (or previous) intermediate valid at `issued` and not in the
+/// root's CRL, `check_storage_map`, then an org the root assigned domains to.
+pub fn verify_storage_map(
+    wire: &Value,
+    root: &Cert,
+    signer_policy: &Obj,
+    root_crl: Option<&Crl>,
+    previous_serial: &str,
+    now: f64,
+) -> Result<VerifiedMap, PolicyError> {
+    let w = keys(wire, MAP_WIRE_KEYS, MAP_WIRE_KEYS, "the signed storage map")?;
+    if canonical_json(wire)?.len() > MAP_MAX {
+        return Err(bad("the signed storage map is larger than 256 KB"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let m = keys(&w["map"], MAP_KEYS, MAP_REQUIRED, "the storage map")?;
+    let issued = int(&m["issued"], "issued", 1, MAX_INT)?;
+    if issued as f64 > now + SKEW as f64 {
+        return Err(refused("the storage map is dated in the future"));
+    }
+    let sig = pj::b64_strict(&pj::py_str(&w["sig"])).ok_or("sig must be base64")?;
+    canonical_json(&w["map"])?;
+    let data = storage_map_bytes(m);
+    let chain = match &w["chain"] {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    let signer = match &inter {
+        Some(c) => check_intermediate(c, root, &terms, previous_serial, issued, root_crl)?,
+        None => "root".to_string(),
+    };
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    if !ecdsa_sha256_verified(spki, &data, &sig) {
+        return Err(refused("the storage map's signature does not verify"));
+    }
+    check_storage_map(&w["map"], None)?;
+    let org = pj::text_of(m, "org");
+    if !terms.org_domains.contains_key(&org) {
+        return Err(refused(DOMAIN_REFUSED));
+    }
+    Ok(VerifiedMap {
+        wire: w.clone(),
+        org,
+        seq: pj::as_int(m.get("seq")).unwrap_or(0),
+        hash: sha256_hex(&data),
+        signer,
+    })
+}
+
+/// What a relay keeps (13.5, SD1-R14): per org the newest storage map and the one the org's current policy names by
+/// `map_sha256` (at most 2 per org, 64 orgs), so a map uploaded before the policy is re-signed breaks nobody.
+#[derive(Default)]
+pub struct MapStore {
+    pub newest: IndexMap<String, VerifiedMap>,
+    pub kept: IndexMap<String, IndexMap<String, VerifiedMap>>,
+}
+
+impl MapStore {
+    /// Verify and keep one signed map. `named`: the `map_sha256` of the org's current policy ("" when none), kept
+    /// even when it is not the newest. A `seq` not above the newest is refused unless it is that named map.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+        named: &str,
+    ) -> Result<VerifiedMap, PolicyError> {
+        let vm = verify_storage_map(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        if let Some(held) = self.kept.get(&vm.org).and_then(|h| h.get(&vm.hash)) {
+            return Ok(held.clone());
+        }
+        match self.newest.get(&vm.org) {
+            None if !self.kept.contains_key(&vm.org) && self.kept.len() >= MAP_ORGS_MAX => {
+                return Err(refused("this relay already holds the storage maps of 64 organizations"));
+            }
+            Some(cur) if vm.seq <= cur.seq && vm.hash != named => {
+                return Err(PolicyError::Refused(format!("that storage map's seq is not higher than {}", cur.seq)));
+            }
+            _ => {}
+        }
+        if self.newest.get(&vm.org).is_none_or(|cur| vm.seq > cur.seq) {
+            self.newest.insert(vm.org.clone(), vm.clone());
+        }
+        self.kept.entry(vm.org.clone()).or_default().insert(vm.hash.clone(), vm.clone());
+        self.prune(&vm.org, named);
+        Ok(vm)
+    }
+
+    /// Keep only the org's newest map and the one its current policy names.
+    pub fn prune(&mut self, org: &str, named: &str) {
+        let newest = self.newest.get(org).map(|v| v.hash.clone()).unwrap_or_default();
+        if let Some(held) = self.kept.get_mut(org) {
+            held.retain(|h, _| *h == newest || h == named);
+        }
+    }
+
+    /// `GET /v1/org/storage?org=` (the newest) or `&sha256=` (that kept map).
+    pub fn get(&self, org: &str, sha256: &str) -> Option<&Obj> {
+        if sha256.is_empty() {
+            self.newest.get(org).map(|v| &v.wire)
+        } else {
+            self.kept.get(org).and_then(|h| h.get(&sha256.to_lowercase())).map(|v| &v.wire)
+        }
+    }
+
+    /// Every kept map, by org and `seq` (what `ext["pc"]["maps"]` holds).
+    pub fn persisted(&self) -> Vec<Value> {
+        let mut orgs: Vec<&String> = self.kept.keys().collect();
+        orgs.sort();
+        let mut out = Vec::new();
+        for org in orgs {
+            let mut maps: Vec<&VerifiedMap> = self.kept[org].values().collect();
+            maps.sort_by_key(|v| v.seq);
+            out.extend(maps.into_iter().map(|v| Value::Object(v.wire.clone())));
+        }
+        out
+    }
+}
+
 /// NT-1 section 3.9: the policy turns message previews off for the people it covers.
 pub fn previews_off(policy: &Obj) -> bool {
     policy.get("notify").and_then(|n| n.get("previews")).and_then(Value::as_str) == Some("off")
@@ -1915,5 +2518,111 @@ mod tests {
         assert!(store.get(&v.org, &"0".repeat(64)).is_none());
         assert_eq!(store.persisted(), vec![Value::Object(v.wire.clone())]);
         assert_eq!(ai_map_hash(v.wire["map"].as_object().unwrap()), v.hash);
+    }
+
+    // ---- SD-1b: tests/vectors/org_storage_v1.json of the add-on (copied here as tests/org_storage_v1.json) ----
+
+    const STORAGE_VECTORS: &str = include_str!("../tests/org_storage_v1.json");
+
+    fn storage_doc() -> Doc {
+        let doc: Value = serde_json::from_str(STORAGE_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let crl = Crl::from_pem(doc["root_crl_pem"].as_str().unwrap().as_bytes()).unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        Doc { doc, root, crl, now }
+    }
+
+    #[test]
+    fn the_org_storage_vectors_give_the_expected_verdicts() {
+        let d = storage_doc();
+        // the policy's `storage` and `sharing` as a device checks them; this relay's signer terms stop at version 2,
+        // so the version 3 cases (the registry cloud check) are the signer's and the devices'
+        let mut skipped: Vec<&str> = Vec::new();
+        for case in d.doc["policy_cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let Ok(terms) = signer_terms(case["signer_policy"].as_object().unwrap()) else {
+                skipped.push(name);
+                continue;
+            };
+            let verdict = check_policy(&case["policy"], &terms).err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{name}");
+        }
+        skipped.sort_unstable();
+        assert_eq!(skipped, ["cloud_differs_from_the_entra_provider", "cloud_matches_the_entra_provider"]);
+        for case in d.doc["gate_cases"].as_array().unwrap() {
+            let verdict = storage_gate(Some(&case["policy"]), case["min_client"].as_object().unwrap()).err().unwrap_or_else(|| "ok".into());
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+        for case in d.doc["map_cases"].as_array().unwrap() {
+            let sp = case["signer_policy"].as_object().unwrap();
+            assert!(verify_signer_policy(&d.root, sp), "{}", case["name"]);
+            let verdict = match verify_storage_map(&case["signed"], &d.root, sp, Some(&d.crl), "", d.now) {
+                Ok(v) if Some(v.hash.as_str()) == case["map_sha256"].as_str() => "ok".to_string(),
+                Ok(_) => "hash differs".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_map_store_keeps_a_map_once_and_refuses_an_org_without_domains() {
+        let d = storage_doc();
+        let cases = d.doc["map_cases"].as_array().unwrap();
+        let case = |name: &str| cases.iter().find(|c| c["name"] == name).unwrap();
+        let root_signed = case("root_signed");
+        let sp = root_signed["signer_policy"].as_object().unwrap();
+        let mut store = MapStore::default();
+        let v = store.accept_at(&root_signed["signed"], &d.root, sp, Some(&d.crl), "", d.now, "").unwrap();
+        assert_eq!((v.org.as_str(), v.seq, v.signer.as_str()), ("acme", 3, "root"));
+        let inter = case("intermediate_signed");
+        let again = store
+            .accept_at(&inter["signed"], &d.root, inter["signer_policy"].as_object().unwrap(), Some(&d.crl), "", d.now, "")
+            .unwrap();
+        assert_eq!(again.hash, v.hash); // the same map: kept once
+        assert_eq!(store.get("acme", ""), Some(&v.wire));
+        assert_eq!(store.get("acme", &v.hash.to_uppercase()), Some(&v.wire));
+        assert_eq!(store.get("acme", &"0".repeat(64)), None);
+        assert_eq!(store.get("beta", ""), None);
+        assert_eq!(store.persisted(), vec![Value::Object(v.wire.clone())]);
+        let gamma = case("org_without_domains");
+        let e = store.accept_at(&gamma["signed"], &d.root, sp, Some(&d.crl), "", d.now, "").unwrap_err();
+        assert_eq!(e, PolicyError::Refused(DOMAIN_REFUSED.into()));
+        store.prune("acme", "");
+        assert_eq!(store.kept["acme"].len(), 1);
+    }
+
+    #[test]
+    fn labels_origins_and_the_storage_gate() {
+        for (text, words) in [
+            ("Acme SharePoint", ""),
+            ("\u{c9}quipe (Paris) & Co.'s-sites 2", ""),
+            ("Acme\u{202e}NAS", "must not contain Unicode format characters"),
+            ("Acme\u{200b}NAS", "must not contain Unicode format characters"),
+            ("\u{2066}Acme\u{2069}", "must not contain Unicode format characters"),
+            ("\u{feff}Acme", "must not contain Unicode format characters"),
+            ("Acme NAS!", "may hold only letters, digits, spaces and .,()&'-"),
+            ("Acme\tNAS", "may hold only letters, digits, spaces and .,()&'-"),
+            ("", "must be 1 to 64 characters"),
+        ] {
+            let got = check_place_label(&json!(text), "x").err().unwrap_or_default();
+            let want = if words.is_empty() { String::new() } else { format!("x {words}") };
+            assert_eq!(got, want, "{text:?}");
+        }
+        assert_eq!(check_place_label(&json!("N".repeat(64)), "x"), Ok(()));
+        assert!(check_place_label(&json!("N".repeat(65)), "x").is_err());
+        for ok in ["https://s3.example.com", "https://s3.example.com/", "HTTPS://c.acme.internal:9443", "https://[::1]:443"] {
+            assert_eq!(https_origin(&json!(ok), "u"), Ok(()), "{ok}");
+        }
+        for no in ["http://s3.example.com", "https://s3.example.com/a", "https://u@h", "https://h?x=1", "https://h#f", "https://h:0", "https://h:99999", "https://h:x", "https://", "https:h", "s3.example.com"] {
+            assert_eq!(https_origin(&json!(no), "u"), Err("u must be an https:// origin".to_string()), "{no}");
+        }
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let with_storage = json!({"storage": {}});
+        assert_eq!(storage_gate(Some(&with_storage), &mins(json!({"hub": "0.98.0", "ios": "1.0.0"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0"}), json!({"ios": "0.98.0"}), json!({"hub": "0.97.9", "ios": "0.98.0"})] {
+            assert_eq!(storage_gate(Some(&with_storage), &mins(early)).unwrap_err(), STORAGE_TOO_SOON);
+        }
+        assert_eq!(storage_gate(Some(&json!({"seq": 1})), &Obj::new()), Ok(()));
     }
 }
