@@ -33,7 +33,7 @@ import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderD
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
-import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, stageKeyFor, stageSignature, type PushSource } from "./queue_model.ts";
+import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pollLaneView, pushLaneName, stageKeyFor, stageSignature, type PushSource } from "./queue_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
@@ -174,6 +174,9 @@ interface LaneRun {
   /** P-FLEET.STAGE1: the stage id of the last draft that was NOT confirmed staged, with its signature. Pressing
    *  Stage again on the same draft reuses the id, so an earlier attempt that did land is not staged twice. */
   stageKey: { id: string; sig: string } | null;
+  /** P-FLEET.DRAIN1 (ADR-0644): when this card last popped its queue head. A status poll asked before it is
+   *  older than the drain and may not restore the queue it popped (queue_model.pollLaneView). */
+  drainAt: number;
 }
 
 function newRun(view: LaneView): LaneRun {
@@ -182,7 +185,7 @@ function newRun(view: LaneView): LaneRun {
     streaming: false, collapsed: false, card: null, attached: [], files: null,
     seq: 0, meter: newMeter(Date.now()), follow: null,
     progress: null, progressAt: 0, waiting: null,
-    staging: false, stageKey: null,
+    staging: false, stageKey: null, drainAt: 0,
   };
 }
 
@@ -1486,6 +1489,7 @@ async function refresh(): Promise<void> {
   const remoteRead = refreshRemote();
   if (Date.now() - boardsAt >= BOARDS_MS) void loadBoards(); // P-FLEET-BOARDS.1: not every 2.5s
   let st: FleetStatusView | null = null;
+  const askedAt = Date.now(); // P-FLEET.DRAIN1 (ADR-0644): polls overlap on a loaded machine and answer out of order
   try { st = await deps.fleetStatus(); } catch { st = null; }
   if (dockState?.minimized) mountPill();
   const hr = dock ? $("#fleetHeadroom", dock) : null;
@@ -1499,7 +1503,9 @@ async function refresh(): Promise<void> {
       run = newRun(lane);
       runs.set(lane.id, run);
     } else {
-      run.view = lane; // the server is the source of truth on poll; stream events fill the gaps between
+      // the server is the source of truth on poll; stream events fill the gaps between. P-FLEET.DRAIN1: except
+      // the queue and status of a poll asked before this card's last drain, which predate the pop.
+      run.view = pollLaneView(lane, run.view, askedAt, run.drainAt);
     }
     // P-PROGRESS.1: the poll's view is the truth for progress and the wait too (a stream sample between
     // polls only fills the gap; the poll's absence of either clears it).
@@ -2598,6 +2604,7 @@ function maybeDrain(run: LaneRun): void {
   const id = run.view.id;
   const next = run.view.queued[0]!;
   run.view.queued = run.view.queued.slice(1);
+  run.drainAt = Date.now(); // P-FLEET.DRAIN1 (ADR-0644): polls asked before this cannot restore the popped head
   // The poll carries only counts, so a drained turn names its images and files by number (P-ATTACH.1).
   const extras = [next.images ? `${next.images} image${next.images === 1 ? "" : "s"}` : "", next.files ? `${next.files} file${next.files === 1 ? "" : "s"}` : ""].filter(Boolean);
   run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (extras.length ? ` [${extras.join(", ")}]` : ""), tools: [] });
