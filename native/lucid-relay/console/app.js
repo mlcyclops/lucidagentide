@@ -6196,10 +6196,12 @@
   // Confirm the new keys (4.4): one fleet step-up of kind "roster" over every relay that must learn them.
   function endorseKeys(roster) {
     const relays = (roster.relays || []).map((x) => x.relay);
+    // fleet/roster says where the key list is now; the endorsement names the position the waiting keys will take.
+    const next = (Number(roster.seq) || 0) + 1;
     confirmDialog({
-      spec: fspec("endorse"), vals: { n: (roster.waiting || []).length, m: relays.length }, name: FMSG.waitingKeys, id: String(roster.seq), two: true,
+      spec: fspec("endorse"), vals: { n: (roster.waiting || []).length, m: relays.length }, name: FMSG.waitingKeys, id: String(next), two: true,
       reaches: relays.map(relayName),
-      run: () => fleetPost("fleet/roster/endorse", { seq: roster.seq }, { action: "fleet.roster.endorse", target: String(roster.seq) }, relays, "roster"),
+      run: () => fleetPost("fleet/roster/endorse", { seq: next }, { action: "fleet.roster.endorse", target: String(next) }, relays, "roster"),
     });
   }
   pages.fleetExports = async () => {
