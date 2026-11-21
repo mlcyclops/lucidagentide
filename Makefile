@@ -1746,3 +1746,8 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-PREVIEW.OVERFLEET1
+demo-P-PREVIEW.OVERFLEET1: ## P-PREVIEW.OVERFLEET1 (ADR-0645): the Preview fly-out opens on top of a floating Fleet dock, its edge resizes it there and the width is saved, Fleet stays open. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_preview_over_fleet_1.mjs
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_over_fleet_1.mjs
