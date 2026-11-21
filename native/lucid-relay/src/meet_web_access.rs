@@ -23,7 +23,7 @@ pub(crate) const ROW_KEYS: [&str; 5] = ["key", "dck", "verified", "admission", "
 const KEY_MAX: usize = 200;
 const CLOCK_MS: f64 = 120.0 * 1000.0;
 const CONFLICT_SHOW: f64 = 60.0;
-const CAPS: [&str; 3] = ["caption_others", "guest_admit", "self_captions"];
+const CAPS: [&str; 4] = ["caption_others", "guest_admit", "peer_identity", "self_captions"];
 const CAPTION_MAX: i64 = 8;
 const LINK_MAX: i64 = 1440;
 const CHALLENGE_TTL: f64 = 60.0;
@@ -575,7 +575,7 @@ impl State {
         if method == "piv" && verified.get("ocsp").and_then(Value::as_str) == Some("unknown") && rules.get("ocsp").and_then(Value::as_str) == Some("required") {
             return Some(E::Forbidden(UNCHECKED.into()));
         }
-        if rules.get("large_calls").and_then(Value::as_str) == Some("refuse") && self.sfu_encrypted(room) {
+        if self.sfu_encrypted(room) && (rules.get("large_calls").and_then(Value::as_str) == Some("refuse") || self.sfu_legacy(room)) {
             return Some(E::Forbidden(sfu::E2EE_GUESTS.into()));
         }
         if recording && rules.get("record").and_then(Value::as_str) == Some("refuse") && self.wa_recording(room) {
@@ -749,7 +749,7 @@ impl State {
     /// calls; into a recorded stay, rules that allow recording.
     pub(super) fn wa_admit_check(&self, id: &str, admission: &Value) -> R<()> {
         let r = &self.guests.rec[id];
-        if self.sfu_encrypted(&r.room) && (r.key.is_empty() || admission.is_null() || rule_of(r, "large_calls").and_then(Value::as_str) == Some("refuse")) {
+        if self.sfu_encrypted(&r.room) && (r.key.is_empty() || admission.is_null() || rule_of(r, "large_calls").and_then(Value::as_str) == Some("refuse") || self.sfu_legacy(&r.room)) {
             return forbidden(sfu::E2EE_GUESTS);
         }
         if rule_of(r, "record").and_then(Value::as_str) == Some("refuse") && self.wa_recording(&r.room) {

@@ -3,7 +3,9 @@
 // and the first joiner asked for a large call (join `large: true`), or the room is a scheduled meeting of
 // `sfu_threshold` or more people, or the call of a group chat or channel with that many members; else `mesh` (at most
 // PEER_MAX_PER_ROOM). The join answer says `media` and, for sfu, `sfu: {url, token, expires}`: a LiveKit access token
-// (JWT HS256 with the media server's API secret) for identity `<peer>` (WA-1 4.3: no email on the media server; the
+// (JWT HS256 with the media server's API secret) for the stay's identity format (WA-1 4.3 revision 4: `"peer"`, the
+// identity `<peer>`, when every certificate holder seated at the stay's first token joined with the cap
+// `peer_identity`, else `"legacy"`, `<principal>|<peer>`, which 0.96.3 apps verify; fixed until the stay ends; the
 // captioner service only listens) in a LiveKit room of its own per
 // stay (`<room>.s<12 hex>`), valid TOKEN_TTL, publishing microphone and camera only (the presenter the relay names
 // also gets the screen). A peer leaving the relay room is removed from the media server too, the stay's LiveKit room
@@ -43,6 +45,8 @@ const CALL_TIMEOUT: f64 = 5.0;
 // wrapped group keys as opaque base64; it never holds a key.
 const E2EE_REQUIRED: &str = "this call is end-to-end encrypted and this app cannot join it";
 pub(super) const E2EE_GUESTS: &str = "guests cannot join an end-to-end encrypted large call";
+/// WA-1 4.3 revision 4: a seat without the cap `peer_identity` asking for media in a `"peer"` stay.
+const NEEDS_NEW_APP: &str = "this call needs the newest Lucid app; update Lucid to join it";
 /// An uncompressed P-384 point: 0x04 || X (48) || Y (48).
 const E2EE_EPK_BYTES: usize = 97;
 const E2EE_BAD_EPK: &str = "epk must be a P-384 public key (base64 of 97 bytes)";
@@ -85,6 +89,8 @@ pub(super) struct Sfu {
     rooms: HashMap<String, String>,
     /// room -> the identity the media server lets share a screen ("" = nobody)
     presenter: HashMap<String, String>,
+    /// room -> its stay's LiveKit identity format, "peer" | "legacy" (fixed at the stay's first token)
+    format: HashMap<String, &'static str>,
     /// time of the next check against seats, and whether one runs now
     next_sync: f64,
     syncing: bool,
@@ -100,9 +106,20 @@ fn stay_room(name: &str) -> bool {
     !rest.contains(&b'\n') && tail.starts_with(b".s") && tail[2..].iter().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(c))
 }
 
-/// The seat's LiveKit identity: its peer id only (WA-1 4.3; apps map peers to people from the member rows).
-fn identity(peer: &Peer) -> String {
-    peer.peer_id.clone()
+/// The seat's LiveKit identity in its stay's format: `<peer>` (apps map peers to people from the member rows), or
+/// `<principal>|<peer>` once the stay is fixed "legacy" (what 0.96.3 apps verify, WA-1 4.3 revision 4).
+fn identity(peer: &Peer, legacy: bool) -> String {
+    if legacy {
+        format!("{}|{}", peer.who.principal, peer.peer_id)
+    } else {
+        peer.peer_id.clone()
+    }
+}
+
+/// The seat verifies `<peer>` LiveKit identities: guest pages and web clients always, an app when its join listed
+/// `peer_identity` (WA-1 4.3 revision 4).
+fn peer_capable(who: &Identity, caps: Option<&[String]>) -> bool {
+    who.guest || who.kind == "web" || caps.is_some_and(|c| c.iter().any(|x| x == "peer_identity"))
 }
 
 /// A compact JWT, HS256 (what LiveKit verifies with the API secret).
@@ -322,14 +339,59 @@ impl State {
         if sfu && who.guest {
             // WA-1 4.3: a guest with its key, an admission and rules allowing large calls
             let ok = self.guests.rec.get(&guests::guest_id(&who.principal)).is_some_and(|r| !r.key.is_empty() && !r.admission.is_null() && r.rules.as_ref().and_then(|x| x.get("large_calls")).and_then(Value::as_str) != Some("refuse"));
-            if !ok {
+            // WA-1 4.3 revision 4: no guest in a stay whose identities 0.96.3 apps verify
+            if !ok || self.sfu.format.get(room).copied().unwrap_or_else(|| self.sfu_decide(room)) == "legacy" {
                 return forbidden(E2EE_GUESTS);
             }
         }
         if sfu && !e2ee {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
         }
+        // WA-1 4.3 revision 4: a seat without `peer_identity` cannot verify the media of a "peer" stay
+        if sfu && self.sfu.format.get(room) == Some(&"peer") && !peer_capable(who, wa::caps(ext)?.0.as_deref()) {
+            return Err(E::Conflict(NEEDS_NEW_APP.into()));
+        }
         Ok(())
+    }
+
+    /// The format a stay's first SFU token fixes: "peer" when every certificate holder seated in it now has the cap
+    /// `peer_identity`, else "legacy".
+    fn sfu_decide(&self, room: &str) -> &'static str {
+        if self.peers.values().filter(|p| p.room == room).all(|p| peer_capable(&p.who, p.caps.as_deref())) {
+            "peer"
+        } else {
+            "legacy"
+        }
+    }
+
+    /// The stay's identity format is fixed "legacy" (guests refused, WA-1 4.3 revision 4).
+    pub(super) fn sfu_legacy(&self, room: &str) -> bool {
+        self.sfu.format.get(room) == Some(&"legacy")
+    }
+
+    /// _sfu_grant with the stay's identity format: the stay's first grant fixes it; 403 for a guest in a "legacy"
+    /// stay, 409 for a seat without `peer_identity` in a "peer" one; the answer says `identity`.
+    fn sfu_media_grant(&mut self, peer_id: &str) -> R<Obj> {
+        let room = self.peers[peer_id].room.clone();
+        let format = match self.sfu.format.get(&room) {
+            Some(f) => *f,
+            None => {
+                let f = self.sfu_decide(&room);
+                self.sfu.format.insert(room.clone(), f);
+                log_info(&format!("sfu room={room} identity={f}"));
+                f
+            }
+        };
+        let peer = &self.peers[peer_id];
+        if format == "legacy" && peer.who.guest {
+            return forbidden(E2EE_GUESTS);
+        }
+        if format == "peer" && !peer_capable(&peer.who, peer.caps.as_deref()) {
+            return Err(E::Conflict(NEEDS_NEW_APP.into()));
+        }
+        let mut grant = self.sfu_grant(peer_id);
+        grant.insert("identity".into(), Value::from(format));
+        Ok(grant)
     }
 
     /// _sfu_stay_created: the media mode of the stay this join starts.
@@ -370,10 +432,15 @@ impl State {
             return obj([("media", Value::from("mesh"))]);
         }
         let pending = self.peers.get(peer_id).map(|p| p.admission_pending).unwrap_or(true);
-        let grant = if pending { Value::Null } else { Value::Object(self.sfu_grant(peer_id)) };
+        let grant = if pending { Value::Null } else { self.sfu_media_grant(peer_id).map(Value::Object).unwrap_or(Value::Null) };
         let stay = self.sfu.rooms.get(room).cloned().unwrap_or_default();
         // `stay`: the stay's LiveKit room, bound in what seats sign
-        let e2ee = obj([("required", Value::Bool(true)), ("stay", Value::from(stay))]);
+        let mut e2ee = obj([("required", Value::Bool(true)), ("stay", Value::from(stay))]);
+        // the stay's identity format once its first token fixed it (a seat waiting for consent reads it from its
+        // /v1/sfu/token answer)
+        if let Some(format) = self.sfu.format.get(room) {
+            e2ee.insert("identity".into(), Value::from(*format));
+        }
         obj([("media", Value::from("sfu")), ("sfu", grant), ("e2ee", Value::Object(e2ee))])
     }
 
@@ -390,7 +457,7 @@ impl State {
     /// _sfu_left: the seat's media server participant goes too.
     pub(super) fn sfu_left(&mut self, peer: &Peer, why: &str) {
         let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(&peer.room).cloned()) else { return };
-        let (who, why) = (identity(peer), why.to_string());
+        let (who, why) = (identity(peer, self.sfu_legacy(&peer.room)), why.to_string());
         spawn("sfu-remove", move || remove_now(&cfg, &lk_room, &who, &why));
     }
 
@@ -398,6 +465,7 @@ impl State {
     pub(super) fn sfu_room_empty(&mut self, room: &str) {
         self.sfu.media.remove(room);
         self.sfu.presenter.remove(room);
+        self.sfu.format.remove(room);
         let lk_room = self.sfu.rooms.remove(room);
         if let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), lk_room) {
             spawn("sfu-delete", move || delete_room(&cfg, &lk_room, "empty"));
@@ -411,6 +479,7 @@ impl State {
             self.sfu.media.remove(&room);
             self.sfu.rooms.remove(&room);
             self.sfu.presenter.remove(&room);
+            self.sfu.format.remove(&room);
         }
     }
 
@@ -419,7 +488,7 @@ impl State {
     pub(super) fn sfu_stage_view(&mut self, room: &str, view: &Obj) {
         let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(room).cloned()) else { return };
         let peer = view.get("presenter").and_then(|p| p.get("peer")).map(pj::py_str).unwrap_or_default();
-        let now_id = self.peers.get(&peer).filter(|p| p.room == room).map(identity).unwrap_or_default();
+        let now_id = self.peers.get(&peer).filter(|p| p.room == room).map(|p| identity(p, self.sfu_legacy(room))).unwrap_or_default();
         let before = self.sfu.presenter.get(room).cloned().unwrap_or_default();
         if now_id == before {
             return;
@@ -447,7 +516,7 @@ impl State {
     }
 
     fn sfu_seats(&self, room: &str) -> HashSet<String> {
-        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(identity).collect()
+        self.peers.values().filter(|p| p.room == room && !p.admission_pending).map(|p| identity(p, self.sfu_legacy(room))).collect()
     }
 
     // ── end-to-end encryption: keys pass through, opaque, never kept ──
@@ -492,7 +561,7 @@ impl State {
         let peer = &self.peers[peer_id];
         let now = pj::now() as i64;
         let expires = now + TOKEN_TTL;
-        let who = identity(peer);
+        let who = identity(peer, self.sfu_legacy(&peer.room));
         // the named presenter keeps the screen across a reconnect with a fresh token
         let mut sources: Vec<Value> = SOURCES.iter().map(|s| Value::from(*s)).collect();
         if self.sfu.presenter.get(&peer.room) == Some(&who) {
@@ -566,7 +635,7 @@ impl Hub {
     /// `POST /v1/sfu/token {peer}`: a fresh media server token for the caller's own seat in a call that uses it (only
     /// a seat that joined it with `e2ee: true`: there is no unencrypted large call).
     pub fn sfu_token(&self, peer_id: &str, who: &Identity) -> R<Obj> {
-        let st = self.st.lock();
+        let mut st = self.st.lock();
         st.owned(peer_id, who)?;
         if st.sfu.cfg.is_none() {
             return Err(E::Unavailable(NO_SFU.into()));
@@ -581,7 +650,7 @@ impl Hub {
         if peer.admission_pending {
             return forbidden(ADMISSION_FIRST);
         }
-        Ok(st.sfu_grant(peer_id))
+        st.sfu_media_grant(peer_id)
     }
 
     /// `POST /v1/e2ee {peer, epk, sig}` -> `{ok}`: the seat's ephemeral public key for this stay (base64 of an
@@ -757,6 +826,38 @@ mod tests {
     }
 
     #[test]
+    fn a_stays_identity_format_is_fixed_at_its_first_token() {
+        let h = Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
+        h.st.lock().sfu.cfg = Some(Arc::new(Cfg { url: "ws://127.0.0.1:9".into(), host: "127.0.0.1".into(), port: 9, tls: false, key: "k".into(), secret: b"s".to_vec(), threshold: 9, max: 100 }));
+        let (ann, ben, cy) = (seat("ann@x", "aaaaaaaaaaaaaaaa"), seat("ben@x", "bbbbbbbbbbbbbbbb"), seat("cy@x", "cccccccccccccccc"));
+        let new = body(serde_json::json!({"large": true, "e2ee": true, "caps": ["peer_identity"]}));
+        let old = body(serde_json::json!({"e2ee": true}));
+        let a = h.join("new", &ann, "", false, Some(&new)).unwrap();
+        let ap = a["peer"].as_str().unwrap().to_string();
+        assert_eq!((&a["e2ee"]["identity"], &a["sfu"]["identity"]), (&Value::from("peer"), &Value::from("peer")));
+        // a 0.96.3 app cannot verify `<peer>` identities: refused before it takes a seat
+        assert_eq!(refusal(h.join("new", &ben, "", false, Some(&old))), NEEDS_NEW_APP);
+        assert_eq!(h.sfu_token(&ap, &ann).unwrap()["identity"], Value::from("peer"));
+        assert_eq!(h.st.lock().sfu_seats("new"), HashSet::from([ap.clone()]));
+
+        // an old app first: "legacy" for the whole stay, even for new apps joining later
+        let large_old = body(serde_json::json!({"large": true, "e2ee": true}));
+        let b = h.join("old", &ben, "", false, Some(&large_old)).unwrap();
+        let bp = b["peer"].as_str().unwrap().to_string();
+        let c = h.join("old", &cy, "", false, Some(&new)).unwrap();
+        let cp = c["peer"].as_str().unwrap().to_string();
+        assert_eq!(c["e2ee"]["identity"], Value::from("legacy"));
+        assert_eq!(h.st.lock().sfu_seats("old"), HashSet::from([format!("ben@x|{bp}"), format!("cy@x|{cp}")]));
+        let guest = Identity { guest: true, ..seat("guest-0123456789abcdef@guest.invalid", "") };
+        assert_eq!(refusal(h.join("old", &guest, "", false, Some(&old))), E2EE_GUESTS);
+
+        // the stay ends: the next one decides again
+        h.leave(&bp, &ben).unwrap();
+        h.leave(&cp, &cy).unwrap();
+        assert!(!h.st.lock().sfu.format.contains_key("old"));
+    }
+
+    #[test]
     fn large_calls_carry_certs_sender_keys_rosters_and_sealed_captions() {
         let h = Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(LinkStats::new()));
         // a media server nobody listens on: leaving seats are removed from it on their own threads
@@ -770,7 +871,9 @@ mod tests {
         let a = h.join("big", &ann, "", false, Some(&e2ee)).unwrap();
         let ap = a["peer"].as_str().unwrap().to_string();
         let stay = h.st.lock().sfu.rooms.get("big").cloned().unwrap();
-        assert_eq!(a["e2ee"], serde_json::json!({"required": true, "stay": stay}));
+        // ann's join had no `peer_identity`: her first token fixed the stay "legacy" (WA-1 4.3 revision 4)
+        assert_eq!(a["e2ee"], serde_json::json!({"required": true, "stay": stay, "identity": "legacy"}));
+        assert_eq!(a["sfu"]["identity"], Value::from("legacy"));
         assert_eq!(a["you"]["cert"], Value::from(ann.cert_pem.clone()));
         assert_eq!((&a["you"]["epk"], &a["you"]["sig"]), (&Value::Null, &Value::Null));
         let later = body(serde_json::json!({"e2ee": true}));
