@@ -1746,3 +1746,8 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-FLEET.READ1
+demo-P-FLEET.READ1: ## P-FLEET.READ1 (ADR-0646): a markdown table in a Fleet card keeps compact columns (times, numbers, dates) on one line and wraps text only between words; a reply's copy button stays in view and copies the reply's markdown. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ LUCID_DEMO_LANE=<lane id> node desktop/scripts/demo_p_fleet_read_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/md_table_fit.test.ts desktop/renderer/lane_transcript.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_fleet_read_1.mjs
