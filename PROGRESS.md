@@ -6381,3 +6381,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-FLEET.HEAD3 (ADR-0647): a Fleet card header click no longer takes the lane over
+- **shipped (2026-11-21):** a header press released within the drag slop does nothing (it promoted the lane into the main composer, P-FLEET.L17, which the user hit by accident and lost the card's view of the running turn); dragging the header still reorders, the Promote button and the orbit spoke still promote; demo_p_fleet_head_3.mjs passes and fails on the old bundle.
+- **stubbed:** nothing.
+- **next:** the turn the user saw stop after the accidental promote and demote; confirm in the installed app that a promote/demote round trip mid-turn keeps the lane streaming.

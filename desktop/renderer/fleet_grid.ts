@@ -894,12 +894,12 @@ function onDockPointerDown(ev: Event): void {
   // windows aren't easily draggable": the header is the only drag surface, and it is packed with buttons,
   // a select and chips, all of which are correctly excluded below - which left almost no draggable pixels
   // in a real lane header. An explicit grip is a target the user can actually aim at.
-  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head, true); return; }
+  if (t.closest("[data-fleet-grip]")) { startCardDrag(e, head); return; }
   // Elsewhere on the header: controls act, they do not drag, and the textarea/select inside a card must
-  // keep their own gestures. P-FLEET.L17: a press that RELEASES within the drag slop is a CLICK, and a
-  // header click is the same takeover as clicking the lane's spoke in the orbit (grip excluded - its one
-  // job is reordering).
-  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head, false);
+  // keep their own gestures. P-FLEET.HEAD3 (ADR-0647): a header press that releases within the drag slop is
+  // a plain click and does NOTHING. It used to take the lane over into the main composer (P-FLEET.L17), which
+  // surprised a user who only touched the header; the Promote button and the orbit's spoke still do that.
+  if (!t.closest("button") && !t.closest("select") && !t.closest("input") && !t.closest("textarea")) startCardDrag(e, head);
 }
 
 function startCardResize(e: PointerEvent, rz: HTMLElement): void {
@@ -942,23 +942,12 @@ function startCardResize(e: PointerEvent, rz: HTMLElement): void {
 
 /** Drag the header to reorder. The rects are collected ONCE, so inserting the placeholder (which reflows
  *  the grid under the pointer) cannot feed the next snapSlot a moved target and make the drop jitter. */
-function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): void {
+function startCardDrag(e: PointerEvent, head: HTMLElement): void {
   const card = head.closest(".fleet-card[data-lane]") as HTMLElement | null; if (!card) return;
   const id = card.dataset.lane ?? ""; if (!id) return;
   const grid = dock ? ($("#fleetGrid", dock) as HTMLElement | null) : null; if (!grid) return;
   const rects = cardRects(grid);
-  if (rects.length < 2) {
-    // One card has nowhere to DRAG, but its header click must still take over (P-FLEET.L17) - the
-    // single-lane fleet is exactly where a new user tries the gesture first.
-    if (!fromGrip) {
-      const clickUp = (): void => {
-        window.removeEventListener("pointerup", clickUp); window.removeEventListener("pointercancel", clickUp);
-        deps?.promoteLane?.(id);
-      };
-      window.addEventListener("pointerup", clickUp); window.addEventListener("pointercancel", clickUp);
-    }
-    return;
-  }
+  if (rects.length < 2) return; // one card has nowhere to drag (P-FLEET.HEAD3: and a click takes nothing over)
   e.preventDefault();
   const ox = e.clientX, oy = e.clientY;
   try { head.setPointerCapture(e.pointerId); } catch { /* non-fatal */ }
@@ -989,12 +978,7 @@ function startCardDrag(e: PointerEvent, head: HTMLElement, fromGrip: boolean): v
     window.removeEventListener("pointercancel", up);
     card.classList.remove("dragging");
     slotEl.remove();
-    if (!moved) {
-      // P-FLEET.L17: released within the slop = a CLICK on the header = the orbit's spoke takeover.
-      // The grip stays reorder-only, and app.ts promoteLane already refuses bad states with the reason.
-      if (!fromGrip) deps?.promoteLane?.(id);
-      return;
-    }
+    if (!moved) return; // P-FLEET.HEAD3 (ADR-0647): released within the slop is a click, and a click reorders nothing
     // Commit through the target's ID, not the raw slot index: `rects` is the cards on screen and
     // `layout.order` is every live lane, and translating keeps the drop honest if the two ever differ.
     const target = rects[slot]?.id ?? id;

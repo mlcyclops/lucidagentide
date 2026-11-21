@@ -1746,3 +1746,8 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-FLEET.HEAD3
+demo-P-FLEET.HEAD3: ## P-FLEET.HEAD3 (ADR-0647): a click on a Fleet card's header no longer takes the lane over into the main composer; the Promote button and the orbit spoke still do. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ LUCID_DEMO_LANE=<lane id> node desktop/scripts/demo_p_fleet_head_3.mjs
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_fleet_head_3.mjs
