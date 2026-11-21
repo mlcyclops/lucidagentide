@@ -2651,14 +2651,14 @@ pub fn previews_off(policy: &Obj) -> bool {
 pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy once every Hub and iPhone runs 0.97.0 or later";
 pub const VIDEO_TOO_SOON: &str = "A team background can be set by policy once every Hub and iPhone runs 0.98.0 or later";
 pub const LAN_SCOPE_TOO_SOON: &str = "Own-network reach across networks can be set by policy once every Hub and iPhone runs 0.98.0 or later";
-pub const WATCH_TOO_SOON: &str = "Apple Watch can be set by policy once every Hub and iPhone runs 0.99.0 or later";
+pub const WATCH_TOO_SOON: &str = "Apple Watch can be set by policy once every Hub and iPhone runs 0.98.1 or later";
 /// NT-1 section 3.9, BG-1 section 2.2, LS-1 section 2 and AW-1 section 2.2: each gated key, the Hub and iPhone releases that first read
 /// it (older devices refuse unknown keys), and the refusal.
 const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 4] = [
     ("notify", [("hub", "0.97.0"), ("ios", "0.97.0")], NOTIFY_TOO_SOON),
     ("video", [("hub", "0.98.0"), ("ios", "0.98.0")], VIDEO_TOO_SOON),
     ("lan_scope", [("hub", "0.98.0"), ("ios", "0.98.0")], LAN_SCOPE_TOO_SOON),
-    ("watch", [("hub", "0.99.0"), ("ios", "0.99.0")], WATCH_TOO_SOON),
+    ("watch", [("hub", "0.98.1"), ("ios", "0.98.1")], WATCH_TOO_SOON),
 ];
 
 /// client_gate: a policy with a key in CLIENT_GATES is signed only once the relay's minimums (`min_client` and the
@@ -3672,10 +3672,10 @@ mod tests {
             w.insert("watch".into(), json!(value));
             assert_eq!(watch(Some(&w)), value);
             let gated = Value::Object(w.clone());
-            for good in [json!({"hub": "0.99.0", "ios": "0.99.0"}), json!({"hub": "0.99.1", "ios": "1.0.0"})] {
+            for good in [json!({"hub": "0.98.1", "ios": "0.98.1"}), json!({"hub": "0.99.0", "ios": "1.0.0"})] {
                 assert_eq!(client_gate(Some(&gated), &mins(good)), Ok(()));
             }
-            for early in [json!({}), json!({"hub": "0.99.0"}), json!({"ios": "0.99.0"}), json!({"hub": "0.98.9", "ios": "0.99.0"}), json!({"hub": "0.99.0", "ios": "0.98.9"})] {
+            for early in [json!({}), json!({"hub": "0.98.1"}), json!({"ios": "0.98.1"}), json!({"hub": "0.98.0", "ios": "0.98.1"}), json!({"hub": "0.98.1", "ios": "0.98.0"})] {
                 assert_eq!(client_gate(Some(&gated), &mins(early)).unwrap_err(), WATCH_TOO_SOON);
             }
         }
