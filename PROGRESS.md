@@ -6390,6 +6390,6 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **stubbed:** nothing.
 - **next:** record and export a live fleet session in Visualize with the fix in.
 ## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds, purchasable world packs for Visualize
-- **shipped (2026-11-21):** package kind "world", the frozen world contract (viz_world_api.ts), engine routes to list, serve, import, export and uninstall worlds, the Visualize world picker with options, entitlement receipts, world throwables and storms, per-item prices and five $9.99 catalog items (Christmas, Valentine's Day, Football, St. Patrick's Day, Soccer), tools/build_world.ts, docs/WORLDS.md.
+- **shipped (2026-11-21):** package kind "world", the frozen world contract (viz_world_api.ts), engine routes to list, serve, import, export and uninstall worlds, the Visualize world picker with options, entitlement receipts, world throwables and storms, per-item prices and seven $9.99 catalog items (Christmas, Valentine's Day, Football, St. Patrick's Day, Soccer, Baseball, Basketball), tools/build_world.ts, docs/WORLDS.md.
 - **stubbed:** nothing in the platform; each world ships as its own pack from the private store repo.
 - **next:** build, sign, upload and film each world in order: Christmas, Valentine's Day, Football, St. Patrick's Day.

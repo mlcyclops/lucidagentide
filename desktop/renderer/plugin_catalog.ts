@@ -144,6 +144,20 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: false, poster: "generated", glyph: "star", tone: "cyan" },
   },
   {
+    id: "world-baseball", name: "Baseball", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-BASEBALL-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "A day at the ballpark: a manager and a team in YOUR colors on a sunny diamond, with hot dogs, foam fingers and Fireworks Night.",
+    lucid: "Your main agent is the manager in the dugout, every fleet lane a player, and subagents run out as base coaches and bat kids. Set the team colors in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "record", tone: "blue" },
+  },
+  {
+    id: "world-basketball", name: "Basketball", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-BASKETBALL-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "Game night in the arena: a coach and a team in YOUR colors on the hardwood, with the mascot, fresh sneakers and a Blackout Intro.",
+    lucid: "Your main agent is the head coach on the sideline, every fleet lane a player, and subagents run on as assistant coaches and the team mascot. Set the team colors in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "bolt", tone: "amber" },
+  },
+  {
     id: "leaps", name: "LEAPS", section: "civilian", sale: "link",
     href: "https://l-e-a-p-s-947863229376.us-west1.run.app", linkLabel: "Subscription on leaps",
     kicker: "Spaced repetition studio",

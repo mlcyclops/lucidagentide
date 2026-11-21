@@ -46,6 +46,8 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   "world-football": { section: "civilian", lookupKey: "PLG-WORLD-FOOTBALL-OTF" },
   "world-st-patricks": { section: "civilian", lookupKey: "PLG-WORLD-STPATRICKS-OTF" },
   "world-soccer": { section: "civilian", lookupKey: "PLG-WORLD-SOCCER-OTF" },
+  "world-baseball": { section: "civilian", lookupKey: "PLG-WORLD-BASEBALL-OTF" },
+  "world-basketball": { section: "civilian", lookupKey: "PLG-WORLD-BASKETBALL-OTF" },
   leaps: { section: "civilian", lookupKey: null },
   "mdmp-engine": { section: "government", lookupKey: null },
   "joint-planning-engine": { section: "government", lookupKey: null },
@@ -103,7 +105,8 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual([
-      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-christmas", "world-football", "world-soccer", "world-st-patricks", "world-valentines",
+      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-christmas", "world-football", "world-soccer",
+      "world-st-patricks", "world-valentines",
     ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
@@ -173,8 +176,10 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
     for (const p of sold) expect(p.price).toBe(isWorldPlugin(p) ? "$9.99" : "$29.99");
   });
 
-  test("the five worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
-    expect(worlds.map((p) => p.id).sort()).toEqual(["world-christmas", "world-football", "world-soccer", "world-st-patricks", "world-valentines"]);
+  test("the seven worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+    expect(worlds.map((p) => p.id).sort()).toEqual([
+      "world-baseball", "world-basketball", "world-christmas", "world-football", "world-soccer", "world-st-patricks", "world-valentines",
+    ]);
     for (const p of worlds) {
       expect(p.group).toBe(WORLDS_GROUP);
       expect(p.section).toBe("civilian");
