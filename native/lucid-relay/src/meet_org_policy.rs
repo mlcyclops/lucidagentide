@@ -41,8 +41,11 @@ const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
     "workflows", "external_archives", "external_apps", "retention", "identity", "notify", "video", "ai", "storage", "sharing",
-    "lan_scope",
+    "lan_scope", "watch",
 ];
+/// AW-1 section 2.1: `watch` is `allow` or `refuse` (absent means refuse).
+const WATCH_VALUES: &[&str] = &["allow", "refuse"];
+pub const WATCH_SHAPE: &str = "watch must be allow or refuse";
 /// BG-1 section 2.1: the camera background of the people the policy covers.
 const VIDEO_KEYS: &[&str] = &["background", "team_image", "change"];
 const VIDEO_BACKGROUNDS: &[&str] = &["none", "blur", "team"];
@@ -1284,6 +1287,11 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             }
         }
     }
+    if let Some(w) = p.get("watch") {
+        if !w.as_str().is_some_and(|w| WATCH_VALUES.contains(&w)) {
+            return Err(bad(WATCH_SHAPE));
+        }
+    }
     if let Some(a) = p.get("ai") {
         check_ai(a, terms)?;
     }
@@ -1323,6 +1331,11 @@ pub fn video_default(policy: Option<&Obj>) -> String {
         Some((b, image, _)) if b == "team" => format!("team:{image}"),
         Some((b, _, _)) => b,
     }
+}
+
+/// AW-1 section 2.1: `allow` or `refuse` (absent, or no policy, means refuse).
+pub fn watch(policy: Option<&Obj>) -> &'static str {
+    if policy.and_then(|p| p.get("watch")).and_then(Value::as_str) == Some("allow") { "allow" } else { "refuse" }
 }
 
 // ---- AI-1: the `ai` key, its gates and the members-only AI map (docs/ai/contract.md 1, 2) ----------------------
@@ -2638,12 +2651,14 @@ pub fn previews_off(policy: &Obj) -> bool {
 pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy once every Hub and iPhone runs 0.97.0 or later";
 pub const VIDEO_TOO_SOON: &str = "A team background can be set by policy once every Hub and iPhone runs 0.98.0 or later";
 pub const LAN_SCOPE_TOO_SOON: &str = "Own-network reach across networks can be set by policy once every Hub and iPhone runs 0.98.0 or later";
-/// NT-1 section 3.9, BG-1 section 2.2 and LS-1 section 2: each gated key, the Hub and iPhone releases that first read
+pub const WATCH_TOO_SOON: &str = "Apple Watch can be set by policy once every Hub and iPhone runs 0.98.1 or later";
+/// NT-1 section 3.9, BG-1 section 2.2, LS-1 section 2 and AW-1 section 2.2: each gated key, the Hub and iPhone releases that first read
 /// it (older devices refuse unknown keys), and the refusal.
-const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 3] = [
+const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 4] = [
     ("notify", [("hub", "0.97.0"), ("ios", "0.97.0")], NOTIFY_TOO_SOON),
     ("video", [("hub", "0.98.0"), ("ios", "0.98.0")], VIDEO_TOO_SOON),
     ("lan_scope", [("hub", "0.98.0"), ("ios", "0.98.0")], LAN_SCOPE_TOO_SOON),
+    ("watch", [("hub", "0.98.1"), ("ios", "0.98.1")], WATCH_TOO_SOON),
 ];
 
 /// client_gate: a policy with a key in CLIENT_GATES is signed only once the relay's minimums (`min_client` and the
@@ -3504,7 +3519,7 @@ mod tests {
         let d = doc();
         let cases = d.doc["cases"].as_array().unwrap();
         let names: HashSet<&str> = cases.iter().filter_map(|c| c["name"].as_str()).collect();
-        for n in ["root_signed", "intermediate_signed", "person_certificate_signed", "expired_intermediate", "domain_outside_org_domains"] {
+        for n in ["root_signed", "intermediate_signed", "person_certificate_signed", "expired_intermediate", "domain_outside_org_domains", "watch_allow", "watch_refuse", "watch_on", "watch_true", "watch_object"] {
             assert!(names.contains(n), "{n}");
         }
         for case in cases {
@@ -3643,6 +3658,27 @@ mod tests {
         }
         v.insert("notify".into(), json!({"previews": "off"}));
         assert_eq!(client_gate(Some(&Value::Object(v)), &mins(json!({"hub": "0.96.0", "ios": "0.96.0"}))).unwrap_err(), NOTIFY_TOO_SOON);
+        // AW-1 sections 2.1 and 2.2: watch
+        for ok in ["allow", "refuse"] {
+            assert_eq!(check(json!({ "watch": ok })), "");
+        }
+        for wrong in [json!("on"), json!("Allow"), json!(""), json!(true), json!(1), json!({"allow": true}), json!(["allow"])] {
+            assert_eq!(check(json!({ "watch": wrong })), WATCH_SHAPE);
+        }
+        let mut w = base.clone();
+        assert_eq!(watch(Some(&w)), "refuse");
+        assert_eq!(watch(None), "refuse");
+        for value in ["allow", "refuse"] {
+            w.insert("watch".into(), json!(value));
+            assert_eq!(watch(Some(&w)), value);
+            let gated = Value::Object(w.clone());
+            for good in [json!({"hub": "0.98.1", "ios": "0.98.1"}), json!({"hub": "0.99.0", "ios": "1.0.0"})] {
+                assert_eq!(client_gate(Some(&gated), &mins(good)), Ok(()));
+            }
+            for early in [json!({}), json!({"hub": "0.98.1"}), json!({"ios": "0.98.1"}), json!({"hub": "0.98.0", "ios": "0.98.1"}), json!({"hub": "0.98.1", "ios": "0.98.0"})] {
+                assert_eq!(client_gate(Some(&gated), &mins(early)).unwrap_err(), WATCH_TOO_SOON);
+            }
+        }
         // LS-1 section 2: lan_scope
         let scope = json!({"networks": ["10.0.0.0/8", "192.168.1.0/24", "100.64.0.0/10"], "ttl": 4, "anchors": ["192.168.1.10"]});
         assert_eq!(check(json!({ "lan_scope": scope.clone() })), "");

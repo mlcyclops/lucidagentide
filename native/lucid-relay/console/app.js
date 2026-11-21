@@ -3288,6 +3288,7 @@
       cols: [{ key: "label", label: "Organization", cell: (o) => u(o.label || o.id) }, { key: "id", label: W["dialog.id"], cell: (o) => code(o.id) }, { key: "members", label: "Members" },
         { key: "bridgesOn", label: "Bridges", cell: (o) => onOff(o.bridgesOn) }, { key: "orgAdmins", label: "Org admins" },
         { key: "policy", label: "Policy", cell: (o) => (o.policy ? "Version " + o.policy.seq + ", " + clean(o.policy.issued) : MSG.no), sortable: false },
+        { key: "watch", label: "Apple Watch", cell: (o) => (o.policy && o.policy.watch === "allow" ? "Allowed" : "Off"), sortable: false },
         { key: "lowering", label: "Pending lowering", cell: (o) => (o.policy && o.policy.pending_lowering ? u(clean(o.policy.pending_lowering.effective_at) + ": " + clean(o.policy.pending_lowering.reason)) : ""), sortable: false }],
     }))];
   };
