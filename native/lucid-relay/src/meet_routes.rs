@@ -225,6 +225,12 @@ fn get_route(path: &str) -> Option<Route> {
             c.raw = Some(m::Raw::Bytes(headers, body));
             Ok(Obj::new())
         },
+        "/v1/org/background" => |c: &mut Ctx| {
+            c.who(false)?;
+            let (headers, body) = c.relay.hub.pc_background_get(&c.q("sha256", ""))?;
+            c.raw = Some(m::Raw::Bytes(headers, body));
+            Ok(Obj::new())
+        },
         "/v1/apps/c/events" => |c: &mut Ctx| {
             let who = c.who(false)?;
             c.relay.hub.pc_apps_events(&c.q("session", ""), &who, &c.q("after", "0"), &c.q("wait", &(pc::EVENTS_WAIT as i64).to_string()))
@@ -627,6 +633,10 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/apps/icon" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);
             c.relay.hub.pc_icon_put(&pj::s(&b, "session"), &who, b.get("png"))
+        },
+        "/v1/org/background" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::BACKGROUND_BODY_MAX)?);
+            c.relay.hub.pc_background_put(&pj::s(&b, "session"), &who, b.get("jpeg"))
         },
         // app and archive certificates
         "/v1/apps/c/hello" => |c: &mut Ctx| {

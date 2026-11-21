@@ -34,8 +34,12 @@ const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention", "notify",
+    "workflows", "external_archives", "external_apps", "retention", "notify", "video",
 ];
+/// BG-1 section 2.1: the camera background of the people the policy covers.
+const VIDEO_KEYS: &[&str] = &["background", "team_image", "change"];
+const VIDEO_BACKGROUNDS: &[&str] = &["none", "blur", "team"];
+const VIDEO_CHANGES: &[&str] = &["allow", "refuse"];
 /// NT-1 section 3.9: the only `notify` the policy may carry.
 const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
@@ -615,7 +619,44 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             return Err(bad(NOTIFY_SHAPE));
         }
     }
+    if let Some(v) = p.get("video") {
+        let got = keys(v, VIDEO_KEYS, &["background"], "video")?;
+        let background = got["background"].as_str().filter(|b| VIDEO_BACKGROUNDS.contains(b));
+        let Some(background) = background else {
+            return Err(bad("video.background must be none, blur or team"));
+        };
+        if let Some(i) = got.get("team_image") {
+            if !i.as_str().is_some_and(|i| hex_ok(i, 64, 64)) {
+                return Err(bad("video.team_image must be 64 lower-case hex digits"));
+            }
+        }
+        if background == "team" && !got.contains_key("team_image") {
+            return Err(bad("a team background needs video.team_image"));
+        }
+        if let Some(c) = got.get("change") {
+            if !c.as_str().is_some_and(|c| VIDEO_CHANGES.contains(&c)) {
+                return Err(bad("video.change must be allow or refuse"));
+            }
+        }
+    }
     Ok(())
+}
+
+/// BG-1 section 2.1: `(background, team_image, change)` of a checked policy, with the absent values filled
+/// (`team_image` "", `change` "allow"); None without `video`.
+pub fn video(policy: Option<&Obj>) -> Option<(String, String, String)> {
+    let v = policy?.get("video")?.as_object()?;
+    let text = |k: &str, d: &str| v.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
+    Some((text("background", ""), text("team_image", ""), text("change", "allow")))
+}
+
+/// BG-1 section 2.3: the default marker ("", `none`, `blur` or `team:<sha256>`).
+pub fn video_default(policy: Option<&Obj>) -> String {
+    match video(policy) {
+        None => String::new(),
+        Some((b, image, _)) if b == "team" => format!("team:{image}"),
+        Some((b, _, _)) => b,
+    }
 }
 
 /// NT-1 section 3.9: the policy turns message previews off for the people it covers.
@@ -623,17 +664,24 @@ pub fn previews_off(policy: &Obj) -> bool {
     policy.get("notify").and_then(|n| n.get("previews")).and_then(Value::as_str) == Some("off")
 }
 
-/// NT-1 section 3.9: the Hub and iPhone releases that accept `notify` (older devices refuse unknown keys).
-const NOTIFY_CLIENTS: [(&str, &str); 2] = [("hub", "0.97.0"), ("ios", "0.97.0")];
 pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy once every Hub and iPhone runs 0.97.0 or later";
+pub const VIDEO_TOO_SOON: &str = "A team background can be set by policy once every Hub and iPhone runs 0.98.0 or later";
+/// NT-1 section 3.9 and BG-1 section 2.2: each gated key, the Hub and iPhone releases that first read it (older
+/// devices refuse unknown keys), and the refusal.
+const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 2] = [
+    ("notify", [("hub", "0.97.0"), ("ios", "0.97.0")], NOTIFY_TOO_SOON),
+    ("video", [("hub", "0.98.0"), ("ios", "0.98.0")], VIDEO_TOO_SOON),
+];
 
-/// notify_gate: a policy with `notify` is signed only once the relay's minimums (`min_client` and the release's) reach
-/// the NT-1 release of both the Hub and the iPhone.
-pub fn notify_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
-    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key("notify"));
-    let ready = NOTIFY_CLIENTS.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
-    if wants && !ready {
-        return Err(NOTIFY_TOO_SOON.into());
+/// client_gate: a policy with a key in CLIENT_GATES is signed only once the relay's minimums (`min_client` and the
+/// release's) reach that key's release of both the Hub and the iPhone.
+pub fn client_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let Some(p) = policy.and_then(Value::as_object) else { return Ok(()) };
+    for (key, clients, needs) in CLIENT_GATES {
+        let ready = clients.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+        if p.contains_key(key) && !ready {
+            return Err(needs.into());
+        }
     }
     Ok(())
 }
@@ -1034,10 +1082,41 @@ mod tests {
         // signing one waits for the NT-1 Hub and iPhone releases in the relay's minimums
         let mins = |v: Value| v.as_object().unwrap().clone();
         let with_notify = Value::Object(off.clone());
-        assert_eq!(notify_gate(Some(&with_notify), &mins(json!({"hub": "0.97.0", "ios": "0.97.1"}))), Ok(()));
+        assert_eq!(client_gate(Some(&with_notify), &mins(json!({"hub": "0.97.0", "ios": "0.97.1"}))), Ok(()));
         for early in [json!({}), json!({"hub": "0.97.0"}), json!({"hub": "0.96.9", "ios": "0.97.0"}), json!({"hub": "0.97", "ios": "0.9.70"})] {
-            assert_eq!(notify_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
+            assert_eq!(client_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
         }
-        assert_eq!(notify_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
+        assert_eq!(client_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
+        assert_eq!(client_gate(None, &Obj::new()), Ok(()));
+
+        // BG-1 section 2.1: video
+        let img = "ab".repeat(32);
+        for ok in [json!({"background": "none"}), json!({"background": "blur", "change": "refuse"}), json!({"background": "team", "team_image": img, "change": "allow"}), json!({"background": "blur", "team_image": img})] {
+            assert_eq!(check(json!({ "video": ok })), "");
+        }
+        assert_eq!(check(json!({"video": {"background": "none", "zz": 1}})), "video has unknown fields: zz");
+        assert_eq!(check(json!({"video": {"background": "photo"}})), "video.background must be none, blur or team");
+        assert_eq!(check(json!({"video": {"background": 1}})), "video.background must be none, blur or team");
+        assert_eq!(check(json!({"video": {"background": "blur", "team_image": "AB".repeat(32)}})), "video.team_image must be 64 lower-case hex digits");
+        assert_eq!(check(json!({"video": {"background": "blur", "team_image": "ab"}})), "video.team_image must be 64 lower-case hex digits");
+        assert_eq!(check(json!({"video": {"background": "team"}})), "a team background needs video.team_image");
+        assert_eq!(check(json!({"video": {"background": "none", "change": "deny"}})), "video.change must be allow or refuse");
+        let mut v = base.clone();
+        assert_eq!(video(Some(&v)), None);
+        assert_eq!(video_default(Some(&v)), "");
+        assert_eq!(video_default(None), "");
+        v.insert("video".into(), json!({"background": "team", "team_image": img}));
+        assert_eq!(video(Some(&v)), Some(("team".into(), img.clone(), "allow".into())));
+        assert_eq!(video_default(Some(&v)), format!("team:{img}"));
+        v.insert("video".into(), json!({"background": "blur", "change": "refuse"}));
+        assert_eq!(video_default(Some(&v)), "blur");
+        // BG-1 section 2.2: signing one waits for 0.98.0, and notify still waits for 0.97.0
+        let with_video = Value::Object(v.clone());
+        assert_eq!(client_gate(Some(&with_video), &mins(json!({"hub": "0.98.0", "ios": "0.98.1"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0"}), json!({"hub": "0.97.9", "ios": "0.98.0"})] {
+            assert_eq!(client_gate(Some(&with_video), &mins(early)).unwrap_err(), VIDEO_TOO_SOON);
+        }
+        v.insert("notify".into(), json!({"previews": "off"}));
+        assert_eq!(client_gate(Some(&Value::Object(v)), &mins(json!({"hub": "0.96.0", "ios": "0.96.0"}))).unwrap_err(), NOTIFY_TOO_SOON);
     }
 }

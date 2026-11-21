@@ -1178,8 +1178,8 @@ impl Relay {
         if who.cert_pem.is_empty() {
             return m::forbidden("sign from one of your devices");
         }
-        // NT-1 section 3.9: `notify` waits until every Hub and iPhone runs the NT-1 release
-        crate::meet_org_policy::notify_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        // NT-1 section 3.9, BG-1 section 2.2: `notify` and `video` wait until every Hub and iPhone reads them
+        crate::meet_org_policy::client_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
         let body = obj([
             ("policy", policy.cloned().unwrap_or(Value::Null)),
             ("proof", Value::from(pj::str_or(proof))),

@@ -33,7 +33,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEYCIQC3befEbGZPzYu6qkuIdGAZIjM4u9mY3PCcgLPyTV7Y1AIhALEPQImywGWTUiHa3N2jHihQ46yxF5U99v/2Psr8DrE7"
+    "sig": "MEUCIH698F5WkW7/O3e9U463kVUqlrV5OvQmLJWkBUgQE7KtAiEA0NcEQdnAh4jVhz/lYYJm8AA0L+sQuNAlH7VrymsGybw="
    },
    "signer_policy": {
     "admins": [
@@ -57,7 +57,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIQCHk83DInF/o5QEL5IF1UXgMfKxxmtrbS/6fDoCQYCmyQIgRnIrecy12S7LBWvKbMvrbYW/XDbcRRZ1KIYDJpAQINs=",
+    "policy_sig": "MEMCH1CGbRvZCMGqOpP7+kFxU1JFlQMw5t6xmyOj58JWx3kCIFe0WvKGhzZ+A42MnCccZyi1G/CKstAcdhkEfQ9gLtZc",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -69,7 +69,7 @@
    "policy_hash": "9141dea19197c5baa91799515a61e8cd83cfbb54c25fcae3c1a8142373322a01",
    "signed": {
     "chain": [
-     "-----BEGIN CERTIFICATE-----\nMIIBlTCCATqgAwIBAgICIAEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5MzEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR51dvqfZqv\n1Ysvazj2dNehkGixL+aAcKWocZF+UUn+HHyq4eDyz7jtEO5SNQZbn8oK4AZwfqwg\nc4O80TpjwE1Lo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNJ\nADBGAiEA961H6lHTkR6XO1s5RiUehxvkyoeFz20U6n2I2Zuuq20CIQCqIh9fqOXh\nY7PvBlm9Smc0OGnT9Ak4KEQH30H5PNgDOQ==\n-----END CERTIFICATE-----\n"
+     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5MzEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAT8EX7Dr4nW\nlWPtE3iB9+I1/wOb9qtgNAwBzWfikG1hXvul6l/wQR9yPwjSVO0ChwOSmb38PfCk\nabnvznlomP98o0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQcky36XlCW4KN4iYd7SjhtLgTRmTAKBggqhkjOPQQDAgNI\nADBFAiEAztT892fcMYfMXNMhlasd9YdxA3ise6BdW4ccLCR8fpUCIA0NBDjrMKrS\njTwk4SYGSP9TR+CpksP1/8Xa99udTk3Y\n-----END CERTIFICATE-----\n"
     ],
     "policy": {
      "admins": [
@@ -98,7 +98,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEQCIFDSaD6XIQ/k5a5FhHOB9MQFHh9l0o1iBGgviobW1yHZAiBPD7EK5EKKZoWxCIum0QxdRfLWK/cUQ8aXqGTj/XWfJg=="
+    "sig": "MEUCIEPNxgy89tOLPtjxp84kFgT8LqnYBni/kznVmZCUvS+UAiEAjLdCOPBcQdd4FpPUpB1osgqDp4rH0/MNc3KfpGp4qnQ="
    },
    "signer_policy": {
     "admins": [
@@ -123,7 +123,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIQC5FDo9efvccDgogjm6vTZ/i4rDRYpXnIs3Z25xJZ/7LQIgO6qgP5ZJAlWdTBxAcGjnlIMwW4IOgKdTWMLlKqCtLes=",
+    "policy_sig": "MEQCIFQ06wWVffbqWtgLcSME7M/F5IeBxx8pMI3IjR4hkV2LAiBEFIk2sLazQIilX7bcFcQLUnO9JICC6jiPyiM/w8cgxQ==",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -134,7 +134,7 @@
    "name": "person_certificate_signed",
    "signed": {
     "chain": [
-     "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgICMAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjYxMjA2\nMjEyMDAwWjATMREwDwYDVQQDDAhBbm4gQWJsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABINWu2cc/40rLvK6O3pA0UNQ7tjavo1hvCvPxS5de/jOZxMPUqx7H9UI\nb20eINvQf7UWT83SEwdkcYXUkCoktxyjcjBwMAwGA1UdEwEB/wQCMAAwPwYDVR0R\nBDgwNoEMYW5uQGFjbWUuY29thiZ1cm46bHVjaWQtbWVldDpkZXZpY2U6YTFhMWEx\nYTFhMWExYTFhMTAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggq\nhkjOPQQDAgNIADBFAiEA+paTOpAYTtDLxu68tO/ZuKp7w4EgPrZ/y9em/EQ0oeAC\nIA8G0lfuKhDzDcP90vLQ7yIfsx2Ns6g0yZjqd4JtzLTs\n-----END CERTIFICATE-----\n"
+     "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgICMAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjYxMjA2\nMjEyMDAwWjATMREwDwYDVQQDDAhBbm4gQWJsZTBZMBMGByqGSM49AgEGCCqGSM49\nAwEHA0IABLrXBy1W//4WygSZy+uP3UQUi4vo1D7mLHXQFSW8ZKDiPLcIiv8gqmS5\nRW3e4xXIYb1yYqQI9cZFrJkYnUgie1OjcjBwMAwGA1UdEwEB/wQCMAAwPwYDVR0R\nBDgwNoEMYW5uQGFjbWUuY29thiZ1cm46bHVjaWQtbWVldDpkZXZpY2U6YTFhMWEx\nYTFhMWExYTFhMTAfBgNVHSMEGDAWgBQcky36XlCW4KN4iYd7SjhtLgTRmTAKBggq\nhkjOPQQDAgNIADBFAiAnqPTbkTRTElhQkp0XPlyJQGJ6fBKy9hfqnVXMxiwMOgIh\nALpYzhQFTudhi7+LH3njWvYNSZ6xmxoIcKJ5Emi6CFro\n-----END CERTIFICATE-----\n"
     ],
     "policy": {
      "admins": [
@@ -163,7 +163,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEYCIQCItw4jBkdXnHhLbUI/y11r0Y9+pbRhS73miNM8F2hulwIhAPOTkFCSucES/cvvm7LnL7REz98/WyX7g6K7YwCj0hBd"
+    "sig": "MEUCIGHAud5qPlhKNckfFJZNnXJaa35FvvgDAPlTgN0dsQsvAiEA4XXxhR7A2sul5mtRL9l0YYlRyR0c9UZQnwDOLYh9/tI="
    },
    "signer_policy": {
     "admins": [
@@ -188,7 +188,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIA+x7CnfxiyOSMEplzfKL4paXYrEQzQH1/IY3+bo7VH4AiEA55v8oLav2AeK7rSj8DhjNcjTje5PdsYVWld+UJ8o8p0=",
+    "policy_sig": "MEUCIQDtampizeVQ6i3Rr1pESlyzKhJ06xKsltsFbv+qmvqnkwIgGj8QyOMX1r1Id86XGCUpHK7PfyTvityfvCMixzKRFZ0=",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -199,7 +199,7 @@
    "name": "expired_intermediate",
    "signed": {
     "chain": [
-     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAIwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYwNzI5MjEyMDAwWhcNMjYxMDI3\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NDEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQLNTz8oM5j\nD+jgcA2HfZPOPLuSHdIT/CP8bVoJfGQHPC+ltvU9SjVNzrpzpQaxEURiTrn9YHzD\n3VeiYVScYzudo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNI\nADBFAiEA5fSSzjJ5WstSV8HFwYDoNgi6DjHwIj6cyE2aboh4fAwCICn9qPCttw2r\nt8w04cloWDR6gRWSsnuIlT+Nh0WXZLml\n-----END CERTIFICATE-----\n"
+     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAIwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYwNzI5MjEyMDAwWhcNMjYxMDI3\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NDEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARzZlaRt43F\nJTKwTytZrKPaALBwLEWrJI2YUC+0+eToxxhoKJbXc5lc7LE5RteZ6AdH77B2elqn\nkzn0girf7bw8o0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQcky36XlCW4KN4iYd7SjhtLgTRmTAKBggqhkjOPQQDAgNI\nADBFAiEA0ECM6r+ZPbIT/TMSP05PgxHoR4VZuM0QsEPIr2bDOqUCIGKgepn2GYjV\nZlft5YHq5wgM81NmMsLhwjlTbyEhTJT2\n-----END CERTIFICATE-----\n"
     ],
     "policy": {
      "admins": [
@@ -228,7 +228,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEYCIQDicA9C+P3PsaFff5tDPaCLh/vd6ye9f0ICAhr5tmSmNAIhAPrP+LhWOjQeeirx49MEmwXJMJcOTqyHtdZlMQK0h7yx"
+    "sig": "MEUCICuU/N4Jmjqwt0n/FoDG3PoN1Ob/aXNHZq1og9oH7LZcAiEA6+B3V62wYkvPen5zO+cmzSTpMhhtXmDFrD+huFxNmpo="
    },
    "signer_policy": {
     "admins": [
@@ -253,7 +253,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIQDqlCYQto5NsNiS2V108iLYNO2cOTvFxw4RulSCdoyneAIgfZqwLvdpkMyNLpBf5FNAni6We5sh8T364qap0yRAvgY=",
+    "policy_sig": "MEYCIQDT7qn5LAy5BpH/S2BEuZLcDozsnnlma0w4turGcK9nbgIhAOrLhNyf52HzxA+1Fi5Q8IdDNmm8rf3HNSB+S2AyP8tD",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -264,7 +264,7 @@
    "name": "revoked_intermediate",
    "signed": {
     "chain": [
-     "-----BEGIN CERTIFICATE-----\nMIIBlDCCATqgAwIBAgICIAMwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NTEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQugYhf3Vdh\nbqCmt1mgx9w/a7y6a7zOFwS3c7f0GceNv0AATnN+5UXaCG7oF2utgOoi4OATdpGX\n7sM67gnGJmA3o0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQsmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNI\nADBFAiEA4/vXXOl3bEDsNmG1ODhUrNgRdP6cOwd95tf4VRxLNjsCIBGxd1QgLEwj\nXsTD4aepGu+LFuJKd+n69T3i2m+5umPh\n-----END CERTIFICATE-----\n"
+     "-----BEGIN CERTIFICATE-----\nMIIBlTCCATqgAwIBAgICIAMwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjYxMTA1MjEyMDAwWhcNMjcwMjA0\nMjEyMDAwWjA1MSMwIQYDVQQDDBpMdWNpZCBNZWV0IFNpZ25pbmcgQ0EgODE5NTEO\nMAwGA1UECgwFTHVjaWQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQBPrNOpu5s\nKQ7xx/bEcVwlPdbsl14c125mXec3297BbonI3ZInIo53YoEpZaUhcPXGc0eGsF9a\nBjFSQlOymqKTo0cwRTASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIB\nhjAfBgNVHSMEGDAWgBQcky36XlCW4KN4iYd7SjhtLgTRmTAKBggqhkjOPQQDAgNJ\nADBGAiEAmPnMxQWrXvcWJ6S0ga4hT2MnXvUDpSYqV9Tb2C2AzvoCIQCy3B4HaSg+\nPyaJOyGCiikUIExforvciNplis1rPGi3Rg==\n-----END CERTIFICATE-----\n"
     ],
     "policy": {
      "admins": [
@@ -293,7 +293,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEQCIBhtHu39QkVQ4XHhl0ROPDC6Gm/YiqNt5DR7PnCemQEGAiBhamT6vWrOfLgm7m7BjniZahJohsrRWmjqVJadecGQFg=="
+    "sig": "MEUCIQDwwChQUKIKrPYrkccwjTLm+vwKq459SVpkLOxMThU5AQIgcD8nMZwrQNqnSTQRavwlgtECt0w27cyRjamjxt4XEbs="
    },
    "signer_policy": {
     "admins": [
@@ -318,7 +318,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEQCIEYnlkgAxcz+UPYpw+C21o4g6vopd88G834oVINOgr3wAiAaPZCy1WY50USfpwLJqF5rX7VTLlLnvJhKyybKLmunww==",
+    "policy_sig": "MEQCIFhOi0UIWgNk4ffc19HpXGmmwmxdrxFrOOU4g9grOVBCAiA4NVdHpIR7gvz+tmuEXkG6w9vYPWSbz8ITTgngz0m8KA==",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -357,7 +357,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEUCIQCMnm3XvIRWMP6rnkqFylDV8oySMi4QKXgo3CJ2df3szAIgMVPoYPedcvA5DqNZBL7pCxpC51tMFzpKudcXRssDK0I="
+    "sig": "MEUCIQDLg6Up+PdnlICxsN3mxS4vUIFt9UC2+/q7UpQzhjwWSgIgIXDb8OEw+3xjK52UPjaSsQWj524ubqPq88Gh99KN9H8="
    },
    "signer_policy": {
     "admins": [
@@ -381,7 +381,7 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIQDjiS4NrhPR7/ugHkS4dIb/2gctEHOJBtTVKs9HHrStCgIgEmCnCnwYM4T6UMEdHsUaRjbRxMAXyP0dCMvOQqrSpjA=",
+    "policy_sig": "MEYCIQC4TYpXkpqomqd4lUjzcpXeWBvSwG4mcGE7oDC+cyQPiQIhAMpxxRY2xQqmbS7MJ2KV8PsVBIBmag6kVlE4HfyLLu59",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -420,7 +420,7 @@
      "seq": 7,
      "v": 1
     },
-    "sig": "MEUCIA9860Vnm72Od9X+ochIjs4FfL9mZELw/+BPoQox0AcUAiEAy1ib3PEo/fQ3rHGqYiiPQQ1s/Ef1D0tkvxpo+F4A5r0="
+    "sig": "MEQCIAQjxzZMtwvCzNytKOqhGCY0PlLUorLIHHnTs6b8oyqKAiAUX7+vFFx+s/FLiUMDgJOHeejlonPiY53CUEa1XQUw+w=="
    },
    "signer_policy": {
     "admins": [
@@ -444,7 +444,537 @@
       "beta.com"
      ]
     },
-    "policy_sig": "MEUCIGCmvVyMWQYWbiaPsLXQgbsMidDnkFglY5ovSZm7anYGAiEAzQOzmsWEZiAjKgEKLjkj5U5r+C0HLpKLQMwk+woQf1Q=",
+    "policy_sig": "MEUCIH3+K5DZ+ZQpTlMySqs+jAOmncHJeIDF8Ac/6MN36SyEAiEAtZpAS0i7bGbe2N4HEr3FvejntdAk7ODlyhPdx8YZijg=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "video_team_locked",
+   "policy_hash": "546e5ce437b2c1dbf26b5a925ccd0cf19afdd92a85c9152ed695e695e6514527",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "team",
+      "change": "refuse",
+      "team_image": "abababababababababababababababababababababababababababababababab"
+     }
+    },
+    "sig": "MEQCIHZhgNtG6eT2T5ZkK71tdh4qitNTFx028ozeqayX2RpnAiAZiQCjH1ohI4VVLG9S6hVbQK1yP/3o+nkKHeMoQD4+iA=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIQCbebE1z2Dx82yOF6DoTUGMg9Ux5I2UD0ldVBja+YlcQQIgF2K1FHlEhGqucuE2GmfpYX8DcJIrxpGKeo+t1FNQdSc=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "video_blur_with_team_choice",
+   "policy_hash": "b7dbad1bbb71308b9351ee8848a10c916ba09cd04b9731b773027924a7ed3c2f",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "blur",
+      "team_image": "abababababababababababababababababababababababababababababababab"
+     }
+    },
+    "sig": "MEYCIQCS0EVDGbr+ICKLoNjCqnhAgKIuXDnLT6Pag8ZwlEeBuAIhAPlBO4aoNVQRyzaq/LsAEVvrZ3ycPBZMJGBBPaB2NEba"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIHOtmVh2zJ/LRilOaAwA9dBetWOl9DlwX6bpDPv63k5lAiEAwUhS5MNd/Narx1VvJD0LoyLbTFMqnmDVRq01u8IKJOk=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "ok",
+   "name": "video_none_allow",
+   "policy_hash": "5732299ec96ca8302882c1cf88e1cbf725ee7ebd6e6593febaba5e4f7a2695a4",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "none",
+      "change": "allow"
+     }
+    },
+    "sig": "MEUCIQC/nQRfIAAFVdefuVhJgl6jsEP4NKoBnsQOJJuTgKZIrAIgHTiQeoff1NjGCsFFDhON+/dhSMAb4DUJTNIEGqh8n/g="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEUCIGSeVFNNSXBomAlcjVg9gaXxIjdYrQvfLdtZv4mjbJWEAiEAmF6XVBJFY5TqIPA/XOF4XDkMo0bFOyB04edtXpSHeA4=",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "video has unknown fields: color",
+   "name": "video_unknown_field",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "blur",
+      "color": "red"
+     }
+    },
+    "sig": "MEUCIAn2NTaU7Bynm5zYk4BM2UF+ob6uPSBcAPqW4lwYNeU1AiEAgqOKRaB7S6Gi/NHF6GKQ8o1QJgZ/nQQrwq3NgCbH9C4="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEYCIQCxNi/jbCmmHc0fKukTWsRr3D/n+RwJkDFnOw5WZvgtTAIhAIqx5A7rlC14fT8Nk/qh31I9nWy4xTlUpPoelnV4XXv4",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "video.background must be none, blur or team",
+   "name": "video_bad_background",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "image"
+     }
+    },
+    "sig": "MEQCIE040z8f4uq0iY+cTxUCtI00dmHwSfDctJ0zW+kBFg24AiBLRu/tLcOg2RYwI8a9CmIERQbq7XTBgJ99mdrqR/syxA=="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEQCIHQO8+iMqstxoTbIIf7d9UI+1fMEFzc9TNwEotCId0MCAiAcfvqEIdV/St2GZQb+ZHst9zoK3Q3ylZ3oSulhj3tP0A==",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "video.team_image must be 64 lower-case hex digits",
+   "name": "video_upper_case_image",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "team",
+      "team_image": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+     }
+    },
+    "sig": "MEUCIQD1YDLrLJ7bhA4B6+wdXh9QuKXLiXlZEW/3rEMLvnGR6AIgPT9tPm7LQ69kPPQlUr5eoH0NJKHFe16ocGKIOC1XTws="
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEYCIQCQJey9Liag95ojvRA/ThVTMBmB1y+CSU15bvA1s3ZDdwIhAKZmujFdZdkt4c/f0Njt4aP/o+an7c6TmaCramBMc+l5",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "a team background needs video.team_image",
+   "name": "video_team_without_image",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "team"
+     }
+    },
+    "sig": "MEYCIQDEWusfpURHfS6DEDF4DncSB9IiUFl1wOsScWXKJdonKQIhALHIqIIHsCquZfTFYThSSkfcymLKoZQKAqnqnLmQAz0V"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEYCIQC20nzd+cxkfP+K7zHVQiqaGH0pxN9uSetFRT+wL8Go1QIhANfcc2lj6Zqz+ENPnrQr4sf/OiknxhfwdJM9EKIV4A6Y",
+    "sso": {},
+    "sso_services": [],
+    "v": 2
+   }
+  },
+  {
+   "expect": "video.change must be allow or refuse",
+   "name": "video_bad_change",
+   "signed": {
+    "chain": [],
+    "policy": {
+     "admins": [
+      "it@acme.com"
+     ],
+     "archive": {
+      "device": "e5e5e5e5e5e5e5e5",
+      "host": "archive.acme.internal",
+      "principal": "archive@apps.acme.com",
+      "since": 1794000000
+     },
+     "domains": [
+      "acme.com"
+     ],
+     "expires": 1796592000,
+     "issued": 1794000000,
+     "label": "Acme",
+     "org": "acme",
+     "retention": {
+      "canvas": 0,
+      "channel": 730,
+      "dm": 365,
+      "files": 365,
+      "group": 365
+     },
+     "seq": 7,
+     "v": 1,
+     "video": {
+      "background": "blur",
+      "change": "never"
+     }
+    },
+    "sig": "MEYCIQCNVEiy9siwsdTawzv85CTDjLeMctFBhthhG/KoG8SUyAIhANPrwgehMVMApUUtU6MwByMaLYPMoYrlCUhQoGgNSe09"
+   },
+   "signer_policy": {
+    "admins": [
+     "ann@acme.com"
+    ],
+    "auto_enroll_device_origin": true,
+    "auto_renew": true,
+    "enclave": false,
+    "issued": "2026-11-05T21:20:00+00:00",
+    "max_devices": 5,
+    "org_admins": {
+     "acme": [
+      "ann@acme.com"
+     ]
+    },
+    "org_domains": {
+     "acme": [
+      "acme.com"
+     ],
+     "beta": [
+      "beta.com"
+     ]
+    },
+    "policy_sig": "MEYCIQCOs8JJV18+fsSvFn46v7c9MYV2Hff3gDKsnePHXD1R7QIhAKHLwejjXndtYpGcXg27jmrs/BEBc5VLw4oI1weZkEvD",
     "sso": {},
     "sso_services": [],
     "v": 2
@@ -452,7 +982,7 @@
   }
  ],
  "now": 1794000300,
- "root_crl_pem": "-----BEGIN X509 CRL-----\nMIHHMG4CAQEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEO\nMAwGA1UECgwFTHVjaWQXDTI2MTEwNjIxMTkwMFoXDTI3MDMwNjIxMjAwMFowFTAT\nAgIgAxcNMjYxMTA2MjExOTAwWjAKBggqhkjOPQQDAgNJADBGAiEAgq6b5wAcyqfN\nK9uglc7+9P8hovHasCZISrqi/XsgpfQCIQC4M6H+2wSVCVOwrPOs6YrvljfXGjza\nBsphQnu+mDJz2Q==\n-----END X509 CRL-----\n",
- "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABGMkqH/88L9Z3F88fmGvKqieIMRP\nPqBF8GYcSq6epqvxFmYcPY+YRhEasgicBDkb3E0L2hZYEby42xWqfwtfSaGjRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBQs\nmbjOYfZ6BjkwpfMMpYoNy2iaezAKBggqhkjOPQQDAgNIADBFAiAW8YKxFvYAYHRk\nyfxCEqyXSGOIZ7A3LQr4Gj2dVksmugIhAPn9JZM9kdfBPye732O3Xu8H6JqVU3/N\neW4mBL9pmwa7\n-----END CERTIFICATE-----\n",
+ "root_crl_pem": "-----BEGIN X509 CRL-----\nMIHFMG4CAQEwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQgTWVldCBDQTEO\nMAwGA1UECgwFTHVjaWQXDTI2MTEwNjIxMTkwMFoXDTI3MDMwNjIxMjAwMFowFTAT\nAgIgAxcNMjYxMTA2MjExOTAwWjAKBggqhkjOPQQDAgNHADBEAiAi90VwFUUYJ3QL\nCATtDolRhYN7SxD/Zyf74vGDLPgzZwIgZPiW8JwIhhJKaqMyLsoqEARVZBXqjdek\ngdGQqVBZN9g=\n-----END X509 CRL-----\n",
+ "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhDCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKXiXn1RhSc/N62PGjGnGiom8tEm\nN7INIhI5jJeB77nciAAzY1gDuhG6h260wJMa6zHOb+hEGnxk/0t6kyYQCB2jRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBQc\nky36XlCW4KN4iYd7SjhtLgTRmTAKBggqhkjOPQQDAgNHADBEAiBG2OCXALpGfhOI\njFwntZ4RzSRvJPUmQ9x1WPZR3NnbywIgFQ7R4BGLUfZ3C5G3RgtHeXsLLBuP1vu9\n75jlRspqjJI=\n-----END CERTIFICATE-----\n",
  "v": 1
 }
