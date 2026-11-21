@@ -688,6 +688,7 @@ impl MeetSection {
                     "issued": inner.get("issued").or_else(|| p.get("issued")).cloned().unwrap_or(Value::Null),
                     "sha256": p.get("hash").or_else(|| p.get("sha256")).cloned().unwrap_or(Value::Null),
                     "pending_lowering": p.get("pending_lowering").cloned().unwrap_or(Value::Null),
+                    "watch": crate::meet_org_policy::watch(Some(&inner)),
                 })
             });
             let count = members.iter().filter(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str())).count();
