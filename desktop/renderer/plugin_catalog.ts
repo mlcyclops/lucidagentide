@@ -137,6 +137,13 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: false, poster: "generated", glyph: "loop", tone: "green" },
   },
   {
+    id: "world-soccer", name: "Soccer", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-SOCCER-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "Match day: a manager and a club in YOUR colors under the floodlights, with volleys, yellow cards, a trophy lift and a Flare Storm.",
+    lucid: "Your main agent is the manager on the touchline, every fleet lane a player, and subagents run on as assistant coaches and ball kids. Set the club colors in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "star", tone: "cyan" },
+  },
+  {
     id: "leaps", name: "LEAPS", section: "civilian", sale: "link",
     href: "https://l-e-a-p-s-947863229376.us-west1.run.app", linkLabel: "Subscription on leaps",
     kicker: "Spaced repetition studio",
