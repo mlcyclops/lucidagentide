@@ -55,10 +55,11 @@ import { hubLanes } from "./orbit_layout.ts";
 import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
+import { vizBrandFor } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641): the demo probe reports each figure's sponsor
 import { mountLedger, type LedgerView } from "./viz_ledger.ts";
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
-  applyEvent, applyFleet, applyRuns, census, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
+  applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
   isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
   type Persona, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
@@ -210,7 +211,11 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   // P-VIZ.6: the demo (and only the demo, through the URL) exposes where each node is on screen, so a real-UI
   // check (desktop/scripts/demo_p_viz_6.mjs) can click an agent the way a user would. Read-only.
   if (demo) (window as unknown as { __vizProbe?: unknown }).__vizProbe = {
-    nodes: () => (model ? [...model.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, box: scene?.screenBoxOf(n.id) ?? null })) : []),
+    // P-VIZ.7 (ADR-0641): the sponsor and size class each figure wears, and whether it is committing right now.
+    nodes: () => (model ? [...model.nodes.values()].map((n) => {
+      const b = vizBrandFor(n.model);
+      return { id: n.id, kind: n.kind, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()) };
+    }) : []),
   };
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
@@ -556,6 +561,7 @@ function syncScene(): void {
       id: n.id, kind: n.kind, persona: n.persona, label: n.kind === "hub" ? "Main" : n.label, status: n.status,
       pos: pos.get(n.id) ?? [0, 0, 0], glow: nodeIntensity(n, now),
       team: team ? team.agents + team.subagents : 0, idleSec: idleSeconds(n, now),
+      model: n.model, committing: committing(n, now), // P-VIZ.7 (ADR-0641): sponsor and the commit animation
     };
   });
   scene.sync(nodes, edgesOf(model, now));

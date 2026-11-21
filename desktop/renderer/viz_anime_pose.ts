@@ -20,6 +20,10 @@
 // P-VIZ.6 (ADR-0637): who a node is (seededGender, shared with the office cast so a node keeps its gender across
 // styles), the hit reactions (planHit / sampleHit: a one-shot clip per hit, turned toward the throw, replaced
 // cleanly by the next hit) and the charge a bolt, an energy ball or an energy drink leaves behind (Charge).
+//
+// P-VIZ.7 (ADR-0641): the variant weapons (weaponOf / weaponAt: katana, kunai, staff, chakram) and their moves,
+// played on some loops of the kata, dash and kiblast slots (weaponTurn); the git commit's `commit` loop and its
+// glowing `raiden` eyes.
 
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
@@ -29,7 +33,8 @@ export const ANIME_STATES: readonly AnimeState[] = ["idle", "working", "paused",
 
 // ------------------------------------------------------------------------------------------ emotions (eye shapes)
 
-export type EyeShape = "open" | "happy" | "closed" | "strain" | "x";
+/** P-VIZ.7 (ADR-0641): "glow" is the commit's blank, glowing white-blue eyes (no iris, light bleeding out). */
+export type EyeShape = "open" | "happy" | "closed" | "strain" | "x" | "glow";
 export interface Emotion {
   readonly shape: EyeShape; readonly open: number; readonly slant: number; readonly lower: number;
   readonly pupil: number; readonly brow: number; readonly browY: number; readonly sweat: boolean;
@@ -53,6 +58,8 @@ export const EMOTIONS = {
   angry: E("open", 0.55, 0.7, 0.3, 0.36, 1.05, -0.2),
   // P-VIZ.6 (ADR-0637): the caught throwing star, heavy-lidded and pleased with himself
   smug: E("open", 0.42, -0.15, 0.4, 0.85, -0.25, 0.1),
+  // P-VIZ.7 (ADR-0641): the git commit, channeling the storm: blank glowing eyes under hard, level brows
+  raiden: E("glow", 0.62, 0.3, 0.3, 1, 0.6, -0.1),
 } satisfies Record<string, Emotion>;
 export type EmotionName = keyof typeof EMOTIONS;
 export const EMOTION_NAMES = Object.keys(EMOTIONS) as EmotionName[];
@@ -170,6 +177,33 @@ export const POSES = {
   orbAbsorb: { emotion: "calm", spine: [-0.05, 0, 0], chest: [-0.12, 0, 0], head: [-0.12, 0, 0], shL: [-0.85, 0, 0.42], elL: [-2.2, 0, 0], shR: [-0.85, 0, -0.42], elR: [-2.2, 0, 0], hipL: [0, 0, -0.18], hipR: [0, 0, 0.18] },
   // Storm: a wide power-up stance, chest and face up to the sky, fists low and out
   stormSky: { emotion: "determined", rootY: -0.06, chest: [-0.28, 0, 0], neck: [-0.25, 0, 0], head: [-0.5, 0, 0], shL: [0.25, 0, -0.65], elL: [-0.55, 0, 0], shR: [0.25, 0, 0.65], elR: [-0.55, 0, 0], hipL: [-0.25, 0, -0.32], kneeL: [0.4, 0, 0], hipR: [-0.25, 0, 0.32], kneeR: [0.4, 0, 0] },
+
+  // ---- P-VIZ.7 (ADR-0641): the variant weapons (always in the right hand; the figure shows the weapon in the hand
+  // or on its mount from weaponAt) and the git commit
+  // the right hand up behind the right shoulder, on the hilt of what rides the back (the katana, the staff)
+  drawReach: { emotion: "focused", root: [0, -0.2, 0], hips: [0, 0.2, 0], chest: [0.02, 0.15, 0], head: [0, -0.25, 0], shL: [-1.2, 0, 0.45], elL: [-1.9, 0, 0], shR: [-2.7, 0, 0.3], elR: [-1.6, 0, 0], ...KATA_LEGS },
+  // katana: raised back over the head, a snap cut down to the front, a wind to his left and a rising sweep out right
+  slashHigh: { emotion: "determined", rootY: -0.04, root: [0, -0.2, 0], hips: [0, 0.2, 0], chest: [-0.1, 0.1, 0], head: [-0.1, -0.1, 0], shL: [-0.9, 0, 0.5], elL: [-1.6, 0, 0], shR: [-2.85, 0, 0.15], elR: [-0.6, 0, 0], ...KATA_LEGS },
+  slashDown: { emotion: "determined", rootY: -0.1, root: [0, -0.2, 0], hips: [0, 0.2, 0], spine: [0.15, 0, 0], chest: [0.12, -0.2, 0], head: [-0.05, 0.1, 0], shL: [-0.5, 0, -0.35], elL: [-1.2, 0, 0], shR: [-0.6, 0, 0.05], elR: [-0.1, 0, 0], hipL: [-0.55, 0, -0.25], kneeL: [0.85, 0, 0], hipR: [0.4, 0, 0.25], kneeR: [0.4, 0, 0] },
+  slashWind: { emotion: "determined", rootY: -0.06, root: [0, -0.35, 0], hips: [0, 0.2, 0], chest: [0.05, -0.5, 0], head: [0, 0.45, 0], shL: [-0.6, 0, -0.3], elL: [-1.4, 0, 0], shR: [-1.3, 0, -0.5], elR: [-1.4, 0, 0], ...KATA_LEGS },
+  slashSweep: { emotion: "determined", rootY: -0.06, root: [0, 0.1, 0], hips: [0, 0.2, 0], chest: [0, 0.45, 0], head: [0, -0.4, 0], shL: [-0.4, 0, -0.55], elL: [-1.2, 0, 0], shR: [-1.75, 0, 0.6], elR: [-0.15, 0, 0], ...KATA_LEGS },
+  // kunai pair: a crouch to the thigh pouches, both hands crossed up to the shoulders, flung out forward and wide
+  kunaiDraw: { emotion: "focused", rootY: -0.08, spine: [0.12, 0, 0], head: [-0.1, 0, 0], shL: [0.05, 0, -0.22], elL: [-0.3, 0, 0], shR: [0.05, 0, 0.22], elR: [-0.3, 0, 0], hipL: [-0.4, 0, -0.2], kneeL: [0.6, 0, 0], hipR: [-0.4, 0, 0.2], kneeR: [0.6, 0, 0] },
+  kunaiWind: { emotion: "determined", rootY: -0.06, chest: [0.12, 0, 0], head: [0.05, 0, 0], shL: [-1.5, 0, 0.6], elL: [-1.6, 0, 0], shR: [-1.5, 0, -0.6], elR: [-1.6, 0, 0], ...KATA_LEGS },
+  kunaiThrow: { emotion: "determined", rootY: -0.06, spine: [0.05, 0, 0], chest: [-0.05, 0, 0], head: [-0.05, 0, 0], shL: [-1.35, 0, -0.55], elL: [-0.1, 0, 0], shR: [-1.35, 0, 0.55], elR: [-0.1, 0, 0], ...KATA_LEGS },
+  // bo staff: spun before him in the right hand (the left in guard), then a lunging two-hand thrust
+  staffSpin: { emotion: "determined", rootY: -0.05, root: [0, -0.15, 0], chest: [0, 0.15, 0], head: [0, -0.1, 0], shL: [-1.0, 0, 0.4], elL: [-1.7, 0, 0], shR: [-1.5, 0, 0.2], elR: [-0.25, 0, 0], ...KATA_LEGS },
+  staffStrike: { emotion: "determined", rootY: -0.1, rootZ: 0.05, spine: [0.1, 0, 0], chest: [0.1, -0.1, 0], head: [-0.05, 0.05, 0], shL: [-1.45, 0, 0.15], elL: [-0.2, 0, 0], shR: [-1.55, 0, -0.05], elR: [-0.05, 0, 0], hipL: [-0.7, 0, -0.15], kneeL: [0.8, 0, 0], hipR: [0.45, 0, 0.2], kneeR: [0.2, 0, 0] },
+  // chakram: off the back of the belt, a backhand wind across the chest, the throw out right, the catch on return
+  discGrab: { emotion: "focused", root: [0, 0.15, 0], chest: [0.05, 0.25, 0], head: [0, -0.2, 0], shL: [-1.2, 0, 0.45], elL: [-1.9, 0, 0], shR: [0.45, 0, 0.3], elR: [-0.9, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  discWind: { emotion: "determined", rootY: -0.06, root: [0, -0.2, 0], chest: [0.05, -0.55, 0], head: [0, 0.5, 0], shL: [-0.5, 0, -0.4], elL: [-1.3, 0, 0], shR: [-1.4, 0, -0.75], elR: [-1.3, 0, 0], ...KATA_LEGS },
+  discThrow: { emotion: "determined", rootY: -0.06, root: [0, 0.2, 0], chest: [0, 0.4, 0], head: [0, -0.45, 0], shL: [-0.4, 0, -0.6], elL: [-1.0, 0, 0], shR: [-1.5, 0, 0.75], elR: [-0.05, 0, 0], ...KATA_LEGS },
+  discCatchReady: { emotion: "focused", chest: [-0.05, 0.1, 0], head: [-0.1, -0.1, 0], shL: [-1.0, 0, 0.4], elL: [-1.7, 0, 0], shR: [-1.9, 0, 0.3], elR: [-0.4, 0, 0], hipL: [0, 0, -0.15], hipR: [0, 0, 0.15] },
+  discCatch: { emotion: "smug", chest: [-0.05, 0.1, 0], head: [-0.05, -0.05, 0.06], shL: [-1.0, 0, 0.4], elL: [-1.7, 0, 0], shR: [-1.7, 0, 0.25], elR: [-0.9, 0, 0], hipL: [0, 0, -0.15], hipR: [0, 0, 0.15] },
+  // the git commit: feet planted wide, the right arm straight up (the bolt leaves that hand), the left fist low and
+  // out, chest and face up to the storm; commitStrain is the same stance pulled a little harder
+  commitRaise: { emotion: "raiden", rootY: -0.05, chest: [-0.12, 0, 0], neck: [-0.1, 0, 0], head: [-0.3, 0.1, 0.05], shL: [0.2, 0, -0.55], elL: [-0.4, 0, 0], shR: [-3.05, 0, 0.12], elR: [-0.05, 0, 0], hipL: [-0.1, 0, -0.3], kneeL: [0.25, 0, 0], hipR: [-0.1, 0, 0.3], kneeR: [0.25, 0, 0] },
+  commitStrain: { emotion: "raiden", rootY: -0.065, chest: [-0.17, 0, 0], neck: [-0.12, 0, 0], head: [-0.38, 0.1, 0.05], shL: [0.26, 0, -0.64], elL: [-0.5, 0, 0], shR: [-3.08, 0, 0.1], elR: [-0.02, 0, 0], hipL: [-0.12, 0, -0.32], kneeL: [0.3, 0, 0], hipR: [-0.12, 0, 0.32], kneeR: [0.3, 0, 0] },
 } as const satisfies Record<string, PoseDef>;
 export type PoseName = keyof typeof POSES;
 export const LAB_POSES: readonly PoseName[] = ["stance", "typing", "powerup", "kiblast", "dash", "meditate", "portrait", "victory", "powerdown"];
@@ -235,8 +269,11 @@ export function tapCurve(u: number): number {
 export interface Key { readonly at: number; readonly pose: PoseName; readonly ease: Ease; readonly emotion: EmotionName; readonly gaze: number }
 export interface Clip { readonly len: number; readonly loop: boolean; readonly keys: readonly Key[] }
 export type ShotName = "powerup" | "victory";
-/** `supervise` is named explicitly so the clip table type-checks whether or not MiniActivity carries it yet. */
-export type ClipName = MiniActivity | "supervise" | ShotName | "failed" | "ended" | "killed";
+/** P-VIZ.7 (ADR-0641): a variant's weapon move, played in a weapon slot (WEAPON_SLOTS) some loops of the activity. */
+export type WeaponClip = "slash" | "kunaiThrow" | "staffSpin" | "discThrow";
+/** `supervise` is named explicitly so the clip table type-checks whether or not MiniActivity carries it yet.
+ *  P-VIZ.7: the weapon moves and the git commit (`commit`, a loop held while the commit runs) are figure-internal. */
+export type ClipName = MiniActivity | "supervise" | ShotName | WeaponClip | "commit" | "failed" | "ended" | "killed";
 
 const K = (at: number, pose: PoseName, e: Ease = "smooth", o: { emotion?: EmotionName; gaze?: number } = {}): Key =>
   ({ at, pose, ease: e, emotion: o.emotion ?? POSES[pose].emotion, gaze: o.gaze ?? 0 });
@@ -281,11 +318,36 @@ export const CLIPS: Readonly<Record<ClipName, Clip>> = {
   ended: { len: 4, loop: false, keys: [K(0, "portrait", "smooth", { emotion: "calm" }), K(0.8, "portrait", "smooth", { emotion: "calm" }), K(1.4, "bow"), K(2.2, "bow"), K(2.8, "portrait", "smooth", { emotion: "happy" }), K(4, "portrait", "smooth", { emotion: "calm" })] },
   // A jolt, then the power-down slump with KO x x eyes.
   killed: { len: 2, loop: false, keys: [K(0, "portrait"), K(0.12, "jolt", "snap"), K(0.4, "jolt"), K(1.4, "powerdown"), K(2, "powerdown")] },
+
+  // ---- P-VIZ.7 (ADR-0641): the weapon moves (each loop starts and ends in the kata guard) and the commit
+  // katana: draw from the back, raise, a snap downward cut, wind left, a snap rising sweep out right, sheathe
+  slash: {
+    len: 3.0, loop: true,
+    keys: [K(0, "stance"), K(0.35, "drawReach"), K(0.55, "slashHigh", "snap"), K(0.8, "slashHigh"), K(0.94, "slashDown", "snap"), K(1.25, "slashDown"), K(1.5, "slashWind"), K(1.62, "slashSweep", "snap"), K(2.0, "slashSweep"), K(2.35, "drawReach"), K(2.7, "stance")],
+  },
+  // kunai: two volleys, a pair each (crouch to the thigh pouches, cross up, snap fling)
+  kunaiThrow: {
+    len: 3.1, loop: true,
+    keys: [K(0, "stance"), K(0.38, "kunaiDraw"), K(0.65, "kunaiWind"), K(0.77, "kunaiThrow", "snap"), K(1.15, "kunaiThrow"), K(1.55, "kunaiDraw"), K(1.8, "kunaiWind"), K(1.92, "kunaiThrow", "snap"), K(2.3, "kunaiThrow"), K(2.7, "stance")],
+  },
+  // bo staff: off the back, spun before him (staffAngle), a snap lunging thrust, back on the back
+  staffSpin: {
+    len: 3.6, loop: true,
+    keys: [K(0, "stance"), K(0.38, "drawReach"), K(0.65, "staffSpin"), K(1.95, "staffSpin"), K(2.07, "staffStrike", "snap"), K(2.5, "staffStrike"), K(2.88, "drawReach"), K(3.2, "stance")],
+  },
+  // chakram: off the belt, the backhand wind, the snap throw; it flies out and back (discFlight) to a snap catch
+  discThrow: {
+    len: 3.3, loop: true,
+    keys: [K(0, "stance"), K(0.35, "discGrab"), K(0.62, "discWind"), K(0.74, "discThrow", "snap"), K(1.05, "discThrow"), K(1.55, "discCatchReady", "smooth", { gaze: -0.5 }), K(1.95, "discCatch", "snap"), K(2.3, "discCatch"), K(2.7, "discGrab"), K(3.0, "stance")],
+  },
+  // the git commit (held while it runs): the raised arm and planted stance, breathing between two strains
+  commit: { len: 2.4, loop: true, keys: [K(0, "commitRaise"), K(1.2, "commitStrain")] },
 };
 
 /** Representative clip times for motion=false (a readable still of each clip). */
 export const STILL_T: Readonly<Record<ClipName, number>> = {
   typing: 0.5, supervise: 2.2, kiblast: 1.66, kata: 0.7, meditate: 0, scan: 1.0, dash: 1.0, powerup: 0.8, victory: 1.0, failed: 0.2, ended: 4, killed: 2,
+  slash: 1.1, kunaiThrow: 0.95, staffSpin: 2.2, discThrow: 0.9, commit: 0,
 };
 
 /** The sampled key data besides the pose (reused by the caller, never allocated per frame). */
@@ -422,6 +484,118 @@ export function auraLevel(t: number): number {
 export function shakeLevel(t: number): number {
   return t < 0 || t >= 0.45 ? 0 : 1 - t / 0.45;
 }
+
+// ------------------------------------------------------------------------------------------ weapons (P-VIZ.7)
+//
+// P-VIZ.7 (ADR-0641): every node carries one weapon, picked by its variant (viz_brand's per-model variant, else
+// the node seed): a katana on the back, a kunai pair in thigh pouches, a bo staff on the back or a chakram on the
+// back of the belt. The weapon slots (kata, dash, kiblast) play the variant's weapon move instead of their own
+// clip on some loops (weaponTurn: from the seed and the loop count, never the first loop), so a fleet keeps
+// mixing moves without any two nodes in lockstep. weaponAt says, per clip time, whether the weapon is in the hand
+// (else on its mount), how far a thrown one has flown, and the staff's spin.
+
+export type AnimeWeapon = "katana" | "kunai" | "staff" | "disc";
+export const WEAPONS: readonly AnimeWeapon[] = ["katana", "kunai", "staff", "disc"];
+export const WEAPON_CLIP: Readonly<Record<AnimeWeapon, WeaponClip>> = { katana: "slash", kunai: "kunaiThrow", staff: "staffSpin", disc: "discThrow" };
+export const WEAPON_CLIPS: readonly WeaponClip[] = ["slash", "kunaiThrow", "staffSpin", "discThrow"];
+/** The activities whose loops can turn into a weapon move. */
+export const WEAPON_SLOTS: readonly MiniActivity[] = ["kata", "dash", "kiblast"];
+/** About this share of a weapon slot's loops (after the first) are the weapon move. */
+export const WEAPON_SHARE = 0.45;
+/** A thrown kunai flies this long; the chakram's out-and-back flight is its clip's window. */
+export const KUNAI_FLY_S = 0.5;
+/** Full turns of the staff spin. */
+export const STAFF_TURNS = 5;
+
+type Win = readonly (readonly [number, number])[];
+/** Clip-time windows [from, to) with the weapon in the right hand. */
+export const WEAPON_HAND: Readonly<Record<AnimeWeapon, Win>> = {
+  katana: [[0.38, 2.38]],
+  kunai: [[0.38, 0.77], [1.55, 1.92]],
+  staff: [[0.38, 2.88]],
+  disc: [[0.35, 0.74], [1.95, 2.7]],
+};
+/** Clip-time windows [from, to) with the weapon in flight. */
+export const WEAPON_FLY: Readonly<Record<AnimeWeapon, Win>> = {
+  katana: [],
+  kunai: [[0.77, 0.77 + KUNAI_FLY_S], [1.92, 1.92 + KUNAI_FLY_S]],
+  staff: [],
+  disc: [[0.74, 1.95]],
+};
+const STAFF_UP: readonly [number, number] = [0.38, 0.65];
+const STAFF_SPIN: readonly [number, number] = [0.65, 1.95];
+const STAFF_DOWN: readonly [number, number] = [2.5, 2.88];
+
+/** The weapon at a clip time: `hand` (in the right hand, else on its mount unless flying), `fly` (-1 when not in
+ *  flight, else the flight progress 0..1), `spin` (the staff's angle about the hand, radians) and `blur` (0..1,
+ *  how fast it spins). */
+export interface WeaponSample { hand: boolean; fly: number; spin: number; blur: number }
+
+export function newWeaponSample(): WeaponSample {
+  return { hand: false, fly: -1, spin: 0, blur: 0 };
+}
+
+/** A variant 0..3: the brand's when it has one, else the node seed's. */
+export function variantOf(variant: number | null | undefined, seed: number): number {
+  if (typeof variant === "number" && Number.isFinite(variant)) return ((Math.floor(variant) % 4) + 4) % 4;
+  return Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 4 : 0;
+}
+
+export function weaponOf(variant: number): AnimeWeapon {
+  return WEAPONS[variantOf(variant, 0)]!;
+}
+
+/** Whether loop `cycle` (0 = the first loop since the activity began) of a weapon slot plays the weapon move. */
+export function weaponTurn(activity: MiniActivity, seed: number, cycle: number): boolean {
+  const slot = WEAPON_SLOTS.indexOf(activity);
+  if (slot < 0 || !(cycle >= 1)) return false;
+  const s = Number.isFinite(seed) ? Math.floor(Math.abs(seed)) % 4294967296 : 0;
+  return mix32((Math.imul(s, 31) + Math.imul(Math.floor(cycle), 0x2545f491) + slot * 7919) | 0) / 4294967296 < WEAPON_SHARE;
+}
+
+function inWin(win: Win, t: number): number {
+  for (const [a, b] of win) if (t >= a && t < b) return (t - a) / (b - a);
+  return -1;
+}
+
+/** The weapon `w` at clip time `t` of its move (WEAPON_CLIP[w]), wrapped like the loop. */
+export function weaponAt(w: AnimeWeapon, t: number, out: WeaponSample): WeaponSample {
+  const tt = clipTime(CLIPS[WEAPON_CLIP[w]], t);
+  out.hand = inWin(WEAPON_HAND[w], tt) >= 0;
+  out.fly = inWin(WEAPON_FLY[w], tt);
+  out.spin = 0;
+  out.blur = 0;
+  if (w === "staff") {
+    // a quarter turn across as it comes off the back, the spin (eased in and out, whole turns), held across for
+    // the thrust, a quarter turn back to go on the back
+    const q = Math.PI / 2, full = Math.PI * 2 * STAFF_TURNS;
+    if (tt < STAFF_UP[0]) out.spin = 0;
+    else if (tt < STAFF_UP[1]) out.spin = q * smoothEase((tt - STAFF_UP[0]) / (STAFF_UP[1] - STAFF_UP[0]));
+    else if (tt < STAFF_SPIN[1]) {
+      const u = (tt - STAFF_SPIN[0]) / (STAFF_SPIN[1] - STAFF_SPIN[0]);
+      out.spin = q + full * smoothEase(u);
+      out.blur = clamp01(16 * u * u * (1 - u) * (1 - u));
+    } else if (tt < STAFF_DOWN[0]) out.spin = q + full;
+    else if (tt < STAFF_DOWN[1]) out.spin = full + q * (1 - smoothEase((tt - STAFF_DOWN[0]) / (STAFF_DOWN[1] - STAFF_DOWN[0])));
+    else out.spin = full;
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------------------------------ git commit (P-VIZ.7)
+//
+// P-VIZ.7 (ADR-0641): while a git commit or push runs (setCommit), the figure blends into the `commit` loop over
+// COMMIT_IN_S: the raised arm shooting a jagged bolt up into a storm cloud (re-jittered BOLT_HZ times a second)
+// with glowing raiden eyes. The cloud gathers over CLOUD_IN_S; when the commit ends the bolt cuts out, the cloud
+// dissipates over CLOUD_OUT_S and the pose blends back over COMMIT_OUT_S.
+
+export const COMMIT_IN_S = 0.4;
+export const COMMIT_OUT_S = 0.5;
+export const CLOUD_IN_S = 0.9;
+export const CLOUD_OUT_S = 0.7;
+export const BOLT_HZ = 14;
+/** The bolt shows once the commit pose is this far in (the arm is up). */
+export const BOLT_AT = 0.7;
 
 // ------------------------------------------------------------------------------------------ supervise checklist
 

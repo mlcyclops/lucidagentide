@@ -43,6 +43,21 @@
 // lashes and a lip color for the women, slightly narrower shoulders. hit() plays the throw tray's reactions over
 // the activity (turning toward the throw; the drink in hand; the Storm's papers off the pile) and the energy
 // drink's charge speeds the work up and warms the tie, trim and screen until it decays.
+//
+// P-VIZ.7 (ADR-0641): every figure is a sponsored athlete. The node's model picks a VizBrand (viz_brand): its
+// emblem spins on a coin orbiting the desk at monitor height (held still under reduced motion) and hangs on a
+// lanyard ID badge with the sponsor's word (TL187 for a private model; no brand, no emblem); its size class scales
+// the person and the chair (the desk set stays); its variant 0..3 (else the seed's) picks the worker's outfit (the
+// cast's own top, a vest, rolled-up sleeves or a cardigan, a hoodie), the desk set (a plant, a framed photo,
+// headphones on a stand, a nameplate, a second monitor, a desk lamp, a desk phone) and the variant's own actions
+// (viz_office_pose.activityClip). The hands are solved onto their props per build (viz_office_pose's IK), so the
+// sip brings the rim to the lips and back to the coaster, and the typing palms rest on the keys. Every desk has a
+// short stack of TPS reports (a cover sheet canvas) with a glossy red stapler on it, "NORM's" in black marker on
+// its top (a decal canvas lifted off the body with a polygon offset, so a close zoom never z-fights). setCommit()
+// plays a git commit or push: the desk set shrinks away, a copier slides in, he stands at it, presses the button
+// and copies slide out one after another onto the tray (a pooled set of sheets with a chart-and-text canvas),
+// sipping his coffee and glancing around, a "TPS Reports" bubble over his head; it holds until setCommit(false)
+// and blends back (COMMIT_BLEND_S).
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -57,10 +72,15 @@ import {
   OUTBURST_S, pageFlipAt, paperFlight, printHeld, reactAt, sampleOfficeClip, stareHold, tapRate, zedAt,
   applyManagerSwap, MANAGER_HAIR, MANAGER_VARIANTS, managerSwapAt, managerSwapDue, managerSwapReady, openManagerCast, otherManager, recastManager,
   clearOfficeHit, longSleeves, newOfficeHitSample, officeHitCharge, planOfficeHit, sampleOfficeHit, workerCast,
-  type Crt, type LookAngles, type ManagerCast, type ManagerMemo, type ManagerVariant, type MouthShape, type OfficeClipName, type OfficeClipSample,
-  type OfficeEmotion, type OfficeHitPlan, type OfficeRole, type OfficeState, type Paper, type ReactKind, type ReactSample, type SwapSample,
-  type WorkerCast, type WorkerHair, type Zed,
+  applyTyping, buttonPress, COMMIT_BLEND_S, commitLook, COPIER, COPY_HIPS, copiesStarted, copyProgress, DESK_MUG, DESK_PHONE, flickAt,
+  HANDSET_AT, handsetHeld, HEADPHONE_STAND, HEADPHONE_STAND_H, KEYBOARD, MUG_GRIP, mugTilt, OFFICE_DESK_Y, OFFICE_RIG, officeDeskSet,
+  officeFacing, OFFICE_POSE_VECTORS, officePoseTable, officeVariant, PHONE_DROP_S, PHONE_GRAB_S, PHONES_BACK_S, PHONES_GRAB_S, PHONES_OFF_S,
+  PHONES_ON_S, phonesAt, phonesGroove, SHOULDER_X, TRAY_TILT, workerOutfit,
+  type Crt, type DeskItem, type LookAngles, type ManagerCast, type ManagerMemo, type ManagerVariant, type MouthShape, type OfficeClipName,
+  type OfficeClipSample, type OfficeEmotion, type OfficeHitPlan, type OfficePoseTable, type OfficeRole, type OfficeState, type Paper,
+  type ReactKind, type ReactSample, type SwapSample, type WorkerCast, type WorkerHair, type WorkerOutfit, type Zed,
 } from "./viz_office_pose.ts";
+import { emblemCanvas, type VizBrand } from "./viz_brand.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
 
@@ -94,6 +114,11 @@ export interface OfficeFigure {
   readonly managerVariant: ManagerVariant | null;
   /** True while a handover animates: the caller should keep drawing at its busy cadence. */
   readonly handingOver: boolean;
+  /** P-VIZ.7 (ADR-0641): a git commit or push is running (true) or done (false). While on, the desk set gives way
+   *  to a copier and he runs off TPS reports at it (pressing the button, copies sliding onto the tray, sipping
+   *  coffee, glancing around, a "TPS Reports" bubble) for as long as it lasts; off blends back to the desk over
+   *  about 0.6 s. Reduced motion shows the copier scene still. A no-op once disposed. */
+  setCommit(on: boolean): void;
   /** `tSec` is on the performance.now() timeline in seconds (rAF time / 1000): the handover schedule runs on it. */
   update(tSec: number, dt: number, motion: boolean): void;
   dispose(): void;
@@ -107,6 +132,10 @@ export interface OfficeFigureOptions {
   /** Picks a worker's gender, hairstyle, top, skin, hair color and glasses, stably per node (viz_scene passes the
    *  node's id hash). */
   seed: number;
+  /** P-VIZ.7 (ADR-0641): the sponsor (viz_brand.vizBrandFor of the node's model): the emblem and lanyard, the
+   *  person's scale and the variant (outfit, desk set, actions). null (the model is not known yet): no emblem,
+   *  scale 1, the variant from the seed. Constructor-only (viz_scene rebuilds the figure when it changes). */
+  brand?: VizBrand | null;
   /** 3D only: build the low fabric cubicle around the desk; its top edges are drawn with `status` (owned and
    *  recolored by the caller, never disposed here). */
   cubicle?: { status: THREE.LineBasicMaterial } | null;
@@ -127,8 +156,8 @@ const INK = "#0a0a12";
 
 // Layout (figure units, the floor at y 0, he faces +Z).
 const SEAT_Y = 0.36;
-const HIP_Y = 0.41;
-const DESK_Y = 0.5;
+const HIP_Y = OFFICE_RIG.hipY;
+const DESK_Y = OFFICE_DESK_Y;
 const MONITOR_POS = [0.33, DESK_Y, 0.38] as const;
 const MONITOR_YAW_3D = -1.4;
 const MONITOR_YAW_FLAT = -0.6;
@@ -336,6 +365,174 @@ function zedCanvas(): HTMLCanvasElement {
   return cv;
 }
 
+// P-VIZ.7 (ADR-0641): the Office Space paperwork, shared per tier like the code canvas. Sized for a close zoom.
+const MARKER_FONT = "\"Segoe Print\", \"Bradley Hand\", \"Marker Felt\", \"Comic Sans MS\", cursive";
+const FORM_FONT = "system-ui, -apple-system, \"Segoe UI\", sans-serif";
+
+/** The stapler's top decal (transparent: the red body shows through): a gloss streak along its length and
+ *  "NORM's" hand-lettered in black marker. A generic stapler: no maker's wordmark. */
+function staplerCanvas(): HTMLCanvasElement {
+  const cv = document.createElement("canvas");
+  cv.width = 512; cv.height = 128;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  const gloss = c.createLinearGradient(0, 0, 0, 128);
+  gloss.addColorStop(0, "rgba(255,255,255,0)");
+  gloss.addColorStop(0.16, "rgba(255,255,255,0.6)");
+  gloss.addColorStop(0.3, "rgba(255,255,255,0)");
+  c.fillStyle = gloss;
+  c.beginPath(); c.roundRect(20, 4, 472, 120, 40); c.fill();
+  // the name in fat black marker filling most of the top, slanted like a hurried hand
+  c.save();
+  c.translate(256, 70);
+  c.rotate(-0.04);
+  c.transform(1, 0, -0.2, 1, 0, 0);
+  c.font = `900 112px ${MARKER_FONT}`;
+  c.textAlign = "center"; c.textBaseline = "middle";
+  c.lineJoin = "round"; c.lineCap = "round";
+  const sx = Math.min(1.6, 440 / Math.max(1, c.measureText("NORM's").width));
+  c.scale(sx, 1);
+  // a marker's stroke: the bleed and the body of the ink in one heavy pass, then the solid fill
+  c.strokeStyle = "#08080c"; c.lineWidth = 12 / sx; c.strokeText("NORM's", 0, 0);
+  c.fillStyle = "#08080c"; c.fillText("NORM's", 0, 0);
+  c.restore();
+  return cv;
+}
+
+/** The TPS report's cover sheet: the title, form fields and a routing grid. */
+function tpsCanvas(): HTMLCanvasElement {
+  const W = 320, H = 400;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  c.fillStyle = "#fbfaf4"; c.fillRect(0, 0, W, H);
+  c.strokeStyle = "#2a2e38"; c.lineWidth = 3; c.strokeRect(10, 10, W - 20, H - 20);
+  // the title as large as the sheet allows, solid black with a stroke so it reads from across the office
+  c.fillStyle = "#050508";
+  c.strokeStyle = "#050508";
+  c.textAlign = "center"; c.textBaseline = "alphabetic";
+  let px = 72;
+  c.font = `900 ${px}px ${FORM_FONT}`;
+  while (px > 30 && c.measureText("TPS REPORT").width > W - 44) c.font = `900 ${--px}px ${FORM_FONT}`;
+  c.lineWidth = 3;
+  c.strokeText("TPS REPORT", W / 2, 82);
+  c.fillText("TPS REPORT", W / 2, 82);
+  c.fillRect(24, 94, W - 48, 6);
+  c.font = `800 15px ${FORM_FONT}`;
+  c.fillText("TESTING PROCEDURE SPECIFICATION", W / 2, 118);
+  c.textAlign = "left";
+  c.font = `700 14px ${FORM_FONT}`;
+  c.lineWidth = 1.5;
+  const field = (label: string, y: number): void => {
+    c.fillText(label, 28, y);
+    c.beginPath(); c.moveTo(28 + c.measureText(label).width + 8, y + 2); c.lineTo(W - 28, y + 2); c.stroke();
+  };
+  field("NAME", 150); field("DEPT", 176); field("DATE", 202); field("PROJECT CODE", 228);
+  // the routing grid
+  const gx = 28, gy = 246, gw = W - 56, rows = 4, cols = 3, rh = 22;
+  c.strokeRect(gx, gy, gw, rows * rh);
+  for (let r = 1; r < rows; r++) { c.beginPath(); c.moveTo(gx, gy + r * rh); c.lineTo(gx + gw, gy + r * rh); c.stroke(); }
+  for (let k = 1; k < cols; k++) { c.beginPath(); c.moveTo(gx + (k * gw) / cols, gy); c.lineTo(gx + (k * gw) / cols, gy + rows * rh); c.stroke(); }
+  c.font = `700 11px ${FORM_FONT}`;
+  ["ROUTE TO", "INITIALS", "DATE"].forEach((s, k) => c.fillText(s, gx + 6 + (k * gw) / cols, gy + 15));
+  c.fillStyle = "#2a2e38";
+  c.font = `800 13px ${FORM_FONT}`;
+  c.textAlign = "center";
+  c.fillText("COVER SHEET REQUIRED ON ALL REPORTS", W / 2, 356);
+  c.strokeRect(40, 340, W - 80, 24);
+  return cv;
+}
+
+/** A fresh copy off the copier: a heading, lines of tiny text, a bar chart and a pie chart. */
+function copyCanvas(): HTMLCanvasElement {
+  const W = 256, H = 320;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  c.fillStyle = "#fcfcf8"; c.fillRect(0, 0, W, H);
+  c.fillStyle = "#1a1d24";
+  c.font = `900 22px ${FORM_FONT}`;
+  c.textBaseline = "alphabetic";
+  c.fillText("TPS", 18, 34);
+  c.fillRect(18, 42, W - 36, 3);
+  let seed = 7;
+  const rnd = (): number => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  c.fillStyle = "#8e939d";
+  for (let r = 0; r < 5; r++) c.fillRect(18, 56 + r * 11, 80 + rnd() * (W - 116), 4);
+  // the bar chart
+  const bx = 22, by = 210, bh = 96;
+  c.strokeStyle = "#1a1d24"; c.lineWidth = 2;
+  c.beginPath(); c.moveTo(bx, by - bh); c.lineTo(bx, by); c.lineTo(bx + 112, by); c.stroke();
+  const bars = ["#3b6fd8", "#e0a030", "#3ba86a", "#d24a4a"];
+  for (let k = 0; k < 4; k++) {
+    const h = 26 + ((k * 37 + 19) % 64);
+    c.fillStyle = bars[k]!;
+    c.fillRect(bx + 10 + k * 25, by - h, 17, h);
+  }
+  // the pie chart
+  const px = 190, py = 166, pr = 40;
+  let a0 = -Math.PI / 2;
+  [0.45, 0.3, 0.25].forEach((f, k) => {
+    c.fillStyle = bars[k]!;
+    c.beginPath(); c.moveTo(px, py); c.arc(px, py, pr, a0, a0 + f * Math.PI * 2); c.closePath(); c.fill();
+    a0 += f * Math.PI * 2;
+  });
+  c.strokeStyle = "#1a1d24"; c.beginPath(); c.arc(px, py, pr, 0, Math.PI * 2); c.stroke();
+  c.fillStyle = "#8e939d";
+  for (let r = 0; r < 6; r++) c.fillRect(18, 232 + r * 12, 60 + rnd() * (W - 96), 4);
+  return cv;
+}
+
+/** The speech bubble over the copier: "TPS Reports". */
+function bubbleCanvas(): HTMLCanvasElement {
+  const W = 320, H = 136;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  c.lineJoin = "round";
+  c.fillStyle = "#ffffff"; c.strokeStyle = INK; c.lineWidth = 7;
+  c.beginPath();
+  c.roundRect(8, 8, W - 16, H - 44, 36);
+  c.moveTo(96, H - 37); c.lineTo(80, H - 8); c.lineTo(126, H - 37);
+  c.fill(); c.stroke();
+  // close the tail's seam
+  c.fillRect(99, H - 42, 24, 8);
+  // heavy ink lettering with a stroke, so the scene's bloom on the white bubble never washes it out
+  c.font = `900 40px ${FORM_FONT}`;
+  c.textAlign = "center"; c.textBaseline = "middle";
+  c.lineJoin = "round";
+  c.strokeStyle = INK; c.lineWidth = 3;
+  c.strokeText("TPS Reports", W / 2, (H - 36) / 2 + 4);
+  c.fillStyle = INK;
+  c.fillText("TPS Reports", W / 2, (H - 36) / 2 + 4);
+  return cv;
+}
+
+/** The framed photo: a toon snapshot of two people and a dog in a park. */
+function photoCanvas(): HTMLCanvasElement {
+  const W = 128, H = 96;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const c = cv.getContext("2d");
+  if (!c) return cv;
+  const sky = c.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#8fc8f0"); sky.addColorStop(0.62, "#d9f0ff"); sky.addColorStop(0.63, "#7cc06a"); sky.addColorStop(1, "#4f9a48");
+  c.fillStyle = sky; c.fillRect(0, 0, W, H);
+  c.fillStyle = "#ffe27a"; c.beginPath(); c.arc(104, 18, 10, 0, Math.PI * 2); c.fill();
+  const person = (x: number, h: number, shirt: string): void => {
+    c.fillStyle = shirt; c.fillRect(x - 9, 82 - h, 18, h - 14);
+    c.fillStyle = "#f0c49c"; c.beginPath(); c.arc(x, 82 - h - 6, 9, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = INK; c.lineWidth = 1.5; c.beginPath(); c.arc(x, 82 - h - 5, 4, 0.2, Math.PI - 0.2); c.stroke();
+  };
+  person(44, 46, "#d04a5a");
+  person(70, 40, "#3a6fd0");
+  c.fillStyle = "#a86c43"; c.fillRect(88, 72, 18, 9); c.beginPath(); c.arc(106, 70, 6, 0, Math.PI * 2); c.fill();
+  return cv;
+}
+
 /** Salt-and-pepper hair: the base with thin grey strands running from the crown down, denser toward the temples
  *  (u 0 and 1 are the ears, u 0.5 the front and the back; see hairUv). */
 function saltPepperCanvas(base: string, grey: string): HTMLCanvasElement {
@@ -425,12 +622,14 @@ interface Tier {
   smallInk: boolean; extras: boolean;
   faceScale: number; codeScale: number;
   papers: number; puffs: number; steam: number; drops: number; zeds: number;
+  /** P-VIZ.7: the copier's pooled copies; `deskSet` builds the variant's desk items and actions (not at minimal). */
+  copies: number; deskSet: boolean;
 }
 
 const TIERS: Record<OfficeDetail, Tier> = {
-  full: { head: [32, 24], small: [12, 10], limb: 14, box: 2, smallInk: true, extras: true, faceScale: 1, codeScale: 1, papers: 6, puffs: 8, steam: 4, drops: 3, zeds: 3 },
-  reduced: { head: [22, 16], small: [8, 6], limb: 10, box: 1, smallInk: true, extras: true, faceScale: 1, codeScale: 1, papers: 4, puffs: 6, steam: 3, drops: 3, zeds: 3 },
-  minimal: { head: [14, 10], small: [6, 4], limb: 6, box: 0, smallInk: false, extras: false, faceScale: 0.5, codeScale: 0.5, papers: 3, puffs: 4, steam: 2, drops: 2, zeds: 2 },
+  full: { head: [32, 24], small: [12, 10], limb: 14, box: 2, smallInk: true, extras: true, faceScale: 1, codeScale: 1, papers: 6, puffs: 8, steam: 4, drops: 3, zeds: 3, copies: 8, deskSet: true },
+  reduced: { head: [22, 16], small: [8, 6], limb: 10, box: 1, smallInk: true, extras: true, faceScale: 1, codeScale: 1, papers: 4, puffs: 6, steam: 3, drops: 3, zeds: 3, copies: 6, deskSet: true },
+  minimal: { head: [14, 10], small: [6, 4], limb: 6, box: 0, smallInk: false, extras: false, faceScale: 0.5, codeScale: 0.5, papers: 3, puffs: 4, steam: 2, drops: 2, zeds: 2, copies: 4, deskSet: false },
 };
 
 const TORSO: readonly Seg[] = [[0.0, -0.02], [0.125, 0.0], [0.135, 0.08], [0.15, 0.18], [0.16, 0.26], [0.15, 0.31], [0.09, 0.34], [0.0, 0.345]];
@@ -476,7 +675,68 @@ interface GeoSet {
   walls: THREE.BufferGeometry; trim: THREE.BufferGeometry; statusLines: THREE.BufferGeometry;
   puff: THREE.BufferGeometry;
   codeTex: THREE.CanvasTexture; checkTex: THREE.CanvasTexture; zedTex: THREE.CanvasTexture;
+  // P-VIZ.7 (ADR-0641): the stapler (black base and hinge, red body, the NORM's decal) and the TPS cover sheet
+  staplerBase: THREE.BufferGeometry; staplerBody: THREE.BufferGeometry; staplerTop: THREE.BufferGeometry; tpsTop: THREE.BufferGeometry;
+  // the sponsor: the coin (rim and a face per side), the lanyard (cord), the badge card and its face; the nameplate's
+  coinRim: THREE.BufferGeometry; coinFace: THREE.BufferGeometry; lanyard: THREE.BufferGeometry; badge: THREE.BufferGeometry;
+  badgeFace: THREE.BufferGeometry; plateFace: THREE.BufferGeometry;
+  // outfits: a rolled cuff, the hoodie's hood and pocket, its drawstrings
+  cuff: THREE.BufferGeometry; hoodie: THREE.BufferGeometry; strings: THREE.BufferGeometry;
+  // the desk sets
+  pot: THREE.BufferGeometry; leaves: THREE.BufferGeometry; frame: THREE.BufferGeometry; picture: THREE.BufferGeometry;
+  phonesStand: THREE.BufferGeometry; headphones: THREE.BufferGeometry; screenBox: THREE.BufferGeometry; monitorArm: THREE.BufferGeometry;
+  lamp: THREE.BufferGeometry; shade: THREE.BufferGeometry; bulb: THREE.BufferGeometry; phoneBase: THREE.BufferGeometry; handset: THREE.BufferGeometry;
+  // the copier: the light body (lid, tray), the dark parts (plinth, slot, drawer pulls), the panel, its button and display
+  copierBody: THREE.BufferGeometry; copierDark: THREE.BufferGeometry; copierPanel: THREE.BufferGeometry; copierButton: THREE.BufferGeometry;
+  copierDisplay: THREE.BufferGeometry;
+  staplerTex: THREE.CanvasTexture; tpsTex: THREE.CanvasTexture; copyTex: THREE.CanvasTexture; bubbleTex: THREE.CanvasTexture; photoTex: THREE.CanvasTexture;
 }
+
+/** A round rod from a to b (build time only). */
+function rod(a: readonly [number, number, number], b: readonly [number, number, number], r: number, seg: number): THREE.BufferGeometry {
+  const from = new THREE.Vector3(...a), to = new THREE.Vector3(...b);
+  const dir = to.clone().sub(from);
+  const g = new THREE.CylinderGeometry(r, r, dir.length(), seg, 1);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize()));
+  g.translate((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2);
+  return g;
+}
+
+/** Stapler measures (its frame: the long axis +X toward the business end, the floor of its base at y 0). */
+const STAPLER = { len: 0.145, w: 0.042, baseH: 0.012, bodyH: 0.026, tilt: -0.03 } as const;
+/** The TPS stack (the desk's pile): its box and where the stapler sits on it (the pile's frame). */
+const PILE = { w: 0.15, h: 0.03, d: 0.19 } as const;
+const STAPLER_ON_PILE = { x: 0.012, z: 0.038, yaw: 0.55 } as const;
+/** The coin: radius and thickness; the orbit around the desk (radius and height per role), its period, the spin's. */
+const COIN_R = 0.09;
+const COIN_T = 0.008;
+const ORBIT = { worker: { r: 0.62, y: 0.88 }, boss: { r: 0.76, y: 0.92 } } as const;
+const ORBIT_S = 16;
+const SPIN_S = 3;
+/** The copier's sheets: where a copy starts (in the slot) and lands (on the tray), copier frame; the stack's step. */
+const SHEET_FROM = [0, 0.415, 0.12] as const;
+const SHEET_TO = [0, 0.412, 0.31] as const;
+const SHEET_STEP = 0.0022;
+/** The "TPS Reports" bubble's width (its canvas is 320 x 136): readable from the overview camera. */
+const BUBBLE_W = 0.72;
+/** Reduced motion: the copies already on the tray. */
+const STILL_COPIES = 3;
+/** The headphones on the stand and in the hand are this much smaller than on the head. */
+const PHONES_SMALL = 0.72;
+/** The headphones' band radius on the head (skull frame). */
+const PHONES_R = 0.18;
+/** Where each desk item stands (x, z on the desk top, yaw), clear of the keyboard, the monitor, the TPS stack, the
+ *  mug and the person's view; the phone and the worker's headphone stand where the solved hands reach for them. */
+const DESK_SPOTS: Readonly<Record<OfficeRole, Partial<Record<DeskItem, readonly [number, number, number]>>>> = {
+  worker: {
+    plant: [0.47, 0.25, 0], photo: [0.1, 0.54, Math.PI - 0.9], headphones: [HEADPHONE_STAND[0], HEADPHONE_STAND[2], Math.PI / 2],
+    nameplate: [0.24, 0.555, 0], phone: [DESK_PHONE[0], DESK_PHONE[2], 0],
+  },
+  boss: {
+    plant: [0.53, 0.27, 0], photo: [-0.42, 0.58, Math.PI + 0.5], headphones: [-0.52, 0.42, Math.PI / 2], lamp: [0.53, 0.56, -0.7],
+    phone: [DESK_PHONE[0], DESK_PHONE[2], 0],
+  },
+};
 
 function buildGeo(t: Tier): GeoSet {
   const L = t.limb, S = t.small, B = t.box;
@@ -508,6 +768,45 @@ function buildGeo(t: Tier): GeoSet {
   ], 3));
   const codeTex = canvasTex(codeCanvas(t.codeScale));
   codeTex.wrapS = codeTex.wrapT = THREE.RepeatWrapping;
+
+  // ---- P-VIZ.7 (ADR-0641)
+  const B1 = Math.min(1, B), R16 = Math.max(16, L * 2);
+  const ST = STAPLER;
+  const bodyY = ST.baseH + 0.003 + ST.bodyH / 2;
+  // the decal on the body's flat top, lifted 1.2 mm along its normal (plus a polygon offset): no z-fighting up close
+  const topX = 0.003 + (ST.bodyH / 2 + 0.0012) * Math.sin(-ST.tilt), topY = bodyY + (ST.bodyH / 2 + 0.0012) * Math.cos(ST.tilt);
+  const zoomTex = (cv: HTMLCanvasElement): THREE.CanvasTexture => {
+    const tex = canvasTex(cv);
+    tex.anisotropy = 8;
+    return tex;
+  };
+  // the lanyard (chest frame at the reference torso depth; the figure scales it to its own)
+  const cord = 0.0042, cs = Math.max(4, L >> 1);
+  const behind = new THREE.TorusGeometry(0.058, cord, 4, Math.max(8, L), Math.PI);
+  behind.rotateX(-Math.PI / 2);
+  behind.translate(0, 0.205, 0);
+  // the hoodie's hood: a thick open ring bunched behind the neck, its gap at the front
+  const hood = new THREE.TorusGeometry(0.088, 0.034, Math.max(5, S[1]), Math.max(10, L + 4), Math.PI * 1.3);
+  hood.rotateX(-Math.PI / 2);
+  hood.rotateY(-0.15 * Math.PI);
+  hood.scale(1, 1.25, 0.9);
+  hood.translate(0, 0.19, -0.035);
+  // (flat leaves need few segments: a fraction of the small parts' tessellation)
+  const leafSeg: Seg = [Math.max(6, S[0] >> 1), Math.max(4, S[1] >> 1)];
+  const leaves: THREE.BufferGeometry[] = [];
+  for (let k = 0; k < 7; k++) {
+    const leaf = new THREE.SphereGeometry(0.018, leafSeg[0], leafSeg[1]);
+    leaf.scale(0.55, 2.4, 0.22);
+    const a = (k / 7) * TAU;
+    leaves.push(placed(leaf, Math.sin(a) * 0.016, 0.1, Math.cos(a) * 0.016, 0.55, a));
+  }
+  const tall = new THREE.SphereGeometry(0.018, leafSeg[0], leafSeg[1]);
+  tall.scale(0.6, 2.9, 0.24);
+  leaves.push(placed(tall, 0, 0.11, 0, 0.1, 0.4));
+  const H = HEADPHONE_STAND_H;
+  const shade = new THREE.ConeGeometry(0.05, 0.065, L, 1, true);
+  const CW = COPIER.w, CD = COPIER.d, CH = COPIER.h;
+
   return {
     refs: 0,
     pelvis: (() => { const g = new THREE.SphereGeometry(0.13, t.head[0] >> 1, t.head[1] >> 1); g.scale(1.15, 0.6, 1); return g; })(),
@@ -565,6 +864,74 @@ function buildGeo(t: Tier): GeoSet {
     codeTex,
     checkTex: canvasTex(checklistCanvas()),
     zedTex: canvasTex(zedCanvas()),
+    staplerBase: merge([
+      placed(box(ST.len, ST.baseH, ST.w * 0.94, B1, 0.004), 0, ST.baseH / 2, 0),
+      placed(new THREE.CylinderGeometry(0.007, 0.007, ST.w * 0.9, L), -ST.len / 2 + 0.008, ST.baseH + 0.005, 0, Math.PI / 2),
+    ]),
+    staplerBody: placed(box(ST.len - 0.006, ST.bodyH, ST.w, B, 0.009), 0.003, bodyY, 0, 0, 0, ST.tilt),
+    staplerTop: placed(new THREE.PlaneGeometry(ST.len - 0.02, ST.w - 0.008), topX, topY, 0, -Math.PI / 2, 0, ST.tilt),
+    tpsTop: placed(new THREE.PlaneGeometry(PILE.w - 0.004, PILE.d - 0.004), 0, PILE.h / 2 + 0.0008, 0, -Math.PI / 2),
+    coinRim: placed(new THREE.CylinderGeometry(COIN_R, COIN_R, COIN_T, R16, 1, true), 0, 0, 0, Math.PI / 2),
+    coinFace: new THREE.CircleGeometry(COIN_R - 0.001, R16),
+    lanyard: merge([
+      behind,
+      rod([-0.058, 0.205, 0], [-0.05, 0.15, 0.122], cord, cs), rod([-0.05, 0.15, 0.122], [0.026, 0.05, 0.148], cord, cs),
+      rod([0.058, 0.205, 0], [0.05, 0.15, 0.122], cord, cs), rod([0.05, 0.15, 0.122], [0.044, 0.05, 0.148], cord, cs),
+      placed(new THREE.BoxGeometry(0.016, 0.012, 0.006), 0.035, 0.046, 0.149),
+    ]),
+    badge: placed(box(0.05, 0.07, 0.003, 0, 0), 0.035, 0.005, 0.152),
+    badgeFace: placed(new THREE.PlaneGeometry(0.046, 0.066), 0.035, 0.005, 0.1545),
+    plateFace: placed(new THREE.PlaneGeometry(0.17, 0.037), 0, 0, 0.0158),
+    cuff: placed(new THREE.TorusGeometry(0.044, 0.013, 5, Math.max(8, L)), 0, -0.012, 0, Math.PI / 2),
+    hoodie: merge([hood, placed(box(0.15, 0.065, 0.02, B1, 0.008), 0, -0.1, 0.1, 0.12)]),
+    strings: merge([-1, 1].map((s) => rod([s * 0.025, 0.165, 0.11], [s * 0.03, 0.075, 0.138], 0.0035, cs))),
+    pot: merge([placed(new THREE.CylinderGeometry(0.036, 0.027, 0.06, L), 0, 0.03, 0), placed(new THREE.CylinderGeometry(0.039, 0.039, 0.01, L), 0, 0.058, 0)]),
+    leaves: merge(leaves),
+    frame: merge([placed(box(0.078, 0.062, 0.008, B1, 0.003), 0, 0.031, 0, -0.2), placed(new THREE.BoxGeometry(0.01, 0.05, 0.004), 0, 0.024, -0.02, 0.45)]),
+    picture: placed(new THREE.PlaneGeometry(0.064, 0.048), 0, 0.031 + 0.0009, 0.0045, -0.2),
+    phonesStand: merge([
+      placed(new THREE.CylinderGeometry(0.04, 0.045, 0.01, L), 0, 0.005, 0),
+      placed(new THREE.CylinderGeometry(0.007, 0.007, H, Math.max(6, L >> 1)), 0, H / 2, 0),
+      placed(new THREE.BoxGeometry(0.06, 0.01, 0.014), 0, H, 0),
+    ]),
+    headphones: merge([
+      new THREE.TorusGeometry(PHONES_R, 0.012, 5, Math.max(12, L + 2), Math.PI),
+      ...[-1, 1].map((s) => placed(new THREE.CylinderGeometry(0.05, 0.05, 0.03, L), s * PHONES_R, -0.01, 0, 0, 0, Math.PI / 2)),
+    ]),
+    screenBox: box(0.34, 0.25, 0.04, B, 0.012),
+    monitorArm: new THREE.BoxGeometry(0.025, 0.2, 0.02),
+    lamp: merge([
+      placed(new THREE.CylinderGeometry(0.045, 0.05, 0.012, L), 0, 0.006, 0),
+      rod([0, 0.012, 0], [0, 0.2, -0.05], 0.007, cs),
+      rod([0, 0.2, -0.05], [-0.15, 0.24, 0], 0.006, cs),
+      placed(new THREE.SphereGeometry(0.011, S[0], S[1]), 0, 0.2, -0.05),
+    ]),
+    shade: placed(shade, -0.16, 0.215, 0, 0, 0, -0.6),
+    bulb: placed(new THREE.SphereGeometry(0.016, S[0], S[1]), -0.17, 0.2, 0),
+    phoneBase: merge([
+      placed(box(0.095, 0.03, 0.085, B1, 0.008), 0, 0.015, 0),
+      ...[-1, 1].map((s) => placed(new THREE.BoxGeometry(0.02, 0.008, 0.03), s * 0.04, 0.03, 0)),
+      ...[-1, 0, 1].map((k) => placed(new THREE.BoxGeometry(0.012, 0.004, 0.01), k * 0.02, 0.031, 0.031)),
+    ]),
+    handset: merge([placed(box(0.11, 0.016, 0.026, B1, 0.006), 0, 0, 0), ...[-1, 1].map((s) => placed(box(0.026, 0.024, 0.03, B1, 0.007), s * 0.045, -0.002, 0))]),
+    copierBody: merge([
+      placed(box(CW, CH - 0.05, CD, B, 0.015), 0, 0.05 + (CH - 0.05) / 2, 0),
+      placed(box(CW + 0.006, COPIER.lid, CD - 0.01, B1, 0.008), 0, CH + COPIER.lid / 2, 0),
+      placed(new THREE.BoxGeometry(0.2, 0.008, 0.2), 0, 0.4, 0.31, TRAY_TILT),
+    ]),
+    copierDark: merge([
+      placed(new THREE.BoxGeometry(CW + 0.02, 0.05, CD + 0.02), 0, 0.025, 0),
+      placed(new THREE.BoxGeometry(0.22, 0.02, 0.006), 0, 0.42, CD / 2 + 0.001),
+      ...[0.2, 0.36].map((y) => placed(new THREE.BoxGeometry(0.006, 0.014, 0.16), -CW / 2 - 0.003, y, 0)),
+    ]),
+    copierPanel: box(0.08, 0.03, 0.22, B1, 0.008),
+    copierButton: new THREE.CylinderGeometry(0.014, 0.014, 0.008, L),
+    copierDisplay: placed(new THREE.PlaneGeometry(0.05, 0.08), 0, 0, 0, -Math.PI / 2),
+    staplerTex: zoomTex(staplerCanvas()),
+    tpsTex: zoomTex(tpsCanvas()),
+    copyTex: zoomTex(copyCanvas()),
+    bubbleTex: canvasTex(bubbleCanvas()),
+    photoTex: canvasTex(photoCanvas()),
   };
 }
 
@@ -791,12 +1158,11 @@ let liveBosses = 0;
 // ------------------------------------------------------------------------------------------ the figure
 
 const O_ROOT = officeJointOffset("root");
+const O_HIPS = officeJointOffset("hips");
 const O_SPINE = officeJointOffset("spine");
 const O_CHEST = officeJointOffset("chest");
 const O_NECK = officeJointOffset("neck");
 const O_HEAD = officeJointOffset("head");
-const O_SHL = officeJointOffset("shL");
-const O_ELL = officeJointOffset("elL");
 const O_SHR = officeJointOffset("shR");
 const O_ELR = officeJointOffset("elR");
 const J_SHL = OFFICE_JOINTS.indexOf("shL");
@@ -922,6 +1288,45 @@ class Office implements OfficeFigure {
   /** The energy drink, in the right hand while a drink hit plays. */
   private readonly can: THREE.Mesh | null = null;
 
+  // P-VIZ.7 (ADR-0641): the build, the variant and the commit
+  /** The variant 0..3 (the outfit, the desk set) for the clips, or -1 at the lowest tier (the plain clips). */
+  private readonly actVariant: number;
+  /** The worker's outfit (null for the boss). */
+  private readonly outfit: WorkerOutfit | null;
+  /** The poses solved for this build (the boss: per manager, built on first need). */
+  private poses: OfficePoseTable;
+  private readonly bossPoses: Partial<Record<ManagerVariant, OfficePoseTable>> = {};
+  private readonly scale: number;
+  /** Per-figure textures (the emblem on the coin, the badge, the nameplate), freed by dispose(). */
+  private readonly ownTex: THREE.Texture[] = [];
+  /** The orbit (a pivot over the desk's center) and the coin on it. */
+  private readonly orbit = new THREE.Group();
+  private readonly coin = new THREE.Group();
+  private readonly deskCenter = new THREE.Vector2();
+  private readonly copier = new THREE.Group();
+  private readonly copierButton: THREE.Mesh;
+  private readonly mDisplay: THREE.MeshBasicMaterial;
+  private readonly sheets: THREE.Mesh[] = [];
+  private readonly bubble: THREE.Sprite;
+  private readonly mBubble: THREE.SpriteMaterial;
+  private commitOn = false;
+  /** 0 at the desk .. 1 at the copier (eased in use); `commitT` the seconds since the copier scene began. */
+  private commitW = 0;
+  private commitT = 0;
+  private readonly cpose = new Float32Array(OFFICE_POSE_LEN);
+  private readonly cinfo: OfficeClipSample = { emotion: "neutral", gaze: 0 };
+  /** The desk phone's handset on its cradle and in the left hand; the headphones on the stand, in the hand, on the
+   *  head (null when the desk set has none). */
+  private deskHandset: THREE.Object3D | null = null;
+  private handHandset: THREE.Object3D | null = null;
+  private phonesStand: THREE.Object3D | null = null;
+  private phonesHand: THREE.Object3D | null = null;
+  private phonesHead: THREE.Object3D | null = null;
+  /** The headphones' and the handset's material (built with the first of them). */
+  private mGear: THREE.MeshToonMaterial | null = null;
+  /** The lanyard and badge (null without a brand), scaled to the torso's depth. */
+  private lanyard: THREE.Group | null = null;
+
   // P-VIZ.6: who the worker is (null for the boss) and the hit layer (a one-shot over the activity) and charge
   private readonly worker: WorkerCast | null;
   private hitPlan: OfficeHitPlan | null = null;
@@ -1007,8 +1412,16 @@ class Office implements OfficeFigure {
     this.group.name = boss ? "office-boss" : "office-worker";
     this.mini = o.look;
     const worker = (this.worker = boss ? null : workerCast(this.seed));
-    const long = worker !== null && longSleeves(worker.top);
+    // P-VIZ.7: the sponsor, the size class's scale and the variant (outfit, desk set, actions)
+    const brand = o.brand ?? null;
+    this.scale = brand && Number.isFinite(brand.scale) && brand.scale > 0 ? brand.scale : 1;
+    const dv = officeVariant(brand?.variant, this.seed);
+    this.actVariant = t.deskSet ? dv : -1;
+    const outfit = (this.outfit = worker ? workerOutfit(worker, dv) : null);
+    const long = outfit !== null && longSleeves(outfit);
     const woman = worker?.gender === "female";
+    // (the boss's: the manager on duty's, set by showVariant below)
+    this.poses = boss ? OFFICE_POSE_VECTORS : officePoseTable({ shoulderX: woman ? SHOULDER_X.woman : SHOULDER_X.man, scale: this.scale });
     if (boss) {
       // who opens: the live or just-gone boss's cast (a rebuild), else a fresh seeded coin flip
       const now = performance.now() / 1000;
@@ -1055,6 +1468,12 @@ class Office implements OfficeFigure {
     const mCheck = toon({ map: g.checkTex, side: THREE.DoubleSide });
     const mPen = toon({ color: "#1d3c8a" });
     const mCan = toon({ color: "#b9f227" });
+    // P-VIZ.7: the glossy red stapler (black base, a decal on top lifted with a polygon offset), the TPS cover sheet
+    const offset = { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 } as const;
+    const mRed = toon({ color: "#d3151b", emissive: "#5a0306", emissiveIntensity: 0.35 });
+    const mBlack = toon({ color: "#16171b" });
+    const mDecal = basic({ map: g.staplerTex, transparent: true, depthWrite: false, ...offset });
+    const mTps = toon({ map: g.tpsTex, ...offset });
     const cv = document.createElement("canvas");
     cv.width = Math.round(FW * t.faceScale);
     cv.height = Math.round(FH * t.faceScale);
@@ -1099,17 +1518,32 @@ class Office implements OfficeFigure {
     pile.position.set(boss ? 0.36 : -0.36, DESK_Y + 0.015, 0.44);
     pile.rotation.y = 0.12;
     this.pileAt.copy(pile.position);
+    // P-VIZ.7: the pile is a stack of TPS reports (the cover sheet on top), NORM's red stapler on it
+    pile.add(new THREE.Mesh(g.tpsTop, mTps));
+    const stapler = G();
+    pile.add(stapler);
+    stapler.position.set(STAPLER_ON_PILE.x, PILE.h / 2 + 0.0012, STAPLER_ON_PILE.z);
+    stapler.rotation.y = STAPLER_ON_PILE.yaw;
+    this.add(stapler, g.staplerBase, mBlack, thin);
+    this.add(stapler, g.staplerBody, mRed, thin);
+    const norm = new THREE.Mesh(g.staplerTop, mDecal);
+    norm.renderOrder = 1;
+    stapler.add(norm);
     const loose = this.add(this.desk, g.sheet, mPaper, 0);
     loose.position.set(boss ? 0.16 : -0.14, DESK_Y + 0.002, 0.5);
     loose.rotation.set(-Math.PI / 2, 0, 0.3);
+    // the mug's handle faces its -X side, where the left hand takes it (viz_office_pose.MUG_GRIP)
     this.desk.add(this.deskMug);
-    this.deskMug.position.set(-0.27, DESK_Y, 0.3);
-    this.add(this.deskMug, g.mug, mMug, thin);
+    this.deskMug.position.set(DESK_MUG[0], DESK_MUG[1], DESK_MUG[2]);
+    this.add(this.deskMug, g.mug, mMug, thin).rotation.y = Math.PI;
     this.coffee = new THREE.Mesh(g.coffee, mCoffee);
     this.deskMug.add(this.coffee);
+    const deskSet: readonly DeskItem[] = t.deskSet ? officeDeskSet(this.role, dv) : [];
+    const plateMat = brand ? basic({ map: this.brandTex(emblemCanvas(brand, 512, 112, { word: true })), transparent: true, ...offset }) : null;
     if (boss) {
       const plate = this.add(this.desk, g.nameplate, this.mPlate ?? this.mTie, thin);
       plate.position.set(0, DESK_Y + 0.0225, 0.6);
+      if (plateMat) plate.add(new THREE.Mesh(g.plateFace, plateMat));
       const dc = (this.deskClipboard = G());
       this.desk.add(dc);
       dc.position.set(0.12, DESK_Y + 0.006, 0.36);
@@ -1129,11 +1563,26 @@ class Office implements OfficeFigure {
       crt.position.set(0, SCREEN_Y, 0.022);
       crt.visible = false;
       mon.add(crt);
+      if (deskSet.includes("monitor2")) {
+        // P-VIZ.7: a second screen stacked over the first on a pole, tipped down a little (the same code scrolls)
+        this.add(mon, g.monitorArm, mMonitor, thin).position.set(0, SCREEN_Y + 0.14, -0.035);
+        const up = G();
+        mon.add(up);
+        up.position.set(0, SCREEN_Y + 0.27, -0.01);
+        up.rotation.x = 0.12;
+        this.add(up, g.screenBox, mMonitor, 1);
+        const scr2 = new THREE.Mesh(g.screen, this.mScreen);
+        scr2.position.z = 0.0205;
+        up.add(scr2);
+      }
       const kb = (this.keyboard = this.add(this.desk, g.keyboard, mKeyboard, thin));
-      kb.position.set(0.03, DESK_Y + 0.01, 0.32);
-      kb.rotation.y = 0.15;
+      kb.position.set(KEYBOARD.x, KEYBOARD.y, KEYBOARD.z);
+      kb.rotation.y = KEYBOARD.yaw;
       this.smokeAt.set(MONITOR_POS[0], MONITOR_POS[1] + SCREEN_Y + 0.14, MONITOR_POS[2]);
     }
+    // P-VIZ.7: the variant's desk items (DESK_SPOTS), not at the lowest tier
+    for (const item of deskSet) if (item !== "monitor2") this.buildDeskItem(item, plateMat, thin);
+    this.deskCenter.set(boss ? 0 : 0.025, boss ? 0.4 : 0.38);
 
     // ---- the cubicle (3D): low fabric partitions, persona trim, the status line on top
     if (o.cubicle && !flat) {
@@ -1148,6 +1597,9 @@ class Office implements OfficeFigure {
     // ---- the chair (rides the root: it rolls and swivels with him)
     const root = (this.root = G());
     this.body.add(root);
+    // P-VIZ.7: the brand's size class scales him and his chair about the floor (the desk set stays put; the hands are
+    // solved for this scale, see `poses`)
+    root.scale.setScalar(this.scale);
     this.add(root, g.chairBase, mMetal, thin);
     this.add(root, g.seat, mChair, 1).position.set(0, SEAT_Y - 0.03, -0.02);
     root.add(this.backPivot);
@@ -1157,27 +1609,35 @@ class Office implements OfficeFigure {
     // ---- the body (the boss's person takes the dissolving ink, see `hull`)
     if (this.personInk) [this.hull, this.hullThin] = this.personInk;
     const hips = (this.hips = G()), spine = G(), chest = (this.chest = G()), neck = G(), head = G();
-    root.add(hips); hips.position.y = HIP_Y; hips.add(spine); spine.add(chest); chest.position.y = 0.16; chest.add(neck); neck.position.y = 0.17; neck.add(head); head.position.y = 0.05;
+    const R = OFFICE_RIG;
+    root.add(hips); hips.position.y = HIP_Y; hips.add(spine); spine.add(chest); chest.position.y = R.chestY; chest.add(neck); neck.position.y = R.neckY; neck.add(head); head.position.y = R.headY;
     this.add(hips, g.pelvis, this.mSlacks, 1);
-    // the boss's suit and blazer and a worker's sweater, cardigan or blazer are the jacket; a shirt or blouse alone
-    this.torso = this.add(spine, g.torso, boss || long ? this.mJacket : this.mShirt, 1);
+    // the boss's suit and blazer and a worker's sweater, cardigan, blazer, hoodie or vest are the jacket (P-VIZ.7: a
+    // vest is the jacket over short shirt sleeves); a shirt or blouse alone (or with rolled-up sleeves)
+    const hoodie = outfit === "hoodie", vest = outfit === "vest", rolled = outfit === "rolled";
+    this.torso = this.add(spine, g.torso, boss || long || vest ? this.mJacket : this.mShirt, 1);
     if (woman) this.torso.scale.set(0.95, 1, 0.76);
     else this.torso.scale.set(1, 1, 0.78); // the boss's: showVariant()
-    if (g.belt && !boss && !long) this.add(spine, g.belt, this.mShoe, 0).scale.set(1, 0.8, 1);
-    if (g.collar) this.add(chest, g.collar, this.mShirt, thin).scale.set(1, 0.85, 1);
-    if (boss || long) {
+    if (g.belt && !boss && !long && !vest) this.add(spine, g.belt, this.mShoe, 0).scale.set(1, 0.8, 1);
+    if (g.collar && !hoodie) this.add(chest, g.collar, this.mShirt, thin).scale.set(1, 0.85, 1);
+    if ((boss || long || vest) && !hoodie) {
       const vee = this.add(chest, g.vee, this.mShirt, 0);
       vee.rotation.set(Math.PI, Math.PI / 6 + Math.PI, 0);
       vee.position.set(0, 0.1, 0.118);
       vee.scale.set(1, 1, 0.2);
     }
-    if (woman) this.add(chest, g.necklace, this.mTie, 0);
+    if (hoodie) {
+      this.add(chest, g.hoodie, this.mJacket, thin);
+      this.add(chest, g.strings, this.toonMat({ color: "#f2f1ec" }), 0);
+    } else if (woman) this.add(chest, g.necklace, this.mTie, 0);
     else if (!boss) {
-      // the boss's tie is the man's own part (buildManager)
-      this.add(chest, g.tieKnot, this.mTie, thin).position.set(0, 0.162, 0.108);
+      // the boss's tie is the man's own part (buildManager); rolled-up sleeves come with the tie loosened
+      const knot = this.add(chest, g.tieKnot, this.mTie, thin);
+      knot.position.set(rolled ? 0.004 : 0, rolled ? 0.142 : 0.162, rolled ? 0.113 : 0.108);
+      knot.rotation.z = rolled ? 0.18 : 0;
       const blade = this.add(chest, g.tieBlade, this.mTie, 0);
-      blade.position.set(0, 0.152, 0.114);
-      blade.rotation.x = -0.08;
+      blade.position.set(rolled ? 0.005 : 0, rolled ? 0.132 : 0.152, rolled ? 0.118 : 0.114);
+      blade.rotation.set(-0.08, 0, rolled ? 0.07 : 0);
     }
     this.add(neck, g.neck, this.mSkin, 1).position.y = 0.02;
 
@@ -1193,22 +1653,25 @@ class Office implements OfficeFigure {
     if (g.ear) for (let s = -1; s <= 1; s += 2) this.add(this.skull, g.ear, this.mSkin, thin).position.set(s * 0.153, -0.01, 0);
     if (worker) this.add(this.skull, acquireWorkerHair(this.detail, worker.hair), this.mHair, 1);
 
-    // arms (L is -X): short sleeves and bare forearms, or the jacket's sleeves (the boss, a long top)
+    // arms (L is -X): short sleeves and bare forearms, or the jacket's sleeves (the boss, a long top); P-VIZ.7:
+    // rolled-up shirt sleeves are long to the elbow with a cuff, the forearms bare
     const sleeves = boss || long;
     const arm = (side: number): [THREE.Group, THREE.Group, THREE.Group] => {
-      const sh = G(); chest.add(sh); sh.position.set(side * (boss ? 0.19 : woman ? 0.16 : 0.17), 0.14, 0);
-      if (sleeves) {
-        this.add(sh, g.jacketCap, this.mJacket, 1);
-        this.add(sh, g.jacketUpper, this.mJacket, 1);
+      const sh = G(); chest.add(sh); sh.position.set(side * (boss ? SHOULDER_X.bossMan : woman ? SHOULDER_X.woman : SHOULDER_X.man), R.shoulderY, 0);
+      if (sleeves || rolled) {
+        const m = rolled ? this.mShirt : this.mJacket;
+        this.add(sh, g.jacketCap, m, 1);
+        this.add(sh, g.jacketUpper, m, 1);
       } else {
         this.add(sh, g.shoulderCap, this.mShirt, 1);
         this.add(sh, g.upperArm, this.mSkin, 1);
         this.add(sh, g.sleeve, this.mShirt, 1);
       }
-      const el = G(); sh.add(el); el.position.y = -0.2;
+      const el = G(); sh.add(el); el.position.y = -R.upperArm;
       this.add(el, sleeves ? g.jacketFore : g.foreArm, sleeves ? this.mJacket : this.mSkin, 1);
-      const hand = G(); el.add(hand); hand.position.y = -0.19;
-      this.add(hand, g.hand, this.mSkin, thin).position.y = -0.035;
+      if (rolled) this.add(el, g.cuff, this.mShirt, thin);
+      const hand = G(); el.add(hand); hand.position.y = -R.foreArm;
+      this.add(hand, g.hand, this.mSkin, thin).position.y = -R.palm;
       return [sh, el, hand];
     };
     const leg = (side: number): [THREE.Group, THREE.Group] => {
@@ -1225,12 +1688,43 @@ class Office implements OfficeFigure {
     const byName: Record<(typeof OFFICE_JOINTS)[number], THREE.Group> = { root, hips, spine, chest, neck, head, shL, elL, shR, elR, hipL, kneeL, hipR, kneeR };
     for (const j of OFFICE_JOINTS) this.joints.push(byName[j]);
 
-    // ---- props in hand
+    // ---- props in hand (P-VIZ.7: the mug hangs from the palm by its handle, placed per frame, see updateProps)
     handL.add(this.handMug);
-    this.handMug.position.y = -0.045;
     this.handMug.visible = false;
-    this.add(this.handMug, g.mug, mMug, thin);
+    this.handMug.scale.setScalar(1 / this.scale);
+    this.add(this.handMug, g.mug, mMug, thin).rotation.y = Math.PI;
     this.handMug.add(new THREE.Mesh(g.coffee, mCoffee));
+    if (this.deskHandset) {
+      const hh = (this.handHandset = new THREE.Group());
+      handL.add(hh);
+      hh.scale.setScalar(1 / this.scale);
+      hh.visible = false;
+      this.add(hh, g.handset, this.mGear!, thin);
+    }
+    if (this.phonesStand && !boss) {
+      const ph = (this.phonesHand = new THREE.Group());
+      handL.add(ph);
+      ph.scale.setScalar(PHONES_SMALL / this.scale);
+      ph.visible = false;
+      this.add(ph, g.headphones, this.mGear!, thin);
+      const pd = (this.phonesHead = new THREE.Group());
+      this.skull.add(pd);
+      pd.visible = false;
+      this.add(pd, g.headphones, this.mGear!, thin);
+    }
+    // P-VIZ.7: the sponsor's lanyard and ID badge (the emblem and the word), at this torso's depth
+    if (brand) {
+      const lan = G();
+      chest.add(lan);
+      lan.scale.set(this.torso.scale.x, 1, this.torso.scale.z / 0.78);
+      this.add(lan, g.lanyard, person({ color: brand.primary }), 0);
+      this.add(lan, g.badge, person({ color: "#f6f6f2" }), thin);
+      // (the patch's rounded corners are clear: blended on a worker, alpha-hashed on the dissolving boss)
+      const face = basic({ map: this.brandTex(emblemCanvas(brand, 184, 264, { word: true })), transparent: !boss, alphaHash: boss, ...offset });
+      if (boss) this.personMats.push(face);
+      lan.add(new THREE.Mesh(g.badgeFace, face));
+      this.lanyard = lan;
+    }
     const can = (this.can = this.add(handR, g.can, mCan, thin));
     can.position.y = -0.05;
     can.visible = false;
@@ -1316,6 +1810,53 @@ class Office implements OfficeFigure {
       this.zeds.push(z);
     }
 
+    // ---- P-VIZ.7: the sponsor's coin orbiting the desk (both faces the emblem, the rim the second color)
+    this.body.add(this.orbit);
+    this.orbit.position.set(this.deskCenter.x, (boss ? ORBIT.boss : ORBIT.worker).y, this.deskCenter.y);
+    this.orbit.add(this.coin);
+    this.coin.position.x = (boss ? ORBIT.boss : ORBIT.worker).r;
+    this.orbit.visible = brand !== null;
+    if (brand) {
+      // (transparent: the round badge's margin shows the rim's color inside the coin, not black)
+      const mEmblem = basic({ map: this.brandTex(emblemCanvas(brand, 256, 256, { word: false })), transparent: true });
+      this.add(this.coin, g.coinRim, toon({ color: brand.secondary, side: THREE.DoubleSide }), thin);
+      const front = new THREE.Mesh(g.coinFace, mEmblem);
+      front.position.z = COIN_T / 2 + 0.0002;
+      const back = new THREE.Mesh(g.coinFace, mEmblem);
+      back.position.z = -COIN_T / 2 - 0.0002;
+      back.rotation.y = Math.PI;
+      this.coin.add(front, back);
+    }
+
+    // ---- P-VIZ.7: the copier (the commit), its pooled copies and the "TPS Reports" bubble
+    this.body.add(this.copier);
+    this.copier.visible = false;
+    this.add(this.copier, g.copierBody, toon({ color: "#d9dbe0" }), 1);
+    this.add(this.copier, g.copierDark, toon({ color: "#3b4049" }), thin);
+    const panel = this.add(this.copier, g.copierPanel, toon({ color: "#3b4049" }), thin);
+    panel.position.set(COPIER.panel[0], COPIER.panel[1], COPIER.panel[2]);
+    panel.rotation.z = COPIER.panelTilt;
+    const btn = (this.copierButton = this.add(panel, g.copierButton, toon({ color: "#2fbf5a", emissive: "#2fbf5a", emissiveIntensity: 0.4 }), 0));
+    btn.position.set(COPIER.button[0], COPIER.button[1] + 0.004, COPIER.button[2]);
+    this.mDisplay = basic({ color: 0x7cf3b0 });
+    const display = new THREE.Mesh(g.copierDisplay, this.mDisplay);
+    display.position.set(0, 0.0156, 0.045);
+    panel.add(display);
+    const mCopy = toon({ map: g.copyTex, side: THREE.DoubleSide });
+    for (let i = 0; i < t.copies; i++) {
+      const s = new THREE.Mesh(g.sheet, mCopy);
+      s.rotation.x = -Math.PI / 2 + TRAY_TILT;
+      s.visible = false;
+      this.copier.add(s);
+      this.sheets.push(s);
+    }
+    // (a touch under white: the scene's bloom otherwise haloes the bubble over its lettering)
+    this.mBubble = this.own(new THREE.SpriteMaterial({ map: g.bubbleTex, color: 0xd6d6d2, transparent: true, depthWrite: false, toneMapped: false }));
+    this.bubble = new THREE.Sprite(this.mBubble);
+    this.bubble.scale.set(BUBBLE_W, BUBBLE_W * 0.425, 1);
+    this.bubble.visible = false;
+    this.body.add(this.bubble);
+
     this.update(0, 0, false);
   }
 
@@ -1354,7 +1895,7 @@ class Office implements OfficeFigure {
 
   setLook(l: MiniLook): void {
     this.mini = l;
-    const lk = officeLook(l, this.seed, this.role, this.variant);
+    const lk = officeLook(l, this.seed, this.role, this.variant, this.outfit ?? undefined);
     this.mShirt.color.set(lk.shirt);
     this.cTie.set(lk.tie);
     this.mSlacks.color.set(lk.slacks);
@@ -1430,6 +1971,11 @@ class Office implements OfficeFigure {
     this.remember(this.clockNow);
   }
 
+  setCommit(on: boolean): void {
+    if (this.disposed) return;
+    this.commitOn = on === true;
+  }
+
   get managerVariant(): ManagerVariant | null {
     return this.boss ? this.variant : null;
   }
@@ -1461,9 +2007,17 @@ class Office implements OfficeFigure {
     }
     // ---- the manager on duty: a due or pinned handover starts at a quiet moment and plays over everything
     const sw = this.boss ? this.manage(tSec, d, motion) : null;
+    // ---- P-VIZ.7: the commit: the desk set and the copier trade places over COMMIT_BLEND_S (never mid-handover);
+    // the copy clip runs from the start of the copier scene, a still of it under reduced motion
+    const cTarget = this.commitOn && sw === null && this.state !== "killed" ? 1 : 0;
+    this.commitW = motion ? approach(this.commitW, cTarget, d / COMMIT_BLEND_S) : cTarget;
+    this.commitT = this.commitW > 0 ? this.commitT + d : 0;
+    const cw = this.commitW * this.commitW * (3 - 2 * this.commitW);
+    const copyT = officeClipTime(OFFICE_CLIPS.copy, motion ? this.commitT : OFFICE_STILL_T.copy);
 
-    // ---- the clip: the state's, the activity's, or the idle behavior; a change blends from the last pose
-    const base = officeClipFor(this.role, this.state, this.activity, this.idleSec);
+    // ---- the clip: the state's, the activity's (the variant's own take on it), or the idle behavior; a change
+    // blends from the last pose
+    const base = officeClipFor(this.role, this.state, this.activity, this.idleSec, this.actVariant);
     if (base !== this.base) {
       const prev = this.base;
       this.base = base;
@@ -1475,12 +2029,12 @@ class Office implements OfficeFigure {
     const clip = OFFICE_CLIPS[base];
     const info = this.info;
     if (!motion) {
-      sampleOfficeClip(clip, OFFICE_STILL_T[base], this.tgt, info);
+      sampleOfficeClip(clip, OFFICE_STILL_T[base], this.tgt, info, this.poses);
       this.cur.set(this.tgt);
       this.blendT = this.blendDur;
     } else {
-      if (this.shot) sampleOfficeClip(OFFICE_CLIPS[this.shot], this.shotT, this.tgt, info);
-      else sampleOfficeClip(clip, this.clipT, this.tgt, info);
+      if (this.shot) sampleOfficeClip(OFFICE_CLIPS[this.shot], this.shotT, this.tgt, info, this.poses);
+      else sampleOfficeClip(clip, this.clipT, this.tgt, info, this.poses);
       if (this.blendT >= this.blendDur) this.cur.set(this.tgt);
       else {
         const u = this.blendT / this.blendDur;
@@ -1495,7 +2049,8 @@ class Office implements OfficeFigure {
       this.hitT += d;
       if (sampleOfficeHit(this.hitPlan, this.hitT, hs, this.hitPose).done) this.endHit();
     }
-    const live = this.shot === null && sw === null && hs.body < 0.5;
+    // (at the copier the desk's activity and its props are put away too)
+    const live = this.shot === null && sw === null && hs.body < 0.5 && this.commitW < 0.5;
     const frantic = this.shot === "frantic";
 
     // ---- the reaction on top
@@ -1509,6 +2064,17 @@ class Office implements OfficeFigure {
     // ---- procedural layers
     const o = this.out;
     o.set(this.cur);
+    // P-VIZ.7: at the copier (blended in and out by the commit's weight), glancing around the office
+    if (cw > 0) {
+      sampleOfficeClip(OFFICE_CLIPS.copy, copyT, this.cpose, this.cinfo, this.poses);
+      for (let i = 0; i < OFFICE_POSE_LEN; i++) o[i] = o[i]! + (this.cpose[i]! - o[i]!) * cw;
+      if (motion) {
+        const look = commitLook(this.commitT, copyT) * cw;
+        o[O_CHEST + 1] += 0.2 * look;
+        o[O_NECK + 1] += 0.3 * look;
+        o[O_HEAD + 1] += 0.5 * look;
+      }
+    }
     const br = motion ? Math.sin((this.life * TAU) / (base === "sleep" ? 4.2 : 3.2)) : 0;
     if (motion) {
       const amp = this.state === "killed" ? 0.2 : 1;
@@ -1521,12 +2087,10 @@ class Office implements OfficeFigure {
       const typing = frantic || (live && boost > 0 && (base === "type" || base === "enter" || base === "squint"));
       this.wType = approach(this.wType, typing ? (base === "squint" && !frantic ? 0.35 : 1) : 0, d / FX_S);
       this.tapPh += (d * tempo * tapRate(this.kS, frantic) * (boost || 1)) / 2;
-      if (this.wType > 0.001) {
-        const tl = tapCurve(fract(this.tapPh)) * this.wType;
-        const tr = tapCurve(fract(this.tapPh + 0.5)) * this.wType;
-        o[O_ELL] += 0.22 * tl; o[O_SHL] += 0.05 * tl;
-        o[O_ELR] += 0.22 * tr; o[O_SHR] += 0.05 * tr;
-      }
+      // P-VIZ.7: small taps down onto the keys, the hands wandering a little across them (viz_office_pose)
+      applyTyping(o, this.tapPh, this.wType);
+      // P-VIZ.7: nodding to the music with the headphones on
+      if (live && base === "headphones") o[O_HEAD] += 0.07 * Math.sin(this.life * TAU * 1.8) * phonesGroove(baseT);
       // the boss's pen ticking boxes
       this.wTick = approach(this.wTick, live && base === "clipboard" ? 1 : 0, d / FX_S);
       this.tickPh += d * tempo * (1.4 + 2.2 * this.kS);
@@ -1548,10 +2112,13 @@ class Office implements OfficeFigure {
     if (sw) applyManagerSwap(o, sw);
     this.apply(o);
     if (sw) this.hips.position.set(sw.x, HIP_Y + sw.lift, sw.z);
+    // P-VIZ.7: standing at the copier, stepped out of the chair (the hands were solved with this offset)
+    else this.hips.position.set(COPY_HIPS[0] * cw, HIP_Y + (COPY_HIPS[1] - HIP_Y) * cw, COPY_HIPS[2] * cw);
     this.backPivot.rotation.x = Math.min(0, o[O_SPINE]!) * 0.8;
 
     // ---- the face: redrawn only when the emotion, the blink step or the gaze bucket changes
-    const emotion = sw ? "content" : hs.emotion ?? rs?.emotion ?? info.emotion;
+    const own = cw > 0.5 ? this.cinfo : info;
+    const emotion = sw ? "content" : hs.emotion ?? rs?.emotion ?? own.emotion;
     if (motion) {
       this.blinkIn -= d;
       this.blinkAge += d;
@@ -1563,7 +2130,7 @@ class Office implements OfficeFigure {
     const emo = OFFICE_EMOTIONS[emotion];
     const staring = (rs !== null && rs.look > 0.5) || hs.emotion !== null;
     const bl = emo.shape === "open" && !staring ? blinkStep(this.blinkAge) : 0; // a stare (or a hit) never blinks
-    const gb = gazeBucket(sw ? 0 : info.gaze * (1 - Math.max(rs?.look ?? 0, hs.turn * hs.body)));
+    const gb = gazeBucket(sw ? 0 : own.gaze * (1 - Math.max(rs?.look ?? 0, hs.turn * hs.body)));
     const key = officeFaceKey(emotion, bl, gb);
     if (key !== this.faceKeyNow) {
       this.faceKeyNow = key;
@@ -1572,8 +2139,10 @@ class Office implements OfficeFigure {
     }
 
     this.updateColors(d, motion, rs);
-    this.updateProps(d, motion, base, baseT, live, rs);
+    this.updateProps(d, motion, base, baseT, live, rs, cw, copyT);
     this.updateFx(d, motion, base, live, frantic, rs);
+    this.updateCommit(motion, cw, copyT);
+    this.updateEmblem(motion);
   }
 
   dispose(): void {
@@ -1583,6 +2152,7 @@ class Office implements OfficeFigure {
     for (const m of this.mats) m.dispose();
     this.faceTex.dispose();
     this.screenTex.dispose();
+    for (const tex of this.ownTex) tex.dispose(); // P-VIZ.7: the emblem, badge and nameplate canvases
     this.hitPlan = null;
     this.hitCam = null;
     this.reactCam = null;
@@ -1632,7 +2202,8 @@ class Office implements OfficeFigure {
     const to = this.want;
     if (to === null) return null;
     if (to === this.variant) { this.want = null; return null; }
-    if (!managerSwapReady(this.state, this.reactKind !== null || this.hitPlan !== null, this.shot !== null)) return null;
+    // (P-VIZ.7: nor while he is at the copier)
+    if (!managerSwapReady(this.state, this.reactKind !== null || this.hitPlan !== null, this.shot !== null || this.commitOn || this.commitW > 0)) return null;
     this.want = null;
     this.cast = recastManager(this.cast, to, now);
     this.remember(now);
@@ -1664,8 +2235,12 @@ class Office implements OfficeFigure {
     this.variant = v;
     const woman = v === "woman";
     this.torso.scale.set(woman ? 1.05 : 1.12, 1, 0.86);
-    this.joints[J_SHL]!.position.x = woman ? -0.18 : -0.19;
-    this.joints[J_SHR]!.position.x = woman ? 0.18 : 0.19;
+    const sx = woman ? SHOULDER_X.bossWoman : SHOULDER_X.bossMan;
+    this.joints[J_SHL]!.position.x = -sx;
+    this.joints[J_SHR]!.position.x = sx;
+    // P-VIZ.7: this manager's solved hands (the shoulders differ) and the lanyard at this torso's depth
+    this.poses = this.bossPoses[v] ??= officePoseTable({ shoulderX: sx, scale: this.scale });
+    this.lanyard?.scale.set(this.torso.scale.x, 1, this.torso.scale.z / 0.78);
     this.mHair.map = this.managerGeo[v]!.hairTex;
     this.setLook(this.mini);
   }
@@ -1692,6 +2267,72 @@ class Office implements OfficeFigure {
     this.hull = this.mInk;
     this.hullThin = this.mInkThin;
     return parts;
+  }
+
+  /** P-VIZ.7 (ADR-0641): a material owned by this figure on its toon ramp. */
+  private toonMat(p: THREE.MeshToonMaterialParameters): THREE.MeshToonMaterial {
+    return this.own(new THREE.MeshToonMaterial({ gradientMap: this.grad, toneMapped: false, ...p }));
+  }
+
+  /** P-VIZ.7: a texture this figure owns (the brand's emblem canvases), freed by dispose(). */
+  private brandTex(cv: HTMLCanvasElement): THREE.CanvasTexture {
+    const tex = canvasTex(cv);
+    tex.anisotropy = 4;
+    this.ownTex.push(tex);
+    return tex;
+  }
+
+  /** P-VIZ.7: one of the variant's desk items at its DESK_SPOTS place (the second monitor is the monitor's own).
+   *  The handset and the headphones also get the copies the hands and the head take (attached with the rig). */
+  private buildDeskItem(item: DeskItem, plateMat: THREE.Material | null, thin: 0 | 2): void {
+    const spot = DESK_SPOTS[this.role][item];
+    if (!spot) return;
+    const g = this.geo;
+    const at = new THREE.Group();
+    this.desk.add(at);
+    at.position.set(spot[0], DESK_Y, spot[1]);
+    at.rotation.y = spot[2];
+    const gear = (): THREE.MeshToonMaterial => (this.mGear ??= this.toonMat({ color: "#26282e" }));
+    switch (item) {
+      case "plant":
+        this.add(at, g.pot, this.toonMat({ color: "#c0623b" }), thin);
+        this.add(at, g.leaves, this.toonMat({ color: "#3e9a4a" }), thin);
+        break;
+      case "photo":
+        this.add(at, g.frame, this.toonMat({ color: "#5b3a22" }), thin);
+        at.add(new THREE.Mesh(g.picture, this.toonMat({ map: g.photoTex })));
+        break;
+      case "nameplate": {
+        const plate = this.add(at, g.nameplate, this.mTie, thin);
+        plate.position.y = 0.0225;
+        if (plateMat) plate.add(new THREE.Mesh(g.plateFace, plateMat));
+        break;
+      }
+      case "lamp":
+        this.add(at, g.lamp, this.toonMat({ color: "#2f5f52" }), thin);
+        this.add(at, g.shade, this.toonMat({ color: "#2f5f52", side: THREE.DoubleSide }), 0);
+        at.add(new THREE.Mesh(g.bulb, this.own(new THREE.MeshBasicMaterial({ color: 0xfff1b8, toneMapped: false }))));
+        break;
+      case "headphones": {
+        this.add(at, g.phonesStand, this.toonMat({ color: "#8d939c" }), thin);
+        const hp = (this.phonesStand = new THREE.Group());
+        at.add(hp);
+        hp.position.y = HEADPHONE_STAND_H - (PHONES_R + 0.012) * PHONES_SMALL;
+        hp.scale.setScalar(PHONES_SMALL);
+        this.add(hp, g.headphones, gear(), thin);
+        break;
+      }
+      case "phone": {
+        this.add(at, g.phoneBase, gear(), thin);
+        const hs = (this.deskHandset = new THREE.Group());
+        at.add(hs);
+        hs.position.y = HANDSET_AT[1] - DESK_Y;
+        this.add(hs, g.handset, gear(), thin);
+        break;
+      }
+      case "monitor2":
+        break;
+    }
   }
 
   /** A clipboard in its own XY plane: the checklist faces -Z (the reader), the board's back faces +Z. */
@@ -1748,7 +2389,8 @@ class Office implements OfficeFigure {
     this.body.worldToLocal(this.v2);
     this.body.worldToLocal(this.v1);
     lookAngles(this.v1.x - this.v2.x, this.v1.y - this.v2.y, this.v1.z - this.v2.z, this.look);
-    const yaw = this.look.yaw - (o[O_ROOT + 1]! + o[O_SPINE + 1]! + o[O_CHEST + 1]!);
+    // (the hips turn too: a handover's walk, the stand at the copier)
+    const yaw = this.look.yaw - (o[O_ROOT + 1]! + o[O_HIPS + 1]! + o[O_SPINE + 1]! + o[O_CHEST + 1]!);
     const pitch = this.look.pitch - (o[O_SPINE]! + o[O_CHEST]!);
     o[O_NECK] = o[O_NECK]! + (pitch * 0.35 - o[O_NECK]!) * w;
     o[O_NECK + 1] = o[O_NECK + 1]! + (yaw * 0.35 - o[O_NECK + 1]!) * w;
@@ -1780,12 +2422,23 @@ class Office implements OfficeFigure {
     if (motion && hs.shake > 0) o[0] += 0.02 * Math.sin(this.life * 90) * hs.shake;
   }
 
-  /** Keep a hand-held prop upright in the body frame (tilted by `rx`), whatever the hand's own angle. */
-  private orient(prop: THREE.Object3D, rx: number): void {
+  /** Keep a hand-held prop upright in the body frame (tilted by `rx`), whatever the hand's own angle. P-VIZ.7:
+   *  turned to `yaw` (the way he faces) and rolled by `rz` first (three's Euler "YXZ", viz_office_pose.mugFrame). */
+  private orient(prop: THREE.Object3D, rx: number, yaw = 0, rz = 0): void {
     prop.parent!.getWorldQuaternion(this.q1).invert();
     this.body.getWorldQuaternion(this.q2);
-    this.q3.setFromEuler(this.e1.set(rx, 0, 0));
+    this.q3.setFromEuler(this.e1.set(rx, yaw, rz, "YXZ"));
     prop.quaternion.copy(this.q1).multiply(this.q2).multiply(this.q3);
+  }
+
+  /** P-VIZ.7: a prop held at the palm by its grip point (the prop's frame, figure units): oriented as orient()
+   *  does, then placed so the grip sits on the palm. The prop's own scale undoes the person's (the brand's size
+   *  class), so it is the same size in the hand as on the desk. */
+  private hang(prop: THREE.Object3D, rx: number, yaw: number, rz: number, gx: number, gy: number, gz: number): void {
+    this.orient(prop, rx, yaw, rz);
+    const s = this.scale;
+    this.v2.set(-gx / s, -gy / s, -gz / s).applyQuaternion(prop.quaternion);
+    prop.position.set(this.v2.x, this.v2.y - OFFICE_RIG.palm, this.v2.z);
   }
 
   private updateColors(d: number, motion: boolean, rs: ReactSample | null): void {
@@ -1812,12 +2465,38 @@ class Office implements OfficeFigure {
     this.mSkin.emissiveIntensity = ((this.screen ? 0.06 * this.scr : 0) + 0.1 * this.chargeNow) * (1 - this.dead);
   }
 
-  private updateProps(d: number, motion: boolean, base: OfficeClipName, baseT: number, live: boolean, rs: ReactSample | null): void {
-    // coffee: in the hand while sipping, on the desk otherwise; it sloshes when the desk is slammed
-    const held = live && mugHeld(base, baseT);
+  private updateProps(d: number, motion: boolean, base: OfficeClipName, baseT: number, live: boolean, rs: ReactSample | null, cw: number, copyT: number): void {
+    // coffee: in the hand while sipping (and all through the copier scene), on the desk otherwise; held by the
+    // handle, kept upright in the way he faces and tipped to the lips (P-VIZ.7); it sloshes when the desk is slammed
+    const atCopier = this.commitW >= 0.5;
+    const held = atCopier || (live && mugHeld(base, baseT));
+    const yaw = officeFacing(this.out);
     this.handMug.visible = held;
     this.deskMug.visible = !held;
-    if (held) this.orient(this.handMug, -0.9 * bump(baseT, 1.2, 1.5, 2.5, 2.9));
+    if (held) this.hang(this.handMug, atCopier ? mugTilt("copy", copyT) : mugTilt(base, baseT), yaw, 0, MUG_GRIP[0], MUG_GRIP[1], MUG_GRIP[2]);
+    // P-VIZ.7: the handset off the cradle to the ear (turning upright on the way) and back
+    if (this.deskHandset && this.handHandset) {
+      const inHand = live && handsetHeld(base, baseT);
+      this.handHandset.visible = inHand;
+      this.deskHandset.visible = !inHand;
+      if (inHand) {
+        const up = bump(baseT, PHONE_GRAB_S, 1.2, 4.7, PHONE_DROP_S);
+        this.hang(this.handHandset, -0.4 * up, yaw, (Math.PI / 2) * up, 0, 0, 0);
+      }
+    }
+    // P-VIZ.7: the headphones off the stand, on the head, back (turning from the stand's angle to the head's)
+    if (this.phonesStand) {
+      const where = live ? phonesAt(base, baseT) : "stand";
+      this.phonesStand.visible = where === "stand";
+      if (this.phonesHead) this.phonesHead.visible = where === "head";
+      if (this.phonesHand) {
+        this.phonesHand.visible = where === "hand";
+        if (where === "hand") {
+          const on = bump(baseT, PHONES_GRAB_S, PHONES_ON_S, PHONES_OFF_S, PHONES_BACK_S);
+          this.hang(this.phonesHand, 0, yaw + (Math.PI / 2) * (1 - on), 0, 0, (PHONES_R + 0.012) * PHONES_SMALL, 0);
+        }
+      }
+    }
     const slosh = rs?.slosh ?? 0;
     this.deskMug.rotation.z = slosh > 0 && motion ? 0.22 * Math.sin(this.life * 28) * slosh : 0;
     this.coffee.rotation.z = -this.deskMug.rotation.z * 1.6;
@@ -1829,8 +2508,8 @@ class Office implements OfficeFigure {
       }
     }
     if (this.report) {
-      this.report.visible = live && base === "reports";
-      const f = this.report.visible ? pageFlipAt(baseT) : -1;
+      this.report.visible = live && (base === "reports" || base === "flip");
+      const f = !this.report.visible ? -1 : base === "flip" ? flickAt(baseT) : pageFlipAt(baseT);
       this.pagePivot.visible = f >= 0;
       if (f >= 0) this.pagePivot.rotation.x = f * Math.PI * 0.95;
     }
@@ -1848,8 +2527,70 @@ class Office implements OfficeFigure {
     // the Enter slam: the keyboard hops
     this.kbHit = motion ? this.kbHit * Math.exp(-d * 9) : 0;
     if (this.keyboard) this.keyboard.position.y = DESK_Y + 0.01 + 0.012 * this.kbHit * Math.abs(Math.sin(this.life * 40));
-    // the outburst's slams shake the desk
-    this.desk.position.x = rs && motion ? 0.008 * Math.sin(this.life * 80) * rs.shake : 0;
+    // the outburst's slams shake the desk; P-VIZ.7: at the copier the desk set shrinks down toward the floor under
+    // its center and slides off toward -X
+    const shake = rs && motion ? 0.008 * Math.sin(this.life * 80) * rs.shake : 0;
+    // (squared: it is mostly gone by the time the copier has grown in, never a toy desk left on the floor)
+    const k = (1 - cw) * (1 - cw);
+    this.desk.visible = k > 0.002;
+    this.desk.scale.setScalar(Math.max(0.002, k));
+    this.desk.position.set(this.deskCenter.x * (1 - k) - 0.35 * cw + shake, 0, this.deskCenter.y * (1 - k));
+  }
+
+  /** P-VIZ.7: the copier scene: the copier grows in from +X as the desk goes, its start button pressed on the
+   *  beat, the display blinking while a copy runs, the pooled copies sliding out of the slot onto the tray and
+   *  stacking up (the oldest recycled), the "TPS Reports" bubble over his head. Reduced motion: a still copier with
+   *  a short stack on the tray and the bubble. */
+  private updateCommit(motion: boolean, cw: number, copyT: number): void {
+    const on = cw > 0.002;
+    this.copier.visible = on;
+    this.bubble.visible = on && cw > 0.5;
+    if (!on) return;
+    this.copier.scale.setScalar(cw);
+    this.copier.position.set(COPIER.x + 0.35 * (1 - cw), 0, COPIER.z);
+    this.copierButton.position.y = COPIER.button[1] + 0.004 - 0.005 * (motion ? buttonPress(copyT) : 0);
+    const started = motion ? copiesStarted(this.commitT) : STILL_COPIES;
+    const n = this.sheets.length;
+    const oldest = Math.max(0, started - n);
+    let running = false;
+    for (let i = 0; i < n; i++) {
+      const s = this.sheets[i]!;
+      const j = started - 1 - i; // i 0 is the newest copy
+      s.visible = j >= 0;
+      if (j < 0) continue;
+      const u = motion ? copyProgress(j, this.commitT) : 1;
+      if (u < 1) running = true;
+      const e = u * u * (3 - 2 * u);
+      s.position.set(
+        SHEET_FROM[0] + (SHEET_TO[0] - SHEET_FROM[0]) * e,
+        SHEET_FROM[1] + (SHEET_TO[1] - SHEET_FROM[1]) * e + (j - oldest) * SHEET_STEP + 0.012 * Math.sin(Math.PI * u),
+        SHEET_FROM[2] + (SHEET_TO[2] - SHEET_FROM[2]) * e,
+      );
+    }
+    // the display: steady green, pulsing while it copies
+    const lit = running ? 0.65 + 0.35 * Math.sin(this.life * 14) : 1;
+    this.mDisplay.color.setRGB(0.49 * lit, 0.95 * lit, 0.69 * lit);
+    if (this.bubble.visible) {
+      this.skull.getWorldPosition(this.v1);
+      this.body.worldToLocal(this.v1);
+      const pop = motion ? Math.min(1, (cw - 0.5) * 2) : 1;
+      this.bubble.position.set(this.v1.x, this.v1.y + 0.42 * this.scale, this.v1.z);
+      this.bubble.scale.set(BUBBLE_W * (0.6 + 0.4 * pop), BUBBLE_W * 0.425 * (0.6 + 0.4 * pop), 1);
+      this.mBubble.opacity = pop;
+    }
+  }
+
+  /** P-VIZ.7: the sponsor's coin: a slow orbit around the desk and a spin about its own axis; still (facing the
+   *  camera side, front right of the desk) under reduced motion. */
+  private updateEmblem(motion: boolean): void {
+    if (!this.orbit.visible) return;
+    if (motion) {
+      this.orbit.rotation.y = this.phase - (this.life / ORBIT_S) * TAU;
+      this.coin.rotation.y = (this.life / SPIN_S) * TAU;
+    } else {
+      this.orbit.rotation.y = -0.7;
+      this.coin.rotation.y = 0.7;
+    }
   }
 
   private updateFx(d: number, motion: boolean, base: OfficeClipName, live: boolean, frantic: boolean, rs: ReactSample | null): void {

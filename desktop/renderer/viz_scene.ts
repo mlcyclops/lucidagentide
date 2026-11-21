@@ -59,6 +59,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
 import { ANIME_HEIGHT, createAnimeFigure, type AnimeFigure, type AnimeState } from "./viz_anime.ts";
 import { createOfficeFigure, type OfficeFigure } from "./viz_office.ts";
+import { vizBrandFor, type VizBrand } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641)
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
 import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
@@ -70,8 +71,10 @@ import { CUBE, frameInterval, IDLE_FPS, KIND_SCALE, PERSONAS, type Persona, type
 export type VizViewMode = "2d" | "3d";
 
 /** P-VIZ.4 (ADR-0625): `team` = how many of the node's team work right now (viz_model.teamOf; an idle node
- *  with a working team supervises), `idleSec` = whole seconds since it last worked (figure.setIdleSeconds). */
-export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number; team: number; idleSec: number }
+ *  with a working team supervises), `idleSec` = whole seconds since it last worked (figure.setIdleSeconds).
+ *  `model` (P-VIZ.7, ADR-0641) picks the figure's sponsor, size and variant (viz_brand); `committing` plays the
+ *  style's git commit animation while a commit or push call runs. */
+export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number; team: number; idleSec: number; model: string; committing: boolean }
 export interface SceneEdge { from: string; to: string; intensity: number; frozen: boolean; dead: boolean }
 export type SceneHit = { kind: "node"; id: string } | { kind: "edge"; from: string; to: string };
 
@@ -242,7 +245,7 @@ const LOOP_R = 1.55, LOOP_LIFT = 0.1;
 interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
 
 /** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. */
-interface FigureSlot { fig: AnimeFigure | OfficeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null }
+interface FigureSlot { fig: AnimeFigure | OfficeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null; committing: boolean }
 
 /** The 3D parts of a node: the figure in its glass cube. `office`: the professional style, where the glass is an
  *  invisible pick box, the cubicle rides the figure and `edgeMat` draws the cubicle's top edges. */
@@ -267,7 +270,13 @@ interface NodeObj {
   /** P-VIZ.4: working team members (an idle node with a team at work supervises) and idle seconds, with the
    *  figure that last heard the idle seconds (a rebuilt figure, after a mode or style switch, hears them again). */
   team: number; idleSec: number; idleTold: { fig: unknown; sec: number };
+  /** P-VIZ.7 (ADR-0641): the sponsor the figure wears (from the node's model; null = model not known yet), its
+   *  signature (a change rebuilds the figure), and whether a git commit or push is running. */
+  brand: VizBrand | null; brandSig: string; committing: boolean;
 }
+
+/** A brand's rebuild signature: the emblem, the size class and the variant are baked into the figure. */
+function brandSig(b: VizBrand | null): string { return b ? `${b.key}:${b.size}:${b.variant}` : ""; }
 
 interface EdgeObj {
   key: string; from: string; to: string; ring: boolean; conduit: EdgeConduit;
@@ -520,7 +529,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       tone: { tint: 0, dim: 0, frost: 0 },
       fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0 },
       team: n.team, idleSec: n.idleSec, idleTold: { fig: null, sec: -1 },
+      brand: vizBrandFor(n.model), brandSig: "", committing: n.committing,
     };
+    obj.brandSig = brandSig(obj.brand);
     paintLabel(obj, n.label);
     ensureParts(obj);
     return obj;
@@ -542,8 +553,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const office = style === "professional";
     const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
     const fig = office
-      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, cubicle: { status: edgeMat } })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false, seed: obj.seed });
+      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, brand: obj.brand, cubicle: { status: edgeMat } })
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false, seed: obj.seed, brand: obj.brand });
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
     holder.add(fig.group);
@@ -559,7 +570,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
       plate.position.y = FLOOR_Y + PLATE_H / 2;
       obj.pivot.add(plate);
-      return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
+      return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null, committing: false };
     }
 
     // The glass: CLEAR, not transmissive. Transmission rendered the dark space behind it as a milky gray slab that
@@ -583,7 +594,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
     plate.position.y = FLOOR_Y + PLATE_H / 2;
     obj.pivot.add(plate);
-    return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
+    return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null, committing: false };
   }
 
   function build2d(obj: NodeObj): Node2D {
@@ -601,15 +612,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     // camera, his head toward the top of the screen (the ortho camera's up is -Z). The office cast tips back the
     // same way with his desk (P-VIZ.4).
     const fig = style === "professional"
-      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true, seed: obj.seed });
+      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, brand: obj.brand })
+      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true, seed: obj.seed, brand: obj.brand });
     const holder = new THREE.Group();
     holder.rotation.x = -Math.PI / 2;
     holder.position.set(0, FIG_2D_Y, FIG_2D_FEET_Z);
     holder.scale.setScalar(FIG_2D_SCALE);
     holder.add(fig.group);
     obj.pivot.add(holder);
-    return { fig, holder, tile, tileMat, rimMat, activity: null, state: null };
+    return { fig, holder, tile, tileMat, rimMat, activity: null, state: null, committing: false };
   }
 
   /** Remove `x` from the node and dispose every material it holds (the geometries are shared or the figure's). */
@@ -1026,6 +1037,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (act !== slot.activity) { slot.fig.setActivity(act); slot.activity = act; }
       if (obj.idleTold.fig !== slot.fig || obj.idleTold.sec !== obj.idleSec) { slot.fig.setIdleSeconds(obj.idleSec); obj.idleTold = { fig: slot.fig, sec: obj.idleSec }; }
       slot.fig.setIntensity(obj.power);
+      // P-VIZ.7 (ADR-0641): the git commit animation plays while the node commits (and keeps the busy cadence).
+      if (slot.committing !== obj.committing) { slot.fig.setCommit(obj.committing); slot.committing = obj.committing; }
+      if (obj.committing) busyNodes = true;
       slot.fig.update(t / 1000, dt, o.motion);
       // P-VIZ.5: a manager handover is a 3.4 s walk-off; at the idle cadence it would stutter.
       if ("handingOver" in slot.fig && slot.fig.handingOver) busyNodes = true;
@@ -1438,6 +1452,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         obj.status = n.status;
         obj.glow = n.glow;
         obj.team = n.team; obj.idleSec = n.idleSec; // P-VIZ.4: read by updateNode
+        obj.committing = n.committing; // P-VIZ.7: read by updateNode
+        // P-VIZ.7: the sponsor, size and variant are baked into the figure: a new model rebuilds it.
+        const brand = vizBrandFor(n.model);
+        if (brandSig(brand) !== obj.brandSig) { obj.brand = brand; obj.brandSig = brandSig(brand); drop3d(obj); drop2d(obj); ensureParts(obj); }
         paintLabel(obj, n.label);
       }
       for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); }

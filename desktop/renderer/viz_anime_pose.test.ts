@@ -19,6 +19,13 @@ import {
   HIT_TURN_S, newCharge, newHitSample, ORB_DECAY_S, ORB_MAX, orbScale, planHit, sampleHit, seededGender, STAR_CHAIN_S, type AnimeHit, type Charge,
   type HitPlan, type HitSample,
 } from "./viz_anime_pose.ts";
+import {
+  KUNAI_FLY_S, newWeaponSample, STAFF_TURNS, variantOf, WEAPON_CLIP, WEAPON_CLIPS, WEAPON_FLY, WEAPON_HAND, WEAPON_SHARE, WEAPON_SLOTS, weaponAt,
+  weaponOf, WEAPONS, weaponTurn,
+} from "./viz_anime_pose.ts";
+import * as THREE from "three";
+import { animeTriangles, createAnimeFigure, type AnimeFigure } from "./viz_anime.ts";
+import type { VizBrand } from "./viz_brand.ts";
 import { lookFor, MINI_ACTIVITIES, relativeLuminance } from "./viz_mini_look.ts";
 
 const CLIP_NAMES = Object.keys(CLIPS) as ClipName[];
@@ -173,6 +180,11 @@ describe("emotion selection", () => {
       failed: ["pain"],
       ended: ["calm", "happy"],
       killed: ["neutral", "surprised", "ko"],
+      slash: ["focused", "determined"],
+      kunaiThrow: ["focused", "determined"],
+      staffSpin: ["focused", "determined"],
+      discThrow: ["focused", "determined", "smug"],
+      commit: ["raiden"],
     };
     for (const name of CLIP_NAMES) expect([...emotionsOf(name)].sort()).toEqual([...want[name]].sort());
   });
@@ -740,5 +752,283 @@ describe("P-VIZ.6: hits", () => {
     const weak = planHit("bolt", 0.25, null, 0, 0);
     expect(hsample(weak, 0.2).crackle).toBeCloseTo(0.25, 6);
     expect(hsample(weak, 0.2).body).toBe(1);
+  });
+});
+
+// ------------------------------------------------------------------------------------------ P-VIZ.7 (ADR-0641)
+
+const NEW_LOOPS: readonly ClipName[] = [...WEAPON_CLIPS, "commit"];
+/** The largest per-joint change between two samples `step` apart, over the whole loop. */
+const maxStep = (name: ClipName, step = 1 / 120): number => {
+  let worst = 0;
+  let prev = sample(name, 0).pose;
+  for (let t = step; t <= CLIPS[name].len; t += step) {
+    const p = sample(name, t).pose;
+    for (let i = 0; i < POSE_LEN; i++) worst = Math.max(worst, Math.abs(p[i]! - prev[i]!));
+    prev = p;
+  }
+  return worst;
+};
+const wrapAngle = (a: number): number => a - Math.round(a / (Math.PI * 2)) * Math.PI * 2;
+
+describe("P-VIZ.7: weapon moves and the commit loop", () => {
+  test("every new clip loops and eases its last key back into its first (no pop at the wrap)", () => {
+    for (const name of NEW_LOOPS) {
+      const c = CLIPS[name];
+      expect(c.loop).toBe(true);
+      const end = sample(name, c.len - 1e-4).pose;
+      const start = sample(name, 0).pose;
+      for (let i = 0; i < POSE_LEN; i++) expect(Math.abs(end[i]! - start[i]!)).toBeLessThan(1e-3);
+    }
+  });
+
+  test("joint coverage: every key sets both arms and both hips, so no limb falls back to the rest pose mid-move", () => {
+    for (const name of NEW_LOOPS) {
+      for (const k of CLIPS[name].keys) {
+        const p = POSES[k.pose] as Partial<Record<string, unknown>>;
+        for (const j of ["shL", "elL", "shR", "elR", "hipL", "hipR"]) expect(p[j]).toBeDefined();
+      }
+    }
+  });
+
+  test("the weapon moves start and end in the kata guard and are never harsher than the kata's own snaps", () => {
+    const kata = maxStep("kata");
+    for (const name of WEAPON_CLIPS) {
+      const keys = CLIPS[name].keys;
+      expect(keys[0]!.pose).toBe("stance");
+      expect(keys[keys.length - 1]!.pose).toBe("stance");
+      expect(keys.some((k) => k.ease === "snap")).toBe(true);
+      expect(maxStep(name)).toBeLessThanOrEqual(kata * 1.1);
+      // the right arm does the work: it sweeps through more than a radian
+      let lo = Infinity, hi = -Infinity;
+      for (const k of keys) {
+        const v = POSE_VECTORS[k.pose][jointOffset("shR")]!;
+        lo = Math.min(lo, v);
+        hi = Math.max(hi, v);
+      }
+      expect(hi - lo).toBeGreaterThan(1);
+    }
+  });
+
+  test("the weapon is on its mount at every loop boundary and in the hand only from a draw key until its release", () => {
+    const s = newWeaponSample();
+    for (const w of WEAPONS) {
+      const clip = CLIPS[WEAPON_CLIP[w]];
+      for (const t of [0, clip.len - 1e-3]) {
+        weaponAt(w, t, s);
+        expect(s.hand).toBe(false);
+        expect(s.fly).toBe(-1);
+      }
+      for (const [a, b] of [...WEAPON_HAND[w], ...WEAPON_FLY[w]]) {
+        expect(a).toBeGreaterThan(0);
+        expect(b).toBeLessThan(clip.len);
+      }
+      // each draw lands on a key (the hand reaching the mount) at most 50 ms before
+      for (const [a] of WEAPON_HAND[w]) expect(clip.keys.some((k) => k.at <= a && a - k.at <= 0.05)).toBe(true);
+      // never both in the hand and in flight
+      for (let t = 0; t < clip.len; t += 1 / 240) {
+        weaponAt(w, t, s);
+        expect(s.hand && s.fly >= 0).toBe(false);
+        expect(s.fly).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
+  test("thrown weapons leave on a snap release; the kunai fly KUNAI_FLY_S, the chakram comes back to a snap catch", () => {
+    for (const w of ["kunai", "disc"] as const) {
+      const clip = CLIPS[WEAPON_CLIP[w]];
+      for (const [a] of WEAPON_FLY[w]) {
+        const key = clip.keys.find((k) => Math.abs(k.at - a) < 1e-9)!;
+        expect(key.ease).toBe("snap");
+        // released out of the hand: the hand window ends exactly where the flight starts
+        expect(WEAPON_HAND[w].some(([, b]) => Math.abs(b - a) < 1e-9)).toBe(true);
+      }
+    }
+    for (const [a, b] of WEAPON_FLY.kunai) expect(b - a).toBeCloseTo(KUNAI_FLY_S, 9);
+    const [[, back]] = WEAPON_FLY.disc as [[number, number]];
+    const catchKey = CLIPS.discThrow.keys.find((k) => k.pose === "discCatch" && k.ease === "snap")!;
+    expect(catchKey.at).toBeCloseTo(back, 9);
+    expect(WEAPON_HAND.disc.some(([a]) => Math.abs(a - back) < 1e-9)).toBe(true);
+  });
+
+  test("the staff spins STAFF_TURNS whole turns without a jump, held across for the thrust and back along the mount", () => {
+    const s = newWeaponSample();
+    const clip = CLIPS.staffSpin;
+    let prev = weaponAt("staff", 0, s).spin, peak = 0, total = 0;
+    for (let t = 1 / 240; t < clip.len; t += 1 / 240) {
+      weaponAt("staff", t, s);
+      expect(Math.abs(s.spin - prev)).toBeLessThan(0.5);
+      total += Math.abs(s.spin - prev);
+      prev = s.spin;
+      expect(s.blur).toBeGreaterThanOrEqual(0);
+      expect(s.blur).toBeLessThanOrEqual(1);
+      if (!s.hand) expect(s.blur).toBe(0);
+      peak = Math.max(peak, s.blur);
+    }
+    expect(peak).toBeGreaterThan(0.9);
+    expect(total / (Math.PI * 2)).toBeGreaterThanOrEqual(STAFF_TURNS);
+    const strike = clip.keys.find((k) => k.pose === "staffStrike")!;
+    expect(Math.abs(wrapAngle(weaponAt("staff", strike.at, s).spin - Math.PI / 2))).toBeLessThan(1e-6);
+    expect(Math.abs(wrapAngle(weaponAt("staff", clip.len - 1e-3, s).spin))).toBeLessThan(1e-6);
+  });
+
+  test("weapon loops: never the first loop, only in the weapon slots, about WEAPON_SHARE, stable and not in lockstep", () => {
+    for (const a of MINI_ACTIVITIES) {
+      for (let seed = 0; seed < 50; seed++) {
+        expect(weaponTurn(a, seed, 0)).toBe(false);
+        if (!WEAPON_SLOTS.includes(a)) for (let c = 1; c < 20; c++) expect(weaponTurn(a, seed, c)).toBe(false);
+      }
+    }
+    let on = 0, n = 0;
+    const firstLoop = new Set<boolean>();
+    for (let seed = 0; seed < 1000; seed++) {
+      firstLoop.add(weaponTurn("kata", seed, 1));
+      for (let c = 1; c <= 20; c++) {
+        const v = weaponTurn("kata", seed * 7919, c);
+        expect(weaponTurn("kata", seed * 7919, c)).toBe(v);
+        if (v) on++;
+        n++;
+      }
+    }
+    expect(Math.abs(on / n - WEAPON_SHARE)).toBeLessThan(0.05);
+    expect(firstLoop.size).toBe(2);
+    expect(weaponTurn("kata", Number.NaN, 3)).toBe(weaponTurn("kata", 0, 3));
+  });
+
+  test("the variant picks one of four weapons: the brand's variant first (wrapped), else the seed's", () => {
+    expect(new Set(WEAPONS).size).toBe(4);
+    expect(new Set(WEAPONS.map((w) => WEAPON_CLIP[w])).size).toBe(4);
+    expect(variantOf(2, 7)).toBe(2);
+    expect(variantOf(5, 7)).toBe(1);
+    expect(variantOf(-1, 7)).toBe(3);
+    expect(variantOf(null, 6)).toBe(2);
+    expect(variantOf(undefined, 6)).toBe(2);
+    expect(variantOf(Number.NaN, 9)).toBe(1);
+    expect(variantOf(null, Number.NaN)).toBe(0);
+    for (let v = 0; v < 4; v++) expect(weaponOf(v)).toBe(WEAPONS[v]!);
+  });
+
+  test("the commit holds the right arm straight up over planted feet, with glowing raiden eyes the whole loop", () => {
+    const shR = jointOffset("shR"), elR = jointOffset("elR"), hipL = jointOffset("hipL"), hipR = jointOffset("hipR");
+    for (let t = 0; t < CLIPS.commit.len; t += 1 / 30) {
+      const { pose, info } = sample("commit", t);
+      expect(pose[shR]!).toBeLessThan(-2.95);
+      expect(pose[elR]!).toBeGreaterThan(-0.1);
+      // feet wide apart
+      expect(pose[hipL + 2]!).toBeLessThan(-0.25);
+      expect(pose[hipR + 2]!).toBeGreaterThan(0.25);
+      expect(info.emotion).toBe("raiden");
+    }
+    expect(EMOTIONS.raiden.shape).toBe("glow");
+    expect(STILL_T.commit).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("P-VIZ.7: the figure (sponsor, size, commit storm)", () => {
+  /** bun has no DOM: a canvas whose 2D context accepts every call is enough to build the figure, its eyes and its
+   *  patches. The fake document lives only for the construction. */
+  function withCanvas<T>(fn: () => T): T {
+    const g = globalThis as { document?: unknown };
+    const had = "document" in g;
+    const prev = g.document;
+    const ctx = new Proxy({} as Record<string | symbol, unknown>, {
+      get: (target, key) => (key in target ? target[key] : () => ({ addColorStop() {} })),
+      set: (target, key, value) => { target[key] = value; return true; },
+    });
+    g.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) };
+    try {
+      return fn();
+    } finally {
+      if (had) g.document = prev;
+      else delete g.document;
+    }
+  }
+  const brand = (scale: number, variant: number): VizBrand =>
+    ({ key: "anthropic", word: "CLAUDE", primary: "#d97757", secondary: "#f4e9dc", ink: "#fffaf3", size: scale > 1 ? "large" : scale < 1 ? "small" : "mid", scale, variant, private: false });
+  const make = (b: VizBrand | null, seed = 4, flat = false): AnimeFigure =>
+    withCanvas(() => createAnimeFigure({ look: lookFor("#38bdf8"), detail: "full", flat, seed, brand: b }));
+  let clock = 0;
+  const run = (fig: AnimeFigure, secs: number, motion = true): void => {
+    for (let f = 0; f < Math.round(secs * 60); f++) {
+      clock += 1 / 60;
+      fig.update(clock, motion ? 1 / 60 : 0, motion);
+    }
+  };
+  /** The bolt: the first mesh drawn with the bolt shader (the forks come after it; the aura's flame shader also has
+   *  uA but runs on a clock, uT, which the bolt's does not). */
+  const boltOf = (fig: AnimeFigure): THREE.Mesh => {
+    const found: THREE.Mesh[] = [];
+    fig.group.traverse((o) => {
+      if (o instanceof THREE.Mesh && o.material instanceof THREE.ShaderMaterial && "uA" in o.material.uniforms && !("uT" in o.material.uniforms)) found.push(o);
+    });
+    return found[0]!;
+  };
+  const ys = (m: THREE.Mesh): number[] => {
+    const p = m.geometry.getAttribute("position")!;
+    const out: number[] = [];
+    for (let i = 0; i < p.count; i++) out.push(p.getY(i));
+    return out;
+  };
+
+  test("the size class scales the whole body: small 0.88, large 1.1 of a mid figure with the same seed", () => {
+    const mid = make(brand(1, 0)), small = make(brand(0.88, 0)), large = make(brand(1.1, 0));
+    const s = (f: AnimeFigure) => f.group.children[0]!.scale.x;
+    expect(s(small) / s(mid)).toBeCloseTo(0.88, 6);
+    expect(s(large) / s(mid)).toBeCloseTo(1.1, 6);
+    for (const f of [mid, small, large]) f.dispose();
+  });
+
+  test("a sponsor adds the front and thigh patches (the 2D map keeps the front one); no sponsor, no patch", () => {
+    // seed 4 picks variant 0, the same weapon as the brand's variant 0
+    const tris = (b: VizBrand | null, flat: boolean): number => {
+      const f = make(b, 4, flat);
+      run(f, 0.2);
+      const n = animeTriangles(f.group);
+      f.dispose();
+      return n;
+    };
+    const patch = tris(brand(1, 0), false) - tris(null, false);
+    expect(patch).toBeGreaterThan(0);
+    expect(tris(brand(1, 0), true) - tris(null, true)).toBeCloseTo(patch / 2, 0);
+  });
+
+  test("setCommit drives the storm: the bolt rises from the raised hand to the cloud, re-jitters, then all of it goes", () => {
+    const fig = make(brand(1, 0));
+    fig.setActivity("typing");
+    run(fig, 0.5);
+    const before = animeTriangles(fig.group);
+    fig.setCommit(true);
+    run(fig, 1.5);
+    const bolt = boltOf(fig);
+    expect(bolt.visible).toBe(true);
+    expect((bolt.material as THREE.ShaderMaterial).uniforms.uA!.value).toBeGreaterThan(0.5);
+    const y = ys(bolt);
+    // from about the raised fist (above the head, eye height is 1.76) up past the cube top (about 2.9) to the cloud
+    expect(Math.min(...y)).toBeGreaterThan(1.8);
+    expect(Math.min(...y)).toBeLessThan(2.6);
+    expect(Math.max(...y)).toBeGreaterThan(5.5);
+    expect(animeTriangles(fig.group)).toBeGreaterThan(before);
+    // it holds for as long as the commit runs, and keeps changing shape
+    const a = ys(bolt);
+    run(fig, 20);
+    expect(bolt.visible).toBe(true);
+    expect(ys(bolt)).not.toEqual(a);
+    fig.setCommit(false);
+    run(fig, 1.5);
+    expect(bolt.visible).toBe(false);
+    expect(animeTriangles(fig.group)).toBe(before);
+    fig.dispose();
+  });
+
+  test("reduced motion: the bolt and the cloud stand still", () => {
+    const fig = make(brand(1, 0));
+    fig.setCommit(true);
+    run(fig, 0.1, false);
+    const bolt = boltOf(fig);
+    expect(bolt.visible).toBe(true);
+    const a = ys(bolt);
+    run(fig, 1, false);
+    expect(ys(bolt)).toEqual(a);
+    fig.dispose();
   });
 });

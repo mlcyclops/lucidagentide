@@ -147,6 +147,9 @@ export interface VizNode {
   /** When the node last stopped working (null while it works). */
   idleSince: number | null;
   usage: { used: number; size: number; cost: number } | null;
+  /** P-VIZ.7 (ADR-0641): git commit / push calls still running (call id -> opened at), and until when the commit
+   *  animation holds after the last one settles (so a fast commit still reads). */
+  commit: { open: Map<string, number>; holdUntil: number };
 }
 
 export type VizEvent =
@@ -203,7 +206,42 @@ function newNode(p: { id: string; kind: VizKind; parent: string | null; name: st
     ...p, status: "idle", laneStatus: null, rate: 0, mean: 0, pending: 0, totalTok: 0, tools: 0, toolFails: 0, activity: 0,
     tappedAt: 0, lastAt: now, bornAt: now, endedAt: null, goneAt: null, asked: null, surgeAt: 0,
     agentType: null, assignment: null, runName: null, batch: null, polled: false, idleSince: now, usage: null,
+    commit: { open: new Map(), holdUntil: 0 },
   };
+}
+
+// ---------------------------------------------------------------------------------------------- commits
+
+/** P-VIZ.7 (ADR-0641): a tool call that commits or pushes: `git [opts] commit|push` in a shell command (options
+ *  such as `-C <dir>` or `-c k=v` may sit between), or the commit namespace's `.commit("subject"` in eval code. */
+export const COMMIT_CALL_RE = /\bgit(?:\s+-{1,2}[\w-]+(?:[= ](?:"[^"]*"|'[^']*'|\S+))?)*\s+(?:commit|push)\b|\.commit\(\s*["'`]/;
+/** After the last commit call settles, the animation holds this long (a quick commit still reads). */
+export const COMMIT_HOLD_MS = 3000;
+/** A commit call that never reports back stops animating after this long. */
+export const COMMIT_MAX_MS = 180_000;
+
+function isCommitCall(e: Loose): boolean {
+  for (const v of [e.input, e.detail, e.intent]) if (typeof v === "string" && COMMIT_CALL_RE.test(v)) return true;
+  return false;
+}
+
+function commitSettled(n: VizNode, id: unknown, now: number): void {
+  if (typeof id !== "string" || !n.commit.open.delete(id)) return;
+  n.commit.holdUntil = Math.max(n.commit.holdUntil, now + COMMIT_HOLD_MS);
+}
+
+/** Every open commit call is over (the turn ended or died): hold, then stop. */
+function commitsEnded(n: VizNode, now: number): void {
+  if (!n.commit.open.size) return;
+  n.commit.open.clear();
+  n.commit.holdUntil = Math.max(n.commit.holdUntil, now + COMMIT_HOLD_MS);
+}
+
+/** Is the node committing right now (a commit or push call is running, or one just settled)? */
+export function committing(n: VizNode, now: number): boolean {
+  if (now < n.commit.holdUntil) return true;
+  for (const at of n.commit.open.values()) if (now - at < COMMIT_MAX_MS) return true;
+  return false;
 }
 
 /** chars / 4: the usual rough count for English text and code. An estimate, labeled as one everywhere. */
@@ -249,7 +287,7 @@ function wake(n: VizNode, now: number): void {
   if (n.status !== "active") { n.status = "active"; n.endedAt = null; }
 }
 
-type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown; detail?: unknown; turns?: unknown };
+type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown; detail?: unknown; turns?: unknown; input?: unknown; intent?: unknown };
 
 /** Fold one tapped event in. Events for a source that is neither Main nor a known agent are dropped
  *  (another hub's lane, or a lane the fleet poll has not listed yet). True when the event was taken (not a
@@ -273,10 +311,16 @@ function fold(s: VizState, n: VizNode, e: Loose, now: number): void {
       return;
     }
     case "tool":
+      // P-VIZ.7: a lane settles a call with its own tool event (done or failed); Main settles it with tool-meta.
+      if (e.status === "done" || e.status === "failed") commitSettled(n, e.id, now);
       if (e.status === "failed") { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); return; }
-      if (e.status === undefined || e.status === "open") { n.tools++; n.activity = 1; wake(n, now); }
+      if (e.status === undefined || e.status === "open") {
+        n.tools++; n.activity = 1; wake(n, now);
+        if (isCommitCall(e)) n.commit.open.set(typeof e.id === "string" ? e.id : `commit-${now}`, now);
+      }
       return;
     case "tool-meta":
+      if (e.ok !== undefined) commitSettled(n, e.id, now);
       if (e.ok === false) { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); }
       return;
     case "subagent":
@@ -307,6 +351,7 @@ function toolFailed(s: VizState, n: VizNode, now: number, tool: string): void {
 }
 
 function die(s: VizState, n: VizNode, now: number, why: string): void {
+  commitsEnded(n, now);
   if (n.status === "killed") return;
   n.status = "killed"; n.endedAt = now; n.rate = 0; n.pending = 0; n.asked = null;
   power(s, n, "killed", now, why);
@@ -317,6 +362,7 @@ function die(s: VizState, n: VizNode, now: number, why: string): void {
  *  Delegations that rode a LANE turn end with it (lanes have no run poll); Main's background runs are
  *  governed by the run poll instead. */
 function turnEnd(s: VizState, n: VizNode, now: number): void {
+  commitsEnded(n, now);
   if (n.asked === "cancel") {
     n.asked = null; n.status = "paused"; n.rate = 0;
     power(s, n, "paused", now, "turn stopped");

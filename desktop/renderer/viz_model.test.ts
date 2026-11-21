@@ -10,7 +10,7 @@ import { orbitSlots } from "./orbit_layout.ts";
 import type { VizBusEvent } from "./viz_bus.ts";
 import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
 import {
-  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, createOutput, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
+  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, COMMIT_HOLD_MS, COMMIT_MAX_MS, committing, createOutput, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
   GONE_MS, HUB_ID, idleSeconds, OUT_CHARS, OUT_TURNS, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
   type PowerKind, type VizEvent, type VizState,
 } from "./viz_model.ts";
@@ -418,5 +418,43 @@ describe("demo feed (?vizDemo=1)", () => {
   });
   test("deterministic: the same start time yields the same events", () => {
     expect(runDemo().log).toEqual(runDemo().log);
+  });
+});
+
+describe("P-VIZ.7 git commits", () => {
+  const commit = (id: string, input: string, status?: string) => ({ type: "tool", id, name: "bash", detail: "bash", input, ...(status ? { status } : {}) });
+  test("a lane's commit then push hold the animation across both calls, then a short hold, then stop", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working")], T0);
+    const n = s.nodes.get("L1")!;
+    applyEvent(s, ev("L1", commit("c1", 'git -C "/work/my repo" commit -m "x"', "open")), T0 + 100);
+    expect(committing(n, T0 + 200)).toBe(true);
+    applyEvent(s, ev("L1", { type: "tool", id: "c1", name: "bash", detail: "bash", status: "done" }), T0 + 1000);
+    applyEvent(s, ev("L1", commit("p1", "git push -u origin feat/x", "open")), T0 + 1200);
+    applyEvent(s, ev("L1", { type: "tool", id: "p1", name: "bash", detail: "bash", status: "done" }), T0 + 9000);
+    expect(committing(n, T0 + 9000 + COMMIT_HOLD_MS - 1)).toBe(true);
+    expect(committing(n, T0 + 9000 + COMMIT_HOLD_MS + 1)).toBe(false);
+  });
+  test("Main's commit-namespace call settles through tool-meta; other git commands and look-alikes do not count", () => {
+    const s = createVizState(T0);
+    const hub = s.nodes.get(HUB_ID)!;
+    for (const input of ["git status", "git log --grep commit", "echo committed", "gitcommit", "await d.show()"]) {
+      applyEvent(s, ev(HUB_ID, { type: "tool", id: input, name: "other", detail: "x", input }, "chat"), T0);
+    }
+    expect(committing(hub, T0 + 1)).toBe(false);
+    applyEvent(s, ev(HUB_ID, { type: "tool", id: "m1", name: "other", detail: "eval", input: 'await d.commit("docs: x")' }, "chat"), T0 + 10);
+    expect(committing(hub, T0 + 20)).toBe(true);
+    applyEvent(s, ev(HUB_ID, { type: "tool-meta", id: "m1", name: "eval", ok: true }, "chat"), T0 + 5000);
+    expect(committing(hub, T0 + 5000 + COMMIT_HOLD_MS + 1)).toBe(false);
+  });
+  test("a commit call that never reports back stops at the turn's end, or after COMMIT_MAX_MS", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working"), lane("L2", "working")], T0);
+    applyEvent(s, ev("L1", commit("c1", "git commit -am wip", "open")), T0);
+    applyEvent(s, ev("L2", commit("c2", "git commit -am wip", "open")), T0);
+    applyEvent(s, ev("L1", { type: "done" }), T0 + 2000);
+    expect(committing(s.nodes.get("L1")!, T0 + 2000 + COMMIT_HOLD_MS + 1)).toBe(false);
+    expect(committing(s.nodes.get("L2")!, T0 + COMMIT_MAX_MS - 1)).toBe(true);
+    expect(committing(s.nodes.get("L2")!, T0 + COMMIT_MAX_MS + 1)).toBe(false);
   });
 });

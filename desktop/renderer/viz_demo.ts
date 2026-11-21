@@ -4,13 +4,15 @@
 // desktop/renderer/viz_demo.ts - P-VIZ.1 (ADR-0622): the Visualize view's DEMO feed, for screenshots and QA.
 //
 // Reached ONLY with `?vizDemo=1` in the renderer URL, and the header then says DEMO in so many words. It is
-// a fixed 48 second script, pure and deterministic (no randomness, no clock of its own): four agents and
+// a fixed 48 second script, pure and deterministic (no randomness, no clock of its own): four agents (six since P-VIZ.7) and
 // Main stream estimated tokens with scripted surges, one agent's tool fails twice, one is paused, one dies on
 // an error and respawns, Main delegates two subagent runs and an agent delegates one. The view feeds it
 // through the SAME model calls a real fleet uses (applyFleet, applyRuns, applyEvent), so the demo exercises
 // the real rules instead of a parallel fake. The node action menu acts on the demo too, locally.
 // P-VIZ.6 (ADR-0635): it also reports measured usage, makes a few edits and writes (one of them fails), and
 // says which folder each agent works in, so the session ledger fills through the same calls.
+// P-VIZ.7 (ADR-0641): six agents on six sponsors and every size class (a self-hosted model wears TL187), and
+// three git commits a cycle (a lane's commit then push, a private lane's commit, Main's commit-namespace commit).
 
 import type { VizBusEvent } from "./viz_bus.ts";
 import { HUB_ID, type VizAsk, type VizLaneInput, type VizRunInput } from "./viz_model.ts";
@@ -26,6 +28,9 @@ const LANES: readonly DemoLane[] = [
   { id: "demo-2", name: "test-suite", model: "openai/gpt-5.2", base: 35, wobble: 10 },
   { id: "demo-3", name: "security-audit", model: "google/gemini-3-pro", base: 28, wobble: 6 },
   { id: "demo-4", name: "docs-writer", model: "xai/grok-4.7", base: 40, wobble: 12 },
+  // P-VIZ.7 (ADR-0641): a small model and a private (self-hosted) one, so every size class and the TL187 emblem show.
+  { id: "demo-5", name: "lint-fixer", model: "anthropic/claude-haiku-4.5", base: 30, wobble: 8 },
+  { id: "demo-6", name: "data-pipeline", model: "dgx-spark/llama-4-70b", base: 25, wobble: 7 },
 ];
 
 /** Scripted status windows per lane, in seconds of the cycle: [from, to, status]. Outside them: working. */
@@ -43,6 +48,7 @@ const SURGES: readonly [string, number, number, number][] = [
 /** P-VIZ.6 (ADR-0635): the folder each demo agent works in (the session ledger's repo column). */
 const CWD: Record<string, string> = {
   [HUB_ID]: "/work/lucid_live_demo", "demo-1": "/work/lucid_api", "demo-2": "/work/lucid_live_demo", "demo-3": "/work/lucid_auth", "demo-4": "/work/lucid_docs",
+  "demo-5": "/work/lucid_api", "demo-6": "/work/pipeline",
 };
 
 const demoLines = (word: string, n: number): string => Array.from({ length: n }, (_, i) => `${word} ${i + 1}\n`).join("");
@@ -114,6 +120,16 @@ export function createDemo(t0: number): VizDemo {
     [14, "demo-4", demoWrite(`demo-w2-${k}`, "/work/lucid_docs/guide/agents.md", 40)],
     [16, "demo-3", demoEdit(`demo-e3-${k}`, "/work/lucid_auth/src/session.ts", "open", 8, 3)],
     [21, "demo-2", demoEdit(`demo-t2-${k}`, "/work/lucid_live_demo/test/flaky.test.ts", "open", 4, 9)],
+    // P-VIZ.7 (ADR-0641): git commits. A lane opens and settles its own call; Main settles its call with tool-meta.
+    // demo-1 commits then pushes back to back, so the animation holds across both calls.
+    [24, "demo-1", { type: "tool", id: `demo-c1-${k}`, name: "bash", detail: "git commit", input: 'git commit -m "split the routes"', status: "open" }],
+    [27, "demo-1", { type: "tool", id: `demo-c1-${k}`, name: "bash", detail: "git commit", status: "done" }],
+    [27.2, "demo-1", { type: "tool", id: `demo-p1-${k}`, name: "bash", detail: "git push", input: "git push -u origin feat/routes", status: "open" }],
+    [31, "demo-1", { type: "tool", id: `demo-p1-${k}`, name: "bash", detail: "git push", status: "done" }],
+    [8, "demo-6", { type: "tool", id: `demo-c6-${k}`, name: "bash", detail: "git commit", input: "git -C /work/pipeline commit -am \"nightly\"", status: "open" }],
+    [14, "demo-6", { type: "tool", id: `demo-c6-${k}`, name: "bash", detail: "git commit", status: "done" }],
+    [30, HUB_ID, { type: "tool", id: `demo-cm-${k}`, name: "other", detail: "eval", input: 'await d.commit("docs: README", ["- refreshed"])' }],
+    [35, HUB_ID, { type: "tool-meta", id: `demo-cm-${k}`, name: "eval", ok: true }],
   ];
 
   return {

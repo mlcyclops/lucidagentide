@@ -6381,3 +6381,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-VIZ.7 (ADR-0641): sponsors per model, size classes and variants, NORM's stapler, git commit animation
+- **shipped (2026-11-21):** viz_brand.ts (original sponsor emblems per provider, TL187 for private models, size classes, variants); commit/push detection in viz_model; anime patches, four variant weapons and a Raiden-style bolt into a storm cloud on commit; office sponsor coin and lanyard, outfits and desk sets, elbows-at-palm typing and mug-at-mouth sip, the NORM's stapler on the TPS stack, and a copier with TPS Reports on commit; demo_p_viz_7.mjs passes narrow and wide.
+- **stubbed:** nothing; the idle sip is proven by the geometry test and the copier frames, not caught in an idle camera close-up.
+- **next:** try both styles with a real fleet commit and push in the installed app, and tune the cloud and bubble sizes at the user's usual zoom.
