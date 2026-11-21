@@ -373,6 +373,7 @@ export interface StagedLanePromptView { text: string; images: LaneImage[]; attac
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): types only
+import type { InstalledWorld } from "./viz_world_api.ts"; // P-WORLDS.1 (ADR-0648): the frozen world contract, types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -613,7 +614,7 @@ export interface KbPackImportView {
 }
 // P-PLUGINS.2 (ADR-0462): installed `.lplugin` plugins and their runtime (desktop/plugins/*). Every
 // running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
-export type PluginKind = "web" | "server" | "daemon";
+export type PluginKind = "web" | "server" | "daemon" | "world";
 export type PluginState = "installed" | "running" | "starting" | "error";
 export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 export interface InstalledPluginView {
@@ -1332,6 +1333,14 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
+  worldsList(): Promise<InstalledWorld[]>;
+  /** Install a SIGNED world package file the user picked (an export from another machine). */
+  worldImport(bytes: ArrayBuffer, filename: string): Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
+  /** A download link for an installed world's original signed package (an attachment). It carries the UI token
+   *  as `?t=` (like previewServeUrl), because a download link cannot set a header. */
+  worldExportUrl(id: string): string;
+  worldUninstall(id: string): Promise<boolean>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -2277,6 +2286,22 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  worldsList: async () => {
+    const d: unknown = await getData("/api/worlds");
+    return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];
+  },
+  worldImport: async (bytes, filename) => {
+    try {
+      // The raw package bytes ride a JSON content type on purpose: the origin guard admits only application/json
+      // POSTs, and the route reads the body as bytes (the creatorCadInspect convention).
+      const res = await fetch("/api/worlds/import", { method: "POST", headers: authHeaders({ "content-type": "application/json", "x-lucid-filename": encodeURIComponent(filename) }), body: bytes });
+      const j = await res.json() as { ok?: unknown; data?: { world?: InstalledWorld }; error?: unknown };
+      if (j.ok === true && j.data?.world) return { ok: true, world: j.data.world };
+      return { ok: false, error: typeof j.error === "string" ? j.error : `the engine answered ${res.status}` };
+    } catch { return { ok: false, error: "the LUCID engine could not be reached" }; }
+  },
+  worldExportUrl: (id) => `/api/worlds/export?id=${encodeURIComponent(id)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`,
+  worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),

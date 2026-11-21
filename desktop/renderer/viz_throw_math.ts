@@ -12,7 +12,7 @@
 //     style switch puts it down).
 
 import type { PerfTier } from "./perf_tier.ts";
-import type { VizStyle } from "./viz_model.ts";
+import { isBuiltinStyle, type VizStyle } from "./viz_model.ts";
 import { THROWS, type ThrowKind } from "./viz_throw_kinds.ts";
 
 /** A point in world space (THREE.Vector3 satisfies it). */
@@ -136,9 +136,10 @@ export function rateLeft(r: RateLimit, now: number): number { return Math.max(0,
 
 // ------------------------------------------------------------------------------------------ armed state
 
-export interface ArmState { readonly style: VizStyle; readonly armed: ThrowKind | null }
+/** P-WORLDS.1 (ADR-0648): a world style's kinds are its own strings; the tray only ever offers the world's three. */
+export interface ArmState { readonly style: VizStyle; readonly armed: string | null }
 export type ArmAction =
-  | { type: "arm"; kind: ThrowKind }
+  | { type: "arm"; kind: string }
   | { type: "disarm" }
   | { type: "style"; style: VizStyle }
   /** A click (or a drag release) on the stage; `onNode` when it landed on an agent or subagent. */
@@ -149,10 +150,10 @@ export function armState(style: VizStyle): ArmState { return { style, armed: nul
 /** The tray's state machine. Arming a kind the style does not offer is ignored; arming the armed kind again puts
  *  it down; a release on a node throws (and stays armed, so you can keep throwing), on empty space nothing; a
  *  style switch puts it down (the other style offers other things). `fire`: what to throw now, if anything. */
-export function armStep(s: ArmState, a: ArmAction): { state: ArmState; fire: ThrowKind | null } {
+export function armStep(s: ArmState, a: ArmAction): { state: ArmState; fire: string | null } {
   switch (a.type) {
     case "arm":
-      if (!THROWS[s.style].some((t) => t.kind === a.kind)) return { state: s, fire: null };
+      if (!a.kind || (isBuiltinStyle(s.style) && !THROWS[s.style].some((t) => t.kind === a.kind))) return { state: s, fire: null };
       return { state: { style: s.style, armed: s.armed === a.kind ? null : a.kind }, fire: null };
     case "disarm":
       return { state: s.armed ? { style: s.style, armed: null } : s, fire: null };

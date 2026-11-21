@@ -8520,6 +8520,27 @@ body.ald-dragging .ald-head{cursor:grabbing}
 /* The header's View menu (in a .popover, z 95): Layout and Quality. */
 .viz-vmenu{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:200px}
 .viz-vmenu-h{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
+/* P-WORLDS.1 (ADR-0648): the World options in the View menu, and the Worlds menu (installed worlds, Get, Export, Import). */
+.viz-vmenu [data-viz-wopts-slot]{align-self:stretch;display:flex;flex-direction:column;gap:6px}
+.viz-vmenu [data-viz-wopts-slot]:empty{display:none}
+.viz-wopts{display:flex;flex-direction:column;gap:5px}
+.viz-wopt{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--txt-2)}
+.viz-wopt input[type=color]{width:30px;height:20px;padding:0;border:1px solid var(--line);border-radius:5px;background:transparent;cursor:pointer}
+.viz-wopt select{font:inherit;font-size:11px;padding:2px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg-1);color:var(--txt)}
+.viz-wopt :is(input,select):focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px;max-width:340px}
+.viz-world-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 8px;padding:4px 6px;border-radius:8px}
+.viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
+.viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;font:inherit;font-size:12px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
+.viz-world-pick b{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-world-pick:disabled{cursor:default;color:var(--txt-3)}
+.viz-world-pick:focus-visible,.viz-world-export:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:4px}
+.viz-world-get{display:inline-flex;align-items:center;gap:4px;margin-left:auto;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;color:var(--accent);border:1px solid rgb(var(--accent-rgb) / .5)}
+.viz-world-export{font-size:11px;color:var(--txt-3);text-decoration:none;white-space:nowrap}
+.viz-world-export:hover{color:var(--txt)}
+.viz-world-err{grid-column:1 / -1;margin:0;font-size:11px;line-height:1.35;color:var(--danger, #ff6b6b)}
+.viz-world-none{margin:0;font-size:12px;color:var(--txt-3)}
+.viz-world-acts{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px;border-top:1px solid var(--line-soft)}
 @keyframes vizPanelIn{from{opacity:0;transform:rotateX(18deg) rotateY(var(--viz-ry)) translateY(6px)}to{opacity:1}}
 @media (prefers-reduced-motion: reduce){
   .viz-panel-card{animation:none;transition:none}

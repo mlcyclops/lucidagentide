@@ -70,6 +70,9 @@ export interface EdgeFx {
   add(closed: boolean): EdgeConduit;
   remove(c: EdgeConduit): void;
   setStyle(style: EdgeStyle): void;
+  /** P-WORLDS.1 (ADR-0648): the fiber's line color and its light (a world's edge colors); null restores the
+   *  built-in silver line and red light. The plasma takes its colors per edge (EdgeConduit.set). */
+  setPalette(line: THREE.Color | null, glow: THREE.Color | null): void;
   setFlat(flat: boolean): void;
   /** One frame at `t` ms; returns true while anything moves fast (an active edge, its particles, a burst, a
    *  flare). An idle edge's slow trickle of particles alone keeps the scene on its idle cadence. */
@@ -313,6 +316,9 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
   const blending = light ? THREE.NormalBlending : THREE.AdditiveBlending;
   let style: EdgeStyle = opts.style;
   let flat = opts.flat;
+  /** P-WORLDS.1 (ADR-0648): the fiber's line and light colors (a world's two edge colors; the built-ins' by default). */
+  const lineBase = new THREE.Color().copy(light ? LINE_LIGHT : LINE_DARK);
+  const fiberLight = new THREE.Color().copy(FIBER_RED);
   const flatU = { value: flat ? 1 : 0 };
   const lightU = { value: light ? 1 : 0 };
   const slots: (Rec | null)[] = [];
@@ -467,7 +473,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
     const lineGeom = new THREE.BufferGeometry();
     const lineAttr = new THREE.BufferAttribute(centers, 3).setUsage(THREE.DynamicDrawUsage);
     lineGeom.setAttribute("position", lineAttr);
-    const lineMat = new THREE.LineBasicMaterial({ color: light ? LINE_LIGHT : LINE_DARK, transparent: true, opacity: 0.9, depthWrite: false });
+    const lineMat = new THREE.LineBasicMaterial({ color: lineBase.clone(), transparent: true, opacity: 0.9, depthWrite: false });
     const line = new THREE.Line(lineGeom, lineMat);
     line.frustumCulled = false;
     line.raycast = () => {};
@@ -587,9 +593,9 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       const m = r.lineMat;
       if (r.dead) { m.color.copy(LINE_DEAD); m.opacity = 0.45; }
       else {
-        m.color.copy(light ? LINE_LIGHT : LINE_DARK);
+        m.color.copy(lineBase);
         if (r.frozen) m.color.lerp(ICE, 0.5);
-        else m.color.lerp(FIBER_RED, Math.min(1, 0.12 * r.lvl + 0.85 * flare));
+        else m.color.lerp(fiberLight, Math.min(1, 0.12 * r.lvl + 0.85 * flare));
         m.opacity = 0.9;
       }
     }
@@ -656,7 +662,7 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
         at[1] = at[1]! + ny * b;
         at[2] = at[2]! + sz * a + nz * b;
       }
-      if (kind === KIND_STREAK) tint.copy(r.frozen ? ICE : FIBER_RED).multiplyScalar(light ? 1 : 2.2);
+      if (kind === KIND_STREAK) tint.copy(r.frozen ? ICE : fiberLight).multiplyScalar(light ? 1 : 2.2);
       else if (kind === KIND_TOKEN) tint.copy(r.frozen ? ICE : r.colA).lerp(r.frozen ? ICE : r.colB, u).lerp(WHITE, 0.35).multiplyScalar(light ? 0.85 : 1.8);
       else tint.copy(r.frozen ? ICE : r.colA).lerp(r.frozen ? ICE : r.colB, u).lerp(WHITE, 0.3).multiplyScalar(light ? 1 : 1.6);
       pos[i * 3] = at[0]!; pos[i * 3 + 1] = at[1]!; pos[i * 3 + 2] = at[2]!;
@@ -694,6 +700,10 @@ export function createEdgeFx(parent: THREE.Object3D, opts: EdgeFxOpts): EdgeFx {
       style = next;
       live = 0;
       for (const r of slots) if (r) { r.acc = 0; r.tokAcc = 0; r.train = 0; applyStyle(r); }
+    },
+    setPalette(line, glow) {
+      lineBase.copy(line ?? (light ? LINE_LIGHT : LINE_DARK));
+      fiberLight.copy(glow ?? FIBER_RED);
     },
     setFlat(next) {
       if (next === flat) return;

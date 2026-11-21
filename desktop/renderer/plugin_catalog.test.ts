@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  FREE_PLUGINS, PREMIUM_PLUGINS, addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, isNewerVersion, parseCageOrUei,
-  parseTierPref, provenanceChip, sortFree, storeInstalledVersion, type AddonFacts, type CardFacts, type InstalledFacts, type PremiumPlugin,
+  FREE_PLUGINS, PREMIUM_PLUGINS, WORLDS_GROUP, addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, isNewerVersion, isWorldPlugin, parseCageOrUei,
+  parseTierPref, provenanceChip, sortFree, storeInstalledVersion, type AddonFacts, type CardFacts, type InstalledFacts, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import type { Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
 
@@ -40,6 +40,11 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   "remote-spokes": { section: "civilian", lookupKey: "PLG-REMOTESPOKES-OTF" },
   "rapid-survey": { section: "government", lookupKey: "PLG-RAPID-OTF" },
   "quantum-cloak": { section: "government", lookupKey: "PLG-QCLOAK-OTF" },
+  // ADR-0648: the Lucid Agent Worlds.
+  "world-christmas": { section: "civilian", lookupKey: "PLG-WORLD-CHRISTMAS-OTF" },
+  "world-valentines": { section: "civilian", lookupKey: "PLG-WORLD-VALENTINES-OTF" },
+  "world-football": { section: "civilian", lookupKey: "PLG-WORLD-FOOTBALL-OTF" },
+  "world-st-patricks": { section: "civilian", lookupKey: "PLG-WORLD-STPATRICKS-OTF" },
   leaps: { section: "civilian", lookupKey: null },
   "mdmp-engine": { section: "government", lookupKey: null },
   "joint-planning-engine": { section: "government", lookupKey: null },
@@ -96,7 +101,9 @@ describe("decideCardAction", () => {
   const government = sold.filter((p) => p.section === "government");
 
   test("only the packaged and verified plugins are on sale", () => {
-    expect(sold.map((p) => p.id).sort()).toEqual(["agentictrade187", "myhome", "pathfinder", "quantum-cloak"]);
+    expect(sold.map((p) => p.id).sort()).toEqual([
+      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-christmas", "world-football", "world-st-patricks", "world-valentines",
+    ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
 
@@ -109,10 +116,10 @@ describe("decideCardAction", () => {
     for (const p of sold) {
       const gov: GovAccessStatus = p.section === "government" ? "approved" : "none";
       expect(decideCardAction(p, facts({ signedIn: false, gov })).kind).toBe("signin");
-      expect(decideCardAction(p, facts({ gov })).kind).toBe("buy");
+      expect(decideCardAction(p, facts({ gov }))).toEqual({ kind: "buy", price: p.price });
       expect(decideCardAction(p, facts({ gov, entitlement: owned() })).kind).toBe("install");
       expect(decideCardAction(p, facts({ gov, entitlement: owned(), busy: true })).kind).toBe("installing");
-      expect(decideCardAction(p, facts({ gov, entitlement: owned({ latestVersion: "1.0.0" }), installedVersion: "1.0.0" })).kind).toBe("open");
+      expect(decideCardAction(p, facts({ gov, entitlement: owned({ latestVersion: "1.0.0" }), installedVersion: "1.0.0" })).kind).toBe(isWorldPlugin(p) ? "open-world" : "open");
       expect(decideCardAction(p, facts({ gov, entitlement: owned({ latestVersion: "1.1.0" }), installedVersion: "1.0.0" }))).toEqual({ kind: "update", to: "1.1.0" });
     }
   });
@@ -149,9 +156,39 @@ describe("decideCardAction", () => {
   });
 
   test("labels name the price and the target version", () => {
-    expect(cardActionLabel({ kind: "buy" })).toBe("Buy $29.99");
+    expect(cardActionLabel({ kind: "buy", price: "$29.99" })).toBe("Buy $29.99");
+    expect(cardActionLabel({ kind: "buy", price: "$9.99" })).toBe("Buy $9.99");
+    expect(cardActionLabel({ kind: "open-world" })).toBe("Open in Visualize");
     expect(cardActionLabel({ kind: "update", to: "1.2.0" })).toBe("Update to 1.2.0");
     expect(cardActionLabel({ kind: "visit", url: "https://x", label: "Visit partner" })).toBe("Visit partner");
+  });
+});
+
+describe("Lucid Agent Worlds (ADR-0648)", () => {
+  const sold = PREMIUM_PLUGINS.filter((p): p is SoldPlugin => p.sale === "buy");
+  const worlds = sold.filter(isWorldPlugin);
+
+  test("each sold item carries its own price: apps $29.99, worlds $9.99", () => {
+    for (const p of sold) expect(p.price).toBe(isWorldPlugin(p) ? "$9.99" : "$29.99");
+  });
+
+  test("the four worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+    expect(worlds.map((p) => p.id).sort()).toEqual(["world-christmas", "world-football", "world-st-patricks", "world-valentines"]);
+    for (const p of worlds) {
+      expect(p.group).toBe(WORLDS_GROUP);
+      expect(p.section).toBe("civilian");
+      expect(p.available).toBe(true);
+      expect(p.id).toMatch(/^world-[a-z0-9-]+$/);
+      expect(p.lookupKey).toMatch(/^PLG-WORLD-[A-Z]+-OTF$/);
+    }
+    expect(WORLDS_GROUP).toBe("Lucid Agent Worlds");
+    expect(PREMIUM_PLUGINS.filter((p) => p.group !== undefined).every(isWorldPlugin)).toBe(true);
+  });
+
+  test("an installed world opens in Visualize, and still offers Update when entitled to a newer one", () => {
+    const w = worlds[0]!;
+    expect(decideCardAction(w, facts({ signedIn: false, installedVersion: "1.0.0" }))).toEqual({ kind: "open-world" });
+    expect(decideCardAction(w, facts({ entitlement: owned({ latestVersion: "1.1.0" }), installedVersion: "1.0.0" }))).toEqual({ kind: "update", to: "1.1.0" });
   });
 });
 

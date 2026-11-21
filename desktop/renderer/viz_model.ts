@@ -30,7 +30,12 @@ import type { VizBusEvent, VizOrigin } from "./viz_bus.ts";
 export const HUB_ID = "main";
 
 /** P-VIZ.4 (ADR-0625): how the figures are drawn: the anime mini Lucids, or office workers at desks. */
-export type VizStyle = "anime" | "professional";
+export type BuiltinStyle = "anime" | "professional";
+/** P-WORLDS.1 (ADR-0648): or an installed Lucid Agent World (`world:<key>`, viz_worlds.ts). */
+export type VizStyle = BuiltinStyle | `world:${string}`;
+
+/** True for the two styles the app ships (anime, professional). */
+export function isBuiltinStyle(s: VizStyle): s is BuiltinStyle { return s === "anime" || s === "professional"; }
 
 export type VizKind = "hub" | "agent" | "subagent";
 

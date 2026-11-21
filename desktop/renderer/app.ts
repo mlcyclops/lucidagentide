@@ -85,7 +85,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay
+import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -18160,6 +18160,10 @@ const pluginsFlyout = createPluginsFlyout({
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
+  // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
+  worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
+  worldExportUrl: (id) => bridge.worldExportUrl(id),
+  openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
@@ -19230,6 +19234,7 @@ function wire(): void {
     },
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
+    openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 

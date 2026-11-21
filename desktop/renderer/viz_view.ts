@@ -44,6 +44,13 @@
 // P-VIZ.6 (ADR-0636): the throw tray (viz_throw.mountThrowTray) sits at the stage's bottom center with the
 // style's three throwables and Storm. While one is armed a click on a node throws it (scene.throwAt) instead of
 // opening the panel, and Esc puts it down before it closes anything else.
+//
+// P-WORLDS.1 (ADR-0648): the style toggle's Worlds button lists the installed Lucid Agent Worlds (viz_worlds:
+// loaded, validated, entitled), selects one (scene.setStyle(`world:<key>`), tray.setStyle), shows "Get" with a
+// lock for a world this account has not bought (the Plugins store, deps.openStore), the error of a world that
+// cannot be shown, Export... (the signed package file) per world, Import world file... and Get more worlds. The
+// View menu gains the selected world's options; a change saves it and rebuilds the figures. A saved world style
+// draws as anime until its world loads (and stays saved if it is gone).
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -64,8 +71,12 @@ import {
   type Persona, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
-import { mountVizScene, type SceneHit, type SceneNode, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
+import { mountVizScene, type SceneHit, type SceneNode, type SceneWorld, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
+import { getMarketProvider } from "./market_gate.ts";
+import { createWorldHost } from "./viz_world_kit.ts";
+import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
+import { loadOptions, loadWorlds, parseStyle, saveOption, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
 
 export interface VizDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -92,6 +103,9 @@ export interface VizDeps {
   openFleet: () => void;
   /** Focus the main composer (Expand on Main). */
   focusMain: () => void;
+  /** P-WORLDS.1 (ADR-0648): open the Plugins drawer on its premium store ("Get" on a world, "Get more worlds");
+   *  `packId` names the world the user asked for. */
+  openStore: (packId?: string) => void;
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
@@ -127,7 +141,7 @@ let recSeq = 0;
 interface ActiveRec { mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; mime: string; at: number; end: number; meta: VizEvent[]; timer: number }
 let rec: ActiveRec | null = null;
 let recPop: { close: () => void } | null = null;
-let viewPop: { node: HTMLElement; close: () => void } | null = null;
+let viewPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 let killArm: { id: string; until: number } | null = null;
 /** P-VIZ.6 (ADR-0636): the throw tray (bottom center of the stage), built with the view. */
 let tray: ThrowTray | null = null;
@@ -156,11 +170,206 @@ interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle }
 function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
-    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: p.style === "professional" ? "professional" : "anime" };
+    // P-WORLDS.1: a saved world style stays saved; until it loads (or if it is gone) the scene draws anime.
+    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style) };
   } catch { return { view: "3d", layout: "orbit", style: "anime" }; }
 }
 let prefs: Prefs = loadPrefs();
 function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
+
+// ---------------------------------------------------------------------------------------------- P-WORLDS.1 (ADR-0648)
+// Lucid Agent Worlds: the installed worlds (viz_worlds.loadWorlds, refreshed on every open and after an import),
+// the selected one with its option values (one object per selection or option change, so the scene rebuilds the
+// cast exactly when it changes), and the Worlds menu.
+
+const worldHost = createWorldHost();
+let worlds: WorldEntry[] = [];
+let curWorld: SceneWorld | null = null;
+let worldsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
+let worldsSeq = 0;
+
+/** The style the scene draws: the saved one, or anime while a saved world is not (or no longer) usable. */
+function effStyle(): VizStyle {
+  if (curWorld) return prefs.style;
+  return prefs.style === "professional" ? "professional" : "anime";
+}
+
+/** The saved world's entry when it can be drawn now. */
+function activeEntry(): WorldEntry | null {
+  return worlds.find((w) => w.style === prefs.style && worldUsable(w)) ?? null;
+}
+
+/** Point curWorld at the saved world with its saved options (kept as is when nothing changed). */
+function resolveWorld(): void {
+  const def = activeEntry()?.def;
+  if (!def) { curWorld = null; return; }
+  const options = loadOptions(localStorage, def);
+  const same = curWorld?.def === def && Object.keys(options).every((k) => curWorld?.options[k] === options[k]);
+  if (!same) curWorld = { def, options };
+}
+
+/** Tell the scene and the tray the current style. A world whose sky is light on a dark theme (or the reverse)
+ *  needs a remount: the scene picks its lights, blending and bloom when it starts. */
+function applyStyle(): void {
+  const style = effStyle();
+  tray?.setStyle(style, curWorld?.def ?? null);
+  paintToggles();
+  paintWorldOptions();
+  if (!scene || !view) return;
+  if (JSON.stringify(sceneTheme(view)) !== themeSig) { remount(); return; }
+  scene.setStyle(style, curWorld);
+}
+
+/** Pick a style (the toggle, a world in the Worlds menu, or the probe). False when it cannot be drawn now. */
+function selectStyle(style: VizStyle): boolean {
+  if (style !== "anime" && style !== "professional") {
+    const e = worlds.find((w) => w.style === style);
+    if (!e || !worldUsable(e)) return false;
+  }
+  prefs.style = style;
+  savePrefs();
+  resolveWorld();
+  applyStyle();
+  return true;
+}
+
+/** List and load the installed worlds, then draw the saved one if it is among them. */
+async function refreshWorlds(): Promise<void> {
+  const seq = ++worldsSeq;
+  const list = await loadWorlds({
+    list: () => bridge.worldsList(),
+    // A variable URL: the bundler leaves the import alone and the browser fetches the module from the engine.
+    importModule: (url: string): Promise<unknown> => import(/* @vite-ignore */ url),
+    host: worldHost,
+    provider: getMarketProvider(),
+    storage: localStorage,
+    now: Date.now,
+    previous: worlds,
+  });
+  if (seq !== worldsSeq) return; // a newer refresh (an import) owns the list
+  worlds = list;
+  resolveWorld();
+  if (isOpen()) applyStyle();
+  if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
+}
+
+const LOCK_SVG = `<svg class="ic" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="10.5" width="13" height="9.5" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></svg>`;
+
+/** The Worlds menu: every installed world (select it, or Get it, or its error), import, export, the store. */
+function openWorldsMenu(anchor: HTMLElement): void {
+  if (worldsPop) { worldsPop.close(); worldsPop = null; return; }
+  const p = popover(anchor, `<div class="viz-worlds" data-viz-worlds-menu></div>`, () => { worldsPop = null; });
+  worldsPop = p;
+  paintWorldsMenu(p.node);
+  p.reposition(); // popover() measured the empty shell: size and place it for the rows just painted
+  p.node.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    const pick = t.closest<HTMLElement>("[data-viz-world-pick]");
+    if (pick) {
+      const e = worlds.find((w) => w.style === pick.dataset.vizWorldPick);
+      if (!e) return;
+      if (worldUsable(e)) { selectStyle(e.style); p.close(); worldsPop = null; return; }
+      if (e.def && !e.error) openStore(e.installed.id); // locked: the store sells it
+      return;
+    }
+    if (t.closest("[data-viz-world-import]")) { (p.node.querySelector("[data-viz-world-file]") as HTMLInputElement | null)?.click(); return; }
+    if (t.closest("[data-viz-world-store]")) openStore();
+  });
+  p.node.addEventListener("change", (ev) => {
+    const input = ev.target as HTMLInputElement;
+    if (!input.matches("[data-viz-world-file]")) return;
+    const file = input.files?.[0];
+    input.value = "";
+    if (file) void importWorldFile(file);
+  });
+}
+
+/** The store lives in the Plugins drawer beside the Preview panel, under this overlay: close it first. */
+function openStore(packId?: string): void {
+  const d = deps;
+  closeViz();
+  d?.openStore(packId);
+}
+
+function paintWorldsMenu(node: HTMLElement): void {
+  const root = node.querySelector<HTMLElement>("[data-viz-worlds-menu]");
+  if (!root) return;
+  const rows = worlds.map((e) => {
+    const on = curWorld !== null && e.style === prefs.style;
+    const locked = !!e.def && !e.error && e.access !== "allowed";
+    const why = e.access === "signin" ? "Sign in with the Google account that bought it, or get it in the store." : "Not purchased on this account yet: get it in the store.";
+    const tip = e.error ? tipAttr(e.label, `This world cannot be shown: ${e.error}.`) : locked ? tipAttr(e.label, `${e.tagline} ${why}`) : tipAttr(e.label, e.tagline);
+    const exportName = `${e.installed.id}-${e.installed.version}.lplugin.zip`;
+    return `<div class="viz-world-row${on ? " on" : ""}${e.error ? " broken" : ""}">
+      <button type="button" class="viz-world-pick" data-viz-world-pick="${esc(e.style)}" aria-pressed="${on}"${e.error ? " disabled" : ""} data-tip="${tip}">
+        <b>${esc(e.label)}</b>${locked ? `<span class="viz-world-get">${LOCK_SVG}Get</span>` : ""}
+      </button>
+      <a class="viz-world-export" href="${esc(bridge.worldExportUrl(e.installed.id))}" download="${esc(exportName)}" data-tip="${tipAttr("Export...", "Save the signed world file, to install it on another machine (Import world file there). It still needs your purchase to show.")}">Export...</a>
+      ${e.error ? `<p class="viz-world-err" role="note">${esc(e.error)}</p>` : ""}
+    </div>`;
+  }).join("");
+  root.innerHTML = `<div class="viz-vmenu-h">Worlds</div>
+    ${rows || `<p class="viz-world-none">No worlds installed yet.</p>`}
+    <div class="viz-world-acts">
+      <button type="button" class="btn-mini orbit-btn" data-viz-world-import data-tip="${tipAttr("Import world file...", "Install a signed .lplugin.zip world file exported from another machine. Its signature and contents are checked first.")}">${icon("folder", 13)}<span>Import world file...</span></button>
+      <button type="button" class="btn-mini orbit-btn" data-viz-world-store data-tip="${tipAttr("Get more worlds", "Open the Plugins store on its premium worlds.")}">${icon("plugins", 13)}<span>Get more worlds</span></button>
+      <input type="file" accept=".zip" data-viz-world-file hidden>
+    </div>`;
+}
+
+async function importWorldFile(file: File): Promise<void> {
+  let r: { ok: boolean; world?: InstalledWorld; error?: string };
+  try { r = await bridge.worldImport(await file.arrayBuffer(), file.name); }
+  catch (e) { r = { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  if (!r.ok || !r.world) { showToast({ title: "World not imported", desc: r.error ?? "The file could not be installed.", timeout: 5000 }); return; }
+  // With the Worlds menu open the new row IS the confirmation; a toast there would cover the menu (top right).
+  if (!worldsPop) showToast({ title: `World installed: ${r.world.name}`, desc: "Pick it in Worlds.", timeout: 3200 });
+  await refreshWorlds();
+}
+
+/** The View menu's World options (the selected world's colors, choices and toggles). A change saves the value
+ *  and rebuilds the figures with it. */
+function worldOptionsHtml(): string {
+  const w = curWorld;
+  if (!w || !w.def.options.length) return "";
+  const row = (o: WorldOption): string => {
+    const v = w.options[o.key];
+    const k = esc(o.key);
+    if (o.type === "color") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
+    if (o.type === "toggle") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="checkbox" data-viz-wopt="${k}"${v === true ? " checked" : ""}></label>`;
+    return `<label class="viz-wopt"><span>${esc(o.label)}</span><select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
+  };
+  return `<div class="viz-vmenu-h">World options</div><div class="viz-wopts" data-viz-wopts>${w.def.options.map(row).join("")}</div>`;
+}
+
+/** "#abc" -> "#aabbcc" (a color input takes only the long form). */
+function fullHex(c: string): string {
+  return /^#[0-9a-fA-F]{3}$/.test(c) ? `#${c[1]}${c[1]}${c[2]}${c[2]}${c[3]}${c[3]}` : c;
+}
+
+/** Repaint the World options section of an open View menu (the selection changed under it). */
+function paintWorldOptions(): void {
+  const slot = viewPop?.node.querySelector<HTMLElement>("[data-viz-wopts-slot]");
+  if (slot) { slot.innerHTML = worldOptionsHtml(); viewPop?.reposition(); }
+}
+
+function onWorldOption(input: HTMLInputElement | HTMLSelectElement): void {
+  const w = curWorld;
+  const key = input.dataset.vizWopt;
+  const o = w?.def.options.find((x) => x.key === key);
+  if (!w || !o) return;
+  const value = o.type === "toggle" ? (input as HTMLInputElement).checked : input.value;
+  curWorld = { def: w.def, options: saveOption(localStorage, w.def, o.key, value) };
+  if (scene) scene.setStyle(effStyle(), curWorld);
+}
+
+/** The scene's theme: the app's, or (a world) the world's sky decides light, its fog color the base color. */
+function sceneTheme(at: HTMLElement): VizTheme {
+  const t = readTheme(at);
+  const env = curWorld?.def.environment;
+  if (!env) return t;
+  return { ...t, light: env.light, bg: toHex(env.fog.color, t.bg), txt: env.light ? "#1a1d26" : "#e8eaf2" };
+}
 
 /** P-VIZ.2 (ADR-0623): the auto camera (follows the action; on unless the user turned it off last time). */
 const AUTO_KEY = "lucid.viz.autoCamera";
@@ -189,6 +398,16 @@ let opened = false;
 export const isOpen = (): boolean => opened;
 
 export function toggleViz(): void { if (isOpen()) closeViz(); else openViz(); }
+
+/** P-WORLDS.1 (ADR-0648): open Visualize on an installed world (the store's "Open in Visualize"). Loads the
+ *  installed list first, so a world installed a moment ago is offered; false when it cannot be drawn. */
+export async function openVizWorld(packageId: string): Promise<boolean> {
+  const key = worldKey(packageId);
+  if (!key) return false;
+  if (!isOpen()) openViz();
+  await refreshWorlds();
+  return selectStyle(worldStyle(key));
+}
 
 /** Open the overlay. `onClose` runs after it closes (the orbit uses it to come back). */
 export function openViz(opts: { onClose?: () => void } = {}): void {
@@ -220,7 +439,12 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
       return { id: n.id, kind: n.kind, name: n.name, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()) };
     }) : []),
     ...(scripted ? { shot: (id: string | null, opts?: Parameters<VizSceneHandle["scriptShot"]>[1]) => scene?.scriptShot(id, opts) } : {}),
+    // P-WORLDS.1 (ADR-0648): the installed worlds and a style switch ("anime", "professional", "world:<key>"),
+    // so a script can show a world; false when that style cannot be drawn now.
+    worlds: () => worlds.map((e) => ({ id: e.installed.id, style: e.style, label: e.label, access: e.access, error: e.error })),
+    style: (id: string): boolean => selectStyle(parseStyle(id)) && effStyle() === id,
   };
+  void refreshWorlds(); // P-WORLDS.1: the scene starts in what it can draw now and switches once the saved world loads
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
   ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
@@ -244,7 +468,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
 export function closeViz(): void {
   if (!view || !opened) return;
   if (rec) stopRec("closed");
-  closePanel(); closePlayer(); recPop?.close(); recPop = null; viewPop?.close(); viewPop = null; hideAutoHint();
+  closePanel(); closePlayer(); recPop?.close(); recPop = null; viewPop?.close(); viewPop = null; worldsPop?.close(); worldsPop = null; hideAutoHint();
   tray?.disarm();
   offBus?.(); offBus = null;
   ledgerView?.destroy(); ledgerView = null;
@@ -283,6 +507,7 @@ function buildView(): HTMLElement {
       <div class="viz-seg" role="group" aria-label="Style">
         <button type="button" data-viz-style="anime" aria-label="Anime" data-tip="${tipAttr("Anime", "Every agent is a mini Lucid in a glass cube, with plasma flowing between them.")}">${icon("styleAnime", 14)}<span>Anime</span></button>
         <button type="button" data-viz-style="professional" aria-label="Professional" data-tip="${tipAttr("Professional", "Office workers at their desks, Main as the boss in the middle, fiber optic lines between them.")}">${icon("stylePro", 14)}<span>Professional</span></button>
+        <button type="button" class="viz-worlds-btn" data-viz-worlds aria-haspopup="true" aria-label="Worlds" data-tip="${tipAttr("Worlds", "Lucid Agent Worlds: add-on casts, skies, throwables and storms. Pick an installed world, import a world file, or get more in the store.")}">${icon("plugins", 14)}<span data-viz-worlds-label>Worlds</span></button>
       </div>
       <label class="viz-auto" data-tip="${tipAttr("Auto camera", "Follows the action: the camera glides to the agent working hardest, and briefly to a kill or a failed tool. Drag, pan or zoom to take the camera yourself; this turns off until you check it again.")}"><input type="checkbox" data-viz-auto aria-label="Auto camera" checked>${icon("autoCamera", 14)}<span>Auto camera</span></label>
       <button type="button" class="btn-mini orbit-btn" data-viz-fit aria-label="Fit everything in view" data-tip="${tipAttr("Fit", "Bring every node back into view. Takes the camera off auto.")}">${icon("center", 13)}</button>
@@ -336,7 +561,7 @@ function buildView(): HTMLElement {
     const t = ev.target as HTMLElement;
     if (t.matches("[data-viz-panel-input]") && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); void sendFromPanel(); }
   });
-  tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, prefs.style); // P-VIZ.6 (ADR-0636)
+  tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, effStyle(), curWorld?.def ?? null); // P-VIZ.6 (ADR-0636)
   return v;
 }
 
@@ -346,7 +571,9 @@ function onViewClick(ev: Event): void {
   const vb = t.closest("[data-viz-view]") as HTMLElement | null;
   if (vb) { prefs.view = vb.dataset.vizView === "2d" ? "2d" : "3d"; savePrefs(); paintToggles(); scene?.setView(prefs.view); return; }
   const sb = t.closest("[data-viz-style]") as HTMLElement | null;
-  if (sb) { prefs.style = sb.dataset.vizStyle === "professional" ? "professional" : "anime"; savePrefs(); paintToggles(); scene?.setStyle(prefs.style); tray?.setStyle(prefs.style); return; }
+  if (sb) { selectStyle(sb.dataset.vizStyle === "professional" ? "professional" : "anime"); return; }
+  const wb = t.closest("[data-viz-worlds]") as HTMLElement | null;
+  if (wb) { openWorldsMenu(wb); return; } // P-WORLDS.1 (ADR-0648)
   if (t.closest("[data-viz-fit]")) { if (autoCam) setAutoCamera(false, true); scene?.fit(); return; }
   const vm = t.closest("[data-viz-viewmenu]") as HTMLElement | null;
   if (vm) { openViewMenu(vm); return; }
@@ -379,11 +606,18 @@ function openViewMenu(anchor: HTMLElement): void {
     </div>
     <div class="viz-vmenu-h">Quality</div>
     <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+    <div data-viz-wopts-slot>${worldOptionsHtml()}</div>
     ${recRows}
   </div>`, () => { viewPop = null; });
   viewPop = p;
+  // P-WORLDS.1 (ADR-0648): a World options change saves it and rebuilds the figures with it.
+  p.node.addEventListener("change", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t.matches("input[data-viz-wopt], select[data-viz-wopt]")) onWorldOption(t as HTMLInputElement | HTMLSelectElement);
+  });
   paintViewMenu();
   paintRecs();
+  p.reposition(); // popover() measured it before the quality label and World options painted
   p.node.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
     const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
@@ -450,7 +684,14 @@ function paintToggles(): void {
   if (!view) return;
   ($("[data-viz-auto]", view) as HTMLInputElement).checked = autoCam;
   for (const b of view.querySelectorAll<HTMLElement>("[data-viz-view]")) { const on = b.dataset.vizView === prefs.view; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
-  for (const b of view.querySelectorAll<HTMLElement>("[data-viz-style]")) { const on = b.dataset.vizStyle === prefs.style; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  const style = effStyle();
+  for (const b of view.querySelectorAll<HTMLElement>("[data-viz-style]")) { const on = b.dataset.vizStyle === style; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  // P-WORLDS.1: the Worlds button is pressed and named while a world is drawn.
+  const wb = $("[data-viz-worlds]", view) as HTMLElement | null;
+  if (wb) {
+    wb.classList.toggle("on", !!curWorld);
+    ($("[data-viz-worlds-label]", wb) as HTMLElement).textContent = curWorld ? curWorld.def.label : "Worlds";
+  }
 }
 
 /** The View menu's layout toggle and quality button (only while the menu is open). */
@@ -517,7 +758,7 @@ function mount(): void {
   const loading = $("[data-viz-loading]", view) as HTMLElement;
   const err = $("[data-viz-error]", view) as HTMLElement;
   loading.hidden = false; err.hidden = true;
-  const theme = readTheme(view);
+  const theme = sceneTheme(view); // P-WORLDS.1: a world's sky decides light
   themeSig = JSON.stringify(theme);
   try {
     scene = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
@@ -531,7 +772,7 @@ function mount(): void {
   scene.onPick(onPick);
   scene.onDoublePick(onDoublePick);
   scene.onUserCamera(onUserCamera);
-  scene.setStyle(prefs.style);
+  scene.setStyle(effStyle(), curWorld);
   tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
   syncScene();
@@ -568,6 +809,7 @@ function syncScene(): void {
       pos: pos.get(n.id) ?? [0, 0, 0], glow: nodeIntensity(n, now),
       team: team ? team.agents + team.subagents : 0, idleSec: idleSeconds(n, now),
       model: n.model, committing: committing(n, now), // P-VIZ.7 (ADR-0641): sponsor and the commit animation
+      parentKind: n.kind === "subagent" && n.parent ? (m.nodes.get(n.parent)?.kind ?? null) : null, // P-WORLDS.1: a world casts helpers by their parent
     };
   });
   scene.sync(nodes, edgesOf(model, now));
@@ -638,7 +880,7 @@ function onTick(): void {
     paintLedger(now);
     if (hover) paintTip(hover.hit, hover.x, hover.y);
     if (panel) paintPanel();
-    if (view && themeSig && JSON.stringify(readTheme(view)) !== themeSig) remount(); // a theme switch while open
+    if (view && themeSig && JSON.stringify(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
   }
 }
 
