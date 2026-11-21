@@ -1746,3 +1746,9 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-PREVIEW.FIT1
+demo-P-PREVIEW.FIT1: ## P-PREVIEW.FIT1 (ADR-0642): the Preview fits an oversized fixed page by default (Fit button), 100% scrolls across it, and every tab pans. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_preview_fit_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_zoom.test.ts desktop/preview_bridge.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_fit_1.mjs
+	node --check desktop/scripts/demo_preview_pan.mjs

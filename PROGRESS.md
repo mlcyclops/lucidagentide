@@ -6381,3 +6381,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-PREVIEW.FIT1 (ADR-0642): Preview fits an oversized page by default; every tab pans
+- **shipped (2026-11-21):** the preview script reports the document's size; previewLayout sizes the frame to the content and fits it by default (Fit button, readout follows the shown zoom); Pan works on every tab; demo_p_preview_fit_1.mjs passes at 1400x900 and 1000x700 and fails on master.
+- **stubbed:** nothing; a page whose width is set in vw is chased at most three times, then shown as laid out.
+- **next:** try a real agent preview of a 1920x1080 card in the installed app's Agent tab.
