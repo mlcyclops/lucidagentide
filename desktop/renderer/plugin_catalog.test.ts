@@ -60,6 +60,11 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   "world-talent-show": { section: "civilian", lookupKey: "PLG-WORLD-TALENTSHOW-OTF" },
   "world-circus": { section: "civilian", lookupKey: "PLG-WORLD-CIRCUS-OTF" },
   "world-magic-show": { section: "civilian", lookupKey: "PLG-WORLD-MAGICSHOW-OTF" },
+  "world-chef-showdown": { section: "civilian", lookupKey: "PLG-WORLD-CHEFSHOWDOWN-OTF" },
+  "world-hospital": { section: "civilian", lookupKey: "PLG-WORLD-HOSPITAL-OTF" },
+  "world-university": { section: "civilian", lookupKey: "PLG-WORLD-UNIVERSITY-OTF" },
+  "world-construction": { section: "civilian", lookupKey: "PLG-WORLD-CONSTRUCTION-OTF" },
+  "world-grand-prix": { section: "civilian", lookupKey: "PLG-WORLD-GRANDPRIX-OTF" },
   leaps: { section: "civilian", lookupKey: null },
   "mdmp-engine": { section: "government", lookupKey: null },
   "joint-planning-engine": { section: "government", lookupKey: null },
@@ -117,9 +122,10 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual([
-      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-christmas", "world-circus",
-      "world-dog-show", "world-esports", "world-farm", "world-football", "world-golf", "world-hockey", "world-horse-racing", "world-magic-show",
-      "world-soccer", "world-st-patricks", "world-summer-games", "world-talent-show", "world-tennis", "world-valentines", "world-winter-games",
+      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-chef-showdown", "world-christmas",
+      "world-circus", "world-construction", "world-dog-show", "world-esports", "world-farm", "world-football", "world-golf", "world-grand-prix",
+      "world-hockey", "world-horse-racing", "world-hospital", "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games",
+      "world-talent-show", "world-tennis", "world-university", "world-valentines", "world-winter-games",
     ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
@@ -189,11 +195,12 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
     for (const p of sold) expect(p.price).toBe(isWorldPlugin(p) ? "$9.99" : "$29.99");
   });
 
-  test("the nineteen worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+  test("the twenty-four worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
     expect(worlds.map((p) => p.id).sort()).toEqual([
-      "world-baseball", "world-basketball", "world-christmas", "world-circus", "world-dog-show", "world-esports", "world-farm", "world-football",
-      "world-golf", "world-hockey", "world-horse-racing", "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games",
-      "world-talent-show", "world-tennis", "world-valentines", "world-winter-games",
+      "world-baseball", "world-basketball", "world-chef-showdown", "world-christmas", "world-circus", "world-construction", "world-dog-show",
+      "world-esports", "world-farm", "world-football", "world-golf", "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital",
+      "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games", "world-talent-show", "world-tennis", "world-university",
+      "world-valentines", "world-winter-games",
     ]);
     for (const p of worlds) {
       expect(p.group).toBe(WORLDS_GROUP);
