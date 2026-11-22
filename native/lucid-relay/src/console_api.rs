@@ -11,6 +11,8 @@
 // only while the pinned map lists it), the public documents, and the token and revocation endpoints (`api_issue`) run
 // on a snapshot of the org's store with the front door's limiters, jti caches and fetch cache.
 
+use crate::api_audit::{ApiAudit, IngestError, Repr};
+use crate::api_checkpoint::IssueFn;
 use crate::api_fetch::FetchCache;
 use crate::api_issue::{self, Answer, IssueCtx, IssueState, TokenHttp};
 use crate::api_map::{check_tighten, AcceptOutcome, ApiMapError, ApiMapStore, ApiTrust, Edition, VerifiedApiMap};
@@ -36,6 +38,12 @@ pub const JOURNAL_DIR: &str = "api-journal-console";
 pub const PSEUDONYM_PKV: u64 = 1;
 /// One api request's answer wait.
 const CALL_MS: u64 = 30_000;
+/// 12.2: at most this many `api-chains` pages per org in one run, so other api ops to the relay wait at most that
+/// long; `audit_tick` resumes a backfill that has more.
+const PAGES_MAX: usize = 64;
+/// 9.3: a connected relay's checkpoint certificates are checked this often (seconds) after its catch-up; it asks for
+/// a new one when under 30 days are left.
+const CHECKPOINT_EVERY: i64 = 3600;
 /// 4.2: a client's `jwks_uri` and a federated issuer's discovery and keys are fetched at most hourly.
 const FETCH_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
@@ -104,6 +112,15 @@ struct Inner {
     store: ApiMapStore,
     orgs: BTreeMap<String, OrgJournal>,
     relays: HashMap<String, RelayApi>,
+    /// Relays that answered `fleet-op` to an audit op (`api-checkpoint-csr`, `api-chains`): none until they reconnect.
+    no_audit: std::collections::HashSet<String>,
+    /// relay -> when its checkpoint certificates are checked next (set by its catch-up, then hourly; `audit_tick`).
+    checkpoint_at: HashMap<String, i64>,
+    /// (relay, org) whose `api-chains` backfill stopped after `PAGES_MAX` pages with more left. The position is the
+    /// console's stored heads of that relay's chains (on disk), so only the pair is kept; `audit_tick` resumes it.
+    backfill: std::collections::BTreeSet<(String, String)>,
+    /// Relays whose audit work runs on a thread now.
+    audit_busy: std::collections::HashSet<String>,
     /// 13: the license edition the maps were last held to (`set_edition`); None until first read.
     edition: Option<Option<Edition>>,
 }
@@ -119,6 +136,8 @@ pub struct ConsoleApi {
     /// The front door's issuer state (6.5 limiters and jti caches) and its 8.1 fetch cache.
     issue: IssueState,
     fetch: FetchCache,
+    /// 9: the console's API audit chains and the issuer of relay checkpoint certificates (`set_audit`, at start).
+    audit: std::sync::OnceLock<(Arc<ApiAudit>, IssueFn)>,
 }
 
 /// `[a-z0-9-]{1,32}`.
@@ -198,10 +217,11 @@ impl ConsoleApi {
             dir: dir.map(Path::to_path_buf),
             logger,
             vault,
-            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), edition: None }),
+            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), no_audit: Default::default(), checkpoint_at: HashMap::new(), backfill: Default::default(), audit_busy: Default::default(), edition: None }),
             sending: Mutex::new(HashMap::new()),
             issue: IssueState::new(),
             fetch: FetchCache::new(FETCH_MAX_AGE),
+            audit: std::sync::OnceLock::new(),
         }
     }
 
@@ -299,6 +319,7 @@ impl ConsoleApi {
                     }
                 };
                 self.edition_lines(&changed.0, changed.1);
+                self.note_audit(vec![crate::fleet_agent::api_note_pinned(vm)], now);
                 self.prune(&vm.org, now);
                 if let Some(link) = link {
                     self.deliver_org(link, &vm.org);
@@ -307,6 +328,7 @@ impl ConsoleApi {
             Ok(AcceptOutcome::Conflict { org, seq, pinned_hash, offered_hash }) => {
                 let f = Fields::new().with("org", org.as_str()).with("seq", *seq).with("pinned", pinned_hash.as_str()).with("offered", offered_hash.as_str()).with("via", "console");
                 self.logger.security("api.map.conflict", &f, Level::Error);
+                self.note_audit(vec![crate::fleet_agent::api_note_conflict(org, *seq, None)], now);
             }
             _ => {}
         }
@@ -342,6 +364,9 @@ impl ConsoleApi {
             }
             e
         };
+        // 9.2: the journal file is the record of the tightening; its audit entry follows it (a tightening is never
+        // refused for the audit: `api.audit-failed` instead)
+        self.note_audit(vec![crate::fleet_agent::api_note_tighten(org, &entry)], now);
         if let Some(link) = link {
             self.deliver_org(link, org);
         }
@@ -433,7 +458,12 @@ impl ConsoleApi {
 
     /// After `welcome`: the relay's api heads are unknown until it answers `api-heads`.
     pub fn on_welcomed(&self, relay: &str) {
-        self.inner.lock().relays.insert(relay.to_string(), RelayApi::Unknown);
+        let mut inner = self.inner.lock();
+        inner.relays.insert(relay.to_string(), RelayApi::Unknown);
+        inner.no_audit.remove(relay);
+        // the reconnect catch-up checks the certificates and backfills from the stored heads again
+        inner.checkpoint_at.remove(relay);
+        inner.backfill.retain(|(r, _)| r != relay);
     }
 
     /// The relay's `api-heads` answer (`{org: {seq, tseq}}`). A relay reporting a tseq above the console's journal
@@ -548,7 +578,14 @@ impl ConsoleApi {
             Some(RelayApi::Heads(h)) => h.keys().cloned().collect(),
             _ => Vec::new(),
         };
-        orgs.iter().all(|org| self.sync_org(link, relay, org, now))
+        // then, in the reconnect catch-up only, per org the checkpoint certificate and the backfill of the relay's
+        // audit chains (9.3, 12.2); later deliveries carry maps and journal entries alone
+        let done = orgs.iter().all(|org| self.sync_org(link, relay, org, now) && (!unknown || self.audit_org(link, relay, org, now)));
+        if unknown && self.audit.get().is_some() {
+            // a relay that stays connected has its certificates checked again hourly (`audit_tick`)
+            self.inner.lock().checkpoint_at.insert(relay.to_string(), now + CHECKPOINT_EVERY);
+        }
+        done
     }
 
     fn sync_org(&self, link: &dyn FleetLink, relay: &str, org: &str, now: i64) -> bool {
@@ -591,8 +628,10 @@ impl ConsoleApi {
                     }
                 }
                 Err(LinkError::Refused { code, .. }) if code == "conflict" => {
-                    let f = Fields::new().with("relay", relay).with("org", org).with("seq", map["map"]["seq"].as_i64().unwrap_or(0)).with("via", "relay");
+                    let seq = map["map"]["seq"].as_i64().unwrap_or(0);
+                    let f = Fields::new().with("relay", relay).with("org", org).with("seq", seq).with("via", "relay");
                     self.logger.security("api.map.conflict", &f, Level::Error);
+                    self.note_audit(vec![crate::fleet_agent::api_note_conflict(org, seq, Some(relay))], now);
                     return false;
                 }
                 Err(_) => return false,
@@ -631,6 +670,238 @@ impl ConsoleApi {
         if let Some(RelayApi::Heads(h)) = self.inner.lock().relays.get_mut(relay) {
             if let Some(h) = h.get_mut(org) {
                 f(h);
+            }
+        }
+    }
+
+    // ── API audit (9, 12.2): the console's own entries, the relays' chains and their checkpoint certificates ──
+
+    /// The console's API audit chains and the issuer of relay checkpoint certificates (the console's Meet CA), set
+    /// once at start; until then no fleet op touches audit and `audit_in` answers 503 `audit-unavailable`.
+    pub fn set_audit(&self, audit: Arc<ApiAudit>, issue: IssueFn) {
+        let _ = self.audit.set((audit, issue));
+    }
+
+    fn chains(&self) -> Option<&Arc<ApiAudit>> {
+        self.audit.get().map(|(a, _)| a)
+    }
+
+    /// Record the console's own notes (see `fleet_agent::api_record`).
+    fn note_audit(&self, notes: Vec<crate::fleet_agent::ApiNote>, now: i64) {
+        if notes.is_empty() || self.audit.get().is_none() {
+            return;
+        }
+        crate::fleet_agent::api_record(self.chains().map(|a| &**a), notes, &self.logger, now);
+    }
+
+    /// `api-audit` from a relay (2.6, API1-S11): a batch of its own chain for one org (which it reported) and one
+    /// representation, checked for continuity and hashes and stored durably before `{ok: true, last}` (`last` the
+    /// console's head of that chain). A batch that does not start right after the stored head answers
+    /// `{ok: false, code: "gap", expected}` and the relay sends again from `expected`; a broken chain is refused
+    /// `bad-chain`; a storage failure is 503 `audit-unavailable`.
+    pub fn audit_in(&self, relay: &str, body: &Value) -> Result<Value, crate::fleet_wire::Refusal> {
+        use crate::fleet_wire::Refusal;
+        let audit = self.chains().ok_or_else(|| Refusal::new(503, "audit-unavailable", "The console's audit chains are not open."))?;
+        let bad = |why: &str| Refusal::new(400, "bad-chain", why);
+        let org = body.get("org").and_then(Value::as_str).filter(|o| org_ok(o)).ok_or_else(|| bad("org is not an organization id"))?;
+        if !self.serves_now(relay, org) {
+            return Err(Refusal::new(403, "org-not-served", "This relay did not report that organization on this connection."));
+        }
+        let repr = body.get("repr").and_then(Value::as_str).and_then(Repr::of).ok_or_else(|| bad("repr must be as_is, pseudonymized or removed"))?;
+        let first = body.get("first").and_then(Value::as_u64).filter(|f| *f >= 1).ok_or_else(|| bad("first must be a seq from 1"))?;
+        let last = body.get("last").and_then(Value::as_u64).filter(|l| *l >= first).ok_or_else(|| bad("last must be a seq from first"))?;
+        let entries = body.get("entries").and_then(Value::as_array).ok_or_else(|| bad("entries must be a list"))?;
+        if entries.len() as u64 != last - first + 1 {
+            return Err(bad("entries must hold first to last"));
+        }
+        match audit.ingest(org, relay, repr, first, last, entries) {
+            Ok(()) => Ok(json!({ "ok": true, "last": audit.head(org, relay, repr).0 })),
+            Err(IngestError::Gap(expected)) => Ok(json!({ "ok": false, "code": "gap", "expected": expected })),
+            Err(IngestError::Invalid(why)) => {
+                let f = Fields::new().with("relay", relay).with("org", org).with("repr", repr.as_str()).with("first", first).with("why", why.as_str());
+                self.logger.security("api.audit.ingest-refused", &f, Level::Error);
+                Err(bad(&why))
+            }
+            Err(IngestError::Unavailable(why)) => Err(Refusal::new(503, "audit-unavailable", &why)),
+        }
+    }
+
+    /// Whether a relay answered an audit op `fleet-op` (an API-1a2 relay); marks it so until it reconnects.
+    fn audit_refused(&self, relay: &str, e: &LinkError) -> bool {
+        let old = matches!(e, LinkError::Refused { code, .. } if code == "fleet-op");
+        if old {
+            self.inner.lock().no_audit.insert(relay.to_string());
+            self.logger.ops("api.relay-without-audit", &Fields::new().with("relay", relay), Level::Info);
+        }
+        old
+    }
+
+    /// Whether the relay listed `org` in its latest `api-heads` answer on its current connection (the orgs it serves
+    /// now). Journal acknowledgments are history kept for pruning, not membership.
+    pub fn serves_now(&self, relay: &str, org: &str) -> bool {
+        matches!(self.inner.lock().relays.get(relay), Some(RelayApi::Heads(h)) if h.contains_key(org))
+    }
+
+    /// The audit part of the catch-up for one org the relay reported (9.3, 12.2): the checkpoint certificate, then
+    /// the backfill of its chains (`backfill_org`; what it leaves goes on at the fleet's minute, so it never fails the
+    /// catch-up). Nothing for a relay that answered an audit op `fleet-op` (until it reconnects) or while the console
+    /// has no audit. False when the certificate's requests failed.
+    fn audit_org(&self, link: &dyn FleetLink, relay: &str, org: &str, now: i64) -> bool {
+        if self.audit.get().is_none() || self.inner.lock().no_audit.contains(relay) {
+            return true;
+        }
+        if !self.checkpoint_org(link, relay, org, now) {
+            return false;
+        }
+        self.backfill_org(link, relay, org);
+        true
+    }
+
+    /// The checkpoint certificate of one org (9.3): the relay answers a CSR when it has none or under 30 days are
+    /// left; the console's Meet CA issues it, the console keeps it for `v1/audit/keys` and for checking the relay's
+    /// checkpoints (`add_keys`, before the relay can sign with it), then the relay installs it. False when a request
+    /// failed (a relay answering `fleet-op` is marked and counts as done).
+    fn checkpoint_org(&self, link: &dyn FleetLink, relay: &str, org: &str, now: i64) -> bool {
+        let Some((audit, issue)) = self.audit.get() else { return true };
+        if self.inner.lock().no_audit.contains(relay) {
+            return true;
+        }
+        match link.request(relay, "api-checkpoint-csr", json!({ "org": org }), CALL_MS) {
+            Ok(a) => {
+                if let Some(csr) = a.get("csr").and_then(Value::as_str).and_then(crate::codec::unb64u) {
+                    let (cert, chain) = match issue(relay, org, &csr, now * 1000) {
+                        Ok(c) => c,
+                        Err(why) => {
+                            self.logger.security("api.checkpoint.issue-failed", &Fields::new().with("relay", relay).with("org", org).with("why", why), Level::Error);
+                            return false;
+                        }
+                    };
+                    if let Err(e) = audit.add_keys(org, relay, &cert, &chain) {
+                        self.logger.security("api.checkpoint.keys-unsaved", &Fields::new().with("relay", relay).with("org", org).with("why", e.message), Level::Error);
+                        return false;
+                    }
+                    let body = json!({ "org": org, "cert": b64u(&cert), "chain": chain.iter().map(|c| b64u(c)).collect::<Vec<_>>() });
+                    if let Err(e) = link.request(relay, "api-checkpoint-cert", body, CALL_MS) {
+                        if let LinkError::Refused { code, error, .. } = &e {
+                            self.logger.security("api.checkpoint.install-refused", &Fields::new().with("relay", relay).with("org", org).with("code", code.as_str()).with("why", error.as_str()), Level::Error);
+                        }
+                        return false;
+                    }
+                    self.logger.ops("api.checkpoint.installed", &Fields::new().with("relay", relay).with("org", org), Level::Info);
+                }
+            }
+            Err(e) => return self.audit_refused(relay, &e),
+        }
+        true
+    }
+
+    /// The backfill of one org's chains of the relay (12.2): `api-chains` pages from the heads the console holds of
+    /// each representation, at most `PAGES_MAX` in this run. A last page with `more: true` leaves the pair in
+    /// `backfill` and `audit_tick` goes on from the stored heads; a page with `more: false` ends it. A link failure
+    /// keeps it for the next tick; a refused page drops it (`api.audit.backfill-refused`). False when it did not end.
+    fn backfill_org(&self, link: &dyn FleetLink, relay: &str, org: &str) -> bool {
+        let Some(audit) = self.chains() else { return true };
+        let key = (relay.to_string(), org.to_string());
+        let set = |pending: bool| {
+            let mut inner = self.inner.lock();
+            if pending {
+                inner.backfill.insert(key.clone());
+            } else {
+                inner.backfill.remove(&key);
+            }
+        };
+        for _ in 0..PAGES_MAX {
+            if self.inner.lock().no_audit.contains(relay) {
+                set(false);
+                return true;
+            }
+            let after: Map<String, Value> = Repr::ALL.iter().map(|r| (r.as_str().to_string(), json!(audit.head(org, relay, *r).0))).collect();
+            let page = match link.request(relay, "api-chains", json!({ "org": org, "after": after }), CALL_MS) {
+                Ok(p) => p,
+                Err(e) => {
+                    let old = self.audit_refused(relay, &e);
+                    set(!old);
+                    return old;
+                }
+            };
+            for repr in Repr::ALL {
+                let entries = page.get(repr.as_str()).and_then(Value::as_array).cloned().unwrap_or_default();
+                let seq = |e: Option<&Value>| e.and_then(|e| e.get("seq")).and_then(Value::as_u64);
+                let (Some(first), Some(last)) = (seq(entries.first()), seq(entries.last())) else { continue };
+                if let Err(e) = audit.ingest(org, relay, repr, first, last, &entries) {
+                    let why = match e {
+                        IngestError::Gap(n) => format!("gap: expected {n}"),
+                        IngestError::Invalid(w) | IngestError::Unavailable(w) => w,
+                    };
+                    self.logger.security("api.audit.backfill-refused", &Fields::new().with("relay", relay).with("org", org).with("repr", repr.as_str()).with("why", why), Level::Error);
+                    set(false);
+                    return false;
+                }
+            }
+            if page.get("more") != Some(&Value::Bool(true)) {
+                set(false);
+                return true;
+            }
+        }
+        set(true);
+        false
+    }
+
+    /// The audit work due for one connected relay at `now`, run in the caller's thread under the relay's delivery
+    /// gate (so maps and journal entries wait at most one bounded run): when its hourly check is due, the checkpoint
+    /// certificate of every org it reported (`checkpoint_org`; again in an hour, or at the next tick after a failed
+    /// request); then the backfills left with more (`backfill_org`, `PAGES_MAX` pages each).
+    pub fn audit_work(&self, link: &dyn FleetLink, relay: &str, now: i64) {
+        let gate = self.sending.lock().entry(relay.to_string()).or_default().clone();
+        let _one = gate.lock();
+        let (orgs, renew, backfill) = {
+            let inner = self.inner.lock();
+            let Some(RelayApi::Heads(h)) = inner.relays.get(relay) else { return };
+            if inner.no_audit.contains(relay) {
+                return;
+            }
+            let renew = inner.checkpoint_at.get(relay).is_some_and(|at| now >= *at);
+            let backfill: Vec<String> = inner.backfill.iter().filter(|(r, _)| r == relay).map(|(_, o)| o.clone()).filter(|o| h.contains_key(o)).collect();
+            (h.keys().cloned().collect::<Vec<String>>(), renew, backfill)
+        };
+        if renew {
+            let ok = orgs.iter().all(|org| self.checkpoint_org(link, relay, org, now));
+            let next = if ok { now + CHECKPOINT_EVERY } else { now };
+            self.inner.lock().checkpoint_at.insert(relay.to_string(), next);
+        }
+        for org in backfill {
+            self.backfill_org(link, relay, &org);
+        }
+    }
+
+    /// The fleet's minute (`Fleet::tick`): `audit_work` for every connected relay that has any due, each on its own
+    /// thread, at most one per relay at a time.
+    pub fn audit_tick(self: &Arc<Self>, link: Arc<dyn FleetLink>, now: i64) {
+        if self.audit.get().is_none() {
+            return;
+        }
+        let due: Vec<String> = {
+            let inner = self.inner.lock();
+            inner
+                .relays
+                .iter()
+                .filter(|(r, s)| matches!(s, RelayApi::Heads(_)) && !inner.no_audit.contains(*r) && !inner.audit_busy.contains(*r))
+                .filter(|(r, _)| inner.checkpoint_at.get(*r).is_some_and(|at| now >= *at) || inner.backfill.iter().any(|(b, _)| b == *r))
+                .map(|(r, _)| r.clone())
+                .collect()
+        };
+        for relay in due.into_iter().filter(|r| link.connected(r)) {
+            if !self.inner.lock().audit_busy.insert(relay.clone()) {
+                continue;
+            }
+            let (me, link) = (self.clone(), link.clone());
+            let r = relay.clone();
+            let spawned = std::thread::Builder::new().name("api-audit-work".into()).spawn(move || {
+                me.audit_work(&*link, &r, now);
+                me.inner.lock().audit_busy.remove(&r);
+            });
+            if spawned.is_err() {
+                self.inner.lock().audit_busy.remove(&relay);
             }
         }
     }
@@ -707,6 +978,27 @@ impl ConsoleApi {
         Err("issuer-key-unlisted")
     }
 
+    /// A read-only copy of one org's api state for the front door's routes: None unless the org has a pinned map or
+    /// one set aside (6.1 `license` then answers).
+    pub fn org_snapshot(&self, org: &str) -> Option<ApiMapStore> {
+        let inner = self.inner.lock();
+        (org_ok(org) && (inner.store.get(org, "").is_some() || inner.store.is_set_aside(org))).then(|| inner.store.org_snapshot(org))
+    }
+
+    /// The orgs with a pinned map, sorted.
+    pub fn orgs(&self) -> Vec<String> {
+        self.inner.lock().store.issuers().keys().cloned().collect()
+    }
+
+    /// The relays that serve an org, sorted: every relay that reported it (its acknowledgments) and every connected
+    /// relay whose api heads list it.
+    pub fn relays_of(&self, org: &str) -> Vec<String> {
+        let inner = self.inner.lock();
+        let mut out: std::collections::BTreeSet<String> = inner.orgs.get(org).map(|j| j.acks.keys().cloned().collect()).unwrap_or_default();
+        out.extend(inner.relays.iter().filter(|(_, s)| matches!(s, RelayApi::Heads(h) if h.contains_key(org))).map(|(r, _)| r.clone()));
+        out.into_iter().collect()
+    }
+
     /// 5.1 and the 6.1 Public pipeline: None for an org without a pinned map (404 `not-found`); then the source
     /// limiter (429 `abuse`); then the document from the pinned map, whose `issuer.url` is I.
     pub fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
@@ -733,7 +1025,8 @@ impl ConsoleApi {
     /// it could not take (`too-large`, `request`). The issuer key must be listed in the pinned map (503
     /// `issuer-key-unlisted`). The store is a snapshot, so no lock is held while a JWKS or discovery fetch runs. A
     /// revocation is journaled as `token_deny` (`until` = the token's `exp`) and sent to the org's relays. `licensed`
-    /// is the console's own license state (6.1 `license`).
+    /// is the console's own license state (6.1 `license`). `audit(client, jti, until)` records a revocation in the
+    /// org's chain before it is journaled (9.4); its failure answers 503 `audit-unavailable`.
     #[allow(clippy::too_many_arguments)]
     pub fn api_token(
         self: &Arc<Self>,
@@ -744,12 +1037,10 @@ impl ConsoleApi {
         body_refused: Option<&'static str>,
         owner_active: &dyn Fn(&str) -> bool,
         licensed: bool,
+        audit: &dyn Fn(&str, &str, i64) -> Result<(), String>,
         now: i64,
     ) -> Option<Answer> {
-        let store = {
-            let inner = self.inner.lock();
-            (org_ok(org) && (inner.store.get(org, "").is_some() || inner.store.is_set_aside(org))).then(|| inner.store.org_snapshot(org))
-        };
+        let store = self.org_snapshot(org);
         let refuse = |code: &'static str, why: &str, retry: Option<i64>| api_issue::refusal(org, http.source, None, code, why, retry);
         let abuse = |s: i64| refuse("abuse", "Too many requests from this address.", Some(s));
         let Some(store) = store else {
@@ -792,8 +1083,27 @@ impl ConsoleApi {
         if !revoke {
             return Some(api_issue::token(&ctx, http));
         }
-        let journal = |client: &str, jti: &str, until: i64| self.append(link.clone(), org, "token_deny", json!({"client": client, "jti": jti}), Some(until), now).map(|_| ()).map_err(|e| e.message);
+        // 9.4: the revocation is in the org's audit chain before the journal entry is written
+        let journal = |client: &str, jti: &str, until: i64| -> Result<(), (&'static str, String)> {
+            audit(client, jti, until).map_err(|e| ("audit-unavailable", e))?;
+            self.append(link.clone(), org, "token_deny", json!({"client": client, "jti": jti}), Some(until), now).map(|_| ()).map_err(|e| ("journal", e.message))
+        };
         Some(api_issue::revoke(&ctx, http, &journal))
+    }
+}
+
+/// 9.3: the console's api audit reads each org's sealed pseudonym key (never draws one) through a weak reference, so
+/// the audit held by `ConsoleApi` makes no cycle.
+pub struct ConsolePseudonymKeys(pub Weak<ConsoleApi>);
+
+impl crate::api_audit::PseudonymKeys for ConsolePseudonymKeys {
+    fn current(&self, org: &str) -> Option<(u32, Vec<u8>)> {
+        let api = self.0.upgrade()?;
+        if !org_ok(org) {
+            return None;
+        }
+        let name = crate::fleet_agent::api_pseudonym_seal_name(org, PSEUDONYM_PKV);
+        vault_do(&*api.vault, |v| v.get(&name)).map(|k| (PSEUDONYM_PKV as u32, k))
     }
 }
 
@@ -847,15 +1157,22 @@ mod tests {
         up: Mutex<bool>,
         dir: PathBuf,
         store: Mutex<ApiMapStore>,
-        vault: Mutex<MemVault>,
+        vault: Arc<Mutex<MemVault>>,
         sent: Mutex<Vec<(String, Value)>>,
         heads: Mutex<Option<Value>>,
         logger: Arc<Logger>,
+        /// The relay's own audit chains (API-1 9); `api-chains` pages hold at most `page` entries per representation.
+        audit: Mutex<Option<Arc<ApiAudit>>>,
+        page: usize,
+        /// An API-1a2 relay: api ops but no audit op (`fleet-op`).
+        no_audit: bool,
+        /// The relay's clock for its checkpoint renewal check (`api-checkpoint-csr`).
+        csr_now: Mutex<i64>,
     }
 
     impl FakeRelay {
         fn new(id: &'static str, org: &str, dir: &Path, logger: Arc<Logger>) -> FakeRelay {
-            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Mutex::new(MemVault::default()), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger }
+            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Arc::new(Mutex::new(MemVault::default())), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger, audit: Mutex::new(None), page: 2, no_audit: false, csr_now: Mutex::new(NOW) }
         }
 
         fn ops(&self) -> Vec<String> {
@@ -866,22 +1183,31 @@ mod tests {
             if self.old && op.starts_with("api-") {
                 return Err(Refusal::of("fleet-op"));
             }
+            if self.no_audit && matches!(op, "api-chains" | "api-checkpoint-csr" | "api-checkpoint-cert") {
+                return Err(Refusal::of("fleet-op"));
+            }
             match op {
+                "api-chains" => match self.audit.lock().clone() {
+                    Some(a) => crate::fleet_agent::api_chains_page(&a, body, self.page),
+                    None => Ok(json!({ "org": self.org, "as_is": [], "pseudonymized": [], "removed": [], "more": false })),
+                },
+                "api-checkpoint-csr" => crate::fleet_agent::api_checkpoint_csr_answer(&self.dir, &*self.vault, body, *self.csr_now.lock()),
+                "api-checkpoint-cert" => crate::fleet_agent::api_checkpoint_cert_answer(&self.dir, &*self.vault, body),
                 "api-heads" => Ok(self.heads.lock().clone().unwrap_or_else(|| {
                     let (seq, tseq) = self.store.lock().head(&self.org);
                     let mut o = Map::new();
                     o.insert(self.org.clone(), json!({ "seq": seq, "tseq": tseq }));
                     Value::Object(o)
                 })),
-                "api-tighten" => crate::fleet_agent::api_tighten_answer(&mut self.store.lock(), body),
-                "api-pseudonym-key" => crate::fleet_agent::api_pseudonym_key_store(&self.dir, &self.vault, body),
+                "api-tighten" => crate::fleet_agent::api_tighten_answer(&mut self.store.lock(), body, &mut Vec::new()),
+                "api-pseudonym-key" => crate::fleet_agent::api_pseudonym_key_store(&self.dir, &*self.vault, body),
                 "api-map" => {
                     let wire = body["map"].as_object().unwrap().clone();
                     let m = &wire["map"];
                     let vm = VerifiedApiMap { org: m["org"].as_str().unwrap().into(), seq: m["seq"].as_i64().unwrap(), expires: m["expires"].as_i64().unwrap(), hash: api_map_hash(m), signer: "root".into(), wire: wire.clone() };
                     let mut store = self.store.lock();
                     let r = store.pin(vm);
-                    crate::fleet_agent::api_map_pinned(r, &mut store, body, &self.logger)
+                    crate::fleet_agent::api_map_pinned(r, &mut store, body, &self.logger, &mut Vec::new())
                 }
                 _ => Ok(json!({})),
             }
@@ -1001,12 +1327,16 @@ mod tests {
         let mut store = ApiMapStore::load(Some(&d));
         let entry = |tseq: u64, action: &str, target: Value| json!({"id": format!("t_acme_{tseq:06}"), "tseq": tseq, "ts": NOW, "action": action, "target": target});
         let body = |e: Value| json!({"org": "acme", "entry": e});
-        let gap = crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "client_suspend", json!(CLIENT)))).unwrap_err();
+        let mut notes = Vec::new();
+        let gap = crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "client_suspend", json!(CLIENT))), &mut notes).unwrap_err();
         assert_eq!((gap.status, gap.code.as_str()), (409, "tseq-gap"));
-        assert_eq!(crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(1, "client_suspend", json!(CLIENT)))).unwrap(), json!({"ok": true, "tseq": 1}));
-        let wide = crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "destination_identities", json!({"destination": "d_9a8b7c6d5e4f3a2b", "identities": "as_is"})))).unwrap_err();
+        assert!(notes.is_empty(), "a refused entry is not audited as applied");
+        assert_eq!(crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(1, "client_suspend", json!(CLIENT))), &mut notes).unwrap(), json!({"ok": true, "tseq": 1}));
+        assert_eq!(notes, vec![("acme".to_string(), json!({"action": "api.tighten", "result": "ok", "resource": "t_acme_000001", "tseq": 1, "op": "client_suspend"}))]);
+        let wide = crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "destination_identities", json!({"destination": "d_9a8b7c6d5e4f3a2b", "identities": "as_is"}))), &mut notes).unwrap_err();
         assert_eq!(wide.code, "not-tightening");
-        assert_eq!(crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "api_off", json!("acme")))).unwrap()["tseq"], 2);
+        assert_eq!(crate::fleet_agent::api_tighten_answer(&mut store, &body(entry(2, "api_off", json!("acme"))), &mut notes).unwrap()["tseq"], 2);
+        assert_eq!(notes.len(), 2);
         drop(store);
         let back = ApiMapStore::load(Some(&d));
         assert_eq!(back.head("acme"), (0, 2));
@@ -1226,7 +1556,7 @@ mod tests {
         let basic = format!("Basic {}", crate::meet_json::b64(format!("{CLIENT}:{SECRET}").as_bytes()));
         let ask_as = |revoke: bool, body: &[u8], licensed: bool| {
             let http = TokenHttp { form: body, authorization: Some(basic.as_str()), dpop: None, client_cert: None, source };
-            api.api_token(None, "acme", revoke, &http, None, &|_: &str| true, licensed, NOW)
+            api.api_token(None, "acme", revoke, &http, None, &|_: &str| true, licensed, &|_: &str, _: &str, _: i64| Ok(()), NOW)
         };
         let ask = |revoke: bool, body: &[u8]| ask_as(revoke, body, true);
         let cc = b"grant_type=client_credentials".as_slice();
@@ -1269,5 +1599,355 @@ mod tests {
         assert!(api.api_document("acme", ApiDoc::Jwks, source, NOW).is_none(), "a set-aside org serves nothing");
         api.set_edition(Some(Edition::Enterprise));
         assert_eq!(ask(false, cc).unwrap().status, 200, "restored");
+    }
+
+    // ── API audit over the channel (2.6, 9, 12.2) ──
+
+    use crate::fleet_agent::{api_next_batch, api_ship_answer, api_shipped_load, ShipStep};
+
+    struct NoSigner;
+
+    impl crate::api_audit::CheckpointSigner for NoSigner {
+        fn kid(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn sign(&self, _: &str, _: &[u8]) -> Option<Vec<u8>> {
+            None
+        }
+        fn certs(&self, _: &str) -> Vec<Value> {
+            Vec::new()
+        }
+    }
+
+    struct NoKeys;
+
+    impl crate::api_audit::PseudonymKeys for NoKeys {
+        fn current(&self, _: &str) -> Option<(u32, Vec<u8>)> {
+            None
+        }
+    }
+
+    fn chains(dir: &Path, source: &str) -> Arc<ApiAudit> {
+        Arc::new(ApiAudit::open(Some(dir), source, Arc::new(NoSigner), Arc::new(NoKeys), NOW))
+    }
+
+    fn call_entry(i: u64) -> Value {
+        json!({"action": "api.call", "client": CLIENT, "scope": "audit.read", "route": "GET /api/orgs/acme/v1/audit", "resource": format!("r{i}"), "result": "ok", "check": "none", "ip": "203.0.113.7", "count": 1})
+    }
+
+    /// The console's Meet CA (a test CA from now) as the issuer of checkpoint certificates.
+    fn issuer(d: &Path) -> IssueFn {
+        let dir = d.join("meet-ca");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut v = MemVault::default();
+        let ca = crate::meet_ca::test_ca(&dir, &mut v, None, crate::codec::now_ms());
+        let held = Arc::new(Mutex::new((ca, v)));
+        Arc::new(move |holder: &str, org: &str, csr: &[u8], t: i64| -> Result<(Vec<u8>, Vec<Vec<u8>>), String> {
+            let mut g = held.lock();
+            let (ca, v) = &mut *g;
+            let issued = ca.issue_checkpoint(&*v, holder, org, csr, t).map_err(|e| e.code.to_string())?;
+            Ok((issued.der, vec![ca.ca_der().to_vec()]))
+        })
+    }
+
+    /// A console with its audit chains and a test Meet CA; one relay of acme (its chains apart, not yet behind
+    /// `api-chains`).
+    fn audited(d: &Path, log: &Arc<Logger>) -> (Arc<ConsoleApi>, Arc<ApiAudit>, Arc<FakeRelay>, Arc<dyn FleetLink>, Arc<ApiAudit>) {
+        let (relay, link) = one(d, log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        let console = chains(&d.join("console"), "console");
+        api.set_audit(console.clone(), issuer(d));
+        let mine = chains(&relay.dir, RELAY);
+        (api, console, relay, link, mine)
+    }
+
+    /// The relay's shipping loop against the console until nothing is left: (repr, first, last) of each batch.
+    fn ship_all(api: &ConsoleApi, mine: &ApiAudit, rdir: &Path, log: &Logger) -> Vec<(Repr, u64, u64)> {
+        let mut out = Vec::new();
+        while let Some(b) = api_next_batch(mine, &api_shipped_load(rdir), &Default::default()) {
+            let own = mine.head("acme", RELAY, b.repr).0;
+            assert_eq!(api_ship_answer(rdir, &b, api.audit_in(RELAY, &b.body), own, log), ShipStep::Acked);
+            out.push((b.repr, b.first, b.last));
+            assert!(out.len() <= 30, "shipping ends");
+        }
+        out
+    }
+
+    fn now_s() -> i64 {
+        crate::codec::now_ms() / 1000
+    }
+
+    #[test]
+    fn a_relay_offline_while_recording_ships_in_order_after_reconnect_and_the_console_chain_verifies() {
+        let d = temp("ship");
+        let (log, lines) = logger();
+        let (api, console, relay, link, mine) = audited(&d, &log);
+        // offline: the relay records; nothing reaches the console
+        *relay.up.lock() = false;
+        for i in 1..=5 {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        assert!(api.audit_in(RELAY, &json!({"org": "acme", "repr": "as_is", "first": 1, "last": 1, "entries": [{}]})).is_err(), "a relay that did not report the org yet");
+        // reconnect: the catch-up learns that the relay serves acme; then the relay ships from what was acknowledged
+        *relay.up.lock() = true;
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        let rdir = relay.dir.clone();
+        assert_eq!(ship_all(&api, &mine, &rdir, &log), vec![(Repr::AsIs, 1, 5), (Repr::Pseudonymized, 1, 5), (Repr::Removed, 1, 5)]);
+        assert_eq!(api_shipped_load(&rdir)["acme"]["as_is"], 5, "the acknowledgment is on disk");
+        // the console's copy verified: every chain has the relay's head seq and hash, and reads in order
+        for r in Repr::ALL {
+            assert_eq!(console.head("acme", RELAY, r), mine.head("acme", RELAY, r), "{r:?}");
+        }
+        let read = console.read("acme", RELAY, Repr::AsIs, 0, 100).unwrap();
+        let seqs: Vec<u64> = read["entries"].as_array().unwrap().iter().map(|e| e["seq"].as_u64().unwrap()).collect();
+        assert_eq!(seqs, [1, 2, 3, 4, 5]);
+        assert_eq!(read["chain"]["head_hash"], json!(mine.head("acme", RELAY, Repr::AsIs).1));
+        // offline again: later entries ship from the acknowledged seq, nothing twice
+        for i in 6..=7 {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        assert_eq!(ship_all(&api, &mine, &rdir, &log), vec![(Repr::AsIs, 6, 7), (Repr::Pseudonymized, 6, 7), (Repr::Removed, 6, 7)]);
+        assert_eq!(console.head("acme", RELAY, Repr::Removed), mine.head("acme", RELAY, Repr::Removed));
+        assert!(!lines.lock().iter().any(|l| l.contains("api.audit.ingest-refused")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_gap_answer_makes_the_relay_resend_from_the_consoles_head() {
+        let d = temp("gap");
+        let (log, _) = logger();
+        let (api, console, relay, link, mine) = audited(&d, &log);
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        let rdir = relay.dir.clone();
+        for i in 1..=3 {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        ship_all(&api, &mine, &rdir, &log);
+        for i in 4..=7 {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        // the relay believes the console holds up to 5; the console holds 3 and answers gap
+        crate::fleet_agent::api_shipped_set(&rdir, "acme", "as_is", 5).unwrap();
+        let b = api_next_batch(&mine, &api_shipped_load(&rdir), &Default::default()).unwrap();
+        assert_eq!((b.repr, b.first, b.last), (Repr::AsIs, 6, 7));
+        let answer = api.audit_in(RELAY, &b.body).unwrap();
+        assert_eq!(answer, json!({"ok": false, "code": "gap", "expected": 4}));
+        assert_eq!(api_ship_answer(&rdir, &b, Ok(answer), 7, &log), ShipStep::Resend);
+        assert_eq!(api_shipped_load(&rdir)["acme"]["as_is"], 3);
+        // the resend starts at the console's head and verifies
+        let b = api_next_batch(&mine, &api_shipped_load(&rdir), &Default::default()).unwrap();
+        assert_eq!((b.repr, b.first, b.last), (Repr::AsIs, 4, 7));
+        assert_eq!(api_ship_answer(&rdir, &b, api.audit_in(RELAY, &b.body), 7, &log), ShipStep::Acked);
+        assert_eq!(console.head("acme", RELAY, Repr::AsIs), mine.head("acme", RELAY, Repr::AsIs));
+        // a console that holds more than the relay has stops that chain; an older console stops shipping
+        assert_eq!(api_ship_answer(&rdir, &b, Ok(json!({"ok": false, "code": "gap", "expected": 9})), 7, &log), ShipStep::Skip("console-ahead".into()));
+        assert_eq!(api_ship_answer(&rdir, &b, Err(Refusal::of("fleet-op")), 7, &log), ShipStep::Off);
+        assert_eq!(api_shipped_load(&rdir)["acme"]["as_is"], 7);
+        // a broken batch is refused, and a relay that never reported the org is not taken
+        let mut broken = b.body.clone();
+        broken["first"] = json!(8);
+        broken["last"] = json!(9);
+        assert_eq!(api.audit_in(RELAY, &broken).unwrap_err().code, "bad-chain");
+        assert_eq!(api.audit_in(OTHER, &b.body).unwrap_err().code, "org-not-served");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn api_chains_backfill_pulls_the_relays_chains_in_pages_on_reconnect() {
+        let d = temp("chains");
+        let (log, _) = logger();
+        let (api, console, relay, link, mine) = audited(&d, &log);
+        *relay.audit.lock() = Some(mine.clone());
+        for i in 1..=5 {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        // pages of at most 2 entries per representation, each asked from the console's heads
+        let afters: Vec<u64> = relay.sent.lock().iter().filter(|(op, _)| op == "api-chains").map(|(_, b)| b["after"]["as_is"].as_u64().unwrap()).collect();
+        assert_eq!(afters, [0, 2, 4]);
+        for r in Repr::ALL {
+            assert_eq!(console.head("acme", RELAY, r), mine.head("acme", RELAY, r), "{r:?}");
+        }
+        // the relay's shipping then finds the console at its head (an overlapping resend is taken)
+        let rdir = relay.dir.clone();
+        assert_eq!(ship_all(&api, &mine, &rdir, &log).len(), 3);
+        // the next reconnect pulls one empty page
+        relay.sent.lock().clear();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        assert_eq!(relay.sent.lock().iter().filter(|(op, _)| op == "api-chains").count(), 1);
+        // `after` names exactly the three representations
+        let page = |after: Value| crate::fleet_agent::api_chains_answer(&mine, &json!({"org": "acme", "after": after}));
+        assert_eq!(page(json!({"as_is": 0, "pseudonymized": 0, "removed": 0, "x": 0})).unwrap_err().code, "bad-after");
+        assert_eq!(page(json!({"as_is": 0, "pseudonymized": 0, "x": 0})).unwrap_err().code, "bad-after");
+        let all = page(json!({"as_is": 3, "pseudonymized": 5, "removed": 0})).unwrap();
+        assert_eq!((all["as_is"].as_array().unwrap().len(), all["pseudonymized"].as_array().unwrap().len(), all["removed"].as_array().unwrap().len(), &all["more"]), (2, 0, 5, &json!(false)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn checkpoint_csr_issue_and_install_round_trip_and_the_certificate_verifies_a_relay_checkpoint() {
+        use crate::api_audit::CheckpointSigner;
+        let d = temp("checkpoint");
+        let (log, _) = logger();
+        let (api, console, relay, link, _mine) = audited(&d, &log);
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        let ops = relay.ops();
+        assert_eq!(&ops[..3], ["api-heads", "api-checkpoint-csr", "api-checkpoint-cert"], "{ops:?}");
+        let body = relay.sent.lock().iter().find(|(op, _)| op == "api-checkpoint-cert").unwrap().1.clone();
+        let cert = crate::codec::unb64u(body["cert"].as_str().unwrap()).unwrap();
+        assert_eq!(body["chain"].as_array().unwrap().len(), 1);
+        // the console keeps the relay's certificate for `v1/audit/keys`
+        assert!(!console.keys("acme").is_empty());
+        // the relay signs a checkpoint with its installed key; the issued certificate verifies it, and nothing else
+        let signer = crate::api_checkpoint::RelayCheckpoints::new(&relay.dir, relay.vault.clone() as Arc<dyn VaultLock>);
+        assert!(signer.kid("acme").is_some());
+        let payload = crate::api_audit::checkpoint_signed_bytes(br#"{"heads":{},"org":"acme","source":"r_00000000000000b1","ts":1}"#);
+        let sig = signer.sign("acme", &payload).unwrap();
+        assert!(crate::api_checkpoint::verify(&cert, &payload, &sig));
+        let mut other = payload.clone();
+        other.push(b' ');
+        assert!(!crate::api_checkpoint::verify(&cert, &other, &sig));
+        // installed and in date: the next catch-up asks, the relay answers no request, nothing is issued
+        relay.sent.lock().clear();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        let ops = relay.ops();
+        assert!(ops.iter().any(|o| o == "api-checkpoint-csr") && !ops.iter().any(|o| o == "api-checkpoint-cert"), "{ops:?}");
+        // a certificate for another key is refused by the relay
+        let wrong = crate::fleet_agent::api_checkpoint_cert_answer(&relay.dir, &*relay.vault, &json!({"org": "acme", "cert": b64u(b"not a certificate"), "chain": []}));
+        assert_eq!(wrong.unwrap_err().code, "bad-cert");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_relay_answering_fleet_op_to_audit_ops_gets_none_until_it_reconnects() {
+        let d = temp("no-audit");
+        let (log, lines) = logger();
+        let mut r = FakeRelay::new(RELAY, "acme", &d.join("relay"), log.clone());
+        r.no_audit = true;
+        let relay = Arc::new(r);
+        *relay.heads.lock() = Some(json!({"acme": {"seq": 0, "tseq": 0}, "beta": {"seq": 0, "tseq": 0}}));
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![relay.clone()]));
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        api.set_audit(chains(&d.join("console"), "console"), issuer(&d));
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()), "an API-1a2 relay keeps its catch-up");
+        assert_eq!(relay.ops(), ["api-heads", "api-checkpoint-csr"], "one refused audit op, none for the next org");
+        assert!(lines.lock().iter().any(|l| l.contains("api.relay-without-audit")));
+        // later deliveries on the same channel carry no audit op
+        assert!(api.sync(&*link, RELAY, now_s()));
+        assert_eq!(relay.ops(), ["api-heads", "api-checkpoint-csr"]);
+        // a reconnect asks again
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        assert_eq!(relay.ops().iter().filter(|o| *o == "api-checkpoint-csr").count(), 2);
+        // a relay before API-1 answers api-heads fleet-op and gets no audit op either
+        let mut o = FakeRelay::new(OTHER, "acme", &d.join("old"), log.clone());
+        o.old = true;
+        let old = Arc::new(o);
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![old.clone()]));
+        api.on_welcomed(OTHER);
+        assert!(api.sync(&*link, OTHER, now_s()));
+        assert_eq!(old.ops(), ["api-heads"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn api_audit_takes_only_orgs_the_relay_reports_on_this_connection() {
+        let d = temp("membership");
+        let (log, _) = logger();
+        let (api, _console, relay, link, mine) = audited(&d, &log);
+        mine.record("acme", call_entry(1), NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        let b = api_next_batch(&mine, &api_shipped_load(&relay.dir), &Default::default()).unwrap();
+        assert_eq!(api.audit_in(RELAY, &b.body).unwrap()["ok"], json!(true));
+        // reconnected, still unasked: nothing is taken
+        api.on_welcomed(RELAY);
+        assert_eq!(api.audit_in(RELAY, &b.body).unwrap_err().code, "org-not-served");
+        // the relay no longer serves acme: its journal acknowledgment stays (pruning history), membership does not
+        *relay.heads.lock() = Some(json!({"beta": {"seq": 0, "tseq": 0}}));
+        assert!(api.sync(&*link, RELAY, now_s()));
+        assert!(api.relays_of("acme").iter().any(|r| r == RELAY), "history is kept for pruning");
+        assert!(!api.serves_now(RELAY, "acme") && api.serves_now(RELAY, "beta"));
+        assert_eq!(api.audit_in(RELAY, &b.body).unwrap_err().code, "org-not-served");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_connected_relay_gets_its_checkpoint_certificate_renewed_by_the_hourly_check() {
+        let d = temp("renew");
+        let (log, _) = logger();
+        let (api, console, relay, link, _mine) = audited(&d, &log);
+        // the catch-up an hour ago installed the first certificate
+        let now = now_s();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now - 3600));
+        let certs = || relay.sent.lock().iter().filter(|(op, _)| op == "api-checkpoint-cert").count();
+        assert_eq!(certs(), 1);
+        let keys = console.keys("acme").len();
+        // still connected and 340 days on, its certificate has under 30 days left
+        *relay.csr_now.lock() = now + 340 * 86400;
+        relay.sent.lock().clear();
+        api.audit_work(&*link, RELAY, now - 1800);
+        assert!(relay.ops().is_empty(), "not an hour since the catch-up");
+        api.audit_work(&*link, RELAY, now);
+        assert_eq!(relay.ops(), ["api-checkpoint-csr", "api-checkpoint-cert"]);
+        assert_eq!(certs(), 1);
+        assert!(console.keys("acme").len() > keys, "the console keeps the new certificate before the relay installs it");
+        // the next check is an hour later; a certificate in date is not renewed
+        *relay.csr_now.lock() = now;
+        relay.sent.lock().clear();
+        api.audit_work(&*link, RELAY, now + 1800);
+        assert!(relay.ops().is_empty());
+        api.audit_work(&*link, RELAY, now + 3600);
+        assert_eq!(relay.ops(), ["api-checkpoint-csr"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_api_chains_backfill_longer_than_one_run_goes_on_at_the_next_tick() {
+        let d = temp("backfill");
+        let (log, _) = logger();
+        let mut r = FakeRelay::new(RELAY, "acme", &d.join("relay"), log.clone());
+        r.page = 1;
+        let relay = Arc::new(r);
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![relay.clone()]));
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        let console = chains(&d.join("console"), "console");
+        api.set_audit(console.clone(), issuer(&d));
+        let mine = chains(&relay.dir, RELAY);
+        *relay.audit.lock() = Some(mine.clone());
+        let n = PAGES_MAX as u64 + 6;
+        for i in 1..=n {
+            mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
+        }
+        // the catch-up stops after PAGES_MAX pages and still succeeds (other api ops are not held up)
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, now_s()));
+        assert_eq!(console.head("acme", RELAY, Repr::AsIs).0, PAGES_MAX as u64);
+        assert!(api.inner.lock().backfill.contains(&(RELAY.to_string(), "acme".to_string())));
+        // the fleet's minute resumes it from the stored heads until a page says no more
+        api.audit_tick(link.clone(), now_s());
+        assert!(wait_for(|| {
+            let inner = api.inner.lock();
+            !inner.backfill.contains(&(RELAY.to_string(), "acme".to_string())) && !inner.audit_busy.contains(RELAY)
+        }));
+        for r in Repr::ALL {
+            assert_eq!(console.head("acme", RELAY, r), mine.head("acme", RELAY, r), "{r:?}");
+        }
+        let afters: Vec<u64> = relay.sent.lock().iter().filter(|(op, _)| op == "api-chains").map(|(_, b)| b["after"]["as_is"].as_u64().unwrap()).collect();
+        assert_eq!(afters, (0..=n).collect::<Vec<u64>>(), "each page from the stored head, none twice");
+        // nothing left: the next minute asks nothing
+        relay.sent.lock().clear();
+        api.audit_tick(link.clone(), now_s());
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(relay.ops().is_empty());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

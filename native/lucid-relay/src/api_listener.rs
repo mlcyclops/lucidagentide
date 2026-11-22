@@ -3,14 +3,19 @@
 // as the guest port. For each org this relay serves that has a pinned unexpired api map, a `relay_origins` entry
 // for this relay's fleet id and a provisioned pseudonym key (11.4), it serves the relay-local issuer (5.6): its
 // RFC 8414 metadata, the protected resource metadata of RR, the local JWKS and `L/oauth/token`, which mints only the
-// four read scopes with `aud` = RR. RR and L always come from the pinned map, never from the request's `Host`.
-// Everything else answers 404 `not-found`. The resource routes (`RR/v1/*`) are the next slice.
+// four read scopes with `aud` = RR, and the 7.2 resource routes (`RR/v1/health`, `v1/audit`, `v1/audit/keys`,
+// `v1/metrics`, the last also through the 6.1 scrape pipeline) through `api_resource`, whose table the listener
+// dispatches from. RR and L always come from the pinned map, never from the request's `Host`. Everything else answers
+// 404 `not-found`.
 //
-// Until the 9.4 audit chain arrives (slice 1a3) each `Answer.event` of the issuer is logged as a security line.
+// 9.4: every decision about a known org is in this relay's audit chain for that org before its answer leaves; without
+// the chain (before enrollment) the org's routes answer 503 `audit-unavailable`.
 
 use crate::api_issue::{self, ClientCert, IssueCtx, IssueState, TokenHttp};
 use crate::api_map::ApiMapStore;
+use crate::api_resource::{self as res, AuditLog, Call, Data, Matched, RelayInfo, Reply, ResourceState, RouteId, Side, Site};
 use crate::fleet_ca::{vault_do, VaultLock};
+use crate::license::Product;
 use crate::meet::{address_of, http_date, quiet_end, read_head, reason_phrase, Relay, Tls, SERVER_VERSION};
 use crate::meet_hub::guests;
 use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
@@ -86,6 +91,12 @@ pub trait Source: Send + Sync {
     fn vault(&self) -> Option<Arc<dyn VaultLock>>;
     /// 6.1: the relay serves people under its license (service `on` or `grace`).
     fn licensed(&self) -> bool;
+    /// 9.1: this relay's API audit chains (source = its fleet id); None before enrollment.
+    fn audit(&self) -> Option<Arc<dyn AuditLog>>;
+    /// 7.2 `v1/health`: the fleet channel to the console is up now.
+    fn console_connected(&self) -> bool;
+    /// The product whose 9.1 keys `v1/metrics` reports.
+    fn product(&self) -> Product;
 }
 
 struct RelaySource {
@@ -121,6 +132,88 @@ impl Source for RelaySource {
         use crate::meet_license::Service;
         let gate = self.relay.upgrade().and_then(|r| r.hub.gate());
         gate.is_some_and(|g| matches!(g.service(), Service::On | Service::Grace))
+    }
+
+    fn audit(&self) -> Option<Arc<dyn AuditLog>> {
+        self.relay.upgrade()?.api_audit().map(|a| a as Arc<dyn AuditLog>)
+    }
+
+    fn console_connected(&self) -> bool {
+        self.relay.upgrade().is_some_and(|r| r.console_connected())
+    }
+
+    fn product(&self) -> Product {
+        // the API listener is the Meeting Hub relay's
+        Product::Meet
+    }
+}
+
+/// This relay as the 7.2 resource routes report it: its own values now (`fleet_probe::peek`, which resets nothing),
+/// under its fleet id.
+struct Own<'a> {
+    id: &'a str,
+    source: &'a dyn Source,
+}
+
+impl Own<'_> {
+    fn row(&self, m: &serde_json::Map<String, Value>) -> crate::fleet_export::RelayRow {
+        let code = |k: &str| m.get(k).and_then(Value::as_i64);
+        crate::fleet_export::RelayRow {
+            id: self.id.to_string(),
+            // the console's registry name and site are not known on the relay
+            name: self.id.to_string(),
+            site: String::new(),
+            product: self.source.product(),
+            // it is answering
+            connected: true,
+            last_contact_ms: None,
+            health: "ok".into(),
+            license_state: code("license_state"),
+            license_service: code("license_service"),
+        }
+    }
+}
+
+impl Data for Own<'_> {
+    fn relays(&self, _org: &str, _now: i64) -> Vec<RelayInfo> {
+        let p = crate::fleet_probe::peek(self.source.product());
+        let license = p.m.get("license_state").and_then(Value::as_u64).and_then(|c| crate::fleet_export::LICENSE_STATES.get(c as usize)).copied().unwrap_or_default();
+        vec![RelayInfo {
+            id: self.id.to_string(),
+            name: self.id.to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            fips: cfg!(feature = "fips"),
+            license_state: license.to_string(),
+            up: true,
+            health: "ok".into(),
+            latest: p.m,
+            ..RelayInfo::default()
+        }]
+    }
+
+    fn ids(&self, _org: &str) -> Vec<String> {
+        vec![self.id.to_string()]
+    }
+
+    fn exposition(&self, _org: &str, ids: &[String], _now: i64) -> String {
+        if !ids.iter().any(|i| i == self.id) {
+            return String::new();
+        }
+        let p = crate::fleet_probe::peek(self.source.product());
+        let row = self.row(&p.m);
+        let snap = crate::fleet_export::Snap { t: Some(p.ts), latest: p.m, totals: p.totals };
+        let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: "standard", fips: cfg!(feature = "fips") };
+        // the families of the console's exposition for this relay; the console's own info family is the console's
+        let text = crate::fleet_export::exposition(&console, &[&row], &[snap], p.ts);
+        text.lines().filter(|l| !l.contains("lucid_console_info")).fold(String::with_capacity(text.len()), |mut out, l| {
+            out.push_str(l);
+            out.push('\n');
+            out
+        })
+    }
+
+    fn console(&self) -> Value {
+        json!(if self.source.console_connected() { "connected" } else { "unreachable" })
     }
 }
 
@@ -251,6 +344,7 @@ impl KeyRing {
 pub struct Req<'a> {
     pub method: &'a str,
     pub path: &'a str,
+    pub query: &'a str,
     pub form: &'a [u8],
     pub authorization: Option<&'a str>,
     pub dpop: Option<&'a str>,
@@ -258,33 +352,16 @@ pub struct Req<'a> {
     pub source: IpAddr,
 }
 
-/// One answer: status, extra headers and a JSON body.
-pub struct Resp {
-    pub status: u16,
-    pub ctype: &'static str,
-    pub headers: Vec<(&'static str, String)>,
-    pub body: Value,
+fn not_found() -> Reply {
+    res::problem(404, "not-found", "Nothing is here.")
 }
 
-/// 8.2: a refusal under `/api/orgs/` (problem+json with the console convention's fields).
-fn problem(status: u16, code: &str, sentence: &str) -> Resp {
-    let body = json!({
-        "ok": false, "code": code, "error": sentence,
-        "type": format!("https://lucid.emertins.com/problems/{code}"), "title": reason_phrase(status), "status": status, "detail": sentence,
-    });
-    Resp { status, ctype: "application/problem+json", headers: vec![("Cache-Control", "no-store".into())], body }
+fn license_refused() -> Reply {
+    res::problem(403, "license", "This relay is not serving under a license right now.")
 }
 
-fn not_found() -> Resp {
-    problem(404, "not-found", "Nothing is here.")
-}
-
-fn license_refused() -> Resp {
-    problem(403, "license", "This relay is not serving under a license right now.")
-}
-
-fn public(body: Value) -> Resp {
-    Resp { status: 200, ctype: "application/json", headers: vec![("Cache-Control", "max-age=300".into())], body }
+fn public(body: Value) -> Reply {
+    Reply { headers: vec![("Cache-Control", "max-age=300".into())], ..Reply::json(200, body) }
 }
 
 /// An org id as maps carry it.
@@ -309,47 +386,19 @@ enum Org {
     SetAside,
 }
 
-enum Route<'a> {
-    AsMetadata(&'a str),
-    ResourceMetadata(&'a str),
-    Jwks(&'a str),
-    Token(&'a str),
-}
-
-fn route_of<'a>(method: &str, path: &'a str) -> Option<Route<'a>> {
-    let one = |rest: &'a str| Some(rest).filter(|o| !o.contains('/'));
-    if method == "GET" {
-        if let Some(org) = path.strip_prefix("/.well-known/oauth-authorization-server/api/orgs/").and_then(|r| r.strip_suffix("/local")) {
-            return one(org).map(Route::AsMetadata);
-        }
-        if let Some(org) = path.strip_prefix("/.well-known/oauth-protected-resource/api/orgs/") {
-            return one(org).map(Route::ResourceMetadata);
-        }
-        if let Some(org) = path.strip_prefix("/api/orgs/").and_then(|r| r.strip_suffix("/local/jwks.json")) {
-            return one(org).map(Route::Jwks);
-        }
-    }
-    if method == "POST" {
-        if let Some(org) = path.strip_prefix("/api/orgs/").and_then(|r| r.strip_suffix("/local/oauth/token")) {
-            return one(org).map(Route::Token);
-        }
-    }
-    None
-}
-
 /// The listener's routes over a `Source`; independent of the socket.
 pub struct Api {
     source: Box<dyn Source>,
     keys: KeyRing,
     state: IssueState,
+    /// The resource and scrape pipelines' limiters and DPoP cache (6.5).
+    resource: ResourceState,
     fetch: crate::api_fetch::FetchCache,
-    /// The security logger for `Answer.event` (interim until the 9.4 audit chain, slice 1a3).
-    log: Box<dyn Fn(&str, &Value) + Send + Sync>,
 }
 
 impl Api {
-    pub fn new(source: Box<dyn Source>, dir: &Path, log: Box<dyn Fn(&str, &Value) + Send + Sync>) -> Api {
-        Api { source, keys: KeyRing::new(dir), state: IssueState::new(), fetch: crate::api_fetch::FetchCache::new(FETCH_MAX_AGE), log }
+    pub fn new(source: Box<dyn Source>, dir: &Path) -> Api {
+        Api { source, keys: KeyRing::new(dir), state: IssueState::new(), resource: ResourceState::new(), fetch: crate::api_fetch::FetchCache::new(FETCH_MAX_AGE) }
     }
 
     /// 5.6: the org's view when it has a pinned unexpired map, this relay's origin in it and a pseudonym key; an org
@@ -378,47 +427,135 @@ impl Api {
         Some(Org::Live(OrgView { store, resource, local, issuer }))
     }
 
-    /// 6.5 source limiter, then the license (6.1): the refusal, if any.
-    fn admit(&self, req: &Req, now: i64) -> Option<Resp> {
-        if let Err(retry) = self.state.source_ok(req.source, now) {
-            let mut r = problem(429, "abuse", "Too many requests from this address; try again later.");
-            r.headers.push(("Retry-After", retry.max(1).to_string()));
-            return Some(r);
-        }
-        (!self.source.licensed()).then(license_refused)
+    /// 6.5 source limiter, then the license (6.1): the refusal, if any, in the org's chain first (9.4).
+    fn admit(&self, m: &Matched, req: &Req, rid: &str, now: i64) -> Option<Reply> {
+        let refused = match self.state.source_ok(req.source, now) {
+            Err(retry) => {
+                let mut r = res::problem(429, "abuse", "Too many requests from this address; try again later.");
+                r.headers.push(("Retry-After", retry.max(1).to_string()));
+                r
+            }
+            Ok(()) if !self.source.licensed() => license_refused(),
+            Ok(()) => return None,
+        };
+        let route = format!("{} {}", m.route.method, m.route.path.replace("{org}", m.org));
+        let audit = self.source.audit();
+        Some(res::public_refused(audit.as_deref(), m.org, &route, rid, req.source, refused, now))
     }
 
-    pub fn answer(&self, req: &Req, now: i64) -> Resp {
-        let Some(route) = route_of(req.method, req.path) else { return not_found() };
-        let org = match route {
-            Route::AsMetadata(o) | Route::ResourceMetadata(o) | Route::Jwks(o) | Route::Token(o) => o,
+    /// One request; every answer carries `X-Lucid-Request-Id` (the audit `rid` of its decision).
+    pub fn answer(&self, req: &Req, now: i64) -> Reply {
+        let rid = res::rid();
+        let mut r = self.route(req, &rid, now);
+        if !r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id") {
+            r.headers.push(("X-Lucid-Request-Id", rid));
+        }
+        r
+    }
+
+    /// A request refused before its route is known (a body this listener does not take, a path or method no route
+    /// has). Inside an org namespace the source limiter is charged first (429 `abuse` instead); then a known org's
+    /// refusal is in its chain (9.4; 503 when it cannot be), and one about an unknown org is a security line (unless
+    /// the limiter refused it, so a flood does not flood the log). Outside every namespace it is answered as is.
+    pub fn refuse_early(&self, method: &str, path: &str, source: IpAddr, refused: Reply, rid: &str, now: i64) -> Reply {
+        let mut r = match res::org_of(path) {
+            None => refused,
+            Some(org) => {
+                let r = res::charged(self.state.source_ok(source, now), refused);
+                if self.view(org, now).is_some() {
+                    let audit = self.source.audit();
+                    res::public_refused(audit.as_deref(), org, &res::namespace_route(method, org), rid, source, r, now)
+                } else {
+                    if r.status != 429 {
+                        let code = r.body.get("code").and_then(Value::as_str).unwrap_or("refused");
+                        let f = crate::log::Fields::new().with("org", org).with("code", code).with("source", crate::console_source::canonical(source).to_string());
+                        crate::console_meet::logger().security("api.refusal", &f, crate::log::Level::Warn);
+                    }
+                    r
+                }
+            }
         };
+        if !r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id") {
+            r.headers.push(("X-Lucid-Request-Id", rid.to_string()));
+        }
+        r
+    }
+
+    fn route(&self, req: &Req, rid: &str, now: i64) -> Reply {
+        let Some(m) = res::route_of(Side::Relay, req.method, req.path) else { return self.refuse_early(req.method, req.path, req.source, not_found(), rid, now) };
+        let org = m.org;
         let view = match self.view(org, now) {
             None => return not_found(),
             // 13: a map the license edition does not allow is set aside: every route of the org, documents included
-            Some(Org::SetAside) => return self.admit(req, now).unwrap_or_else(|| problem(403, "map-edition", "This organization's API map is not allowed under this relay's license edition.")),
+            Some(Org::SetAside) => {
+                return self.admit(&m, req, rid, now).unwrap_or_else(|| res::problem(403, "map-edition", "This organization's API map is not allowed under this relay's license edition."))
+            }
             Some(Org::Live(v)) => v,
         };
-        if let Route::Token(_) = route {
+        match m.route.id {
             // the token pipeline charges the source limiter and checks the license itself
-            return self.token(org, &view, req, now);
-        }
-        // 6.1 Public: org known, then the source limiter
-        if let Some(refused) = self.admit(req, now) {
-            return refused;
-        }
-        match route {
-            Route::AsMetadata(_) => public(api_issue::as_metadata(&view.local, &format!("{}/oauth/token", view.local), None, &format!("{}/jwks.json", view.local))),
-            Route::ResourceMetadata(_) => public(api_issue::resource_metadata(&view.resource, &[view.issuer.as_str(), view.local.as_str()], &LOCAL_SCOPES)),
-            _ => match self.signing(org, now) {
-                Ok((_, listed)) => public(api_issue::jwks(&listed.iter().map(|k| api_issue::ec_public_jwk(&k.pair, &k.kid)).collect::<Vec<_>>())),
-                Err(r) => r,
-            },
+            RouteId::LocalToken => self.token(org, &view, req, rid, now),
+            RouteId::LocalAsMetadata | RouteId::ResourceMetadata | RouteId::LocalJwks => {
+                // 6.1 Public: org known, then the source limiter
+                if let Some(refused) = self.admit(&m, req, rid, now) {
+                    return refused;
+                }
+                match m.route.id {
+                    RouteId::LocalAsMetadata => public(api_issue::as_metadata(&view.local, &format!("{}/oauth/token", view.local), None, &format!("{}/jwks.json", view.local))),
+                    RouteId::ResourceMetadata => public(api_issue::resource_metadata(&view.resource, &[view.issuer.as_str(), view.local.as_str()], &LOCAL_SCOPES)),
+                    _ => match self.signing(org, now) {
+                        Ok((_, listed)) => public(api_issue::jwks(&self.local_jwks(&listed))),
+                        Err(r) => r,
+                    },
+                }
+            }
+            RouteId::Health | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics => self.resource(&view, &m, req, rid, now),
+            // front door routes: not served here
+            RouteId::AsMetadata | RouteId::Jwks | RouteId::OpenApi | RouteId::Token | RouteId::Revoke | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay => not_found(),
         }
     }
 
-    fn signing(&self, org: &str, now: i64) -> Result<(Arc<LocalKey>, Vec<Arc<LocalKey>>), Resp> {
-        let unavailable = || problem(503, "unavailable", "This relay cannot issue tokens right now.");
+    fn local_jwks(&self, listed: &[Arc<LocalKey>]) -> Vec<Value> {
+        listed.iter().map(|k| api_issue::ec_public_jwk(&k.pair, &k.kid)).collect()
+    }
+
+    /// 7.2 resource routes: 6.2 (or the 6.1 scrape pipeline) and the route, audited (9.4), in `api_resource`.
+    fn resource(&self, view: &OrgView, m: &Matched, req: &Req, rid: &str, now: i64) -> Reply {
+        let (Some(audit), Some(id)) = (self.source.audit(), self.source.relay_id()) else { return res::audit_unavailable() };
+        // the local profile's keys: none while this relay cannot reach its sealed keys (local tokens then fail)
+        let local_keys = self.signing(m.org, now).map(|(_, listed)| self.local_jwks(&listed)).unwrap_or_default();
+        let owner_active = |p: &str| self.source.owner_active(p);
+        let data = Own { id: &id, source: &*self.source };
+        let site = Site {
+            side: Side::Relay,
+            relay: &id,
+            resource: &view.resource,
+            local: Some((view.local.as_str(), local_keys.as_slice())),
+            store: &view.store,
+            owner_active: &owner_active,
+            licensed: self.source.licensed(),
+            audit: &*audit,
+            state: &self.resource,
+            data: &data,
+            now,
+        };
+        let call = Call {
+            org: m.org,
+            route: m.route,
+            id: m.id,
+            path: req.path,
+            query: req.query,
+            authorization: req.authorization,
+            dpop: req.dpop,
+            cert: req.client_cert,
+            source: req.source,
+            rid,
+        };
+        res::answer(&site, &call)
+    }
+
+    fn signing(&self, org: &str, now: i64) -> Result<(Arc<LocalKey>, Vec<Arc<LocalKey>>), Reply> {
+        let unavailable = || res::problem(503, "unavailable", "This relay cannot issue tokens right now.");
         let vault = self.source.vault().ok_or_else(unavailable)?;
         self.keys.keys(org, &*vault, now).map_err(|e| {
             crate::meet::log_error(&format!("api local key org={org}: {e}"));
@@ -426,7 +563,8 @@ impl Api {
         })
     }
 
-    fn token(&self, org: &str, view: &OrgView, req: &Req, now: i64) -> Resp {
+    fn token(&self, org: &str, view: &OrgView, req: &Req, rid: &str, now: i64) -> Reply {
+        let Some(audit) = self.source.audit() else { return res::audit_unavailable() };
         let (key, _) = match self.signing(org, now) {
             Ok(k) => k,
             Err(r) => return r,
@@ -451,10 +589,8 @@ impl Api {
         };
         let http = TokenHttp { form: req.form, authorization: req.authorization, dpop: req.dpop, client_cert: req.client_cert, source: req.source };
         let a = api_issue::token(&ctx, &http);
-        if let Some((name, fields)) = &a.event {
-            (self.log)(name, fields);
-        }
-        Resp { status: a.status, ctype: "application/json", headers: a.headers, body: a.body }
+        let route = format!("POST /api/orgs/{org}/local/oauth/token");
+        Reply::of_answer(res::token_audited(&*audit, org, &route, rid, req.source, a, now))
     }
 }
 
@@ -470,16 +606,6 @@ struct Port {
     refusals: crate::meet_tls::RefusalLog,
 }
 
-/// The relay's security logger for an issuer event.
-fn security_line(name: &str, fields: &Value) {
-    let mut f = crate::log::Fields::new();
-    for (k, v) in fields.as_object().into_iter().flatten() {
-        f = f.with(k, v.clone());
-    }
-    let level = if name == "api.refusal" { crate::log::Level::Warn } else { crate::log::Level::Info };
-    crate::console_meet::logger().security(name, &f, level);
-}
-
 /// Start the API listener on its own thread (nothing when `api_listen` is off).
 pub fn start(relay: &Arc<Relay>) -> Result<(), String> {
     let s = &relay.settings;
@@ -491,7 +617,7 @@ pub fn start(relay: &Arc<Relay>) -> Result<(), String> {
     let tls = crate::meet_tls::api_tls_config(s)?;
     let listener = TcpListener::bind(listen.as_str()).map_err(|e| format!("cannot listen on {listen}: {e}"))?;
     let source = RelaySource { relay: Arc::downgrade(relay), dir: dir.clone() };
-    let api = Api::new(Box::new(source), &dir, Box::new(security_line));
+    let api = Api::new(Box::new(source), &dir);
     let port = Arc::new(Port { api, settings: s.clone(), tls, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: crate::meet_tls::RefusalLog::new() });
     std::thread::Builder::new()
         .name("relay-api-port".into())
@@ -583,22 +709,19 @@ fn serve(port: &Port, mut tcp: TcpStream, address: &str, ip: IpAddr) {
     let _ = tls.flush();
 }
 
-fn request_id() -> String {
-    let mut b = [0u8; 8];
-    let _ = aws_lc_rs::rand::fill(&mut b);
-    crate::codec::hex(&b)
-}
-
-fn write(w: &mut Tls, r: &Resp) -> std::io::Result<()> {
-    let body = serde_json::to_vec(&r.body).unwrap_or_default();
+fn write(w: &mut Tls, r: &Reply) -> std::io::Result<()> {
+    let body = r.bytes();
     let mut head = format!("HTTP/1.1 {} {}\r\nServer: {SERVER_VERSION}\r\nDate: {}\r\n", r.status, reason_phrase(r.status), http_date());
-    let fixed = [
+    let mut fixed = vec![
         ("Content-Type", r.ctype.to_string()),
         ("Content-Length", body.len().to_string()),
         ("X-Content-Type-Options", "nosniff".to_string()),
         ("Strict-Transport-Security", "max-age=31536000".to_string()),
-        ("X-Lucid-Request-Id", request_id()),
     ];
+    // 8.2: every answer carries a request id; one before any route (a malformed request) gets its own
+    if !r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id") {
+        fixed.push(("X-Lucid-Request-Id", res::rid()));
+    }
     for (k, v) in fixed.iter().map(|(k, v)| (*k, v)).chain(r.headers.iter().map(|(k, v)| (*k, v))) {
         head.push_str(&format!("{k}: {v}\r\n"));
     }
@@ -612,27 +735,29 @@ fn write(w: &mut Tls, r: &Resp) -> std::io::Result<()> {
 /// One request: Ok(false) when the connection closes after it.
 fn one(port: &Port, reader: &mut BufReader<Tls>, ip: IpAddr, cert: Option<&ClientCert>) -> std::io::Result<bool> {
     let Some(head) = read_head(reader)? else { return Ok(false) };
-    let (path, _query) = head.path_query();
+    let (path, query) = head.path_query();
+    // a body this listener does not take: refused before any route, through the namespace's limiter and chain
+    let early = |r: Reply| port.api.refuse_early(&head.method, &path, ip, r, &res::rid(), crate::meet_json::now() as i64);
     if head.header("transfer-encoding").is_some_and(|v| !v.is_empty()) {
-        write(reader.get_mut(), &problem(411, "bad-request", "Send the body with a Content-Length."))?;
+        write(reader.get_mut(), &early(res::problem(411, "bad-request", "Send the body with a Content-Length.")))?;
         return Ok(false);
     }
     let length = match head.header("content-length").map(|l| l.trim().parse::<usize>()) {
         None => 0,
         Some(Ok(n)) => n,
         Some(Err(_)) => {
-            write(reader.get_mut(), &problem(400, "bad-request", "The Content-Length is not a number."))?;
+            write(reader.get_mut(), &early(res::problem(400, "bad-request", "The Content-Length is not a number.")))?;
             return Ok(false);
         }
     };
     if length > BODY_MAX {
-        write(reader.get_mut(), &problem(413, "too-large", "The body is larger than 16 KiB."))?;
+        write(reader.get_mut(), &early(res::problem(413, "too-large", "The body is larger than 16 KiB.")))?;
         return Ok(false);
     }
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body)?;
     let (authorization, dpop) = (head.header("authorization"), head.header("dpop"));
-    let req = Req { method: &head.method, path: &path, form: &body, authorization: authorization.as_deref(), dpop: dpop.as_deref(), client_cert: cert, source: ip };
+    let req = Req { method: &head.method, path: &path, query: &query, form: &body, authorization: authorization.as_deref(), dpop: dpop.as_deref(), client_cert: cert, source: ip };
     let resp = port.api.answer(&req, crate::meet_json::now() as i64);
     write(reader.get_mut(), &resp)?;
     Ok(!head.close)
@@ -641,6 +766,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, ip: IpAddr, cert: Option<&Clien
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_audit::ApiAudit;
     use crate::api_map::VerifiedApiMap;
     use crate::fleet_ca::MemVault;
 
@@ -657,9 +783,45 @@ mod tests {
         vault: Arc<parking_lot::Mutex<MemVault>>,
         pseudonym: bool,
         licensed: bool,
+        audit: Arc<ApiAudit>,
+    }
+
+    struct NoSigner;
+    impl crate::api_audit::CheckpointSigner for NoSigner {
+        fn kid(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn sign(&self, _: &str, _: &[u8]) -> Option<Vec<u8>> {
+            None
+        }
+        fn certs(&self, _: &str) -> Vec<Value> {
+            Vec::new()
+        }
+    }
+
+    struct Keys;
+    impl crate::api_audit::PseudonymKeys for Keys {
+        fn current(&self, _: &str) -> Option<(u32, Vec<u8>)> {
+            Some((1, vec![5; 32]))
+        }
+    }
+
+    /// The actions in this relay's `as_is` chain for the org.
+    fn actions(audit: &ApiAudit) -> Vec<String> {
+        let page = audit.read("acme", "r_01", crate::api_audit::Repr::AsIs, 0, 1000).unwrap();
+        page["entries"].as_array().into_iter().flatten().filter_map(|e| e["action"].as_str().map(str::to_string)).collect()
     }
 
     impl Source for TestSource {
+        fn audit(&self) -> Option<Arc<dyn AuditLog>> {
+            Some(self.audit.clone() as Arc<dyn AuditLog>)
+        }
+        fn console_connected(&self) -> bool {
+            false
+        }
+        fn product(&self) -> Product {
+            Product::Meet
+        }
         fn relay_id(&self) -> Option<String> {
             Some("r_01".into())
         }
@@ -705,34 +867,39 @@ mod tests {
         s
     }
 
-    fn api_with(origins: Value, pseudonym: bool, licensed: bool, dir: &Path) -> (Api, EcdsaKeyPair, Arc<Mutex<Vec<(String, Value)>>>) {
+    fn api_with(origins: Value, pseudonym: bool, licensed: bool, dir: &Path) -> (Api, EcdsaKeyPair, Arc<ApiAudit>) {
         let key = client_key();
-        let source = TestSource { store: store(&key, origins), vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym, licensed };
-        let lines = Arc::new(Mutex::new(Vec::new()));
-        let sink = lines.clone();
-        let api = Api::new(Box::new(source), dir, Box::new(move |n: &str, v: &Value| sink.lock().push((n.to_string(), v.clone()))));
-        (api, key, lines)
+        let audit = Arc::new(ApiAudit::open(Some(dir.join(format!("chains-{}", res::rid())).as_path()), "r_01", Arc::new(NoSigner), Arc::new(Keys), NOW));
+        let source = TestSource { store: store(&key, origins), vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym, licensed, audit: audit.clone() };
+        (Api::new(Box::new(source), dir), key, audit)
     }
 
-    fn api(dir: &Path) -> (Api, EcdsaKeyPair, Arc<Mutex<Vec<(String, Value)>>>) {
+    fn api(dir: &Path) -> (Api, EcdsaKeyPair, Arc<ApiAudit>) {
         api_with(json!({"r_01": ORIGIN}), true, true, dir)
+    }
+
+    /// A DPoP proof under `pair` for `htm` and `htu` (and `ath` of `token` when given).
+    fn proof_by(pair: &EcdsaKeyPair, htm: &str, htu: &str, token: Option<&str>) -> String {
+        let point = pair.public_key().as_ref();
+        let jwk = json!({"kty": "EC", "crv": "P-256", "x": crate::codec::b64u(&point[1..33]), "y": crate::codec::b64u(&point[33..65])});
+        let mut claims = json!({"jti": res::rid(), "htm": htm, "htu": htu, "iat": NOW});
+        if let Some(t) = token {
+            claims["ath"] = json!(crate::codec::b64u(&crate::codec::sha256(t.as_bytes())));
+        }
+        crate::api_token::sign_es256(pair, &json!({"typ": "dpop+jwt", "alg": "ES256", "jwk": jwk}), &claims).unwrap()
     }
 
     /// A DPoP proof for the local token endpoint under a fresh key.
     fn dpop_proof() -> String {
-        let pair = client_key();
-        let point = pair.public_key().as_ref();
-        let jwk = json!({"kty": "EC", "crv": "P-256", "x": crate::codec::b64u(&point[1..33]), "y": crate::codec::b64u(&point[33..65])});
-        let claims = json!({"jti": request_id(), "htm": "POST", "htu": format!("{L}/oauth/token"), "iat": NOW});
-        crate::api_token::sign_es256(&pair, &json!({"typ": "dpop+jwt", "alg": "ES256", "jwk": jwk}), &claims).unwrap()
+        proof_by(&client_key(), "POST", &format!("{L}/oauth/token"), None)
     }
 
     fn token_req<'a>(form: &'a str, dpop: Option<&'a str>) -> Req<'a> {
-        Req { method: "POST", path: "/api/orgs/acme/local/oauth/token", form: form.as_bytes(), authorization: None, dpop, client_cert: None, source: "10.40.0.7".parse().unwrap() }
+        Req { method: "POST", path: "/api/orgs/acme/local/oauth/token", query: "", form: form.as_bytes(), authorization: None, dpop, client_cert: None, source: "10.40.0.7".parse().unwrap() }
     }
 
     fn get<'a>(path: &'a str) -> Req<'a> {
-        Req { method: "GET", path, form: b"", authorization: None, dpop: None, client_cert: None, source: "10.40.0.7".parse().unwrap() }
+        Req { method: "GET", path, query: "", form: b"", authorization: None, dpop: None, client_cert: None, source: "10.40.0.7".parse().unwrap() }
     }
 
     fn enc(s: &str) -> String {
@@ -741,7 +908,7 @@ mod tests {
 
     fn token_form(key: &EcdsaKeyPair, scope: &str) -> String {
         let header = json!({"alg": "ES256", "typ": "JWT", "kid": "k1"});
-        let claims = json!({"iss": "c_mon", "sub": "c_mon", "aud": format!("{L}/oauth/token"), "iat": NOW, "exp": NOW + 60, "jti": request_id()});
+        let claims = json!({"iss": "c_mon", "sub": "c_mon", "aud": format!("{L}/oauth/token"), "iat": NOW, "exp": NOW + 60, "jti": res::rid()});
         let assertion = crate::api_token::sign_es256(key, &header, &claims).unwrap();
         format!(
             "grant_type=client_credentials&client_id=c_mon&client_assertion_type={}&client_assertion={assertion}&scope={}&resource={}",
@@ -766,7 +933,7 @@ mod tests {
     }
 
     fn tmp() -> Tmp {
-        let d = std::env::temp_dir().join(format!("lucid-api-listener-{}", request_id()));
+        let d = std::env::temp_dir().join(format!("lucid-api-listener-{}", res::rid()));
         std::fs::create_dir_all(&d).unwrap();
         Tmp(d)
     }
@@ -792,12 +959,48 @@ mod tests {
             "/.well-known/oauth-protected-resource/api/orgs/beta",
             "/.well-known/oauth-authorization-server/api/orgs/beta/local",
             "/api/orgs/beta/local/jwks.json",
-            "/api/orgs/acme/v1/health",
+            "/api/orgs/beta/v1/health",
+            "/api/orgs/acme/v1/capacity",
+            "/api/orgs/acme/v1/openapi.json",
             "/",
             "/.well-known/oauth-protected-resource/api/orgs/acme/extra",
         ] {
             let r = api.answer(&get(path), NOW);
             assert_eq!((r.status, r.body["code"].as_str()), (404, Some("not-found")), "{path}");
+        }
+    }
+
+    #[test]
+    fn refusals_before_the_route_charge_the_limiter_and_reach_the_orgs_chain() {
+        let dir = tmp();
+        let (api, _, audit) = api(dir.path());
+        let ip: IpAddr = "10.40.0.9".parse().unwrap();
+        let rid = res::rid();
+        // a body the listener does not take, inside a known org's namespace
+        let r = api.refuse_early("POST", "/api/orgs/acme/local/oauth/token", ip, res::problem(413, "too-large", "Too large."), &rid, NOW);
+        assert_eq!((r.status, r.body["code"].as_str()), (413, Some("too-large")));
+        assert!(r.headers.iter().any(|(k, v)| *k == "X-Lucid-Request-Id" && *v == rid));
+        // a method no route has
+        let wrong = Req { method: "DELETE", path: "/api/orgs/acme/v1/health", query: "", form: b"", authorization: None, dpop: None, client_cert: None, source: ip };
+        assert_eq!(api.answer(&wrong, NOW).status, 404);
+        // both are in the org's chain (unauthenticated: summarized per source from the first)
+        audit.tick(NOW + 120);
+        let page = audit.read("acme", "r_01", crate::api_audit::Repr::AsIs, 0, 1000).unwrap();
+        let checks: Vec<&str> = page["entries"].as_array().unwrap().iter().filter_map(|e| e["check"].as_str()).collect();
+        assert!(checks.contains(&"too-large") && checks.contains(&"not-found"), "{checks:?}");
+        // the source limiter is charged first: 120 a minute, every early refusal counted
+        for _ in 2..api_issue::SOURCE_PER_MINUTE {
+            assert_eq!(api.refuse_early("POST", "/api/orgs/acme/v1/health", ip, res::problem(411, "bad-request", "No."), &res::rid(), NOW).status, 411);
+        }
+        let r = api.refuse_early("POST", "/api/orgs/acme/v1/health", ip, res::problem(411, "bad-request", "No."), &res::rid(), NOW);
+        assert_eq!((r.status, r.body["code"].as_str()), (429, Some("abuse")));
+        assert!(r.headers.iter().any(|(k, _)| *k == "Retry-After"));
+        // an unknown org's refusal is in no chain; outside every namespace nothing is charged
+        let other: IpAddr = "10.40.0.10".parse().unwrap();
+        assert_eq!(api.refuse_early("POST", "/api/orgs/beta/v1/health", other, res::problem(411, "bad-request", "No."), &res::rid(), NOW).status, 411);
+        assert!(audit.read("beta", "r_01", crate::api_audit::Repr::AsIs, 0, 10).unwrap()["entries"].as_array().unwrap().is_empty());
+        for _ in 0..200 {
+            assert_eq!(api.refuse_early("GET", "/", ip, res::problem(404, "not-found", "No."), &res::rid(), NOW).status, 404);
         }
     }
 
@@ -819,9 +1022,10 @@ mod tests {
         let key = client_key();
         let mut aside = store(&key, json!({"r_01": ORIGIN}));
         assert_eq!(aside.revalidate(None), ["acme"]);
-        let source = TestSource { store: aside, vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym: true, licensed: true };
-        let api = Api::new(Box::new(source), dir.path(), Box::new(|_: &str, _: &Value| {}));
-        for path in ["/.well-known/oauth-protected-resource/api/orgs/acme", "/.well-known/oauth-authorization-server/api/orgs/acme/local", "/api/orgs/acme/local/jwks.json"] {
+        let audit = Arc::new(ApiAudit::open(Some(dir.path().join("chains").as_path()), "r_01", Arc::new(NoSigner), Arc::new(Keys), NOW));
+        let source = TestSource { store: aside, vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym: true, licensed: true, audit };
+        let api = Api::new(Box::new(source), dir.path());
+        for path in ["/.well-known/oauth-protected-resource/api/orgs/acme", "/.well-known/oauth-authorization-server/api/orgs/acme/local", "/api/orgs/acme/local/jwks.json", "/api/orgs/acme/v1/health"] {
             let r = api.answer(&get(path), NOW);
             assert_eq!((r.status, r.body["code"].as_str()), (403, Some("map-edition")), "{path}");
         }
@@ -867,7 +1071,7 @@ mod tests {
     #[test]
     fn local_token_issued_for_the_read_scopes_only() {
         let dir = tmp();
-        let (api, key, lines) = api(dir.path());
+        let (api, key, audit) = api(dir.path());
         let (form, proof) = (token_form(&key, "monitor.read audit.read"), dpop_proof());
         let r = api.answer(&token_req(&form, Some(&proof)), NOW);
         assert_eq!(r.status, 200, "{}", r.body);
@@ -883,20 +1087,55 @@ mod tests {
         let mut scopes: Vec<&str> = r.body["scope"].as_str().unwrap_or_default().split(' ').collect();
         scopes.sort_unstable();
         assert_eq!(scopes, ["audit.read", "monitor.read"]);
-        assert!(lines.lock().iter().any(|(n, _)| n == "api.token"));
+        // 9.4: the token was in the chain before it was released, under the answer's request id
+        assert_eq!(actions(&audit), ["api.token"]);
+        assert!(r.headers.iter().any(|(k, v)| *k == "X-Lucid-Request-Id" && v.len() == 22));
+    }
+
+    #[test]
+    fn local_token_reads_this_relays_health_and_audit_chain() {
+        let dir = tmp();
+        let (api, key, audit) = api(dir.path());
+        let holder = client_key();
+        let token_endpoint = format!("{L}/oauth/token");
+        let form = token_form(&key, "monitor.read audit.read");
+        let proof = proof_by(&holder, "POST", &token_endpoint, None);
+        let r = api.answer(&token_req(&form, Some(&proof)), NOW);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let token = r.body["access_token"].as_str().unwrap().to_string();
+        let authorization = format!("DPoP {token}");
+        let call = |path: &'static str| {
+            let p = proof_by(&holder, "GET", &format!("{ORIGIN}{path}"), Some(&token));
+            let req = Req { method: "GET", path, query: "", form: b"", authorization: Some(authorization.as_str()), dpop: Some(p.as_str()), client_cert: None, source: "10.40.0.7".parse().unwrap() };
+            api.answer(&req, NOW)
+        };
+        let health = call("/api/orgs/acme/v1/health");
+        assert_eq!(health.status, 200, "{}", health.body);
+        assert_eq!((health.body["console"].as_str(), health.body["mode"].as_str()), (Some("unreachable"), Some("normal")));
+        assert_eq!(health.body["relays"][0]["id"], "r_01");
+        // the local profile: internal ceiling reads the pseudonymized chain of this relay
+        let page = call("/api/orgs/acme/v1/audit");
+        assert_eq!(page.status, 200, "{}", page.body);
+        assert_eq!(page.body["repr"], "pseudonymized");
+        let metrics = call("/api/orgs/acme/v1/metrics");
+        assert_eq!(metrics.status, 200);
+        assert!(metrics.text.as_deref().is_some_and(|t| t.contains("lucid_relay_up{relay=\"r_01\"") && !t.contains("lucid_console_info")));
+        assert_eq!(actions(&audit).iter().filter(|a| *a == "api.call").count(), 3);
+        // without a token: refused 401 and recorded
+        assert_eq!(api.answer(&get("/api/orgs/acme/v1/health"), NOW).status, 401);
     }
 
     #[test]
     fn local_token_refuses_a_scope_outside_the_four() {
         let dir = tmp();
-        let (api, key, lines) = api(dir.path());
+        let (api, key, audit) = api(dir.path());
         // people.read is in the client's grant but not among the four the local issuer mints
         let (form, proof) = (token_form(&key, "people.read"), dpop_proof());
         let r = api.answer(&token_req(&form, Some(&proof)), NOW);
         assert_eq!(r.status, 400, "{}", r.body);
         assert_eq!(r.body["error"], "invalid_scope");
         assert!(r.body.get("access_token").is_none());
-        assert!(lines.lock().iter().any(|(n, _)| n == "api.refusal"));
+        assert_eq!(actions(&audit), ["api.refusal"]);
     }
 
     #[test]

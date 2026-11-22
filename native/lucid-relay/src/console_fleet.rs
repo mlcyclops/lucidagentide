@@ -767,6 +767,11 @@ pub struct Fleet {
     /// API-1: the org api maps, tightening journals and pseudonym keys this console holds and delivers (2.4 to 2.6),
     /// and the relay grace of the fleet verifier (3.4).
     pub api: Arc<crate::console_api::ConsoleApi>,
+    /// API-1 9: the console's API audit chains (source `console`, and the relays' chains as received), checkpoints
+    /// signed by per-org keys certified by the Meet CA.
+    api_audit: Arc<crate::api_audit::ApiAudit>,
+    /// API-1 6.5: the front door's resource and public pipeline limiters and DPoP cache.
+    pub api_state: crate::api_resource::ResourceState,
 }
 
 /// A request as the fleet section sees it (console.rs builds it after the role, origin and size checks).
@@ -1072,10 +1077,24 @@ impl Fleet {
         // AC-2b-D 8.3: the CA's files and its sealed key; a CA whose key does not unseal opens `lost`.
         let meet = with_vault(console, |v| crate::meet_ca::MeetCa::open(&state_dir, &*v));
         let api = Arc::new(crate::console_api::ConsoleApi::open(Some(&state_dir), logger.clone(), Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console)))));
-        let _ = t;
+        let mut issue: Option<crate::api_checkpoint::IssueFn> = None;
         let fleet = Arc::new_cyclic(|weak: &Weak<Fleet>| {
             let bridge: Arc<dyn crate::fleet_people::PeopleHost> = Arc::new(PeopleBridge { fleet: weak.clone() });
             let people = Arc::new(crate::fleet_people::People::new(bridge));
+            // API-1 9.3: checkpoint certificates (the console's own and the relays') come from the Meet CA
+            let w = weak.clone();
+            let issuer: crate::api_checkpoint::IssueFn = Arc::new(move |holder: &str, org: &str, csr: &[u8], at: i64| {
+                let f = w.upgrade().ok_or_else(|| "the console is stopping".to_string())?;
+                let c = f.console().map_err(|e| e.message)?;
+                let mut g = f.meet.lock();
+                let ca = g.as_mut().filter(|m| m.state() == crate::meet_ca::CaState::Ok).ok_or_else(|| "deploy-ca-needed".to_string())?;
+                let issued = with_vault(&c, |v| ca.issue_checkpoint(&*v, holder, org, csr, at)).map_err(|e| e.message)?;
+                Ok((issued.der, vec![ca.ca_der().to_vec()]))
+            });
+            issue = Some(issuer.clone());
+            let signer = crate::api_checkpoint::ConsoleCheckpoints::new(&state_dir, Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console))), issuer);
+            let pseudonym = Arc::new(crate::console_api::ConsolePseudonymKeys(Arc::downgrade(&api)));
+            let api_audit = Arc::new(crate::api_audit::ApiAudit::open(Some(state_dir.as_path()), "console", Arc::new(signer), pseudonym, t.div_euclid(1000)));
             Fleet {
                 console: Arc::downgrade(console),
                 state_dir,
@@ -1095,11 +1114,38 @@ impl Fleet {
                 meet: Mutex::new(meet),
                 crl_failing: Mutex::new(false),
                 diverge_seen: Mutex::new(HashMap::new()),
-                api,
+                api: api.clone(),
+                api_audit,
+                api_state: crate::api_resource::ResourceState::new(),
             }
         });
+        // API-1 2.6, 9.3: relay chains received through `api-audit`, relay checkpoint certificates issued in catch-up
+        if let Some(issue) = issue {
+            api.set_audit(fleet.api_audit.clone(), issue);
+        }
+        for n in fleet.api_audit.take_notes() {
+            logger.security("api.audit.note", &Fields::new().with("note", n), Level::Warn);
+        }
+        // API-1 9.3, 9.4: minute buckets, checkpoints and retention every 10 s
+        let w = Arc::downgrade(&fleet);
+        let notes = logger.clone();
+        crate::api_resource::spawn_ticker(
+            "console-api-audit",
+            Box::new(move || w.upgrade().map(|f| f.api_audit.clone())),
+            Box::new(move |n: &str| notes.security("api.audit.note", &Fields::new().with("note", n), Level::Warn)),
+        )?;
         console.attach_fleet(fleet.clone());
         Ok(fleet)
+    }
+
+    /// API-1 9: the console's API audit chains.
+    pub fn api_audit(&self) -> Arc<crate::api_audit::ApiAudit> {
+        self.api_audit.clone()
+    }
+
+    /// API-1 7.1: the front door's view of the org's relays (registry, metrics, health) for the resource routes.
+    pub fn api_data(&self) -> FleetData<'_> {
+        FleetData { fleet: self }
     }
 
     pub fn console_id(&self) -> String {
@@ -3279,6 +3325,10 @@ impl Fleet {
     /// relays' `read-health` counts refreshed, people's cache checked, the `roster-behind` clock.
     pub fn tick(&self, c: &Console, t: i64) {
         self.expire_pending(t);
+        // API-1 9.3, 12.2: checkpoint certificate renewal and resumed `api-chains` backfills (on their own threads)
+        if let Some(link) = self.link.get().cloned() {
+            self.api.audit_tick(link, t.div_euclid(1000));
+        }
         for s in self.metrics.take_summaries(t) {
             self.record(c, &format!("relay {}", s.relay), "fleet.metrics-refused", Some(s.relay.clone()), json!({ "relay": s.relay, "count": s.count, "why": s.why }), t);
         }
@@ -5629,6 +5679,103 @@ impl Console {
             headers.push(("Retry-After", s.to_string()));
         }
         crate::console::ConsoleReply { status: a.status, content_type: a.content_type, body: a.body, headers, close: false }
+    }
+}
+
+// ── API-1 7.1: the front door's view of an org's relays ────────────────────────────────────────────────────────
+
+/// The org's relays as the front door's resource routes report them: the relays that serve the org
+/// (`ConsoleApi::relays_of`) and are live in the registry, with the registry's own values, the latest accepted
+/// metrics snapshot and the health of 8.2.
+pub struct FleetData<'a> {
+    fleet: &'a Fleet,
+}
+
+impl FleetData<'_> {
+    fn records(&self, org: &str) -> Vec<RelayRecord> {
+        let ids = self.fleet.api.relays_of(org);
+        let reg = self.fleet.registry.lock();
+        ids.iter().filter_map(|id| reg.relays.get(id).filter(|r| r.state.live()).cloned()).collect()
+    }
+
+    fn row(&self, r: &RelayRecord, t: i64) -> crate::fleet_export::RelayRow {
+        let connected = self.fleet.connected(&r.id);
+        let latest = self.fleet.metrics.latest(&r.id);
+        let code = |k: &str| latest.as_ref().and_then(|l| l.m.get(k).and_then(Value::as_i64));
+        crate::fleet_export::RelayRow {
+            id: r.id.clone(),
+            name: r.name.clone(),
+            site: r.site.clone(),
+            product: r.product,
+            connected,
+            last_contact_ms: r.last_contact_at,
+            health: self.fleet.health(r, connected, t).to_owned(),
+            license_state: code("license_state"),
+            license_service: code("license_service"),
+        }
+    }
+}
+
+/// The days left of the certificates a relay reports (9.1 `cert_*_days`, `crl_days`, `license_days`), and of its
+/// current fleet certificate from the registry.
+fn certificates_of(r: &RelayRecord, m: &Map<String, Value>, t: i64) -> Vec<Value> {
+    let reported = [("tls", "cert_tls_days"), ("console", "cert_console_days"), ("mgmt", "cert_mgmt_days"), ("signer", "cert_signer_days"), ("crl", "crl_days"), ("license", "license_days")];
+    let mut out: Vec<Value> = reported.iter().filter_map(|(name, k)| m.get(*k).and_then(Value::as_i64).map(|d| json!({"name": name, "days_left": d}))).collect();
+    out.extend(r.serials.iter().filter(|s| s.current).map(|s| json!({"name": "fleet", "serial": s.serial, "days_left": (s.not_after - t).div_euclid(86_400_000)})));
+    out
+}
+
+impl crate::api_resource::Data for FleetData<'_> {
+    fn relays(&self, org: &str, now: i64) -> Vec<crate::api_resource::RelayInfo> {
+        let t = now.saturating_mul(1000);
+        self.records(org)
+            .iter()
+            .map(|r| {
+                let row = self.row(r, t);
+                let latest = self.fleet.metrics.latest(&r.id);
+                let up = row.connected && latest.as_ref().is_some_and(|l| t - l.t <= crate::fleet_export::UP_WINDOW_MS);
+                let m = latest.map(|l| l.m).unwrap_or_default();
+                let license = row.license_state.and_then(|c| usize::try_from(c).ok()).and_then(|c| crate::fleet_export::LICENSE_STATES.get(c)).copied().unwrap_or_default();
+                crate::api_resource::RelayInfo {
+                    id: r.id.clone(),
+                    name: r.name.clone(),
+                    region: r.site.clone(),
+                    version: r.version.clone(),
+                    fips: r.fips,
+                    license_state: license.to_string(),
+                    up,
+                    health: row.health,
+                    last_contact_s: r.last_contact_at.map(|at| (t - at).max(0) / 1000),
+                    certificates: certificates_of(r, &m, t),
+                    latest: m,
+                }
+            })
+            .collect()
+    }
+
+    fn ids(&self, org: &str) -> Vec<String> {
+        self.records(org).into_iter().map(|r| r.id).collect()
+    }
+
+    fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+        let t = now.saturating_mul(1000);
+        let rows: Vec<crate::fleet_export::RelayRow> = self.records(org).iter().filter(|r| ids.contains(&r.id)).map(|r| self.row(r, t)).collect();
+        let snaps: Vec<crate::fleet_export::Snap> = rows
+            .iter()
+            .map(|r| {
+                let latest = self.fleet.metrics.latest(&r.id);
+                let totals = self.fleet.metrics.totals(&r.id).into_iter().map(|(i, x)| (crate::fleet_metrics::KEYS[i].key.to_owned(), crate::fleet_probe::number(x))).collect();
+                crate::fleet_export::Snap { t: latest.as_ref().map(|l| l.t), latest: latest.map(|l| l.m).unwrap_or_default(), totals }
+            })
+            .collect();
+        let high = self.fleet.console().is_ok_and(|c| c.high_profile());
+        let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: if high { "high" } else { "standard" }, fips: cfg!(feature = "fips") };
+        let named: Vec<&crate::fleet_export::RelayRow> = rows.iter().collect();
+        crate::fleet_export::exposition(&console, &named, &snaps, t)
+    }
+
+    fn console(&self) -> Value {
+        json!({"version": env!("CARGO_PKG_VERSION"), "fips": cfg!(feature = "fips")})
     }
 }
 

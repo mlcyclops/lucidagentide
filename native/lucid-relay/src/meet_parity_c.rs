@@ -1088,11 +1088,20 @@ impl State {
     /// URIs; a connector: the org the bridge configuration gives its principal; a person: every org whose newest
     /// policy's `domains` hold its email domain, plus its `organizations` org). No org, or another kind: `not_after`.
     pub(crate) fn api_cert_end(&mut self, kind: &str, principal: &str, orgs: &[String], not_after: i64, now: i64) -> i64 {
+        let Some((grace_kind, bound)) = self.api_cert_orgs(kind, principal, orgs) else { return not_after };
+        let maps = self.api_maps();
+        let hours: Vec<Option<u32>> = bound.iter().map(|o| maps.grace_hours(o, grace_kind, now)).collect();
+        crate::api_map::effective_end(not_after, &hours)
+    }
+
+    /// API-1 3.3: the grace kind and the sorted orgs that bind a Meet certificate (see `api_cert_end`); None for a
+    /// kind no grace applies to.
+    pub(crate) fn api_cert_orgs(&mut self, kind: &str, principal: &str, orgs: &[String]) -> Option<(&'static str, Vec<String>)> {
         let relay_org = || match self.org(principal) {
             Value::Object(o) => o.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string),
             _ => None,
         };
-        let (grace_kind, mut bound): (&str, Vec<String>) = match kind {
+        let (grace_kind, mut bound): (&'static str, Vec<String>) = match kind {
             "app" | "archive" | "sso" => ("app", orgs.to_vec()),
             "connector" => ("connector", relay_org().into_iter().collect()),
             "person" => {
@@ -1106,13 +1115,11 @@ impl State {
                 }
                 ("person", bound)
             }
-            _ => return not_after,
+            _ => return None,
         };
         bound.sort();
         bound.dedup();
-        let maps = self.api_maps();
-        let hours: Vec<Option<u32>> = bound.iter().map(|o| maps.grace_hours(o, grace_kind, now)).collect();
-        crate::api_map::effective_end(not_after, &hours)
+        Some((grace_kind, bound))
     }
 
     /// The AI map the org's current policy names (the one devices and the gateway use), if the relay holds it.
@@ -2613,11 +2620,22 @@ impl Hub {
             }
             st.api_accept(signed, edition)
         })();
+        let dir = st.pc.state_dir.clone();
         drop(st);
+        // API-1 9.2: a new pin and a conflict go into the org's audit chain
         let vm = match r? {
-            crate::api_map::AcceptOutcome::Pinned(vm) | crate::api_map::AcceptOutcome::Unchanged(vm) => vm,
+            crate::api_map::AcceptOutcome::Pinned(vm) => {
+                let (org, mut e) = crate::fleet_agent::api_note_pinned(&vm);
+                e["principal"] = Value::from(who.principal.clone());
+                self.api_record(dir.as_deref(), vec![(org, e)]);
+                vm
+            }
+            crate::api_map::AcceptOutcome::Unchanged(vm) => vm,
             crate::api_map::AcceptOutcome::Conflict { org, seq, pinned_hash, offered_hash } => {
                 log_warn(&format!("api.map.conflict org={org} seq={seq} pinned={pinned_hash} offered={offered_hash} by={}", who.principal));
+                let (o, mut e) = crate::fleet_agent::api_note_conflict(&org, seq, None);
+                e["principal"] = Value::from(who.principal.clone());
+                self.api_record(dir.as_deref(), vec![(o, e)]);
                 return Err(E::Coded(409, "conflict", format!("{org}'s api map {seq} was seen with two different hashes")));
             }
         };
@@ -2632,6 +2650,15 @@ impl Hub {
             Some(hub) => hub.st.lock().api_cert_end(&g.kind, &g.principal, &g.orgs, g.not_after, now),
             None => g.not_after,
         })
+    }
+
+    /// API-1 3.3, 9.2: the orgs whose grace admits a Meet certificate past its `notAfter` (each binding org whose
+    /// pinned map gives a grace for its kind), where its `cert.grace-used` entry goes.
+    pub fn api_grace_orgs(&self, kind: &str, principal: &str, orgs: &[String], now: i64) -> Vec<String> {
+        let mut st = self.st.lock();
+        let Some((grace_kind, bound)) = st.api_cert_orgs(kind, principal, orgs) else { return Vec::new() };
+        let maps = st.api_maps();
+        bound.into_iter().filter(|o| maps.grace_hours(o, grace_kind, now).is_some_and(|h| h > 0)).collect()
     }
 
     // ── API-1: the fleet channel's api ops (docs/api/contract.md 2.4 to 2.6) ──
@@ -2653,15 +2680,17 @@ impl Hub {
         Value::Object(heads)
     }
 
-    /// The fleet requests `api-map` and `api-tighten` (2.6), answered only after the store is flushed to disk.
+    /// The fleet requests `api-map` and `api-tighten` (2.6), answered only after the store is flushed to disk; a new
+    /// pin, a conflict, a rebase and an applied tightening go into the org's audit chain (9.2) with the lock released.
     pub fn api_fleet_request(&self, op: &str, body: &Value) -> Result<Value, crate::fleet_wire::Refusal> {
         let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
         let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut notes = Vec::new();
         let mut st = self.st.lock();
         if !Self::api_served(&st).contains(org) {
             return Err(crate::fleet_wire::Refusal::new(403, "org-not-served", "This relay does not serve that organization."));
         }
-        match op {
+        let answer = match op {
             "api-map" => {
                 if body.get("map").and_then(|m| m.get("map")).and_then(|m| m.get("org")).and_then(Value::as_str) != Some(org) {
                     return Err(crate::fleet_wire::Refusal::new(400, "bad-map", "The api map is for another organization."));
@@ -2670,11 +2699,24 @@ impl Hub {
                     E::Coded(_, code, msg) => crate::api_map::ApiMapError::new(code, msg),
                     other => crate::api_map::ApiMapError::new("bad-map", format!("{other:?}")),
                 });
-                crate::fleet_agent::api_map_pinned(r, st.api_maps(), body, &crate::console_meet::logger())
+                crate::fleet_agent::api_map_pinned(r, st.api_maps(), body, &crate::console_meet::logger(), &mut notes)
             }
-            "api-tighten" => crate::fleet_agent::api_tighten_answer(st.api_maps(), body),
+            "api-tighten" => crate::fleet_agent::api_tighten_answer(st.api_maps(), body, &mut notes),
             _ => Err(crate::fleet_wire::Refusal::of("fleet-op")),
+        };
+        let dir = st.pc.state_dir.clone();
+        drop(st);
+        self.api_record(dir.as_deref(), notes);
+        answer
+    }
+
+    /// Record api notes in this relay's own chains (`fleet_agent::api_audit_of` its state folder).
+    fn api_record(&self, dir: Option<&std::path::Path>, notes: Vec<crate::fleet_agent::ApiNote>) {
+        if notes.is_empty() {
+            return;
         }
+        let audit = dir.and_then(crate::fleet_agent::api_audit_of);
+        crate::fleet_agent::api_record(audit.as_deref(), notes, &crate::console_meet::logger(), pj::now() as i64);
     }
 
     /// The API listener's view of one org (5.6): a read-only copy of its api state taken under the lock, None when

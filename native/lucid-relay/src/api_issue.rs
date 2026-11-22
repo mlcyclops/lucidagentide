@@ -4,8 +4,8 @@
 //
 // The caller selects the org from the request path (never by searching maps), hands over a read-only snapshot of
 // that org's store (a JWKS or discovery fetch may block, so no store lock is held across a call), the issuer's
-// signing key, and logs `Answer.event` as a security line (`api.token`, `api.revoke`, `api.refusal`): the 9.4 audit
-// chain arrives in slice 1a3.
+// signing key, and appends `Answer.event` (`api.token`, `api.revoke`, `api.refusal`) to the org's 9.4 audit chain
+// before it releases the answer (`api_resource::token_audited`; a revocation is audited inside its journal call).
 
 use crate::api_fetch::{check_url, FetchCache, Limits};
 use crate::api_map::{effective_end, ApiMapStore, TightenEntry, CEILINGS};
@@ -71,7 +71,7 @@ impl IssueState {
     /// is the seconds until the oldest request leaves the window (`Retry-After`). `token` and `revoke` charge it
     /// themselves; the public documents call it after the org is known.
     pub fn source_ok(&self, ip: IpAddr, now: i64) -> Result<(), i64> {
-        take(&self.sources, &crate::console_source::source_key(ip), SOURCE_PER_MINUTE, now).map_err(|l| match l {
+        take(&self.sources, &crate::console_source::source_key(ip), SOURCE_PER_MINUTE, now).map(|_| ()).map_err(|l| match l {
             Limit::Wait(s) => s,
             Limit::Full => MINUTE,
         })
@@ -93,7 +93,7 @@ impl IssueState {
 
 /// Why a window refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Limit {
+pub(crate) enum Limit {
     /// The key's window is full: the seconds until a place frees.
     Wait(i64),
     /// The map already holds `WINDOW_KEYS` live keys after the stale ones were swept: a new key is refused, so a flood
@@ -103,7 +103,7 @@ enum Limit {
 
 /// Take one place in a one-day sliding window kept as per-minute counts (at most 1440 per key); a minute's count
 /// leaves once its minute began a day ago.
-fn take_daily(windows: &Mutex<HashMap<String, VecDeque<(i64, u64)>>>, key: &str, n: u64, now: i64) -> Result<(), Limit> {
+pub(crate) fn take_daily(windows: &Mutex<HashMap<String, VecDeque<(i64, u64)>>>, key: &str, n: u64, now: i64) -> Result<(), Limit> {
     let gone = |minute: i64| now - minute * MINUTE >= DAY;
     let mut m = windows.lock();
     if m.len() >= WINDOW_KEYS && !m.contains_key(key) {
@@ -127,8 +127,8 @@ fn take_daily(windows: &Mutex<HashMap<String, VecDeque<(i64, u64)>>>, key: &str,
     Ok(())
 }
 
-/// Take one place in a one-minute sliding window.
-fn take(windows: &Mutex<HashMap<String, VecDeque<i64>>>, key: &str, n: usize, now: i64) -> Result<(), Limit> {
+/// Take one place in a one-minute sliding window of `n`: Ok is (places used now, seconds until the oldest leaves).
+pub(crate) fn take(windows: &Mutex<HashMap<String, VecDeque<i64>>>, key: &str, n: usize, now: i64) -> Result<(usize, i64), Limit> {
     let mut m = windows.lock();
     if m.len() >= WINDOW_KEYS && !m.contains_key(key) {
         m.retain(|_, q| q.back().is_some_and(|t| now - t < MINUTE));
@@ -144,7 +144,7 @@ fn take(windows: &Mutex<HashMap<String, VecDeque<i64>>>, key: &str, n: usize, no
         return Err(Limit::Wait(q.front().map_or(MINUTE, |f| f + MINUTE - now).max(1)));
     }
     q.push_back(now);
-    Ok(())
+    Ok((q.len(), q.front().map_or(MINUTE, |f| f + MINUTE - now).max(1)))
 }
 
 // ---- the interface ------------------------------------------------------------------------------------------------
@@ -187,7 +187,7 @@ impl ClientCert {
 
     /// 4.2 `tls_client_auth`: an app certificate (kind `app`, a `<name>@apps.<domain>` email) of this client's
     /// `principal`, naming `org`, verified by the TLS layer, whose serial and SPKI match one of `credentials`.
-    fn authenticates(&self, client: &Obj, org: &str, credentials: &[&Value]) -> bool {
+    pub(crate) fn authenticates(&self, client: &Obj, org: &str, credentials: &[&Value]) -> bool {
         let principal = client.get("principal").and_then(Value::as_str).unwrap_or_default();
         self.chain_ok
             && self.kind == "app"
@@ -233,7 +233,7 @@ pub struct TokenHttp<'a> {
     pub source: IpAddr,
 }
 
-/// An answer: status, JSON body, headers, and the security line for the caller to log (until the 9.4 audit chain).
+/// An answer: status, JSON body, headers, and the decision the caller appends to the org's audit chain (9.4).
 #[derive(Clone, Debug)]
 pub struct Answer {
     pub status: u16,
@@ -256,7 +256,7 @@ fn no(code: &'static str, why: impl Into<String>) -> Refusal {
 }
 
 /// "the key is unknown" as "The key is unknown."
-fn sentence(s: &str) -> String {
+pub(crate) fn sentence(s: &str) -> String {
     let mut c = s.chars();
     let mut out: String = c.next().map(|f| f.to_uppercase().collect()).unwrap_or_default();
     out.push_str(c.as_str());
@@ -284,7 +284,7 @@ fn shape(code: &str) -> (u16, &'static str) {
         "subject" => (400, "invalid_grant"),
         "dpop" | "dpop-replay" | "dpop-required" => (400, "invalid_dpop_proof"),
         "too-large" => (413, "invalid_request"),
-        "fetch" | "sign" | "journal" | "issuer-key-unlisted" => (503, "temporarily_unavailable"),
+        "fetch" | "sign" | "journal" | "issuer-key-unlisted" | "audit-unavailable" => (503, "temporarily_unavailable"),
         _ => (400, "invalid_request"),
     }
 }
@@ -481,7 +481,7 @@ fn minutes_of(hhmm: &str) -> Option<u32> {
 /// API1-R10 `hours`: `now` falls from `from` up to (not including) `to` in the zone `tz`, on one of `days` (1 Monday
 /// to 7 Sunday). A window past midnight belongs to the day it starts; `from` equal to `to` is the whole day; an
 /// unknown zone is outside.
-fn inside_hours(h: &Value, now: i64) -> bool {
+pub(crate) fn inside_hours(h: &Value, now: i64) -> bool {
     use chrono::{Datelike, Timelike};
     let s = |k: &str| h.get(k).and_then(Value::as_str);
     let zone = s("tz").and_then(|z| z.parse::<chrono_tz::Tz>().ok());
@@ -850,23 +850,29 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
 /// `POST <issuer>/oauth/revoke` (RFC 7009): the source limiter, the map and the org, the client authenticated as for
 /// `client_credentials`, then a token this issuer signed for that client (its signature checked with the issuer's
 /// key, or at the console any key of the map's `issuer.jwks`) is journaled through `journal(client, jti, until =
-/// exp)` once (not when expired or already denied). Every other token answers 200 too (RFC 7009 2.2).
-pub fn revoke(ctx: &IssueCtx, http: &TokenHttp, journal: &dyn Fn(&str, &str, i64) -> Result<(), String>) -> Answer {
+/// exp)` once (not when expired or already denied). Every other token answers 200 too (RFC 7009 2.2). The journal
+/// call audits the revocation first (9.4); its Err is (`audit-unavailable` or `journal`, why), both 503. A revocation
+/// that journals nothing carries an `api.revoke` event without `jti` for the caller to audit.
+pub fn revoke(ctx: &IssueCtx, http: &TokenHttp, journal: &dyn Fn(&str, &str, i64) -> Result<(), (&'static str, String)>) -> Answer {
     let mut who = None;
     revoke_inner(ctx, http, journal, &mut who).unwrap_or_else(|r| refused(ctx, http, who.as_deref(), r))
 }
 
-fn revoke_inner(ctx: &IssueCtx, http: &TokenHttp, journal: &dyn Fn(&str, &str, i64) -> Result<(), String>, who: &mut Option<String>) -> Result<Answer, Refusal> {
+fn revoke_inner(ctx: &IssueCtx, http: &TokenHttp, journal: &dyn Fn(&str, &str, i64) -> Result<(), (&'static str, String)>, who: &mut Option<String>) -> Result<Answer, Refusal> {
     let form = opening(ctx, http)?;
     let Some(token) = form.get("token") else { return Err(no("request", "The request carries no token.")) };
     let auth = authenticate(ctx, http, &form, false, who)?;
-    let done = Answer { status: 200, body: json!({}), headers: no_store(), event: None };
+    let noop = json!({"org": ctx.org, "client": auth.id, "source": http.source.to_string()});
+    let done = Answer { status: 200, body: json!({}), headers: no_store(), event: Some(("api.revoke", noop)) };
     let Some((jti, exp)) = own_token(ctx, token, &auth.id) else { return Ok(done) };
     let denied = ctx.store.active(ctx.org).iter().any(|e| e.action == "token_deny" && e.target.get("jti").and_then(Value::as_str) == Some(jti.as_str()));
     if exp <= ctx.now || denied {
         return Ok(done);
     }
-    journal(&auth.id, &jti, exp).map_err(|e| no("journal", format!("The revocation could not be recorded ({e}).")))?;
+    journal(&auth.id, &jti, exp).map_err(|(code, e)| match code {
+        "audit-unavailable" => no("audit-unavailable", format!("The revocation could not be audited ({e}).")),
+        _ => no("journal", format!("The revocation could not be recorded ({e}).")),
+    })?;
     let event = json!({"org": ctx.org, "client": auth.id, "jti": jti, "until": exp, "source": http.source.to_string()});
     Ok(Answer { event: Some(("api.revoke", event)), ..done })
 }
@@ -1359,11 +1365,11 @@ mod tests {
         assert_eq!(state.source_ok(newcomer, NOW + 60), Ok(()), "once the others are stale, room is made");
         // the issuance windows: a new client is refused `abuse` while the map is full of live clients
         for i in 0..WINDOW_KEYS {
-            assert_eq!(take(&state.issued, &format!("acme c{i}"), 120, NOW), Ok(()));
+            assert_eq!(take(&state.issued, &format!("acme c{i}"), 120, NOW), Ok((1, MINUTE)));
         }
         let r = state.issue_ok(ORG, CLIENT, 120, 1000, NOW + 1).err().unwrap();
         assert_eq!((r.code, r.retry), ("abuse", Some(MINUTE)));
-        assert_eq!(take(&state.issued, "acme c7", 120, NOW + 1), Ok(()), "a held client still counts");
+        assert_eq!(take(&state.issued, "acme c7", 120, NOW + 1), Ok((2, MINUTE - 1)), "a held client still counts");
         for i in 0..WINDOW_KEYS {
             assert_eq!(take_daily(&state.issued_daily, &format!("acme c{i}"), 1000, NOW), Ok(()));
         }
@@ -1386,7 +1392,7 @@ mod tests {
             ctx.licensed = false;
             let h = http(&body, Some(&p));
             if revoking {
-                revoke(&ctx, &h, &|_: &str, _: &str, _: i64| Err("not journaled".to_string()))
+                revoke(&ctx, &h, &|_: &str, _: &str, _: i64| Err(("journal", "not journaled".to_string())))
             } else {
                 token(&ctx, &h)
             }
@@ -1447,7 +1453,7 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let journal = |client: &str, jti: &str, until: i64| {
             calls.borrow_mut().push((client.to_string(), jti.to_string(), until));
-            Ok::<(), String>(())
+            Ok::<(), (&'static str, String)>(())
         };
         let rev = |s: &ApiMapStore, jti: &str, token: &str| {
             let a = assertion(&fx, jti);
@@ -1470,6 +1476,15 @@ mod tests {
         let body = form(&[("token", token_text.as_str()), ("client_id", CLIENT)]);
         assert_eq!(code(&revoke(&ctx_of(&fx, &s, &owners, None), &http(&body, None), &journal)), "client-auth");
         assert_eq!(calls.borrow().len(), 1);
+        // a revocation journaling nothing still carries its event (without a jti) for the caller to audit
+        let a = rev(&s, "v6", "not-a-token");
+        assert_eq!(a.event.as_ref().map(|(n, e)| (*n, e.get("jti").is_none())), Some(("api.revoke", true)));
+        // 9.4: the audit before the journal failed: 503 audit-unavailable, nothing journaled
+        let unaudited = |_: &str, _: &str, _: i64| Err::<(), _>(("audit-unavailable", "disk full".to_string()));
+        let a = assertion(&fx, "v7");
+        let body = form(&[("token", token_text.as_str()), ("client_assertion_type", ASSERTION_TYPE), ("client_assertion", a.as_str())]);
+        let r = revoke(&ctx_of(&fx, &s, &owners, None), &http(&body, None), &unaudited);
+        assert_eq!((r.status, code(&r).as_str()), (503, "audit-unavailable"));
     }
 
     #[test]

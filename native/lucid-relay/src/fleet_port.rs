@@ -14,11 +14,15 @@
 // 10-line header, the program from a sealed in-memory copy of the running image, `SHA256SUMS`, `meta`), their limits
 // and sources, `deploy-high` under High; and the relay's `meet-cert` request (9.3), answered by f-console.
 //
-// API-1 7.1 (the front door): the issuer routes under `/api/orgs/<org>` and their `.well-known` documents, answered
-// by `console_api` and `api_issue`, and API client certificates of the org Meet CA (`Peer::ApiClient`, with its CRL
-// and `app` grace) for `tls_client_auth`. Each issuer answer's security line is logged here until the 9.4 audit chain.
+// API-1 7.1 (the front door): every org route under `/api/orgs/<org>` and the `.well-known` documents, dispatched
+// from the `api_resource` route table: the issuer routes answered by `console_api` and `api_issue`, the OpenAPI
+// document and the resource routes by `api_resource` over the fleet's registry, metrics and audit chains; API client
+// certificates of the org Meet CA (`Peer::ApiClient`, with its CRL and `app` grace) for `tls_client_auth`; and the
+// relays' `api-audit` chain transfers (2.6). Every decision about a known org is in its audit chain before the answer
+// leaves (9.4), and every answer carries `X-Lucid-Request-Id`.
 
 use crate::api_issue::{self, Answer, ClientCert, TokenHttp};
+use crate::api_resource::{self, Reply, RouteId, Side as ApiSide};
 use crate::codec::{b64u, hex, now_ms, parse_json, sha256, stringify};
 use crate::console_api::ApiDoc;
 use crate::console_source::Cidr;
@@ -143,10 +147,36 @@ pub trait Desk: Send + Sync {
         None
     }
     /// API-1 5.2 (`revoke` false) and 5.5 at `now` (seconds); None for an unknown org (404). `body_refused` is the
-    /// port's verdict on a body it could not take. Blocking: a JWKS or discovery fetch may run.
-    fn api_token(&self, _org: &str, _revoke: bool, _http: &TokenHttp, _body_refused: Option<&'static str>, _now: i64) -> Option<Answer> {
+    /// port's verdict on a body it could not take. The decision is in the org's audit chain under `rid` before the
+    /// answer is returned (9.4). Blocking: a JWKS or discovery fetch may run, and the audit append fsyncs.
+    fn api_token(&self, _org: &str, _revoke: bool, _http: &TokenHttp, _body_refused: Option<&'static str>, _rid: &str, _now: i64) -> Option<Answer> {
         None
     }
+    /// API-1 9: the console's API audit chains (source `console`).
+    fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        None
+    }
+    /// API-1 7.1: the OpenAPI document and the resource routes of `call.org` at `now` (seconds), audited; None for an
+    /// unknown org (404). Blocking: the audit append fsyncs.
+    fn api_resource(&self, _call: &api_resource::Call, _now: i64) -> Option<api_resource::Reply> {
+        None
+    }
+    /// API-1 9.1: the console holds an api map for `org` (pinned or set aside), so its decisions go to its chain.
+    fn api_known(&self, _org: &str) -> bool {
+        false
+    }
+    /// API-1 6.5: the front door's source limiter for requests outside the route table (120 a minute); Err is the
+    /// seconds to wait.
+    fn api_source_ok(&self, _source: IpAddr, _now: i64) -> Result<(), i64> {
+        Ok(())
+    }
+    /// API-1 2.6 `api-audit` from a connected relay: its chain entries for one org, durable before Ok.
+    fn api_audit_in(&self, _relay: &str, _body: &Value) -> Result<Value, Refusal> {
+        Err(Refusal::of("fleet-op"))
+    }
+    /// API-1 3.3, 3.4: a certificate admitted inside a grace, recorded as `cert.grace-used` in the chain of each org
+    /// it concerns (an app certificate: the orgs it names; a relay certificate: the orgs that relay serves).
+    fn api_grace_used(&self, _relay: Option<&str>, _orgs: &[String], _serial: &str, _kind: &str, _now: i64) {}
 }
 
 /// A certificate the port issued (enrollment, renewal, recovery).
@@ -264,15 +294,99 @@ impl Desk for FleetDesk {
         self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
         self.fleet.api.api_document(org, doc, source, now)
     }
-    fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, now: i64) -> Option<Answer> {
+    fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, rid: &str, now: i64) -> Option<Answer> {
         self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
         // API-1 4.3: the owner is active unless the console's people data marks them inactive for the org
         let people = self.fleet.people();
         let owner_active = |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(org, p));
-        // 6.1 `license`: the console serves while its service state is not stopped (on, grace or upgrade period; the
-        // fleet section holds no product license and reports on)
-        let licensed = self.console.license_view(now.saturating_mul(1000)).service.state != crate::console::ServiceState::Stopped;
-        self.fleet.api.api_token(self.fleet.api_link(), org, revoke, http, body_refused, &owner_active, licensed, now)
+        let licensed = self.licensed(now);
+        let audit = self.fleet.api_audit();
+        let route = format!("POST /api/orgs/{org}/oauth/{}", if revoke { "revoke" } else { "token" });
+        // 9.4: a revocation is in the chain before its `token_deny` is journaled
+        let revoked = |client: &str, jti: &str, until: i64| -> Result<(), String> {
+            let e = json!({"rid": rid, "action": "api.token", "route": route, "ip": crate::console_source::canonical(http.source).to_string(),
+                           "result": "ok", "client": client, "jti": jti, "until": until});
+            audit.record(org, e, now).map(|_| ()).map_err(|e| e.message)
+        };
+        let known = self.fleet.api.org_snapshot(org).is_some();
+        let a = self.fleet.api.api_token(self.fleet.api_link(), org, revoke, http, body_refused, &owner_active, licensed, &revoked, now)?;
+        if !known {
+            // 9.1: a decision that concerns no org (the source limiter before the org resolved) is a security line
+            if let Some((name, fields)) = &a.event {
+                let mut f = Fields::new();
+                for (k, v) in fields.as_object().into_iter().flatten() {
+                    f.set(k, v.clone());
+                }
+                self.console.logger.security(name, &f, Level::Warn);
+            }
+            return Some(a);
+        }
+        Some(api_resource::token_audited(&*audit, org, &route, rid, http.source, a, now))
+    }
+    fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        Some(self.fleet.api_audit())
+    }
+    fn api_resource(&self, call: &api_resource::Call, now: i64) -> Option<Reply> {
+        self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
+        let org = call.org;
+        let store = self.fleet.api.org_snapshot(org)?;
+        // I: the pinned map's issuer (empty while the map is set aside, which every route refuses `map-edition`)
+        let issuer = store.get(org, "").and_then(|m| Some(m.map().get("issuer")?.get("url")?.as_str()?.to_string())).unwrap_or_default();
+        if issuer.is_empty() && call.route.id == RouteId::OpenApi {
+            // like the other public documents (5.1): no document without a serving map
+            return None;
+        }
+        let people = self.fleet.people();
+        let owner_active = |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(org, p));
+        let audit = self.fleet.api_audit();
+        let data = self.fleet.api_data();
+        let site = api_resource::Site {
+            side: ApiSide::FrontDoor,
+            relay: "console",
+            resource: &issuer,
+            local: None,
+            store: &store,
+            owner_active: &owner_active,
+            licensed: self.licensed(now),
+            audit: &*audit,
+            state: &self.fleet.api_state,
+            data: &data,
+            now,
+        };
+        Some(api_resource::answer(&site, call))
+    }
+    fn api_audit_in(&self, relay: &str, body: &Value) -> Result<Value, Refusal> {
+        self.fleet.api.audit_in(relay, body)
+    }
+    fn api_known(&self, org: &str) -> bool {
+        self.fleet.api.org_snapshot(org).is_some()
+    }
+    fn api_source_ok(&self, source: IpAddr, now: i64) -> Result<(), i64> {
+        self.fleet.api_state.public_ok(source, now)
+    }
+    fn api_grace_used(&self, relay: Option<&str>, orgs: &[String], serial: &str, kind: &str, now: i64) {
+        let orgs: Vec<String> = match relay {
+            Some(r) => self.fleet.api.orgs().into_iter().filter(|o| self.fleet.api.relays_of(o).iter().any(|x| x == r)).collect(),
+            None => orgs.to_vec(),
+        };
+        let audit = self.fleet.api_audit();
+        for org in orgs {
+            let mut e = json!({"action": "cert.grace-used", "serial": serial, "kind": kind, "result": "ok"});
+            if let Some(r) = relay {
+                e["node"] = json!(r);
+            }
+            if let Err(err) = audit.record(&org, e, now) {
+                self.console.logger.security("api.audit.failed", &Fields::new().with("org", org.as_str()).with("action", "cert.grace-used").with("why", err.message), Level::Error);
+            }
+        }
+    }
+}
+
+impl FleetDesk {
+    /// API-1 6.1 and 6.2 `license`: the console serves while its service state is not stopped (on, grace or upgrade
+    /// period; the fleet section holds no product license and reports on).
+    fn licensed(&self, now: i64) -> bool {
+        self.console.license_view(now.saturating_mul(1000)).service.state != crate::console::ServiceState::Stopped
     }
 }
 
@@ -503,6 +617,7 @@ impl PortState {
             _ => None,
         };
         if let Some((relay, serial)) = who {
+            self.desk.api_grace_used(Some(&relay), &[], &serial, "relay", now_s);
             let f = Fields::new().with("relay", relay).with("serial", serial).with("notAfter", not_after).with("hoursLeft", (end - now_s) / 3600);
             self.logger.security("cert.grace-used", &f, Level::Warn);
         }
@@ -542,6 +657,7 @@ impl PortState {
         let now = t.div_euclid(1000);
         let Some(cert) = self.api_client(leaf, rest, now) else { return Peer::Refused };
         if now > cert.not_after {
+            self.desk.api_grace_used(None, &cert.orgs, &cert.serial, "app", now);
             let f = Fields::new().with("kind", "app").with("serial", cert.serial.as_str()).with("notAfter", cert.not_after);
             self.logger.security("cert.grace-used", &f, Level::Warn);
         }
@@ -583,14 +699,23 @@ impl PortState {
         ClientCert::of_leaf(leaf.as_ref(), true)
     }
 
-    /// API-1 5.1 on the front door: the document of `org` at `now` (seconds), or 404 `not-found` for an unknown org.
-    pub fn api_doc(&self, org: &str, doc: ApiDoc, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
-        api_response(self.desk.api_document(org, doc, ip, now).unwrap_or_else(api_not_found))
+    /// API-1 5.1 on the front door: the document of `org` at `now` (seconds), or 404 `not-found` for an unknown org. A
+    /// refusal of a known org (the source limiter) is in its audit chain first (9.4).
+    pub fn api_doc(&self, m: &api_resource::Matched, doc: ApiDoc, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let Some(a) = self.desk.api_document(m.org, doc, ip, now) else { return reply_response(api_not_found(), &rid) };
+        let mut r = Reply::of_answer(a);
+        if r.status != 200 {
+            let route = format!("{} {}", m.route.method, m.route.path.replace("{org}", m.org));
+            let audit = self.desk.api_audit();
+            r = api_resource::public_refused(audit.as_deref().map(|a| a as &dyn api_resource::AuditLog), m.org, &route, &rid, ip, r, now);
+        }
+        reply_response(r, &rid)
     }
 
-    /// API-1 5.2 and 5.5 on the front door at `now` (seconds), blocking: the issuer's answer with its security line
-    /// logged (until the 9.4 audit chain), or 404 `not-found` for an unknown org. `form` is the body or why it was not
-    /// taken (`too-large`, `request`).
+    /// API-1 5.2 and 5.5 on the front door at `now` (seconds), blocking: the issuer's answer once its decision is in
+    /// the org's audit chain, or 404 `not-found` for an unknown org. `form` is the body or why it was not taken
+    /// (`too-large`, `request`).
     #[allow(clippy::too_many_arguments)]
     pub fn api_token_answer(&self, org: &str, revoke: bool, form: Result<Vec<u8>, &'static str>, authorization: Option<&str>, dpop: Option<&str>, cert: Option<&ClientCert>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
         let (body, refused) = match &form {
@@ -598,15 +723,39 @@ impl PortState {
             Err(code) => (&[][..], Some(*code)),
         };
         let http = TokenHttp { form: body, authorization, dpop, client_cert: cert, source: ip };
-        let a = self.desk.api_token(org, revoke, &http, refused, now).unwrap_or_else(api_not_found);
-        if let Some((name, fields)) = &a.event {
-            let mut f = Fields::new();
-            for (k, v) in fields.as_object().into_iter().flatten() {
-                f.set(k, v.clone());
+        let rid = api_resource::rid();
+        let r = self.desk.api_token(org, revoke, &http, refused, &rid, now).map_or_else(api_not_found, Reply::of_answer);
+        reply_response(r, &rid)
+    }
+
+    /// API-1 9.4 on the front door at `now` (seconds), blocking: a request in `org`'s namespace that no route takes (a
+    /// path or method outside the table) answers 404 `not-found` after the source limiter (429 `abuse` instead); a
+    /// known org's refusal is in its chain first (503 when it cannot be), an unknown org's is a security line (unless
+    /// the limiter refused it).
+    pub fn api_unrouted(&self, org: &str, method: &str, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let r = api_resource::charged(self.desk.api_source_ok(ip, now), api_not_found());
+        let r = if self.desk.api_known(org) {
+            let audit = self.desk.api_audit();
+            api_resource::public_refused(audit.as_deref().map(|a| a as &dyn api_resource::AuditLog), org, &api_resource::namespace_route(method, org), &rid, ip, r, now)
+        } else {
+            if r.status != 429 {
+                let f = Fields::new().with("org", org).with("code", "not-found").with("source", crate::console_source::canonical(ip).to_string());
+                self.logger.security("api.refusal", &f, Level::Warn);
             }
-            self.logger.security(name, &f, if *name == "api.refusal" { Level::Warn } else { Level::Info });
-        }
-        api_response(a)
+            r
+        };
+        reply_response(r, &rid)
+    }
+
+    /// API-1 7.1 on the front door at `now` (seconds), blocking: the OpenAPI document and the resource routes, or 404
+    /// `not-found` for an unknown org.
+    #[allow(clippy::too_many_arguments)]
+    pub fn api_resource_answer(&self, m: &api_resource::Matched, path: &str, query: &str, authorization: Option<&str>, dpop: Option<&str>, cert: Option<&ClientCert>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let call = api_resource::Call { org: m.org, route: m.route, id: m.id, path, query, authorization, dpop, cert, source: ip, rid: &rid };
+        let r = self.desk.api_resource(&call, now).unwrap_or_else(api_not_found);
+        reply_response(r, &rid)
     }
 
     fn rate_ok(&self, ip: IpAddr, t: i64) -> bool {
@@ -997,6 +1146,16 @@ impl PortState {
                             Err(r) => w::res_err_text(id, &r),
                         });
                     }
+                    Ok(Frame::Req { id, op: "api-audit", body }) => {
+                        // API-1 2.6: a relay's audit chain entries for one org; checked and fsynced before the answer
+                        let state = self.clone();
+                        let r = relay.clone();
+                        let answer = tokio::task::spawn_blocking(move || state.desk.api_audit_in(&r, &Value::Object(body))).await.unwrap_or_else(|_| Err(Refusal::of("fleet-op")));
+                        chan.send(match answer {
+                            Ok(b) => w::res_ok_text(id, b),
+                            Err(r) => w::res_err_text(id, &r),
+                        });
+                    }
                     Ok(Frame::Req { id, .. }) => {
                         chan.send(w::res_err_text(id, &Refusal::of("fleet-op")));
                     }
@@ -1223,50 +1382,23 @@ fn forbidden() -> Response<Full<Bytes>> {
     answer(403, &json!({ "ok": false, "code": "forbidden", "error": w::FORBIDDEN }), true)
 }
 
-// ── API-1 7.1: the issuer routes of the front door ──────────────────────────────────────────────────────────
+// ── API-1 7.1: the org routes of the front door ─────────────────────────────────────────────────────────────
 
-/// An issuer route and its org, taken from the request path only (API1-R2).
-#[derive(Debug, PartialEq, Eq)]
-enum ApiRoute<'a> {
-    Doc(ApiDoc, &'a str),
-    Token { org: &'a str, revoke: bool },
+fn api_not_found() -> Reply {
+    api_resource::problem(404, "not-found", w::NOT_FOUND)
 }
 
-/// `GET /.well-known/oauth-authorization-server/api/orgs/<org>`, `GET /.well-known/oauth-protected-resource/api/orgs/<org>`,
-/// `GET /api/orgs/<org>/jwks.json`, `POST /api/orgs/<org>/oauth/token` and `POST /api/orgs/<org>/oauth/revoke`.
-fn api_route<'a>(method: &str, path: &'a str) -> Option<ApiRoute<'a>> {
-    let segment = |s: &'a str| (!s.is_empty() && !s.contains('/')).then_some(s);
-    let route = if let Some(rest) = path.strip_prefix("/.well-known/oauth-authorization-server/api/orgs/") {
-        ApiRoute::Doc(ApiDoc::AuthorizationServer, segment(rest)?)
-    } else if let Some(rest) = path.strip_prefix("/.well-known/oauth-protected-resource/api/orgs/") {
-        ApiRoute::Doc(ApiDoc::ProtectedResource, segment(rest)?)
-    } else {
-        let (org, tail) = path.strip_prefix("/api/orgs/")?.split_once('/')?;
-        let org = segment(org)?;
-        match tail {
-            "jwks.json" => ApiRoute::Doc(ApiDoc::Jwks, org),
-            "oauth/token" => ApiRoute::Token { org, revoke: false },
-            "oauth/revoke" => ApiRoute::Token { org, revoke: true },
-            _ => return None,
-        }
-    };
-    let method_ok = if matches!(route, ApiRoute::Doc(..)) { method == "GET" } else { method == "POST" };
-    method_ok.then_some(route)
-}
-
-fn api_not_found() -> Answer {
-    api_issue::problem(404, "not-found", w::NOT_FOUND)
-}
-
-fn api_response(a: Answer) -> Response<Full<Bytes>> {
-    let mut b = Response::builder().status(a.status);
-    if !a.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
-        b = b.header(CONTENT_TYPE, "application/json");
-    }
-    for (k, v) in &a.headers {
+/// An API answer as an HTTP response, with its `X-Lucid-Request-Id` (8.2).
+fn reply_response(r: Reply, rid: &str) -> Response<Full<Bytes>> {
+    let body = r.bytes();
+    let mut b = Response::builder().status(r.status).header(CONTENT_TYPE, r.ctype);
+    for (k, v) in &r.headers {
         b = b.header(*k, v.as_str());
     }
-    b.body(Full::new(Bytes::from(stringify(&a.body)))).unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+    if !r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id") {
+        b = b.header("X-Lucid-Request-Id", rid);
+    }
+    b.body(Full::new(Bytes::from(body))).unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
 /// A token request body (API-1 5.2): `application/x-www-form-urlencoded`, at most 16 KiB. Err is the contract code.
@@ -1282,14 +1414,22 @@ async fn read_form(req: Request<Incoming>) -> Result<Vec<u8>, &'static str> {
     }
 }
 
-/// API-1 7.1 on the front door: the documents answer at once; the token and revocation endpoints read their form and
-/// run on a blocking thread (a JWKS or discovery fetch may run).
-async fn api_answer(state: Arc<PortState>, route: ApiRoute<'_>, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
+/// API-1 7.1 on the front door, dispatched from the `api_resource` table: the documents answer at once; the token and
+/// revocation endpoints (after reading their form), the OpenAPI document and the resource routes run on a blocking
+/// thread (a JWKS or discovery fetch may run; audit appends fsync).
+async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
     let now = now_ms().div_euclid(1000);
-    let (org, revoke) = match route {
-        ApiRoute::Doc(doc, org) => return state.api_doc(org, doc, ip, now),
-        ApiRoute::Token { org, revoke } => (org.to_owned(), revoke),
+    let doc = match m.route.id {
+        RouteId::AsMetadata => Some(ApiDoc::AuthorizationServer),
+        RouteId::ResourceMetadata => Some(ApiDoc::ProtectedResource),
+        RouteId::Jwks => Some(ApiDoc::Jwks),
+        RouteId::Token | RouteId::Revoke | RouteId::OpenApi | RouteId::Health | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics => None,
+        // the relay listener's own routes
+        RouteId::LocalAsMetadata | RouteId::LocalJwks | RouteId::LocalToken => return reply_response(api_not_found(), &api_resource::rid()),
     };
+    if let Some(doc) = doc {
+        return state.api_doc(&m, doc, ip, now);
+    }
     let (authorization, dpop) = {
         let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
         (header("authorization"), header("dpop"))
@@ -1298,10 +1438,20 @@ async fn api_answer(state: Arc<PortState>, route: ApiRoute<'_>, peer: Peer, ip: 
         Peer::ApiClient { cert } => Some(cert),
         _ => None,
     };
-    let form = read_form(req).await;
-    tokio::task::spawn_blocking(move || state.api_token_answer(&org, revoke, form, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, now))
-        .await
-        .unwrap_or_else(|_| api_response(api_issue::problem(503, "unavailable", "The token endpoint failed; try again.")))
+    let failed = || reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid());
+    if matches!(m.route.id, RouteId::Token | RouteId::Revoke) {
+        let (org, revoke) = (m.org.to_owned(), m.route.id == RouteId::Revoke);
+        let form = read_form(req).await;
+        return tokio::task::spawn_blocking(move || state.api_token_answer(&org, revoke, form, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, now)).await.unwrap_or_else(|_| failed());
+    }
+    let (path, query) = (req.uri().path().to_owned(), req.uri().query().unwrap_or_default().to_owned());
+    let method = m.route.method;
+    tokio::task::spawn_blocking(move || match api_resource::route_of(ApiSide::FrontDoor, method, &path) {
+        Some(m) => state.api_resource_answer(&m, &path, &query, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, now),
+        None => reply_response(api_not_found(), &api_resource::rid()),
+    })
+    .await
+    .unwrap_or_else(|_| failed())
 }
 
 async fn read_body(req: Request<Incoming>) -> Option<Value> {
@@ -1344,8 +1494,15 @@ async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>
             Err(_) => refused(&Refusal::of("recovery-refused")),
         };
     }
-    if let Some(route) = api_route(&method, &path) {
-        return api_answer(state, route, peer, ip, req).await;
+    if let Some(m) = api_resource::route_of(ApiSide::FrontDoor, &method, &path) {
+        return api_answer(state, m, peer, ip, req).await;
+    }
+    if let Some(org) = api_resource::org_of(&path).map(str::to_owned) {
+        // an org namespace, but no route of the table: limited and audited like the routes (blocking: an fsync)
+        let now = t.div_euclid(1000);
+        return tokio::task::spawn_blocking(move || state.api_unrouted(&org, &method, ip, now))
+            .await
+            .unwrap_or_else(|_| reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid()));
     }
     match (method.as_str(), path.as_str()) {
         ("GET", "/fleet/v1/trust") => answer(200, &state.trust(), false),
@@ -2141,6 +2298,12 @@ pub(crate) mod tests {
         pub grace: AtomicU32,
         /// API-1 5: the console's api state behind the issuer routes (none: every org is unknown).
         pub api: Mutex<Option<Arc<crate::console_api::ConsoleApi>>>,
+        /// API-1 9: the console's audit chains (none: refusals of known orgs answer 503 `audit-unavailable`).
+        pub audit: Mutex<Option<Arc<crate::api_audit::ApiAudit>>>,
+        /// API-1 3.3, 3.4: (relay, orgs, serial, kind) of every `cert.grace-used` handed to the chains.
+        pub graced: Mutex<Vec<(Option<String>, Vec<String>, String, String)>>,
+        /// API-1 6.5: the front door's limiter for requests outside the route table.
+        pub api_limits: crate::api_resource::ResourceState,
     }
 
     impl TestDesk {
@@ -2254,9 +2417,47 @@ pub(crate) mod tests {
         fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
             self.api.lock().clone()?.api_document(org, doc, source, now)
         }
-        fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, now: i64) -> Option<Answer> {
-            self.api.lock().clone()?.api_token(None, org, revoke, http, body_refused, &|_: &str| true, true, now)
+        fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, _rid: &str, now: i64) -> Option<Answer> {
+            self.api.lock().clone()?.api_token(None, org, revoke, http, body_refused, &|_: &str| true, true, &|_: &str, _: &str, _: i64| Ok(()), now)
         }
+        fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+            self.audit.lock().clone()
+        }
+        fn api_known(&self, org: &str) -> bool {
+            self.api.lock().clone().is_some_and(|a| a.org_snapshot(org).is_some())
+        }
+        fn api_source_ok(&self, source: IpAddr, now: i64) -> Result<(), i64> {
+            self.api_limits.public_ok(source, now)
+        }
+        fn api_grace_used(&self, relay: Option<&str>, orgs: &[String], serial: &str, kind: &str, _now: i64) {
+            self.graced.lock().push((relay.map(str::to_string), orgs.to_vec(), serial.to_string(), kind.to_string()));
+        }
+    }
+
+    struct NoSigner;
+    impl crate::api_audit::CheckpointSigner for NoSigner {
+        fn kid(&self, _: &str) -> Option<String> {
+            None
+        }
+        fn sign(&self, _: &str, _: &[u8]) -> Option<Vec<u8>> {
+            None
+        }
+        fn certs(&self, _: &str) -> Vec<Value> {
+            Vec::new()
+        }
+    }
+
+    struct NoKeys;
+    impl crate::api_audit::PseudonymKeys for NoKeys {
+        fn current(&self, _: &str) -> Option<(u32, Vec<u8>)> {
+            None
+        }
+    }
+
+    /// Console chains under the test's folder.
+    fn chains(name: &str, now: i64) -> Arc<crate::api_audit::ApiAudit> {
+        let dir = crate::fleet_ca::tests_dir(&format!("{name}-chains"));
+        Arc::new(crate::api_audit::ApiAudit::open(Some(dir.as_path()), "console", Arc::new(NoSigner), Arc::new(NoKeys), now))
     }
 
     pub(crate) fn test_port(name: &str) -> (Arc<PortState>, Arc<TestDesk>, Arc<Mutex<MemVault>>) {
@@ -2353,6 +2554,10 @@ pub(crate) mod tests {
         assert_eq!(state.classify(&expired, t), Peer::Refused, "grace 0: the verifier is exactly today's");
         desk.grace.store(12, Ordering::SeqCst);
         assert!(matches!(state.classify(&expired, t), Peer::Relay { .. }), "inside grace.relay");
+        assert!(desk.graced.lock().is_empty(), "the handshake's own check records nothing");
+        assert!(matches!(state.classify_connection(&expired, t), Peer::Relay { .. }));
+        // API-1 9: once per connection, into the chains of the orgs the relay serves
+        assert_eq!(desk.graced.lock().iter().map(|(r, _, _, k)| (r.clone(), k.clone())).collect::<Vec<_>>(), [(Some(relay.to_string()), "relay".to_string())]);
         desk.grace.store(1, Ordering::SeqCst);
         assert_eq!(state.classify(&expired, t), Peer::Refused, "past notAfter + grace");
         // a denied serial stays refused inside the grace
@@ -2841,16 +3046,43 @@ pub(crate) mod tests {
 
     #[test]
     fn api_routes_are_org_namespaced() {
-        assert_eq!(api_route("GET", "/.well-known/oauth-authorization-server/api/orgs/acme"), Some(ApiRoute::Doc(ApiDoc::AuthorizationServer, "acme")));
-        assert_eq!(api_route("GET", "/.well-known/oauth-protected-resource/api/orgs/acme"), Some(ApiRoute::Doc(ApiDoc::ProtectedResource, "acme")));
-        assert_eq!(api_route("GET", "/api/orgs/acme/jwks.json"), Some(ApiRoute::Doc(ApiDoc::Jwks, "acme")));
-        assert_eq!(api_route("POST", "/api/orgs/acme/oauth/token"), Some(ApiRoute::Token { org: "acme", revoke: false }));
-        assert_eq!(api_route("POST", "/api/orgs/acme/oauth/revoke"), Some(ApiRoute::Token { org: "acme", revoke: true }));
-        assert_eq!(api_route("GET", "/api/orgs/acme/oauth/token"), None);
-        assert_eq!(api_route("POST", "/api/orgs/acme/jwks.json"), None);
-        assert_eq!(api_route("GET", "/.well-known/oauth-authorization-server/api/orgs/acme/local"), None);
-        assert_eq!(api_route("GET", "/api/orgs//jwks.json"), None);
-        assert_eq!(api_route("GET", "/fleet/v1/trust"), None);
+        let id = |method: &str, path: &str| api_resource::route_of(ApiSide::FrontDoor, method, path).map(|m| (m.route.id, m.org.to_string(), m.id.map(str::to_string)));
+        let acme = |r: RouteId| Some((r, "acme".to_string(), None));
+        assert_eq!(id("GET", "/.well-known/oauth-authorization-server/api/orgs/acme"), acme(RouteId::AsMetadata));
+        assert_eq!(id("GET", "/.well-known/oauth-protected-resource/api/orgs/acme"), acme(RouteId::ResourceMetadata));
+        assert_eq!(id("GET", "/api/orgs/acme/jwks.json"), acme(RouteId::Jwks));
+        assert_eq!(id("POST", "/api/orgs/acme/oauth/token"), acme(RouteId::Token));
+        assert_eq!(id("POST", "/api/orgs/acme/oauth/revoke"), acme(RouteId::Revoke));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/openapi.json"), acme(RouteId::OpenApi));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/health"), acme(RouteId::Health));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/capacity"), acme(RouteId::Capacity));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/fleet/relays"), acme(RouteId::FleetRelays));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/fleet/relays/r_00000000000000a1"), Some((RouteId::FleetRelay, "acme".into(), Some("r_00000000000000a1".into()))));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/audit"), acme(RouteId::Audit));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/audit/keys"), acme(RouteId::AuditKeys));
+        assert_eq!(id("GET", "/api/orgs/acme/v1/metrics"), acme(RouteId::Metrics));
+        assert_eq!(id("GET", "/api/orgs/acme/oauth/token"), None);
+        assert_eq!(id("POST", "/api/orgs/acme/jwks.json"), None);
+        assert_eq!(id("GET", "/.well-known/oauth-authorization-server/api/orgs/acme/local"), None);
+        assert_eq!(id("POST", "/api/orgs/acme/local/oauth/token"), None);
+        assert_eq!(id("GET", "/api/orgs//jwks.json"), None);
+        assert_eq!(id("GET", "/fleet/v1/trust"), None);
+    }
+
+    /// The front door's match of a document route.
+    fn doc_route(org: &str, doc: ApiDoc) -> (String, ApiDoc) {
+        let path = match doc {
+            ApiDoc::AuthorizationServer => format!("/.well-known/oauth-authorization-server/api/orgs/{org}"),
+            ApiDoc::ProtectedResource => format!("/.well-known/oauth-protected-resource/api/orgs/{org}"),
+            ApiDoc::Jwks => format!("/api/orgs/{org}/jwks.json"),
+        };
+        (path, doc)
+    }
+
+    fn doc_at(state: &PortState, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let (path, doc) = doc_route(org, doc);
+        let m = api_resource::route_of(ApiSide::FrontDoor, "GET", &path).expect("a document route");
+        state.api_doc(&m, doc, source, now)
     }
 
     async fn api_json(r: Response<Full<Bytes>>) -> (u16, String, Value) {
@@ -2885,8 +3117,16 @@ pub(crate) mod tests {
                 *desk.api.lock() = Some(api_with_map(now));
             }
             for doc in [ApiDoc::AuthorizationServer, ApiDoc::ProtectedResource, ApiDoc::Jwks] {
-                let (status, ctype, body) = api_json(state.api_doc("nope", doc, ip(1), now)).await;
+                let r = doc_at(&state, "nope", doc, ip(1), now);
+                assert!(r.headers().contains_key("X-Lucid-Request-Id"));
+                let (status, ctype, body) = api_json(r).await;
                 assert_eq!((status, ctype.as_str(), body["code"].as_str()), (404, "application/problem+json", Some("not-found")));
+            }
+            // the resource routes and the OpenAPI document of an unknown org
+            for path in ["/api/orgs/nope/v1/health", "/api/orgs/nope/v1/openapi.json"] {
+                let m = api_resource::route_of(ApiSide::FrontDoor, "GET", path).unwrap();
+                let (status, _, body) = api_json(state.api_resource_answer(&m, path, "", None, None, None, ip(1), now)).await;
+                assert_eq!((status, body["code"].as_str()), (404, Some("not-found")));
             }
             for revoke in [false, true] {
                 let r = state.api_token_answer("nope", revoke, Ok(b"grant_type=client_credentials".to_vec()), None, None, None, ip(1), now);
@@ -2901,26 +3141,66 @@ pub(crate) mod tests {
         let (state, desk, _) = test_port("api-docs");
         let now = now_ms() / 1000;
         *desk.api.lock() = Some(api_with_map(now));
+        let audit = chains("api-docs", now);
+        *desk.audit.lock() = Some(audit.clone());
         let i = "https://console.acme.example:7443/api/orgs/acme";
-        let (status, ctype, body) = api_json(state.api_doc("acme", ApiDoc::AuthorizationServer, ip(1), now)).await;
+        let (status, ctype, body) = api_json(doc_at(&state, "acme", ApiDoc::AuthorizationServer, ip(1), now)).await;
         assert_eq!((status, ctype.as_str()), (200, "application/json"));
         assert_eq!((body["issuer"].as_str(), body["token_endpoint"].clone(), body["revocation_endpoint"].clone(), body["jwks_uri"].clone()), (Some(i), json!(format!("{i}/oauth/token")), json!(format!("{i}/oauth/revoke")), json!(format!("{i}/jwks.json"))));
         assert_eq!(body["grant_types_supported"], json!(["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]));
-        let (_, _, body) = api_json(state.api_doc("acme", ApiDoc::ProtectedResource, ip(1), now)).await;
+        let (_, _, body) = api_json(doc_at(&state, "acme", ApiDoc::ProtectedResource, ip(1), now)).await;
         assert_eq!((body["resource"].as_str(), body["authorization_servers"].clone()), (Some(i), json!([i])));
-        let (_, _, body) = api_json(state.api_doc("acme", ApiDoc::Jwks, ip(1), now)).await;
+        let (_, _, body) = api_json(doc_at(&state, "acme", ApiDoc::Jwks, ip(1), now)).await;
         assert_eq!(body["keys"][0]["kid"], "k1");
         // 6.5: 120 requests a minute from one address
         for _ in 3..api_issue::SOURCE_PER_MINUTE {
-            assert_eq!(state.api_doc("acme", ApiDoc::Jwks, ip(1), now).status().as_u16(), 200);
+            assert_eq!(doc_at(&state, "acme", ApiDoc::Jwks, ip(1), now).status().as_u16(), 200);
         }
-        let r = state.api_doc("acme", ApiDoc::Jwks, ip(1), now);
+        let r = doc_at(&state, "acme", ApiDoc::Jwks, ip(1), now);
         assert_eq!((r.status().as_u16(), r.headers().contains_key(RETRY_AFTER)), (429, true));
+        // 9.4: the refusal of a known org is in its chain (refusal summaries under the source address, from the first)
+        audit.tick(now + 120);
+        let page = audit.read("acme", "console", crate::api_audit::Repr::AsIs, 0, 1000).unwrap();
+        assert!(page["entries"].as_array().unwrap().iter().any(|e| e["check"] == "abuse"));
+        // without chains it cannot be recorded: 503 audit-unavailable
+        *desk.audit.lock() = None;
+        let (status, _, body) = api_json(doc_at(&state, "acme", ApiDoc::Jwks, ip(1), now)).await;
+        assert_eq!((status, body["code"].as_str()), (503, Some("audit-unavailable")));
         // the org's token endpoint: the listed issuer key is not one this console holds, and a body too large
         let (status, _, body) = api_json(state.api_token_answer("acme", false, Ok(b"grant_type=client_credentials".to_vec()), None, None, None, ip(2), now)).await;
         assert_eq!((status, body["code"].as_str(), body["error"].as_str()), (503, Some("issuer-key-unlisted"), Some("temporarily_unavailable")));
         let (status, _, body) = api_json(state.api_token_answer("acme", false, Err("too-large"), None, None, None, ip(2), now)).await;
         assert_eq!((status, body["code"].as_str()), (413, Some("too-large")));
+    }
+
+    #[tokio::test]
+    async fn requests_outside_the_table_in_a_namespace_are_limited_and_audited() {
+        let (state, desk, _) = test_port("api-unrouted");
+        let now = now_ms() / 1000;
+        *desk.api.lock() = Some(api_with_map(now));
+        let audit = chains("api-unrouted", now);
+        *desk.audit.lock() = Some(audit.clone());
+        // a method or path no route has, in a known org's namespace: 404, in the org's chain
+        let r = state.api_unrouted("acme", "DELETE", ip(3), now);
+        assert!(r.headers().contains_key("X-Lucid-Request-Id"));
+        let (status, ctype, body) = api_json(r).await;
+        assert_eq!((status, ctype.as_str(), body["code"].as_str()), (404, "application/problem+json", Some("not-found")));
+        audit.tick(now + 120);
+        let page = audit.read("acme", "console", crate::api_audit::Repr::AsIs, 0, 1000).unwrap();
+        assert!(page["entries"].as_array().unwrap().iter().any(|e| e["check"] == "not-found" && e["route"] == "DELETE /api/orgs/acme"), "{page}");
+        // the source limiter is charged first
+        for _ in 1..api_issue::SOURCE_PER_MINUTE {
+            assert_eq!(state.api_unrouted("acme", "GET", ip(3), now).status().as_u16(), 404);
+        }
+        let r = state.api_unrouted("acme", "GET", ip(3), now);
+        assert_eq!((r.status().as_u16(), r.headers().contains_key(RETRY_AFTER)), (429, true));
+        // an unknown org: 404 and no chain of its own
+        assert_eq!(state.api_unrouted("nope", "GET", ip(4), now).status().as_u16(), 404);
+        assert!(audit.read("nope", "console", crate::api_audit::Repr::AsIs, 0, 10).unwrap()["entries"].as_array().unwrap().is_empty());
+        // a known org whose refusal cannot be recorded: 503
+        *desk.audit.lock() = None;
+        let (status, _, body) = api_json(state.api_unrouted("acme", "GET", ip(5), now)).await;
+        assert_eq!((status, body["code"].as_str()), (503, Some("audit-unavailable")));
     }
 
     #[test]

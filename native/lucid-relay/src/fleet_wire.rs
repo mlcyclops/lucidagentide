@@ -542,11 +542,22 @@ pub const OPS: &[OpSpec] = &[
     OpSpec { op: "api-map", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "map"], opt: &["base"] },
     OpSpec { op: "api-tighten", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "entry"], opt: &[] },
     OpSpec { op: "api-pseudonym-key", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "pkv", "key", "not_before"], opt: &[] },
+    // API-1 2.6, 9.3, 12.2: the relay's audit chains shipped to the console (`api-audit`, acknowledged once durable),
+    // pulled back after a reconnect (`api-chains`), and its per-org checkpoint key certified by the console.
+    OpSpec { op: "api-audit", kind: Kind::Req, to: Some(Side::Console), keys: &["org", "repr", "first", "last", "entries"], opt: &[] },
+    OpSpec { op: "api-chains", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "after"], opt: &[] },
+    OpSpec { op: "api-checkpoint-csr", kind: Kind::Req, to: Some(Side::Relay), keys: &["org"], opt: &[] },
+    OpSpec { op: "api-checkpoint-cert", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "cert", "chain"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
     OPS.iter().find(|s| s.op == op)
 }
+
+/// API-1 2.6: an `api-audit` request frame, and each `api-chains` answer page (both 1 MiB, the console's frame limit).
+pub const API_AUDIT_MAX: usize = TO_CONSOLE_MAX;
+/// API-1 9.3: an `api-checkpoint-cert` request frame (a certificate and its chain to the org CA).
+pub const API_CHECKPOINT_CERT_MAX: usize = 32 * 1024;
 
 /// API-1 2.6: the size limit of an op's whole request frame, below the side's frame limit (3.8).
 pub fn op_frame_max(op: &str) -> Option<usize> {
@@ -554,6 +565,10 @@ pub fn op_frame_max(op: &str) -> Option<usize> {
         "api-map" => Some(300 * 1024),
         "api-tighten" => Some(8 * 1024),
         "api-pseudonym-key" => Some(1024),
+        "api-audit" => Some(API_AUDIT_MAX),
+        "api-chains" => Some(256),
+        "api-checkpoint-csr" => Some(256),
+        "api-checkpoint-cert" => Some(API_CHECKPOINT_CERT_MAX),
         _ => None,
     }
 }
@@ -1142,6 +1157,29 @@ mod tests {
         assert_eq!(parse_frame(&req_text(1, "api-heads", json!({"org": "acme"})), Side::Relay).err().unwrap().why, "body");
         let welcome = json!({"consoleId": "c_0123456789abcdef", "time": 1, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1, "api": {"acme": {"seq": 0, "tseq": 0}}});
         assert_eq!(parse_frame(&evt_text("welcome", welcome), Side::Relay).err().unwrap().why, "body");
+    }
+
+    #[test]
+    fn api_audit_ops_have_their_keys_directions_and_size_limits() {
+        // api-audit goes relay to console, at most 1 MiB
+        let batch = |n: usize| json!({"org": "acme", "repr": "as_is", "first": 1, "last": 1, "entries": ["x".repeat(n)]});
+        assert!(matches!(parse_frame(&req_text(1, "api-audit", batch(10)), Side::Console), Ok(Frame::Req { op: "api-audit", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-audit", batch(10)), Side::Relay).err().unwrap().why, "op");
+        assert!(parse_frame(&req_text(1, "api-audit", batch(1000 * 1024)), Side::Console).is_ok());
+        assert_eq!(parse_frame(&req_text(1, "api-audit", batch(API_AUDIT_MAX)), Side::Console).err().unwrap().why, "size");
+        assert_eq!(parse_frame(&req_text(1, "api-audit", json!({"org": "acme", "repr": "as_is", "first": 1, "entries": []})), Side::Console).err().unwrap().why, "body");
+        // api-chains goes console to relay, 256 B in
+        let after = json!({"as_is": 0, "pseudonymized": 0, "removed": 0});
+        assert!(matches!(parse_frame(&req_text(1, "api-chains", json!({"org": "acme", "after": after.clone()})), Side::Relay), Ok(Frame::Req { op: "api-chains", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-chains", json!({"org": "acme", "after": after})), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-chains", json!({"org": "a".repeat(200), "after": {}})), Side::Relay).err().unwrap().why, "size");
+        // checkpoint certificates go console to relay
+        assert!(matches!(parse_frame(&req_text(1, "api-checkpoint-csr", json!({"org": "acme"})), Side::Relay), Ok(Frame::Req { op: "api-checkpoint-csr", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-checkpoint-csr", json!({"org": "acme"})), Side::Console).err().unwrap().why, "op");
+        let cert = json!({"org": "acme", "cert": "A".repeat(2000), "chain": ["A".repeat(2000)]});
+        assert!(matches!(parse_frame(&req_text(1, "api-checkpoint-cert", cert), Side::Relay), Ok(Frame::Req { op: "api-checkpoint-cert", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-checkpoint-cert", json!({"org": "acme", "cert": "A"})), Side::Relay).err().unwrap().why, "body");
+        assert_eq!(parse_frame(&req_text(1, "api-checkpoint-cert", json!({"org": "acme", "cert": "A".repeat(API_CHECKPOINT_CERT_MAX), "chain": []})), Side::Relay).err().unwrap().why, "size");
     }
 
     #[test]

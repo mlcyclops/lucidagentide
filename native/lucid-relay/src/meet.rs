@@ -1323,13 +1323,18 @@ fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>,
     let logger = crate::console_meet::logger();
     // AC-2b-D 9.3, 8.7: the Meeting Hub fields and frames of the link (meetRoots, meetCrl, meetPki, meet-crl,
     // welcome.meetCaId, renewals)
-    let fleet = Arc::new(MeetFleet { relay: Arc::downgrade(relay), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()) });
+    let fleet = Arc::new(MeetFleet::new(relay));
     {
         let mut all = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner());
         all.retain(|(d, _)| *d != dir);
         all.push((dir.clone(), fleet.clone()));
     }
     crate::fleet_agent::set_meet_hooks(&dir, fleet);
+    // API-1 9.3, 9.4: the relay's audit chains close summary minutes, write checkpoints and apply retention every 10 s
+    // (with or without `api_listen`), once they are open
+    let weak = Arc::downgrade(relay);
+    let note = |n: &str| crate::console_meet::logger().security("api.audit.note", &crate::log::Fields::new().with("note", n), crate::log::Level::Warn);
+    crate::api_resource::spawn_ticker("relay-api-audit", Box::new(move || weak.upgrade()?.api_audit()), Box::new(note))?;
     if !s.with_console.trim().is_empty() {
         let hosts: Vec<String> = [s.host.clone(), s.turn_host_public.clone(), s.console_public.clone(), s.guest_public.clone()].into_iter().filter(|h| !h.is_empty()).collect();
         crate::console_fleet::start_with_console(Path::new(s.with_console.trim()), crate::license::Product::Meet, &hosts, Some(&dir), logger.clone())?;
@@ -1402,6 +1407,8 @@ pub struct MeetFleet {
     ca_held: AtomicBool,
     /// The console's origin while `ca_held` (the `<origin>` of `relay.fleet-ca-held`).
     origin: Mutex<String>,
+    /// API-1 9.1: this relay's own audit chains, opened once it has a relay id and a vault.
+    audit: Mutex<Option<Arc<crate::api_audit::ApiAudit>>>,
 }
 
 /// The link of each running Meeting Hub relay by state folder (one per process; tests run several).
@@ -1411,6 +1418,32 @@ static MEET_FLEETS: std::sync::Mutex<Vec<(PathBuf, Arc<MeetFleet>)>> = std::sync
 pub const RELAY_FLEET_CA_HELD: &str = "The Admin Console at <origin> holds the CA this High relay trusts, so it takes no changes from that console. Move this relay to a CA the console does not hold.";
 
 impl MeetFleet {
+    pub fn new(relay: &Arc<Relay>) -> MeetFleet {
+        MeetFleet { relay: Arc::downgrade(relay), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()), audit: Mutex::new(None) }
+    }
+
+    /// API-1 9.1: the relay's own audit chains (source = its fleet relay id), opened the first time they are asked for
+    /// once the relay is enrolled (open completes uncommitted transactions and flushes the summary WAL); None before.
+    fn audit(&self, r: &Relay) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        let mut held = self.audit.lock();
+        if let Some(a) = held.as_ref() {
+            return Some(a.clone());
+        }
+        let dir = Some(PathBuf::from(&r.settings.state_dir)).filter(|d| !d.as_os_str().is_empty())?;
+        let map = crate::fleet_agent::load_link_json(&dir).ok().flatten()?;
+        let relay_id = crate::fleet_agent::Link { map }.relay_id().to_string();
+        if relay_id.is_empty() {
+            return None;
+        }
+        let book = r.fleet.get().map(|f| f.book.clone()).or_else(|| r.admin_console.get().cloned())?;
+        let vault: Arc<dyn crate::fleet_ca::VaultLock> = book;
+        let signer = Arc::new(crate::api_checkpoint::RelayCheckpoints::new(&dir, vault.clone()));
+        let keys = Arc::new(crate::api_checkpoint::RelayPseudonymKeys::new(&dir, vault));
+        let audit = Arc::new(crate::api_audit::ApiAudit::open(Some(&dir), &relay_id, signer, keys, pj::now() as i64));
+        *held = Some(audit.clone());
+        Some(audit)
+    }
+
     /// 8.7: whether this relay runs the High profile (its book, `console_profile`, or `profile.lock`).
     fn high(r: &Relay) -> bool {
         crate::console_settings::profile_locked() || r.settings.console_profile.trim() == "high" || r.fleet.get().is_some_and(|f| f.book.profile_high()) || r.admin_console.get().is_some_and(|c| c.profile_high())
@@ -1475,6 +1508,60 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
 
     fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
         self.relay.upgrade().map(|r| r.hub.api_fleet_request(op, body))
+    }
+
+    fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        let r = self.relay.upgrade()?;
+        self.audit(&r)
+    }
+}
+
+/// API-1 9.2: a certificate's `cert.grace-used` entry goes into each org at most once an hour (the security line is
+/// written on every request).
+static GRACE_NOTED: std::sync::Mutex<Vec<(String, String, i64)>> = std::sync::Mutex::new(Vec::new());
+
+impl Relay {
+    /// API-1 9.1: this relay's own audit chains (source = its fleet relay id); None until it is enrolled with a vault
+    /// (the API listener then answers 503 `audit-unavailable`).
+    pub fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        if self.settings.state_dir.is_empty() {
+            return None;
+        }
+        let dir = PathBuf::from(&self.settings.state_dir);
+        let fleet = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| *d == dir).map(|(_, f)| f.clone())?;
+        fleet.audit(self)
+    }
+
+    /// API-1 7.2 `v1/health`: the fleet channel to the console is welcomed and open now.
+    pub fn console_connected(&self) -> bool {
+        !self.settings.state_dir.is_empty() && crate::fleet_agent::channel_up(Path::new(&self.settings.state_dir))
+    }
+
+    /// API-1 3.3, 9.2: a Meet certificate admitted inside its org grace: `cert.grace-used` into each org whose grace
+    /// admits it, once an hour per org and certificate. A failed append is the security line `api.audit-failed`
+    /// (Meet requests are not API decisions, so they are not refused for it).
+    fn api_grace_used(&self, who: &Identity) {
+        let now = pj::now() as i64;
+        let orgs = self.hub.api_grace_orgs(&who.kind, &who.principal, &who.orgs, now);
+        let due: Vec<String> = {
+            let mut noted = GRACE_NOTED.lock().unwrap_or_else(|e| e.into_inner());
+            noted.retain(|(_, _, at)| now - at < 3600);
+            let due: Vec<String> = orgs.into_iter().filter(|o| !noted.iter().any(|(no, ns, _)| no == o && *ns == who.serial)).collect();
+            noted.extend(due.iter().map(|o| (o.clone(), who.serial.clone(), now)));
+            due
+        };
+        if due.is_empty() {
+            return;
+        }
+        let mut entry = serde_json::json!({ "action": "cert.grace-used", "result": "ok", "kind": who.kind, "principal": who.principal, "until": who.grace_end });
+        if !who.serial.is_empty() {
+            entry["serial"] = Value::from(who.serial.clone());
+        }
+        if !who.device.is_empty() {
+            entry["device"] = Value::from(who.device.clone());
+        }
+        let notes = due.into_iter().map(|o| (o, entry.clone())).collect();
+        crate::fleet_agent::api_record(self.api_audit().as_deref(), notes, &crate::console_meet::logger(), now);
     }
 }
 
@@ -2144,6 +2231,7 @@ impl Ctx<'_> {
         if who.in_grace {
             let left = (who.grace_end - pj::now() as i64).max(0) as f64 / 3600.0;
             log_warn(&format!("cert.grace-used principal={} serial={} not_after={} grace_end={} hours_left={left:.1}", who.principal, who.serial, pj::iso_utc(who.not_after), pj::iso_utc(who.grace_end)));
+            self.relay.api_grace_used(&who);
         }
         if let Some(der) = self.der {
             who.cert_pem = der_to_pem(der);
@@ -2575,7 +2663,7 @@ mod tests {
             let state = dir("held");
             std::fs::write(state.join("ca.crt"), ca.pem()).unwrap();
             let r = test_relay(Settings { state_dir: path(&state), client_ca: path(&state.join("ca.crt")), console_profile: profile.into(), ..Settings::default() });
-            let f = Arc::new(MeetFleet { relay: Arc::downgrade(&r), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()) });
+            let f = Arc::new(MeetFleet::new(&r));
             MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).push((state, f.clone()));
             (r, f)
         };
