@@ -725,7 +725,7 @@ impl State {
     /// then the earliest-expiring of all until the total fits the budget. Returns how many entries it dropped.
     fn admit_cert(&mut self, e: Registered, t_sec: i64) -> usize {
         let mut dropped = 0;
-        let expired: Vec<String> = self.certs.values().filter(|old| old.exp <= t_sec).map(|old| old.cert_sha256.clone()).collect();
+        let expired: Vec<String> = self.certs.values().filter(|old| self.trust.past_grace(old.exp, t_sec)).map(|old| old.cert_sha256.clone()).collect();
         for sha in expired {
             self.drop_cert(&sha);
             dropped += 1;
@@ -983,7 +983,7 @@ impl State {
         if self.trust.is_revoked(&s.serial) {
             return Some("its certificate was revoked");
         }
-        if s.exp <= t.div_euclid(1000) {
+        if self.trust.past_grace(s.exp, t.div_euclid(1000)) {
             return Some("its certificate expired");
         }
         if s.role != "hub" && t - s.at >= SEEN_MS {
@@ -996,7 +996,8 @@ impl State {
     fn free_users(&mut self, t: i64) -> Result<(), String> {
         let Some(l) = self.licensed.as_mut() else { return Ok(()) };
         let trust = &self.trust;
-        let freed = l.users.prune(|serial| trust.is_revoked(serial), t.div_euclid(1000))?;
+        // API-1 3.5: a certificate inside the directory's grace still holds its seat
+        let freed = l.users.prune(|serial| trust.is_revoked(serial), trust.grace_now(t.div_euclid(1000)))?;
         for f in freed {
             let fields = Fields::new().with("user", f.user).with("why", f.why).with("used", l.users.used()).with("users", l.license.users);
             self.logger.ops("user.freed", &fields, Level::Info);
@@ -1137,7 +1138,7 @@ impl State {
         self.clock.now(t);
         if t - self.certs_swept_at >= CERT_SWEEP_MS {
             self.certs_swept_at = t;
-            let gone: Vec<String> = self.certs.values().filter(|e| e.exp <= t.div_euclid(1000)).map(|e| e.cert_sha256.clone()).collect();
+            let gone: Vec<String> = self.certs.values().filter(|e| self.trust.past_grace(e.exp, t.div_euclid(1000))).map(|e| e.cert_sha256.clone()).collect();
             if !gone.is_empty() {
                 for sha in gone {
                     self.drop_cert(&sha);
@@ -1747,7 +1748,7 @@ impl State {
             "revoked"
         } else if self.blocks.is_blocked(node, t) {
             "blocked"
-        } else if s.exp <= now {
+        } else if self.trust.past_grace(s.exp, now) {
             "expired"
         } else if s.exp - now <= EXPIRING_SEC {
             "expiring"
@@ -2411,6 +2412,40 @@ mod tests {
         assert!(st.verified.contains_key(&sha), "a warm cache");
         // The leaf expires while the CRL is unchanged: 401 on the next request, cache or not.
         assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", T0 + 10_000, 3).0, 401);
+    }
+
+    /// API-1 3.5: inside the held directory's `cert_grace_hours` an expired node certificate registers, takes mail and
+    /// survives the sweep; past it, it is refused, takes no mail and is swept.
+    #[test]
+    fn api1_a_node_inside_the_directory_grace_registers_receives_and_survives_a_sweep() {
+        let root = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut st = state(&root, None, None).unwrap();
+        let s0 = T0 / 1000;
+        let root_id = node_id_of(&p256_spki_der(&root.verifying_key().into()));
+        let directory = compact(&root, &json!({
+            "v": 1, "typ": "lucid-relay-directory", "root": root_id, "version": 1,
+            "relays": [{ "url": "https://relay.example.com", "region": "eu", "priority": 1 }], "iat": s0 - 60, "exp": s0 + 30 * 86_400, "cert_grace_hours": 24,
+        }));
+        assert!(matches!(st.take_directory(&directory, T0, &Fields::new()), Ok(Ok(1))));
+        // valid for an hour from T0; used two hours later, inside the 24 hour grace
+        let cert = cert_for(&root, &key, 2, "spoke", "desk", s0 + 3600);
+        let sha = sha256_hex(cert.as_bytes());
+        let node = node_id_of(&p256_spki_der(&key.verifying_key().into()));
+        let inside = T0 + 2 * 3_600_000;
+        assert_eq!(register(&mut st, &key, &cert, inside, 1), 200);
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", inside, 2).0, 200);
+        assert_eq!(st.recipient_problem(&node, inside), None);
+        st.certs_swept_at = 0;
+        st.sweep(inside);
+        assert!(st.certs.contains_key(&sha), "inside the grace the sweep keeps it");
+        // past exp + 24 h: refused, no mail, swept
+        let past = T0 + 3_600_000 + 24 * 3_600_000 + 1000;
+        assert_eq!(call(&mut st, &key, Auth::Hash(&sha, "v3"), "GET", "/v1/inbox", "", past, 3).0, 401);
+        assert!(st.recipient_problem(&node, past).is_some());
+        st.certs_swept_at = 0;
+        st.sweep(past);
+        assert!(!st.certs.contains_key(&sha), "past the grace the sweep drops it");
     }
 
     #[test]

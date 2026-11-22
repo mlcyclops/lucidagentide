@@ -2600,12 +2600,17 @@ impl Hub {
 
     /// `POST /v1/org/api {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
     /// `{org, seq, hash}`, answered after the map is flushed to disk. The pinned seq with another hash raises
-    /// `api.map.conflict` and answers 409 `conflict`.
+    /// `api.map.conflict` and answers 409 `conflict`. A map for an org this relay does not serve is refused before
+    /// it is verified (403 `org-not-served`).
     pub fn pc_api_upload(&self, session: &str, who: &Identity, signed: Body) -> R<Obj> {
         let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
         let mut st = self.st.lock();
         let r = (|| -> R<crate::api_map::AcceptOutcome> {
             st.check_admin(session, who)?;
+            let org = signed.and_then(|s| s.get("map")).and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default();
+            if !Self::api_served(&st).contains(org) {
+                return Err(E::Coded(403, "org-not-served", "This relay does not serve that organization.".into()));
+            }
             st.api_accept(signed, edition)
         })();
         drop(st);
@@ -2618,20 +2623,6 @@ impl Hub {
         };
         log_info(&format!("org_api_upload org={} seq={} hash={} by={}", vm.org, vm.seq, vm.hash, who.principal));
         Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
-    }
-
-    /// `GET /v1/org/api?org=<id>[&sha256=<hex>]` -> `{signed, signer_policy}`: the pinned map, or the pinned or
-    /// previous map with that hash, only to the console; anyone else, and a map the relay does not hold, get 404
-    /// `{"ok": false, "code": "not-found", "error": "Not found."}`.
-    pub fn pc_api_get_for(&self, who: &Identity, org: &str, sha256: &str) -> R<Obj> {
-        let not_found = || E::Coded(404, "not-found", "Not found.".into());
-        if !who.is_console() {
-            return Err(not_found());
-        }
-        let mut st = self.st.lock();
-        let wire = st.api_maps().get(org, sha256).map(|v| v.wire.clone()).ok_or_else(not_found)?;
-        let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
-        Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
     }
 
     /// API-1 3.3: the Meet verifier's view of the live api map store (`State::api_cert_end`), holding the hub weakly.
@@ -3460,6 +3451,25 @@ mod tests {
         assert_eq!(pols(Some(&json!([a, b]))).unwrap().len(), 2);
         assert!(pols(Some(&json!([b, a]))).is_err());
         assert!(pols(Some(&json!(["x"]))).is_err());
+    }
+
+    /// API-1 2.4: `POST /v1/org/api` refuses a map for an org this relay does not serve before verifying it.
+    #[test]
+    fn api1_an_upload_for_an_org_the_relay_does_not_serve_is_refused() {
+        let hub = Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        hub.st.lock().organizations = json!({"ben@acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        let ann = Identity { principal: "ann@x".into(), name: "ANN".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let session = hub.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
+        let signed = |org: &str| json!({"map": {"org": org, "seq": 1}, "sig": "", "chain": []});
+        let other = signed("beta");
+        match hub.pc_api_upload(&session, &ann, Some(&other)) {
+            Err(E::Coded(403, "org-not-served", _)) => {}
+            r => panic!("expected org-not-served, got {r:?}"),
+        }
+        assert!(hub.st.lock().api_maps().get("beta", "").is_none(), "nothing pinned");
+        // the org it serves goes on to verification (refused here for another reason)
+        let mine = signed("acme");
+        assert!(!matches!(hub.pc_api_upload(&session, &ann, Some(&mine)), Err(E::Coded(_, "org-not-served", _)) | Ok(_)));
     }
 
     /// API-1 3.3: the applicable grace is the smallest among the orgs that bind a certificate; an org without a pinned

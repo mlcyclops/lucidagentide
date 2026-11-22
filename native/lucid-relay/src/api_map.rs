@@ -1048,6 +1048,16 @@ fn contains(map: &Obj, e: &TightenEntry) -> bool {
     }
 }
 
+/// 2.5: whether a pinned map already settles an entry: it clears it (and was issued after the entry), or folds it and
+/// contains its restriction. `token_deny` and `scrape_deny` are never settled by a map.
+fn settled_by(map: &Obj, e: &TightenEntry) -> bool {
+    if DENY_ACTIONS.contains(&e.action.as_str()) {
+        return false;
+    }
+    let issued = map.get("issued").and_then(int_of).unwrap_or(0);
+    (lists(map, "cleared", &e.id) && e.ts < issued) || (lists(map, "folded", &e.id) && contains(map, e))
+}
+
 /// 2.5 folding and clearing for a newly pinned map: `fold-mismatch` when it folds an active id whose restriction it
 /// does not contain, folds or clears a `token_deny` or `scrape_deny`, clears an entry not older than its `issued`, or
 /// lists an id both ways. Returns the active ids that remain, sorted.
@@ -1098,6 +1108,16 @@ pub struct OrgApi {
     pub applied: u64,
     /// Journal entries not yet folded or cleared, in `tseq` order.
     pub active: Vec<TightenEntry>,
+}
+
+impl OrgApi {
+    /// Drop the active entries the pinned map settles (2.5); true when any went.
+    fn settle(&mut self) -> bool {
+        let Some(map) = self.pinned.as_ref().map(|p| p.map().clone()) else { return false };
+        let before = self.active.len();
+        self.active.retain(|e| !settled_by(&map, e));
+        self.active.len() != before
+    }
 }
 
 /// What `accept` did.
@@ -1174,6 +1194,18 @@ impl ApiMapStore {
                 }
             }
         }
+        // a crash after the map's write and before the journal's (`pin`) leaves entries the pinned map settles: drop
+        // them and write the journal again (until then they only kept the relay stricter)
+        let orgs: Vec<String> = store.orgs.keys().cloned().collect();
+        for org in orgs {
+            let mut o = store.orgs[&org].clone();
+            if o.settle() {
+                if let Err(e) = store.save_journal(&org, &o) {
+                    crate::meet::log_warn(&format!("api journal not rewritten org={org} why={e}"));
+                }
+                store.orgs.insert(org, o);
+            }
+        }
         store
     }
 
@@ -1219,9 +1251,16 @@ impl ApiMapStore {
         self.room_for(&vm.org)?;
         let cur = self.orgs.get(&vm.org).cloned().unwrap_or_default();
         let (pseq, phash) = cur.pinned.as_ref().map_or((0, ""), |p| (p.seq, p.hash.as_str()));
-        // the pinned map sent again (a reconnect or a retried upload) changes nothing
+        // the pinned map sent again (a reconnect or a retried upload) pins nothing; it still settles the journal, so a
+        // crash between the map's write and the journal's converges on the next delivery
         if let Some(p) = cur.pinned.as_ref().filter(|p| p.hash == vm.hash) {
-            return Ok(AcceptOutcome::Unchanged(p.clone()));
+            let p = p.clone();
+            let mut next = cur.clone();
+            if next.settle() {
+                self.save_journal(&vm.org, &next)?;
+                self.orgs.insert(vm.org.clone(), next);
+            }
+            return Ok(AcceptOutcome::Unchanged(p));
         }
         match pin_verdict(vm.seq, &vm.hash, pseq, phash) {
             "seq-not-higher" => return fail("seq-not-higher", format!("that api map's seq is not higher than {pseq}")),
@@ -1233,10 +1272,18 @@ impl ApiMapStore {
         next.previous = cur.pinned.clone();
         next.pinned = Some(vm.clone());
         next.active.retain(|e| remaining.contains(&e.id));
-        if next.active != cur.active {
-            self.save_journal(&vm.org, &next)?;
-        }
+        // the map first: a crash before the journal's write leaves the new map with the old (stricter) journal, which
+        // `load` and a retried delivery settle; never the old map without its tightening
         self.save_map(&vm.org, &next)?;
+        if next.active != cur.active {
+            if let Err(e) = self.save_journal(&vm.org, &next) {
+                // the map is on disk: keep the journal as written (stricter) in memory too, settled at the next load
+                let mut kept = next.clone();
+                kept.active = cur.active.clone();
+                self.orgs.insert(vm.org.clone(), kept);
+                return Err(e);
+            }
+        }
         self.orgs.insert(vm.org.clone(), next);
         Ok(AcceptOutcome::Pinned(vm))
     }
@@ -1257,7 +1304,10 @@ impl ApiMapStore {
         Ok(Some(from))
     }
 
-    /// 2.5: apply one journal entry for `org` (its tseq exactly the next) and flush the journal before Ok(tseq).
+    /// 2.5: apply one journal entry for `org` (its tseq exactly the next) and flush the journal before Ok(tseq). An
+    /// entry the pinned map already settles (a map that arrived before its entry, as in a reconnect catch-up) is
+    /// recorded as applied but not kept active: cleared when the map clears it, folded only when the map also contains
+    /// its restriction.
     pub fn apply_tighten(&mut self, org: &str, entry: &Value) -> Result<u64, ApiMapError> {
         self.room_for(org)?;
         let cur = self.orgs.get(org).cloned().unwrap_or_default();
@@ -1267,7 +1317,9 @@ impl ApiMapStore {
         }
         let mut next = cur;
         next.applied = e.tseq;
-        next.active.push(e);
+        if !next.pinned.as_ref().is_some_and(|p| settled_by(p.map(), &e)) {
+            next.active.push(e);
+        }
         self.save_journal(org, &next)?;
         let tseq = next.applied;
         self.orgs.insert(org.to_string(), next);
@@ -1308,7 +1360,7 @@ impl ApiMapStore {
         self.orgs.get(org).is_some_and(|o| o.active.iter().any(|e| e.action == "api_off"))
     }
 
-    /// `GET /v1/org/api?org=` (the pinned map) or `&sha256=` (the pinned or previous map with that hash).
+    /// The org's pinned map (`sha256` empty), or the pinned or previous map with that hash.
     pub fn get(&self, org: &str, sha256: &str) -> Option<&VerifiedApiMap> {
         let o = self.orgs.get(org)?;
         if sha256.is_empty() {
@@ -1528,6 +1580,56 @@ mod tests {
         m["cleared"] = json!(["t_acme_000001"]);
         assert!(matches!(s.pin(verified(m)), Ok(AcceptOutcome::Pinned(_))));
         assert!(s.active("acme").is_empty());
+    }
+
+    #[test]
+    fn a_crash_between_the_map_and_journal_writes_never_widens_and_converges() {
+        let dir = temp("crash");
+        let suspend = entry(1, "client_suspend", json!("c_5f1a2b3c4d5e6f70"));
+        let mut s = ApiMapStore::load(Some(&dir));
+        s.pin(verified(good_map(1))).unwrap();
+        s.apply_tighten("acme", &suspend).unwrap();
+        let journal = dir.join(JOURNAL_DIR).join("acme.json");
+        let before = std::fs::read(&journal).unwrap();
+        let mut m2 = good_map(2);
+        m2["cleared"] = json!(["t_acme_000001"]);
+        assert!(matches!(s.pin(verified(m2.clone())), Ok(AcceptOutcome::Pinned(_))));
+        // the crash: the map reached the disk, the journal did not (the map is written first, so the reverse, the old
+        // map without its tightening, cannot happen)
+        std::fs::write(&journal, &before).unwrap();
+        let back = ApiMapStore::load(Some(&dir));
+        assert_eq!(back.head("acme"), (2, 1));
+        assert!(back.active("acme").is_empty(), "the next load settles the journal against the pinned map");
+        let on_disk: Value = serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(on_disk["active"], json!([]), "and writes it");
+        // the same state in memory (a relay that kept running): the retried delivery of the same map converges
+        std::fs::write(&journal, &before).unwrap();
+        let mut live = ApiMapStore::load(Some(&dir));
+        live.orgs.get_mut("acme").unwrap().active.push(TightenEntry::parse(&suspend).unwrap());
+        std::fs::write(&journal, &before).unwrap();
+        assert!(matches!(live.pin(verified(m2)), Ok(AcceptOutcome::Unchanged(_))));
+        assert!(live.active("acme").is_empty());
+        let on_disk: Value = serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        assert_eq!(on_disk["active"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entries_arriving_after_the_map_that_folds_or_clears_them_are_settled() {
+        // the catch-up order: the newer map first, then the journal entries it folds or clears
+        let mut s = ApiMapStore::load(None);
+        s.pin(verified(good_map(1))).unwrap();
+        let mut m2 = good_map(2);
+        m2["cleared"] = json!(["t_acme_000001"]);
+        // fleet.read is not among the client's scopes (contained); audit.read still is (not contained)
+        m2["folded"] = json!(["t_acme_000002", "t_acme_000003"]);
+        assert!(matches!(s.pin(verified(m2)), Ok(AcceptOutcome::Pinned(_))));
+        assert_eq!(s.apply_tighten("acme", &entry(1, "client_suspend", json!("c_5f1a2b3c4d5e6f70"))), Ok(1));
+        assert_eq!(s.apply_tighten("acme", &entry(2, "client_drop_scope", json!({"client": "c_5f1a2b3c4d5e6f70", "scope": "fleet.read"}))), Ok(2));
+        assert_eq!(s.apply_tighten("acme", &entry(3, "client_drop_scope", json!({"client": "c_5f1a2b3c4d5e6f70", "scope": "audit.read"}))), Ok(3));
+        let active: Vec<&str> = s.active("acme").iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(active, ["t_acme_000003"], "the cleared suspension is not active; a fold without the restriction stays");
+        assert_eq!(s.head("acme"), (2, 3));
     }
 
     #[test]

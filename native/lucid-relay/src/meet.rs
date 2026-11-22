@@ -739,24 +739,33 @@ pub fn uri_value(uris: &[String], prefix: &str) -> String {
     uris.iter().find_map(|u| u.strip_prefix(prefix).filter(|v| is_device_id(v)).map(str::to_string)).unwrap_or_default()
 }
 
-/// API-1 3.3: `(in_grace, grace_end)` of a verified client certificate. The handshake admitted an expired leaf only
-/// inside its grace, but rustls hands the verifier's verdict to no connection, so the same grace view is asked again.
-fn grace_of(cert: &Cert) -> (bool, i64) {
+/// API-1 3.2: what a request on a connection whose certificate is past its effective end hears.
+pub const CERT_EXPIRED: &str = "the client certificate has expired";
+
+/// API-1 3.3: `(in_grace, grace_end)` of a client certificate, re-judged on every request: rustls hands the verifier's
+/// verdict to no connection, and a connection can outlive the grace (the map expires, a `grace_lower` arrives, or
+/// time passes). Past `notAfter` and past the effective end it is refused as expired.
+fn grace_of(cert: &Cert, source: Option<&crate::meet_tls::GraceSource>) -> R<(bool, i64)> {
     let now = pj::now() as i64;
     if now <= cert.not_after {
-        return (false, 0);
+        return Ok((false, 0));
     }
-    let end = crate::meet_tls::cert_grace_end(cert, now);
+    let end = crate::meet_tls::grace_end_with(source, cert, now);
     if now <= end {
-        (true, end)
+        Ok((true, end))
     } else {
-        (false, 0)
+        forbidden(CERT_EXPIRED)
     }
 }
 
 /// identity_from_cert: CN and email SAN of the verified client certificate, the device from the SAN URI (label:
 /// the first OU), a seed's token, or `legacy-` plus the serial's first 16 hex.
 pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
+    identity_with_grace(der, crate::meet_tls::grace_source())
+}
+
+/// `identity_from_cert` judging expiry with this grace source.
+fn identity_with_grace(der: Option<&[u8]>, source: Option<&crate::meet_tls::GraceSource>) -> R<Identity> {
     let Some(der) = der else { return forbidden("no client certificate") };
     let cert = Cert::from_der(der).ok_or_else(|| E::Forbidden("the client certificate has no name or no email".into()))?;
     let cn = cert.names.cns().last().cloned().unwrap_or_default();
@@ -773,8 +782,19 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     if kind == "sso" {
         // the SSO service has no email or device: it is named by its serial, sso routes only
         let name = if cn.is_empty() { "Lucid Meet SSO".to_string() } else { cn };
-        let (in_grace, grace_end) = grace_of(&cert);
-        return Ok(Identity { principal: format!("sso:{}", cert.serial), name: pj::clip(name.trim(), 80), serial: cert.serial.clone(), kind, orgs, in_grace, grace_end, ..Default::default() });
+        let (in_grace, grace_end) = grace_of(&cert, source)?;
+        return Ok(Identity {
+            principal: format!("sso:{}", cert.serial),
+            name: pj::clip(name.trim(), 80),
+            serial: cert.serial.clone(),
+            kind,
+            orgs,
+            not_before: cert.not_before,
+            not_after: cert.not_after,
+            in_grace,
+            grace_end,
+            ..Default::default()
+        });
     }
     let emails = &cert.names.emails;
     if cn.is_empty() || emails.is_empty() {
@@ -800,7 +820,7 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         not_after: cert.not_after,
         ..Default::default()
     };
-    (who.in_grace, who.grace_end) = grace_of(&cert);
+    (who.in_grace, who.grace_end) = grace_of(&cert, source)?;
     let token = uri_value(uris, SEED_URI_PREFIX);
     if !token.is_empty() {
         who.seed = true;
@@ -2460,6 +2480,33 @@ mod tests {
         let ann = ca.leaf(&[0x33], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &k, true);
         let who = identity_from_cert(Some(&ann)).unwrap();
         assert_eq!((who.principal.as_str(), who.device.as_str(), who.kind.as_str()), ("ann@x.org", "0123456789abcdef", "person"));
+    }
+
+    /// API-1 3.2, 3.3: a connection admitted inside the grace is refused on its next request once the grace no longer
+    /// covers now (here lowered to 0); an SSO certificate is judged alike and carries its validity.
+    #[test]
+    fn api1_a_connection_admitted_in_grace_is_refused_once_the_grace_is_lowered() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+        let ca = Ca::new("Lucid Meet CA");
+        let now = pj::now() as i64;
+        let hours = Arc::new(AtomicI64::new(24));
+        let h = hours.clone();
+        let source: crate::meet_tls::GraceSource = Arc::new(move |g: &crate::meet_tls::GraceSubject, _now: i64| g.not_after + h.load(Ordering::SeqCst) * 3600);
+        let ann = ca.leaf_valid(&[0x41], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &Key::new(), true, now - 10 * 3600, now - 2 * 3600);
+        let who = identity_with_grace(Some(&ann), Some(&source)).unwrap();
+        assert!(who.in_grace);
+        assert_eq!(who.grace_end, now - 2 * 3600 + 24 * 3600);
+        let sso = ca.leaf_valid(&[0x42], "Lucid Meet SSO", None, &[pc::SSO_URI, "urn:lucid-meet:org:acme"], &Key::new(), true, now - 10 * 3600, now - 2 * 3600);
+        let svc = identity_with_grace(Some(&sso), Some(&source)).unwrap();
+        assert_eq!((svc.in_grace, svc.not_after), (true, now - 2 * 3600));
+        hours.store(0, Ordering::SeqCst);
+        assert_eq!(identity_with_grace(Some(&ann), Some(&source)).unwrap_err().message(), CERT_EXPIRED);
+        assert_eq!(identity_with_grace(Some(&sso), Some(&source)).unwrap_err().message(), CERT_EXPIRED);
+        // without a grace source an expired certificate is refused too; one in date is untouched
+        assert_eq!(identity_with_grace(Some(&ann), None).unwrap_err().message(), CERT_EXPIRED);
+        let fresh = ca.leaf(&[0x43], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &Key::new(), true);
+        let who = identity_with_grace(Some(&fresh), None).unwrap();
+        assert_eq!((who.in_grace, who.grace_end), (false, 0));
     }
 
     /// R3-M2, D15: with `profile.lock` present (here owned by this user, not root, and writable by it: it still

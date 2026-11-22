@@ -119,7 +119,6 @@ pub static GATE: &[(&str, &str, Class)] = &[
     ("GET", "/v1/chat/log", S),
     ("GET", "/v1/org/policy", S),
     ("GET", "/v1/org/ai", S),
-    ("GET", "/v1/org/api", S),
     ("GET", "/v1/ai/allowed", S),
     ("GET", "/v1/ai/history", S),
     ("GET", "/v1/admin/ai/audit", S),

@@ -227,11 +227,6 @@ fn get_route(path: &str) -> Option<Route> {
             let who = c.who(false)?;
             c.relay.hub.pc_ai_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
         },
-        // API-1 2.4: org api maps, only to the console
-        "/v1/org/api" => |c: &mut Ctx| {
-            let who = c.who(false)?;
-            c.relay.hub.pc_api_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
-        },
         // AI-1 6.4 and 7.6: who may use org AI, and AI history
         "/v1/ai/allowed" => |c: &mut Ctx| {
             let who = c.who(false)?;

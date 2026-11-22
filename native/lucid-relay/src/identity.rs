@@ -546,6 +546,22 @@ impl TrustStore {
         self.cert_grace_hours = hours;
     }
 
+    /// API-1 3.5 (identity.ts `pastGrace`): the instant a node certificate's raw `exp` is compared with (`exp <= it`
+    /// is expired): `now` without a grace, else `now - hours * 3600 - 1`, so the certificate lives while
+    /// `now <= exp + hours * 3600`. Revocation is checked apart and never has a grace.
+    pub fn grace_now(&self, now: i64) -> i64 {
+        if self.cert_grace_hours == 0 {
+            now
+        } else {
+            now.saturating_sub(self.cert_grace_hours * 3600 + 1)
+        }
+    }
+
+    /// API-1 3.5: a node certificate ending at `exp` is past its effective end at `now`.
+    pub fn past_grace(&self, exp: i64, now: i64) -> bool {
+        exp <= self.grace_now(now)
+    }
+
     /// The verified release gates (tests and vectors only; the relay runs with RELAY_GATES).
     #[cfg(test)]
     pub fn set_gates(&mut self, gates: &[&str]) {
@@ -1010,7 +1026,7 @@ impl TrustStore {
             return Err(Refusal::new("certificate is not valid yet"));
         }
         // API-1 3.5: inside the directory's grace an expired certificate passes (the revocation check below still runs)
-        if exp <= now && (self.cert_grace_hours == 0 || now > exp.saturating_add(self.cert_grace_hours * 3600)) {
+        if self.past_grace(exp, now) {
             return Err(Refusal::new("certificate expired"));
         }
         let serial = str_of(p.get("serial")).unwrap_or_default().to_owned();

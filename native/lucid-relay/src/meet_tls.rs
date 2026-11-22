@@ -443,16 +443,17 @@ pub fn set_grace_source(source: GraceSource) {
     let _ = GRACE.set(source);
 }
 
-fn grace_end_with(source: Option<&GraceSource>, cert: &Cert, now: i64) -> i64 {
+/// The source `set_grace_source` set (None before, and in tests that never set it).
+pub fn grace_source() -> Option<&'static GraceSource> {
+    GRACE.get()
+}
+
+/// The effective end of `cert` at `now` from `source` (`notAfter` without one, or for a certificate with no grace).
+pub fn grace_end_with(source: Option<&GraceSource>, cert: &Cert, now: i64) -> i64 {
     match (source, GraceSubject::of(cert)) {
         (Some(f), Some(s)) => f(&s, now).max(cert.not_after),
         _ => cert.not_after,
     }
-}
-
-/// API-1 3.2: the effective end of a Meet client certificate (its `notAfter` without a grace).
-pub fn cert_grace_end(cert: &Cert, now: i64) -> i64 {
-    grace_end_with(GRACE.get(), cert, now)
 }
 
 #[derive(Clone)]
