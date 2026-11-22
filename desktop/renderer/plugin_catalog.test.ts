@@ -48,6 +48,9 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   "world-soccer": { section: "civilian", lookupKey: "PLG-WORLD-SOCCER-OTF" },
   "world-baseball": { section: "civilian", lookupKey: "PLG-WORLD-BASEBALL-OTF" },
   "world-basketball": { section: "civilian", lookupKey: "PLG-WORLD-BASKETBALL-OTF" },
+  "world-hockey": { section: "civilian", lookupKey: "PLG-WORLD-HOCKEY-OTF" },
+  "world-winter-games": { section: "civilian", lookupKey: "PLG-WORLD-WINTERGAMES-OTF" },
+  "world-summer-games": { section: "civilian", lookupKey: "PLG-WORLD-SUMMERGAMES-OTF" },
   leaps: { section: "civilian", lookupKey: null },
   "mdmp-engine": { section: "government", lookupKey: null },
   "joint-planning-engine": { section: "government", lookupKey: null },
@@ -105,8 +108,8 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual([
-      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-christmas", "world-football", "world-soccer",
-      "world-st-patricks", "world-valentines",
+      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-christmas", "world-football", "world-hockey",
+      "world-soccer", "world-st-patricks", "world-summer-games", "world-valentines", "world-winter-games",
     ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
@@ -176,9 +179,10 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
     for (const p of sold) expect(p.price).toBe(isWorldPlugin(p) ? "$9.99" : "$29.99");
   });
 
-  test("the seven worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+  test("the ten worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
     expect(worlds.map((p) => p.id).sort()).toEqual([
-      "world-baseball", "world-basketball", "world-christmas", "world-football", "world-soccer", "world-st-patricks", "world-valentines",
+      "world-baseball", "world-basketball", "world-christmas", "world-football", "world-hockey", "world-soccer", "world-st-patricks",
+      "world-summer-games", "world-valentines", "world-winter-games",
     ]);
     for (const p of worlds) {
       expect(p.group).toBe(WORLDS_GROUP);

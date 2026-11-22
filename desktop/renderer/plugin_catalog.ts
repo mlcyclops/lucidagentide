@@ -158,6 +158,27 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: false, poster: "generated", glyph: "bolt", tone: "amber" },
   },
   {
+    id: "world-hockey", name: "Hockey", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-HOCKEY-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "Puck drop: a coach and a team in YOUR colors on the ice, with hat tricks, an Ice Storm and the red goal light.",
+    lucid: "Your main agent is the head coach behind the bench, every fleet lane a skater or goalie, and subagents run on as assistant coaches and the ice resurfacer driver. Set the team colors in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "shield", tone: "cyan" },
+  },
+  {
+    id: "world-winter-games", name: "Winter Games", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-WINTERGAMES-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "The mountain venue: skiers, snowboarders, skaters and curlers in YOUR national colors and flag, with an Avalanche and a gold medal podium.",
+    lucid: "Your main agent is the flag bearer, every fleet lane an athlete, and subagents run on as coaches and a polar bear cub mascot. Design the team colors and flag in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "star", tone: "blue" },
+  },
+  {
+    id: "world-summer-games", name: "Summer Games", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-SUMMERGAMES-OTF", available: true, price: WORLD_PRICE,
+    kicker: "Lucid Agent World",
+    pitch: "The main stadium: sprinters, swimmers, gymnasts and archers in YOUR national colors and flag, with a Heat Wave and a world record on every commit.",
+    lucid: "Your main agent is the torchbearer, every fleet lane an athlete, and subagents run on as coaches and judges with scorecards. Design the team colors and flag in the world's options.",
+    media: { loop: false, poster: "generated", glyph: "spark", tone: "green" },
+  },
+  {
     id: "leaps", name: "LEAPS", section: "civilian", sale: "link",
     href: "https://l-e-a-p-s-947863229376.us-west1.run.app", linkLabel: "Subscription on leaps",
     kicker: "Spaced repetition studio",
