@@ -699,7 +699,7 @@ impl FleetCa {
         Ok(self.manifest.clone())
     }
 
-    fn issued_at(&self) -> i64 {
+    pub(crate) fn issued_at(&self) -> i64 {
         self.manifest.get("issuedAt").and_then(Value::as_i64).unwrap_or(0)
     }
 

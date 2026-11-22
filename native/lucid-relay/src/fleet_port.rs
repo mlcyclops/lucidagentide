@@ -544,9 +544,41 @@ impl PortState {
         self.finish_enroll("", relay_id, spki.to_vec(), relay.clone(), "same-process", "same-process".into(), t)
     }
 
-    /// `GET /fleet/v1/trust`: the current signed manifest.
+    /// The current signed manifest (pushes and answers).
     pub fn trust(&self) -> Value {
         self.ca.lock().manifest.clone()
+    }
+
+    /// `GET /fleet/v1/trust`: a manifest issued within `TRUST_FRESH_MS`, reissued first when the current one is
+    /// older. A relay refreshing at start (revision 3.3) adopts the fetched `issuedAt` as its trusted time T and
+    /// from then on accepts a pushed manifest only when `issuedAt <= T + 5 minutes`. With the daily manifest (up
+    /// to a day old) T stayed hours behind after every restart, so each later push was refused as
+    /// `issued-future` until the stored manifest expired and the relay lost the console. A fresh one keeps T
+    /// within a minute of the console's clock. At most one reissue per `TRUST_FRESH_MS`, so an anonymous caller
+    /// cannot churn the sequence.
+    pub fn fresh_trust(&self, t: i64) -> Value {
+        let reissued = {
+            let mut ca = self.ca.lock();
+            if ca.health == Health::Ready && t - ca.issued_at() > TRUST_FRESH_MS {
+                match vault_do(&*self.vault, |v| ca.reissue(&*v, t)) {
+                    Ok(m) => {
+                        let _ = ca.save();
+                        Some((m, ca.seq))
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+        match reissued {
+            Some((m, seq)) => {
+                self.broadcast("trust", &m);
+                self.desk.audit("console", "fleet.trust", json!({ "seq": seq, "why": "fetch" }), t);
+                m
+            }
+            None => self.trust(),
+        }
     }
 
     /// `POST /fleet/v1/recover-cert` on a recovery-only connection (3.11, A3-M2).
@@ -1088,7 +1120,13 @@ async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>
         };
     }
     match (method.as_str(), path.as_str()) {
-        ("GET", "/fleet/v1/trust") => answer(200, &state.trust(), false),
+        ("GET", "/fleet/v1/trust") => {
+            let s = state.clone();
+            match tokio::task::spawn_blocking(move || s.fresh_trust(t)).await {
+                Ok(m) => answer(200, &m, false),
+                Err(_) => answer(200, &state.trust(), false),
+            }
+        }
         ("POST", "/fleet/v1/enroll/preview") | ("POST", "/fleet/v1/enroll") => {
             if peer != Peer::Anonymous {
                 return forbidden();
@@ -1141,6 +1179,9 @@ async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>
 
 /// The folder of the seven download paths (AC-2b-D 4.1, invariant D2).
 pub const INSTALL_PREFIX: &str = "/fleet/v1/install/";
+/// `GET /fleet/v1/trust` answers a manifest issued within this (`fresh_trust`): well inside the relays' 5-minute
+/// `issuedAt` slack, and the most often a fetch can make the console reissue.
+pub const TRUST_FRESH_MS: i64 = 60_000;
 /// The four install scripts: (file, product, environment) as `deploy_scripts::body` names them.
 pub const SCRIPTS: [(&str, &str, &str); 4] = [("meet-linux.sh", "meet", "linux"), ("spokes-linux.sh", "spokes", "linux"), ("meet-docker.sh", "meet", "docker"), ("spokes-docker.sh", "spokes", "docker")];
 /// 4.4: scripts, `SHA256SUMS` and `meta`, 60 per 15 minutes per source; the program 6 per hour, 1 at once per source
@@ -2021,6 +2062,30 @@ pub(crate) mod tests {
 
     fn preview_req(code: &w::Code, host: &str) -> Value {
         json!({ "v": 1, "id": code.id(), "mac": b64u(w::preview_mac(code.secret.expose(), &code.id(), host).expose()) })
+    }
+
+    /// A relay refreshing at start adopts the fetched `issuedAt` as its trusted time, so the fetch answers a
+    /// manifest no older than `TRUST_FRESH_MS`: reissued (seq + 1, issuedAt = now, the same leaves) when older, the
+    /// same one when fresh, and at most one reissue per window however often it is fetched.
+    #[test]
+    fn a_trust_fetch_answers_a_fresh_manifest() {
+        let (state, desk, _) = test_port("fresh-trust");
+        let before = state.trust();
+        let issued = before["issuedAt"].as_i64().unwrap();
+        let seq = before["seq"].as_u64().unwrap();
+        // fresh: the same manifest, nothing reissued
+        assert_eq!(state.fresh_trust(issued + TRUST_FRESH_MS), before);
+        // a day old: reissued at the fetch time, one sequence higher, the same leaves, audited
+        let t = issued + 24 * 3_600_000;
+        let after = state.fresh_trust(t);
+        assert_eq!(after["seq"].as_u64(), Some(seq + 1));
+        assert_eq!(after["issuedAt"].as_i64(), Some(t));
+        assert_eq!(after["leaves"], before["leaves"]);
+        assert_eq!(state.trust(), after);
+        assert_eq!(desk.audits.lock().iter().filter(|a| *a == "fleet.trust").count(), 1);
+        // fetched again within the window: no second reissue
+        assert_eq!(state.fresh_trust(t + TRUST_FRESH_MS - 1), after);
+        assert_eq!(desk.audits.lock().iter().filter(|a| *a == "fleet.trust").count(), 1);
     }
 
     #[test]
