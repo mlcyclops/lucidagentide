@@ -804,7 +804,7 @@ impl State {
             }
             return Ok(());
         }
-        if who.guest || who.is_service() || who.connector || who.console {
+        if who.guest || who.is_service() || who.connector || who.is_console() {
             return Ok(());
         }
         let org = self.wa_org_of(&who.principal);

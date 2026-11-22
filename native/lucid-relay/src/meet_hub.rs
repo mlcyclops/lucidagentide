@@ -1008,7 +1008,6 @@ impl State {
         let mut devices = as_obj(self.directory.get(&who.principal)).and_then(|e| as_obj(e.get("devices"))).cloned().unwrap_or_default();
         if !who.device.is_empty() {
             let mut d = obj([("label", Value::from(who.device_label.clone())), ("last_seen", f(now))]);
-<<<<<<< HEAD
             // AC-1 2.4 seats: when the record began, and the certificate it was last seen with
             let old = devices.get(&who.device).and_then(Value::as_object).cloned().unwrap_or_default();
             d.insert("added".into(), old.get("added").cloned().unwrap_or_else(|| f(now)));
