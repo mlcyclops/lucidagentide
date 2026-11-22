@@ -122,10 +122,11 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual([
-      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-chef-showdown", "world-christmas",
-      "world-circus", "world-construction", "world-dog-show", "world-esports", "world-farm", "world-football", "world-golf", "world-grand-prix",
-      "world-hockey", "world-horse-racing", "world-hospital", "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games",
-      "world-talent-show", "world-tennis", "world-university", "world-valentines", "world-winter-games",
+      "agentictrade187", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-bowling", "world-chef-showdown",
+      "world-christmas", "world-circus", "world-construction", "world-dog-show", "world-esports", "world-extreme-sports", "world-farm",
+      "world-figure-skating", "world-football", "world-golf", "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital",
+      "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis",
+      "world-university", "world-valentines", "world-wave-riders", "world-winter-games",
     ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
@@ -195,12 +196,13 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
     for (const p of sold) expect(p.price).toBe(isWorldPlugin(p) ? "$9.99" : "$29.99");
   });
 
-  test("the twenty-four worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+  test("the twenty-nine worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
     expect(worlds.map((p) => p.id).sort()).toEqual([
-      "world-baseball", "world-basketball", "world-chef-showdown", "world-christmas", "world-circus", "world-construction", "world-dog-show",
-      "world-esports", "world-farm", "world-football", "world-golf", "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital",
-      "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games", "world-talent-show", "world-tennis", "world-university",
-      "world-valentines", "world-winter-games",
+      "world-baseball", "world-basketball", "world-bowling", "world-chef-showdown", "world-christmas", "world-circus", "world-construction",
+      "world-dog-show", "world-esports", "world-extreme-sports", "world-farm", "world-figure-skating", "world-football", "world-golf",
+      "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital", "world-magic-show", "world-soccer", "world-st-patricks",
+      "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis", "world-university", "world-valentines", "world-wave-riders",
+      "world-winter-games",
     ]);
     for (const p of worlds) {
       expect(p.group).toBe(WORLDS_GROUP);
