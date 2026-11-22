@@ -330,10 +330,54 @@ fn stored_entry(o: &Obj) -> bool {
         && env_ok
         && pj::as_int(o.get("ts")).is_some()
         && o.get("serial").map(Value::is_string).unwrap_or(false)
-        && stored_seal(o.get("seal"), o.get("sk"))
+        && (stored_seal(o.get("seal"), o.get("sk")) || legacy_row(o))
         && prev_ok
         && voip_ok
         && o.get("callkit").map(Value::is_boolean).unwrap_or(false)
+}
+
+/// MV-1: a pre-NT-1 app's registration: no seal key (pushes go out as the PB-1 payload).
+fn legacy_row(o: &Obj) -> bool {
+    ["seal", "sk", "seal_prev", "sk_prev"].iter().all(|k| pj::text_of(o, k).is_empty())
+}
+
+/// MV-1: the PB-1 payload and APNs headers of a push to a legacy row: `msg`, `call` and `live` only, as the 0.96.3
+/// relay sent them (no seal, no preview); None for any other kind.
+fn build_legacy(person_key: &[u8], kind: &str, conv: &str, badge: i64, topic: &str, sent_s: i64) -> Option<(Obj, Vec<(&'static str, String)>)> {
+    let call = matches!(kind, "call" | "live");
+    if !call && kind != "msg" {
+        return None;
+    }
+    let tid = tag(person_key, conv.as_bytes());
+    let mut aps = obj([
+        ("alert", Value::Object(obj([("title", Value::from(TITLE)), ("body", Value::from(if call { "Incoming call" } else { "New message" }))]))),
+        ("badge", Value::from(badge)),
+        ("sound", Value::from("default")),
+        ("thread-id", Value::from(tid.clone())),
+    ]);
+    if call {
+        aps.insert("interruption-level".into(), Value::from("time-sensitive"));
+    }
+    let payload = obj([("aps", Value::Object(aps)), ("c", Value::from(tid.clone()))]);
+    let expiration = if call { 0 } else { sent_s + MESSAGE_TTL };
+    let headers = vec![
+        ("apns-push-type", "alert".to_string()),
+        ("apns-topic", topic.to_string()),
+        ("apns-priority", "10".to_string()),
+        ("apns-expiration", expiration.to_string()),
+        ("apns-collapse-id", tid),
+    ];
+    Some((payload, headers))
+}
+
+/// MV-1: a row kept by a 0.96.3 relay (`{token, env, ts, serial}`) as the legacy row of this relay.
+fn legacy_of(o: &Obj) -> Obj {
+    let mut row = o.clone();
+    for k in ["seal", "sk", "seal_prev", "sk_prev", "voip"] {
+        row.insert(k.into(), Value::from(""));
+    }
+    row.insert("callkit".into(), Value::Bool(false));
+    row
 }
 
 /// The id a reply or thread names: a plain message's `reply_to` is its preview `{id, name, text}`, an encrypted one's
@@ -515,7 +559,9 @@ impl State {
                     Some(o) if stored_entry(o) => {
                         kept.insert(device.clone(), entry.clone());
                     }
-                    Some(o) if !o.contains_key("seal") => log_info(&format!("push_token_dropped principal={principal} device={} why=no_seal", kv(device))),
+                    Some(o) if !o.contains_key("seal") && stored_entry(&legacy_of(o)) => {
+                        kept.insert(device.clone(), Value::Object(legacy_of(o)));
+                    }
                     _ => log_warn(&format!("state file: push token of {principal} device={} unreadable; ignored", kv(device))),
                 }
             }
@@ -664,6 +710,15 @@ impl State {
     fn nt_push(&mut self, to: &str, device: &str, row: &Obj, channel: Channel, mut inner: Obj, time_sensitive: bool) -> bool {
         let kind = pj::text_of(&inner, "k");
         let dropped = |why: &str| log_warn(&format!("push_dropped principal={to} device={} kind={kind} why={why}", kv(device)));
+        if legacy_row(row) {
+            if channel != Channel::Alert {
+                return false;
+            }
+            let key = self.pu_person_key(to);
+            let badge = self.pu_badge(to);
+            let Some((payload, headers)) = build_legacy(&key, &kind, &pj::text_of(&inner, "conv"), badge, &self.pu.topic, self.pu.now() as i64) else { return false };
+            return self.nt_queue(to, device, row, false, kind, headers, pj::dumps_compact(&Value::Object(payload)).into_bytes());
+        }
         inner.insert("dev".into(), Value::from(device));
         let Some(padded) = fit(&mut inner, channel) else {
             dropped("size");
@@ -690,7 +745,12 @@ impl State {
             dropped("size");
             return false;
         }
-        let voip = channel == Channel::Voip;
+        self.nt_queue(to, device, row, channel == Channel::Voip, kind, headers, bytes)
+    }
+
+    /// Queue one built push to the device's token (its VoIP token for `voip`). True when queued.
+    #[allow(clippy::too_many_arguments)]
+    fn nt_queue(&self, to: &str, device: &str, row: &Obj, voip: bool, kind: String, headers: Vec<(&'static str, String)>, payload: Vec<u8>) -> bool {
         let job = apns::Job {
             principal: to.to_string(),
             device: device.to_string(),
@@ -699,13 +759,13 @@ impl State {
             voip,
             kind: kind.clone(),
             headers,
-            payload: bytes,
+            payload,
         };
         let Some(sender) = &self.pu.sender else { return false };
         if sender.send(job) {
             true
         } else {
-            dropped("queue");
+            log_warn(&format!("push_dropped principal={to} device={} kind={kind} why=queue", kv(device)));
             false
         }
     }
@@ -1283,21 +1343,26 @@ impl Hub {
         if env == "sandbox" && !st.pu.sandbox {
             return bad(NO_SANDBOX);
         }
-        let Some(seal) = body.get("seal").and_then(Value::as_str).and_then(pj::b64_strict).filter(|r| seal_point(r)) else { return bad(BAD_SEAL) };
-        let sk = sk_of(&seal);
-        if body.get("sk").and_then(Value::as_str) != Some(sk.as_str()) {
-            return bad(BAD_SK);
-        }
-        let voip_token = match body.get("voip_token") {
-            None | Some(Value::Null) => String::new(),
-            v => match hex_token(v) {
-                Some(t) => t,
-                None => return bad(BAD_VOIP),
-            },
+        // MV-1: a pre-NT-1 app registers `{token, env}` only (PB-1): a legacy row, no seal, plain pushes
+        let legacy = !["seal", "sk", "voip_token", "callkit"].iter().any(|k| body.contains_key(*k));
+        let (seal_b64, sk, voip_token, callkit) = if legacy {
+            (String::new(), String::new(), String::new(), false)
+        } else {
+            let Some(seal) = body.get("seal").and_then(Value::as_str).and_then(pj::b64_strict).filter(|r| seal_point(r)) else { return bad(BAD_SEAL) };
+            let sk = sk_of(&seal);
+            if body.get("sk").and_then(Value::as_str) != Some(sk.as_str()) {
+                return bad(BAD_SK);
+            }
+            let voip_token = match body.get("voip_token") {
+                None | Some(Value::Null) => String::new(),
+                v => match hex_token(v) {
+                    Some(t) => t,
+                    None => return bad(BAD_VOIP),
+                },
+            };
+            let Some(Value::Bool(callkit)) = body.get("callkit") else { return bad(BAD_CALLKIT) };
+            (pj::b64(&seal), sk, voip_token, *callkit)
         };
-        let Some(Value::Bool(callkit)) = body.get("callkit") else { return bad(BAD_CALLKIT) };
-        let callkit = *callkit;
-        let seal_b64 = pj::b64(&seal);
         // PR-1 1.4: whoever loses this token to the new registration, and the caller, may change presence
         let holds = |d: &Value| as_obj(Some(d)).map(|d| d.values().any(|e| e.get("token").and_then(Value::as_str) == Some(token.as_str()))).unwrap_or(false);
         let mut holders: Vec<String> = st.push_tokens.iter().filter(|(p, d)| **p != who.principal && holds(d)).map(|(p, _)| p.clone()).collect();
@@ -1305,6 +1370,7 @@ impl Hub {
         let before: Vec<_> = holders.iter().map(|p| st.pstate(p)).collect();
         let old = as_obj(st.push_tokens.get(&who.principal)).and_then(|d| as_obj(d.get(&who.device))).cloned();
         let (seal_prev, sk_prev) = match &old {
+            _ if legacy => (String::new(), String::new()),
             Some(o) if pj::text_of(o, "seal") != seal_b64 => (pj::text_of(o, "seal"), pj::text_of(o, "sk")),
             Some(o) => (pj::text_of(o, "seal_prev"), pj::text_of(o, "sk_prev")),
             None => (String::new(), String::new()),
@@ -2143,7 +2209,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_tokens_load_when_sound_and_old_rows_without_a_seal_go() {
+    fn stored_tokens_load_when_sound_and_old_rows_without_a_seal_stay_legacy() {
         let h = hub();
         let mut st = h.st.lock();
         let (_, seal, sk) = seal_key_pair();
@@ -2155,7 +2221,8 @@ mod tests {
             "cy@x": {"cccccccccccccccc": wrong_sk},
         }}));
         st.pu_load(&raw);
-        assert_eq!(Value::Object(st.push_tokens.clone()), json!({"ben@x": {IPHONE: good}}));
+        let legacy = json!({"token": TOKEN, "env": "production", "ts": 1, "serial": "", "seal": "", "sk": "", "seal_prev": "", "sk_prev": "", "voip": "", "callkit": false});
+        assert_eq!(Value::Object(st.push_tokens.clone()), json!({"ben@x": {IPHONE: good, "cccccccccccccccc": legacy}}));
     }
 
     #[test]
@@ -2481,6 +2548,72 @@ mod tests {
         let got = h.invite(&sa, &ann, Some(&json!("ben@x")), Some(&json!("elsewhere")), None).unwrap();
         assert_eq!(invites(&got)[0]["ring"], json!(true));
         assert!(sent(&mut rx).is_empty());
+    }
+
+    /// MV-1: a 0.96.3 app registers `{token, env}`: a legacy row that gets the PB-1 payload for messages and calls
+    /// only; a later NT-1 registration replaces it; a 0.96.3 state row loads as one.
+    #[test]
+    fn a_pre_nt1_app_keeps_plain_pushes_for_messages_and_calls() {
+        let (h, mut rx) = hub_on();
+        let (ann, ben) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", IPHONE));
+        let sa = session(&h, &ann);
+        let sb = session(&h, &ben);
+        h.bye(&sb, &ben).unwrap();
+        let answer = h.push_register(&ben, &row(json!({"token": TOKEN, "env": "sandbox"}))).unwrap();
+        assert_eq!(answer["voip"], json!(false));
+        let person = pj::b64_strict(answer["key"].as_str().unwrap()).unwrap();
+        let stored = h.st.lock().push_tokens["ben@x"][IPHONE].clone();
+        assert!(stored_entry(stored.as_object().unwrap()));
+        assert_eq!((&stored["seal"], &stored["sk"], &stored["voip"], &stored["callkit"]), (&json!(""), &json!(""), &json!(""), &json!(false)));
+        // any NT-1 field: full NT-1 validation
+        assert_eq!(error(h.push_register(&ben, &row(json!({"token": TOKEN, "env": "sandbox", "callkit": false})))), format!("400 {BAD_SEAL}"));
+        dm(&h, "m1", json!({}));
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        let tid = tag(&person, b"dm:ann@x");
+        assert_eq!(payload_of(&jobs[0]), json!({"aps": {"alert": {"title": "Lucid Meet", "body": "New message"}, "badge": 1, "sound": "default", "thread-id": tid}, "c": tid}));
+        assert_eq!((header(&jobs[0], "apns-collapse-id"), jobs[0].voip, jobs[0].token.as_str()), (Some(tid), false, TOKEN));
+        let room = dm_room("ann@x", "ben@x");
+        h.invite(&sa, &ann, Some(&json!("ben@x")), Some(&json!(room)), None).unwrap();
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        let p = payload_of(&jobs[0]);
+        assert_eq!((&p["aps"]["alert"]["body"], &p["aps"]["interruption-level"], &p["aps"]["sound"]), (&json!("Incoming call"), &json!("time-sensitive"), &json!("default")));
+        assert_eq!(header(&jobs[0], "apns-expiration").as_deref(), Some("0"));
+        // a meeting kind or the missed push: nothing for a legacy row
+        let mut st = h.st.lock();
+        let inner = row(json!({"v": 1, "k": "missed", "conv": "dm:ann@x", "id": "x"}));
+        let r = st.push_tokens["ben@x"][IPHONE].as_object().unwrap().clone();
+        assert!(!st.nt_push("ben@x", IPHONE, &r, Channel::Alert, inner, false));
+        // a 0.96.3 state row loads as a legacy row
+        let raw = row(json!({"push_tokens": {"ben@x": {IPHONE: {"token": TOKEN, "env": "production", "ts": 1, "serial": "1a"}}}}));
+        st.push_tokens.clear();
+        st.pu_load(&raw);
+        assert_eq!(st.push_tokens["ben@x"][IPHONE]["seal"], json!(""));
+        drop(st);
+        // NT-1 registration replaces it
+        register(&h, &ben, TOKEN, None, false);
+        assert_ne!(h.st.lock().push_tokens["ben@x"][IPHONE]["seal"], json!(""));
+    }
+
+    /// MV-2: a silent invitation (ring false) is neither told to nor listed in hello for a pre-NT-1 app's session.
+    #[test]
+    fn a_silent_invitation_skips_pre_nt1_apps() {
+        let (h, _rx) = hub_on();
+        let (ann, old, new) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", "dddddddddddddddd"), who("ben@x", "eeeeeeeeeeeeeeee"));
+        let sa = session(&h, &ann);
+        let client = |v: &str| row(json!({"app": "hub", "version": v, "platform": "windows"}));
+        let so = h.hello_active(&old, "", &client("0.96.3"), true).unwrap()["session"].as_str().unwrap().to_string();
+        let sn = h.hello_active(&new, "", &client("0.97.0"), true).unwrap()["session"].as_str().unwrap().to_string();
+        let ring = |room: &str| invites(&h.invite(&sa, &ann, Some(&json!("ben@x")), Some(&json!(room)), None).unwrap())[0]["ring"].as_bool().unwrap();
+        assert!(ring("r1") && ring("r2") && ring("r3") && !ring("r4"));
+        assert_eq!((events_of(&h, &so, &old, "invite").len(), events_of(&h, &sn, &new, "invite").len()), (3, 4));
+        let listed = |v: &str, w: &Identity| invites(&h.hello_active(w, "", &client(v), true).unwrap()).len();
+        assert_eq!((listed("0.96.3", &old), listed("0.97.0", &new)), (3, 4));
+        let ios = row(json!({"app": "ios", "version": "0.96.9"}));
+        assert_eq!(invites(&h.hello_active(&old, "", &ios, true).unwrap()).len(), 3);
+        let other = row(json!({"app": "watch", "version": "0.1"}));
+        assert_eq!(invites(&h.hello_active(&old, "", &other, true).unwrap()).len(), 4);
     }
 
     #[test]
