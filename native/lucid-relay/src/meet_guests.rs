@@ -150,6 +150,9 @@ pub(super) struct Rec {
     pub(super) host_org: String,
     pub(super) rules: Option<Obj>,
     pub(super) admission: Value,
+    /// WA-1 revision 6: the guest's email (claimed, or the verified one) and whether a checked sign-in proved it.
+    pub(super) email: String,
+    pub(super) email_verified: bool,
 }
 
 /// In memory: the guest port's origin and link secret, the lobby rows, each room's lobby option (this stay), who the
@@ -401,7 +404,11 @@ impl State {
         if r.kind == "member" {
             out.insert("principal".into(), Value::from(r.principal.clone()));
             out.insert("org".into(), self.org(&r.principal));
-        } else if !r.key.is_empty() {
+            return out;
+        }
+        out.insert("email".into(), Value::from(r.email.clone()));
+        out.insert("email_verified".into(), Value::Bool(r.email_verified));
+        if !r.key.is_empty() {
             out.insert("principal".into(), Value::from(r.principal.clone()));
             out.insert("key".into(), Value::from(r.key.clone()));
             out.insert("dck".into(), r.dck.clone());
@@ -523,6 +530,8 @@ impl State {
             host_org: String::new(),
             rules: None,
             admission: Value::Null,
+            email: String::new(),
+            email_verified: false,
         };
         self.guests.rec.insert(id.clone(), rec);
         id
@@ -1040,10 +1049,10 @@ impl Hub {
         r
     }
 
-    /// `POST /g/v1/knock {token, name, key, pop, pop_ts, dck, verified?}` -> `{guest, secret, wait: true, room,
-    /// expires, name, rules, verified}` (WA-1 2.6): the page's key and its proof over this link, its chat bundle, and
-    /// an SSO result the relay checks (an invalid one counts as absent); the guest's class and resolved rules decide,
-    /// and it waits in the room's lobby.
+    /// `POST /g/v1/knock {token, name, email, key, pop, pop_ts, dck, verified?}` -> `{guest, secret, wait: true, room,
+    /// expires, name, email, rules, verified}` (WA-1 2.6): the page's key and its proof over this link, its chat
+    /// bundle, and an SSO result the relay checks (an invalid one counts as absent; without a valid one the claimed
+    /// email is required); the guest's class and resolved rules decide, and it waits in the room's lobby.
     pub fn guests_knock(&self, body: &Obj, address: &str) -> R<Obj> {
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, String, String, String)> {
@@ -1064,13 +1073,17 @@ impl Hub {
             let given = body.get("verified").filter(|v| !v.is_null());
             let verified = st.wa_verified(given, &link.room, &key_sha).map(Value::Object).unwrap_or(Value::Null);
             let unchecked = given.is_some() && verified.is_null();
-            let rules = st.wa_rules_for(&link.room, &link.org, &verified, None);
+            let email = match verified.get("email") {
+                Some(e) => pj::py_str(e),
+                None => wa::claimed_email(body.get("email"))?,
+            };
+            let rules = st.wa_rules_for(&link.room, &link.org, &verified, &email, None);
             // the class's link_max_minutes caps the pass from the link's issue time
             let exp = (link.expires as f64).min(link.issued + pj::as_int(rules.get("link_max_minutes")).unwrap_or(1440) as f64 * 60.0);
             if exp <= now {
                 return Err(E::Gone(EXPIRED.into()));
             }
-            if let Some(refusal) = st.wa_refusal(&rules, &verified, unchecked, &link.room, false) {
+            if let Some(refusal) = st.wa_refusal(&rules, &verified, unchecked, &link.room, false, State::wa_claimed_domain(&verified, &email)) {
                 return Err(refusal);
             }
             let live = st.guests.rec.values().filter(|r| r.state != "ended");
@@ -1091,6 +1104,8 @@ impl Hub {
                 r.verified = verified.clone();
                 r.host_org = link.org.clone();
                 r.rules = Some(rules.clone());
+                r.email = email.clone();
+                r.email_verified = !verified.is_null();
             }
             st.guests_lobby_event(&link.room, "");
             st.wa_bypass(&id);
@@ -1103,6 +1118,7 @@ impl Hub {
                 ("room", Value::from(link.room.clone())),
                 ("expires", Value::from(exp as i64)),
                 ("name", Value::from(name)),
+                ("email", Value::from(email)),
                 ("rules", Value::Object(State::wa_guest_view(&rules, &link.org))),
                 ("verified", view),
             ]);

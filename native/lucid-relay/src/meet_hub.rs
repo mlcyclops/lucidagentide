@@ -812,11 +812,14 @@ impl State {
     }
 
     /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}, plus
-    /// `guest: true` for a web guest).
+    /// `guest: true`, `email` and `email_verified` for a web guest).
     fn person(&self, p: &Peer) -> Obj {
         let mut out = with(&p.public(), obj([("org", self.org(&p.who.principal))]));
         if p.who.guest {
+            let rec = self.guests.rec.get(&guests::guest_id(&p.who.principal));
             out.insert("guest".into(), Value::Bool(true));
+            out.insert("email".into(), Value::from(rec.map(|r| r.email.clone()).unwrap_or_default()));
+            out.insert("email_verified".into(), Value::Bool(rec.is_some_and(|r| r.email_verified)));
         }
         out
     }

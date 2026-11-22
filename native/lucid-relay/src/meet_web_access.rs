@@ -150,6 +150,21 @@ fn domain_ok(s: &str) -> bool {
     (1..=253).contains(&s.len()) && s.split('.').all(label_ok)
 }
 
+pub(super) const EMAIL_WORDS: &str = "enter your email address";
+
+/// _wa_claimed_email: an unverified guest's email (WA-1 2.6 revision 6), trimmed and lower-cased; EMAIL_WORDS when it
+/// is missing or not an address.
+pub(super) fn claimed_email(value: Option<&Value>) -> R<String> {
+    let email = value.and_then(Value::as_str).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let (local, domain) = email.split_once('@').unwrap_or((email.as_str(), ""));
+    // WA_EMAIL_LOCAL_RE
+    let local_ok = (1..=64).contains(&local.len()) && local.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || b".!#$%&'*+/=?^_`{|}~-".contains(&c));
+    if email.len() > 254 || email.matches('@').count() != 1 || !local_ok || !domain_ok(domain) || !domain.contains('.') {
+        return bad(EMAIL_WORDS);
+    }
+    Ok(email)
+}
+
 /// WA_ORG_RE: an org id (a v2 guest link's `o`, a web_orgs entry).
 pub(super) fn org_ok(s: &str) -> bool {
     (1..=32).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
@@ -267,7 +282,8 @@ type Sources = Vec<(String, Vec<Value>)>;
 /// _wa_resolve: the resolved rule object: every field but `match` with the defaults filled, the most restrictive value
 /// of every matching rule of every source (`verify` lists intersect, numbers take the smallest), plus `class` and `by`
 /// (per field the source that set its value). `star`: only rules whose `match` has "*" (a link's life at creation).
-fn resolve(sources: &Sources, cls: &str, domain: &str, star: bool) -> Obj {
+/// `also`: more classes whose rules apply (an unverified guest's claimed government email), `class` stays `cls`.
+fn resolve(sources: &Sources, cls: &str, domain: &str, star: bool, also: &[&str]) -> Obj {
     let mut out = defaults();
     let mut by = Obj::new();
     for (label, rules) in sources {
@@ -276,7 +292,7 @@ fn resolve(sources: &Sources, cls: &str, domain: &str, star: bool) -> Obj {
                 if !match_list(rule).iter().any(|m| m == "*") {
                     continue;
                 }
-            } else if !matches(rule, cls, domain) {
+            } else if !std::iter::once(cls).chain(also.iter().copied()).any(|c| matches(rule, c, domain)) {
                 continue;
             }
             for (name, value) in rule {
@@ -502,12 +518,26 @@ impl State {
 
     fn wa_class(&self, verified: &Value) -> String {
         let Some(domain) = verified.get("domain").and_then(Value::as_str) else { return "unverified".into() };
-        let gov = GOV_SUFFIXES.iter().map(|s| s.to_string()).chain(self.wa.gov_domains.iter().cloned()).any(|s| domain == s || domain.ends_with(&format!(".{s}")));
-        if gov { "us-gov" } else { "verified" }.into()
+        if self.wa_gov(domain) { "us-gov" } else { "verified" }.into()
     }
 
-    /// _wa_rules_for: a guest's resolved rules now (`extra`: an org about to be present).
-    pub(super) fn wa_rules_for(&mut self, room: &str, host_org: &str, verified: &Value, extra: Option<&str>) -> Obj {
+    fn wa_gov(&self, domain: &str) -> bool {
+        GOV_SUFFIXES.iter().map(|s| s.to_string()).chain(self.wa.gov_domains.iter().cloned()).any(|s| domain == s || domain.ends_with(&format!(".{s}")))
+    }
+
+    /// _wa_claimed_domain: an unverified guest's claimed email domain ("" for a verified one or none).
+    pub(super) fn wa_claimed_domain<'a>(verified: &Value, email: &'a str) -> &'a str {
+        if verified.is_null() {
+            email.split_once('@').map(|(_, d)| d).unwrap_or_default()
+        } else {
+            ""
+        }
+    }
+
+    /// _wa_rules_for: a guest's resolved rules now (`extra`: an org about to be present). An unverified guest's claimed
+    /// email domain (`email`: the guest's) matches too, and a government one adds the `us-gov` rules (a claim only
+    /// makes the rules stricter).
+    pub(super) fn wa_rules_for(&mut self, room: &str, host_org: &str, verified: &Value, email: &str, extra: Option<&str>) -> Obj {
         let mut present = self.wa_present(room);
         if let Some(e) = extra {
             if !present.iter().any(|o| o == e) {
@@ -516,8 +546,12 @@ impl State {
             }
         }
         let sources = self.wa_sources(host_org, &present);
-        let domain = verified.get("domain").and_then(Value::as_str).unwrap_or_default().to_string();
-        resolve(&sources, &self.wa_class(verified), &domain, false)
+        if let Some(domain) = verified.get("domain").and_then(Value::as_str) {
+            return resolve(&sources, &self.wa_class(verified), domain, false, &[]);
+        }
+        let claimed = Self::wa_claimed_domain(verified, email);
+        let also: &[&str] = if !claimed.is_empty() && self.wa_gov(claimed) { &["us-gov"] } else { &[] };
+        resolve(&sources, "unverified", claimed, false, also)
     }
 
     /// _wa_guest_view: the guest's own copy: `by` says only `host` or `other`.
@@ -531,7 +565,7 @@ impl State {
     pub(super) fn wa_link_cap(&mut self, room: &str, host_org: &str) -> i64 {
         let present = self.wa_present(room);
         let sources = self.wa_sources(host_org, &present);
-        pj::as_int(resolve(&sources, "unverified", "", true).get("link_max_minutes")).unwrap_or(LINK_MAX)
+        pj::as_int(resolve(&sources, "unverified", "", true, &[]).get("link_max_minutes")).unwrap_or(LINK_MAX)
     }
 
     /// `GET /g/v1/verify`: the methods the link's "*" and `unverified` rules accept that this relay can offer, and
@@ -539,7 +573,7 @@ impl State {
     pub(super) fn wa_verify_view(&mut self, room: &str, host_org: &str) -> Obj {
         let present = self.wa_present(room);
         let sources = self.wa_sources(host_org, &present);
-        let rules = resolve(&sources, "unverified", "", false);
+        let rules = resolve(&sources, "unverified", "", false, &[]);
         let url = self.wa.verify_url.clone();
         let methods: Vec<Value> = rules.get("verify").and_then(Value::as_array).into_iter().flatten().filter(|m| !url.is_empty() || *m == "none").cloned().collect();
         obj([("methods", Value::Array(methods)), ("verify_url", Value::from(url))])
@@ -549,8 +583,9 @@ impl State {
         self.peers.values().any(|p| p.room == room && (p.recording || !p.recording_request.is_empty()))
     }
 
-    /// _wa_refusal: why a guest with these rules may not be here (None: it may).
-    pub(super) fn wa_refusal(&self, rules: &Obj, verified: &Value, unchecked: bool, room: &str, recording: bool) -> Option<E> {
+    /// _wa_refusal: why a guest with these rules may not be here (None: it may). `claimed`: an unverified guest's
+    /// claimed email domain.
+    pub(super) fn wa_refusal(&self, rules: &Obj, verified: &Value, unchecked: bool, room: &str, recording: bool, claimed: &str) -> Option<E> {
         let domain = verified.get("domain").and_then(Value::as_str);
         if rules.get("allow") == Some(&Value::Bool(false)) {
             return Some(E::Forbidden(match domain {
@@ -563,7 +598,7 @@ impl State {
         if !verify.iter().any(|m| m == method) {
             let words = if verify.is_empty() {
                 NO_GUESTS
-            } else if rules.get("class").and_then(Value::as_str) == Some("us-gov") {
+            } else if rules.get("class").and_then(Value::as_str) == Some("us-gov") || (verified.is_null() && !claimed.is_empty() && self.wa_gov(claimed)) {
                 GOV_WORDS
             } else if unchecked {
                 UNCHECKED
@@ -814,12 +849,12 @@ impl State {
         let recording = self.wa_recording(room);
         let mut n = 0;
         for id in self.wa_guest_recs(room, &["admitted", "in"]) {
-            let (host_org, verified) = {
+            let (host_org, verified, email) = {
                 let r = &self.guests.rec[&id];
-                (r.host_org.clone(), r.verified.clone())
+                (r.host_org.clone(), r.verified.clone(), r.email.clone())
             };
-            let rules = self.wa_rules_for(room, &host_org, &verified, Some(&org));
-            if self.wa_refusal(&rules, &verified, false, room, recording).is_some() {
+            let rules = self.wa_rules_for(room, &host_org, &verified, &email, Some(&org));
+            if self.wa_refusal(&rules, &verified, false, room, recording, Self::wa_claimed_domain(&verified, &email)).is_some() {
                 n += 1;
             }
         }
@@ -842,11 +877,11 @@ impl State {
 
     fn wa_retighten(&mut self, room: &str) {
         for id in self.wa_guest_recs(room, &["waiting", "admitted", "in"]) {
-            let (host_org, verified, old, guest) = {
+            let (host_org, verified, email, old, guest) = {
                 let r = &self.guests.rec[&id];
-                (r.host_org.clone(), r.verified.clone(), r.rules.clone(), r.peer.clone())
+                (r.host_org.clone(), r.verified.clone(), r.email.clone(), r.rules.clone(), r.peer.clone())
             };
-            let rules = self.wa_rules_for(room, &host_org, &verified, None);
+            let rules = self.wa_rules_for(room, &host_org, &verified, &email, None);
             if old.as_ref() == Some(&rules) {
                 continue;
             }
@@ -1261,18 +1296,35 @@ mod tests {
     #[test]
     fn rules_resolve_most_restrictive_with_by() {
         let sources: Sources = vec![("relay".into(), vec![json!({"match": ["*"], "ai": "local"})]), ("gov-baseline".into(), vec![gov_baseline()]), ("org:meet".into(), vec![json!({"match": ["*"], "chat": "e2ee", "link_max_minutes": 120}), json!({"match": ["verified"], "lobby": "verified_bypass"})])];
-        let r = resolve(&sources, "unverified", "", false);
+        let r = resolve(&sources, "unverified", "", false, &[]);
         assert_eq!(r["ai"], "local");
         assert_eq!(r["chat"], "e2ee");
         assert_eq!(r["link_max_minutes"], 120);
         assert_eq!(r["lobby"], "always");
         assert_eq!(r["by"], json!({"ai": "relay", "chat": "org:meet", "link_max_minutes": "org:meet"}));
-        let g = resolve(&sources, "us-gov", "agency.gov", false);
+        let g = resolve(&sources, "us-gov", "agency.gov", false, &[]);
         assert_eq!(g["verify"], json!(["sso_phr", "piv"]));
         assert_eq!(g["log_hours"], 24);
-        let v = resolve(&sources, "verified", "x.example", false);
+        let v = resolve(&sources, "verified", "x.example", false, &[]);
         assert_eq!(v["lobby"], "verified_bypass");
-        assert_eq!(resolve(&vec![("relay".into(), vec![json!({"match": ["x.example"], "allow": false})])], "verified", "a.x.example", false)["allow"], false);
+        let domain_rule = vec![("relay".into(), vec![json!({"match": ["x.example"], "allow": false})])];
+        assert_eq!(resolve(&domain_rule, "verified", "a.x.example", false, &[])["allow"], false);
+        // revision 6: an unverified guest's claimed domain matches, a claimed government one adds the us-gov rules
+        assert_eq!(resolve(&domain_rule, "unverified", "x.example", false, &[])["allow"], false);
+        let c = resolve(&sources, "unverified", "agency.gov", false, &["us-gov"]);
+        assert_eq!((c["class"].clone(), c["log_hours"].clone()), (json!("unverified"), json!(24)));
+    }
+
+    #[test]
+    fn claimed_emails() {
+        let e = |s: &str| claimed_email(Some(&json!(s))).ok();
+        assert_eq!(e("  Ann.Lee+x@Agency.GOV "), Some("ann.lee+x@agency.gov".into()));
+        for bad in ["", "ann", "ann@", "@x.example", "ann@localhost", "a@b@x.example", "ann lee@x.example", "ann@-x.example"] {
+            assert_eq!(e(bad), None, "{bad}");
+        }
+        assert_eq!(e(&format!("{}@x.example", "a".repeat(65))), None);
+        assert!(claimed_email(None).is_err());
+        assert!(claimed_email(Some(&json!(7))).is_err());
     }
 
     #[test]

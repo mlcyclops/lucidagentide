@@ -283,10 +283,10 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
     let mut extra: Vec<(&str, String)> = Vec::new();
     let (status, payload) = match result {
         Ok(o) => {
-            // what passes as it is: the knock's `verified` (the guest's own sign-in, WA-1 2.6) and the chat devices
+            // what passes as it is: the knock's `email` and `verified` (the guest's own, WA-1 2.6) and the chat devices
             // (CE-1 binds principals, WA-1 4.4)
             let keep: &[&str] = match path.as_str() {
-                "/g/v1/knock" => &["verified"],
+                "/g/v1/knock" => &["email", "verified"],
                 "/g/v1/chat/devices" => &["devices"],
                 _ => &[],
             };
