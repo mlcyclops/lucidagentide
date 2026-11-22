@@ -1,16 +1,16 @@
 # mlcyclops/lucidagentide usage metrics
 
-Last collected 2026-11-21T12:47:09.038Z by the repo-metrics workflow (P-METRICS.1, ADR-0561).
+Last collected 2026-11-22T12:41:05.129Z by the repo-metrics workflow (P-METRICS.1, ADR-0561).
 
 All counts are downloads, not people. GitHub does not record who downloaded a file, so one person can count many times.
 
 ## Release downloads
 
-Change is measured against the 2026-11-14 snapshot.
+Change is measured against the 2026-11-15 snapshot.
 
 | Release | Product | Published | Installers | Change | Windows | Mac | Linux | Update checks |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| v2.5.4-beta.8 (pre) | Agent | 2026-11-20 | 5 | new | 3 | 0 | 2 | 4 |
+| v2.5.4-beta.8 (pre) | Agent | 2026-11-20 | 6 | new | 4 | 0 | 2 | 8 |
 | v2.5.4-beta.7 (pre) | Agent | 2026-11-18 | 25 | new | 12 | 7 | 6 | 16 |
 | v2.5.4-beta.6 (pre) | Agent | 2026-11-18 | 15 | new | 6 | 4 | 5 | 6 |
 | v2.5.4-beta.5 (pre) | Agent | 2026-11-15 | 16 | new | 6 | 5 | 5 | 9 |
@@ -18,7 +18,7 @@ Change is measured against the 2026-11-14 snapshot.
 | v2.5.4-beta.3 (pre) | Agent | 2026-11-13 | 16 | +0 | 5 | 7 | 4 | 4 |
 | v2.5.4-beta.2 (pre) | Agent | 2026-11-13 | 12 | +0 | 4 | 4 | 4 | 4 |
 | v2.5.4-beta.1 (pre) | Agent | 2026-11-13 | 13 | +0 | 4 | 5 | 4 | 4 |
-| v2.5.3 | Agent | 2026-11-11 | 66 | +26 | 22 | 19 | 25 | 160 |
+| v2.5.3 | Agent | 2026-11-11 | 66 | +25 | 22 | 19 | 25 | 163 |
 | v2.5.3-beta.4 (pre) | Agent | 2026-11-11 | 14 | +0 | 6 | 4 | 4 | 4 |
 | v2.5.3-beta.3 (pre) | Agent | 2026-11-10 | 16 | +0 | 8 | 4 | 4 | 7 |
 | v2.5.3-beta.2 (pre) | Agent | 2026-11-10 | 12 | +0 | 4 | 4 | 4 | 4 |
@@ -32,7 +32,7 @@ Installers include every file someone can install from, so a Windows app that up
 
 ## Clones and views
 
-Traffic was not collected on 2026-11-21: METRICS_TRAFFIC_TOKEN is not set
+Traffic was not collected on 2026-11-22: METRICS_TRAFFIC_TOKEN is not set
 
 No daily clone history yet.
 
