@@ -290,7 +290,9 @@ impl Exporter {
         let named: Vec<&RelayRow> = rows.iter().filter(|r| rec.relays.names(&r.id)).collect();
         let snaps: Vec<Snap> = named.iter().map(|r| Snap::of(r, metrics)).collect();
         let console = ConsoleInfo { version: ctx.version, profile: if ctx.profile_high { "high" } else { "standard" }, fips: ctx.fips };
-        ScrapeAnswer { status: 200, content_type: CONTENT_TYPE, retry_after: None, body: exposition(&console, &named, &snaps, now).into_bytes(), used_hint: Some(rec.hint.clone()), code: None }
+        let mut text = exposition(&console, &named, &snaps, now);
+        text.push_str(&api_families(None, now.div_euclid(1000), false));
+        ScrapeAnswer { status: 200, content_type: CONTENT_TYPE, retry_after: None, body: text.into_bytes(), used_hint: Some(rec.hint.clone()), code: None }
     }
 }
 
@@ -395,6 +397,30 @@ pub fn exposition(console: &ConsoleInfo, rows: &[&RelayRow], snaps: &[Snap], now
         let Some(code) = r.license_service.filter(|c| (0..=3).contains(c)) else { continue };
         for (n, st) in LICENSE_SERVICES.iter().enumerate() {
             out.push_str(&format!("lucid_relay_license_service{{{},state=\"{st}\"}} {}\n", labels(r), u8::from(n as i64 == code)));
+        }
+    }
+    out
+}
+
+/// API-1 10.1: the families of `api_catalog::counters` after `exposition`, for one org (an org's `v1/metrics`) or
+/// every org summed (None: the console's own `/metrics`) at `now_s`, HELP and TYPE from the catalog, label values
+/// escaped. `lucid_relay_mode` only on a relay (`normal` until a mode is set).
+pub fn api_families(org: Option<&str>, now_s: i64, relay: bool) -> String {
+    use crate::api_catalog::counters::{rows, Row, FAMILIES};
+    let catalog = crate::api_catalog::catalog();
+    let mut series = rows(org, now_s);
+    if relay && !series.iter().any(|r| r.prom == "lucid_relay_mode") {
+        for (mode, v) in [("normal", 1.0), ("failover", 0.0)] {
+            series.push(Row { prom: "lucid_relay_mode", labels: vec![("mode".into(), mode.into())], value: v });
+        }
+    }
+    let mut out = String::new();
+    for prom in FAMILIES.iter().filter(|p| relay || **p != "lucid_relay_mode") {
+        let Some(f) = catalog.family(prom) else { continue };
+        out.push_str(&format!("# HELP {prom} {}\n# TYPE {prom} {}\n", escape_help(&f.help), f.kind.prom_type()));
+        for r in series.iter().filter(|r| r.prom == *prom) {
+            let labels: Vec<String> = r.labels.iter().map(|(k, v)| format!("{k}=\"{}\"", escape_label(v))).collect();
+            out.push_str(&format!("{prom}{{{}}} {}\n", labels.join(","), fmt_num(r.value)));
         }
     }
     out
@@ -566,5 +592,24 @@ mod tests {
         let c = &e["console"];
         let console = ConsoleInfo { version: c["version"].as_str().unwrap(), profile: c["profile"].as_str().unwrap(), fips: c["fips"].as_bool().unwrap() };
         assert_eq!(exposition(&console, &refs, &snaps, now), e["text"].as_str().unwrap());
+    }
+
+    #[test]
+    fn the_api_families_follow_the_catalog_per_org() {
+        use crate::api_catalog::counters;
+        let (org, other) = ("export-test-a", "export-test-b");
+        counters::api_request(org, "c_\"x\"", "ok");
+        counters::api_refusal(other, "export-test-check");
+        let text = api_families(Some(org), 1_800_000_000, false);
+        for prom in counters::FAMILIES.iter().filter(|p| **p != "lucid_relay_mode") {
+            let f = crate::api_catalog::catalog().family(prom).unwrap();
+            assert!(text.contains(&format!("# HELP {prom} {}\n# TYPE {prom} {}\n", f.help, f.kind.prom_type())), "{prom}");
+        }
+        assert!(text.contains("lucid_api_requests_total{client=\"c_\\\"x\\\"\",result=\"ok\"} 1\n"), "{text}");
+        assert!(!text.contains("export-test-check"), "another org's series");
+        assert!(!text.contains("lucid_relay_mode"), "the console has no relay mode");
+        let relay = api_families(Some(org), 1_800_000_000, true);
+        assert!(relay.contains("lucid_relay_mode{mode=\"normal\"} 1\nlucid_relay_mode{mode=\"failover\"} 0\n"), "{relay}");
+        assert!(api_families(None, 1_800_000_000, false).contains("lucid_api_refusals_total{check=\"export-test-check\"} 1\n"));
     }
 }

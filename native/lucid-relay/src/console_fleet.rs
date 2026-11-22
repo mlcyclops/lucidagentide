@@ -772,6 +772,9 @@ pub struct Fleet {
     api_audit: Arc<crate::api_audit::ApiAudit>,
     /// API-1 6.5: the front door's resource and public pipeline limiters and DPoP cache.
     pub api_state: crate::api_resource::ResourceState,
+    /// API-1 11: the export destinations of every org's pinned map, their queues under `<state>/exports/` and their
+    /// delivery; the API audit chains' retention hold.
+    pub export: Arc<crate::api_export::ExportEngine>,
 }
 
 /// A request as the fleet section sees it (console.rs builds it after the role, origin and size checks).
@@ -1095,6 +1098,10 @@ impl Fleet {
             let signer = crate::api_checkpoint::ConsoleCheckpoints::new(&state_dir, Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console))), issuer);
             let pseudonym = Arc::new(crate::console_api::ConsolePseudonymKeys(Arc::downgrade(&api)));
             let api_audit = Arc::new(crate::api_audit::ApiAudit::open(Some(state_dir.as_path()), "console", Arc::new(signer), pseudonym, t.div_euclid(1000)));
+            // API-1 11: its threads find no fleet until this returns, and every destination loads suspended until the
+            // first `refresh` below
+            let export_host = Arc::new(ExportHost { fleet: weak.clone(), logger: logger.clone(), host: console.cfg.host.clone() });
+            let export = crate::api_export::ExportEngine::open(&state_dir.join(crate::api_export::EXPORTS_DIR), export_host, logger.clone(), true);
             Fleet {
                 console: Arc::downgrade(console),
                 state_dir,
@@ -1117,6 +1124,7 @@ impl Fleet {
                 api: api.clone(),
                 api_audit,
                 api_state: crate::api_resource::ResourceState::new(),
+                export,
             }
         });
         // API-1 2.6, 9.3: relay chains received through `api-audit`, relay checkpoint certificates issued in catch-up
@@ -1126,6 +1134,22 @@ impl Fleet {
         for n in fleet.api_audit.take_notes() {
             logger.security("api.audit.note", &Fields::new().with("note", n), Level::Warn);
         }
+        // API-1 9.4, 11: the chains keep every entry an audit destination has not acknowledged (set before the
+        // retention ticker starts); maps, tightenings, the edition and credentials reach the exports at once; API
+        // spans and log events go to the engine
+        fleet.api_audit.set_retention_hold(fleet.export.retention_hold());
+        let w = Arc::downgrade(&fleet.export);
+        api.set_export_hook(Box::new(move |credential: Option<(&str, &str)>| {
+            if let Some(e) = w.upgrade() {
+                match credential {
+                    Some((org, id)) => e.credential_changed(org, id),
+                    None => e.refresh(crate::codec::now_ms().div_euclid(1000)),
+                }
+            }
+        }));
+        crate::api_export::install(&fleet.export);
+        crate::log::set_export_tap(crate::api_export::log_tap());
+        fleet.export.refresh(t.div_euclid(1000));
         // API-1 9.3, 9.4: minute buckets, checkpoints and retention every 10 s
         let w = Arc::downgrade(&fleet);
         let notes = logger.clone();
@@ -3329,6 +3353,10 @@ impl Fleet {
         if let Some(link) = self.link.get().cloned() {
             self.api.audit_tick(link, t.div_euclid(1000));
         }
+        // API-1 11: maps that expired this minute stop their org's exports; metrics snapshots, queue ages, refusal
+        // summaries
+        self.export.refresh(t.div_euclid(1000));
+        self.export.tick(t);
         for s in self.metrics.take_summaries(t) {
             self.record(c, &format!("relay {}", s.relay), "fleet.metrics-refused", Some(s.relay.clone()), json!({ "relay": s.relay, "count": s.count, "why": s.why }), t);
         }
@@ -3536,6 +3564,10 @@ impl Fleet {
         }
         for relay in &sa.gaps {
             out.push(item("relay-gap", "warn", json!({ "relay": names.get(relay).cloned().unwrap_or_else(|| relay.clone()) }), format!("#/relays/{relay}")));
+        }
+        // API-1 11.6 `ExportAuditBacklog`: an audit destination over its queue limits; export paused, nothing dropped
+        for (org, _, name) in self.export.audit_backlog() {
+            out.push(item("export-audit-backlog", "bad", json!({ "destination": clean(&name), "org": org }), "#/security/exports".into()));
         }
         for v in c.settings_now().tokens.iter().filter_map(crate::fleet_export::TokenRecord::from_json) {
             let days = (v.expires - t).div_euclid(86_400_000);
@@ -5716,6 +5748,89 @@ impl FleetData<'_> {
     }
 }
 
+/// API-1 11: what the export engine reads of the fleet console: the pinned maps and journal, the sealed destination
+/// credentials, the org's audit chains (the console's own and every relay chain stored), the org's metrics as the
+/// front door's `v1/metrics` exposition shows them, and the sinks.
+struct ExportHost {
+    fleet: Weak<Fleet>,
+    logger: Arc<crate::log::Logger>,
+    /// The console's host name, as its SIEM messages carry it.
+    host: String,
+}
+
+impl crate::api_export::Host for ExportHost {
+    fn config(&self, now: i64) -> (Option<crate::api_map::Edition>, Vec<crate::api_export::OrgConfig>) {
+        self.fleet.upgrade().map_or((None, Vec::new()), |f| f.api.export_config(now))
+    }
+
+    fn credential(&self, org: &str, id: &str) -> Option<crate::api_export_wire::Credential> {
+        self.fleet.upgrade()?.api.destination_credential(org, id)
+    }
+
+    fn delete_credential(&self, org: &str, id: &str) {
+        if let Some(f) = self.fleet.upgrade() {
+            f.api.delete_destination_credential(org, id);
+        }
+    }
+
+    fn pseudonym_key(&self, org: &str) -> Option<(u32, Vec<u8>)> {
+        let f = self.fleet.upgrade()?;
+        crate::api_audit::PseudonymKeys::current(&crate::console_api::ConsolePseudonymKeys(Arc::downgrade(&f.api)), org)
+    }
+
+    fn audit_sources(&self, org: &str) -> Vec<String> {
+        let Some(f) = self.fleet.upgrade() else { return Vec::new() };
+        if !crate::api_audit::org_ok(org) {
+            return Vec::new();
+        }
+        let mut out: std::collections::BTreeSet<String> = f.api.relays_of(org).into_iter().collect();
+        out.insert("console".into());
+        // relays that served the org before and are gone still have chains the console stores
+        for e in std::fs::read_dir(f.state_dir.join(crate::api_audit::AUDIT_DIR).join(org)).into_iter().flatten().flatten() {
+            if let Some(n) = e.file_name().to_str().filter(|n| crate::api_audit::source_ok(n)) {
+                if e.path().is_dir() {
+                    out.insert(n.to_string());
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    fn audit_read(&self, org: &str, source: &str, repr: crate::api_audit::Repr, after: u64, limit: usize) -> Vec<Value> {
+        let Some(f) = self.fleet.upgrade() else { return Vec::new() };
+        f.api_audit.read(org, source, repr, after, limit).ok().and_then(|v| v.get("entries")?.as_array().cloned()).unwrap_or_default()
+    }
+
+    fn audit_record(&self, org: &str, entry: Value, now: i64) {
+        let f = self.fleet.upgrade();
+        crate::fleet_agent::api_record(f.as_ref().map(|f| &*f.api_audit), vec![(org.to_string(), entry)], &self.logger, now);
+    }
+
+    fn metric_rows(&self, org: &str, now: i64) -> Vec<crate::api_export::MetricRow> {
+        use crate::api_resource::Data;
+        let Some(f) = self.fleet.upgrade() else { return Vec::new() };
+        let data = f.api_data();
+        let ids = data.ids(org);
+        crate::api_export::parse_exposition(&data.exposition(org, &ids, now))
+    }
+
+    fn resource(&self, org: &str) -> Vec<(String, String)> {
+        let id = self.fleet.upgrade().map(|f| f.console_id.clone()).unwrap_or_default();
+        [("service.name", "lucid-console"), ("service.version", env!("CARGO_PKG_VERSION")), ("service.instance.id", id.as_str()), ("lucid.org", org), ("lucid.relay.id", "console")]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn make_sink(&self, destination: &Value, credential: crate::api_export_wire::Credential) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
+        if destination.get("kind").and_then(Value::as_str) == Some("syslog_cef") {
+            crate::fleet_syslog::cef_sink(destination, credential, &self.host, env!("CARGO_PKG_VERSION"))
+        } else {
+            crate::api_export_wire::sink_for(destination, credential)
+        }
+    }
+}
+
 /// The days left of the certificates a relay reports (9.1 `cert_*_days`, `crl_days`, `license_days`), and of its
 /// current fleet certificate from the registry.
 fn certificates_of(r: &RelayRecord, m: &Map<String, Value>, t: i64) -> Vec<Value> {
@@ -5771,7 +5886,7 @@ impl crate::api_resource::Data for FleetData<'_> {
         let high = self.fleet.console().is_ok_and(|c| c.high_profile());
         let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: if high { "high" } else { "standard" }, fips: cfg!(feature = "fips") };
         let named: Vec<&crate::fleet_export::RelayRow> = rows.iter().collect();
-        crate::fleet_export::exposition(&console, &named, &snaps, t)
+        crate::fleet_export::exposition(&console, &named, &snaps, t) + &crate::fleet_export::api_families(Some(org), now, false)
     }
 
     fn console(&self) -> Value {

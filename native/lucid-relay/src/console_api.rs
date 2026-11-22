@@ -138,7 +138,13 @@ pub struct ConsoleApi {
     fetch: FetchCache,
     /// 9: the console's API audit chains and the issuer of relay checkpoint certificates (`set_audit`, at start).
     audit: std::sync::OnceLock<(Arc<ApiAudit>, IssueFn)>,
+    /// 11: told when the destinations may have changed (None: a map, a tightening or the edition; Some((org, id)):
+    /// that destination's credential), so the export engine applies it at once (`set_export_hook`, at start).
+    export_hook: std::sync::OnceLock<ExportHook>,
 }
+
+/// See `ConsoleApi::set_export_hook`.
+pub type ExportHook = Box<dyn Fn(Option<(&str, &str)>) + Send + Sync>;
 
 /// `[a-z0-9-]{1,32}`.
 fn org_ok(s: &str) -> bool {
@@ -222,6 +228,7 @@ impl ConsoleApi {
             issue: IssueState::new(),
             fetch: FetchCache::new(FETCH_MAX_AGE),
             audit: std::sync::OnceLock::new(),
+            export_hook: std::sync::OnceLock::new(),
         }
     }
 
@@ -283,6 +290,7 @@ impl ConsoleApi {
             inner.store.revalidate(edition)
         };
         self.edition_lines(&changed, edition);
+        self.export_changed(None);
     }
 
     /// Call with the store's lock released.
@@ -321,6 +329,7 @@ impl ConsoleApi {
                 self.edition_lines(&changed.0, changed.1);
                 self.note_audit(vec![crate::fleet_agent::api_note_pinned(vm)], now);
                 self.prune(&vm.org, now);
+                self.export_changed(None);
                 if let Some(link) = link {
                     self.deliver_org(link, &vm.org);
                 }
@@ -367,6 +376,8 @@ impl ConsoleApi {
         // 9.2: the journal file is the record of the tightening; its audit entry follows it (a tightening is never
         // refused for the audit: `api.audit-failed` instead)
         self.note_audit(vec![crate::fleet_agent::api_note_tighten(org, &entry)], now);
+        // 2.5, 11: a destination tightening takes effect on the console's exports at once
+        self.export_changed(None);
         if let Some(link) = link {
             self.deliver_org(link, org);
         }
@@ -906,6 +917,106 @@ impl ConsoleApi {
         }
     }
 
+    // ── exports (11) ──
+
+    /// The export engine's hook (`api_export::ExportEngine::refresh` and `credential_changed`), set once at start.
+    pub fn set_export_hook(&self, hook: ExportHook) {
+        let _ = self.export_hook.set(hook);
+    }
+
+    /// Call with the store's lock released (the engine reads `export_config`).
+    fn export_changed(&self, credential: Option<(&str, &str)>) {
+        if let Some(h) = self.export_hook.get() {
+            h(credential);
+        }
+    }
+
+    /// 11.1, 11.5, 13: the license edition the maps are held to (None: unknown) and every org with a pinned map:
+    /// whether it serves (not set aside), the map's `expires`, its destinations and its active journal entries. Also
+    /// sets the org's `lucid_api_clients{state}` gauge (10.1) from the same read (clients expired at `now` counted so).
+    pub fn export_config(&self, now: i64) -> (Option<Edition>, Vec<crate::api_export::OrgConfig>) {
+        let inner = self.inner.lock();
+        let orgs = inner
+            .store
+            .issuers()
+            .into_keys()
+            .map(|org| {
+                let suspended = |id: &str| inner.store.active(&org).iter().any(|e| e.action == "client_suspend" && e.target.as_str() == Some(id));
+                let mut counts = [("active", 0u64), ("suspended", 0), ("expired", 0)];
+                for c in inner.store.clients(&org) {
+                    let i = if c.get("state").and_then(Value::as_str) == Some("suspended") || suspended(c.get("id").and_then(Value::as_str).unwrap_or_default()) {
+                        1
+                    } else if c.get("expires").and_then(Value::as_i64).is_some_and(|e| e <= now) {
+                        2
+                    } else {
+                        0
+                    };
+                    counts[i].1 += 1;
+                }
+                for (state, n) in counts {
+                    crate::api_catalog::counters::set_api_clients(&org, state, n);
+                }
+                // an expired map still serves its destinations' config; the engine stops them at `expires` itself
+                let serving = inner.store.get(&org, "");
+                let destinations = serving.and_then(|m| m.map().get("destinations")).and_then(Value::as_array).cloned().unwrap_or_default();
+                let expires = serving.map_or(0, |m| m.expires);
+                crate::api_export::OrgConfig { serving: serving.is_some(), expires, destinations, active: inner.store.active(&org).to_vec(), org }
+            })
+            .collect();
+        (inner.edition.flatten(), orgs)
+    }
+
+    /// 11.3: seal a destination's credential as `secret:<org>:<id>` (destination ids are unique only within one
+    /// org's map) with its entry date and, for a vendor token or a service account key, its "rotate by" date (90
+    /// days). The destination must be in the org's pinned map with a `credential` the value fits. The value never
+    /// enters a log, the map or the audit. The export engine makes the destination's sink again at once. Called by
+    /// the Exports screen (slice 1a6).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn put_destination_credential(&self, org: &str, id: &str, credential: crate::api_export_wire::Credential, now: i64) -> Result<(), String> {
+        let entry = {
+            let inner = self.inner.lock();
+            inner.store.get(org, "").and_then(|m| m.map().get("destinations")?.as_array()?.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(id)).cloned())
+        };
+        let Some(entry) = entry else { return Err("That destination is not in the organization's api map.".into()) };
+        if entry.get("credential").is_none() || !crate::api_export::credential_fits(&entry, &credential) {
+            return Err("That credential does not fit the destination's credential type.".into());
+        }
+        let sealed = crate::api_export::sealed_credential(&credential, now);
+        vault_do(&*self.vault, |v| v.put(&crate::api_export::seal_name(org, id), stringify(&sealed).as_bytes()))?;
+        self.logger.ops("exports.credential-stored", &Fields::new().with("org", org).with("destination", id), Level::Info);
+        self.export_changed(Some((org, id)));
+        Ok(())
+    }
+
+    fn sealed_destination(&self, org: &str, id: &str) -> Option<Value> {
+        let raw = vault_do(&*self.vault, |v| v.get(&crate::api_export::seal_name(org, id)))?;
+        parse_json(std::str::from_utf8(&raw).ok()?)
+    }
+
+    /// 11.3: whether a destination's credential is sealed (and reads).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn has_destination_credential(&self, org: &str, id: &str) -> bool {
+        self.destination_credential(org, id).is_some()
+    }
+
+    /// The sealed credential of a destination, for its sink only.
+    pub fn destination_credential(&self, org: &str, id: &str) -> Option<crate::api_export_wire::Credential> {
+        crate::api_export::credential_of(self.sealed_destination(org, id)?.get("credential")?)
+    }
+
+    /// 11.3: the "rotate by" date (unix seconds) of a destination's vendor token or service account key.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn destination_credential_rotate_by(&self, org: &str, id: &str) -> Option<i64> {
+        self.sealed_destination(org, id)?.get("rotate_by")?.as_i64()
+    }
+
+    /// A deleted destination's sealed credential goes with it.
+    pub fn delete_destination_credential(&self, org: &str, id: &str) {
+        if let Err(e) = vault_do(&*self.vault, |v| v.remove(&crate::api_export::seal_name(org, id))) {
+            self.logger.ops("exports.credential-not-removed", &Fields::new().with("org", org).with("destination", id).with("why", e), Level::Error);
+        }
+    }
+
     // ── 3.4 ──
 
     /// The `relay` grace of the fleet verifier at `now` (seconds): the minimum of `grace.relay` (lowered by the
@@ -1138,6 +1249,42 @@ mod tests {
 
     fn map(seq: i64, relay_grace: i64, expires: i64) -> VerifiedApiMap {
         map_folding(seq, relay_grace, expires, &[])
+    }
+
+    /// API-1 11.3: a destination credential is sealed as `secret:<org>:<id>` with its "rotate by" date, must fit the
+    /// map's credential type, never reaches a log line, and the export engine's hook hears of it.
+    #[test]
+    fn destination_credentials_are_sealed_fit_the_map_and_are_never_logged() {
+        use crate::api_export_wire::Credential;
+        let (log, lines) = logger();
+        let api = Arc::new(ConsoleApi::open(None, log, vault()));
+        let d = "d_9a8b7c6d5e4f3a2b";
+        let mut vm = map(1, 0, NOW + 86_400);
+        vm.wire["map"]["destinations"] = json!([{"id": d, "name": "Splunk HEC", "kind": "splunk_hec", "preset": "splunk_hec", "signals": ["audit"],
+            "ceiling": "internal", "identities": "pseudonymized", "failover": false, "private_ok": false,
+            "endpoint": "https://hec.acme.example:8088/services/collector/event", "credential": {"type": "token", "ref": format!("secret:{d}")},
+            "queue": {"max_bytes": 1_073_741_824u64, "max_age_s": 259_200}}]);
+        vm.hash = api_map_hash(&vm.wire["map"]);
+        api.publish_verified(None, vm, NOW).unwrap();
+        let heard: Arc<Mutex<Vec<Option<(String, String)>>>> = Arc::default();
+        let h = heard.clone();
+        api.set_export_hook(Box::new(move |k: Option<(&str, &str)>| h.lock().push(k.map(|(o, i)| (o.to_string(), i.to_string())))));
+        assert!(api.put_destination_credential("acme", d, Credential::Mtls { cert_pem: "C".into(), key_pem: "K".into(), ca_pem: None }, NOW).is_err());
+        assert!(api.put_destination_credential("acme", "d_0000000000000000", Credential::Token("x".into()), NOW).is_err());
+        assert!(api.put_destination_credential("beta", d, Credential::Token("x".into()), NOW).is_err(), "another org has no such destination");
+        assert!(!api.has_destination_credential("acme", d));
+        api.put_destination_credential("acme", d, Credential::Token("hec-secret-value".into()), NOW).unwrap();
+        assert!(api.has_destination_credential("acme", d));
+        assert!(!api.has_destination_credential("beta", d), "the same id in another org is another secret");
+        assert_eq!(api.destination_credential_rotate_by("acme", d), Some(NOW + 90 * 86_400));
+        assert!(matches!(api.destination_credential("acme", d), Some(Credential::Token(t)) if t == "hec-secret-value"));
+        assert_eq!(*heard.lock(), vec![Some(("acme".to_string(), d.to_string()))]);
+        assert!(lines.lock().iter().all(|l| !l.contains("hec-secret-value")));
+        let (edition, orgs) = api.export_config(NOW);
+        assert_eq!(edition, None);
+        assert_eq!((orgs.len(), orgs[0].serving, orgs[0].destinations.len(), orgs[0].expires), (1, true, 1, NOW + 86_400));
+        api.delete_destination_credential("acme", d);
+        assert!(!api.has_destination_credential("acme", d));
     }
 
     type Lines = Arc<Mutex<Vec<String>>>;

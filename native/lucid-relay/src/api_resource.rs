@@ -87,11 +87,12 @@ pub enum RouteId {
     Audit,
     AuditKeys,
     Metrics,
+    TelemetryCatalog,
 }
 
 impl RouteId {
     #[cfg(test)]
-    pub const ALL: [RouteId; 16] = [
+    pub const ALL: [RouteId; 17] = [
         RouteId::AsMetadata,
         RouteId::LocalAsMetadata,
         RouteId::ResourceMetadata,
@@ -108,6 +109,7 @@ impl RouteId {
         RouteId::Audit,
         RouteId::AuditKeys,
         RouteId::Metrics,
+        RouteId::TelemetryCatalog,
     ];
 }
 
@@ -140,8 +142,8 @@ const fn r(id: RouteId, side: Side, method: &'static str, path: &'static str, pi
 use Pipeline::{Public as PUB, Resource as RES, Token as TOK};
 use Side::{FrontDoor as F, Relay as R};
 
-/// Every org route of both listeners (7.1 without `v1/telemetry/catalog`, 7.2).
-pub static ROUTES: [ApiRoute; 21] = [
+/// Every org route of both listeners (7.1, 7.2).
+pub static ROUTES: [ApiRoute; 22] = [
     r(RouteId::AsMetadata, F, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the issuer I"),
     r(RouteId::ResourceMetadata, F, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource I"),
     r(RouteId::Jwks, F, "GET", "/api/orgs/{org}/jwks.json", PUB, "", "public", "", "Jwks", "The issuer keys of the org's api map"),
@@ -155,6 +157,7 @@ pub static ROUTES: [ApiRoute; 21] = [
     r(RouteId::Audit, F, "GET", "/api/orgs/{org}/v1/audit", RES, "audit.read", "internal", "", "AuditPage", "The org's console or relay audit chain"),
     r(RouteId::AuditKeys, F, "GET", "/api/orgs/{org}/v1/audit/keys", RES, "audit.read", "internal", "", "AuditKeys", "Checkpoint certificates, current and retired"),
     r(RouteId::Metrics, F, "GET", "/api/orgs/{org}/v1/metrics", RES, "monitor.read", "internal", "", "Metrics", "The client's relays' exposition"),
+    r(RouteId::TelemetryCatalog, F, "GET", "/api/orgs/{org}/v1/telemetry/catalog", RES, "monitor.read", "internal", "", "TelemetryCatalog", "The telemetry catalog and field registry (section 10)"),
     r(RouteId::LocalAsMetadata, R, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}/local", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the local issuer L"),
     r(RouteId::ResourceMetadata, R, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource RR"),
     r(RouteId::LocalJwks, R, "GET", "/api/orgs/{org}/local/jwks.json", PUB, "", "public", "", "Jwks", "The relay's local token keys for the org"),
@@ -288,8 +291,14 @@ pub fn public_refused(audit: Option<&dyn AuditLog>, org: &str, route: &str, rid:
                    "check": code, "status": reply.status, "count": 1});
     let key = format!("ip:{}", crate::console_source::source_key(source));
     match audit.refusal(org, &key, &code, route, e, now) {
-        Ok(()) => reply,
-        Err(_) => audit_unavailable(),
+        Ok(()) => {
+            counted(org, "", Some(&code));
+            reply
+        }
+        Err(_) => {
+            counted(org, "", Some("audit-unavailable"));
+            audit_unavailable()
+        }
     }
 }
 
@@ -516,6 +525,19 @@ fn entry_of(call: &Call, action: &str) -> Map<String, Value> {
     e
 }
 
+/// 10.1: a decision in `lucid_api_requests_total` (`client` empty until authenticated) and, refused, in
+/// `lucid_api_refusals_total` by its check.
+fn counted(org: &str, client: &str, refused: Option<&str>) {
+    use crate::api_catalog::counters;
+    match refused {
+        None => counters::api_request(org, client, "ok"),
+        Some(check) => {
+            counters::api_request(org, client, "refused");
+            counters::api_refusal(org, check);
+        }
+    }
+}
+
 fn rate_headers(r: &mut Reply, rate: Option<Rate>) {
     if let Some(x) = rate {
         r.headers.push(("RateLimit-Limit", x.limit.to_string()));
@@ -544,8 +566,10 @@ fn refuse(site: &Site, call: &Call, who: Option<(&str, Option<&str>)>, n: No) ->
     }
     let key = who.map_or_else(|| format!("ip:{}", crate::console_source::source_key(call.source)), |(c, _)| c.to_string());
     if site.audit.refusal(call.org, &key, n.code, &route, Value::Object(e), site.now).is_err() {
+        counted(call.org, who.map_or("", |(c, _)| c), Some("audit-unavailable"));
         return audit_unavailable();
     }
+    counted(call.org, who.map_or("", |(c, _)| c), Some(n.code));
     let mut r = problem(n.status, n.code, &n.why);
     if let Some(s) = n.retry {
         r.headers.push(("Retry-After", s.to_string()));
@@ -635,14 +659,26 @@ fn openapi_answer(site: &Site, call: &Call) -> Reply {
 }
 
 /// Every route of `ROUTES` the listener hands here (the OpenAPI document and the resource routes), with its
-/// `X-Lucid-Request-Id`. The issuer routes stay with the listeners (`token_audited`).
+/// `X-Lucid-Request-Id`. The issuer routes stay with the listeners (`token_audited`). Each call is one span for the
+/// org's `traces` destinations (API-1 11, `api_export::api_span`; nothing without a console engine).
 pub fn answer(site: &Site, call: &Call) -> Reply {
+    let start_ms = crate::codec::now_ms();
     let mut r = match (call.route.pipeline, call.route.id) {
         (Pipeline::Public, RouteId::OpenApi) => openapi_answer(site, call),
         (Pipeline::Resource, _) => resource_answer(site, call),
         _ => problem(404, "not-found", NOT_FOUND),
     };
     r.headers.push(("X-Lucid-Request-Id", call.rid.to_string()));
+    crate::api_export::api_span(&crate::api_export::SpanCall {
+        org: call.org,
+        method: call.route.method,
+        route: call.route.path,
+        status: r.status,
+        rid: call.rid,
+        relay: if site.side == Side::Relay { site.relay } else { "console" },
+        start_ms,
+        end_ms: crate::codec::now_ms(),
+    });
     r
 }
 
@@ -815,6 +851,7 @@ fn scrape_pipeline(site: &Site, call: &Call) -> Result<Allowed, Reply> {
 /// 9.4: the allowed call (with the bytes it releases) is appended before the answer leaves; 503 otherwise.
 fn finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, mut reply: Reply) -> Reply {
     if !site.audit.allowed_ok() {
+        counted(call.org, &ok.client, Some("audit-unavailable"));
         return audit_unavailable();
     }
     let text = match reply.text.take() {
@@ -834,8 +871,10 @@ fn finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, mut repl
         e.insert("jti".into(), json!(j));
     }
     if site.audit.record(call.org, Value::Object(e), site.now).is_err() {
+        counted(call.org, &ok.client, Some("audit-unavailable"));
         return audit_unavailable();
     }
+    counted(call.org, &ok.client, None);
     reply.text = Some(text);
     rate_headers(&mut reply, ok.rate);
     reply
@@ -935,6 +974,7 @@ fn serve(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
             let text = site.data.exposition(org, &ids, now);
             Ok(Reply { status: 200, ctype: crate::fleet_export::CONTENT_TYPE, headers: vec![("Cache-Control", "no-store".into())], body: Value::Null, text: Some(text) })
         }
+        RouteId::TelemetryCatalog => Ok(Reply::json(200, crate::api_catalog::catalog().json().clone())),
         _ => Err(no(404, "not-found", NOT_FOUND)),
     }
 }
@@ -1010,6 +1050,18 @@ pub fn token_audited(audit: &dyn AuditLog, org: &str, route: &str, rid: &str, so
             audit.refusal(org, &key, &code, route, Value::Object(e), now)
         }
     };
+    // 10.1, once the decision is in the chain: a client named by a refused request is not yet authenticated
+    let client = s("client").unwrap_or_default();
+    match (&done, name) {
+        (Ok(()), "api.token") => {
+            counted(org, client, None);
+            let issuer = if route.contains("/local/") { "relay" } else { "console" };
+            crate::api_catalog::counters::api_token_issued(org, client, issuer);
+        }
+        (Ok(()), "api.revoke") => counted(org, client, None),
+        (Ok(()), _) => counted(org, "", Some(s("code").unwrap_or("request"))),
+        (Err(_), _) => counted(org, "", Some("audit-unavailable")),
+    }
     match done {
         Ok(()) => a,
         Err(_) => {
@@ -1113,7 +1165,7 @@ pub fn schemas() -> Map<String, Value> {
     relay["properties"]["health"] = json!({"enum": crate::fleet_export::HEALTH_STATES});
     relay["properties"]["certificates"] = json!({"type": "array", "items": {"type": "object", "required": ["name", "days_left"],
         "properties": {"name": string, "days_left": {"type": "integer"}, "serial": string}}});
-    let v = json!({
+    let mut v = json!({
         "Problem": {"type": "object", "required": ["ok", "code", "error", "type", "title", "status", "detail"],
             "properties": {"ok": {"const": false}, "code": string, "error": string, "type": {"type": "string", "format": "uri"},
                            "title": string, "status": {"type": "integer"}, "detail": string}},
@@ -1152,6 +1204,9 @@ pub fn schemas() -> Map<String, Value> {
         "AuditKeys": {"type": "object", "required": ["keys"], "properties": {"keys": {"type": "array", "items": {"type": "object"}}}},
         "Metrics": {"type": "string", "contentMediaType": crate::fleet_export::CONTENT_TYPE},
     });
+    v["TelemetryCatalog"] = json!({"type": "object", "required": ["version", "resource_attributes", "families", "records"],
+        "properties": {"version": {"const": crate::api_catalog::VERSION}, "resource_attributes": {"type": "array", "items": {"type": "object"}},
+                       "families": {"type": "array", "items": {"type": "object"}}, "records": {"type": "array", "items": {"type": "object"}}}});
     match v {
         Value::Object(m) => m,
         _ => Map::new(),
@@ -1591,6 +1646,25 @@ mod tests {
         assert_eq!(first.get("calls_active"), Some(&json!(3)));
         assert_eq!(first.get("cpu_host"), Some(&json!(12.5)));
         assert!(first.get("messages").is_none() && first.get("license_state").is_none() && first.get("lanes_total").is_none());
+    }
+
+    #[test]
+    fn the_telemetry_catalog_route_answers_the_catalog_and_counts_each_decision() {
+        let env = Env::new(client());
+        let path = "/api/orgs/acme/v1/telemetry/catalog";
+        let r = env.get(path, Some(&env.token(&["monitor.read"])));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(&r.body, crate::api_catalog::catalog().json());
+        assert_eq!(code(&env.get(path, Some(&env.token(&["fleet.read"])))), (403, "scope".into()));
+        assert!(route_of(Side::Relay, "GET", path).is_none(), "front door only");
+        // 10.1 (other tests of this org count too, so at least)
+        let rows = crate::api_catalog::counters::rows(Some(ORG), NOW);
+        let n = |prom: &str, labels: &[(&str, &str)]| {
+            rows.iter().find(|r| r.prom == prom && r.labels.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>() == labels).map_or(0.0, |r| r.value)
+        };
+        assert!(n("lucid_api_requests_total", &[("client", CLIENT), ("result", "ok")]) >= 1.0);
+        assert!(n("lucid_api_requests_total", &[("client", CLIENT), ("result", "refused")]) >= 1.0);
+        assert!(n("lucid_api_refusals_total", &[("check", "scope")]) >= 1.0);
     }
 
     #[test]

@@ -1543,6 +1543,9 @@ impl Relay {
     fn api_grace_used(&self, who: &Identity) {
         let now = pj::now() as i64;
         let orgs = self.hub.api_grace_orgs(&who.kind, &who.principal, &who.orgs, now);
+        for o in &orgs {
+            crate::api_catalog::counters::grace_used(o, &who.kind, if who.serial.is_empty() { &who.principal } else { &who.serial }, now);
+        }
         let due: Vec<String> = {
             let mut noted = GRACE_NOTED.lock().unwrap_or_else(|e| e.into_inner());
             noted.retain(|(_, _, at)| now - at < 3600);

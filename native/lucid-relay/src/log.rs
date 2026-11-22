@@ -414,6 +414,14 @@ type Sink = Box<dyn Fn(&str, Level) + Send + Sync>;
 /// Every written line handed on as well (the control panel's ring, ADR-A094): category, level, event, the JSON line.
 pub type Tap = Arc<dyn Fn(&str, Level, &str, &str) + Send + Sync>;
 
+/// API-1 10.3: every line any logger of the process writes also goes to the console's export engine (set once by
+/// the fleet console; `api_export::log_tap` keeps only catalog-listed events that name an org).
+static EXPORT_TAP: std::sync::OnceLock<Tap> = std::sync::OnceLock::new();
+
+pub fn set_export_tap(tap: Tap) {
+    let _ = EXPORT_TAP.set(tap);
+}
+
 pub struct Logger {
     component: String,
     min: Level,
@@ -472,6 +480,9 @@ impl Logger {
             s.send(syslog_frame(&ts, level, cat, &self.component, &json));
         }
         if let Some(tap) = &self.tap {
+            tap(cat, level, event, &json);
+        }
+        if let Some(tap) = EXPORT_TAP.get() {
             tap(cat, level, event, &json);
         }
     }

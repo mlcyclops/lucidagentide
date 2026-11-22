@@ -1137,9 +1137,8 @@ impl ApiAudit {
         std::mem::take(&mut *self.notes.lock())
     }
 
-    /// Slice 1a4's export hook: segments holding entries at or above a chain's hold are kept, on this source's chains
-    /// and on the relay chains received. Its caller (the export queues) arrives with slice 1a4.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The export hook (`api_export::ExportEngine::retention_hold`, set by the fleet console at start): segments
+    /// holding entries at or above a chain's hold are kept, on this source's chains and on the relay chains received.
     pub fn set_retention_hold(&self, hold: RetentionHold) {
         *self.hold.write() = Some(hold);
     }

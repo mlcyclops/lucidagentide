@@ -632,6 +632,7 @@
     "attention.relay-cert-expired": "The management certificate of <relay> has ended. Enroll it again with Replace.",
     "attention.relay-left": "<relay> left the console.",
     "attention.relay-flapping": "Two machines are connecting as <relay>. Its key may have been copied.",
+    "attention.export-audit-backlog": "Audit records of <org> are waiting to reach <destination>. They are kept until it takes them.",
     "attention.relay-read-only": "<relay> is read only from the console.",
     "attention.relay-confirm-waiting": "<n> changes wait for the operator of <relay>.",
     "attention.relay-scopes-pending": "<relay> has not accepted the scopes you asked for yet.",

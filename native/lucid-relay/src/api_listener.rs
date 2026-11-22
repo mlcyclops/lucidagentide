@@ -195,7 +195,7 @@ impl Data for Own<'_> {
         vec![self.id.to_string()]
     }
 
-    fn exposition(&self, _org: &str, ids: &[String], _now: i64) -> String {
+    fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
         if !ids.iter().any(|i| i == self.id) {
             return String::new();
         }
@@ -205,11 +205,14 @@ impl Data for Own<'_> {
         let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: "standard", fips: cfg!(feature = "fips") };
         // the families of the console's exposition for this relay; the console's own info family is the console's
         let text = crate::fleet_export::exposition(&console, &[&row], &[snap], p.ts);
-        text.lines().filter(|l| !l.contains("lucid_console_info")).fold(String::with_capacity(text.len()), |mut out, l| {
+        let mut out = text.lines().filter(|l| !l.contains("lucid_console_info")).fold(String::with_capacity(text.len()), |mut out, l| {
             out.push_str(l);
             out.push('\n');
             out
-        })
+        });
+        // API-1 10.1: this relay's own counters for the org
+        out.push_str(&crate::fleet_export::api_families(Some(org), now, true));
+        out
     }
 
     fn console(&self) -> Value {
@@ -511,7 +514,7 @@ impl Api {
             }
             RouteId::Health | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics => self.resource(&view, &m, req, rid, now),
             // front door routes: not served here
-            RouteId::AsMetadata | RouteId::Jwks | RouteId::OpenApi | RouteId::Token | RouteId::Revoke | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay => not_found(),
+            RouteId::AsMetadata | RouteId::Jwks | RouteId::OpenApi | RouteId::Token | RouteId::Revoke | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::TelemetryCatalog => not_found(),
         }
     }
 

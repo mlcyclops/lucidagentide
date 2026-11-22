@@ -371,6 +371,7 @@ impl Desk for FleetDesk {
         };
         let audit = self.fleet.api_audit();
         for org in orgs {
+            crate::api_catalog::counters::grace_used(&org, kind, serial, now);
             let mut e = json!({"action": "cert.grace-used", "serial": serial, "kind": kind, "result": "ok"});
             if let Some(r) = relay {
                 e["node"] = json!(r);
@@ -1423,7 +1424,7 @@ async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: P
         RouteId::AsMetadata => Some(ApiDoc::AuthorizationServer),
         RouteId::ResourceMetadata => Some(ApiDoc::ProtectedResource),
         RouteId::Jwks => Some(ApiDoc::Jwks),
-        RouteId::Token | RouteId::Revoke | RouteId::OpenApi | RouteId::Health | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics => None,
+        RouteId::Token | RouteId::Revoke | RouteId::OpenApi | RouteId::Health | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics | RouteId::TelemetryCatalog => None,
         // the relay listener's own routes
         RouteId::LocalAsMetadata | RouteId::LocalJwks | RouteId::LocalToken => return reply_response(api_not_found(), &api_resource::rid()),
     };
