@@ -43,6 +43,7 @@ mod ai_gateway_bench;
 mod ai_gateway_cards;
 mod ai_gateway_policy;
 mod ai_gateway_suite;
+mod api_map;
 mod codec;
 mod collab;
 mod collab_auth;

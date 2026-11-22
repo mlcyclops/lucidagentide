@@ -2775,7 +2775,7 @@ pub struct Verified {
     pub signer: String,
 }
 
-fn check_intermediate(
+pub(crate) fn check_intermediate(
     inter: &Cert,
     root: &Cert,
     terms: &SignerTerms,

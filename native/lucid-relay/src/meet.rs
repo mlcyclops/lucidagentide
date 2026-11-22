@@ -166,6 +166,8 @@ pub enum E {
     Held(String, Obj),
     /// _GuestsBusy: 429 on the guest port, with Retry-After seconds.
     Busy(String, u64),
+    /// A refusal with a status and a contract `code` (API-1): `{"ok": false, "code", "error"}`.
+    Coded(u16, &'static str, String),
     /// The client went away while its body was read: nobody to answer.
     ClientGone,
     /// Anything else: 500 (logged).
@@ -175,7 +177,7 @@ pub enum E {
 impl E {
     pub fn message(&self) -> String {
         match self {
-            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::ConflictInfo(m, _) | E::Busy(m, _) => m.clone(),
+            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::ConflictInfo(m, _) | E::Busy(m, _) | E::Coded(_, _, m) => m.clone(),
             E::Update(info) => update_message(info),
             E::ClientGone => String::new(),
         }
@@ -2220,6 +2222,7 @@ pub fn run(ctx: &mut Ctx, result: std::thread::Result<R<Obj>>) -> Option<(u16, O
             (429, err(m))
         }
         Err(E::NotFound(m)) => (404, err(m)),
+        Err(E::Coded(status, code, m)) => (status, obj([("ok", Value::Bool(false)), ("code", Value::from(code)), ("error", Value::from(m))])),
         Err(E::Unavailable(m)) => (501, err(m)),
         Err(E::Gone(m)) => (410, err(m)),
         Err(E::Bad(m)) => (400, err(m)),

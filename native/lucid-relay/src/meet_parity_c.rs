@@ -79,6 +79,21 @@ pub(crate) const AI_NOT_FOUND: &str = "not found";
 pub(crate) const MAP_BODY_MAX: usize = 320 * 1024;
 /// Every refused or missing `GET /v1/org/storage`.
 const SD_NOT_FOUND: &str = "not found";
+/// API-1 2.4: a 256 KiB map in a signed envelope and its request (`/v1/org/api`).
+pub(crate) const API_MAP_BODY_MAX: usize = 384 * 1024;
+
+/// An api map refusal with its contract code: 400 for the map's shape, 403 for its signature or expiry, 409 for the
+/// license, the issuer and the pin, 500 when the relay could not flush its store.
+fn api_error(e: crate::api_map::ApiMapError) -> E {
+    let status = match e.code {
+        "signature" | "map-expired" => 403,
+        "license" | "issuer-taken" | "seq-not-higher" | "conflict" => 409,
+        "io" => 500,
+        _ => 400,
+    };
+    E::Coded(status, e.code, e.message)
+}
+
 pub(crate) const ICON_MAX: usize = 64 * 1024;
 const ICON_DIR: &str = "app-icons";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -618,6 +633,9 @@ pub struct Pc {
     store: Option<op::Store>,
     /// AI-1 2: the org AI maps (rebuilt from `ext["ai"]["maps"]` like the policy store).
     ai_maps: Option<op::AiMapStore>,
+    /// API-1 2.4: the org api maps and journals (loaded from `state_dir/api-maps` and `state_dir/api-journal` the
+    /// first time; in memory without a state folder).
+    api_maps: Option<crate::api_map::ApiMapStore>,
     /// SD-1 13.5: the org storage maps (rebuilt from `ext["pc"]["maps"]` like the policy store).
     maps: Option<op::MapStore>,
     signer: Option<Arc<SignerClient>>,
@@ -647,6 +665,7 @@ impl Pc {
             minimums: None,
             store: None,
             ai_maps: None,
+            api_maps: None,
             maps: None,
             signer: None,
             sso_out: IndexMap::new(),
@@ -1044,6 +1063,24 @@ impl State {
         self.ai_keep_maps();
         log_info(&format!("org_ai org={} seq={} hash={} signer={}", vm.org, vm.seq, vm.hash, vm.signer));
         Ok(vm)
+    }
+
+    // ── API-1: org api maps (docs/api/contract.md 2.4) ──
+
+    /// The api map store, loaded from the state folder the first time.
+    pub(crate) fn api_maps(&mut self) -> &mut crate::api_map::ApiMapStore {
+        let dir = self.pc.state_dir.clone();
+        self.pc.api_maps.get_or_insert_with(|| crate::api_map::ApiMapStore::load(dir.as_deref()))
+    }
+
+    /// _api_accept: verify, check against the org's newest policy and the edition, fold and pin one signed api map.
+    pub(crate) fn api_accept(&mut self, wire: Option<&Value>, edition: crate::api_map::Edition) -> R<crate::api_map::AcceptOutcome> {
+        let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
+        let wire = wire.cloned().unwrap_or(Value::Null);
+        let org = wire.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let policy = self.pc_store().and_then(|s| s.newest.get(&org)).map(|v| v.policy.clone());
+        let trust = crate::api_map::ApiTrust { root: &root, signer_policy: &signer_policy, root_crl: crl.as_ref(), previous_serial: &previous };
+        self.api_maps().accept(&wire, &trust, pj::now() as i64, policy.as_ref(), edition).map_err(api_error)
     }
 
     /// The AI map the org's current policy names (the one devices and the gateway use), if the relay holds it.
@@ -2525,6 +2562,44 @@ impl Hub {
             return Err(E::NotFound(AI_NOT_FOUND.into()));
         }
         self.pc_ai_get(org, sha256)
+    }
+
+    // ── API-1: org api maps (docs/api/contract.md 2.4) ──
+
+    /// `POST /v1/org/api {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
+    /// `{org, seq, hash}`, answered after the map is flushed to disk. The pinned seq with another hash raises
+    /// `api.map.conflict` and answers 409 `conflict`.
+    pub fn pc_api_upload(&self, session: &str, who: &Identity, signed: Body) -> R<Obj> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut st = self.st.lock();
+        let r = (|| -> R<crate::api_map::AcceptOutcome> {
+            st.check_admin(session, who)?;
+            st.api_accept(signed, edition)
+        })();
+        drop(st);
+        let vm = match r? {
+            crate::api_map::AcceptOutcome::Pinned(vm) | crate::api_map::AcceptOutcome::Unchanged(vm) => vm,
+            crate::api_map::AcceptOutcome::Conflict { org, seq, pinned_hash, offered_hash } => {
+                log_warn(&format!("api.map.conflict org={org} seq={seq} pinned={pinned_hash} offered={offered_hash} by={}", who.principal));
+                return Err(E::Coded(409, "conflict", format!("{org}'s api map {seq} was seen with two different hashes")));
+            }
+        };
+        log_info(&format!("org_api_upload org={} seq={} hash={} by={}", vm.org, vm.seq, vm.hash, who.principal));
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
+    }
+
+    /// `GET /v1/org/api?org=<id>[&sha256=<hex>]` -> `{signed, signer_policy}`: the pinned map, or the pinned or
+    /// previous map with that hash, only to the console; anyone else, and a map the relay does not hold, get 404
+    /// `{"ok": false, "code": "not-found", "error": "Not found."}`.
+    pub fn pc_api_get_for(&self, who: &Identity, org: &str, sha256: &str) -> R<Obj> {
+        let not_found = || E::Coded(404, "not-found", "Not found.".into());
+        if !who.is_console() {
+            return Err(not_found());
+        }
+        let mut st = self.st.lock();
+        let wire = st.api_maps().get(org, sha256).map(|v| v.wire.clone()).ok_or_else(not_found)?;
+        let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
+        Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
     }
 
     // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──

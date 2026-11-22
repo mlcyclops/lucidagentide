@@ -227,6 +227,11 @@ fn get_route(path: &str) -> Option<Route> {
             let who = c.who(false)?;
             c.relay.hub.pc_ai_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
         },
+        // API-1 2.4: org api maps, only to the console
+        "/v1/org/api" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_api_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
         // AI-1 6.4 and 7.6: who may use org AI, and AI history
         "/v1/ai/allowed" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -674,6 +679,11 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/org/ai" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
             c.relay.hub.pc_ai_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        // API-1 2.4: org api maps (the uploaders of POST /v1/org/policy: a relay admin)
+        "/v1/org/api" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.hub.pc_api_upload(&pj::s(&b, "session"), &who, b.get("signed"))
         },
         "/v1/org/ai/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
