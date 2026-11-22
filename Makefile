@@ -1806,3 +1806,9 @@ demo-P-VIZ.UI1: ## P-VIZ.UI1: Visualize pop-out polish: the View menu, Customize
 demo-P-WORLDS.FX1: ## P-WORLDS.FX1 (ADR-0652): plasma-light world streams (a saturated core tube in a sheath, normal-blended packets with a bright rim, spark trails from ultra), packet tokens (orb, coin, petal, snowflake, spark, custom; instanced spinning coins with an embossed face, a reeded edge and a glint), per-tier token budgets, and environmentFor(options) re-applied with the sky on every option change. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_fx_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_worlds_fx_1.mjs
+
+.PHONY: demo-P-FLEET.DEMO1
+demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA and video: FAKE_ACP_MODE=script replays the security-first scripts (prose, tools, one permission ask, a delegation, cancel). Live: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --every 60
+	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/fleet_demo/start_qa_fleet.mjs
+	node --check desktop/scripts/fleet_demo/seed_fleet.mjs

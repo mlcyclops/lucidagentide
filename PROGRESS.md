@@ -6429,3 +6429,11 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-22):** per-node asks in viz_model (Main by engine id, lanes by event or poll, subagents on their parent; cleared on answer, status, auto-approved, turn end, removal or timeout; triage counts); viz_approvals (pulsing amber or red badge per node in 3D and 2D, the pop-out with Approve, Auto, Deny and Enter, A, D, Esc, the triage strip that folds after 4 s); scene.flyTo and View > Fly to approvals (persisted); answers through fleetAnswer, the grid's exported autoRiskModal and the chat card's pick; three local DEMO asks a cycle; tests and demo_p_viz_approve_1.mjs (real-UI run by the integrator).
 - **stubbed:** the demo parks lane asks only, so Main's pop-out (its options and Auto as "always allow") is covered by unit tests, not the real-UI run.
 - **next:** the Session scope (allow every same-kind ask for the lane's session) in the pop-out, and the same badges on the Fleet orbit.
+## P-VIZ.UI1 (ADR-0656): Visualize pop-out readability
+- **shipped (2026-11-22):** pop-outs scroll inside their own padding; AA labels and headers that never shrink; balanced swatch rows; Esc closes the Worlds menu; contrast-safe name-pill chips drawn over the stage; the hub panel shows chat prose only; demo_p_viz_ui_1.mjs passes on Hospital and Magic Show.
+- **stubbed:** the node-panel clipping check measures a panel tilted in 3D and may flag false positives there.
+- **next:** the same audit on the Fleet orbit's pop-outs.
+## P-FLEET.DEMO1 (ADR-0657): a scripted fake fleet for QA and video
+- **shipped (2026-11-22):** FAKE_ACP_MODE=script with eight security-first scripts, start_qa_fleet.mjs (isolated engine and omp shim) and seed_fleet.mjs (six lanes, --every, --no-main); fake_acp_script.test.ts passes.
+- **stubbed:** one permission ask per session, so later rounds of a lane run as already approved.
+- **next:** a script per world mini game, so a real Build on any world produces its own game.
