@@ -393,6 +393,20 @@ pub struct Session {
     pub active: bool,
 }
 
+/// The NT-1 release of the apps: a session of an older `hub` or `ios` app is not told of an invitation that does
+/// not ring (MV-2).
+const NT1_APPS: &str = "0.97.0";
+
+/// MV-2: the session's client is a pre-NT-1 app (`hub` or `ios` below NT1_APPS).
+fn pre_nt1(client: &Obj) -> bool {
+    matches!(pj::s(client, "app").as_str(), "hub" | "ios") && m::version_key(&pj::s(client, "version")) < m::version_key(NT1_APPS)
+}
+
+/// MV-2: whether a session with this client hears of the invitation (a silent one skips a pre-NT-1 app).
+fn hears_invite(client: &Obj, inv: &Obj) -> bool {
+    inv.get("ring") != Some(&Value::Bool(false)) || !pre_nt1(client)
+}
+
 fn push(seq: &mut i64, events: &mut VecDeque<Obj>, event: &Obj) {
     *seq += 1;
     let mut e = event.clone();
@@ -3458,7 +3472,7 @@ impl Hub {
                     ]))
                 })
                 .collect();
-            let invites: Vec<Value> = st.invites.get(&who.principal).map(|l| l.iter().filter(|i| pj::num(i, "ts") > now - INVITE_TTL).map(|i| Value::Object(i.clone())).collect()).unwrap_or_default();
+            let invites: Vec<Value> = st.invites.get(&who.principal).map(|l| l.iter().filter(|i| pj::num(i, "ts") > now - INVITE_TTL && hears_invite(&client, i)).map(|i| Value::Object(i.clone())).collect()).unwrap_or_default();
             let renewed = st.renewed.get(&m::key(&who.principal, &who.device)).cloned().unwrap_or(Value::Null);
             let admin = st.admins.contains(&who.principal);
             let mut reply = obj([
@@ -3936,7 +3950,10 @@ impl Hub {
             pending.push(inv.clone());
             st.invites.insert(t.clone(), pending);
             let shown = with(&inv, obj([("ring_ms_left", Value::from((push::RING_SECONDS * 1000.0) as i64))]));
-            st.tell(std::slice::from_ref(t), &with(&shown, obj([("type", Value::from("invite"))])), None);
+            let event = with(&shown, obj([("type", Value::from("invite"))]));
+            for s in st.sessions.values_mut().filter(|s| s.who.principal == *t && hears_invite(&s.client, &inv)) {
+                push(&mut s.seq, &mut s.events, &event);
+            }
             if ring {
                 st.nt_call(&inv, others);
             }
