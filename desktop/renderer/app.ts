@@ -139,7 +139,7 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { autoRiskModal, closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
 import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
@@ -1839,7 +1839,20 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
+/** P-VIZ.APPROVE1 (ADR-0655): Main's open permission cards by engine id (each card's `pick`), so the Visualize pop-out
+ *  answers through the card itself: the same option reading, the card's result line or toast, the voice approval
+ *  disarmed. Left when the card is answered by any path. */
+const chatAsks = new Map<string, (oid: string | null) => void>();
+/** A chat bubble's readable text for a summary surface (the Visualize hub panel): buttons, hidden parts and the
+ *  stream cursor left out, one line per block so paragraphs and tool rows never glue into each other. */
+function chatProse(el: Element | null): string {
+  if (!el) return "";
+  const c = el.cloneNode(true) as HTMLElement;
+  for (const x of c.querySelectorAll("button, [hidden], .cursor")) x.remove();
+  const lines = [...c.children].map((x) => (x.textContent ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return (lines.length ? lines.join("\n") : (c.textContent ?? "")).trim();
+}
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void; pick: (oid: string | null) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1951,14 +1964,20 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     actions.hidden = true;
     if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
+  // One option, read the way this card's own buttons are (P-VIZ.APPROVE1: Visualize's pop-out answers through it).
+  // No option (null) is a deny at the engine, fail-closed.
+  const pick = (oid: string | null): void => {
+    if (oid === null) { choose(null, "Denied", false); return; }
+    const opt = e.options.find((o) => o.optionId === oid);
+    if (!opt) return;
+    const isDeny = (e.egress || e.exec) ? opt.kind === "reject" : !isAllowOpt(opt.kind, opt.optionId);
+    choose(oid, isDeny ? "Denied" : "Allowed", !isDeny);
+  };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
-    if (!b) return;
-    const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
+    if (b?.dataset.oid) pick(b.dataset.oid);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose, pick };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -3155,10 +3174,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
     }
     else if (e.type === "permission") {
-      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
+      // P-VIZ.APPROVE1 (ADR-0655): Visualize took the tapped ask; a replay of one already answered leaves it again.
+      const resolved: { type: string; id: string } = { type: "permission-resolved", id: e.id };
+      if (answeredPermissions.has(e.id)) { vizBus.emit("main", "chat", resolved); return; }
+      if (permCards.has(e.id)) return;
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      const card = createPermissionCard(e, () => {
+        answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null;
+        chatAsks.delete(e.id);
+        vizBus.emit("main", "chat", resolved); // answered anywhere (chat, voice, Visualize, turn end)
+      });
       permCards.set(e.id, card);
+      chatAsks.set(e.id, card.pick);
       armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
@@ -19224,7 +19251,10 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
     fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
     mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
-      role: m.classList.contains("user") ? "user" as const : "assistant" as const, text: (m.querySelector(".text")?.textContent ?? "").trim(),
+      // an assistant's prose is .text > .stream; its siblings are the turn HUD and hidden restart banners, whose
+      // button labels would glue into the panel's text ("Restart agentStop command")
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const,
+      text: chatProse(m.querySelector(".text > .stream") ?? m.querySelector(".text")),
     })),
     sendMain: (text) => {
       if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
@@ -19237,6 +19267,10 @@ function wire(): void {
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
     openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
+    // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
+    fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
+    respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 

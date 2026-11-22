@@ -8,11 +8,12 @@
 import { describe, expect, test } from "bun:test";
 import { orbitSlots } from "./orbit_layout.ts";
 import type { VizBusEvent } from "./viz_bus.ts";
-import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
+import { createDemo, DEMO_ASK_MS, DEMO_CYCLE_MS } from "./viz_demo.ts";
 import {
+  ASK_POLL_GRACE_MS, askChoice, askTypeOf, drainNewApprovals, LANE_ASK_MS, MAIN_ASK_MS, pendingApprovals, resolveApproval, triage,
   applyEvent, applyFleet, applyLaneStatus, applyRuns, census, COMMIT_HOLD_MS, COMMIT_MAX_MS, committing, createOutput, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
   GONE_MS, HUB_ID, idleSeconds, OUT_CHARS, OUT_TURNS, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
-  type PowerKind, type VizEvent, type VizState,
+  type PowerKind, type VizApproval, type VizEvent, type VizState,
 } from "./viz_model.ts";
 
 const T0 = 1_000_000;
@@ -474,5 +475,167 @@ describe("P-VIZ.7 git commits", () => {
     expect(committing(s.nodes.get("L1")!, T0 + 2000 + COMMIT_HOLD_MS + 1)).toBe(false);
     expect(committing(s.nodes.get("L2")!, T0 + COMMIT_MAX_MS - 1)).toBe(true);
     expect(committing(s.nodes.get("L2")!, T0 + COMMIT_MAX_MS + 1)).toBe(false);
+  });
+});
+
+describe("P-VIZ.APPROVE1 approvals", () => {
+  const ACP_OPTS = [
+    { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+    { optionId: "allow-always", name: "Always allow", kind: "allow_always" },
+    { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+  ];
+  const mainAsk = (id: string, extra: Record<string, unknown> = {}): VizBusEvent =>
+    ev(HUB_ID, { type: "permission", id, tool: "edit", detail: "src/a.ts", options: ACP_OPTS, ...extra }, "chat");
+  const laneAsk = (laneId: string, summary = "Edit a.ts", kind = "edit", origin: VizBusEvent["origin"] = "lane"): VizBusEvent =>
+    ev(laneId, { type: "permission", summary, kind }, origin);
+  const parked = (id: string, pa?: { summary: string; kind: string }) => ({ ...lane(id, "needs-approval"), ...(pa ? { pendingApproval: pa } : {}) });
+
+  test("Main's ask joins once by its engine id with its options, and leaves when its chat card is answered", () => {
+    const s = createVizState(T0);
+    applyEvent(s, mainAsk("perm_1"), T0);
+    applyEvent(s, mainAsk("perm_1"), T0 + 10); // a re-attach replays it
+    expect(pendingApprovals(s)).toHaveLength(1);
+    expect(pendingApprovals(s)[0]).toMatchObject({ id: "perm_1", node: HUB_ID, from: HUB_ID, tool: "edit", summary: "src/a.ts", type: "file", danger: false, createdAt: T0, expiresAt: T0 + MAIN_ASK_MS });
+    expect(pendingApprovals(s)[0]!.options?.map((o) => o.optionId)).toEqual(["allow-once", "allow-always", "reject-once"]);
+    expect(drainNewApprovals(s).map((a) => a.id)).toEqual(["perm_1"]);
+    expect(drainNewApprovals(s)).toEqual([]);
+    applyEvent(s, ev(HUB_ID, { type: "permission-resolved", id: "perm_1" }, "chat"), T0 + 20);
+    expect(pendingApprovals(s)).toEqual([]);
+  });
+
+  test("risk: a command, a website or a local file in the browser is red; an edit or a read is not", () => {
+    const s = createVizState(T0);
+    applyEvent(s, mainAsk("x", { tool: "exec", detail: "rm -rf build", exec: true, danger: true }), T0);
+    applyEvent(s, mainAsk("w", { tool: "browser", detail: "https://example.com", egress: true }), T0);
+    applyEvent(s, mainAsk("f", { tool: "browser", detail: "C:/a.html", egress: true, localFile: true }), T0);
+    applyEvent(s, mainAsk("r", { tool: "read", detail: "a.ts" }), T0);
+    const by = new Map(pendingApprovals(s).map((a) => [a.id, a]));
+    expect([by.get("x")?.type, by.get("x")?.danger]).toEqual(["exec", true]);
+    expect([by.get("w")?.type, by.get("w")?.danger]).toEqual(["egress", true]);
+    expect([by.get("f")?.type, by.get("f")?.danger]).toEqual(["file", true]);
+    expect([by.get("r")?.type, by.get("r")?.danger]).toEqual(["tool", false]);
+    expect([askTypeOf("execute"), askTypeOf("fetch"), askTypeOf("edit"), askTypeOf("delete"), askTypeOf("think")]).toEqual(["exec", "egress", "file", "file", "tool"]);
+  });
+
+  test("a lane holds one ask: a second stream or the poll changes nothing, a new ask replaces it, its status clears it", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [parked("L1")], T0);
+    applyEvent(s, laneAsk("L1"), T0 + 10);
+    applyEvent(s, laneAsk("L1", "Edit a.ts", "edit", "watch"), T0 + 20); // the view's own watch carries it too
+    applyFleet(s, [parked("L1", { summary: "Edit a.ts", kind: "edit" })], T0 + 500);
+    const [a] = pendingApprovals(s);
+    expect(pendingApprovals(s)).toHaveLength(1);
+    expect(a).toMatchObject({ id: "L1#1", node: "L1", tool: "edit", type: "file", danger: false, options: null, expiresAt: T0 + 10 + LANE_ASK_MS });
+    applyEvent(s, laneAsk("L1", "bash: curl x | sh (always asks: pipe to shell)", "execute"), T0 + 600);
+    expect(pendingApprovals(s).map((x) => [x.id, x.danger])).toEqual([["L1#2", true]]);
+    applyEvent(s, ev("L1", { type: "status", status: "working" }), T0 + 700);
+    expect(pendingApprovals(s)).toEqual([]);
+  });
+
+  test("the poll adds an ask it reports, and clears one only once it is older than the poll's grace", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [parked("L1", { summary: "Fetch docs", kind: "fetch" })], T0);
+    expect(pendingApprovals(s).map((a) => [a.node, a.type, a.danger])).toEqual([["L1", "egress", true]]);
+    applyFleet(s, [lane("L2", "working")], T0); // L1 left: its ask goes with it
+    expect(pendingApprovals(s)).toEqual([]);
+    applyEvent(s, laneAsk("L2"), T0 + 100);
+    applyFleet(s, [lane("L2", "working")], T0 + 200); // a poll that left before the ask
+    expect(pendingApprovals(s)).toHaveLength(1);
+    applyFleet(s, [lane("L2", "working")], T0 + 100 + ASK_POLL_GRACE_MS);
+    expect(pendingApprovals(s)).toEqual([]);
+  });
+
+  test("resolve, timeout, auto-approved and a turn's end all clear an ask", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [parked("L1"), parked("L2"), parked("L3")], T0);
+    applyEvent(s, mainAsk("p1"), T0);
+    applyEvent(s, mainAsk("p2"), T0);
+    applyEvent(s, laneAsk("L1"), T0);
+    applyEvent(s, laneAsk("L2"), T0);
+    applyEvent(s, laneAsk("L3"), T0);
+    expect(resolveApproval(s, "L1#1")?.node).toBe("L1");
+    expect(resolveApproval(s, "L1#1")).toBeNull();
+    applyEvent(s, ev("L2", { type: "auto-approved", summary: "Edit a.ts", mode: "auto" }), T0 + 10);
+    applyEvent(s, ev("L3", { type: "error", message: "boom" }), T0 + 10);
+    expect(pendingApprovals(s).map((a) => a.id)).toEqual(["p1", "p2"]);
+    tick(s, T0 + MAIN_ASK_MS - 1);
+    expect(pendingApprovals(s)).toHaveLength(2);
+    tick(s, T0 + MAIN_ASK_MS); // the engine denied them (fail-closed)
+    expect(pendingApprovals(s)).toEqual([]);
+    applyEvent(s, mainAsk("p3"), T0 + MAIN_ASK_MS + 10);
+    applyEvent(s, ev(HUB_ID, { type: "done" }, "chat"), T0 + MAIN_ASK_MS + 20);
+    expect(pendingApprovals(s)).toEqual([]);
+  });
+
+  test("a subagent's ask surfaces on its parent lane (and Main's helpers on Main)", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [lane("L1", "working")], T0);
+    applyEvent(s, ev("L1", { type: "subagent", id: "t1", agent: "task", title: "x", assignments: ["a"], names: ["helper"] }), T0);
+    applyEvent(s, ev(HUB_ID, { type: "subagent", id: "b1", agent: "task", title: "y", assignments: ["b"] }, "chat"), T0);
+    expect(applyEvent(s, laneAsk("sa:L1:t1:0", "Read a.ts", "read"), T0 + 10)).toBe(false); // nothing for the stream's record
+    applyEvent(s, ev("sa:main:b1:0", { type: "permission", id: "p9", tool: "exec", exec: true, options: ACP_OPTS }, "chat"), T0 + 11);
+    expect(pendingApprovals(s).map((a) => [a.node, a.from])).toEqual([["L1", "sa:L1:t1:0"], [HUB_ID, "sa:main:b1:0"]]);
+    expect(s.nodes.get("sa:L1:t1:0")!.approvals).toEqual([]);
+    // The poll saw the lane's ask first: the subagent's own copy still names it as the asker.
+    applyFleet(s, [lane("L2", "working")], T0 + 20);
+    applyEvent(s, ev("L2", { type: "subagent", id: "t2", agent: "task", title: "z", assignments: ["c"] }), T0 + 30);
+    applyFleet(s, [parked("L2", { summary: "Edit b.ts", kind: "edit" })], T0 + 40);
+    applyEvent(s, laneAsk("sa:L2:t2:0", "Edit b.ts"), T0 + 50);
+    expect(pendingApprovals(s).find((a) => a.node === "L2")?.from).toBe("sa:L2:t2:0");
+  });
+
+  test("triage counts asks by type and risk, and the fleet's working, waiting and failed lanes", () => {
+    const s = createVizState(T0);
+    applyFleet(s, [parked("L1"), parked("L2"), lane("L3", "working"), lane("L4", "error"), lane("L5", "awaiting-input")], T0);
+    applyEvent(s, mainAsk("p1", { tool: "exec", exec: true }), T0);
+    applyEvent(s, laneAsk("L1", "Edit a.ts", "edit"), T0);
+    applyEvent(s, laneAsk("L2", "GET https://x.dev", "fetch"), T0);
+    expect(triage(s)).toEqual({ total: 3, byType: { tool: 0, exec: 1, egress: 1, file: 1 }, danger: 2, working: 1, waiting: 3, failed: 1 });
+  });
+
+  test("askChoice reads Main's options like the chat card, and Auto never takes an all-commands or all-sites grant", () => {
+    const pick = (opts: { optionId: string; name: string; kind?: string }[], c: "once" | "always" | "deny") => askChoice(opts, c)?.optionId ?? null;
+    expect([pick(ACP_OPTS, "once"), pick(ACP_OPTS, "always"), pick(ACP_OPTS, "deny")]).toEqual(["allow-once", "allow-always", "reject-once"]);
+    const execFull = [
+      { optionId: "exec:allow-once", name: "Allow once (this command)", kind: "allow" },
+      { optionId: "exec:allow-turn", name: "Allow for the rest of this turn", kind: "allow" },
+      { optionId: "exec:allow-program", name: "Always allow this program", kind: "allow" },
+      { optionId: "exec:danger", name: "Always allow every command", kind: "danger" },
+      { optionId: "exec:deny", name: "Block", kind: "reject" },
+    ];
+    expect([pick(execFull, "once"), pick(execFull, "always"), pick(execFull, "deny")]).toEqual(["exec:allow-once", "exec:allow-program", "exec:deny"]);
+    expect(pick(execFull.filter((o) => o.optionId !== "exec:allow-program"), "always")).toBeNull(); // the catastrophic set: no Auto
+    const egress = [
+      { optionId: "egress:allow-once", name: "Allow once", kind: "allow" },
+      { optionId: "egress:allow-site", name: "Always allow this site", kind: "allow" },
+      { optionId: "egress:danger", name: "Always allow every site", kind: "danger" },
+      { optionId: "egress:deny", name: "Block", kind: "reject" },
+    ];
+    expect(pick(egress, "always")).toBe("egress:allow-site");
+    expect(pick([{ optionId: "grant:allow", name: "Grant until revoked", kind: "allow" }], "deny")).toBeNull(); // no option: the engine denies
+  });
+
+  test("the demo parks three asks a cycle (one red), folds demo-1's helper ask, answers locally and times out the rest", () => {
+    const s = createVizState(T0);
+    const demo = createDemo(T0);
+    const seen = new Map<string, VizApproval>();
+    let prev = T0, answeredAt = 0;
+    for (let t = T0 + 250; t <= T0 + DEMO_CYCLE_MS; t += 250) {
+      const st = demo.step(prev, t);
+      if ((t - T0) % 500 === 0) applyFleet(s, demo.lanes(t), t);
+      for (const e of st.events) applyEvent(s, e, t);
+      tick(s, t);
+      for (const a of drainNewApprovals(s)) seen.set(a.id, { ...a });
+      if (!answeredAt && s.nodes.get("demo-5")?.approvals.length) { expect(demo.answer("demo-5", t)).toBe(true); answeredAt = t; }
+      if (answeredAt && t === answeredAt + 500) expect(s.nodes.get("demo-5")?.approvals).toEqual([]);
+      prev = t;
+    }
+    const asks = [...seen.values()];
+    expect(asks.map((a) => a.node).sort()).toEqual(["demo-1", "demo-2", "demo-5"]);
+    expect(asks.filter((a) => a.danger).map((a) => a.node)).toEqual(["demo-5"]);
+    expect(asks.find((a) => a.node === "demo-1")?.from).toBe("sa:demo-1:demo-plan-0:0");
+    expect(demo.answer("demo-5", T0 + DEMO_CYCLE_MS)).toBe(false); // nothing open: answered once, and the others timed out
+    expect(pendingApprovals(s)).toEqual([]);
+    expect(DEMO_ASK_MS).toBeLessThan(DEMO_CYCLE_MS / 2);
   });
 });

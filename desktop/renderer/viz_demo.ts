@@ -14,7 +14,9 @@
 // P-VIZ.7 (ADR-0641): six agents on six sponsors and every size class (a self-hosted model wears TL187), and
 // three git commits a cycle (a lane's commit then push, a private lane's commit, Main's commit-namespace commit).
 // P-WORLDS.BUILD1 (ADR-0653): one build per demo agent a cycle on a separate build channel (DemoStep.builds: pieces,
-// lock-ins, a red flicker, the reveal), each ending in DEMO_GAME, a small sample game labeled as a demo sample.
+// lock-ins, a red flicker, the reveal), each ending in a sample game labeled as a demo sample. P-WORLDS.BUILD2: the
+// view picks it, rotating through the current world's template samples (viz_build_model.demoSampleAt).
+// P-VIZ.APPROVE1 (ADR-0655): three tool-call approvals a cycle (one red) that the view answers locally (answer).
 
 import type { VizBusEvent } from "./viz_bus.ts";
 import { HUB_ID, type VizAsk, type VizLaneInput, type VizRunInput } from "./viz_model.ts";
@@ -68,7 +70,7 @@ export interface DemoStep { events: VizBusEvent[]; asks: { id: string; ask: VizA
 /** P-WORLDS.BUILD1 (ADR-0653): one build per demo agent a cycle: [lane, phase s it starts, helpers, then the steps
  *  at their phase seconds]. Each build starts with a subagent spawn on the build channel (its pieces) and ends with
  *  the turn's done, except demo-1, whose git commit at 27 s (a real event above) reveals its build. Every build ends
- *  in DEMO_GAME, a sample labeled as one. */
+ *  in a sample labeled as one (the view arms it on the spawn). */
 const BUILDS: readonly { lane: string; at: number; helpers: number; steps: readonly (readonly [number, "lock" | "fail" | "done"])[] }[] = [
   { lane: "demo-3", at: 3, helpers: 3, steps: [[5, "lock"], [6.5, "fail"], [8, "lock"], [10, "lock"], [12, "done"]] },
   { lane: "demo-2", at: 8, helpers: 3, steps: [[10, "lock"], [12, "lock"], [13, "fail"], [14, "lock"], [16, "done"]] },
@@ -78,41 +80,21 @@ const BUILDS: readonly { lane: string; at: number; helpers: number; steps: reado
   { lane: "demo-6", at: 30, helpers: 2, steps: [[33, "lock"], [34, "fail"], [36, "lock"], [38, "done"]] },
 ];
 
-/** P-WORLDS.BUILD1 (ADR-0653): the demo's sample mini game, a self-contained HTML target-tap game (inline CSS and
- *  JS, no network), labeled DEMO SAMPLE in its title, its top bar and every chip and popup that shows it. It sets
- *  body[data-ready] once its script ran (the real-UI demo checks the sandbox let it run). Under 8 KB. */
-export const DEMO_GAME: { readonly title: string; readonly html: string } = {
-  title: "Target tap (demo sample)",
-  html: `<!doctype html><html><head><meta charset="utf-8"><title>Target tap (demo sample)</title><style>
-html,body{margin:0;height:100%;font:14px system-ui,sans-serif;background:#0f1724;color:#e8eefc;overflow:hidden;user-select:none}
-#bar{display:flex;gap:14px;align-items:center;padding:8px 12px;background:#17233a}#bar b{color:#ffd166}
-#tag{margin-left:auto;font-size:11px;letter-spacing:.08em;color:#ff9f43;border:1px solid #ff9f43;border-radius:999px;padding:1px 8px;white-space:nowrap}
-#field{position:absolute;left:0;right:0;top:38px;bottom:0}
-.t{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;padding:0;border-radius:50%;border:0;cursor:pointer;animation:p .25s ease-out;
-background:radial-gradient(circle,#fff 0 18%,#ff4d6d 19% 42%,#fff 43% 60%,#ff4d6d 61%)}
-@keyframes p{from{transform:scale(.2)}}
-#go{position:absolute;left:0;right:0;top:38px;bottom:0;display:grid;place-items:center;text-align:center}
-#start{font:inherit;font-weight:700;padding:10px 22px;border-radius:10px;border:0;background:#ffd166;color:#111;cursor:pointer}
-</style></head><body>
-<div id="bar"><span>Score <b id="sc">0</b></span><span>Time <b id="tm">30</b></span><span id="tag">DEMO SAMPLE</span></div>
-<div id="field"></div>
-<div id="go"><div><p id="msg">Tap the targets before they fade.</p><button id="start" type="button">Play</button></div></div>
-<script>
-(function(){
-var f=document.getElementById("field"),sc=document.getElementById("sc"),tm=document.getElementById("tm"),go=document.getElementById("go"),msg=document.getElementById("msg"),st=document.getElementById("start");
-var score=0,left=30,spawn=0,tick=0;
-function add(){var t=document.createElement("button");t.className="t";t.type="button";t.setAttribute("aria-label","target");
-t.style.left=(8+Math.random()*84)+"%";t.style.top=(10+Math.random()*80)+"%";
-t.onclick=function(){score++;sc.textContent=score;t.remove();};f.appendChild(t);setTimeout(function(){t.remove();},1400);}
-function end(){clearInterval(spawn);clearInterval(tick);f.textContent="";msg.textContent="Time! You hit "+score+" targets.";st.textContent="Play again";go.style.display="grid";}
-st.onclick=function(){score=0;left=30;sc.textContent="0";tm.textContent="30";go.style.display="none";
-spawn=setInterval(add,650);tick=setInterval(function(){left--;tm.textContent=left;if(left<=0)end();},1000);add();};
-document.body.setAttribute("data-ready","1");
-})();
-</script></body></html>`,
-};
+/** P-VIZ.APPROVE1 (ADR-0655): three tool-call approvals a cycle, one red (a command the exec floor always asks). The
+ *  lane parks on each (needs-approval in the poll, its pendingApproval) from `at` until the user answers it in the
+ *  view (VizDemo.answer, local: the real answer routes are never called for a demo node) or DEMO_ASK_MS passes (the
+ *  engine's fail-closed timeout, a deny). demo-1's ask comes from its subagent and folds onto demo-1. */
+export const DEMO_ASK_MS = 20_000;
+/** At 8, 12 and 16.5 s, each lane parked clear of its own scripted surge (a parked lane streams nothing). */
+const APPROVALS: readonly { lane: string; at: number; source: (k: number) => string; summary: string; kind: string }[] = [
+  { lane: "demo-1", at: 8, source: (k) => `sa:demo-1:demo-plan-${k}:0`, summary: "Read src/routes/index.ts for plan-split", kind: "read" },
+  { lane: "demo-5", at: 12, source: () => "demo-5", summary: "rm -rf build && sudo make install (always asks: sudo)", kind: "execute" },
+  { lane: "demo-2", at: 16.5, source: () => "demo-2", summary: "Edit test/api.test.ts", kind: "edit" },
+];
 
 export interface VizDemo {
+  /** P-VIZ.APPROVE1: the user approved or denied `lane`'s open demo ask in the view; false when it has none. */
+  answer(lane: string, now: number): boolean;
   lanes(now: number): VizLaneInput[];
   runs(now: number): VizRunInput[];
   /** Everything the script emits in (prev, now]. */
@@ -134,9 +116,18 @@ export function createDemo(t0: number): VizDemo {
     return a;
   };
 
+  /** P-VIZ.APPROVE1: asks answered in the view (`<lane>:<cycle>`), and lanes whose answer the next step reports. */
+  const answered = new Set<string>();
+  let settled: string[] = [];
+  const openAsk = (lane: string, now: number): (typeof APPROVALS)[number] | null => {
+    const k = Math.floor((now - t0) / DEMO_CYCLE_MS), p = phaseOf(now);
+    return APPROVALS.find((d) => d.lane === lane && p >= d.at && p < d.at + DEMO_ASK_MS / 1000 && !answered.has(`${lane}:${k}`)) ?? null;
+  };
+
   const laneStatus = (id: string, now: number): string | null => {
     const a = actOf(id, now);
     if (a) return a.ask === "kill" ? null : a.ask === "end" ? "stopped" : "done";
+    if (openAsk(id, now)) return "needs-approval";
     const p = phaseOf(now);
     for (const [from, to, st] of WINDOWS[id] ?? []) if (p >= from && p < to) return st;
     return "working";
@@ -188,7 +179,8 @@ export function createDemo(t0: number): VizDemo {
       const out: VizLaneInput[] = [];
       for (const l of LANES) {
         const st = laneStatus(l.id, now);
-        if (st !== null) out.push({ id: l.id, name: l.name, model: l.model, status: st });
+        const ask = st === "needs-approval" ? openAsk(l.id, now) : null;
+        if (st !== null) out.push({ id: l.id, name: l.name, model: l.model, status: st, ...(ask ? { pendingApproval: { summary: ask.summary, kind: ask.kind } } : {}) });
       }
       return out;
     },
@@ -213,11 +205,20 @@ export function createDemo(t0: number): VizDemo {
       if (now <= prev) return { events, asks, builds };
       const a = prev - t0, b = now - t0;
       const due = (k: number, phase: number): boolean => { const at = k * DEMO_CYCLE_MS + phase * 1000; return at > a && at <= b; };
+      const emit = (source: string, e: { type: string; [key: string]: unknown }): void => { events.push({ source, origin: "demo", e }); };
       for (let k = Math.floor(a / DEMO_CYCLE_MS); k <= Math.floor(b / DEMO_CYCLE_MS); k++) {
         for (const [phase, source, what] of oneShots(k)) {
           if (!due(k, phase)) continue;
           if (typeof what === "string") asks.push({ id: source, ask: what });
           else events.push({ source, origin: "demo", e: what });
+        }
+        // P-VIZ.APPROVE1 (ADR-0655): the lane parks (status first, like the engine), then asks; unanswered, it times out.
+        for (const d of APPROVALS) {
+          if (due(k, d.at)) {
+            emit(d.lane, { type: "status", status: "needs-approval" });
+            emit(d.source(k), { type: "permission", summary: d.summary, kind: d.kind });
+          }
+          if (due(k, d.at + DEMO_ASK_MS / 1000) && !answered.has(`${d.lane}:${k}`)) settled.push(d.lane);
         }
         // P-WORLDS.BUILD1 (ADR-0653): the build channel, in phase order per lane.
         for (const bd of BUILDS) {
@@ -233,6 +234,12 @@ export function createDemo(t0: number): VizDemo {
           });
         }
       }
+      // P-VIZ.APPROVE1: a lane whose ask was answered or timed out leaves needs-approval (the engine's status event).
+      for (const lane of settled) {
+        const st = laneStatus(lane, now);
+        if (st && st !== "needs-approval") emit(lane, { type: "status", status: st });
+      }
+      settled = [];
       const dt = Math.min(1000, now - prev) / 1000;
       for (const source of [HUB_ID, ...LANES.map((l) => l.id)]) {
         const chars = Math.round(rateOf(source, now) * dt * 4);
@@ -245,6 +252,12 @@ export function createDemo(t0: number): VizDemo {
     },
     act(id, ask, now) {
       if (LANES.some((l) => l.id === id)) acts.set(id, { ask, at: now });
+    },
+    answer(lane, now) {
+      if (!openAsk(lane, now)) return false;
+      answered.add(`${lane}:${Math.floor((now - t0) / DEMO_CYCLE_MS)}`);
+      settled.push(lane);
+      return true;
     },
     cwd: (id) => CWD[id] ?? null,
   };

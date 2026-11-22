@@ -53,6 +53,12 @@ export async function verifyCastCustomization(page, worldKey = null) {
   /** Open Visualize (after a load), close boot toasts, and make sure the world is drawn. */
   const openOnWorld = async () => {
     await page.waitForSelector("#ctViz", { timeout: 20000 });
+    // Fly to approvals (on by default) would move the camera off the nodes this demo clicks; it is read at load
+    if ((await page.evaluate(() => localStorage.getItem("lucid.viz.flyToApprovals.v1"))) !== "0") {
+      await page.evaluate(() => localStorage.setItem("lucid.viz.flyToApprovals.v1", "0"));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector("#ctViz", { timeout: 20000 });
+    }
     if (!(await page.$("#vizView [data-viz-ledger]"))) await page.click("#ctViz");
     await page.waitForSelector("#vizView [data-viz-worlds]", { visible: true, timeout: 15000 });
     await pause(1500);

@@ -136,7 +136,8 @@ export async function verifyStreams(page, worldKey = null) {
   let petal = null;
   for (let k = 0; k < 8; k++) { await pause(250); petal = await probe("fx"); if (petal.quads > 0) break; }
   assert(petal.token === "petal" && petal.coins === 0 && petal.quads > 0, `petals are not drawn as sprites: ${JSON.stringify({ token: petal.token, quads: petal.quads, coins: petal.coins })}`);
-  assert((await probe("fxPreview", { token: "custom" })) === false, "a custom token without paintToken was accepted");
+  // paintToken: null strips the painter a world may ship for its own custom token (most v2 worlds do)
+  assert((await probe("fxPreview", { token: "custom", paintToken: null })) === false, "a custom token without paintToken was accepted");
 
   // 5. a World option change re-applies the world's own environment (environmentFor, sky, edges, charge)
   if (!(await page.$("input[data-viz-wopt], select[data-viz-wopt]"))) await page.click("#vizView [data-viz-viewmenu]");

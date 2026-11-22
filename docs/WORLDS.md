@@ -91,6 +91,12 @@ miniGames: [{ id: "scorekeeper", label: "Bowling scorekeeper", brief: "Build a b
   sends `brief` to that agent as an ordinary task through the panel's own send path. Only that run's output can become
   an artifact: its last fenced `html` block (or a whole `<!doctype html>` document), at most 256 KB. Without
   `miniGames` the host offers its own two (a target-tap and a memory-cards game).
+- `sample` (optional, per template; P-WORLDS.BUILD2): a ready-made, playable example of what the brief produces, ONE
+  whole HTML document (`<!doctype html><html>...</html>`, inline CSS and JS, no network, no external assets) of at
+  most 64 KB. A malformed sample is dropped and the template stays. The panel row then shows Play sample next to
+  Build, and the `?vizDemo=1` builds end in your samples in turn (without any, in the host's two). A sample is
+  labeled Sample and passes the same gate and sandbox as an agent-built artifact; being in a signed pack does not
+  make it trusted. Draw on a canvas that fills the frame at any size: the popup's game area is 16:10 and resizable.
 - The artifact shows as a chip over the node. Its popup first sends it through the engine's security gate (the
   scanner, fail-closed: a block or a scan that cannot run means it is never shown, and the popup says why), labels it
   Untrusted, and runs nothing until Play. Play loads it in an iframe with `sandbox="allow-scripts"` (never

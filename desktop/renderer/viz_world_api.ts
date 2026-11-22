@@ -245,6 +245,11 @@ export interface WorldMiniGame {
   /** The task brief sent to the agent as is. Ask for ONE self-contained HTML file (inline CSS and JS, no network,
    *  no external assets) in a fenced html block: that block becomes the artifact. */
   brief: string;
+  /** Optional: a ready-made, playable example of what the brief produces (ONE self-contained HTML document, inline
+   *  CSS and JS, no network, no external assets, at most 64 KB). The host shows it as a labeled sample: the
+   *  `?vizDemo=1` builds end in it, and the node panel can play it as a preview. It passes the same security gate
+   *  and sandbox as an agent-built artifact. */
+  sample?: string;
 }
 
 /** v2 (ADR-0653): what kit.scaffold builds. */

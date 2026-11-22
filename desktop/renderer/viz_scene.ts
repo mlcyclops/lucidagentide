@@ -191,6 +191,12 @@ export interface VizSceneHandle {
    *  `polar` and `az` (radians; az relative to the way the figure faces), drifting `azSpeed` radians a second; the
    *  node stops turning to the camera while it is the subject. null hands the camera back (to auto, if it is on). */
   scriptShot(id: string | null, opts?: { offset?: Vec3; dist?: number; polar?: number; az?: number; azSpeed?: number }): void;
+  /** P-VIZ.APPROVE1 (ADR-0655): frame the node for `holdMs` (3D: the auto camera's close frame; 2D: pan and zoom to
+   *  it), whether or not Auto camera is on; after that the camera stays (auto off) or auto takes over again. Reduced
+   *  motion cuts instead of flying. The user's drag, pan or zoom ends it. False when there is no such node. */
+  flyTo(id: string, holdMs: number): boolean;
+  /** The node a flyTo is framing right now, else null (read by the demo probe). */
+  flying(): string | null;
   /** P-VIZ.6: the node under client (x, y), or null. */
   nodeAt(x: number, y: number): string | null;
   /** P-VIZ.6: a throwable is armed (`cursor`, a CSS cursor showing it) or not (null). While armed every click is
@@ -696,6 +702,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function userGrab(): void {
     userMoved = true;
     shot = null; // P-VIZ.7: the user's hand always beats a scripted shot
+    flight = null; // P-VIZ.APPROVE1: and a fly-to an approval
     if (!auto) return;
     auto = false;
     userCamCb?.();
@@ -711,7 +718,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const size = KIND_SCALE[n.kind];
     root.scale.setScalar(size);
 
-    const labelMat = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, toneMapped: false });
+    // P-VIZ.UI1: the pill sits at floor level in front of the figure, so a world's stage plate (wider than the cube)
+    // and its glass came in front of its left end and cut the role tag ("ODER"). It is a name tag: it draws over
+    // the scene (no depth test), last (renderOrder 10, above every other layer's 1 to 8).
+    const labelMat = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, depthTest: false, toneMapped: false });
     const label = new THREE.Sprite(labelMat);
     label.renderOrder = 10;
     pivot.add(label);
@@ -908,37 +918,49 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const key = `${role}|${text}`;
     if (obj.labelText === key) return;
     obj.labelText = key;
+    // P-VIZ.UI1: the role is a solid chip in the persona's color with dark or light ink by contrast (a light-blue
+    // "CODER" drawn straight on a white pill over a light sky was near invisible). Widths come from the INK bounds
+    // (actualBoundingBox), not the advance alone, so a glyph that overhangs its advance is never cut at an edge.
+    const color = PERSONAS[obj.persona].color;
     const scale = 3;
     const cv = document.createElement("canvas");
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     const font = `600 ${22 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
-    const roleFont = `700 ${15 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    const roleFont = `700 ${13 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    const inkOf = (m: TextMetrics): { left: number; w: number } => {
+      const left = Math.max(0, m.actualBoundingBoxLeft || 0);
+      return { left, w: Math.max(m.width, left + (m.actualBoundingBoxRight || 0)) };
+    };
     ctx.font = font;
-    const tw = ctx.measureText(text).width;
+    const t = inkOf(ctx.measureText(text));
     ctx.font = roleFont;
-    const rw = ctx.measureText(role).width;
-    const padX = 14 * scale, gap = 10 * scale;
-    const w = Math.ceil(padX * 2 + rw + (text ? gap + tw : 0));
+    const r = inkOf(ctx.measureText(role));
     const h = 40 * scale;
+    const pad = 7 * scale, chipH = h - 2 * pad, chipPadX = 9 * scale, gap = 9 * scale, padEnd = 16 * scale;
+    const chipW = Math.ceil(chipPadX * 2 + r.w);
+    const w = Math.ceil(pad + chipW + (text ? gap + t.w + padEnd : pad));
     cv.width = w; cv.height = h;
     const c2 = cv.getContext("2d")!;
-    c2.fillStyle = theme.light ? "rgba(255,255,255,0.86)" : "rgba(10,12,20,0.74)";
+    c2.fillStyle = theme.light ? "rgba(255,255,255,0.94)" : "rgba(10,12,20,0.84)";
     roundRect(c2, 0, 0, w, h, h / 2);
     c2.fill();
-    c2.strokeStyle = PERSONAS[obj.persona].color;
+    c2.strokeStyle = color;
     c2.globalAlpha = 0.7; c2.lineWidth = 2 * scale;
     roundRect(c2, scale, scale, w - 2 * scale, h - 2 * scale, h / 2 - scale);
     c2.stroke();
     c2.globalAlpha = 1;
+    c2.fillStyle = color;
+    roundRect(c2, pad, pad, chipW, chipH, chipH / 2);
+    c2.fill();
     c2.textBaseline = "middle";
     c2.font = roleFont;
-    c2.fillStyle = PERSONAS[obj.persona].color;
-    c2.fillText(role, padX, h / 2 + scale);
+    c2.fillStyle = inkOn(color);
+    c2.fillText(role, pad + chipPadX + r.left, h / 2 + scale);
     if (text) {
       c2.font = font;
       c2.fillStyle = theme.txt;
-      c2.fillText(text, padX + rw + gap, h / 2 + scale);
+      c2.fillText(text, pad + chipW + gap + t.left, h / 2 + scale);
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -1334,6 +1356,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   const camPos = new THREE.Vector3();
   // P-VIZ.7: the scripted shot (scriptShot); while set it drives the camera instead of the director.
   let shot: { id: string; offset: THREE.Vector3; dist: number; polar: number; az: number; azSpeed: number; at: number } | null = null;
+  /** P-VIZ.APPROVE1 (ADR-0655): a fly-to (flyTo) frames this node instead of the director's focus until `until`. */
+  let flight: { id: string; until: number } | null = null;
 
   /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
   function figureState(obj: NodeObj, t: number): AnimeState {
@@ -1579,7 +1603,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** One auto camera step: spring the target, distance (zoom in 2D) and angles toward the focus. */
   const aim = new THREE.Vector3();
   function driveCamera(t: number, dt: number): void {
-    const f = focusId ? nodes.get(focusId) : undefined;
+    if (flight && (t >= flight.until || !nodes.has(flight.id))) flight = null;
+    const fid = flight?.id ?? focusId;
+    const f = fid ? nodes.get(fid) : undefined;
     const sec = t / 1000;
     const swayOn = o.motion && !!f;
     const sway = swayOn ? Math.sin((sec * Math.PI * 2) / SWAY_S) : 0;
@@ -1754,7 +1780,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     clock.now = t;
     if (needFit && nodes.size) fit();
     busyCam = false;
-    if ((auto || shot) && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled; }
+    if ((auto || shot || flight) && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled || !!flight; }
     controls.update();
     busyNodes = false;
     for (const n of nodes.values()) {
@@ -2044,6 +2070,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       rig.settled = false;
       kick();
     },
+    flyTo(id, holdMs) {
+      if (stopped || !nodes.has(id)) return false;
+      if (!auto && !shot && !flight) seedRig(); // the springs start from wherever the user left the camera
+      flight = { id, until: performance.now() + holdMs };
+      rig.settled = false;
+      kick();
+      return true;
+    },
+    flying: () => (flight && performance.now() < flight.until ? flight.id : null),
     storm() {
       if (!nodes.size) return;
       clock.now = performance.now();
@@ -2196,6 +2231,15 @@ function roundRectShape(w: number, h: number, r: number): THREE.Shape {
   s.lineTo(x, y + r);
   s.quadraticCurveTo(x, y, x + r, y);
   return s;
+}
+
+/** P-VIZ.UI1: the ink for text on a solid `hex` fill: near-black or white, whichever has the higher WCAG contrast. */
+function inkOn(hex: string): string {
+  const n = Number.parseInt(hex.replace("#", "").padEnd(6, "0").slice(0, 6), 16);
+  const lin = (v: number): number => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  const lum = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  const dark = 0.0042; // #0b0d14
+  return (lum + 0.05) / (dark + 0.05) >= 1.05 / (lum + 0.05) ? "#0b0d14" : "#ffffff";
 }
 
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

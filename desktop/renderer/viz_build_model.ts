@@ -12,9 +12,13 @@
 // An artifact comes from a lane's output ONLY when the user started one of the world's mini-game templates on that
 // node (armTemplate): the text of that run is kept (bounded) and its last fenced html block (or a whole
 // <!doctype html> document) is the artifact. The ?vizDemo=1 feed arms a labeled demo sample instead (armSample).
+// P-WORLDS.BUILD2: a template may carry a ready-made `sample` (validSample: a whole HTML document of at most 64 KB;
+// a malformed one is dropped, the template stays). The demo rotates through the current world's samples (else the
+// host's two, viz_sample_games.ts) and the node panel's Play sample opens one directly (sampleArtifact).
 // Nothing here trusts the artifact: viz_artifact_popup.ts sends it through the engine's security gate first.
 
 import { COMMIT_CALL_RE } from "./viz_model.ts";
+import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
 import type { WorldBuildSite, WorldDefinition, WorldMiniGame, WorldScaffoldStyle, WorldTier } from "./viz_world_api.ts";
 
 /** Pieces a build holds at most (the scene's tier budget may draw fewer). */
@@ -36,6 +40,9 @@ export interface BuildArtifact {
   html: string;
   /** The ?vizDemo=1 sample (labeled as one everywhere it shows). */
   demo: boolean;
+  /** P-WORLDS.BUILD2: a template's ready-made `sample` (the world's or the host's), not agent-built. Every demo
+   *  artifact is one; the node panel's Play sample opens one too. */
+  sample: boolean;
   at: number;
   /** The user chose Keep: a new build on the node leaves it in place until a newer artifact replaces it. */
   kept: boolean;
@@ -175,10 +182,10 @@ function reveal(book: BuildBook, b: NodeBuild, node: string, now: number, out: B
   let art: BuildArtifact | null = null;
   if (b.template) {
     const html = extractHtmlArtifact(b.text);
-    if (html) art = { id: `${node}:${++book.seq}`, node, title: b.template.label, html, demo: false, at: now, kept: false };
+    if (html) art = { id: `${node}:${++book.seq}`, node, title: b.template.label, html, demo: false, sample: false, at: now, kept: false };
     b.template = null; b.text = "";
   } else if (b.sample) {
-    art = { id: `${node}:${++book.seq}`, node, title: b.sample.title, html: b.sample.html, demo: true, at: now, kept: false };
+    art = { id: `${node}:${++book.seq}`, node, title: b.sample.title, html: b.sample.html, demo: true, sample: true, at: now, kept: false };
     b.sample = null;
   }
   b.revealed = true; b.locked = b.pieces;
@@ -201,6 +208,20 @@ export function armTemplate(book: BuildBook, node: string, game: { id: string; l
  *  this labeled sample. */
 export function armSample(book: BuildBook, node: string, sample: { title: string; html: string }): void {
   buildOf(book, node).sample = { title: sample.title, html: sample.html };
+}
+
+/** P-WORLDS.BUILD2: the node panel's Play sample. A labeled sample artifact for `node`, NOT on the node yet (no chip,
+ *  no build); Keep puts it there (adoptArtifact). Null when the template has no valid sample. */
+export function sampleArtifact(book: BuildBook, node: string, game: WorldMiniGame, now: number): BuildArtifact | null {
+  const html = validSample(game.sample);
+  return html ? { id: `${node}:${++book.seq}`, node, title: game.label, html, demo: false, sample: true, at: now, kept: false } : null;
+}
+
+/** Keep on a sample opened from the panel: it becomes the node's kept artifact (replacing the one there). */
+export function adoptArtifact(book: BuildBook, a: BuildArtifact): BuildArtifact {
+  a.kept = true;
+  buildOf(book, a.node).artifact = a;
+  return a;
 }
 
 /** The node's current artifact (the chip over it), or null. */
@@ -278,11 +299,26 @@ const NO_NET = "Put everything in ONE self-contained HTML file: inline all CSS a
 
 /** The host's templates for a world that declares none (and the two built-in styles). */
 export const DEFAULT_MINI_GAMES: readonly WorldMiniGame[] = [
-  { id: "target-tap", label: "Target tap game", brief: `Build a small target-tap mini game: targets pop up at random spots, the player taps them before they fade, a 30 second round, a score and a restart button. ${NO_NET}` },
-  { id: "memory-cards", label: "Memory cards game", brief: `Build a small memory cards mini game: a 4 by 4 grid of face-down cards, flip two at a time to find pairs, count the moves, and offer a restart. ${NO_NET}` },
+  { id: "target-tap", label: "Target tap game", brief: `Build a small target-tap mini game: targets pop up at random spots, the player taps them before they fade, a 30 second round, a score and a restart button. ${NO_NET}`, sample: SAMPLE_TARGET_TAP },
+  { id: "memory-cards", label: "Memory cards game", brief: `Build a small memory cards mini game: a 4 by 4 grid of face-down cards, flip two at a time to find pairs, count the moves, and offer a restart. ${NO_NET}`, sample: SAMPLE_MEMORY_CARDS },
 ];
 
-/** The world's valid templates (id, label and brief checked, at most three), else the host's defaults. */
+/** The largest `sample` a template may carry, in UTF-8 bytes (WorldMiniGame.sample). */
+export const SAMPLE_MAX_BYTES = 64 * 1024;
+const WHOLE_DOC = /^(?:<!doctype html\b[^>]*>\s*)?<html[\s>][\s\S]*<\/html\s*>$/i;
+
+/** P-WORLDS.BUILD2: a template's sample when it is a string of at most SAMPLE_MAX_BYTES holding one whole HTML
+ *  document (an optional <!doctype html>, then <html> through </html>, with a body or a script in it), trimmed;
+ *  else null (the caller drops it). The engine's gate still checks and scans it before anything shows. */
+export function validSample(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > SAMPLE_MAX_BYTES) return null;
+  const html = raw.trim();
+  if (!html || new TextEncoder().encode(html).byteLength > SAMPLE_MAX_BYTES) return null;
+  return WHOLE_DOC.test(html) && /<(body|script)\b/i.test(html) ? html : null;
+}
+
+/** The world's valid templates (id, label and brief checked, at most three; a malformed sample is dropped and the
+ *  template stays), else the host's defaults. */
 export function miniGamesFor(def: WorldDefinition | null): readonly WorldMiniGame[] {
   const raw = Array.isArray(def?.miniGames) ? (def!.miniGames as readonly unknown[]) : [];
   const out: WorldMiniGame[] = [];
@@ -290,13 +326,30 @@ export function miniGamesFor(def: WorldDefinition | null): readonly WorldMiniGam
   for (const g of raw) {
     if (out.length >= MINI_GAMES_MAX) break;
     if (!g || typeof g !== "object") continue;
-    const { id, label, brief } = g as Partial<WorldMiniGame>;
+    const { id, label, brief, sample } = g as Partial<WorldMiniGame>;
     if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]{0,40}$/.test(id) || ids.has(id)) continue;
     if (typeof label !== "string" || !label.trim() || typeof brief !== "string" || !brief.trim() || brief.length > 4000) continue;
     ids.add(id);
-    out.push({ id, label: label.trim().slice(0, 40), brief: brief.trim() });
+    const html = validSample(sample);
+    out.push({ id, label: label.trim().slice(0, 40), brief: brief.trim(), ...(html ? { sample: html } : {}) });
   }
   return out.length ? out : DEFAULT_MINI_GAMES;
+}
+
+/** P-WORLDS.BUILD2: the templates the ?vizDemo=1 builds end in: the world's templates that carry a valid sample,
+ *  else the host's (every one of which does). */
+export function demoSampleGames(def: WorldDefinition | null): readonly (WorldMiniGame & { sample: string })[] {
+  const all = miniGamesFor(def);
+  const own = all === DEFAULT_MINI_GAMES ? [] : all.filter((g): g is WorldMiniGame & { sample: string } => typeof g.sample === "string");
+  return own.length ? own : (DEFAULT_MINI_GAMES as readonly (WorldMiniGame & { sample: string })[]);
+}
+
+/** The `turn`-th demo build's sample (the demo rotates through demoSampleGames), as armSample takes it: the game's
+ *  label as the title (every surface adds the DEMO SAMPLE label) and its document. */
+export function demoSampleAt(def: WorldDefinition | null, turn: number): { id: string; title: string; html: string } {
+  const games = demoSampleGames(def);
+  const g = games[((Math.floor(turn) % games.length) + games.length) % games.length]!;
+  return { id: g.id, title: g.label, html: g.sample };
 }
 
 // ------------------------------------------------------------------------------------------ the artifact popup
@@ -318,6 +371,20 @@ export function readVerdict(data: unknown): ArtifactGateVerdict {
   if (d.ok === true && typeof d.id === "string" && /^[0-9a-f-]{16,64}$/i.test(d.id)) return { state: "pass", frameId: d.id };
   if (d.ok === false) return { state: "blocked", reason: typeof d.reason === "string" && d.reason ? d.reason : "the security gate blocked it" };
   return { state: "blocked", reason: "fail-closed: the security gate gave no valid verdict" };
+}
+
+/** P-WORLDS.BUILD2: the popup's game area is 16:10; its width starts here and the user resizes it within the room. */
+export const ART_ASPECT = 16 / 10;
+export const ART_DEFAULT_W = 640;
+export const ART_MIN_W = 320;
+
+/** The game area's width for a wanted width and the room it may fill (px): never wider than `roomW`, never taller
+ *  than `roomH` at 16:10, at least ART_MIN_W when the room allows it. Whole pixels. */
+export function fitArtWidth(want: number, roomW: number, roomH: number): number {
+  const max = Math.max(0, Math.min(roomW, roomH * ART_ASPECT));
+  const min = Math.min(ART_MIN_W, max);
+  const w = Number.isFinite(want) ? want : ART_DEFAULT_W;
+  return Math.floor(Math.min(max, Math.max(min, w)));
 }
 
 /** The iframe's attributes for a passed artifact. The token rides the query (an iframe GET cannot send a header);

@@ -2794,10 +2794,24 @@ function toggleAuto(run: LaneRun): void {
   openAutoRiskModal(run);
 }
 
-/** The full auto-mode risk gate (the app.ts first-open modal pattern; classes are global). Esc and Cancel
- *  close without action; Accept sends acceptRisk: true, which the server persists as the risk timestamp.
- *  The checkbox widens the switch to ALL lanes, including ones spawned later. */
+/** The full auto-mode risk gate for one card. Accept sends acceptRisk: true, which the server persists as the risk
+ *  timestamp; the checkbox widens the switch to ALL lanes, including ones spawned later. */
 function openAutoRiskModal(run: LaneRun): void {
+  autoRiskModal((allLanes) => {
+    void deps?.fleetAuto({ ...(allLanes ? {} : { laneId: run.view.id }), on: true, acceptRisk: true })
+      .then((r) => {
+        if (!r?.ok) return; // no toast surface in this module - the next poll re-states the truth
+        const targets = allLanes ? [...runs.values()] : [run];
+        for (const t of targets) { t.view.autoApprove = true; paintFrame(t); }
+      })
+      .catch(() => { /* the next poll corrects it */ });
+  });
+}
+
+/** The full auto-mode risk modal (the app.ts first-open modal pattern; classes are global). Esc and Cancel close
+ *  without action; Accept runs `onAccept` with the "all agents" choice, and only Accept may send acceptRisk: true.
+ *  P-VIZ.APPROVE1 (ADR-0655): Visualize's Auto on a lane's approval asks through this same gate. */
+export function autoRiskModal(onAccept: (allLanes: boolean) => void): void {
   const ov = el(`<div class="modal-ov" id="fleetAutoRisk">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fleetAutoRiskTitle">
       <div class="modal-icon">${icon("bolt", 24)}</div>
@@ -2820,16 +2834,11 @@ function openAutoRiskModal(run: LaneRun): void {
   $("[data-auto-cancel]", ov)?.addEventListener("click", close);
   $("[data-auto-accept]", ov)?.addEventListener("click", () => {
     const allLanes = ($("[data-auto-all]", ov) as HTMLInputElement | null)?.checked ?? false;
-    void deps?.fleetAuto({ ...(allLanes ? {} : { laneId: run.view.id }), on: true, acceptRisk: true })
-      .then((r) => {
-        if (!r?.ok) return; // no toast surface in this module - the next poll re-states the truth
-        const targets = allLanes ? [...runs.values()] : [run];
-        for (const t of targets) { t.view.autoApprove = true; paintFrame(t); }
-      })
-      .catch(() => { /* the next poll corrects it */ });
     close();
+    onAccept(allLanes);
   });
   document.body.appendChild(ov);
+  ($("[data-auto-cancel]", ov) as HTMLElement | null)?.focus(); // the safe choice holds focus, so Enter never accepts by accident
 }
 
 // ---------------------------------------------------------------- the + Lane form

@@ -66,6 +66,13 @@
 // the hub or a live lane offers the world's mini-game templates (miniGames, else the host's two): one starts the
 // brief as an ordinary prompt through the panel's own send path, and only that run's output can become an artifact.
 // The ?vizDemo=1 feed plays one build per demo agent on a separate build channel, each ending in a labeled sample.
+// P-WORLDS.BUILD2: each template row has Build and, when the template carries a `sample`, Play sample (the popup,
+// labeled Sample, through the same gate and sandbox); the demo's builds rotate through the current world's samples.
+//
+// P-VIZ.APPROVE1 (ADR-0655): tool-call approvals (viz_approvals over viz_model's per-node asks): a pulsing badge over
+// every node with an open ask, its pop-out (Approve, Auto, Deny through the grid card's and the chat card's own paths),
+// the triage strip at the top of the stage, and View > Fly to approvals (persisted, on by default) that flies the
+// camera to a new ask without moving focus. The node panel and the pop-out never show at once.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -76,20 +83,21 @@ import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridg
 import { hubLanes } from "./orbit_layout.ts";
 import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
-import { createDemo, DEMO_GAME, type VizDemo } from "./viz_demo.ts";
+import { createDemo, type VizDemo } from "./viz_demo.ts";
 import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifactPopup, type ArtifactChips } from "./viz_artifact_popup.ts"; // P-WORLDS.BUILD1 (ADR-0653)
 import { createScaffold } from "./viz_build.ts";
-import { armSample, armTemplate, artifactOf, buildEvent, buildSiteFor, createBuildBook, discardArtifact, dropBuild, keepArtifact, miniGamesFor, type BuildStep } from "./viz_build_model.ts";
+import { adoptArtifact, armSample, armTemplate, artifactOf, buildEvent, buildSiteFor, createBuildBook, demoSampleAt, discardArtifact, dropBuild, keepArtifact, miniGamesFor, sampleArtifact, type BuildStep } from "./viz_build_model.ts";
 import type { WorldDefinition, WorldScaffold } from "./viz_world_api.ts";
 import { vizBrandFor } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641): the demo probe reports each figure's sponsor
 import { mountLedger, type LedgerView } from "./viz_ledger.ts";
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
-  applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
+  applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
   isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
-  type Persona, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
+  type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
+import { mountApprovals, type ApprovalsView } from "./viz_approvals.ts"; // P-VIZ.APPROVE1 (ADR-0655)
 import { mountVizScene, type SceneHit, type SceneNode, type SceneWorld, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
 import { getMarketProvider } from "./market_gate.ts";
@@ -128,6 +136,12 @@ export interface VizDeps {
   /** P-WORLDS.1 (ADR-0648): open the Plugins drawer on its premium store ("Get" on a world, "Get more worlds");
    *  `packId` names the world the user asked for. */
   openStore: (packId?: string) => void;
+  /** P-VIZ.APPROVE1 (ADR-0655): the approval pop-out's answers: a lane's like its grid card (fleetAnswer, and Auto
+   *  through the grid's risk modal then fleetAuto), Main's through its chat card (null option = deny). */
+  fleetAnswer: LucidBridge["fleetAnswer"];
+  fleetAuto: LucidBridge["fleetAuto"];
+  autoRiskModal: (onAccept: (allLanes: boolean) => void) => void;
+  respondMain: (id: string, optionId: string | null) => void;
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
@@ -167,6 +181,14 @@ let viewPop: { node: HTMLElement; close: () => void; reposition: () => void } | 
 let killArm: { id: string; until: number } | null = null;
 /** P-VIZ.6 (ADR-0636): the throw tray (bottom center of the stage), built with the view. */
 let tray: ThrowTray | null = null;
+/** P-VIZ.APPROVE1 (ADR-0655): the approval badges, pop-out and triage strip (viz_approvals), mounted per open. The
+ *  View menu's "Fly to approvals" (on by default, persisted) flies the camera to a new ask; `flights` counts the
+ *  flights it started (the demo probe's proof). */
+let asks: ApprovalsView | null = null;
+const FLY_KEY = "lucid.viz.flyToApprovals.v1";
+const FLY_HOLD_MS = 2600;
+let flyAsks = ((): boolean => { try { return localStorage.getItem(FLY_KEY) !== "0"; } catch { return true; } })();
+let flights = 0;
 const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 
 /** P-VIZ.4 (ADR-0625): lanes whose background subagent runs are polled per cycle, at most. */
@@ -357,13 +379,14 @@ function worldOptionsHtml(): string {
   const row = (o: WorldOption): string => {
     const v = w.options[o.key];
     const k = esc(o.key);
-    if (o.type === "color") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
-    if (o.type === "toggle") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="checkbox" data-viz-wopt="${k}"${v === true ? " checked" : ""}></label>`;
+    const name = `<span title="${esc(o.label)}">${esc(o.label)}</span>`; // P-VIZ.UI1: a long label ellipsizes, the title has it all
+    if (o.type === "color") return `<label class="viz-wopt">${name}<input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
+    if (o.type === "toggle") return `<label class="viz-wopt">${name}<input type="checkbox" data-viz-wopt="${k}"${v === true ? " checked" : ""}></label>`;
     if (o.type === "swatch") { // P-WORLDS.CAST2 (ADR-0650): a named ramp, drawn as swatch buttons
       const cur = o.swatches.find((s) => s.value === v) ?? o.swatches.find((s) => s.value === o.default);
-      return `<div class="viz-wopt-sw">${castRowHead(o.label, cur?.label ?? "")}${swatchGrid(o.label, `wopt-${o.key}`, `data-viz-wopt-sw="${k}"`, o.swatches.map((s) => ({ ...s, color: s.value })), cur?.value ?? null, Math.min(10, o.swatches.length))}</div>`;
+      return `<div class="viz-wopt-sw">${castRowHead(o.label, cur?.label ?? "")}${swatchGrid(o.label, `wopt-${o.key}`, `data-viz-wopt-sw="${k}"`, o.swatches.map((s) => ({ ...s, color: s.value })), cur?.value ?? null, balancedCols(o.swatches.length))}</div>`;
     }
-    return `<label class="viz-wopt"><span>${esc(o.label)}</span><select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
+    return `<label class="viz-wopt">${name}<select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
   };
   return `<div class="viz-vmenu-h">World options</div><div class="viz-wopts" data-viz-wopts>${w.def.options.map(row).join("")}</div>`;
 }
@@ -405,6 +428,12 @@ function setWorldOption(key: string, value: string | boolean): void {
 let castPrefs: CastPrefs = loadCastPrefs(localStorage);
 let lookPop: { id: string; node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 
+/** Columns for `n` swatches: at most 10 a row (what fits the View menu), spread evenly over the rows so a ramp of
+ *  11 draws as 6 and 5, never 10 and a lone swatch. */
+function balancedCols(n: number): number {
+  return Math.max(1, Math.ceil(n / Math.ceil(n / 10)));
+}
+
 /** A ramp of named swatch buttons (one pressed, or none). `attrs` marks each button for the click router, which
  *  reads the button's data-value; `k` keys them so a repaint keeps keyboard focus. */
 function swatchGrid(label: string, k: string, attrs: string, items: readonly { value: string; label: string; color: string }[], current: string | null, cols: number): string {
@@ -420,7 +449,7 @@ function chipRow(label: string, k: string, attrs: string, items: readonly { valu
 
 /** A one-line label with the current value at its end (and an optional control after it). */
 function castRowHead(label: string, value: string, extra = ""): string {
-  return `<div class="viz-wopt"><span>${esc(label)}</span><span class="viz-cast-val"><b>${esc(value)}</b>${extra}</span></div>`;
+  return `<div class="viz-wopt"><span title="${esc(label)}">${esc(label)}</span><span class="viz-cast-val"><b title="${esc(value)}">${esc(value)}</b>${extra}</span></div>`;
 }
 
 /** Replace a section's markup; the focused control (by data-k) keeps focus. */
@@ -513,7 +542,7 @@ function paintLook(): void {
   const auto = (field: string, on: boolean): string =>
     `<button type="button" class="viz-chip viz-chip-auto${on ? " on" : ""}" data-viz-look="${field}" data-value="" data-k="look-${field}:auto" aria-pressed="${on}" data-tip="${tipAttr("Auto", "Let the fleet decide this one.")}">Auto</button>`;
   const styles = HAIR_STYLES.filter((h) => !pin.presentation || h.suits.includes(pin.presentation));
-  repaintKeepingFocus(root, `<div class="viz-vmenu-h">Look of ${esc(name)}</div>
+  repaintKeepingFocus(root, `<div class="viz-vmenu-h" title="Look of ${esc(name)}">Look of ${esc(name)}</div>
     ${chipRow("Presentation", "look-pres", `data-viz-look="presentation"`, [{ value: "", label: "Auto" }, ...PRESENTATIONS.map((x) => ({ value: x.id, label: x.label }))], pin.presentation ?? "", "viz-seg")}
     ${castRowHead("Skin", SKIN_NAMES[a.skinIndex] ?? "", auto("skin", pin.skin === undefined))}
     ${swatchGrid("Skin shade", "look-skin", `data-viz-look="skin"`, skinItems(pin.undertone ?? castPrefs.fleet.undertone), pin.skin === undefined ? null : String(pin.skin), 10)}
@@ -641,12 +670,15 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
       const r = chip && !chip.hidden ? chip.getBoundingClientRect() : null;
       return {
         id, pieces: b.pieces, locked: b.locked, failed: b.failed, revealed: b.revealed, template: b.template?.id ?? null,
-        artifact: b.artifact ? { id: b.artifact.id, title: b.artifact.title, demo: b.artifact.demo, kept: b.artifact.kept, bytes: b.artifact.html.length } : null,
+        artifact: b.artifact ? { id: b.artifact.id, title: b.artifact.title, demo: b.artifact.demo, sample: b.artifact.sample, kept: b.artifact.kept, bytes: b.artifact.html.length } : null,
         scaffold: sc ? { pieces: sc.pieces, locked: sc.locked, revealed: sc.revealed } : null,
         chip: r ? { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height } : null,
       };
     }),
     artifact: () => artifactPopupState(),
+    // P-VIZ.APPROVE1 (ADR-0655): the open asks with their badges, the strip and the pop-out, the Fly to approvals
+    // setting, the flights it started and the node a flight is framing now. Read-only.
+    approvals: () => (asks ? { ...asks.probe(), flyToApprovals: flyAsks, flights, flying: scene?.flying() ?? null } : null),
   };
   void refreshWorlds(); // P-WORLDS.1: the scene starts in what it can draw now and switches once the saved world loads
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
@@ -654,6 +686,13 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
   builds = createBuildBook(); // P-WORLDS.BUILD1 (ADR-0653): builds live as long as the model
   chips = mountArtifactChips($("[data-viz-stage]", view) as HTMLElement, (id) => scene?.screenBoxOf(id) ?? null, openChip);
+  const d = deps;
+  flights = 0;
+  asks = mountApprovals({ // P-VIZ.APPROVE1 (ADR-0655)
+    stage: $("[data-viz-stage]", view) as HTMLElement, model: () => model, demo: () => demo, boxOf: (id) => scene?.screenBoxOf(id) ?? null,
+    fleetAnswer: d.fleetAnswer, fleetAuto: d.fleetAuto, autoRiskModal: d.autoRiskModal, respondMain: d.respondMain,
+    jump: (id) => { scene?.flyTo(id, FLY_HOLD_MS); }, onOpen: closePanel, refresh: () => void pollFleet(),
+  });
   const rows = ledgerRows(ledger); // what this session already counted; the scene's nodes join on the first tick
   ledgerView.paint(rows, ledgerSummary(rows));
   paintToggles();
@@ -679,6 +718,7 @@ export function closeViz(): void {
   offBus?.(); offBus = null;
   ledgerView?.destroy(); ledgerView = null;
   closeArtifactPopup(); chips?.destroy(); chips = null; // P-WORLDS.BUILD1 (ADR-0653); the scene disposes the scaffolds
+  asks?.destroy(); asks = null; // P-VIZ.APPROVE1 (ADR-0655)
   headRo?.disconnect(); headRo = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
@@ -798,6 +838,8 @@ function onViewClick(ev: Event): void {
   if (look) { openLook(look.dataset.vizLookOpen ?? ""); return; } // P-WORLDS.CAST2 (ADR-0650)
   const game = t.closest<HTMLButtonElement>("[data-viz-game]");
   if (game && !game.disabled) { void startMiniGame(game.dataset.vizNode ?? "", game.dataset.vizGame ?? ""); return; } // P-WORLDS.BUILD1 (ADR-0653)
+  const sample = t.closest<HTMLButtonElement>("[data-viz-game-sample]");
+  if (sample && !sample.disabled) { playSample(sample.dataset.vizNode ?? "", sample.dataset.vizGameSample ?? ""); return; } // P-WORLDS.BUILD2
 }
 
 /** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). A narrow
@@ -817,6 +859,8 @@ function openViewMenu(anchor: HTMLElement): void {
     </div>
     <div class="viz-vmenu-h">Quality</div>
     <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+    <div class="viz-vmenu-h">Approvals</div>
+    <label class="viz-wopt" data-tip="${tipAttr("Fly to approvals", "When an agent asks for approval, the camera flies to it and its badge pulses. It never takes the keyboard from what you are typing.")}"><span>Fly to approvals</span><input type="checkbox" data-viz-flyask${flyAsks ? " checked" : ""}></label>
     <div data-viz-wopts-slot>${worldOptionsHtml()}</div>
     <div data-viz-cast-slot>${castHtml()}</div>
     ${recRows}
@@ -826,6 +870,10 @@ function openViewMenu(anchor: HTMLElement): void {
   p.node.addEventListener("change", (ev) => {
     const t = ev.target as HTMLElement;
     if (t.matches("input[data-viz-wopt], select[data-viz-wopt]")) onWorldOption(t as HTMLInputElement | HTMLSelectElement);
+    if (t.matches("input[data-viz-flyask]")) { // P-VIZ.APPROVE1 (ADR-0655)
+      flyAsks = (t as HTMLInputElement).checked;
+      try { localStorage.setItem(FLY_KEY, flyAsks ? "1" : "0"); } catch { /* still applies for this session */ }
+    }
   });
   paintViewMenu();
   paintRecs();
@@ -926,7 +974,7 @@ function paintQuality(): void {
   // P-VIZ.GPU1 (ADR-0651): Auto names the GPU it decided on ("Auto · ultra (RTX 4070)").
   const gpu = deps.perf.gpu();
   const from = deps.perf.steppedFrom();
-  b.innerHTML = `${icon("gauge", 13)} ${esc(m === "auto" ? `Auto \u00b7 ${tier}${gpu?.name ? ` (${gpu.name})` : ""}` : m[0]!.toUpperCase() + m.slice(1))}`;
+  b.innerHTML = `${icon("gauge", 13)}<span>${esc(m === "auto" ? `Auto \u00b7 ${tier}${gpu?.name ? ` (${gpu.name})` : ""}` : m[0]!.toUpperCase() + m.slice(1))}</span>`; // P-VIZ.UI1: a long GPU name ellipsizes; the tip names it
   const gpuLine = gpu?.cls ? ` GPU: ${gpu.name ?? "unknown"}, ${gpu.cls}.` : "";
   const stepLine = from ? ` Stepped down from ${from}: frames missed the budget.` : "";
   b.setAttribute("data-tip", tipValue("Quality", `Auto, Full, Reduced, Minimal, Ultra or Cinematic: the same Performance mode as the Knowledge Graph. Auto picks by GPU, battery and CPU, and steps down one level when frames miss the budget. Cinematic: ultra plus ambient occlusion and depth of field. Ultra: 12000 particles, sharper pixels, smoothed edges, contact shadows, bloom on light worlds too. Full: 6000 particles, 60 fps, glass refraction and bloom. Reduced: 2500 particles, 30 fps. Minimal: 600 particles, 20 fps, no lightning. Now: ${tier}.${gpuLine}${stepLine}`));
@@ -1062,6 +1110,14 @@ function onBus(ev: VizBusEvent): void {
   foldOutput(out, ev.e);
 }
 
+/** P-VIZ.APPROVE1 (ADR-0655): new asks pulse their badges; with Fly to approvals on, the camera flies to the newest
+ *  (the scene cuts under reduced motion). Focus never moves: a reply being typed anywhere keeps its caret. */
+function onApprovals(list: readonly VizApproval[]): void {
+  asks?.arrived(list.map((a) => a.id));
+  const a = list[list.length - 1];
+  if (flyAsks && a && scene?.flyTo(a.node, FLY_HOLD_MS)) flights++;
+}
+
 /** P-VIZ.6 (ADR-0635): an event the model took also counts in the session ledger, on the node it came from. */
 function noteLedger(ev: VizBusEvent): void {
   const n = model?.nodes.get(ev.source);
@@ -1104,8 +1160,9 @@ function onTick(): void {
     for (const a of st.asks) markAsked(model, a.id, a.ask);
     for (const e of st.events) if (applyEvent(model, e, now)) { noteLedger(e); noteBuild(e.source, e.e); }
     // P-WORLDS.BUILD1 (ADR-0653): the demo's build channel; each build's spawn arms the labeled sample it ends in.
+    // P-WORLDS.BUILD2: the current world's template samples in turn (else the host's two).
     for (const b of st.builds) {
-      if (b.e.type === "subagent") armSample(builds, b.source, DEMO_GAME);
+      if (b.e.type === "subagent") armSample(builds, b.source, demoSampleAt(buildWorld(), demoSampleTurn++));
       noteBuild(b.source, b.e);
     }
   }
@@ -1113,6 +1170,9 @@ function onTick(): void {
   const fresh = drainEvents(model);
   syncScene();
   if (fresh.length) scene?.fire(fresh);
+  const arrived = drainNewApprovals(model); // P-VIZ.APPROVE1 (ADR-0655)
+  if (arrived.length) onApprovals(arrived);
+  asks?.sync(now);
   if (now - censusAt >= 500) {
     censusAt = now;
     paintCensus(now);
@@ -1147,7 +1207,7 @@ async function pollFleet(): Promise<void> {
   fleetOffline = !st;
   if (st) {
     const mine = hubLanes(st.lanes, st.hub);
-    applyFleet(m, mine.map((l) => ({ id: l.id, name: l.name, model: l.model, status: l.status, ...(l.usage ? { usage: l.usage } : {}) })), Date.now(), st.masterModel);
+    applyFleet(m, mine.map((l) => ({ id: l.id, name: l.name, model: l.model, status: l.status, ...(l.usage ? { usage: l.usage } : {}), ...(l.pendingApproval ? { pendingApproval: l.pendingApproval } : {}) })), Date.now(), st.masterModel);
     // P-VIZ.6 (ADR-0635): a new hub session starts the ledger over (Main's folder is fetched again); each lane
     // brings its session, its repo (else its folder) and its measured usage.
     const now = Date.now();
@@ -1286,7 +1346,7 @@ function placeIn(node: HTMLElement, x: number, y: number): void {
  *  empty space nothing happens). */
 function onPick(hit: SceneHit | null): void {
   if (tray?.release(hit)) return;
-  if (!hit || hit.kind !== "node") { closePanel(); return; }
+  if (!hit || hit.kind !== "node") { closePanel(); asks?.close(); return; } // P-VIZ.APPROVE1: the pop-out too
   scene?.reactNode(hit.id, "stare");
   openPanel(hit.id);
 }
@@ -1303,6 +1363,7 @@ function openPanel(id: string): void {
   const n = model.nodes.get(id);
   if (!n) return;
   hideTip();
+  asks?.close(); // P-VIZ.APPROVE1: one card beside a node at a time
   if (panel?.id !== id) {
     if (panel) { cancelAnimationFrame(panel.raf); window.clearTimeout(panel.flipTimer); }
     killArm = null;
@@ -1388,13 +1449,15 @@ function paintPanel(): void {
   // P-WORLDS.CAST2 (ADR-0650): a world's human figure (the hub or a lane) can have its look pinned.
   const castable = n.kind !== "subagent" && !!curWorld && !!scene?.castOf(id);
   const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, demo ? 1 : 0, parent?.name, castable, buildWorld()?.id ?? ""].join("|"); // P-WORLDS.BUILD1: the templates follow the world
-  ($("[data-viz-panel-st]", box) as HTMLElement).textContent = status;
+  const stEl = $("[data-viz-panel-st]", box) as HTMLElement;
+  if (stEl.textContent !== status) stEl.textContent = stEl.title = status; // ellipsizes; the title has the full line
   if (headSig !== panel.headSig) {
     panel.headSig = headSig;
     box.setAttribute("aria-label", `${n.name}: ${kind}`);
     box.style.setProperty("--viz-c", PERSONAS[n.persona].color);
-    panelEl("[data-viz-panel-name]").textContent = n.name;
-    panelEl("[data-viz-panel-sub]").textContent = `${PERSONAS[n.persona].label} \u00b7 ${kind}`;
+    const nameEl = panelEl("[data-viz-panel-name]"), subEl = panelEl("[data-viz-panel-sub]");
+    nameEl.textContent = nameEl.title = n.name; // P-VIZ.UI1: both ellipsize; the title has the full text
+    subEl.textContent = subEl.title = `${PERSONAS[n.persona].label} \u00b7 ${kind}`;
     const ex = panelEl("[data-viz-panel-expand]");
     const exTarget = n.kind === "subagent" ? parent : n;
     const toChat = !exTarget || exTarget.kind === "hub";
@@ -1597,9 +1660,11 @@ function onKey(e: KeyboardEvent): void {
   if (active && active !== document.body && !view.contains(active)) return; // a layer above us owns this Esc
   e.preventDefault(); e.stopPropagation();
   if (ledgerView?.ownsFocus()) { ledgerView.collapse(); return; } // P-VIZ.6: Esc inside the ledger folds it back
+  if (asks?.escape()) return; // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out, then a strip holding focus
   if (lookPop) { closeLook(); return; } // P-WORLDS.CAST2 (ADR-0650)
   if (artifactPopupState().open) { closeArtifactPopup(); return; } // P-WORLDS.BUILD1 (ADR-0653)
   if (viewPop) { viewPop.close(); viewPop = null; return; }
+  if (worldsPop) { worldsPop.close(); worldsPop = null; return; }
   if (playerOpen()) { closePlayer(); return; }
   if (recPop) { recPop.close(); recPop = null; return; }
   if (tray?.disarm()) return; // P-VIZ.6 (ADR-0636): Esc puts an armed throwable down first
@@ -1788,6 +1853,8 @@ const scaffolds = new Map<string, WorldScaffold>();
 /** The style, world, view and tier the scaffolds were made for; a change rebuilds them from the book. */
 let scaffoldSig = "";
 let chips: ArtifactChips | null = null;
+/** P-WORLDS.BUILD2: which sample the next ?vizDemo=1 build ends in (demoSampleAt rotates through the world's). */
+let demoSampleTurn = 0;
 
 /** The world being drawn (its build sites and templates), or null in a built-in style. */
 function buildWorld(): WorldDefinition | null {
@@ -1885,8 +1952,29 @@ function miniGameActs(n: VizNode, ended: boolean): string {
     : n.kind === "agent" && (ended || n.status === "killed") ? `${who} has ended. Respawn it from the Fleet panel first.`
     : "";
   const why = `Sends this brief to ${who} as an ordinary task. Its subagents build at the ${site}; the single HTML file it ends with opens from a chip over ${who} after the security gate, untrusted and sandboxed.`;
+  const sampleWhy = "Plays the template's ready-made sample now, no agent needed. It passes the same security gate and runs in the same sandbox. Keep puts it on this node.";
+  // P-WORLDS.BUILD2: one row per template: its label, Build (the brief as a task), Play sample (when it has one).
   return `<div class="viz-panel-build" role="group" aria-label="Mini games"><span class="viz-panel-build-h">Mini game</span>${miniGamesFor(def).map((g) =>
-    `<button type="button" class="viz-panel-act" data-viz-game="${esc(g.id)}" data-viz-node="${esc(n.id)}"${off ? " disabled" : ""} data-tip="${tipAttr(g.label, off || why)}">${esc(g.label)}</button>`).join("")}</div>`;
+    `<div class="viz-panel-game" data-viz-game-row="${esc(g.id)}"><span class="viz-panel-game-l" title="${esc(g.label)}">${esc(g.label)}</span>`
+    + `<button type="button" class="viz-panel-act" data-viz-game="${esc(g.id)}" data-viz-node="${esc(n.id)}"${off ? " disabled" : ""} aria-label="Build ${esc(g.label)}" data-tip="${tipAttr(`Build ${g.label}`, off || why)}">${icon("bolt", 12)}<span>Build</span></button>`
+    + (g.sample ? `<button type="button" class="viz-panel-act" data-viz-game-sample="${esc(g.id)}" data-viz-node="${esc(n.id)}" aria-label="Play the ${esc(g.label)} sample" data-tip="${tipAttr(`${g.label} sample`, sampleWhy)}">${icon("play", 12)}<span>Play sample</span></button>` : "")
+    + `</div>`).join("")}</div>`;
+}
+
+/** P-WORLDS.BUILD2: the node panel's Play sample. The template's sample opens in the artifact popup labeled Sample
+ *  (and Demo on the ?vizDemo=1 feed): the same gate first, the same sandbox. It is not on the node until Keep. */
+function playSample(id: string, gameId: string): void {
+  if (!view || !model || !panel || panel.id !== id) return;
+  const n = model.nodes.get(id);
+  const game = miniGamesFor(buildWorld()).find((g) => g.id === gameId);
+  if (!n || n.kind === "subagent" || !game) return;
+  const a = sampleArtifact(builds, id, game, Date.now());
+  if (!a) return;
+  if (demo) a.demo = true;
+  openArtifactPopup(panelEl("[data-viz-panel-acts]"), a, {
+    keep: (x) => { chips?.set(x.node, adoptArtifact(builds, x)); },
+    discard: (x) => { if (artifactOf(builds, x.node)?.id === x.id) { applyBuildSteps(discardArtifact(builds, x.id)); chips?.set(x.node, null); } },
+  });
 }
 
 /** Start a template on the panel's node: arm the build book (only this run's output can become an artifact), then

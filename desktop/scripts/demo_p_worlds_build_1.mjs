@@ -8,10 +8,11 @@
 //   1. builds run from the event stream: scaffolding appears (pieces), pieces lock in, one flickers red (a failed
 //      tool), and the build reveals with an artifact (the labeled demo sample); the scene's scaffold follows the book;
 //   2. the artifact chip over the node is the topmost element at its center, and a real click opens the popup;
-//   3. the popup asks the engine's security gate first (verdict pass), says Untrusted and Demo sample, and runs
+//   3. the popup asks the engine's security gate first (verdict pass), says Untrusted, Sample and Demo (the chip
+//      says DEMO SAMPLE, P-WORLDS.BUILD2), and runs
 //      nothing until Play; Play loads an iframe with sandbox="allow-scripts" (never allow-same-origin) whose served
 //      frame carries the CSP default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';
-//   4. inside: the game's script ran (body[data-ready]) and plays (a click on Play spawns targets), and it has no
+//   4. inside: the game's script ran (body[data-ready]) and plays (its Play starts a round), and it has no
 //      network (fetch to the engine is refused) and no reach into LUCID (parent.document and localStorage throw);
 //   5. a blocked artifact (a bidi-control character) gets no id from the gate, so it can never render;
 //   6. Keep marks the artifact kept; Discard closes the popup and removes the chip;
@@ -37,6 +38,12 @@ export async function verifyBuild(page, worldKey = null) {
   const topmost = (sel) => page.$eval(sel, (n) => { const b = n.getBoundingClientRect(); return n.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)); });
   const audit = async (root) => { const bad = await page.evaluate(auditBoxes, root, MIN_GAP); assert(bad.length === 0, `spacing on ${root}: ${bad.join(" | ")}`); };
 
+  // Fly to approvals (on by default) would move the camera off the nodes this demo clicks; it is read at load
+  if ((await page.evaluate(() => localStorage.getItem("lucid.viz.flyToApprovals.v1"))) !== "0") {
+    await page.evaluate(() => localStorage.setItem("lucid.viz.flyToApprovals.v1", "0"));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#ctViz", { timeout: 20000 });
+  }
   if (!(await page.$("#vizView [data-viz-ledger]"))) await page.click("#ctViz");
   await page.waitForSelector("#vizView [data-viz-stage]", { visible: true, timeout: 15000 });
   await pause(1500);
@@ -47,6 +54,10 @@ export async function verifyBuild(page, worldKey = null) {
     for (let i = 0; i < 40 && !ok; i++) { ok = !!(await probe("style", `world:${worldKey}`)); if (!ok) await pause(500); }
     assert(ok, `the world "${worldKey}" cannot be drawn: ${JSON.stringify(await probe("worlds"))}`);
     await pause(2000);
+  } else {
+    // the host's samples belong to the built-in styles; the page may still be on a world from an earlier demo
+    assert(await probe("style", "anime"), "cannot switch to the built-in anime style");
+    await pause(1500);
   }
   // Fit takes the camera off auto, so the chips hold still for a click
   assert(await topmost("#vizView [data-viz-fit]"), "the Fit button is covered");
@@ -69,7 +80,7 @@ export async function verifyBuild(page, worldKey = null) {
   assert(saw.failed >= 1, "no piece flickered red on a failed tool");
   assert(saw.scaffolds > 0 && saw.scaffoldMatches === saw.scaffolds, "the scene's scaffold does not follow the build book");
   assert(target, `no revealed build put a demo artifact chip on screen: ${JSON.stringify(await probe("builds"))}`);
-  assert(target.artifact.title.includes("demo sample"), `the artifact is not labeled a demo sample: ${target.artifact.title}`);
+  assert(target.artifact.demo && target.artifact.sample, `the artifact is not a labeled demo sample: ${JSON.stringify(target.artifact)}`);
 
   const openPopup = async () => {
     const b = ((await probe("builds")) ?? []).find((x) => x.id === target.id);
@@ -88,7 +99,9 @@ export async function verifyBuild(page, worldKey = null) {
   assert(st.verdict === "pass", `the security gate did not pass the demo sample: ${JSON.stringify(st)}`);
   assert(!st.playing && !(await page.$(".popover.viz-art-pop iframe")), "something rendered before Play");
   const tags = await page.$$eval(".popover.viz-art-pop .viz-art-tag", (ns) => ns.map((n) => n.textContent.trim()));
-  assert(tags.includes("Untrusted") && tags.includes("Demo sample"), `the popup labels are ${JSON.stringify(tags)}`);
+  assert(tags.includes("Untrusted") && tags.includes("Sample") && tags.includes("Demo"), `the popup labels are ${JSON.stringify(tags)}`);
+  const badge = await page.$eval(`[data-viz-art-chip="${target.id}"] .viz-art-badge`, (n) => n.textContent.trim()).catch(() => "");
+  assert(badge === "DEMO SAMPLE", `the chip is labeled ${JSON.stringify(badge)}, not DEMO SAMPLE`);
   await audit(".popover.viz-art-pop");
   assert(await topmost(".popover.viz-art-pop [data-viz-art-play]"), "Play is covered");
   await page.click(".popover.viz-art-pop [data-viz-art-play]");
@@ -110,21 +123,29 @@ export async function verifyBuild(page, worldKey = null) {
   }
   assert(game, "the artifact's srcdoc frame never loaded");
   const inside = await game.evaluate(async (origin) => {
-    const out = { ready: document.body?.dataset.ready === "1", title: document.title, net: "open", parent: "open", storage: "open" };
+    // the host's samples set body[data-ready]; a world's own sample may not, so a canvas only a script could have
+    // drawn on (it differs from a blank one of the same size) also counts
+    const cv = document.querySelector("canvas");
+    const blank = document.createElement("canvas");
+    if (cv) { blank.width = cv.width; blank.height = cv.height; }
+    const ready = document.body?.dataset.ready === "1" || (!!cv && cv.toDataURL() !== blank.toDataURL());
+    const out = { ready, title: document.title, net: "open", parent: "open", storage: "open" };
     try { await fetch(`${origin}/api/health`, { cache: "no-store" }); } catch { out.net = "blocked"; }
     try { void parent.document.title; } catch { out.parent = "blocked"; }
     try { void window.localStorage.length; } catch { out.storage = "blocked"; }
     return out;
   }, engine);
   assert(inside.ready, "the game's inline script did not run under the frame's CSP");
-  assert(/demo sample/i.test(inside.title), `the game is not labeled a demo sample: ${inside.title}`);
   assert(inside.net === "blocked", "the artifact reached the network");
   assert(inside.parent === "blocked" && inside.storage === "blocked", `the artifact reached LUCID: ${JSON.stringify(inside)}`);
   const outerNet = await game.parentFrame().evaluate(async (origin) => { try { await fetch(`${origin}/api/health`); return "open"; } catch { return "blocked"; } }, engine);
   assert(outerNet === "blocked", "the served frame reached the network");
-  await game.evaluate(() => document.getElementById("start")?.click());
+  // the host's samples (P-WORLDS.BUILD2) start from #start and say so in body[data-state]; a world's own may not
+  const started = await game.evaluate(() => { const s = document.getElementById("start"); if (!s) return false; s.click(); return true; });
   await pause(900);
-  assert((await game.$$(".t")).length > 0, "the game does not play (no targets after Play)");
+  if (started && (await game.evaluate(() => document.body.hasAttribute("data-state")))) {
+    assert((await game.evaluate(() => document.body.dataset.state)) === "play", "the game does not play after its Play button");
+  }
 
   // 5. a blocked artifact gets no id, so it can never render
   const blocked = await page.evaluate(async () => {

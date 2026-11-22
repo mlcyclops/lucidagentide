@@ -7,11 +7,16 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  ARTIFACT_MAX_CHARS, ARTIFACT_SANDBOX, armSample, armTemplate, artifactOf, BUILD_MAX_PIECES, buildEvent, buildSiteFor, createBuildBook, DEFAULT_MINI_GAMES,
-  DEFAULT_SITE_ANCHOR, discardArtifact, extractHtmlArtifact, frameAttrs, keepArtifact, MINI_GAMES_MAX, miniGamesFor, readVerdict, scaffoldBudget,
+  adoptArtifact, ART_ASPECT, ART_DEFAULT_W, ART_MIN_W, ARTIFACT_MAX_CHARS, fitArtWidth, ARTIFACT_SANDBOX, armSample, armTemplate, artifactOf, BUILD_MAX_PIECES, buildEvent, buildSiteFor, createBuildBook,
+  DEFAULT_MINI_GAMES, DEFAULT_SITE_ANCHOR, demoSampleAt, demoSampleGames, discardArtifact, extractHtmlArtifact, frameAttrs, keepArtifact, MINI_GAMES_MAX,
+  miniGamesFor, readVerdict, SAMPLE_MAX_BYTES, sampleArtifact, scaffoldBudget, validSample,
 } from "./viz_build_model.ts";
 import type { WorldDefinition } from "./viz_world_api.ts";
-import { createDemo, DEMO_CYCLE_MS, DEMO_GAME } from "./viz_demo.ts";
+import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
+import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
+
+/** What the demo's first build ends in (the host's first sample). */
+const DEMO_GAME = demoSampleAt(null, 0);
 
 const N = "lane-1";
 const T = 1_000_000;
@@ -218,26 +223,119 @@ describe("build sites, templates and budgets", () => {
 });
 
 describe("the demo feed's builds", () => {
-  test("one build per demo agent a cycle, each ending in the labeled sample", () => {
+  test("one build per demo agent a cycle, each ending in a labeled sample, rotating through the samples", () => {
     const d = createDemo(T);
     const b = createBuildBook();
     const revealed = new Set<string>();
+    const titles: string[] = [];
+    let turn = 0;
     for (let t = T; t < T + DEMO_CYCLE_MS; t += 100) {
       const st = d.step(t, t + 100);
       for (const e of st.events) for (const s of buildEvent(b, e.source, e.e, t)) if (s.kind === "reveal" && s.artifact) revealed.add(s.node);
       for (const e of st.builds) {
-        if (e.e.type === "subagent") armSample(b, e.source, DEMO_GAME);
-        for (const s of buildEvent(b, e.source, e.e, t)) if (s.kind === "reveal" && s.artifact) { expect(s.artifact.demo).toBe(true); revealed.add(s.node); }
+        if (e.e.type === "subagent") armSample(b, e.source, demoSampleAt(null, turn++));
+        for (const s of buildEvent(b, e.source, e.e, t)) if (s.kind === "reveal" && s.artifact) { expect(s.artifact).toMatchObject({ demo: true, sample: true }); revealed.add(s.node); }
       }
     }
+    for (const a of [...b.builds.values()].map((x) => x.artifact)) if (a) titles.push(a.title);
     expect([...revealed].sort()).toEqual(["demo-1", "demo-2", "demo-3", "demo-4", "demo-5", "demo-6"]);
+    expect(new Set(titles)).toEqual(new Set(["Target tap game", "Memory cards game"]));
   });
 
-  test("the sample is a small self-contained game, labeled as a demo sample", () => {
-    expect(DEMO_GAME.html.length).toBeLessThan(8 * 1024);
-    expect(DEMO_GAME.title).toContain("demo sample");
-    expect(DEMO_GAME.html).toContain("DEMO SAMPLE");
-    expect(DEMO_GAME.html).not.toMatch(/https?:|src=|fetch\(|XMLHttpRequest|WebSocket|localStorage/);
-    expect(extractHtmlArtifact(`\`\`\`html\n${DEMO_GAME.html}\n\`\`\``)).toBe(DEMO_GAME.html);
+  test("the host's two samples are small self-contained canvas games with a score, restart, keyboard and pointer", () => {
+    for (const html of [SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS]) {
+      expect(new TextEncoder().encode(html).byteLength).toBeLessThan(12 * 1024);
+      expect(validSample(html)).toBe(html);
+      expect(html).toMatch(/^<!doctype html>/);
+      expect(html).toContain("<canvas");
+      expect(html).toContain("data-ready");
+      expect(html).toContain('id="start"');
+      expect(html).toContain('id="restart"');
+      expect(html).toContain("keydown");
+      expect(html).toContain("pointerdown");
+      expect(html).toContain("data-score");
+      expect(html).toContain("devicePixelRatio");
+      expect(html).not.toMatch(/https?:|src=|fetch\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|import\(|eval\(/);
+      expect(html).not.toMatch(/[^\x09\x0a\x0d\x20-\x7e]/); // plain ASCII: nothing for the scanner to flag
+      expect(extractHtmlArtifact(`\`\`\`html\n${html}\n\`\`\``)).toBe(html);
+    }
+    expect(DEFAULT_MINI_GAMES.map((g) => g.sample)).toEqual([SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS]);
+  });
+});
+
+describe("template samples (P-WORLDS.BUILD2)", () => {
+  const def = (miniGames: unknown[]): WorldDefinition => ({ miniGames }) as unknown as WorldDefinition;
+  const DOC = "<!doctype html><html><head><title>x</title></head><body><canvas></canvas><script>1</script></body></html>";
+
+  test("validSample: a whole HTML document of at most 64 KB, trimmed; anything else is null", () => {
+    expect(SAMPLE_MAX_BYTES).toBe(65536);
+    expect(validSample(DOC)).toBe(DOC);
+    expect(validSample(`  \n${DOC}\n `)).toBe(DOC);
+    expect(validSample("<html><body>hi</body></html>")).toBe("<html><body>hi</body></html>");
+    const big = `<!doctype html><html><body>${"x".repeat(SAMPLE_MAX_BYTES)}</body></html>`;
+    const wide = `<!doctype html><html><body>${"\u00e9".repeat(SAMPLE_MAX_BYTES / 2)}</body></html>`; // under 64 K chars, over 64 KB
+    for (const bad of [undefined, null, 42, {}, "", "   ", "<div>a fragment</div>", "<script>1</script>", "```html\n<html><body></body></html>\n```",
+      "<!doctype html><html><body>no end", "<html></html>", "text before <html><body></body></html>", big, wide]) {
+      expect(validSample(bad)).toBeNull();
+    }
+  });
+
+  test("a malformed sample is dropped and its template stays; a valid one is kept", () => {
+    const games = miniGamesFor(def([
+      { id: "a", label: "A", brief: "Build A.", sample: DOC },
+      { id: "b", label: "B", brief: "Build B.", sample: "<div>not a document</div>" },
+      { id: "c", label: "C", brief: "Build C.", sample: 7 },
+    ]));
+    expect(games.map((g) => g.id)).toEqual(["a", "b", "c"]);
+    expect(games[0]!.sample).toBe(DOC);
+    expect(games[1]).not.toHaveProperty("sample");
+    expect(games[2]).not.toHaveProperty("sample");
+  });
+
+  test("demo rotation: the world's samples in order, wrapping; none valid falls back to the host's", () => {
+    const d = def([
+      { id: "a", label: "A", brief: "x", sample: DOC },
+      { id: "b", label: "B", brief: "x" },
+      { id: "c", label: "C", brief: "x", sample: DOC.replace("x", "y") },
+    ]);
+    expect(demoSampleGames(d).map((g) => g.id)).toEqual(["a", "c"]);
+    expect([0, 1, 2, 3, -1].map((i) => demoSampleAt(d, i).id)).toEqual(["a", "c", "a", "c", "c"]);
+    expect(demoSampleAt(d, 1)).toEqual({ id: "c", title: "C", html: DOC.replace("x", "y") });
+    const none = def([{ id: "a", label: "A", brief: "x", sample: "<b>bad</b>" }]);
+    expect(demoSampleGames(none)).toBe(DEFAULT_MINI_GAMES);
+    expect(demoSampleGames(null)).toBe(DEFAULT_MINI_GAMES);
+    expect([0, 1, 2].map((i) => demoSampleAt(null, i).id)).toEqual(["target-tap", "memory-cards", "target-tap"]);
+  });
+
+  test("Play sample: a labeled sample artifact off the node until Keep adopts it", () => {
+    const b = createBuildBook();
+    expect(sampleArtifact(b, N, { id: "a", label: "A", brief: "x" }, T)).toBeNull();
+    expect(sampleArtifact(b, N, { id: "a", label: "A", brief: "x", sample: "<div>bad</div>" }, T)).toBeNull();
+    const a = sampleArtifact(b, N, DEFAULT_MINI_GAMES[1]!, T)!;
+    expect(a).toMatchObject({ node: N, title: "Memory cards game", html: SAMPLE_MEMORY_CARDS, demo: false, sample: true, kept: false });
+    expect(artifactOf(b, N)).toBeNull();
+    expect(adoptArtifact(b, a)).toBe(a);
+    expect(artifactOf(b, N)).toMatchObject({ id: a.id, kept: true });
+    buildEvent(b, N, { type: "subagent", assignments: ["x"] } as never, T); // a new build keeps a kept artifact
+    expect(artifactOf(b, N)?.id).toBe(a.id);
+  });
+
+  test("the popup's game area: 16:10, within the room, at least the minimum when it fits", () => {
+    expect(ART_ASPECT).toBe(1.6);
+    expect(fitArtWidth(ART_DEFAULT_W, 2000, 2000)).toBe(640);
+    expect(fitArtWidth(900, 2000, 400)).toBe(640); // 400 tall at 16:10
+    expect(fitArtWidth(900, 500, 2000)).toBe(500);
+    expect(fitArtWidth(100, 2000, 2000)).toBe(ART_MIN_W);
+    expect(fitArtWidth(100, 250, 2000)).toBe(250); // a tiny window: the room wins over the minimum
+    expect(fitArtWidth(Number.NaN, 2000, 2000)).toBe(ART_DEFAULT_W);
+    expect(fitArtWidth(500, -10, 300)).toBe(0);
+  });
+
+  test("an agent-built artifact is not a sample", () => {
+    const b = createBuildBook();
+    armTemplate(b, N, { id: "tap", label: "Tap" }, false, T);
+    buildEvent(b, N, { type: "token", text: GAME } as never, T);
+    buildEvent(b, N, { type: "done" } as never, T);
+    expect(artifactOf(b, N)).toMatchObject({ demo: false, sample: false });
   });
 });

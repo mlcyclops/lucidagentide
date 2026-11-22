@@ -10,13 +10,16 @@ import {
   ARTIFACT_GONE_DOC, artifactFrameDoc, artifactFrameHeaders, artifactShapeProblem, gateVizArtifact, VIZ_ARTIFACT_CSP, VIZ_ARTIFACT_KEEP, VIZ_ARTIFACT_MAX_CHARS,
   VIZ_ARTIFACT_SANDBOX, VIZ_ARTIFACT_TTL_MS, VizArtifactStore,
 } from "./viz_artifact_gate.ts";
-import { DEMO_GAME } from "./renderer/viz_demo.ts";
+import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./renderer/viz_sample_games.ts";
+
+const DEMO_GAME = { html: SAMPLE_TARGET_TAP };
 
 const pass = async (): Promise<{ block: boolean; reason: string }> => ({ block: false, reason: "" });
 
 describe("gateVizArtifact (fail-closed)", () => {
-  test("a clean HTML game passes", async () => {
+  test("a clean HTML game passes (both host samples)", async () => {
     expect(await gateVizArtifact(DEMO_GAME.html, pass)).toEqual({ ok: true });
+    expect(await gateVizArtifact(SAMPLE_MEMORY_CARDS, pass)).toEqual({ ok: true });
   });
 
   test("a scanner block blocks, with its reason", async () => {
