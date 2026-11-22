@@ -4,8 +4,7 @@
 // (`private_key_jwt`), federated subject tokens (RFC 8693), client secrets, access token minting with the lifetime rule
 // (5.3), and offline access token validation with the current-grant intersection (5.4).
 //
-// The token and resource endpoints that call this arrive with the listeners.
-#![cfg_attr(not(test), allow(dead_code))]
+// The token endpoints (`api_issue.rs`) call this; offline validation waits for the resource routes (slice 1a3).
 
 use crate::api_map::{effective_end, ApiMapStore, TightenEntry, CEILINGS};
 use crate::codec::{b64u, sha256, unb64u};
@@ -313,12 +312,9 @@ impl JtiCache {
     }
 
     /// Entries held now.
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.order.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.order.is_empty()
     }
 
     fn prune(&mut self, now: i64) {
@@ -670,13 +666,15 @@ pub fn mint_access_token(
 
 /// Which issuer a resource accepts a token from (5.6): the console profile (the map's `issuer.url` and `issuer.jwks`)
 /// or a relay's local profile (`RR/local` and the relay's own local JWKS for the org). A key of one is never accepted
-/// under the other.
+/// under the other. Offline validation is called by the resource routes (slice 1a3); until then only tests do.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug)]
 pub enum Profile<'a> {
     Console { issuer: &'a str, jwks: &'a [Value] },
     Local { issuer: &'a str, jwks: &'a [Value] },
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl<'a> Profile<'a> {
     /// The console profile of the org's pinned map.
     pub fn console(store: &'a ApiMapStore, org: &str) -> Option<Profile<'a>> {
@@ -692,6 +690,7 @@ impl<'a> Profile<'a> {
 }
 
 /// What a valid token grants now: the intersection of the token and the current map and journal (5.4).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Grant {
     pub client: String,
@@ -705,11 +704,13 @@ pub struct Grant {
     pub exp: i64,
 }
 
-fn rank(ceiling: &str) -> Option<usize> {
+/// The place of a ceiling in `CEILINGS` (lowest first).
+pub(crate) fn rank(ceiling: &str) -> Option<usize> {
     CEILINGS.iter().position(|c| *c == ceiling)
 }
 
-fn names<'a>(o: &'a Obj, k: &'static str) -> impl Iterator<Item = &'a str> {
+/// The strings of a list member of a map object.
+pub(crate) fn names<'a>(o: &'a Obj, k: &'static str) -> impl Iterator<Item = &'a str> {
     o.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str)
 }
 
@@ -719,11 +720,12 @@ pub fn find_client<'a>(store: &'a ApiMapStore, org: &str, id: &str) -> Option<&'
 }
 
 /// The journal entries of `action` aimed at `client` (target `{client, ...}`).
-fn client_entries<'a>(active: &'a [TightenEntry], action: &'a str, client: &'a str) -> impl Iterator<Item = &'a TightenEntry> {
+pub(crate) fn client_entries<'a>(active: &'a [TightenEntry], action: &'a str, client: &'a str) -> impl Iterator<Item = &'a TightenEntry> {
     active.iter().filter(move |e| e.action == action && e.target.get("client").and_then(Value::as_str) == Some(client))
 }
 
-fn target_field<'a>(e: &'a TightenEntry, k: &str) -> &'a str {
+/// A string member of a journal entry's target (empty when absent).
+pub(crate) fn target_field<'a>(e: &'a TightenEntry, k: &str) -> &'a str {
     e.target.get(k).and_then(Value::as_str).unwrap_or_default()
 }
 
@@ -747,6 +749,7 @@ fn target_field<'a>(e: &'a TightenEntry, k: &str) -> &'a str {
 /// lowering; relays the client's less journaled drops (`*` expands to the map's relays and `console` when one applies).
 /// `dpop` is `(proof, htm, htu)` with `htu` the canonical origin plus the request path.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_access_token(
     token: &str,
     profile: &Profile,

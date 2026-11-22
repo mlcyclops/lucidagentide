@@ -1074,7 +1074,7 @@ impl State {
     }
 
     /// _api_accept: verify, check against the org's newest policy and the edition, fold and pin one signed api map.
-    pub(crate) fn api_accept(&mut self, wire: Option<&Value>, edition: crate::api_map::Edition) -> R<crate::api_map::AcceptOutcome> {
+    pub(crate) fn api_accept(&mut self, wire: Option<&Value>, edition: Option<crate::api_map::Edition>) -> R<crate::api_map::AcceptOutcome> {
         let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
         let wire = wire.cloned().unwrap_or(Value::Null);
         let org = wire.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
@@ -2677,6 +2677,35 @@ impl Hub {
         }
     }
 
+    /// The API listener's view of one org (5.6): a read-only copy of its api state taken under the lock, None when
+    /// this relay does not serve the org. The caller verifies a token against the copy with the lock released.
+    /// The license edition is read here each time (an installed or replaced license changes it), and the pinned maps
+    /// are checked against it again before the copy is taken.
+    pub fn api_org_snapshot(&self, org: &str) -> Option<crate::api_map::ApiMapStore> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut st = self.st.lock();
+        if !Self::api_served(&st).contains(org) {
+            return None;
+        }
+        let maps = st.api_maps();
+        let changed = maps.revalidate(edition);
+        for o in &changed {
+            let state = if maps.is_set_aside(o) { "set-aside" } else { "restored" };
+            let f = crate::log::Fields::new().with("org", o.as_str()).with("state", state).with("edition", edition.map_or_else(|| "none".to_string(), |e| format!("{e:?}").to_lowercase()));
+            crate::console_meet::logger().security("api.map.edition-refused", &f, crate::log::Level::Warn);
+        }
+        Some(maps.org_snapshot(org))
+    }
+
+    /// The 1a2 owner rule on a relay: a principal is inactive only when this relay knows it and holds every device
+    /// certificate it knows for it revoked (the denied set); a principal it does not know counts as active.
+    pub fn api_owner_active(&self, principal: &str) -> bool {
+        let st = self.st.lock();
+        let Some(devices) = st.directory.get(&principal.to_lowercase()).and_then(|e| e.get("devices")).and_then(Value::as_object) else { return true };
+        let serials: Vec<String> = devices.values().map(|d| crate::meet::serial_of(d.get("serial"))).filter(|s| !s.is_empty()).collect();
+        serials.is_empty() || !serials.iter().all(|s| st.denied.contains_key(s))
+    }
+
     // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──
 
     /// `POST /v1/org/storage {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
@@ -3458,6 +3487,8 @@ mod tests {
     fn api1_an_upload_for_an_org_the_relay_does_not_serve_is_refused() {
         let hub = Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
         hub.st.lock().organizations = json!({"ben@acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        // an edition, so the served org's map reaches verification rather than `map-edition`
+        hub.st.lock().pc.license_edition = "enterprise".into();
         let ann = Identity { principal: "ann@x".into(), name: "ANN".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
         let session = hub.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
         let signed = |org: &str| json!({"map": {"org": org, "seq": 1}, "sig": "", "chain": []});
@@ -3469,7 +3500,37 @@ mod tests {
         assert!(hub.st.lock().api_maps().get("beta", "").is_none(), "nothing pinned");
         // the org it serves goes on to verification (refused here for another reason)
         let mine = signed("acme");
-        assert!(!matches!(hub.pc_api_upload(&session, &ann, Some(&mine)), Err(E::Coded(_, "org-not-served", _)) | Ok(_)));
+        assert!(!matches!(hub.pc_api_upload(&session, &ann, Some(&mine)), Err(E::Coded(_, "org-not-served" | "map-edition", _)) | Ok(_)));
+    }
+
+    /// API-1 13: a relay with no license edition sets every pinned map aside (the listener's snapshot holds none);
+    /// an edition restores it.
+    #[test]
+    fn api1_a_relay_with_no_edition_sets_its_maps_aside() {
+        let dir = crate::meet_tls::testpki::dir("api-edition");
+        let maps = dir.join("api-maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        // a map fully valid under check_api_map (restoring checks it again), for org acme
+        let vectors: Value = serde_json::from_str(include_str!("../tests/api_map_v1.json")).unwrap();
+        let map = vectors["maps"].as_array().unwrap().iter().find(|c| c["name"] == "good-full-enterprise").unwrap()["map"].clone();
+        assert_eq!(map["org"], "acme");
+        let held = json!({"pinned": {"signed": {"map": map.clone(), "sig": "", "chain": []}, "signer": "root"}});
+        std::fs::write(maps.join("acme.json"), serde_json::to_vec(&held).unwrap()).unwrap();
+        let hub = Hub::new(None, &[], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        {
+            let mut st = hub.st.lock();
+            st.pc.api_maps = Some(crate::api_map::ApiMapStore::load(Some(&dir)));
+            st.organizations = json!({"ann@acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        }
+        assert_eq!(hub.ai_edition(), None);
+        let aside = hub.api_org_snapshot("acme").unwrap();
+        assert!(aside.is_set_aside("acme"));
+        assert!(aside.get("acme", "").is_none());
+        hub.st.lock().pc.license_edition = "enterprise".into();
+        let back = hub.api_org_snapshot("acme").unwrap();
+        assert!(!back.is_set_aside("acme"));
+        assert_eq!(back.get("acme", "").map(|m| m.seq), map["seq"].as_i64());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// API-1 3.3: the applicable grace is the smallest among the orgs that bind a certificate; an org without a pinned

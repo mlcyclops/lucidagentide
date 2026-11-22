@@ -44,6 +44,8 @@ mod ai_gateway_cards;
 mod ai_gateway_policy;
 mod ai_gateway_suite;
 mod api_fetch;
+mod api_issue;
+mod api_listener;
 mod api_map;
 mod api_token;
 mod codec;

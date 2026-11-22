@@ -13,8 +13,14 @@
 // AC-2b-D 4 (d-port): the seven download paths under `/fleet/v1/install/` (the four install scripts behind their
 // 10-line header, the program from a sealed in-memory copy of the running image, `SHA256SUMS`, `meta`), their limits
 // and sources, `deploy-high` under High; and the relay's `meet-cert` request (9.3), answered by f-console.
+//
+// API-1 7.1 (the front door): the issuer routes under `/api/orgs/<org>` and their `.well-known` documents, answered
+// by `console_api` and `api_issue`, and API client certificates of the org Meet CA (`Peer::ApiClient`, with its CRL
+// and `app` grace) for `tls_client_auth`. Each issuer answer's security line is logged here until the 9.4 audit chain.
 
+use crate::api_issue::{self, Answer, ClientCert, TokenHttp};
 use crate::codec::{b64u, hex, now_ms, parse_json, sha256, stringify};
+use crate::console_api::ApiDoc;
 use crate::console_source::Cidr;
 use crate::fleet_ca::{vault_do, FleetCa, Health, Push, VaultLock};
 use crate::fleet_wire::{self as w, Frame, In, LocalEnd, Refusal, Side, Wire};
@@ -33,9 +39,9 @@ use rustls::client::danger::HandshakeSignatureValid;
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
-use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::server::{ClientHello, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
-use rustls::{CipherSuite, DigitallySignedStruct, DistinguishedName, NamedGroup, ServerConfig, SignatureScheme};
+use rustls::{CertificateError, CipherSuite, DigitallySignedStruct, DistinguishedName, NamedGroup, RootCertStore, ServerConfig, SignatureScheme};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::convert::Infallible;
@@ -123,6 +129,23 @@ pub trait Desk: Send + Sync {
     /// console holds, 0 when it holds none or any of them has expired.
     fn relay_grace_hours(&self, _t: i64) -> u32 {
         0
+    }
+    /// API-1 4.2 `tls_client_auth`: the org Meet CA certificate (DER) and its newest CRL (PEM) the console holds.
+    fn api_client_trust(&self) -> Option<(Vec<u8>, String)> {
+        None
+    }
+    /// API-1 3.3: the applicable `app` grace (hours) at `now` (seconds) of the orgs an API client certificate names.
+    fn api_app_grace(&self, _orgs: &[String], _now: i64) -> u32 {
+        0
+    }
+    /// API-1 5.1: a public document of `org` at `now` (seconds); None for an unknown org (404).
+    fn api_document(&self, _org: &str, _doc: ApiDoc, _source: IpAddr, _now: i64) -> Option<Answer> {
+        None
+    }
+    /// API-1 5.2 (`revoke` false) and 5.5 at `now` (seconds); None for an unknown org (404). `body_refused` is the
+    /// port's verdict on a body it could not take. Blocking: a JWKS or discovery fetch may run.
+    fn api_token(&self, _org: &str, _revoke: bool, _http: &TokenHttp, _body_refused: Option<&'static str>, _now: i64) -> Option<Answer> {
+        None
     }
 }
 
@@ -230,6 +253,27 @@ impl Desk for FleetDesk {
     fn relay_grace_hours(&self, t: i64) -> u32 {
         self.fleet.api.relay_grace_hours(t.div_euclid(1000))
     }
+    fn api_client_trust(&self) -> Option<(Vec<u8>, String)> {
+        self.fleet.api_client_trust()
+    }
+    fn api_app_grace(&self, orgs: &[String], now: i64) -> u32 {
+        self.fleet.api.app_grace_hours(orgs, now)
+    }
+    fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
+        // API-1 13: the maps are held to the license edition in force (revalidated only when it changes)
+        self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
+        self.fleet.api.api_document(org, doc, source, now)
+    }
+    fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, now: i64) -> Option<Answer> {
+        self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
+        // API-1 4.3: the owner is active unless the console's people data marks them inactive for the org
+        let people = self.fleet.people();
+        let owner_active = |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(org, p));
+        // 6.1 `license`: the console serves while its service state is not stopped (on, grace or upgrade period; the
+        // fleet section holds no product license and reports on)
+        let licensed = self.console.license_view(now.saturating_mul(1000)).service.state != crate::console::ServiceState::Stopped;
+        self.fleet.api.api_token(self.fleet.api_link(), org, revoke, http, body_refused, &owner_active, licensed, now)
+    }
 }
 
 // ── Settings and state ──────────────────────────────────────────────────────────────────────────────────────
@@ -269,6 +313,9 @@ pub enum Peer {
     Anonymous,
     Relay { relay: String, serial: String, generation: u64, spki: Vec<u8> },
     Recovery { relay: String, serial: String },
+    /// API-1 4.2: an API client certificate issued by the org Meet CA this console holds, verified with its CRL and
+    /// `app` grace. It reaches only the API routes' `tls_client_auth` (and whatever an anonymous caller reaches).
+    ApiClient { cert: ClientCert },
     Refused,
 }
 
@@ -481,6 +528,85 @@ impl PortState {
             Some((relay, serial)) => Peer::Recovery { relay, serial },
             None => Peer::Refused,
         }
+    }
+
+    /// Classify an accepted connection by its whole presented chain: a relay or recovery certificate exactly as
+    /// `classify_connection`; otherwise an API client certificate of the org Meet CA (API-1 4.2), whose use inside its
+    /// `app` grace writes `cert.grace-used`.
+    pub fn classify_chain(&self, chain: &[CertificateDer<'_>], t: i64) -> Peer {
+        let Some((leaf, rest)) = chain.split_first() else { return Peer::Anonymous };
+        let peer = self.classify_connection(leaf.as_ref(), t);
+        if peer != Peer::Refused {
+            return peer;
+        }
+        let now = t.div_euclid(1000);
+        let Some(cert) = self.api_client(leaf, rest, now) else { return Peer::Refused };
+        if now > cert.not_after {
+            let f = Fields::new().with("kind", "app").with("serial", cert.serial.as_str()).with("notAfter", cert.not_after);
+            self.logger.security("cert.grace-used", &f, Level::Warn);
+        }
+        Peer::ApiClient { cert }
+    }
+
+    /// API-1 4.2 `tls_client_auth`: a client certificate issued directly by the org Meet CA this console holds (the
+    /// CA's CRL covers exactly those), verified by webpki at `now` (seconds), or, past its `notAfter`, as of its
+    /// `notAfter` within the applicable `app` grace of 3.3 (the `meet_tls` grace rule) with the CA itself valid now;
+    /// then not listed on the CA's current CRL (an expired CRL refuses, grace or not).
+    fn api_client(&self, leaf: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: i64) -> Option<ClientCert> {
+        let (ca_der, crl_pem) = self.desk.api_client_trust()?;
+        let root = crate::meet_x509::Cert::from_der(&ca_der)?;
+        let cert = crate::meet_x509::Cert::from_der(leaf.as_ref())?;
+        if !cert.issued_by(&root) || root.not_before > now || root.not_after < now {
+            return None;
+        }
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(ca_der)).ok()?;
+        let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::new(crate::server::provider())).build().ok()?;
+        let at = |s: i64| Some(UnixTime::since_unix_epoch(Duration::from_secs(u64::try_from(s).ok()?)));
+        match verifier.verify_client_cert(leaf, intermediates, at(now)?) {
+            Ok(_) => {}
+            Err(rustls::Error::InvalidCertificate(CertificateError::Expired | CertificateError::ExpiredContext { .. })) if now > cert.not_after => {
+                let orgs = crate::meet_tls::GraceSubject::of(&cert)?.orgs;
+                let hours = self.desk.api_app_grace(&orgs, now);
+                if now > cert.not_after.saturating_add(i64::from(hours) * 3600) {
+                    return None;
+                }
+                verifier.verify_client_cert(leaf, intermediates, at(cert.not_after)?).ok()?;
+            }
+            Err(_) => return None,
+        }
+        let crl = crate::meet_x509::Crl::from_pem(crl_pem.as_bytes())?;
+        let current = crl.issuer == root.subject && crl.signature_valid(&root.spki) && crl.this_update <= now && crl.next_update.is_none_or(|n| n > now);
+        if !current || crl.serials.contains(&cert.serial) {
+            return None;
+        }
+        ClientCert::of_leaf(leaf.as_ref(), true)
+    }
+
+    /// API-1 5.1 on the front door: the document of `org` at `now` (seconds), or 404 `not-found` for an unknown org.
+    pub fn api_doc(&self, org: &str, doc: ApiDoc, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        api_response(self.desk.api_document(org, doc, ip, now).unwrap_or_else(api_not_found))
+    }
+
+    /// API-1 5.2 and 5.5 on the front door at `now` (seconds), blocking: the issuer's answer with its security line
+    /// logged (until the 9.4 audit chain), or 404 `not-found` for an unknown org. `form` is the body or why it was not
+    /// taken (`too-large`, `request`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn api_token_answer(&self, org: &str, revoke: bool, form: Result<Vec<u8>, &'static str>, authorization: Option<&str>, dpop: Option<&str>, cert: Option<&ClientCert>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let (body, refused) = match &form {
+            Ok(b) => (b.as_slice(), None),
+            Err(code) => (&[][..], Some(*code)),
+        };
+        let http = TokenHttp { form: body, authorization, dpop, client_cert: cert, source: ip };
+        let a = self.desk.api_token(org, revoke, &http, refused, now).unwrap_or_else(api_not_found);
+        if let Some((name, fields)) = &a.event {
+            let mut f = Fields::new();
+            for (k, v) in fields.as_object().into_iter().flatten() {
+                f.set(k, v.clone());
+            }
+            self.logger.security(name, &f, if *name == "api.refusal" { Level::Warn } else { Level::Info });
+        }
+        api_response(a)
     }
 
     fn rate_ok(&self, ip: IpAddr, t: i64) -> bool {
@@ -1041,10 +1167,12 @@ impl ClientCertVerifier for RelayVerifier {
     fn root_hint_subjects(&self) -> &[DistinguishedName] {
         &[]
     }
-    fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, _intermediates: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
+    fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
         let t = (now.as_secs() as i64) * 1000;
         match self.0.classify(end_entity.as_ref(), t) {
             Peer::Relay { .. } | Peer::Recovery { .. } => Ok(ClientCertVerified::assertion()),
+            // API-1 4.2: an API client certificate of the org Meet CA
+            _ if self.0.api_client(end_entity, intermediates, t.div_euclid(1000)).is_some() => Ok(ClientCertVerified::assertion()),
             _ => Err(rustls::Error::InvalidCertificate(rustls::CertificateError::Revoked)),
         }
     }
@@ -1095,6 +1223,87 @@ fn forbidden() -> Response<Full<Bytes>> {
     answer(403, &json!({ "ok": false, "code": "forbidden", "error": w::FORBIDDEN }), true)
 }
 
+// ── API-1 7.1: the issuer routes of the front door ──────────────────────────────────────────────────────────
+
+/// An issuer route and its org, taken from the request path only (API1-R2).
+#[derive(Debug, PartialEq, Eq)]
+enum ApiRoute<'a> {
+    Doc(ApiDoc, &'a str),
+    Token { org: &'a str, revoke: bool },
+}
+
+/// `GET /.well-known/oauth-authorization-server/api/orgs/<org>`, `GET /.well-known/oauth-protected-resource/api/orgs/<org>`,
+/// `GET /api/orgs/<org>/jwks.json`, `POST /api/orgs/<org>/oauth/token` and `POST /api/orgs/<org>/oauth/revoke`.
+fn api_route<'a>(method: &str, path: &'a str) -> Option<ApiRoute<'a>> {
+    let segment = |s: &'a str| (!s.is_empty() && !s.contains('/')).then_some(s);
+    let route = if let Some(rest) = path.strip_prefix("/.well-known/oauth-authorization-server/api/orgs/") {
+        ApiRoute::Doc(ApiDoc::AuthorizationServer, segment(rest)?)
+    } else if let Some(rest) = path.strip_prefix("/.well-known/oauth-protected-resource/api/orgs/") {
+        ApiRoute::Doc(ApiDoc::ProtectedResource, segment(rest)?)
+    } else {
+        let (org, tail) = path.strip_prefix("/api/orgs/")?.split_once('/')?;
+        let org = segment(org)?;
+        match tail {
+            "jwks.json" => ApiRoute::Doc(ApiDoc::Jwks, org),
+            "oauth/token" => ApiRoute::Token { org, revoke: false },
+            "oauth/revoke" => ApiRoute::Token { org, revoke: true },
+            _ => return None,
+        }
+    };
+    let method_ok = if matches!(route, ApiRoute::Doc(..)) { method == "GET" } else { method == "POST" };
+    method_ok.then_some(route)
+}
+
+fn api_not_found() -> Answer {
+    api_issue::problem(404, "not-found", w::NOT_FOUND)
+}
+
+fn api_response(a: Answer) -> Response<Full<Bytes>> {
+    let mut b = Response::builder().status(a.status);
+    if !a.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+        b = b.header(CONTENT_TYPE, "application/json");
+    }
+    for (k, v) in &a.headers {
+        b = b.header(*k, v.as_str());
+    }
+    b.body(Full::new(Bytes::from(stringify(&a.body)))).unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+/// A token request body (API-1 5.2): `application/x-www-form-urlencoded`, at most 16 KiB. Err is the contract code.
+async fn read_form(req: Request<Incoming>) -> Result<Vec<u8>, &'static str> {
+    let form = req.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).and_then(|v| v.split(';').next()).is_some_and(|c| c.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+    if !form {
+        return Err("request");
+    }
+    match tokio::time::timeout(w::UPGRADE_WAIT, Limited::new(req.into_body(), api_issue::FORM_MAX).collect()).await {
+        Ok(Ok(c)) => Ok(c.to_bytes().to_vec()),
+        Ok(Err(e)) if e.is::<http_body_util::LengthLimitError>() => Err("too-large"),
+        _ => Err("request"),
+    }
+}
+
+/// API-1 7.1 on the front door: the documents answer at once; the token and revocation endpoints read their form and
+/// run on a blocking thread (a JWKS or discovery fetch may run).
+async fn api_answer(state: Arc<PortState>, route: ApiRoute<'_>, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
+    let now = now_ms().div_euclid(1000);
+    let (org, revoke) = match route {
+        ApiRoute::Doc(doc, org) => return state.api_doc(org, doc, ip, now),
+        ApiRoute::Token { org, revoke } => (org.to_owned(), revoke),
+    };
+    let (authorization, dpop) = {
+        let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        (header("authorization"), header("dpop"))
+    };
+    let cert = match peer {
+        Peer::ApiClient { cert } => Some(cert),
+        _ => None,
+    };
+    let form = read_form(req).await;
+    tokio::task::spawn_blocking(move || state.api_token_answer(&org, revoke, form, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, now))
+        .await
+        .unwrap_or_else(|_| api_response(api_issue::problem(503, "unavailable", "The token endpoint failed; try again.")))
+}
+
 async fn read_body(req: Request<Incoming>) -> Option<Value> {
     let collected = tokio::time::timeout(w::UPGRADE_WAIT, Limited::new(req.into_body(), w::BODY_MAX).collect()).await.ok()?.ok()?;
     parse_json(std::str::from_utf8(&collected.to_bytes()).ok()?)
@@ -1134,6 +1343,9 @@ async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>
             Ok(Err(r)) => refused(&r),
             Err(_) => refused(&Refusal::of("recovery-refused")),
         };
+    }
+    if let Some(route) = api_route(&method, &path) {
+        return api_answer(state, route, peer, ip, req).await;
     }
     match (method.as_str(), path.as_str()) {
         ("GET", "/fleet/v1/trust") => answer(200, &state.trust(), false),
@@ -1705,10 +1917,11 @@ async fn serve_conn(state: Arc<PortState>, acceptor: TlsAcceptor, tcp: TcpStream
     let ip = crate::console_source::canonical(addr.ip());
     let Some(mut unverified) = Unverified::take(&state, ip) else { return };
     let Ok(Ok(tls)) = tokio::time::timeout(w::HANDSHAKE, acceptor.accept(tcp)).await else { return };
-    let presented = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).map(|c| c.as_ref().to_vec());
-    let peer = match &presented {
+    let chain: Option<Vec<CertificateDer<'static>>> = tls.get_ref().1.peer_certificates().map(|c| c.to_vec());
+    let presented = chain.as_ref().and_then(|c| c.first()).map(|c| c.as_ref().to_vec());
+    let peer = match &chain {
         None => Peer::Anonymous,
-        Some(der) => state.classify_connection(der, now_ms()),
+        Some(c) => state.classify_chain(c, now_ms()),
     };
     if peer == Peer::Refused {
         return;
@@ -1926,6 +2139,8 @@ pub(crate) mod tests {
         pub deploy: Mutex<Value>,
         /// API-1 3.4: the console-wide `relay` grace (hours).
         pub grace: AtomicU32,
+        /// API-1 5: the console's api state behind the issuer routes (none: every org is unknown).
+        pub api: Mutex<Option<Arc<crate::console_api::ConsoleApi>>>,
     }
 
     impl TestDesk {
@@ -2035,6 +2250,12 @@ pub(crate) mod tests {
         }
         fn relay_grace_hours(&self, _t: i64) -> u32 {
             self.grace.load(Ordering::SeqCst)
+        }
+        fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
+            self.api.lock().clone()?.api_document(org, doc, source, now)
+        }
+        fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, now: i64) -> Option<Answer> {
+            self.api.lock().clone()?.api_token(None, org, revoke, http, body_refused, &|_: &str| true, true, now)
         }
     }
 
@@ -2616,6 +2837,90 @@ pub(crate) mod tests {
         let In::Text(t) = rx.next().await else { panic!("answer") };
         assert!(matches!(w::parse_frame(&t, Side::Relay), Ok(Frame::Res { id: 9, answer: Ok(_) })));
         assert_eq!(desk.meet_certs.lock()[0].0, relay);
+    }
+
+    #[test]
+    fn api_routes_are_org_namespaced() {
+        assert_eq!(api_route("GET", "/.well-known/oauth-authorization-server/api/orgs/acme"), Some(ApiRoute::Doc(ApiDoc::AuthorizationServer, "acme")));
+        assert_eq!(api_route("GET", "/.well-known/oauth-protected-resource/api/orgs/acme"), Some(ApiRoute::Doc(ApiDoc::ProtectedResource, "acme")));
+        assert_eq!(api_route("GET", "/api/orgs/acme/jwks.json"), Some(ApiRoute::Doc(ApiDoc::Jwks, "acme")));
+        assert_eq!(api_route("POST", "/api/orgs/acme/oauth/token"), Some(ApiRoute::Token { org: "acme", revoke: false }));
+        assert_eq!(api_route("POST", "/api/orgs/acme/oauth/revoke"), Some(ApiRoute::Token { org: "acme", revoke: true }));
+        assert_eq!(api_route("GET", "/api/orgs/acme/oauth/token"), None);
+        assert_eq!(api_route("POST", "/api/orgs/acme/jwks.json"), None);
+        assert_eq!(api_route("GET", "/.well-known/oauth-authorization-server/api/orgs/acme/local"), None);
+        assert_eq!(api_route("GET", "/api/orgs//jwks.json"), None);
+        assert_eq!(api_route("GET", "/fleet/v1/trust"), None);
+    }
+
+    async fn api_json(r: Response<Full<Bytes>>) -> (u16, String, Value) {
+        let status = r.status().as_u16();
+        let ctype = r.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+        let body = r.into_body().collect().await.map(|c| c.to_bytes().to_vec()).unwrap_or_default();
+        (status, ctype, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    /// The console's api state holding acme's pinned map (issuer key `k1` listed, not held).
+    fn api_with_map(now: i64) -> Arc<crate::console_api::ConsoleApi> {
+        let logger = Arc::new(Logger::capture("console", Box::new(|_, _| {})));
+        let vault: Arc<dyn VaultLock> = Arc::new(Mutex::new(MemVault::default()));
+        let api = Arc::new(crate::console_api::ConsoleApi::open(None, logger, vault));
+        let m = json!({"v": 1, "org": "acme", "seq": 1, "issued": now - 10, "expires": now + 30 * 86400,
+                       "issuer": {"url": "https://console.acme.example:7443/api/orgs/acme",
+                                  "jwks": [{"kty": "EC", "crv": "P-256", "kid": "k1", "x": "A".repeat(43), "y": "A".repeat(43), "use": "sig", "alg": "ES256", "nbf": now - 10, "exp": now + 86400}]},
+                       "grace": {"person": 0, "app": 0, "connector": 0, "relay": 0}, "failover_after_s": 300, "folded": [], "cleared": [],
+                       "relay_origins": {}, "clients": []});
+        let wire = json!({"map": m, "sig": "", "chain": []});
+        let vm = crate::api_map::VerifiedApiMap { org: "acme".into(), seq: 1, expires: now + 30 * 86400, hash: crate::api_map::api_map_hash(&wire["map"]), signer: "root".into(), wire: wire.as_object().unwrap().clone() };
+        api.publish_verified(None, vm, now).unwrap();
+        api
+    }
+
+    #[tokio::test]
+    async fn api_routes_answer_404_for_an_unknown_org() {
+        let (state, desk, _) = test_port("api-404");
+        let now = now_ms() / 1000;
+        for with_console in [false, true] {
+            if with_console {
+                *desk.api.lock() = Some(api_with_map(now));
+            }
+            for doc in [ApiDoc::AuthorizationServer, ApiDoc::ProtectedResource, ApiDoc::Jwks] {
+                let (status, ctype, body) = api_json(state.api_doc("nope", doc, ip(1), now)).await;
+                assert_eq!((status, ctype.as_str(), body["code"].as_str()), (404, "application/problem+json", Some("not-found")));
+            }
+            for revoke in [false, true] {
+                let r = state.api_token_answer("nope", revoke, Ok(b"grant_type=client_credentials".to_vec()), None, None, None, ip(1), now);
+                let (status, _, body) = api_json(r).await;
+                assert_eq!((status, body["code"].as_str()), (404, Some("not-found")));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn api_metadata_documents_come_from_the_pinned_map() {
+        let (state, desk, _) = test_port("api-docs");
+        let now = now_ms() / 1000;
+        *desk.api.lock() = Some(api_with_map(now));
+        let i = "https://console.acme.example:7443/api/orgs/acme";
+        let (status, ctype, body) = api_json(state.api_doc("acme", ApiDoc::AuthorizationServer, ip(1), now)).await;
+        assert_eq!((status, ctype.as_str()), (200, "application/json"));
+        assert_eq!((body["issuer"].as_str(), body["token_endpoint"].clone(), body["revocation_endpoint"].clone(), body["jwks_uri"].clone()), (Some(i), json!(format!("{i}/oauth/token")), json!(format!("{i}/oauth/revoke")), json!(format!("{i}/jwks.json"))));
+        assert_eq!(body["grant_types_supported"], json!(["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]));
+        let (_, _, body) = api_json(state.api_doc("acme", ApiDoc::ProtectedResource, ip(1), now)).await;
+        assert_eq!((body["resource"].as_str(), body["authorization_servers"].clone()), (Some(i), json!([i])));
+        let (_, _, body) = api_json(state.api_doc("acme", ApiDoc::Jwks, ip(1), now)).await;
+        assert_eq!(body["keys"][0]["kid"], "k1");
+        // 6.5: 120 requests a minute from one address
+        for _ in 3..api_issue::SOURCE_PER_MINUTE {
+            assert_eq!(state.api_doc("acme", ApiDoc::Jwks, ip(1), now).status().as_u16(), 200);
+        }
+        let r = state.api_doc("acme", ApiDoc::Jwks, ip(1), now);
+        assert_eq!((r.status().as_u16(), r.headers().contains_key(RETRY_AFTER)), (429, true));
+        // the org's token endpoint: the listed issuer key is not one this console holds, and a body too large
+        let (status, _, body) = api_json(state.api_token_answer("acme", false, Ok(b"grant_type=client_credentials".to_vec()), None, None, None, ip(2), now)).await;
+        assert_eq!((status, body["code"].as_str(), body["error"].as_str()), (503, Some("issuer-key-unlisted"), Some("temporarily_unavailable")));
+        let (status, _, body) = api_json(state.api_token_answer("acme", false, Err("too-large"), None, None, None, ip(2), now)).await;
+        assert_eq!((status, body["code"].as_str()), (413, Some("too-large")));
     }
 
     #[test]

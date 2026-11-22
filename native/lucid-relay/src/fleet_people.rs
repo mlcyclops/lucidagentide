@@ -804,6 +804,20 @@ impl People {
         self.cache.lock().observe(&views);
     }
 
+    /// API-1 4.3, the 1a2 rule until SCIM (API-1b): true only when the console's people data (the cached Meeting Hub
+    /// rows of every relay) marks `principal` revoked, removed or blocked for `org`. A principal the console knows
+    /// nothing about counts as active.
+    pub fn person_inactive(&self, org: &str, principal: &str) -> bool {
+        let want = principal.trim().to_lowercase();
+        let c = self.cache.lock();
+        c.entries.values().flat_map(|e| e.data.rows.iter()).any(|r| {
+            r.get("kind").and_then(Value::as_str) == Some("meet")
+                && r.get("org").and_then(Value::as_str) == Some(org)
+                && r.get("id").and_then(Value::as_str).is_some_and(|id| id.to_lowercase() == want)
+                && matches!(r.get("state").and_then(Value::as_str), Some("revoked" | "removed" | "blocked"))
+        })
+    }
+
     /// Rows held, in all.
     #[cfg(test)]
     pub fn cached_rows(&self) -> usize {
@@ -1491,6 +1505,21 @@ mod tests {
 
     fn by_id<'a>(rows: &'a Value, id: &str) -> &'a Value {
         rows["rows"].as_array().unwrap().iter().find(|r| r["id"] == id).unwrap()
+    }
+
+    #[test]
+    fn a_person_is_inactive_only_when_the_people_data_says_so() {
+        let (_fake, people, _) = setup();
+        let mut answer = meet_people();
+        for row in answer["people"].as_array_mut().unwrap() {
+            row["org"] = json!("acme");
+        }
+        let m1 = view("m1", Product::Meet);
+        people.cache.lock().put(m1.key(), Arc::new(meet_rows(&m1, &answer, json!({}), T0)), T0);
+        assert!(people.person_inactive("acme", "Bob@x.org"), "bob's only device is blocked");
+        assert!(!people.person_inactive("acme", "ann@x.org"));
+        assert!(!people.person_inactive("other", "bob@x.org"), "another org");
+        assert!(!people.person_inactive("acme", "nobody@x.org"), "unknown counts as active");
     }
 
     #[tokio::test]

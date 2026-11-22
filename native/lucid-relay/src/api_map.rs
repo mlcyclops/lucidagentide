@@ -193,12 +193,20 @@ pub enum Edition {
 }
 
 impl Edition {
-    /// "standard" is Standard; anything else (and no license edition) is Enterprise.
-    pub fn of(edition: Option<&str>) -> Edition {
-        if edition == Some("standard") {
-            Edition::Standard
-        } else {
-            Edition::Enterprise
+    /// "standard" is Standard and "enterprise" Enterprise; anything else, and no license edition, is unknown (None):
+    /// no api map is accepted or served under an unknown edition (13).
+    pub fn of(edition: Option<&str>) -> Option<Edition> {
+        match edition {
+            Some("standard") => Some(Edition::Standard),
+            Some("enterprise") => Some(Edition::Enterprise),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Edition::Standard => "standard",
+            Edition::Enterprise => "enterprise",
         }
     }
 }
@@ -1108,6 +1116,10 @@ pub struct OrgApi {
     pub applied: u64,
     /// Journal entries not yet folded or cleared, in `tseq` order.
     pub active: Vec<TightenEntry>,
+    /// 13: the pinned map fails the license edition now held (`revalidate`). It is kept (memory and disk) but the org
+    /// serves nothing (`map-edition`) until a conforming map is pinned or the edition allows it again. Not persisted:
+    /// every start revalidates under the edition it reads.
+    pub aside: bool,
 }
 
 impl OrgApi {
@@ -1174,6 +1186,13 @@ fn write_flushed(path: &Path, v: &Value) -> Res<()> {
 }
 
 impl ApiMapStore {
+    /// A read-only copy of one org's state (in memory, no folder, so nothing it does reaches the disk), for work that
+    /// must not hold the live store's lock, such as a token request that fetches a JWKS.
+    pub fn org_snapshot(&self, org: &str) -> ApiMapStore {
+        let orgs = self.orgs.get(org).map(|o| BTreeMap::from([(org.to_string(), o.clone())])).unwrap_or_default();
+        ApiMapStore { dir: None, orgs }
+    }
+
     /// The store kept under `dir` (every org file found), or an empty one in memory without a folder.
     pub fn load(dir: Option<&Path>) -> ApiMapStore {
         let mut store = ApiMapStore { dir: dir.map(Path::to_path_buf), orgs: BTreeMap::new() };
@@ -1238,12 +1257,41 @@ impl ApiMapStore {
         Ok(())
     }
 
-    /// 2.4: verify a signed map (with the issuers held for other orgs), check its seq against the pin, fold the
-    /// journal into it (2.5), and pin it durably before Ok.
-    pub fn accept(&mut self, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Obj>, edition: Edition) -> Result<AcceptOutcome, ApiMapError> {
+    /// 2.4: verify a signed map (with the issuers held for other orgs) under the license `edition` (13; an unknown
+    /// edition accepts nothing: `map-edition`), check its seq against the pin, fold the journal into it (2.5), and pin
+    /// it durably before Ok. A map accepted under the edition serves again if its org was set aside.
+    pub fn accept(&mut self, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Obj>, edition: Option<Edition>) -> Result<AcceptOutcome, ApiMapError> {
+        let Some(edition) = edition else { return fail("map-edition", "the license edition is not known, so no api map is accepted") };
         let held = self.issuers();
         let vm = verify_api_map(signed, trust.root, trust.signer_policy, trust.root_crl, trust.previous_serial, now, policy, edition, &held)?;
-        self.pin(vm)
+        let org = vm.org.clone();
+        let r = self.pin(vm)?;
+        if matches!(r, AcceptOutcome::Pinned(_) | AcceptOutcome::Unchanged(_)) {
+            if let Some(o) = self.orgs.get_mut(&org) {
+                o.aside = false;
+            }
+        }
+        Ok(r)
+    }
+
+    /// 13: hold every pinned map to the license `edition` now in force: a map that `check_api_map` refuses under it
+    /// (judged as at its `issued`, so only the edition's limits can newly refuse it), and every map while the edition
+    /// is unknown (None), is set aside (kept, serving nothing); a set-aside map that conforms again serves again.
+    /// Returns every org whose state changed (`is_set_aside` tells which way), for the caller's security lines.
+    pub fn revalidate(&mut self, edition: Option<Edition>) -> Vec<String> {
+        let none = BTreeMap::new();
+        let mut changed = Vec::new();
+        for (org, o) in self.orgs.iter_mut() {
+            let Some(p) = o.pinned.as_ref() else { continue };
+            let map = &p.wire["map"];
+            let issued = map.get("issued").and_then(int_of).unwrap_or(0);
+            let aside = !edition.is_some_and(|e| check_api_map(map, issued, None, e, &none).is_ok());
+            if aside != o.aside {
+                o.aside = aside;
+                changed.push(org.clone());
+            }
+        }
+        changed
     }
 
     /// Pin a map already verified.
@@ -1330,9 +1378,19 @@ impl ApiMapStore {
 // Read by the fleet channel (api-tighten, hello), the TLS verifiers (grace) and the API listener, which build on this.
 #[cfg_attr(not(test), allow(dead_code))]
 impl ApiMapStore {
-    /// The org's pinned map when it has not expired at `now`.
+    /// The org's pinned map unless it is set aside (13): everything that serves reads the map through this.
+    fn serving(&self, org: &str) -> Option<&VerifiedApiMap> {
+        self.orgs.get(org).filter(|o| !o.aside)?.pinned.as_ref()
+    }
+
+    /// The org's pinned map is held but set aside: it fails the license edition in force (13, `map-edition`).
+    pub fn is_set_aside(&self, org: &str) -> bool {
+        self.orgs.get(org).is_some_and(|o| o.aside && o.pinned.is_some())
+    }
+
+    /// The org's serving pinned map when it has not expired at `now`.
     fn live(&self, org: &str, now: i64) -> Option<&VerifiedApiMap> {
-        self.orgs.get(org)?.pinned.as_ref().filter(|p| p.expires > now)
+        self.serving(org).filter(|p| p.expires > now)
     }
 
     /// 3.3: the org's grace for `kind` (hours, lowered by journaled `grace_lower`), None without a pinned unexpired
@@ -1360,18 +1418,19 @@ impl ApiMapStore {
         self.orgs.get(org).is_some_and(|o| o.active.iter().any(|e| e.action == "api_off"))
     }
 
-    /// The org's pinned map (`sha256` empty), or the pinned or previous map with that hash.
+    /// The org's serving pinned map (`sha256` empty; None while set aside), or the pinned or previous map with that
+    /// hash.
     pub fn get(&self, org: &str, sha256: &str) -> Option<&VerifiedApiMap> {
-        let o = self.orgs.get(org)?;
         if sha256.is_empty() {
-            return o.pinned.as_ref();
+            return self.serving(org);
         }
+        let o = self.orgs.get(org)?;
         let want = sha256.to_lowercase();
         [o.pinned.as_ref(), o.previous.as_ref()].into_iter().flatten().find(|m| m.hash == want)
     }
 
     fn pinned_list(&self, org: &str, k: &str) -> &[Value] {
-        self.orgs.get(org).and_then(|o| o.pinned.as_ref()).and_then(|p| p.map().get(k)).and_then(Value::as_array).map_or(&[][..], Vec::as_slice)
+        self.serving(org).and_then(|p| p.map().get(k)).and_then(Value::as_array).map_or(&[][..], Vec::as_slice)
     }
 
     /// The pinned map's `clients`.
@@ -1386,7 +1445,7 @@ impl ApiMapStore {
 
     /// The pinned map's `relay_origins`.
     pub fn relay_origins(&self, org: &str) -> Option<&Obj> {
-        self.orgs.get(org)?.pinned.as_ref()?.map().get("relay_origins").and_then(Value::as_object)
+        self.serving(org)?.map().get("relay_origins").and_then(Value::as_object)
     }
 
     /// Journal entries still active for the org.
@@ -1653,7 +1712,8 @@ mod tests {
         let mut seen = 0;
         let mut codes: BTreeSet<&str> = BTreeSet::new();
         for c in doc["maps"].as_array().unwrap() {
-            let edition = Edition::of(c["edition"].as_str());
+            // a vector without an edition tests no edition limit
+            let edition = Edition::of(c["edition"].as_str()).unwrap_or(Edition::Enterprise);
             let held: BTreeMap<String, String> = c["held_issuers"].as_object().into_iter().flatten().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect();
             let got = code(check_api_map(&c["map"], now, policy, edition, &held));
             assert_eq!(got, c["expect"].as_str().unwrap(), "maps/{}", c["name"]);
@@ -1707,5 +1767,30 @@ mod tests {
             assert!(codes.contains(want), "no vector refuses with {want}");
         }
         assert!(doc["api_max_bytes"].as_u64().unwrap() as usize <= API_MAP_MAX);
+    }
+
+    #[test]
+    fn a_map_over_the_edition_is_set_aside_and_restored() {
+        assert_eq!((Edition::of(Some("standard")), Edition::of(Some("enterprise")), Edition::of(None), Edition::of(Some("pro"))), (Some(Edition::Standard), Some(Edition::Enterprise), None, None));
+        let mut s = ApiMapStore::load(None);
+        // an Enterprise-only map (a splunk_hec destination)
+        s.pin(verified(good_map(1))).unwrap();
+        assert_eq!(s.revalidate(Some(Edition::Enterprise)), Vec::<String>::new());
+        assert!(s.get("acme", "").is_some());
+        assert_eq!(s.revalidate(Some(Edition::Standard)), ["acme"]);
+        assert!(s.is_set_aside("acme"));
+        assert!(s.get("acme", "").is_none() && s.clients("acme").is_empty() && s.relay_origins("acme").is_none() && s.grace_hours("acme", "app", NOW).is_none(), "the org serves nothing");
+        assert_eq!(s.head("acme").0, 1, "the map is kept");
+        assert_eq!(crate::api_issue::closed(&s, "acme", NOW), Some("map-edition"));
+        assert_eq!(s.revalidate(Some(Edition::Enterprise)), ["acme"]);
+        assert!(!s.is_set_aside("acme"));
+        assert_eq!(crate::api_issue::closed(&s, "acme", NOW), None, "restored");
+        assert_eq!(s.revalidate(None), ["acme"], "an unknown edition serves no map");
+        assert!(s.is_set_aside("acme"));
+        // an unknown edition accepts no map either
+        let trust_root = crate::meet_x509::Cert::from_pem(serde_json::from_str::<Value>(VECTORS).unwrap()["root_pem"].as_str().unwrap()).unwrap();
+        let sp = Obj::new();
+        let trust = ApiTrust { root: &trust_root, signer_policy: &sp, root_crl: None, previous_serial: "" };
+        assert_eq!(code(s.accept(&json!({"map": good_map(2), "sig": "", "chain": []}), &trust, NOW, None, None)), "map-edition");
     }
 }

@@ -555,6 +555,10 @@ impl ClientCertVerifier for MeetVerifier {
         self.inner.root_hint_subjects()
     }
 
+    fn client_auth_mandatory(&self) -> bool {
+        self.inner.client_auth_mandatory()
+    }
+
     fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
         let verified = match self.inner.verify_client_cert(end_entity, intermediates, now) {
             Ok(v) => v,
@@ -585,11 +589,46 @@ impl ClientCertVerifier for MeetVerifier {
 /// tls_context: the server TLS for new connections.
 pub fn tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     let provider = Arc::new(crate::server::provider());
-    let certs = load_certs(&s.cert, "certificate")?;
-    let key = load_key(&s.key)?;
     let roots = Arc::new(roots_of(&s.client_ca)?);
     let inner = WebPkiClientVerifier::builder_with_provider(roots, provider.clone()).build().map_err(|e| format!("the client CA does not load: {e}"))?;
-    let (crls, chain, revoke) = match active_crl(s) {
+    meet_server_config(s, provider, inner, true)
+}
+
+/// API-1 7.2: the API listener's server TLS: the relay's own certificate, TLS 1.3 and 1.2, a client certificate
+/// asked for but OPTIONAL. A presented one is checked in the handshake against the client CA (and the 3.3 grace
+/// path) only; its revocation is checked after the handshake by `api_cert_revocation_checked`, which counts it only
+/// under a current CRL, so a relay without a CRL still serves anonymous clients but authenticates no certificate.
+pub fn api_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
+    let provider = Arc::new(crate::server::provider());
+    let roots = Arc::new(roots_of(&s.client_ca)?);
+    let inner = WebPkiClientVerifier::builder_with_provider(roots, provider.clone()).allow_unauthenticated().build().map_err(|e| format!("the client CA does not load: {e}"))?;
+    meet_server_config(s, provider, inner, false)
+}
+
+/// API-1 4.2: whether a client chain that passed `api_tls_config`'s handshake also passed revocation at `now`: the
+/// CRL file in force (read now, so a refreshed list applies at once) holds a current list, signed by its issuer,
+/// for every certificate checked (the leaf, or the whole chain for a chain bundle), and none lists it. No CRL file,
+/// an unreadable one, or no current list: false (the certificate then counts as not presented).
+pub fn api_cert_revocation_checked(s: &Settings, leaf: &[u8], intermediates: &[CertificateDer<'_>], now: i64) -> bool {
+    let Some(crl) = active_crl(s) else { return false };
+    let crls = std::fs::read(&crl).map(|d| crls_in(&d)).unwrap_or_default();
+    if crls.is_empty() {
+        return false;
+    }
+    let Ok(store) = roots_of(&s.client_ca) else { return false };
+    let Ok(inner) = WebPkiClientVerifier::builder_with_provider(Arc::new(store), Arc::new(crate::server::provider())).build() else { return false };
+    let roots: Vec<Cert> = pem_blocks(&read_bytes(Path::new(&s.client_ca)), "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    let chain = bundle_checks_chain(&crl, Path::new(&s.client_ca));
+    let v = MeetVerifier { inner, roots, crls, chain, revoke: true, grace: Grace(None) };
+    v.revocation(leaf, intermediates, now).is_ok()
+}
+
+/// A server config with the relay's certificate and the Meet client verifier around `inner` (whose
+/// `client_auth_mandatory` the wrapper keeps). `handshake_revocation` false leaves the CRL to the caller.
+fn meet_server_config(s: &Settings, provider: Arc<rustls::crypto::CryptoProvider>, inner: Arc<dyn ClientCertVerifier>, handshake_revocation: bool) -> Result<Arc<ServerConfig>, String> {
+    let certs = load_certs(&s.cert, "certificate")?;
+    let key = load_key(&s.key)?;
+    let (crls, chain, revoke) = match active_crl(s).filter(|_| handshake_revocation) {
         None => (Vec::new(), false, false),
         Some(crl) => {
             let data = std::fs::read(&crl).map_err(|e| format!("cannot read the CRL {}: {e}", crl.display()))?;
@@ -1425,6 +1464,34 @@ mod tests {
         let stranger = other.leaf_valid(&[0x74], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
         assert!(verify(&grace_verifier(&ca, None, Some(24)), &stranger, &[]).is_err());
         assert!(verify(&grace_verifier(&ca, None, Some(24)), &under_good, &[]).is_err());
+    }
+
+    /// API-1 4.2: a certificate on the API listener counts only after a current CRL was checked for it.
+    #[test]
+    fn api1_listener_certificate_counts_only_under_a_current_crl() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        let leaf = ca.leaf(&[0x81], "monitor", None, &["urn:lucid-meet:app:acme"], &Key::new(), true);
+        let d = dir("api-crl");
+        let ca_file = d.join("ca.crt");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let crl_file = d.join("crl.pem");
+        let s = Settings { client_ca: ca_file.to_string_lossy().into(), crl: String::new(), state_dir: String::new(), ..Settings::default() };
+        // no CRL file: the handshake config still loads (anonymous clients are served) but the certificate never counts
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        let s = Settings { crl: crl_file.to_string_lossy().into(), ..s };
+        // a current list naming its serial: refused
+        std::fs::write(&crl_file, ca.crl_pem(t - 300, t + DAY, &[&[0x81]], None)).unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        // a current list without it: accepted
+        std::fs::write(&crl_file, ca.crl_pem(t - 300, t + DAY, &[], None)).unwrap();
+        assert!(api_cert_revocation_checked(&s, &leaf, &[], t));
+        // an expired list, or a file with no list: not counted
+        std::fs::write(&crl_file, ca.crl_pem(t - 10 * DAY, t - DAY, &[], None)).unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        std::fs::write(&crl_file, "").unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

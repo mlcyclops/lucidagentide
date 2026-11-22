@@ -6,16 +6,25 @@
 // first after `welcome`; an older relay answers `fleet-op` and gets no api op until it reconnects), the reconnect
 // catch-up (key, then map, then journal entries strictly in order, before any other request), and the console-wide
 // relay grace of the fleet verifier (3.4).
+//
+// 5.1 to 5.5, the front door's issuer: each org's issuer signing key (P-256, sealed as `api-issuer-<org>-<kid>`, used
+// only while the pinned map lists it), the public documents, and the token and revocation endpoints (`api_issue`) run
+// on a snapshot of the org's store with the front door's limiters, jti caches and fetch cache.
 
+use crate::api_fetch::FetchCache;
+use crate::api_issue::{self, Answer, IssueCtx, IssueState, TokenHttp};
 use crate::api_map::{check_tighten, AcceptOutcome, ApiMapError, ApiMapStore, ApiTrust, Edition, VerifiedApiMap};
 use crate::codec::{b64u, parse_json, stringify};
 use crate::console_fleet::{FleetLink, LinkError};
 use crate::fleet_ca::{vault_do, NoVault, Vault, VaultLock};
 use crate::log::{Fields, Level, Logger};
+use aws_lc_rs::rand::SystemRandom;
+use aws_lc_rs::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
 use parking_lot::Mutex;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
@@ -27,6 +36,24 @@ pub const JOURNAL_DIR: &str = "api-journal-console";
 pub const PSEUDONYM_PKV: u64 = 1;
 /// One api request's answer wait.
 const CALL_MS: u64 = 30_000;
+/// 4.2: a client's `jwks_uri` and a federated issuer's discovery and keys are fetched at most hourly.
+const FETCH_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// A public document of the front door (5.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApiDoc {
+    /// RFC 8414 `/.well-known/oauth-authorization-server/api/orgs/<org>`.
+    AuthorizationServer,
+    /// RFC 9728 `/.well-known/oauth-protected-resource/api/orgs/<org>`.
+    ProtectedResource,
+    /// `I/jwks.json`: the map's `issuer.jwks`.
+    Jwks,
+}
+
+/// The sealed name of an org's issuer signing key (PKCS#8).
+fn issuer_seal_name(org: &str, kid: &str) -> String {
+    format!("api-issuer-{org}-{kid}")
+}
 
 /// The console's sealed store, reached without keeping the console alive.
 pub struct ConsoleVault(pub Weak<crate::console::Console>);
@@ -53,6 +80,8 @@ struct OrgJournal {
     keys: BTreeMap<String, u64>,
     /// (pkv, not_before) of the org's sealed pseudonym key.
     key: Option<(u64, i64)>,
+    /// The `kid` of the newest issuer signing key drawn for the org (sealed as `api-issuer-<org>-<kid>`).
+    issuer_kid: Option<String>,
 }
 
 impl OrgJournal {
@@ -75,6 +104,8 @@ struct Inner {
     store: ApiMapStore,
     orgs: BTreeMap<String, OrgJournal>,
     relays: HashMap<String, RelayApi>,
+    /// 13: the license edition the maps were last held to (`set_edition`); None until first read.
+    edition: Option<Option<Edition>>,
 }
 
 /// The console's api maps, journals and pseudonym keys, and their delivery to the relays (2.4, 2.5, 2.6).
@@ -85,6 +116,9 @@ pub struct ConsoleApi {
     inner: Mutex<Inner>,
     /// One delivery at a time per relay, so entries reach it strictly in order.
     sending: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// The front door's issuer state (6.5 limiters and jti caches) and its 8.1 fetch cache.
+    issue: IssueState,
+    fetch: FetchCache,
 }
 
 /// `[a-z0-9-]{1,32}`.
@@ -124,6 +158,7 @@ impl ConsoleApi {
                     j.acks = u64_map(v.get("tseq"));
                     j.keys = u64_map(v.get("pkv"));
                     j.key = v.get("key").and_then(|k| Some((k.get("pkv")?.as_u64()?, k.get("not_before")?.as_i64()?)));
+                    j.issuer_kid = v.get("issuer").and_then(Value::as_str).map(str::to_string);
                 }
             }
         }
@@ -159,7 +194,15 @@ impl ConsoleApi {
                 }
             }
         }
-        ConsoleApi { dir: dir.map(Path::to_path_buf), logger, vault, inner: Mutex::new(Inner { store, orgs, relays: HashMap::new() }), sending: Mutex::new(HashMap::new()) }
+        ConsoleApi {
+            dir: dir.map(Path::to_path_buf),
+            logger,
+            vault,
+            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), edition: None }),
+            sending: Mutex::new(HashMap::new()),
+            issue: IssueState::new(),
+            fetch: FetchCache::new(FETCH_MAX_AGE),
+        }
     }
 
     fn journal_dir(&self) -> Option<PathBuf> {
@@ -192,29 +235,70 @@ impl ConsoleApi {
         let Some(dir) = self.journal_dir() else { return Ok(()) };
         crate::store::make_dir(&dir).map_err(io_e)?;
         let key = j.key.map_or(Value::Null, |(pkv, nb)| json!({ "pkv": pkv, "not_before": nb }));
-        let v = json!({ "base": j.base, "tseq": j.acks, "pkv": j.keys, "key": key });
+        let v = json!({ "base": j.base, "tseq": j.acks, "pkv": j.keys, "key": key, "issuer": j.issuer_kid });
         crate::fleet_local::write_durable(&dir.join(format!("{org}.acks.json")), stringify(&v).as_bytes()).map_err(io_e)
     }
 
     // ── maps (2.4) ──
 
     /// Verify and pin a signed map in the console's store, then send it (`api-map`) to every connected relay of its
-    /// org. A conflict raises `api.map.conflict`.
+    /// org. A conflict raises `api.map.conflict`. Called by the API access screen's save (slice 1a6).
     #[allow(clippy::too_many_arguments)]
-    pub fn publish_map(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Map<String, Value>>, edition: Edition) -> Result<AcceptOutcome, ApiMapError> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn publish_map(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Map<String, Value>>, edition: Option<Edition>) -> Result<AcceptOutcome, ApiMapError> {
         let r = self.inner.lock().store.accept(signed, trust, now, policy, edition);
         self.published(link, r, now)
     }
 
+    /// 13: hold every pinned map to the license `edition` (None: unknown, which serves no map). Revalidates only when
+    /// the edition changes (or on the first call); each org set aside logs `api.map.edition-refused`, each restored
+    /// `api.map.edition-restored`.
+    pub fn set_edition(&self, edition: Option<Edition>) {
+        let changed = {
+            let mut inner = self.inner.lock();
+            if inner.edition == Some(edition) {
+                return;
+            }
+            inner.edition = Some(edition);
+            inner.store.revalidate(edition)
+        };
+        self.edition_lines(&changed, edition);
+    }
+
+    /// Call with the store's lock released.
+    fn edition_lines(&self, changed: &[String], edition: Option<Edition>) {
+        for org in changed {
+            let aside = self.inner.lock().store.is_set_aside(org);
+            let f = Fields::new().with("org", org.as_str()).with("edition", edition.map(Edition::as_str));
+            if aside {
+                self.logger.security("api.map.edition-refused", &f, Level::Warn);
+            } else {
+                self.logger.security("api.map.edition-restored", &f, Level::Info);
+            }
+        }
+    }
+
     /// `publish_map` for a map already verified.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn publish_verified(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, vm: VerifiedApiMap, now: i64) -> Result<AcceptOutcome, ApiMapError> {
         let r = self.inner.lock().store.pin(vm);
         self.published(link, r, now)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn published(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, r: Result<AcceptOutcome, ApiMapError>, now: i64) -> Result<AcceptOutcome, ApiMapError> {
         match &r {
             Ok(AcceptOutcome::Pinned(vm)) => {
+                // a map pinned without an edition check (`publish_verified`) is held to the edition in force too
+                let changed = {
+                    let mut inner = self.inner.lock();
+                    let held = inner.edition;
+                    match held {
+                        Some(edition) => (inner.store.revalidate(edition), edition),
+                        None => (Vec::new(), None),
+                    }
+                };
+                self.edition_lines(&changed.0, changed.1);
                 self.prune(&vm.org, now);
                 if let Some(link) = link {
                     self.deliver_org(link, &vm.org);
@@ -265,16 +349,19 @@ impl ConsoleApi {
     }
 
     /// The journal head (last tseq) of an org.
+    #[cfg(test)]
     pub fn journal_head(&self, org: &str) -> u64 {
         self.inner.lock().orgs.get(org).map_or(0, OrgJournal::head)
     }
 
     /// The entries still kept for an org (after pruning).
+    #[cfg(test)]
     pub fn journal_len(&self, org: &str) -> usize {
         self.inner.lock().orgs.get(org).map_or(0, |j| j.entries.len())
     }
 
     /// The tseq a relay acknowledged for an org.
+    #[cfg(test)]
     pub fn acked(&self, relay: &str, org: &str) -> u64 {
         self.inner.lock().orgs.get(org).and_then(|j| j.acks.get(relay).copied()).unwrap_or(0)
     }
@@ -309,7 +396,7 @@ impl ConsoleApi {
         if let Some(dir) = self.journal_dir() {
             let text: String = kept.iter().map(|e| format!("{}\n", stringify(e))).collect();
             // the base first: a crash between the writes leaves entries the next open skips by their tseq
-            let next = OrgJournal { base: j.base + n as u64, entries: Vec::new(), acks: j.acks.clone(), keys: j.keys.clone(), key: j.key };
+            let next = OrgJournal { base: j.base + n as u64, entries: Vec::new(), acks: j.acks.clone(), keys: j.keys.clone(), key: j.key, issuer_kid: j.issuer_kid.clone() };
             if self.save_acks(org, &next).is_err() || crate::fleet_local::write_durable(&dir.join(format!("{org}.jsonl")), text.as_bytes()).is_err() {
                 self.logger.security("api.journal.prune-failed", &Fields::new().with("org", org), Level::Error);
                 return;
@@ -556,6 +643,157 @@ impl ConsoleApi {
         let inner = self.inner.lock();
         let orgs = inner.store.issuers();
         orgs.keys().map(|o| inner.store.grace_hours(o, "relay", now).unwrap_or(0)).min().unwrap_or(0)
+    }
+
+    /// 3.3 for an API client certificate: the smallest `app` grace (hours) of the orgs its SAN names, an org without a
+    /// pinned unexpired map counting 0; 0 for a certificate naming none.
+    pub fn app_grace_hours(&self, orgs: &[String], now: i64) -> u32 {
+        let inner = self.inner.lock();
+        orgs.iter().map(|o| inner.store.grace_hours(o, "app", now).unwrap_or(0)).min().unwrap_or(0)
+    }
+
+    // ── the front door's issuer (5.1 to 5.5) ──
+
+    fn sealed_issuer_key(&self, org: &str, kid: &str) -> Option<EcdsaKeyPair> {
+        let pkcs8 = vault_do(&*self.vault, |v| v.get(&issuer_seal_name(org, kid)))?;
+        EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &pkcs8).ok()
+    }
+
+    /// The org's issuer signing key, drawn once (P-256 on AWS-LC) and sealed as `api-issuer-<org>-<kid>`; Ok is its
+    /// public JWK, for an admin to list in the map's `issuer.jwks` with its `nbf` and `exp`. A held key whose sealed
+    /// value no longer opens is replaced by a new one. The private key never leaves the sealed store or this process.
+    // The API settings page (slice 1a6) calls this; until then only tests do.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn issuer_public_jwk(&self, org: &str) -> Result<Value, String> {
+        if !org_ok(org) {
+            return Err("that is not an organization id".into());
+        }
+        let held = self.inner.lock().orgs.get(org).and_then(|j| j.issuer_kid.clone());
+        if let Some(kid) = held {
+            if let Some(pair) = self.sealed_issuer_key(org, &kid) {
+                return Ok(api_issue::ec_public_jwk(&pair, &kid));
+            }
+        }
+        let kid = format!("i-{}", b64u(&crate::console_auth::random(6).ok_or("no random bytes")?));
+        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new()).map_err(|_| "the issuer key could not be drawn".to_string())?;
+        let pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref()).map_err(|_| "the issuer key does not read".to_string())?;
+        vault_do(&*self.vault, |v| v.put(&issuer_seal_name(org, &kid), pkcs8.as_ref()))?;
+        let mut inner = self.inner.lock();
+        let j = inner.orgs.entry(org.to_string()).or_default();
+        j.issuer_kid = Some(kid.clone());
+        self.save_acks(org, j).map_err(|e| e.message)?;
+        Ok(api_issue::ec_public_jwk(&pair, &kid))
+    }
+
+    /// The key the console signs the org's access tokens with (5.3): a sealed issuer key whose `kid` the pinned map
+    /// lists in `issuer.jwks` with the same public point and inside that entry's `nbf`/`exp`, the latest `nbf` first.
+    /// Err is `issuer-key-unlisted`.
+    pub fn issuer_key(&self, org: &str, now: i64) -> Result<(EcdsaKeyPair, String), &'static str> {
+        let listed: Vec<Value> = {
+            let inner = self.inner.lock();
+            inner.store.get(org, "").and_then(|m| m.map().get("issuer")?.get("jwks")?.as_array().cloned()).unwrap_or_default()
+        };
+        let int = |k: &Value, f: &str| k.get(f).and_then(Value::as_i64);
+        let mut live: Vec<&Value> = listed.iter().filter(|k| int(*k, "nbf").is_some_and(|n| n <= now) && int(*k, "exp").is_some_and(|e| now < e)).collect();
+        live.sort_by_key(|k| std::cmp::Reverse(int(*k, "nbf")));
+        for k in live {
+            let Some(kid) = k.get("kid").and_then(Value::as_str) else { continue };
+            let Some(pair) = self.sealed_issuer_key(org, kid) else { continue };
+            let mine = api_issue::ec_public_jwk(&pair, kid);
+            if mine.get("x") == k.get("x") && mine.get("y") == k.get("y") {
+                return Ok((pair, kid.to_string()));
+            }
+        }
+        Err("issuer-key-unlisted")
+    }
+
+    /// 5.1 and the 6.1 Public pipeline: None for an org without a pinned map (404 `not-found`); then the source
+    /// limiter (429 `abuse`); then the document from the pinned map, whose `issuer.url` is I.
+    pub fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
+        if !org_ok(org) {
+            return None;
+        }
+        let issuer = self.inner.lock().store.get(org, "")?.map().get("issuer").cloned().unwrap_or(Value::Null);
+        if let Err(s) = self.issue.source_ok(source, now) {
+            let mut a = api_issue::problem(429, "abuse", "Too many requests from this address; try again later.");
+            a.headers.push(("Retry-After", s.to_string()));
+            return Some(a);
+        }
+        let i = issuer.get("url").and_then(Value::as_str).unwrap_or_default();
+        let body = match doc {
+            ApiDoc::AuthorizationServer => api_issue::as_metadata(i, &format!("{i}/oauth/token"), Some(&format!("{i}/oauth/revoke")), &format!("{i}/jwks.json")),
+            ApiDoc::ProtectedResource => api_issue::resource_metadata(i, &[i], &crate::api_map::SCOPES),
+            ApiDoc::Jwks => api_issue::jwks(issuer.get("jwks").and_then(Value::as_array).map_or(&[][..], Vec::as_slice)),
+        };
+        Some(api_issue::document(body))
+    }
+
+    /// 5.2 (`revoke` false) and 5.5 (`revoke` true) on the front door for the org of the request path. None for an org
+    /// without a pinned map (404 `not-found`, after the source limiter). `body_refused` is the port's verdict on a body
+    /// it could not take (`too-large`, `request`). The issuer key must be listed in the pinned map (503
+    /// `issuer-key-unlisted`). The store is a snapshot, so no lock is held while a JWKS or discovery fetch runs. A
+    /// revocation is journaled as `token_deny` (`until` = the token's `exp`) and sent to the org's relays. `licensed`
+    /// is the console's own license state (6.1 `license`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn api_token(
+        self: &Arc<Self>,
+        link: Option<Arc<dyn FleetLink>>,
+        org: &str,
+        revoke: bool,
+        http: &TokenHttp,
+        body_refused: Option<&'static str>,
+        owner_active: &dyn Fn(&str) -> bool,
+        licensed: bool,
+        now: i64,
+    ) -> Option<Answer> {
+        let store = {
+            let inner = self.inner.lock();
+            (org_ok(org) && (inner.store.get(org, "").is_some() || inner.store.is_set_aside(org))).then(|| inner.store.org_snapshot(org))
+        };
+        let refuse = |code: &'static str, why: &str, retry: Option<i64>| api_issue::refusal(org, http.source, None, code, why, retry);
+        let abuse = |s: i64| refuse("abuse", "Too many requests from this address.", Some(s));
+        let Some(store) = store else {
+            return self.issue.source_ok(http.source, now).err().map(abuse);
+        };
+        let key = if body_refused.is_none() { self.issuer_key(org, now).ok() } else { None };
+        let Some((key, kid)) = key else {
+            if let Err(s) = self.issue.source_ok(http.source, now) {
+                return Some(abuse(s));
+            }
+            let code = if licensed { api_issue::closed(&store, org, now).or(body_refused).unwrap_or("issuer-key-unlisted") } else { "license" };
+            let why = match code {
+                "license" => api_issue::LICENSE_WHY,
+                "too-large" => "The request body is larger than 16 KiB.",
+                "request" => "The request body is not an application/x-www-form-urlencoded form.",
+                "issuer-key-unlisted" => "The console's issuer key is not listed in the organization's api map.",
+                c => api_issue::closed_why(c),
+            };
+            return Some(refuse(code, why, None));
+        };
+        let issuer = store.get(org, "").and_then(|m| Some(m.map().get("issuer")?.get("url")?.as_str()?.to_string())).unwrap_or_default();
+        let endpoint = format!("{issuer}/oauth/token");
+        let mut resources = vec![issuer.clone()];
+        resources.extend(store.relay_origins(org).into_iter().flatten().filter_map(|(_, o)| o.as_str()).map(|o| format!("{}/api/orgs/{org}", o.trim_end_matches('/'))));
+        let ctx = IssueCtx {
+            org,
+            issuer: &issuer,
+            token_endpoint: &endpoint,
+            resources: &resources,
+            local_scopes: None,
+            key: &key,
+            kid: &kid,
+            store: &store,
+            owner_active,
+            fetch: &self.fetch,
+            state: &self.issue,
+            licensed,
+            now,
+        };
+        if !revoke {
+            return Some(api_issue::token(&ctx, http));
+        }
+        let journal = |client: &str, jti: &str, until: i64| self.append(link.clone(), org, "token_deny", json!({"client": client, "jti": jti}), Some(until), now).map(|_| ()).map_err(|e| e.message);
+        Some(api_issue::revoke(&ctx, http, &journal))
     }
 }
 
@@ -937,8 +1175,8 @@ mod tests {
         // a tampered map does not verify and nothing is sent
         let mut bad = signed.clone();
         bad["map"]["seq"] = json!(bad["map"]["seq"].as_i64().unwrap() + 1);
-        assert!(api.publish_map(Some(link.clone()), &bad, &trust, now, doc["policy"].as_object(), Edition::Enterprise).is_err());
-        let vm = match api.publish_map(Some(link.clone()), &signed, &trust, now, doc["policy"].as_object(), Edition::Enterprise).unwrap() {
+        assert!(api.publish_map(Some(link.clone()), &bad, &trust, now, doc["policy"].as_object(), Some(Edition::Enterprise)).is_err());
+        let vm = match api.publish_map(Some(link.clone()), &signed, &trust, now, doc["policy"].as_object(), Some(Edition::Enterprise)).unwrap() {
             AcceptOutcome::Pinned(vm) => vm,
             other => panic!("expected a pin, got {other:?}"),
         };
@@ -958,5 +1196,78 @@ mod tests {
         api.publish_verified(None, map(1, 12, NOW + 100), NOW).unwrap();
         assert_eq!(api.relay_grace_hours(NOW), 12);
         assert_eq!(api.relay_grace_hours(NOW + 100), 0, "an expired map counts 0");
+    }
+
+    const SECRET: &str = "lcs_0123456789abcdef";
+
+    /// A pinned map listing `jwks`, with one D11 secret client (`networks` 10.40.0.0/23).
+    fn issuer_map(seq: i64, jwks: Value) -> VerifiedApiMap {
+        let m = json!({"v": 1, "org": "acme", "seq": seq, "issued": NOW - 10, "expires": NOW + 30 * 86400,
+                       "issuer": {"url": "https://console.acme.example:7443/api/orgs/acme", "jwks": jwks},
+                       "grace": {"person": 0, "app": 0, "connector": 0, "relay": 0},
+                       "failover_after_s": 300, "folded": [], "cleared": [],
+                       "relay_origins": {"r_01": "https://relay1.acme.example:9443"},
+                       "clients": [{"id": CLIENT, "name": "scrape", "principal": "scrape@apps.acme.example", "kind": "monitoring",
+                                    "owner": "ann@acme.example", "reach": "R0", "scopes": ["monitor.read"], "ceiling": "internal",
+                                    "relays": ["*"], "networks": ["10.40.0.0/23"], "mtls_required": false,
+                                    "rate": {"per_minute_each": 60, "per_day_each": 1000},
+                                    "credentials": [{"type": "client_secret", "sha256": crate::codec::sha256_hex(SECRET.as_bytes()), "hint": "lcs_0123", "expires": NOW + 30 * 86400}],
+                                    "created": NOW - 10, "expires": NOW + 300 * 86400, "state": "active"}],
+                       "destinations": []});
+        let wire = json!({"map": m, "sig": "", "chain": []});
+        VerifiedApiMap { org: "acme".into(), seq, expires: NOW + 30 * 86400, hash: api_map_hash(&wire["map"]), signer: "root".into(), wire: wire.as_object().unwrap().clone() }
+    }
+
+    #[test]
+    fn the_front_door_issues_with_a_listed_key_and_journals_revocations() {
+        let (log, _) = logger();
+        let api = Arc::new(ConsoleApi::open(None, log, vault()));
+        let source: IpAddr = "10.40.0.7".parse().unwrap();
+        let basic = format!("Basic {}", crate::meet_json::b64(format!("{CLIENT}:{SECRET}").as_bytes()));
+        let ask_as = |revoke: bool, body: &[u8], licensed: bool| {
+            let http = TokenHttp { form: body, authorization: Some(basic.as_str()), dpop: None, client_cert: None, source };
+            api.api_token(None, "acme", revoke, &http, None, &|_: &str| true, licensed, NOW)
+        };
+        let ask = |revoke: bool, body: &[u8]| ask_as(revoke, body, true);
+        let cc = b"grant_type=client_credentials".as_slice();
+        assert!(ask(false, cc).is_none(), "no map: not-found");
+        assert!(api.api_document("acme", ApiDoc::Jwks, source, NOW).is_none());
+        let jwk = api.issuer_public_jwk("acme").unwrap();
+        assert_eq!(api.issuer_public_jwk("acme").unwrap(), jwk, "drawn once");
+        api.publish_verified(None, issuer_map(1, json!([])), NOW).unwrap();
+        let a = ask(false, cc).unwrap();
+        assert_eq!((a.status, a.body["code"].as_str()), (503, Some("issuer-key-unlisted")));
+        assert_eq!(ask_as(false, cc, false).unwrap().body["code"], "license", "the license comes before the key");
+        let mut listed = jwk.clone();
+        listed["nbf"] = json!(NOW + 60);
+        listed["exp"] = json!(NOW + 86400);
+        api.publish_verified(None, issuer_map(2, json!([listed])), NOW).unwrap();
+        assert_eq!(ask(false, cc).unwrap().body["code"], "issuer-key-unlisted", "not before its nbf");
+        listed["nbf"] = json!(NOW - 60);
+        api.publish_verified(None, issuer_map(3, json!([listed])), NOW).unwrap();
+        let a = ask_as(false, cc, false).unwrap();
+        assert_eq!((a.status, a.body["code"].as_str()), (403, Some("license")));
+        let a = ask(false, cc).unwrap();
+        assert_eq!((a.status, a.body["token_type"].as_str(), a.body["expires_in"].as_i64()), (200, Some("Bearer"), Some(300)), "{}", a.body);
+        let token = a.body["access_token"].as_str().unwrap().to_string();
+        // the documents come from the pinned map
+        let d = api.api_document("acme", ApiDoc::Jwks, source, NOW).unwrap();
+        assert_eq!(d.body["keys"][0]["kid"], jwk["kid"]);
+        let d = api.api_document("acme", ApiDoc::ProtectedResource, source, NOW).unwrap();
+        assert_eq!(d.body["authorization_servers"], json!(["https://console.acme.example:7443/api/orgs/acme"]));
+        // a revocation journals token_deny once
+        let body = format!("token={token}");
+        let r = ask(true, body.as_bytes()).unwrap();
+        assert_eq!((r.status, r.event.as_ref().map(|e| e.0)), (200, Some("api.revoke")));
+        assert_eq!(api.journal_head("acme"), 1);
+        assert_eq!(ask(true, body.as_bytes()).unwrap().status, 200);
+        assert_eq!(api.journal_head("acme"), 1, "already denied");
+        // 13: an unknown edition sets the map aside (403 `map-edition`); a known edition it fits serves it again
+        api.set_edition(None);
+        let a = ask(false, cc).unwrap();
+        assert_eq!((a.status, a.body["code"].as_str()), (403, Some("map-edition")));
+        assert!(api.api_document("acme", ApiDoc::Jwks, source, NOW).is_none(), "a set-aside org serves nothing");
+        api.set_edition(Some(Edition::Enterprise));
+        assert_eq!(ask(false, cc).unwrap().status, 200, "restored");
     }
 }

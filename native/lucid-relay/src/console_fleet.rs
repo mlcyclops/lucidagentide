@@ -3896,6 +3896,41 @@ impl Fleet {
         self.meet.lock().as_ref().map(|m| m.id().to_owned())
     }
 
+    /// API-1 4.2 `tls_client_auth` on the front door: the org Meet CA certificate (DER) and its newest CRL (PEM), when
+    /// the CA is held, usable and has signed a list; None otherwise (no API client certificate is accepted).
+    pub fn api_client_trust(&self) -> Option<(Vec<u8>, String)> {
+        let g = self.meet.lock();
+        let m = g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok)?;
+        Some((m.ca_der().to_vec(), m.crl()?.0))
+    }
+
+    /// The fleet link, for the API front door's journal deliveries (API-1 5.5).
+    pub fn api_link(&self) -> Option<Arc<dyn FleetLink>> {
+        self.link.get().cloned()
+    }
+
+    /// API-1 13: the license edition the console holds its api maps to at `t` (ms): its own product license's when
+    /// it has one; otherwise the lowest edition among the in-date licenses of its library (Standard when any is
+    /// standard). The lowest is the most conservative choice: the console cannot tie a fleet license to an API org.
+    /// None (no map serves) when neither gives an edition.
+    pub fn api_edition(&self, t: i64) -> Option<crate::api_map::Edition> {
+        use crate::api_map::Edition;
+        let own = self.console().ok().and_then(|c| c.license_view(t).license.get("edition").and_then(Value::as_str).map(str::to_owned));
+        if let Some(e) = own {
+            return Edition::of(Some(&e));
+        }
+        let book = self.book.lock();
+        let editions: Vec<Edition> =
+            book.library.iter().filter(|l| l.get("exp").and_then(Value::as_i64).is_some_and(|exp| exp > t / 1000)).filter_map(|l| Edition::of(str_of(l.get("edition")))).collect();
+        if editions.is_empty() {
+            None
+        } else if editions.contains(&Edition::Standard) {
+            Some(Edition::Standard)
+        } else {
+            Some(Edition::Enterprise)
+        }
+    }
+
     /// AC-2b-D 4.3: `sha256//<b64 current>;sha256//<b64 next>` from the current signed trust manifest.
     pub fn curl_pins(&self, t: i64) -> String {
         if let Some(port) = crate::fleet_port::global() {

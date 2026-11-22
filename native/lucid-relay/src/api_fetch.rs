@@ -3,8 +3,6 @@
 //! name, so DNS rebinding between check and connect cannot happen), redirects never followed, bodies capped.
 //! TLS follows the crate convention: webpki roots on the AWS-LC provider of `crate::server::provider()`.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -327,10 +325,12 @@ pub fn fetch_json_blocking(url: &FetchUrl, private_ok: bool, max_bytes: usize, l
         .unwrap_or_else(|_| Err(FetchError::new("connect", "fetch thread panicked")))
 }
 
-/// Successful fetches keyed by normalized URL, kept for `max_age` (JWKS: one hour).
+/// Successful fetches keyed by fetch policy and normalized URL, kept for `max_age` (JWKS: one hour). The policy is
+/// part of the key: a document fetched with `private_ok` (a private address allowed) is never served to a request
+/// that does not allow private addresses, which must resolve and check the URL itself.
 pub struct FetchCache {
     max_age: Duration,
-    entries: Mutex<HashMap<String, (Instant, serde_json::Value)>>,
+    entries: Mutex<HashMap<(bool, String), (Instant, serde_json::Value)>>,
 }
 
 impl FetchCache {
@@ -338,39 +338,26 @@ impl FetchCache {
         FetchCache { max_age, entries: Mutex::new(HashMap::new()) }
     }
 
-    /// A fresh cached value, if any.
-    pub fn get(&self, url: &FetchUrl) -> Option<serde_json::Value> {
+    /// A fresh cached value fetched under the same policy, if any.
+    pub fn get(&self, url: &FetchUrl, private_ok: bool) -> Option<serde_json::Value> {
         let m = self.entries.lock().unwrap_or_else(|e| e.into_inner());
-        m.get(&url.url).filter(|(at, _)| at.elapsed() < self.max_age).map(|(_, v)| v.clone())
+        m.get(&(private_ok, url.url.clone())).filter(|(at, _)| at.elapsed() < self.max_age).map(|(_, v)| v.clone())
     }
 
-    pub fn put(&self, url: &FetchUrl, value: serde_json::Value) {
+    /// Record a value fetched under `private_ok`.
+    pub fn put(&self, url: &FetchUrl, private_ok: bool, value: serde_json::Value) {
         let mut m = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         m.retain(|_, (at, _)| at.elapsed() < self.max_age);
-        m.insert(url.url.clone(), (Instant::now(), value));
+        m.insert((private_ok, url.url.clone()), (Instant::now(), value));
     }
 
-    /// Drop one entry (for example after a `kid` miss, to force a refetch).
-    pub fn invalidate(&self, url: &FetchUrl) {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner()).remove(&url.url);
-    }
-
-    /// Cached value, or fetch and cache it. Errors are not cached.
-    pub async fn fetch_json(&self, url: &FetchUrl, private_ok: bool, max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
-        if let Some(v) = self.get(url) {
-            return Ok(v);
-        }
-        let v = fetch_json(url, private_ok, max_bytes, limits).await?;
-        self.put(url, v.clone());
-        Ok(v)
-    }
-
+    /// Cached value, or fetch and cache it (errors are not cached).
     pub fn fetch_json_blocking(&self, url: &FetchUrl, private_ok: bool, max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
-        if let Some(v) = self.get(url) {
+        if let Some(v) = self.get(url, private_ok) {
             return Ok(v);
         }
         let v = fetch_json_blocking(url, private_ok, max_bytes, limits)?;
-        self.put(url, v.clone());
+        self.put(url, private_ok, v.clone());
         Ok(v)
     }
 }
@@ -465,13 +452,20 @@ mod tests {
     fn cache_respects_max_age() {
         let u = check_url("https://example.com/jwks").unwrap();
         let c = FetchCache::new(Duration::from_secs(3600));
-        assert!(c.get(&u).is_none());
-        c.put(&u, serde_json::json!({"keys": []}));
-        assert_eq!(c.get(&u), Some(serde_json::json!({"keys": []})));
-        c.invalidate(&u);
-        assert!(c.get(&u).is_none());
+        assert!(c.get(&u, false).is_none());
+        c.put(&u, false, serde_json::json!({"keys": []}));
+        assert_eq!(c.get(&u, false), Some(serde_json::json!({"keys": []})));
         let z = FetchCache::new(Duration::ZERO);
-        z.put(&u, serde_json::json!(1));
-        assert!(z.get(&u).is_none());
+        z.put(&u, false, serde_json::json!(1));
+        assert!(z.get(&u, false).is_none());
+    }
+
+    #[test]
+    fn a_document_fetched_with_private_ok_never_serves_a_stricter_request() {
+        let u = check_url("https://idp.internal.example/jwks").unwrap();
+        let c = FetchCache::new(Duration::from_secs(3600));
+        c.put(&u, true, serde_json::json!({"keys": [1]}));
+        assert_eq!(c.get(&u, true), Some(serde_json::json!({"keys": [1]})));
+        assert!(c.get(&u, false).is_none(), "a credential without private_ok must fetch and check the address itself");
     }
 }
