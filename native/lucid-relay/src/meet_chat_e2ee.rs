@@ -143,6 +143,11 @@ fn is_serial(s: &str) -> bool {
     hex_of(s, 1, 64)
 }
 
+/// WA_GUEST_SR_RE: a web guest's sr, "f" + 64 hex (WA-1 4.4).
+fn is_guest_sr(s: &str) -> bool {
+    s.strip_prefix('f').is_some_and(|h| hex_of(h, 64, 64))
+}
+
 fn is_channel_id(s: &str) -> bool {
     s.len() == 18 && s.starts_with("c-") && hex_of(&s[2..], 16, 16)
 }
@@ -204,7 +209,9 @@ fn device_ref(v: Option<&Value>, what: &str, serial: bool) -> R<Obj> {
         ("device", Value::from(matched(o.get("device"), is_device, &format!("{what}.device must be a device id (16 hex)"))?)),
     ]);
     if serial {
-        out.insert("serial".into(), Value::from(matched(o.get("serial"), is_serial, &format!("{what}.serial must be a certificate serial (hex)"))?));
+        // WA-1 4.4: a guest's own sr
+        let guest = pj::text_of(&out, "principal").ends_with(m::GUEST_DOMAIN);
+        out.insert("serial".into(), Value::from(matched(o.get("serial"), if guest { is_guest_sr } else { is_serial }, &format!("{what}.serial must be a certificate serial (hex)"))?));
     }
     Ok(out)
 }
@@ -302,7 +309,8 @@ pub(super) fn envelope(v: Option<&Value>, kinds: &[&str], ref_: &str, who: &Iden
     if who.own_device() && d != who.device {
         return forbidden("enc d must be your own device");
     }
-    let sr = matched(e.get("sr"), is_serial, "enc sr must be a certificate serial (hex)")?;
+    // a web guest's sr: "f" + the hex SHA-256 of its key (WA-1 4.4), from guests only
+    let sr = matched(e.get("sr"), if who.guest { is_guest_sr } else { is_serial }, "enc sr must be a certificate serial (hex)")?;
     if !who.serial.is_empty() && sr != who.serial {
         return forbidden("enc sr must be your certificate's serial");
     }
@@ -655,9 +663,18 @@ impl State {
         self.peers.values().any(|p| p.room == room && p.who.guest && !p.admission_pending)
     }
 
-    /// _ce_room_open: new chat in a call: refused under "required" while a guest is in it.
-    pub(super) fn ce_room_open(&self, room: &str) -> R<()> {
-        if self.ce_required() && self.ce_guests(room) {
+    /// _ce_room_open: new chat in a call. Plain text: refused under "required" while a guest is in it, or while a
+    /// seated guest's rules say `chat: "e2ee"` (WA-1 4.4). Sealed: verified guests hold chat keys (WA-1 4.4 revision
+    /// 3), so only a guest outside encryption (not signed in, or not admitted by an app) turns it off, under
+    /// "required" or its own `chat: "e2ee"` rule.
+    pub(super) fn ce_room_open(&self, room: &str, sealed: bool) -> R<()> {
+        let off = if sealed {
+            let plain = self.wa_plain_guests(room);
+            !plain.is_empty() && (self.ce_required() || plain.iter().any(|e2ee| *e2ee))
+        } else {
+            (self.ce_required() && self.ce_guests(room)) || self.wa_any_rule(room, "chat", "e2ee")
+        };
+        if off {
             return Err(E::Conflict(GUESTS_OFF.into()));
         }
         Ok(())
@@ -668,7 +685,7 @@ impl State {
     pub(super) fn ce_plain(&mut self, room: Option<&str>, cid: Option<&str>) -> R<()> {
         self.ce_store();
         if let Some(room) = room {
-            self.ce_room_open(room)?;
+            self.ce_room_open(room, false)?;
             if !self.ce_guests(room) {
                 return Err(E::Conflict(PLAIN.into()));
             }
@@ -1032,7 +1049,7 @@ impl State {
     }
 
     /// _ce_wrap: a checked wrap (or share) from the caller's own device.
-    fn ce_wrap(&mut self, v: &Value, who: &Identity, share: bool) -> R<Obj> {
+    pub(super) fn ce_wrap(&mut self, v: &Value, who: &Identity, share: bool) -> R<Obj> {
         let keys: &[&str] = if share { &SHARE } else { &WRAP };
         let mut item = v.as_object().cloned();
         if let Some(o) = item.as_mut().filter(|o| o.contains_key("share")) {
@@ -1114,6 +1131,52 @@ impl State {
         Ok(out)
     }
 
+    /// _ce_keep_wraps: keep checked wraps for their recipient devices, each told `chat_keys`; a web guest (WA-1 4.4, no
+    /// presence session) hears them in its call's events with the wraps themselves. Answers the last `seq`.
+    pub(super) fn ce_keep_wraps(&mut self, rows: &[Obj]) -> i64 {
+        let rts = now_ms();
+        let mut seq = pj::as_int(self.ce_store().get("seq")).unwrap_or(0);
+        let mut told: IndexMap<(String, String), i64> = IndexMap::new();
+        let mut to_guests: IndexMap<String, Vec<Value>> = IndexMap::new();
+        for row in rows {
+            seq += 1;
+            let to = as_obj(row.get("to")).cloned().unwrap_or_default();
+            let key = (pj::text_of(&to, "principal"), pj::text_of(&to, "device"));
+            let wraps = self.ce_part("wraps");
+            let kept = wraps.entry(format!("{}|{}", key.0, key.1)).or_insert_with(|| Value::Array(Vec::new()));
+            if !kept.is_array() {
+                *kept = Value::Array(Vec::new());
+            }
+            let kept = kept.as_array_mut().expect("wrap rows");
+            let stored = Value::Object(with(row, obj([("seq", Value::from(seq)), ("rts", Value::from(rts))])));
+            kept.push(stored.clone());
+            if kept.len() > WRAPS_KEEP {
+                let cut = kept.len() - WRAPS_KEEP;
+                kept.drain(..cut);
+            }
+            if key.0.ends_with(m::GUEST_DOMAIN) {
+                to_guests.entry(key.0.clone()).or_default().push(stored);
+            }
+            told.insert(key, seq);
+        }
+        self.ce_store().insert("seq".into(), Value::from(seq));
+        self.dirty = true;
+        for ((principal, device), n) in told {
+            // `key_seq`: the session's event queue owns `seq`
+            self.tell_device(&principal, &device, &obj([("type", Value::from("chat_keys")), ("key_seq", Value::from(n))]));
+        }
+        for (principal, wraps) in to_guests {
+            if !wa::chat_guest(self.guests.rec.get(&guests::guest_id(&principal))) {
+                continue; // a guest outside encryption never sees principals
+            }
+            let seats: Vec<String> = self.peers.values().filter(|p| p.who.principal == principal).map(|p| p.peer_id.clone()).collect();
+            for p in seats {
+                self.push_peer(&p, &obj([("type", Value::from("chat_keys")), ("wraps", Value::Array(wraps.clone()))]));
+            }
+        }
+        seq
+    }
+
     // ── files ──
 
     /// _ce_files_check: a new upload: encrypted to an encrypted conversation, plain only to one that is not
@@ -1122,7 +1185,7 @@ impl State {
         let plain_ok = match pj::text_of(place, "scope").as_str() {
             "room" => {
                 let room = pj::text_of(place, "room");
-                self.ce_room_open(&room)?;
+                self.ce_room_open(&room, e2ee)?;
                 self.ce_guests(&room)
             }
             "channel" => self.ce_bridgeable(&pj::text_of(place, "channel")),
@@ -1395,33 +1458,15 @@ impl Hub {
                 return Err(E::Conflict(NO_SHARES.into()));
             }
             let rows = items.iter().map(|w| st.ce_wrap(w, who, share)).collect::<R<Vec<Obj>>>()?;
+            let web = |st: &State, r: &Obj| {
+                let to = as_obj(r.get("to")).cloned().unwrap_or_default();
+                as_obj(st.directory.get(&pj::text_of(&to, "principal"))).and_then(|e| as_obj(e.get("devices"))).and_then(|d| as_obj(d.get(&pj::text_of(&to, "device")))).is_some_and(|d| pj::truthy(d.get("web")))
+            };
+            if share && rows.iter().any(|r| web(&st, r)) {
+                return Err(E::Conflict("history is never shared with a browser".into())); // WA-1 4.5
+            }
             st.ai_wrap_sets(who, &rows)?; // AI-1 7.6: the covering archives read ai:
-            let rts = now_ms();
-            let mut seq = pj::as_int(st.ce_store().get("seq")).unwrap_or(0);
-            let mut told: IndexMap<(String, String), i64> = IndexMap::new();
-            for row in &rows {
-                seq += 1;
-                let to = as_obj(row.get("to")).cloned().unwrap_or_default();
-                let key = (pj::text_of(&to, "principal"), pj::text_of(&to, "device"));
-                let wraps = st.ce_part("wraps");
-                let kept = wraps.entry(format!("{}|{}", key.0, key.1)).or_insert_with(|| Value::Array(Vec::new()));
-                if !kept.is_array() {
-                    *kept = Value::Array(Vec::new());
-                }
-                let kept = kept.as_array_mut().expect("wrap rows");
-                kept.push(Value::Object(with(row, obj([("seq", Value::from(seq)), ("rts", Value::from(rts))]))));
-                if kept.len() > WRAPS_KEEP {
-                    let cut = kept.len() - WRAPS_KEEP;
-                    kept.drain(..cut);
-                }
-                told.insert(key, seq);
-            }
-            st.ce_store().insert("seq".into(), Value::from(seq));
-            st.dirty = true;
-            for ((principal, device), n) in told {
-                // `key_seq`: the session's event queue owns `seq`
-                st.tell_device(&principal, &device, &obj([("type", Value::from("chat_keys")), ("key_seq", Value::from(n))]));
-            }
+            let seq = st.ce_keep_wraps(&rows);
             Ok((seq, rows.len()))
         })();
         drop(st);
@@ -1466,7 +1511,7 @@ impl Hub {
                         return forbidden(ADMISSION_FIRST);
                     }
                     let room = st.peers[peer].room.clone();
-                    st.ce_room_open(&room)?;
+                    st.ce_room_open(&room, !p.plain)?;
                     Conv::Room { peer: peer.to_string(), room }
                 }
                 "dm" => {
@@ -1555,6 +1600,9 @@ impl Hub {
                     ("to_name", Value::from(to_name.clone())),
                 ]),
             };
+            if who.guest && matches!(c, Conv::Room { .. }) {
+                row.insert("guest".into(), Value::Bool(true)); // WA-1 4.4: a guest's sealed line
+            }
             row.insert("ts".into(), f(now));
             row.insert("rts".into(), Value::from((now * 1000.0) as i64));
             row.insert("enc".into(), Value::Object(env));
@@ -1805,7 +1853,7 @@ mod tests {
         assert_eq!(refusal(st.ce_plain(Some(&room), None)), "ok");
         st.ce.mode = "required".into();
         assert_eq!(refusal(st.ce_plain(Some(&room), None)), format!("409 {GUESTS_OFF}"));
-        assert_eq!(refusal(st.ce_room_open(&room)), format!("409 {GUESTS_OFF}"));
+        assert_eq!(refusal(st.ce_room_open(&room, false)), format!("409 {GUESTS_OFF}"));
         assert_eq!(refusal(st.ce_linkable("c-2")), format!("409 {REQUIRED_LINKS}"));
         assert_eq!(refusal(st.ce_linkable("c-1")), format!("409 {NOT_LINKABLE}"));
         assert_eq!(refusal(st.ce_bridgeable_ok(&ann)), format!("409 {REQUIRED_BRIDGEABLE}"));

@@ -41,7 +41,7 @@ const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
     "workflows", "external_archives", "external_apps", "retention", "identity", "notify", "video", "ai", "storage", "sharing",
-    "lan_scope", "watch",
+    "lan_scope", "watch", "guests", "web_devices",
 ];
 /// AW-1 section 2.1: `watch` is `allow` or `refuse` (absent means refuse).
 const WATCH_VALUES: &[&str] = &["allow", "refuse"];
@@ -92,6 +92,29 @@ const PERSONAL_TENANT: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
 /// LS-1 section 2: the keys of `lan_scope` and its one refusal.
 const LAN_SCOPE_KEYS: &[&str] = &["networks", "ttl", "anchors"];
 const LAN_SCOPE_SHAPE: &str = "lan_scope must list 1 to 32 private IPv4 networks, a ttl of 1 to 16 and anchors inside those networks";
+// WA-1: guest rules (contract sections 3.3 and 3.5) and web devices (section 7.1).
+const GUESTS_KEYS: &[&str] = &["links", "profile", "captioner", "rules"];
+const GUESTS_CHOICES: [(&str, &[&str]); 3] = [("links", &["allow", "refuse"]), ("profile", &["standard", "us-gov"]), ("captioner", &["allow", "refuse"])];
+const GUEST_RULES_MAX: usize = 20;
+const GUEST_MATCH_MAX: usize = 50;
+const GUEST_METHODS: &[&str] = &["none", "sso", "sso_phr", "piv"];
+const GUEST_CLASSES: &[&str] = &["*", "unverified", "verified", "us-gov"];
+const RULE_KEYS: &[&str] =
+    &["match", "allow", "verify", "lobby", "large_calls", "record", "chat", "third_party_text", "ai", "captions", "ocsp", "link_max_minutes", "log_hours"];
+const RULE_CHOICES: [(&str, &[&str]); 8] = [
+    ("lobby", &["verified_bypass", "always"]),
+    ("large_calls", &["allow", "refuse"]),
+    ("record", &["consent", "refuse"]),
+    ("chat", &["any", "e2ee"]),
+    ("third_party_text", &["allow", "refuse"]),
+    ("ai", &["any", "local", "off"]),
+    ("captions", &["on", "off"]),
+    ("ocsp", &["best_effort", "required"]),
+];
+const RULE_RANGES: [(&str, i64, i64); 2] = [("link_max_minutes", 1, 1440), ("log_hours", 0, 168)];
+const WEB_DEVICES_KEYS: &[&str] = &["allow", "max_hours", "verify"];
+const WEB_VERIFY: &[&str] = &["sso", "sso_phr"];
+const WEB_HOURS_MAX: i64 = 168;
 /// NT-1 section 3.9: the only `notify` the policy may carry.
 const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
@@ -101,7 +124,8 @@ const APP_KEYS: &[&str] =
 const APP_REQUIRED: &[&str] = &["principal", "device", "name", "type", "scope", "host"];
 const COMMAND_KEYS: &[&str] = &["name", "description", "usage"];
 const WIRE_KEYS: &[&str] = &["policy", "sig", "chain"];
-const SSO_SERVICE_KEYS: &[&str] = &["serial", "orgs", "domains"];
+const SSO_SERVICE_KEYS: &[&str] = &["serial", "orgs", "domains", "guest_verify"];
+const SSO_SERVICE_REQUIRED: &[&str] = &["serial", "orgs", "domains"];
 
 // ---- ID-1 (docs/identity/contract.md sections 1.5, 3.1 to 3.3 and 3.8) ----
 /// The Lucid password baseline `B` (owner decision 1, TechLead187/lucidagentIDEaddon#251): the Hub vault's 8.
@@ -458,6 +482,8 @@ pub struct SignerTerms {
     pub enclave: bool,
     /// `sso_services`: (serial, orgs, domains) of each registered SSO service (AI-1 6.4 binds its posts to them).
     pub sso_services: Vec<(String, Vec<String>, Vec<String>)>,
+    /// Serials of the SSO services listed with `guest_verify: true` (WA-1 section 2.6).
+    pub guest_verifiers: Vec<String>,
     /// The signer policy's version (1, 2 or 3); ID-1 needs 3.
     pub version: i64,
     /// Version 3: the root-signed provider registry (1.5).
@@ -486,6 +512,12 @@ impl SignerTerms {
     /// Every registry entry of `org`.
     pub fn providers_of(&self, org: &str) -> Vec<&IdentityProvider> {
         self.identity_providers.iter().filter(|p| p.org == org).collect()
+    }
+
+    /// True when the SSO service with certificate `serial` (hex) is listed with `guest_verify: true`.
+    pub fn guest_verifier(&self, serial: &str) -> bool {
+        let serial = serial.to_lowercase();
+        self.guest_verifiers.iter().any(|s| *s == serial)
     }
 
     /// The org the root assigned `domain` to ("" when none).
@@ -548,14 +580,23 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     }
     let services = list(policy.get("sso_services").unwrap_or(&empty_list), "sso_services", 100, 0)?;
     let mut sso_services = Vec::new();
+    let mut guest_verifiers = Vec::new();
     let mut service_orgs: Vec<(String, String)> = Vec::new();
     for svc in services {
         if let (Some(serial), Some(orgs)) = (svc.get("serial").and_then(Value::as_str), svc.get("orgs").and_then(Value::as_array)) {
             service_orgs.extend(orgs.iter().filter_map(Value::as_str).map(|o| (serial.to_string(), o.to_string())));
         }
-        let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_KEYS, "an SSO service")?;
+        let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_REQUIRED, "an SSO service")?;
         if !o["serial"].as_str().is_some_and(|s| hex_ok(s, 1, 40)) {
             return Err("an SSO service's serial must be lower-case hex".into());
+        }
+        let guest_verify = match o.get("guest_verify") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err("an SSO service's guest_verify must be true or false".into()),
+        };
+        if guest_verify {
+            guest_verifiers.push(pj::py_str(&o["serial"]));
         }
         let orgs = list(&o["orgs"], "an SSO service's orgs", RELAY_MAX, 1)?;
         if orgs.iter().any(|x| !x.as_str().is_some_and(|x| org_domains.contains_key(x))) {
@@ -598,7 +639,7 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     }
     let enclave = policy.get("enclave") == Some(&Value::Bool(true));
     let identity_providers = registry_of(policy.get("identity_providers"), &org_domains, &service_orgs)?;
-    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services, version, identity_providers })
+    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services, guest_verifiers, version, identity_providers })
 }
 
 /// Signer policy v3 `identity_providers` (1.5): a canonical array sorted by `(org, id)`, unique by `(org, id)` and
@@ -1131,6 +1172,95 @@ fn has_dup<T: PartialEq>(items: &[T]) -> bool {
     (1..items.len()).any(|i| items[..i].contains(&items[i]))
 }
 
+fn choice<'a>(v: &'a Value, choices: &[&str], what: &str) -> Res<&'a str> {
+    v.as_str().filter(|s| choices.contains(s)).ok_or_else(|| format!("{what} must be {}", choices.join(" or ")))
+}
+
+fn methods(v: &Value, allowed: &[&str], what: &str, low: usize) -> Res<()> {
+    if !list(v, what, allowed.len(), low)?.iter().all(|m| m.as_str().is_some_and(|m| allowed.contains(&m))) {
+        return Err(format!("{what} may list only {}", allowed.join(", ")));
+    }
+    Ok(())
+}
+
+/// One rule object of WA-1 section 3.3 (every field optional).
+pub fn check_guest_rule(rule: &Value, what: &str) -> Res<()> {
+    let r = keys(rule, RULE_KEYS, &[], what)?;
+    canonical_json(rule)?;
+    if let Some(m) = r.get("match") {
+        for x in list(m, &format!("{what}'s match"), GUEST_MATCH_MAX, 1)? {
+            let ok = x.as_str().is_some_and(|s| GUEST_CLASSES.contains(&s) || (s.chars().count() <= 253 && s.split('.').all(label_ok)));
+            if !ok {
+                return Err(format!("{what}'s match lists *, unverified, verified, us-gov or lower-case DNS names"));
+            }
+        }
+    }
+    if r.get("allow").is_some_and(|a| !a.is_boolean()) {
+        return Err(format!("{what}'s allow must be true or false"));
+    }
+    if let Some(v) = r.get("verify") {
+        methods(v, GUEST_METHODS, &format!("{what}'s verify"), 0)?;
+    }
+    for (key, choices) in RULE_CHOICES {
+        if let Some(v) = r.get(key) {
+            choice(v, choices, &format!("{what}'s {key}"))?;
+        }
+    }
+    for (key, low, high) in RULE_RANGES {
+        if let Some(v) = r.get(key) {
+            int(v, &format!("{what}'s {key}"), low, high)?;
+        }
+    }
+    Ok(())
+}
+
+/// A list of at most 20 rule objects (`guests.rules`; the relay's `guest_rules`).
+pub fn check_guest_rules(rules: &Value, what: &str) -> Res<()> {
+    for r in list(rules, what, GUEST_RULES_MAX, 0)? {
+        check_guest_rule(r, "a guest rule")?;
+    }
+    Ok(())
+}
+
+fn check_guests(v: &Value) -> Res<()> {
+    let g = keys(v, GUESTS_KEYS, &[], "guests")?;
+    for (key, choices) in GUESTS_CHOICES {
+        if let Some(x) = g.get(key) {
+            choice(x, choices, &format!("guests.{key}"))?;
+        }
+    }
+    if let Some(r) = g.get("rules") {
+        check_guest_rules(r, "guests.rules")?;
+    }
+    Ok(())
+}
+
+fn check_web_devices(v: &Value) -> Res<()> {
+    let w = keys(v, WEB_DEVICES_KEYS, &[], "web_devices")?;
+    if w.get("allow").is_some_and(|a| !a.is_boolean()) {
+        return Err("web_devices.allow must be true or false".into());
+    }
+    if let Some(h) = w.get("max_hours") {
+        int(h, "web_devices.max_hours", 1, WEB_HOURS_MAX)?;
+    }
+    if let Some(m) = w.get("verify") {
+        methods(m, WEB_VERIFY, "web_devices.verify", 1)?;
+    }
+    Ok(())
+}
+
+/// A key hash: SHA-256 of a SubjectPublicKeyInfo DER, unpadded base64url (43 characters).
+pub fn key_sha256(spki: &[u8]) -> String {
+    crate::codec::b64u(&crate::codec::sha256(spki))
+}
+
+/// What the SSO service signs in a guest verification result (WA-1 section 2.4 step 6).
+#[allow(clippy::too_many_arguments)]
+pub fn guest_verify_bytes(room: &str, key: &str, email: &str, domain: &str, method: &str, idp: &str, aal: &str, ocsp: &str, at: i64, exp: i64) -> Vec<u8> {
+    let (a, e) = ((at as u64).to_be_bytes(), (exp as u64).to_be_bytes());
+    lp(&[b"lucid-meet-guest-verify-v1", b"1", room.as_bytes(), key.as_bytes(), email.as_bytes(), domain.as_bytes(), method.as_bytes(), idp.as_bytes(), aal.as_bytes(), ocsp.as_bytes(), &a, &e])
+}
+
 /// Every field rule and limit of an org policy, and its domains against the root's `org_domains` (Refused with
 /// DOMAIN_REFUSED). Bad for any other problem.
 pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyError> {
@@ -1260,6 +1390,12 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
             return Err(refused("identity rules need the root's signer policy version 3; nothing was signed"));
         }
         check_identity(identity, terms, org, p["label"].as_str().unwrap_or(org), issued, None, None)?;
+    }
+    if let Some(g) = p.get("guests") {
+        check_guests(g)?;
+    }
+    if let Some(w) = p.get("web_devices") {
+        check_web_devices(w)?;
     }
     if let Some(n) = p.get("notify") {
         let ok = n.as_object().is_some_and(|o| o.len() == 1 && o.get("previews").and_then(Value::as_str) == Some("off"));
@@ -2652,13 +2788,18 @@ pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy 
 pub const VIDEO_TOO_SOON: &str = "A team background can be set by policy once every Hub and iPhone runs 0.98.0 or later";
 pub const LAN_SCOPE_TOO_SOON: &str = "Own-network reach across networks can be set by policy once every Hub and iPhone runs 0.98.0 or later";
 pub const WATCH_TOO_SOON: &str = "Apple Watch can be set by policy once every Hub and iPhone runs 0.98.1 or later";
-/// NT-1 section 3.9, BG-1 section 2.2, LS-1 section 2 and AW-1 section 2.2: each gated key, the Hub and iPhone releases that first read
-/// it (older devices refuse unknown keys), and the refusal.
-const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 4] = [
+pub const WA_TOO_SOON: &str = "Guest and web rules can be set by policy once every Hub and iPhone runs 0.98.3 or later";
+/// The WA-1 release of the Hub and the iPhone (reads `guests` and `web_devices`).
+const WA_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.3"), ("ios", "0.98.3")];
+/// NT-1 section 3.9, BG-1 section 2.2, LS-1 section 2, AW-1 section 2.2 and WA-1 sections 3.5 and 7.1: each gated key, the Hub and
+/// iPhone releases that first read it (older devices refuse unknown keys), and the refusal.
+const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 6] = [
     ("notify", [("hub", "0.97.0"), ("ios", "0.97.0")], NOTIFY_TOO_SOON),
     ("video", [("hub", "0.98.0"), ("ios", "0.98.0")], VIDEO_TOO_SOON),
     ("lan_scope", [("hub", "0.98.0"), ("ios", "0.98.0")], LAN_SCOPE_TOO_SOON),
     ("watch", [("hub", "0.98.1"), ("ios", "0.98.1")], WATCH_TOO_SOON),
+    ("guests", WA_CLIENTS, WA_TOO_SOON),
+    ("web_devices", WA_CLIENTS, WA_TOO_SOON),
 ];
 
 /// client_gate: a policy with a key in CLIENT_GATES is signed only once the relay's minimums (`min_client` and the

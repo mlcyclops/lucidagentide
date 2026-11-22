@@ -112,7 +112,15 @@ pub(crate) const ARCHIVE_URI: &str = "urn:lucid-meet:archive";
 pub(crate) const SSO_URI: &str = "urn:lucid-meet:sso";
 /// + org id: the org a service belongs to.
 pub(crate) const ORG_URI_PREFIX: &str = "urn:lucid-meet:org:";
-const KIND_URIS: [(&str, &str); 5] = [("connector", m::CONNECTOR_URI), ("app", APP_URI), ("archive", ARCHIVE_URI), ("sso", SSO_URI), ("console", m::CONSOLE_URI)];
+/// WA-1: an org's captioner service (section 5.3) and a person's browser (7.2, never on mutual TLS).
+pub(crate) const CAPTIONER_URI: &str = "urn:lucid-meet:captioner";
+pub(crate) const WEB_URI: &str = "urn:lucid-meet:device-kind:web";
+const KIND_URIS: [(&str, &str); 7] = [("connector", m::CONNECTOR_URI), ("app", APP_URI), ("archive", ARCHIVE_URI), ("sso", SSO_URI), ("console", m::CONSOLE_URI), ("captioner", CAPTIONER_URI), ("web", WEB_URI)];
+/// WA-1 section 5.3: what a captioner certificate may use (anything else: 403 the words).
+const CAPTIONER_GET: [&str; 3] = ["/v1/inbox", "/v1/events", "/v1/crl"];
+const CAPTIONER_POST: [&str; 9] = ["/v1/hello", "/v1/join", "/v1/leave", "/v1/signal", "/v1/sfu/token", "/v1/e2ee", "/v1/e2ee/keys", "/v1/e2ee/roster", "/v1/captions"];
+pub(crate) const CAPTIONER_ONLY: &str = "captioner certificates may only caption calls";
+const WEB_CERT: &str = "this certificate is for Lucid Meet on the web";
 /// Service principals are `<name>@apps.<domain>`.
 const APPS_PREFIX: &str = "apps.";
 const APP_GET: [&str; 14] = ["/v1/whoami", "/v1/crl", "/v1/org/policy", "/v1/chat/devices", "/v1/chat/keys", "/v1/chat/log", "/v1/channels/history", "/v1/dm/history", "/v1/files/get", "/v1/files/list", "/v1/apps/c/events", "/v1/org/ai", "/v1/ai/allowed", "/v1/ai/history"];
@@ -299,6 +307,16 @@ pub(crate) fn service_confined(kind: &str, method: &str, path: &str) -> &'static
                 SSO_ROUTES_ONLY
             }
         }
+        "captioner" => {
+            let allowed: &[&str] = if method == "GET" { &CAPTIONER_GET } else { &CAPTIONER_POST };
+            if ok(allowed) {
+                ""
+            } else {
+                CAPTIONER_ONLY
+            }
+        }
+        // WA-1 section 7.2: only through a web port session
+        "web" => WEB_CERT,
         _ => "",
     }
 }
@@ -314,7 +332,7 @@ pub(crate) fn cert_kind(uris: &[String]) -> R<(String, Vec<String>)> {
     let mut orgs: Vec<String> = uris.iter().filter_map(|u| u.strip_prefix(ORG_URI_PREFIX)).filter(|o| !o.is_empty()).map(str::to_string).collect();
     orgs.sort();
     orgs.dedup();
-    if (kind == "app" || kind == "archive") && orgs.len() != 1 {
+    if matches!(kind, "app" | "archive" | "captioner") && orgs.len() != 1 {
         return forbidden(ONE_ORG);
     }
     if kind == "sso" && orgs.is_empty() {
@@ -613,14 +631,14 @@ pub struct Pc {
     /// The root org policies are checked against (relay.json client_ca).
     ca_file: String,
     /// Where the root's CRL is.
-    crl_files: Vec<PathBuf>,
+    pub(crate) crl_files: Vec<PathBuf>,
     minimums: Option<Minimums>,
     store: Option<op::Store>,
     /// AI-1 2: the org AI maps (rebuilt from `ext["ai"]["maps"]` like the policy store).
     ai_maps: Option<op::AiMapStore>,
     /// SD-1 13.5: the org storage maps (rebuilt from `ext["pc"]["maps"]` like the policy store).
     maps: Option<op::MapStore>,
-    signer: Option<Arc<SignerClient>>,
+    pub(crate) signer: Option<Arc<SignerClient>>,
     sso_out: IndexMap<String, SsoOut>,
     sso_answered: HashMap<(String, String), f64>,
     icons_mem: HashMap<String, Vec<u8>>,
@@ -763,7 +781,7 @@ impl State {
 
     // ── org policies ──
 
-    fn pc_root(&self) -> Option<Cert> {
+    pub(crate) fn pc_root(&self) -> Option<Cert> {
         if self.pc.ca_file.is_empty() {
             return None;
         }

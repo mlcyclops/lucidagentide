@@ -93,6 +93,7 @@ mod meet_console;
 mod meet_console_identity;
 mod meet_console_port;
 mod meet_guest_port;
+mod meet_web_port;
 mod meet_hub;
 mod meet_json;
 mod meet_license;

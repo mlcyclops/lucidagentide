@@ -834,7 +834,8 @@ pub fn has_route(method: &str, path: &str) -> bool {
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
-    if let Some(refused) = confined(ctx, method) {
+    // the web port's own allow-list ran first (it has no client certificate)
+    if let Some(refused) = ctx.web.is_none().then(|| confined(ctx, method)).flatten() {
         return run(ctx, Ok(Err(refused)));
     }
     let route = if method == "GET" { get_route(&ctx.path) } else { post_route(&ctx.path) };
@@ -1293,7 +1294,7 @@ fn caption(c: &mut Ctx) -> R<Obj> {
 fn captions(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     let weak = m::weak(b.get("weak"))?;
-    c.relay.hub.captions(&pj::s(&b, "peer"), &who, b.get("lines"), weak, b.get("sent_ms"))
+    c.relay.hub.captions(&pj::s(&b, "peer"), &who, b.get("lines"), weak, b.get("sent_ms"), b.get("for").filter(|v| !v.is_null()))
 }
 
 /// `{peer, late_history?, catchup?}` (`catchup`: the signed catch-up option of chat encryption, Hub::ce_catchup).

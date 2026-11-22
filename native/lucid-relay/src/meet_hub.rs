@@ -76,6 +76,9 @@ mod pc_docs;
 // AI-1: who may use org AI, the personal-access audit and AI history (`ai:` conversations).
 #[path = "meet_ai.rs"]
 pub mod ai;
+// WA-1 (web access): verified guests and guest rules, guests inside encryption, captions for others, web sessions.
+#[path = "meet_web_access.rs"]
+pub mod wa;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -371,6 +374,10 @@ pub struct Peer {
     /// to the relay ("" until it publishes). Live only, never logged.
     epk: String,
     epk_sig: String,
+    /// WA-1 section 5.1: the join's `caps` (None: an app that sent none, which captions itself) and how many others
+    /// it may caption (`caption_others_max`).
+    caps: Option<Vec<String>>,
+    cap_max: i64,
 }
 
 impl Peer {
@@ -415,6 +422,16 @@ struct Stay {
     chat_stay: String,
     /// The newest signed catch-up option of the call's chat (meet_chat_e2ee::ce_catchup).
     chat_catchup: Option<Obj>,
+    /// WA-1 section 5.1: seat -> the seat captioning it (null: nobody), the captioner service asked, and removed.
+    captioning: Obj,
+    caption_requested: bool,
+    captioner_removed: bool,
+}
+
+impl Stay {
+    fn new(start: f64, seen: IndexMap<String, f64>, late_history: bool) -> Stay {
+        Stay { start, seen, late_history, chat_stay: String::new(), chat_catchup: None, captioning: Obj::new(), caption_requested: false, captioner_removed: false }
+    }
 }
 
 struct Moved {
@@ -534,6 +551,8 @@ pub struct State {
     pc: pc::Pc,
     /// In memory: the canvases' and cursors' rate counters.
     pc_docs: pc_docs::DocsRate,
+    /// In memory: WA-1's settings, web port sessions and challenges, guest conflicts (persisted state: ext["wa"]).
+    wa: wa::Wa,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -766,6 +785,7 @@ impl State {
             out.insert("cert".into(), Value::from(p.cert.clone()));
         }
         self.sfu_member(p, &mut out);
+        self.wa_member(p, &mut out); // WA-1: a guest's key, bundle, verification, admission, rules
         out
     }
 
@@ -792,11 +812,14 @@ impl State {
     }
 
     /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}, plus
-    /// `guest: true` for a web guest).
+    /// `guest: true`, `email` and `email_verified` for a web guest).
     fn person(&self, p: &Peer) -> Obj {
         let mut out = with(&p.public(), obj([("org", self.org(&p.who.principal))]));
         if p.who.guest {
+            let rec = self.guests.rec.get(&guests::guest_id(&p.who.principal));
             out.insert("guest".into(), Value::Bool(true));
+            out.insert("email".into(), Value::from(rec.map(|r| r.email.clone()).unwrap_or_default()));
+            out.insert("email_verified".into(), Value::Bool(rec.is_some_and(|r| r.email_verified)));
         }
         out
     }
@@ -863,6 +886,7 @@ impl State {
             self.control_stage_view(room, v);
             self.guests_stage_view(room, v);
             self.sfu_stage_view(room, v);
+            self.wa_stage_view(room, v);
         }
         view
     }
@@ -1000,6 +1024,9 @@ impl State {
                         d.insert(k.into(), v.clone());
                     }
                 }
+            }
+            if who.kind == "web" {
+                d.insert("web".into(), Value::Bool(true)); // WA-1 4.5: never a history share's target
             }
             devices.insert(who.device.clone(), Value::Object(d));
         }
@@ -1262,6 +1289,7 @@ impl State {
                 let by = pj::text_of(&person, "principal");
                 self.stage_event(room, if organizer { "organizer" } else { "cohost" }, &by, Some(&id));
             }
+            self.wa_recaption(room);
         }
     }
 
@@ -1562,6 +1590,7 @@ impl State {
         self.control_left(peer, why);
         self.sfu_left(peer, why);
         self.guests_left(peer, why);
+        self.wa_left(peer, why);
     }
 
     /// _wave3_room_empty: the last one left a room.
@@ -1571,6 +1600,7 @@ impl State {
         self.control_room_empty(room);
         self.sfu_room_empty(room);
         self.guests_room_empty(room);
+        self.wa_room_empty(room);
     }
 
     /// _wave3_prune: the periodic prune (and the one at load), before the relay's own retention.
@@ -1593,7 +1623,8 @@ impl State {
         self.breakout_may_join(room, who)?;
         self.sfu_may_join(room, who, ext)?;
         self.guests_may_join(room, who)?;
-        self.bridge_may_join(who)
+        self.bridge_may_join(who)?;
+        self.wa_may_join(room, who, ext)
     }
 
     /// _wave3_each("stay_created"): the first join into an empty room started a stay.
@@ -1610,7 +1641,7 @@ impl State {
     /// _wave3_join_extra: what the slices add to (or replace in) a join answer.
     fn wave3_join_extra(&mut self, room: &str, peer_id: &str) -> Obj {
         let mut out = self.breakout_join_extra(room, peer_id);
-        for part in [self.sfu_join_extra(room, peer_id), self.guests_join_extra(room, peer_id), self.ce_join_extra(room)] {
+        for part in [self.sfu_join_extra(room, peer_id), self.guests_join_extra(room, peer_id), self.ce_join_extra(room), self.wa_join_extra(room)] {
             for (k, v) in part {
                 out.insert(k, v);
             }
@@ -1628,7 +1659,8 @@ impl Hub {
         st.guests_configure(s)?;
         st.bridge_configure(s)?;
         st.pa_configure(s);
-        st.ce_configure(s)
+        st.ce_configure(s)?;
+        st.wa_configure(s)
     }
 
     /// _wave3_each("tick"), every reap: the media server's check against seats (on its own thread) and the guests'
@@ -1642,6 +1674,7 @@ impl Hub {
         if st.guests_on() {
             st.guests_sweep();
         }
+        st.wa_tick(pj::now());
         drop(st);
         self.wake();
     }
@@ -1935,6 +1968,7 @@ impl Hub {
             pu: push::Push::new(state_dir.as_deref()),
             pc: pc::Pc::new(state_dir.as_deref()),
             pc_docs: pc_docs::DocsRate::default(),
+            wa: wa::Wa::new(),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None) };
         if hub.state_dir.is_some() {
@@ -2221,6 +2255,7 @@ impl Hub {
 
     #[allow(clippy::too_many_arguments)]
     fn join_locked(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, client: &Obj, ext: &Obj) -> R<(Obj, String)> {
+        let (caps, cap_max) = wa::caps(ext)?;
         st.check_copy(who, address)?;
         st.wave3_may_join(room, who, ext)?;
         let mine: Vec<String> = st.peers.values().filter(|p| p.who.principal == who.principal && p.room == room).map(|p| p.peer_id.clone()).collect();
@@ -2280,6 +2315,8 @@ impl Hub {
             e2ee: ext.get("e2ee") == Some(&Value::Bool(true)),
             epk: String::new(),
             epk_sig: String::new(),
+            caps,
+            cap_max,
         };
         let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
@@ -2297,7 +2334,7 @@ impl Hub {
         let now = pj::now();
         let creates = !st.stays.contains_key(room);
         if creates {
-            st.stays.insert(room.to_string(), Stay { start: now, seen: IndexMap::new(), late_history, chat_stay: String::new(), chat_catchup: None });
+            st.stays.insert(room.to_string(), Stay::new(now, IndexMap::new(), late_history));
             st.wave3_stay_created(room, who, ext);
             if late_history {
                 log_info(&format!("options room={room} principal={} late_history=on why=created", who.principal));
@@ -2333,6 +2370,7 @@ impl Hub {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
         }
+        st.wa_joined(room, &peer_id);
         let stage_view = st.stage_view_ext(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();
         let chats: Vec<&Obj> = log.iter().filter(|l| pj::text_of(l, "kind") == "chat").collect();
@@ -3018,14 +3056,15 @@ impl Hub {
         st.owned(peer_id, who)?;
         st.sfu_caption_check(peer_id, std::iter::once(text))?;
         let room = st.peers[peer_id].room.clone();
-        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur)?;
+        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur, None)?;
         drop(st);
         self.wake();
         Self::caption_logged(&room, who, text, &line, repeat);
         Ok(line)
     }
 
-    pub fn captions(&self, peer_id: &str, who: &Identity, lines: Body, weak: Option<bool>, sent_ms: Body) -> R<Obj> {
+    /// `for_`: the seat whose speech the caller captions (WA-1 section 5.2), only from its assigned captioner.
+    pub fn captions(&self, peer_id: &str, who: &Identity, lines: Body, weak: Option<bool>, sent_ms: Body, for_: Body) -> R<Obj> {
         let Some(Value::Array(lines)) = lines else { return bad("lines must be a list") };
         if lines.is_empty() || lines.len() > CAPTIONS_BATCH_MAX {
             return bad(format!("send 1 to {CAPTIONS_BATCH_MAX} lines at a time"));
@@ -3035,6 +3074,10 @@ impl Hub {
         let mut done: Vec<(String, Obj, bool)> = Vec::new();
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
+        let target = match for_ {
+            Some(t) => Some(st.wa_caption_for(peer_id, t)?),
+            None => None,
+        };
         st.sfu_caption_check(peer_id, lines.iter().filter_map(Value::as_object).map(|o| pj::s(o, "text")).filter(|t| !t.trim().is_empty()))?;
         let room = st.peers[peer_id].room.clone();
         st.report_weak(peer_id, weak);
@@ -3072,7 +3115,7 @@ impl Hub {
                     out.push(Value::Object(obj([("cseq", c), ("refused", Value::from(e.message()))])));
                 }
                 Ok((t, c, age, dur)) => {
-                    let (line, repeat) = match Self::caption_line(&mut st, peer_id, who, &t, c, age, dur) {
+                    let (line, repeat) = match Self::caption_line(&mut st, peer_id, who, &t, c, age, dur, target.as_deref()) {
                         Ok(stored) => stored,
                         Err(e) => {
                             // a late joiner's refusal ends the batch, after any weak report it carried
@@ -3094,7 +3137,10 @@ impl Hub {
         Ok(obj([("lines", Value::Array(out))]))
     }
 
-    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>) -> R<(Obj, bool)> {
+    /// `target`: the seat whose speech the captioner `peer_id` captions (WA-1 5.2): the line is that seat's, with
+    /// `peer` (the target) and `by` (the captioner).
+    #[allow(clippy::too_many_arguments)]
+    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>, target: Option<&str>) -> R<(Obj, bool)> {
         if st.peers[peer_id].admission_pending {
             return forbidden(ADMISSION_FIRST);
         }
@@ -3104,16 +3150,23 @@ impl Hub {
             }
         }
         let room = st.peers[peer_id].room.clone();
+        let speaker = target.and_then(|t| st.peers.get(t)).map(|p| (p.peer_id.clone(), p.who.name.clone(), p.who.principal.clone()));
+        let (from, name, principal) = speaker.unwrap_or_else(|| (peer_id.to_string(), who.name.clone(), who.principal.clone()));
         let mut line = obj([
             ("type", Value::from("caption")),
             ("kind", Value::from("caption")),
             ("id", Value::from(pj::token_hex(6))),
-            ("from", Value::from(peer_id)),
-            ("name", Value::from(who.name.clone())),
-            ("principal", Value::from(who.principal.clone())),
+            ("from", Value::from(from.clone())),
+            ("name", Value::from(name)),
+            ("principal", Value::from(principal)),
             ("text", Value::from(text)),
             ("ts", f(pj::now())),
         ]);
+        if target.is_some() {
+            line.insert("peer".into(), Value::from(from));
+            line.insert("by".into(), Value::from(peer_id));
+            line.insert("by_name".into(), Value::from(who.name.clone()));
+        }
         if let Some(c) = cseq {
             line.insert("cseq".into(), Value::from(c));
         }
@@ -3206,6 +3259,9 @@ impl Hub {
         }
         let room = st.peers[peer_id].room.clone();
         if st.peers[peer_id].recording_request.is_empty() {
+            if st.wa_any_rule(&room, "record", "refuse") {
+                return Err(E::Conflict(wa::RECORD_REFUSED.into())); // WA-1 section 3.3
+            }
             if !acknowledged {
                 return forbidden("acknowledge the recording policy before requesting consent");
             }
@@ -3283,7 +3339,7 @@ impl Hub {
         let stay = st.stays.entry(room.clone()).or_insert_with(|| {
             let mut seen = IndexMap::new();
             seen.insert(who.principal.clone(), now);
-            Stay { start: now, seen, late_history: false, chat_stay: String::new(), chat_catchup: None }
+            Stay::new(now, seen, false)
         });
         let changed = stay.late_history != late;
         let attendance = Value::Bool(st.pa_attendance_on());
@@ -3403,7 +3459,8 @@ impl Hub {
         if who.connector {
             return forbidden(bridge::ROUTES_ONLY);
         }
-        if who.is_service() {
+        if who.is_service() && who.kind != "captioner" {
+            // WA-1 5.3: the captioner's session is its inbox (caption_request)
             return forbidden(pc::routes_only(&who.kind));
         }
         let client = m::client(Some(&Value::Object(client.clone())));
@@ -3487,6 +3544,9 @@ impl Hub {
             reply.extend(st.nt_hello(&who.principal));
             reply.extend(st.ce_hello());
             reply.extend(st.pc_hello());
+            if who.kind == "captioner" {
+                reply = obj([("session", reply["session"].clone()), ("you", reply["you"].clone())]);
+            }
             Ok((reply, sid))
         })();
         drop(st);
@@ -4266,6 +4326,7 @@ impl Hub {
         let mut st = self.st.lock();
         let n = st.drop_matching(&wanted);
         st.pu_drop_serials(&wanted);
+        st.wa_drop_serials(&wanted); // WA-1: web port sessions go at once
         drop(st);
         self.wake();
         n
@@ -5118,7 +5179,7 @@ mod tests {
         let cy = who("cy@x", "cccccccccccccccc");
         let joined = h.join("ops", &cy, "", false, None).unwrap();
         let c = peer_of(&joined);
-        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options", "stage", "chat_stay", "chat_e2ee"]);
+        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options", "stage", "chat_stay", "chat_e2ee", "stay"]);
         assert_eq!((&joined["members"], &joined["chat"], &joined["missed"], &joined["stage"]), (&json!([]), &json!([]), &json!({}), &Value::Null));
         assert_eq!((&joined["recording"], &joined["admission_pending"]), (&json!([a]), &json!(true)));
         assert_eq!(joined["recording_notices"][0]["on"], json!(true));
@@ -5126,7 +5187,7 @@ mod tests {
 
         assert_eq!(refusal(h.say(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.caption(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
-        assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None)), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.room_captions(&c, &cy, "0", "10")), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.room_history(&json!("ops"), &cy, &json!(0), 10)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.signal(&c, &cy, &a, json!({}))), "403 recording consent is required before joining media");
