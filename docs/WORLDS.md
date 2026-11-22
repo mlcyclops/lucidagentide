@@ -7,7 +7,7 @@ is sold like a premium plugin ($9.99 one-time), and installs through the same ga
 
 ## 1. The contract
 
-`desktop/renderer/viz_world_api.ts` is the frozen contract (`WORLD_API_VERSION = 1`). A world is ONE ES module whose
+`desktop/renderer/viz_world_api.ts` is the frozen contract (`WORLD_API_VERSION = 2`). A world is ONE ES module whose
 default export is:
 
 ```ts
@@ -16,7 +16,7 @@ import type { DefineWorld } from "<path to>/viz_world_api.ts";
 const defineWorld: DefineWorld = (host) => {
   const { THREE, kit } = host;
   return {
-    apiVersion: 1,
+    apiVersion: 2,
     id: "christmas",              // the package id without "world-"
     label: "Christmas",
     tagline: "Santa runs the workshop, elves build, reindeer fly the helpers",
@@ -24,7 +24,8 @@ const defineWorld: DefineWorld = (host) => {
     storm: { label: "Blizzard", tip: "...", icon: "<svg path data, 24x24>" },
     options: [/* WorldOption: color, select or toggle */],
     environment: { light, paintSky, fog, edges: { style, colorA, colorB }, chargeColor, createAmbient },
-    createFigure(o) { /* WorldFigure: feet at origin, facing +Z, about kit.FIGURE_HEIGHT tall */ },
+    castRoles: { subagent: "creature" },  // optional (v2): roles that are not people; the rest are "human"
+    createFigure(o) { /* WorldFigure: feet at origin, facing +Z, about kit.FIGURE_HEIGHT tall; o.appearance (v2) */ },
     createStage(o) { /* optional WorldStage inside kit.CELL */ },
     createProjectile(kind, flat) { /* WorldProjectile */ },
     createStorm(ctx) { /* WorldStorm; update returns false when over */ },
@@ -39,18 +40,44 @@ Rules:
   roundedBox, merge, canvasTexture, drawEmblem, random, noise1, ease). Type-only imports (`import type`) are fine.
 - No other package imports either: the renderer resolves no bare specifiers. Bundle what you need.
 - Pick variants from `o.seed` and `kit.random(seed)`, never `Math.random()`, so a node looks the same every time.
+- Draw people from `o.appearance` (below), never from seed bits, and never lock a role (the hub, the helpers) to one
+  presentation, skin or hair.
 - Honor `motion: false` (reduced motion), `flat` (the 2D map) and `detail` (full, reduced, minimal).
 - Dispose every geometry, material and texture you create in `dispose()`.
 - A world has no network or file access: its manifest declares no permissions and no csp, and the engine refuses one
   that does. Static files it needs (textures) go in `assets/` and load same-origin from
   `/worlds/<id>/<version>/assets/...` (types: .js, .json, .png, .webp, .svg, .jpg, .ktx2).
 
+### Casting (contract v2, ADR-0649)
+
+The host casts the fleet (`desktop/renderer/viz_cast.ts`) and passes every human figure `o.appearance`:
+
+| field | values |
+| --- | --- |
+| `presentation` | `"feminine"`, `"masculine"` or `"neutral"` |
+| `body` | `0` to `3`, slight to broad, independent of presentation |
+| `skin`, `skinIndex`, `skinBand` | a `#rrggbb` tone from a 10-step ramp light to deep (`SKIN_RAMP`), its index 0 to 9, and `"light"`, `"medium"` or `"dark"` |
+| `hair` | a style id that suits the presentation: `short buzz curls coils afro puffs locs braids long wavy bob pixie bun ponytail headscarf hijab` (`HAIR_STYLES`); draw your nearest style for an id you do not model |
+| `hairColor` | a `#rrggbb` natural color, black to platinum (`HAIR_COLORS`) |
+| `face` | `0` to `7`, a face variant the world interprets |
+
+- Balance: hub, agents and subagents take slots of one sequence in the order they appear, so any 6 figures in a row
+  hold at least 2 feminine and 2 masculine and span light, medium and dark skin. Different fleets start at different
+  points of it.
+- Stability: a node keeps its appearance for the session, as other nodes come and go and when options change; picking
+  another world recasts.
+- `castRoles` (optional, per role `"human"` or `"creature"`, default human): a creature role (reindeer, doves, a
+  walking pin, farm animals) gets no `appearance` and takes no slot, so it does not skew the balance.
+- `o.seed` (and the stage's seed) is the node's id hash run through a 32-bit mixer, so every bit range varies between
+  nearby ids. v1 modules (`apiVersion: 1`) still load and get this mixed seed too, which is why installed v1 packs
+  stopped rolling one look for the whole demo fleet without an update. They simply ignore `appearance`.
+
 ## 2. Source layout
 
 ```
 world-christmas/
   world.json        { "id": "world-christmas", "version": "1.0.0", "name": "Christmas",
-                      "description": "Santa's workshop ...", "apiVersion": 1 }
+                      "description": "Santa's workshop ...", "apiVersion": 2 }
   src/index.ts      the default export above
   assets/           optional: textures and data, copied as is
 ```

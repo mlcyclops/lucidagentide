@@ -16,13 +16,17 @@
 // for a newer `apiVersion` than the host's WORLD_API_VERSION is listed but not offered.
 //
 // This file is a FROZEN CONTRACT (AGENTS.md): change it only through a new apiVersion and an ADR.
+//
+// Version 2 (P-WORLDS.CAST1, ADR-0649), additive: the host casts people (viz_cast.CastBook) and passes each human
+// figure its `appearance`; a world may declare roles that are not people (`castRoles`). Every world, v1 included,
+// now receives a mixed `seed`. v1 modules keep loading unchanged.
 
 import type * as THREE_NS from "three";
 import type { MiniActivity, MiniLook } from "./viz_mini_look.ts";
 import type { VizBrand } from "./viz_brand.ts";
 
 /** The contract version this host implements. A world declares the version it was built against. */
-export const WORLD_API_VERSION = 1;
+export const WORLD_API_VERSION = 2;
 
 /** The three.js namespace the host renders with. */
 export type ThreeNs = typeof THREE_NS;
@@ -33,6 +37,8 @@ export type WorldState = "idle" | "working" | "paused" | "ended" | "killed" | "f
 export type WorldReaction = "stare" | "outburst";
 export type WorldRole = "hub" | "agent" | "subagent";
 export type WorldDetail = "full" | "reduced" | "minimal";
+/** v2 (ADR-0649): whether a role is cast as people or as something else. */
+export type WorldCastRole = "human" | "creature";
 
 /** A user-set value from the world's options (WorldOption.key -> value). */
 export type WorldOptionValues = Readonly<Record<string, string | boolean>>;
@@ -44,6 +50,27 @@ export type WorldOption =
   | { key: string; label: string; type: "select"; default: string; choices: readonly { value: string; label: string }[] }
   | { key: string; label: string; type: "toggle"; default: boolean };
 
+/** v2 (ADR-0649): who a human figure is, resolved by the host over the whole fleet (any 6 figures in a row hold at
+ *  least 2 feminine and 2 masculine and span light, medium and dark skin). Stable per node for the session. */
+export interface WorldAppearance {
+  presentation: "feminine" | "masculine" | "neutral";
+  /** Body build, slight to broad (0 to 3), independent of presentation. */
+  body: 0 | 1 | 2 | 3;
+  /** The skin tone, #rrggbb, from the host's 10-step ramp (viz_cast.SKIN_RAMP, light to deep). */
+  skin: string;
+  /** Its index on that ramp (0 lightest, 9 deepest), for a world with its own ramp of the same length. */
+  skinIndex: number;
+  skinBand: "light" | "medium" | "dark";
+  /** A hair style id from the shared vocabulary (viz_cast.HAIR_STYLES: short, buzz, curls, coils, afro, puffs,
+   *  locs, braids, long, wavy, bob, pixie, bun, ponytail, headscarf, hijab), always one that suits `presentation`.
+   *  Map an id the world does not draw to its nearest style. */
+  hair: string;
+  /** The hair color, #rrggbb, black to platinum (viz_cast.HAIR_COLORS). */
+  hairColor: string;
+  /** A face variant, 0 to 7 (brows, eye shape, lips, freckles: the world decides what each one means). */
+  face: number;
+}
+
 export interface WorldFigureOptions {
   role: WorldRole;
   /** For a subagent, the role of its parent: a world can make the hub's helpers one thing (Santa's reindeer)
@@ -54,11 +81,15 @@ export interface WorldFigureOptions {
   detail: WorldDetail;
   /** True in the 2D top-down map (the host tips the figure back to face the camera; keep it light). */
   flat: boolean;
-  /** Stable per node: pick variants (outfit, prop, name tag) from it, never from Math.random(). */
+  /** Stable per node and mixed over all 32 bits (v2: every bit range varies between nearby ids): pick variants
+   *  (outfit, prop, name tag) from it, never from Math.random(). */
   seed: number;
   /** The model's sponsor (emblem colors and word, size class); null when unknown. kit.drawEmblem paints it. */
   brand: VizBrand | null;
   options: WorldOptionValues;
+  /** v2 (ADR-0649): skin, hair, presentation, build and face for a human figure; draw these instead of rolling
+   *  them from the seed. Absent for a role the world casts as a creature (castRoles). */
+  appearance?: WorldAppearance;
 }
 
 /** One figure. Same surface as the built-in anime and office figures (viz_anime.AnimeFigure). */
@@ -166,6 +197,9 @@ export interface WorldDefinition {
   storm: { label: string; tip: string; icon: string };
   options: readonly WorldOption[];
   environment: WorldEnvironment;
+  /** v2 (ADR-0649): roles that are not people (reindeer, doves, a walking pin) are "creature": they take no part
+   *  in the fleet's presentation and skin balance and get no `appearance`. A role left out is "human". */
+  castRoles?: { hub?: WorldCastRole; agent?: WorldCastRole; subagent?: WorldCastRole };
   createFigure(o: WorldFigureOptions): WorldFigure;
   createStage?(o: WorldStageOptions): WorldStage;
   createProjectile(kind: string, flat: boolean): WorldProjectile;

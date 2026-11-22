@@ -51,6 +51,9 @@
 // throwables fly the same arc (viz_throw.launchWorld) and its storm is its own effect (createStorm, updated until
 // it ends) while the figures are hit("storm") along the front from the sky like the anime storm. The view passes
 // a theme whose `light` follows the world's sky (it remounts when that flips), so lights, bloom and labels match.
+// P-WORLDS.CAST1 (ADR-0649): world figures and stages get viz_cast.worldSeed (the id hash, mixed) instead of the raw
+// id hash the built-in casts keep, and each human figure gets its appearance from the scene's CastBook (a slot per
+// node in first-seen order, kept while the world lasts; cleared on a world switch and on destroy).
 //
 // Resource contract (the orbit canvas's, ADR-0522): a DPR-capped canvas sized by a ResizeObserver, a frame
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
@@ -76,7 +79,8 @@ import { createThrowFx, skyAbove } from "./viz_throw.ts";
 import { isThrowKind } from "./viz_throw_kinds.ts";
 import { launchPx, stormSchedule, volley } from "./viz_throw_math.ts";
 import { CUBE, frameInterval, IDLE_FPS, isBuiltinStyle, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
-import type { WorldAmbient, WorldDefinition, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
+import type { WorldAmbient, WorldAppearance, WorldDefinition, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
+import { CastBook, castGroupOf, nodeSeed, worldSeed } from "./viz_cast.ts"; // P-WORLDS.CAST1 (ADR-0649)
 
 export type VizViewMode = "2d" | "3d";
 
@@ -124,6 +128,9 @@ export interface VizSceneHandle {
    *  Still reported when the node is off to a side (the panel docks at that edge); null when it is behind the
    *  camera or gone. The node panel sits beside it. */
   screenBoxOf(id: string): { x: number; y: number; r: number } | null;
+  /** P-WORLDS.CAST1 (ADR-0649): the appearance the node's world figure was cast with; null in a built-in style,
+   *  for a role the world casts as a creature, or for an unknown node. */
+  castOf(id: string): WorldAppearance | null;
   /** P-VIZ.6 (ADR-0636): throw `kind` at the node: it flies (an arc from `from`, stage px where the throw
    *  started, or the viewer's side; the bolt strikes from above) and the figure reacts on arrival. Reduced
    *  motion: no flight, the hit lands at once. False when there is no such node, or `kind` is not a built-in
@@ -377,6 +384,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let ambient: WorldAmbient | null = null;
   let worldFog: THREE.FogExp2 | null = null;
   const worldStorms: { group: THREE.Group; storm: WorldStorm }[] = [];
+  /** P-WORLDS.CAST1 (ADR-0649): who each world figure is, balanced over the fleet, stable per node until the
+   *  world changes or the scene goes. */
+  const cast = new CastBook();
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = mode === "3d" ? persp : ortho;
   let controls = makeControls();
   let interacting = false;
@@ -551,10 +561,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     pivot.add(label);
 
     world.add(root);
-    let seed = 7;
-    for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) >>> 0;
     const obj: NodeObj = {
-      id: n.id, kind: n.kind, parentKind: n.parentKind, persona: n.persona, size, seed,
+      id: n.id, kind: n.kind, parentKind: n.parentKind, persona: n.persona, size, seed: nodeSeed(n.id),
       look: lookFor(color), base, tileBase: base.clone().lerp(bgColor, theme.light ? 0.8 : 0.74),
       root, pivot, d3: null, d2: null,
       label, labelMat, labelText: "", cracks: null,
@@ -646,17 +654,20 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null, committing: false, stage: null };
   }
 
-  /** P-WORLDS.1: the world's figure for the node (the hub, an agent, or a subagent with its parent's role). */
+  /** P-WORLDS.1: the world's figure for the node (the hub, an agent, or a subagent with its parent's role).
+   *  P-WORLDS.CAST1 (ADR-0649): a mixed seed (the raw id hash gave nearby ids one look) and, unless the world
+   *  casts the role as a creature, the node's appearance from the scene's cast book. */
   function worldFigure(w: SceneWorld, obj: NodeObj, flat: boolean): WorldFigure {
+    const appearance = cast.appearanceFor(obj.id, castGroupOf(w.def.castRoles, obj.kind));
     return w.def.createFigure({
       role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, look: obj.look, detail: o.detail,
-      flat, seed: obj.seed, brand: obj.brand, options: w.options,
+      flat, seed: worldSeed(obj.seed), brand: obj.brand, options: w.options, ...(appearance ? { appearance } : {}),
     });
   }
 
-  /** P-WORLDS.1: the world's ground for the node, when it brings one. */
+  /** P-WORLDS.1: the world's ground for the node, when it brings one (P-WORLDS.CAST1: with the mixed seed). */
   function worldStage(w: SceneWorld, obj: NodeObj, flat: boolean): WorldStage | null {
-    return w.def.createStage?.({ role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, seed: obj.seed, detail: o.detail, flat, options: w.options }) ?? null;
+    return w.def.createStage?.({ role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, seed: worldSeed(obj.seed), detail: o.detail, flat, options: w.options }) ?? null;
   }
 
   function build2d(obj: NodeObj): Node2D {
@@ -1640,7 +1651,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         if (obj.parentKind !== n.parentKind) { obj.parentKind = n.parentKind; if (activeWorld) { drop3d(obj); drop2d(obj); ensureParts(obj); } }
         paintLabel(obj, n.label);
       }
-      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); }
+      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); cast.release(id); } // P-WORLDS.CAST1: its slot stays reserved
       const want = new Set<string>();
       for (const e of links) {
         if (!nodes.has(e.from) || !nodes.has(e.to)) continue;
@@ -1695,7 +1706,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         const fromWorld = activeWorld !== null;
         style = next;
         activeWorld = null;
-        if (fromWorld) { clearWorldStorms(); applyWorldEnvironment(); }
+        if (fromWorld) { clearWorldStorms(); applyWorldEnvironment(); cast.clear(); }
         edgeFx.setStyle(edgeStyleFor(next));
       } else {
         // P-WORLDS.1: a world style needs its definition; the same world with new options rebuilds the cast.
@@ -1703,7 +1714,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         const sameWorld = next === style && activeWorld?.def === w.def;
         style = next;
         activeWorld = w;
-        if (!sameWorld) { clearWorldStorms(); applyWorldEnvironment(); }
+        if (!sameWorld) { clearWorldStorms(); applyWorldEnvironment(); cast.clear(); } // P-WORLDS.CAST1: new options keep the cast
         edgeFx.setStyle(w.def.environment.edges.style);
       }
       for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
@@ -1745,6 +1756,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       anchorAt.project(camera);
       const tx = r.left + ((anchorAt.x + 1) / 2) * r.width, ty = r.top + ((1 - anchorAt.y) / 2) * r.height;
       return { x, y, r: Math.max(8, Math.hypot(tx - x, ty - y)) };
+    },
+    castOf(id) {
+      const obj = nodes.get(id);
+      return activeWorld && obj ? cast.appearanceFor(id, castGroupOf(activeWorld.def.castRoles, obj.kind)) : null;
     },
     throwAt(nodeId, kind, from) {
       const obj = nodes.get(nodeId);
@@ -1847,6 +1862,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       controls.dispose();
       for (const obj of nodes.values()) disposeNode(obj);
       nodes.clear();
+      cast.clear(); // P-WORLDS.CAST1
       for (const ed of [...edges.values()]) dropEdge(ed);
       edgeFx.dispose();
       throwFx.dispose();

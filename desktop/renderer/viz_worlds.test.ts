@@ -52,6 +52,20 @@ describe("validateWorld", () => {
     expect(errOf({ ...goodDef(), apiVersion: undefined })).toContain("apiVersion");
   });
 
+  test("v1 modules still load on the v2 host (ADR-0649)", () => {
+    expect(WORLD_API_VERSION).toBe(2);
+    expect(validateWorld({ ...goodDef(), apiVersion: 1 }, { ...INST, apiVersion: 1 }).ok).toBe(true);
+    expect(validateWorld({ ...goodDef(), apiVersion: 2 }, { ...INST, apiVersion: 2 }).ok).toBe(true);
+  });
+
+  test("castRoles: optional, known roles only, human or creature (ADR-0649)", () => {
+    expect(validateWorld({ ...goodDef(), apiVersion: 2, castRoles: { subagent: "creature" } }, INST).ok).toBe(true);
+    expect(validateWorld({ ...goodDef(), apiVersion: 2, castRoles: { hub: "human", agent: "human", subagent: "creature" } }, INST).ok).toBe(true);
+    expect(errOf({ ...goodDef(), castRoles: "creature" })).toContain("castRoles");
+    expect(errOf({ ...goodDef(), castRoles: { boss: "human" } })).toContain("unknown role");
+    expect(errOf({ ...goodDef(), castRoles: { agent: "robot" } })).toContain("human or creature");
+  });
+
   test("the id must match the package id's key", () => {
     expect(errOf({ ...goodDef(), id: "valentines" })).toContain("does not match");
     expect(errOf(goodDef(), { ...INST, id: "plugin-christmas" })).toContain("not a world package id");

@@ -1760,3 +1760,8 @@ demo-P-VIZ.REC1: ## P-VIZ.REC1 (ADR-0643): the Visualize header's Record, Record
 demo-P-WORLDS.1: ## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds: signed world packs (kind "world") import, load and render in Visualize with their stage, sky, throwables, storm and options; export the package. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 LUCID_DEMO_WORLD=<path to .lplugin.zip> node desktop/scripts/demo_p_worlds_1.mjs
 	$(BUN) test $(TEST_IGNORES) harness/plugins desktop/plugins desktop/renderer/viz_worlds.test.ts desktop/renderer/plugin_catalog.test.ts tools/build_world.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_worlds_1.mjs
+
+.PHONY: demo-P-WORLDS.CAST1
+demo-P-WORLDS.CAST1: ## P-WORLDS.CAST1 (ADR-0649): balanced casting for world figures: world API v2 (appearance, castRoles), mixed world seeds so v1 packs vary too, one cast book per scene. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_cast_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_cast_1.mjs

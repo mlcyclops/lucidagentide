@@ -25,6 +25,7 @@
 // played on some loops of the kata, dash and kiblast slots (weaponTurn); the git commit's `commit` loop and its
 // glowing `raiden` eyes.
 
+import { mix32 } from "./viz_cast.ts"; // P-WORLDS.CAST1 (ADR-0649): moved there, unchanged
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
 
@@ -755,13 +756,6 @@ export function distributeYaw(need: number, out: Float32Array): Float32Array {
 // ------------------------------------------------------------------------------------------ who a node is (P-VIZ.6)
 
 export type FigureGender = "male" | "female";
-
-function mix32(x: number): number {
-  let h = (x + 0x9e3779b9) | 0;
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  return (h ^ (h >>> 16)) >>> 0;
-}
 
 /** A node's gender from its seed (viz_scene's id hash): stable for the id, about half and half over a fleet, and
  *  the same in both styles (the office worker and the anime figure read it from the same seed). */

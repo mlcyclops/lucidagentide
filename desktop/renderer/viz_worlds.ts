@@ -6,7 +6,8 @@
 // loadWorlds lists the installed world packages (engine GET /api/worlds), imports each one's module from its
 // same-origin URL (/worlds/<id>/<version>/world.js), calls its default export with the host (viz_world_kit) and
 // VALIDATES what it returns (validateWorld: the contract version, the id, exactly three throwables with unique
-// kinds and plain SVG path icons, the storm, the options and their defaults, the environment and the factories).
+// kinds and plain SVG path icons, the storm, the options and their defaults, the environment, the cast roles (v2,
+// ADR-0649) and the factories). A module built for any apiVersion up to WORLD_API_VERSION loads.
 // A world that fails to load or validate is still listed, with its error, and is never offered.
 //
 // Activation (the store's rule, market_gate's provider): with no provider configured a world is allowed. With one,
@@ -158,6 +159,14 @@ export function validateWorld(def: unknown, installed: InstalledWorld): { ok: tr
   }
   const envErr = checkEnvironment(def.environment);
   if (envErr) return bad(envErr);
+  // P-WORLDS.CAST1 (ADR-0649): which roles are people; anything but "human" or "creature" per role is refused.
+  if (def.castRoles !== undefined) {
+    if (!isRec(def.castRoles)) return bad("castRoles is not an object");
+    for (const [role, cast] of Object.entries(def.castRoles)) {
+      if (role !== "hub" && role !== "agent" && role !== "subagent") return bad(`castRoles has an unknown role "${role}"`);
+      if (cast !== undefined && cast !== "human" && cast !== "creature") return bad(`castRoles.${role} is not human or creature`);
+    }
+  }
   if (!isFn(def.createFigure)) return bad("createFigure is not a function");
   if (!isFn(def.createProjectile)) return bad("createProjectile is not a function");
   if (!isFn(def.createStorm)) return bad("createStorm is not a function");

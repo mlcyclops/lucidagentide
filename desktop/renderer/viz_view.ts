@@ -434,9 +434,10 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   const scripted = new URLSearchParams(location.search).get("vizScript") === "1";
   if (demo || scripted) (window as unknown as { __vizProbe?: unknown }).__vizProbe = {
     // P-VIZ.7 (ADR-0641): the sponsor and size class each figure wears, and whether it is committing right now.
+    // P-WORLDS.CAST1 (ADR-0649): in a world, the appearance its figure was cast with (null otherwise).
     nodes: () => (model ? [...model.nodes.values()].map((n) => {
       const b = vizBrandFor(n.model);
-      return { id: n.id, kind: n.kind, name: n.name, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()) };
+      return { id: n.id, kind: n.kind, name: n.name, box: scene?.screenBoxOf(n.id) ?? null, brand: b?.key ?? null, size: b?.size ?? null, committing: committing(n, Date.now()), cast: scene?.castOf(n.id) ?? null };
     }) : []),
     ...(scripted ? { shot: (id: string | null, opts?: Parameters<VizSceneHandle["scriptShot"]>[1]) => scene?.scriptShot(id, opts) } : {}),
     // P-WORLDS.1 (ADR-0648): the installed worlds and a style switch ("anime", "professional", "world:<key>"),
