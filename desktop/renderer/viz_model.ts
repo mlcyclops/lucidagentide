@@ -24,7 +24,7 @@
 // after a minute), and `teamOf` says how many of a node's team work while it does not (it supervises).
 
 import { orbitSlots } from "./orbit_layout.ts";
-import type { PerfTier } from "./perf_tier.ts";
+import type { BaseTier, PerfTier } from "./perf_tier.ts";
 import type { VizBusEvent, VizOrigin } from "./viz_bus.ts";
 
 export const HUB_ID = "main";
@@ -903,18 +903,37 @@ export interface VizTierOpts {
   lightning: 0 | 1 | 2;
   /** Any automatic motion (bobbing, flowing particles, shakes). Off under prefers-reduced-motion. */
   motion: boolean;
-  /** How detailed each mini Lucid figure is built (P-VIZ.2): the tier itself. */
-  detail: PerfTier;
+  /** How detailed each mini Lucid figure is built (P-VIZ.2): the tier, with ultra and cinematic built as "full"
+   *  (v1 worlds and the built-in casts know three levels; P-VIZ.GPU1 passes `tier` beside it). */
+  detail: BaseTier;
+  /** P-VIZ.GPU1 (ADR-0651): the tier itself (world figures, stages and ambient get it next to `detail`). */
+  tier: PerfTier;
+  /** P-VIZ.GPU1: multisample count of the post-processing target (0 = none; the canvas keeps `antialias`). */
+  msaa: 0 | 4;
+  /** P-VIZ.GPU1: a soft contact shadow under each 3D figure. */
+  contactShadows: boolean;
+  /** P-VIZ.GPU1: bloom also on light themes, at a low strength and above the sky's brightness. */
+  lightBloom: boolean;
+  /** P-VIZ.GPU1: screen-space ambient occlusion (3D only). */
+  ssao: boolean;
+  /** P-VIZ.GPU1: a subtle depth of field focused where the auto camera looks (3D, auto camera on). */
+  dof: boolean;
 }
 
-/** The perf tier (perf_tier.ts, the same Auto / Full / Reduced / Minimal the Knowledge Graph uses) decides
- *  the budgets; prefers-reduced-motion removes all automatic motion and leaves effects as color changes. */
+const NO_GPU_EXTRAS = { msaa: 0, contactShadows: false, lightBloom: false, ssao: false, dof: false } as const;
+
+/** The perf tier (perf_tier.ts, the same Auto / Full / Reduced / Minimal the Knowledge Graph uses, plus the
+ *  P-VIZ.GPU1 ultra and cinematic tiers) decides the budgets; prefers-reduced-motion removes all automatic motion
+ *  and leaves effects as color changes. Ultra: dpr 2, MSAA, contact shadows, 12000 particles, bloom on light
+ *  themes too. Cinematic: ultra plus SSAO and depth of field. */
 export function vizTierOpts(tier: PerfTier, reducedMotion: boolean): VizTierOpts {
-  const base: VizTierOpts = tier === "full"
-    ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full" }
-    : tier === "reduced"
-      ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, lightning: 1, motion: true, detail: "reduced" }
-      : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, lightning: 0, motion: true, detail: "minimal" };
+  const base: VizTierOpts = tier === "ultra" || tier === "cinematic"
+    ? { particles: 12000, fx: 3200, fps: 60, dprCap: 2, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full", tier, msaa: 4, contactShadows: true, lightBloom: true, ssao: tier === "cinematic", dof: tier === "cinematic" }
+    : tier === "full"
+      ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full", tier, ...NO_GPU_EXTRAS }
+      : tier === "reduced"
+        ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, lightning: 1, motion: true, detail: "reduced", tier, ...NO_GPU_EXTRAS }
+        : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, lightning: 0, motion: true, detail: "minimal", tier, ...NO_GPU_EXTRAS };
   return reducedMotion ? { ...base, particles: 0, fx: 0, lightning: 0, motion: false } : base;
 }
 

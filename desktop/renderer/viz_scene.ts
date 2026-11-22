@@ -54,6 +54,8 @@
 // P-WORLDS.CAST1 (ADR-0649): world figures and stages get viz_cast.worldSeed (the id hash, mixed) instead of the raw
 // id hash the built-in casts keep, and each human figure gets its appearance from the scene's CastBook (a slot per
 // node in first-seen order, kept while the world lasts; cleared on a world switch and on destroy).
+// P-WORLDS.BUILD1 (ADR-0653): anchor(id, key, object) rides a host object on a node (the view's build scaffolding,
+// viz_build.ts): placed beside the node every frame, disposed with its node, on replace and on destroy.
 //
 // Resource contract (the orbit canvas's, ADR-0522): a DPR-capped canvas sized by a ResizeObserver, a frame
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
@@ -68,19 +70,25 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js"; // P-VIZ.GPU1 (ADR-0651): cinematic DOF
+import { Pass } from "three/examples/jsm/postprocessing/Pass.js";
+import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js"; // P-VIZ.GPU1: cinematic SSAO
+import { createFrameGovernor, type GovernorStats, type PerfTier } from "./perf_tier.ts";
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
 import { ANIME_HEIGHT, createAnimeFigure, type AnimeState } from "./viz_anime.ts";
 import { createOfficeFigure } from "./viz_office.ts";
 import { vizBrandFor, type VizBrand } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641)
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
-import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
+import { createEdgeFx, type EdgeConduit, type EdgeFxStats } from "./viz_plasma.ts";
 import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
 import { createThrowFx, skyAbove } from "./viz_throw.ts";
 import { isThrowKind } from "./viz_throw_kinds.ts";
 import { launchPx, stormSchedule, volley } from "./viz_throw_math.ts";
 import { CUBE, frameInterval, IDLE_FPS, isBuiltinStyle, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
-import type { WorldAmbient, WorldAppearance, WorldDefinition, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
+import type { WorldAmbient, WorldAppearance, WorldDefinition, WorldEdges, WorldEnvironment, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
+import { mergeEnvironment, worldEnvironment } from "./viz_worlds.ts"; // P-WORLDS.FX1 (ADR-0652)
 import { CastBook, castGroupOf, nodeSeed, worldSeed } from "./viz_cast.ts"; // P-WORLDS.CAST1 (ADR-0649)
+import type { CastPrefs } from "./viz_cast_prefs.ts"; // P-WORLDS.CAST2 (ADR-0650)
 
 export type VizViewMode = "2d" | "3d";
 
@@ -97,8 +105,31 @@ export interface SceneWorld { readonly def: WorldDefinition; readonly options: W
 export interface SceneEdge { from: string; to: string; intensity: number; frozen: boolean; dead: boolean }
 export type SceneHit = { kind: "node"; id: string } | { kind: "edge"; from: string; to: string };
 
+/** P-WORLDS.BUILD1 (ADR-0653): a host object that rides a node (a build site's scaffolding). The scene places it
+ *  every frame at the node's center plus `offset` (cell units, CUBE, scaled by the node's kind: x right, y up, z toward
+ *  the front; on the 2D map it lies on the tile plane), scales it with the node, and disposes it when it is replaced,
+ *  removed, when its node leaves, or when the scene goes. Never pickable. */
+export interface SceneAnchor {
+  readonly object: THREE.Object3D;
+  readonly offset: readonly [number, number, number];
+  /** One frame; true while it still animates (the scene keeps its full frame rate). */
+  update(tSec: number, dt: number, motion: boolean): boolean;
+  dispose(): void;
+}
+
 /** Theme colors, already normalized to #rrggbb by the view (read from the CSS custom properties). */
 export interface VizTheme { bg: string; txt: string; accent: string; cyan: string; light: boolean }
+
+/** P-VIZ.GPU1 (ADR-0651): the renderer settings a tier produced, and the frame-time governor's numbers. */
+export interface VizQualityStats {
+  tier: PerfTier; pixelRatio: number; dprCap: number; antialias: boolean; msaa: number;
+  /** Post-processing runs (a composer exists and the view is 3D). */
+  post: boolean; bloom: boolean; bloomStrength: number; lightTheme: boolean;
+  ssao: boolean; dof: boolean; dofActive: boolean;
+  /** How many 3D figures stand on a contact shadow. */
+  contactShadows: number;
+  particles: number; fps: number; governor: GovernorStats;
+}
 
 export interface VizSceneHandle {
   readonly canvas: HTMLCanvasElement;
@@ -131,6 +162,22 @@ export interface VizSceneHandle {
   /** P-WORLDS.CAST1 (ADR-0649): the appearance the node's world figure was cast with; null in a built-in style,
    *  for a role the world casts as a creature, or for an unknown node. */
   castOf(id: string): WorldAppearance | null;
+  /** P-WORLDS.FX1 (ADR-0652), for the demo probe: what the edges draw (style, token, live particles, coins,
+   *  sparks, the tier's caps), the charge tint, and where each edge's middle stretch is on screen (client pixels,
+   *  u 0.3 to 0.7 along it; points behind the camera are left out). */
+  edgeFxInfo(): EdgeFxStats & { chargeColor: string | null; edges: { from: string; to: string; points: { x: number; y: number }[] }[] };
+  /** P-WORLDS.FX1, QA only (the ?vizDemo=1 probe): `edges` merged over the active world's edges, as if its
+   *  environmentFor had returned them, until the world or its options change; null drops the preview. False
+   *  without a world or when the merged edges do not validate. */
+  previewEdges(edges: Partial<WorldEdges> | null): boolean;
+  /** P-WORLDS.BUILD1 (ADR-0653): set the node's anchored object under `key` (replacing and disposing the one there), or
+   *  remove it (null). False (and `a` untouched) when there is no such node. */
+  anchor(id: string, key: string, a: SceneAnchor | null): boolean;
+  /** P-WORLDS.BUILD1: an anchored object changed: draw (the loop parks under reduced motion when nothing moves). */
+  wake(): void;
+  /** P-WORLDS.CAST2 (ADR-0650): the user's cast preferences (pins, then the fleet mode); a world's figures are
+   *  rebuilt with them. Kept across style changes. */
+  setCast(prefs: CastPrefs): void;
   /** P-VIZ.6 (ADR-0636): throw `kind` at the node: it flies (an arc from `from`, stage px where the throw
    *  started, or the viewer's side; the bolt strikes from above) and the figure reacts on arrival. Reduced
    *  motion: no flight, the hit lands at once. False when there is no such node, or `kind` is not a built-in
@@ -150,6 +197,11 @@ export interface VizSceneHandle {
    *  delivered to onPick at once (no double click wait). */
   setThrowArmed(cursor: string | null): void;
   onLost(cb: () => void): void;
+  /** P-VIZ.GPU1 (ADR-0651): the frame-time governor's one verdict for this mount (3 s of busy frames after the
+   *  scene settles). The view steps Auto down one tier on "miss"; an explicit tier is never changed. */
+  onFrameBudget(cb: (verdict: "ok" | "miss", stats: GovernorStats) => void): void;
+  /** P-VIZ.GPU1: what the renderer is actually doing (read by the demo probe; read-only). */
+  quality(): VizQualityStats;
   destroy(): void;
 }
 
@@ -232,6 +284,8 @@ const TILE = 1.5;
 const FIG_2D_SCALE = (TILE * 0.8) / ANIME_HEIGHT;
 /** In 3D he stands about 0.85 of the cube's height, so he reads as the subject and not a figurine in a box. */
 const FIG_3D_SCALE = 1.15;
+/** P-VIZ.GPU1 (ADR-0651): the contact shadow's radius in the holder's frame (a little wider than his stance). */
+const CONTACT_R = 0.36;
 const FIG_2D_FEET_Z = 0.56;
 /** 2D layers above the node's plane: the tile covers the edge ends; the figure lies face up high enough that
  *  his hair and the spikes behind his head clear the tile; the caption sits above the figure. */
@@ -366,6 +420,33 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   }
   const world = new THREE.Group();
   scene.add(world);
+  // P-WORLDS.BUILD1 (ADR-0653): node-anchored host objects (build scaffolding), by node id then key.
+  const anchorRoot = new THREE.Group();
+  world.add(anchorRoot);
+  const anchors = new Map<string, Map<string, SceneAnchor>>();
+  function dropAnchor(a: SceneAnchor): void { anchorRoot.remove(a.object); a.dispose(); }
+  function dropAnchors(id: string): void {
+    const m = anchors.get(id);
+    if (!m) return;
+    anchors.delete(id);
+    for (const a of m.values()) dropAnchor(a);
+  }
+  /** Place and update every anchored object; true while any animates. */
+  function updateAnchors(t: number, dt: number): boolean {
+    let live = false;
+    for (const [id, m] of anchors) {
+      const obj = nodes.get(id);
+      if (!obj) continue;
+      const k = CUBE * obj.size;
+      for (const a of m.values()) {
+        const y = mode === "2d" ? obj.cur.y + TILE_Y : obj.cur.y + a.offset[1] * k;
+        a.object.position.set(obj.cur.x + a.offset[0] * k, y, obj.cur.z + a.offset[2] * k);
+        a.object.scale.setScalar(obj.size);
+        if (a.update(t / 1000, dt, o.motion)) live = true;
+      }
+    }
+    return live;
+  }
 
   // Cameras: a perspective one orbiting in 3D, an orthographic one looking straight down in 2D.
   const persp = new THREE.PerspectiveCamera(45, 1, 0.05, 500);
@@ -380,6 +461,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** P-WORLDS.1 (ADR-0648): the world a world style draws with (null for the built-ins), its charge tint, its
    *  ambient layer and its storms in progress. */
   let activeWorld: SceneWorld | null = null;
+  /** P-WORLDS.FX1 (ADR-0652): the active world's environment for its options (environmentFor over environment). */
+  let worldEnv: WorldEnvironment | null = null;
   const chargeWorld = new THREE.Color();
   let ambient: WorldAmbient | null = null;
   let worldFog: THREE.FogExp2 | null = null;
@@ -391,19 +474,88 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let controls = makeControls();
   let interacting = false;
 
-  // Bloom: the full tier only, and never on the light theme (it would wash the page out).
-  const bloomOn = o.bloom && !theme.light;
+  // Bloom: the full tier and up, and below ultra never on the light theme (it would wash the page out).
+  // P-VIZ.GPU1 (ADR-0651): ultra blooms light themes too, weakly and with the threshold above the sky's brightness
+  // (only HDR highlights glow: particles, arcs, sparks), and renders through a 4x MSAA target (the canvas's own
+  // antialias does not reach a post-processing target). Cinematic adds SSAO and a subtle depth of field focused
+  // where the auto camera looks. Volumetric light shafts are left out: a raymarched shaft pass is another full
+  // screen pass per light on top of SSAO and DOF, too costly for a view that runs beside the agents.
+  const bloomOn = o.bloom && (!theme.light || o.lightBloom);
   let composer: EffectComposer | null = null;
   let renderPass: RenderPass | null = null;
   let bloom: UnrealBloomPass | null = null;
-  if (bloomOn) {
-    composer = new EffectComposer(renderer);
+  let outputPass: OutputPass | null = null;
+  let ssao: SSAOPass | null = null;
+  let bokeh: BokehPass | null = null;
+  let bokehFocus: THREE.IUniform<number> | null = null;
+  const dofHooks: HookPass[] = [];
+  /** What an override render (SSAO's normals, the DOF depth) must not see: points, lines, see-through meshes (the
+   *  glass, world FX), the sky, and for SSAO the label sprites (their quads would cast AO halos). Restored right
+   *  after; the array is reused, so the hooks allocate nothing per frame. */
+  const overrideHidden: THREE.Object3D[] = [];
+  let hideSprites = false;
+  let hiddenBg: THREE.Scene["background"] = null;
+  const hideForOverride = (x: THREE.Object3D): void => {
+    if (!x.visible) return;
+    const m = (x as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    const hide = (x as THREE.Sprite).isSprite ? hideSprites : (x as THREE.Points).isPoints || (x as THREE.Line).isLine || (!!m && !Array.isArray(m) && m.transparent);
+    if (hide) { x.visible = false; overrideHidden.push(x); }
+  };
+  const hideOverride = (sprites: boolean): void => {
+    hideSprites = sprites;
+    hiddenBg = scene.background;
+    scene.background = null;
+    scene.traverse(hideForOverride);
+  };
+  const restoreOverride = (): void => {
+    for (const x of overrideHidden) x.visible = true;
+    overrideHidden.length = 0;
+    scene.background = hiddenBg;
+    hiddenBg = null;
+  };
+  if (bloomOn || o.ssao || o.dof) {
+    composer = new EffectComposer(renderer, o.msaa ? new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: o.msaa }) : undefined);
     renderPass = new RenderPass(scene, camera);
-    bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.4, 0.93); // glow on particles, arcs and cube edges; figures stay readable
     composer.addPass(renderPass);
-    composer.addPass(bloom);
-    composer.addPass(new OutputPass());
+    if (o.ssao) {
+      ssao = new SSAOPass(scene, persp, 1, 1, 16);
+      ssao.kernelRadius = 0.35; // world units: contact-scale occlusion (feet on a stage, a figure at a desk)
+      ssao.minDistance = 0.00002; // linear depth over near..far (0.05..500): about 1 cm to 1 m
+      ssao.maxDistance = 0.002;
+      composer.addPass(new HookPass(() => hideOverride(true)));
+      composer.addPass(ssao);
+      composer.addPass(new HookPass(restoreOverride));
+    }
+    if (bloomOn) {
+      bloom = theme.light
+        ? new UnrealBloomPass(new THREE.Vector2(256, 256), 0.14, 0.3, 1.0) // light theme (ultra): HDR highlights only, faint
+        : new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.4, 0.93); // glow on particles, arcs and cube edges; figures stay readable
+      composer.addPass(bloom);
+    }
+    if (o.dof) {
+      bokeh = new BokehPass(scene, persp, { focus: 10, aperture: 0.0006, maxblur: 0.005 }); // subtle: a few px at most
+      bokehFocus = bokeh.materialBokeh.uniforms.focus as THREE.IUniform<number>;
+      dofHooks.push(new HookPass(() => hideOverride(false)), new HookPass(restoreOverride));
+      composer.addPass(dofHooks[0]!);
+      composer.addPass(bokeh);
+      composer.addPass(dofHooks[1]!);
+    }
+    outputPass = new OutputPass();
+    composer.addPass(outputPass);
   }
+  /** P-VIZ.GPU1: depth of field follows the auto camera only (a user's own camera stays sharp everywhere). */
+  function aimDof(): void {
+    if (!bokeh || !bokehFocus) return;
+    const on = auto && mode === "3d" && nodes.size > 0;
+    bokeh.enabled = on;
+    for (const h of dofHooks) h.enabled = on;
+    if (on) bokehFocus.value = persp.position.distanceTo(controls.target);
+  }
+
+  // P-VIZ.GPU1: the soft contact shadow under each 3D figure (ultra and up): one radial texture and one material
+  // for every figure, disposed with the scene.
+  const contactTex = o.contactShadows ? contactShadowTexture() : null;
+  const contactMat = contactTex ? new THREE.MeshBasicMaterial({ map: contactTex, color: 0x000000, transparent: true, opacity: theme.light ? 0.34 : 0.55, depthWrite: false, toneMapped: false }) : null;
 
   const geo = new Map<string, THREE.BufferGeometry>();
   const shared = <T extends THREE.BufferGeometry>(key: string, make: () => T): T => {
@@ -421,7 +573,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 
   // ------------------------------------------------------------------ edges (viz_plasma) + effect particles
   // The scene starts in the anime style; setStyle switches the edges with the figures.
-  const edgeFx = createEdgeFx(world, { detail: o.detail, particles: o.particles, motion: o.motion, light: theme.light, flat: mode === "2d", style: "plasma" });
+  const edgeFx = createEdgeFx(world, { detail: o.tier, particles: o.particles, motion: o.motion, light: theme.light, flat: mode === "2d", style: "plasma" });
   const fx = makePointPool(o.fx);
   const fxVel = new Float32Array(o.fx * 3);
   const fxLife = new Float32Array(o.fx);
@@ -493,6 +645,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let needFit = true;
   let W = 0, H = 0;
   const clock = { now: performance.now() };
+  /** P-VIZ.GPU1 (ADR-0651): one 3 s frame-time check per mount (perf_tier.createFrameGovernor). */
+  const governor = createFrameGovernor(performance.now());
+  let governBusy = false;
+  let budgetCb: ((verdict: "ok" | "miss", stats: GovernorStats) => void) | null = null;
   let hoverCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let pickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let doublePickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
@@ -603,6 +759,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
     holder.add(fig.group);
+    // P-VIZ.GPU1 (ADR-0651): ultra and up ground the figure with a soft contact shadow; it rides the holder (turns,
+    // scales and implodes with him), and its geometry and material are shared, so dropping the holder frees nothing.
+    if (contactMat) {
+      const shadow = new THREE.Mesh(shared("contact-shadow", () => new THREE.PlaneGeometry(CONTACT_R * 2, CONTACT_R * 2).rotateX(-Math.PI / 2)), contactMat);
+      shadow.position.y = 0.004;
+      holder.add(shadow);
+    }
     obj.pivot.add(holder);
     // P-WORLDS.1: the world's own ground replaces the glass cube and plate; the glass stays as the pick box.
     const stage = wd ? worldStage(wd, obj, false) : null;
@@ -660,14 +823,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   function worldFigure(w: SceneWorld, obj: NodeObj, flat: boolean): WorldFigure {
     const appearance = cast.appearanceFor(obj.id, castGroupOf(w.def.castRoles, obj.kind));
     return w.def.createFigure({
-      role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, look: obj.look, detail: o.detail,
+      role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, look: obj.look, detail: o.detail, tier: o.tier, // P-VIZ.GPU1
       flat, seed: worldSeed(obj.seed), brand: obj.brand, options: w.options, ...(appearance ? { appearance } : {}),
     });
   }
 
   /** P-WORLDS.1: the world's ground for the node, when it brings one (P-WORLDS.CAST1: with the mixed seed). */
   function worldStage(w: SceneWorld, obj: NodeObj, flat: boolean): WorldStage | null {
-    return w.def.createStage?.({ role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, seed: worldSeed(obj.seed), detail: o.detail, flat, options: w.options }) ?? null;
+    return w.def.createStage?.({ role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, seed: worldSeed(obj.seed), detail: o.detail, tier: o.tier, flat, options: w.options }) ?? null;
   }
 
   function build2d(obj: NodeObj): Node2D {
@@ -1042,7 +1205,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     sparks: spawnFx,
     burst: burstAt,
     bolt: boltBetween,
-  }, { detail: o.detail, motion: o.motion, light: theme.light });
+  }, { detail: o.tier, motion: o.motion, light: theme.light }); // P-VIZ.GPU1: ultra storms strike harder
   throwFx.setFlat(mode === "2d");
   const throwTo = new THREE.Vector3(), throwFrom = new THREE.Vector3(), stormDir = new THREE.Vector3(), stormCenter = new THREE.Vector3();
   const throwPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -1077,24 +1240,41 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
    *  none of them. Runs only when the style moves to, from or between worlds (anime and professional share one
    *  backdrop, so a switch between them never touches it). */
   function applyWorldEnvironment(): void {
+    applyWorldLook();
+    rebuildAmbient();
+  }
+
+  /** P-WORLDS.FX1 (ADR-0652): the part of the environment that follows the world's options. Resolves
+   *  environmentFor(options) over the environment, then paints it (paintWorldLook). Runs on every world switch and
+   *  on every option change of the same world. */
+  function applyWorldLook(): void {
+    worldEnv = activeWorld ? worldEnvironment(activeWorld.def, activeWorld.options) : null;
+    paintWorldLook();
+  }
+
+  /** The sky (repainted: a world's paintSky may close over its options), fog, edge style, palette and packet token,
+   *  and the charge tint of `worldEnv`, or the built-in backdrop with none of them. */
+  function paintWorldLook(): void {
     bgTex.dispose();
-    const w = activeWorld;
-    if (!w) {
+    const env = worldEnv;
+    if (!env) {
       bgTex = backdrop(theme);
       worldFog = null;
       scene.fog = null;
       edgeFx.setPalette(null, null);
+      edgeFx.setTokens(null);
     } else {
-      const env = w.def.environment;
       bgTex = worldSky((c, width, height) => env.paintSky(c, width, height));
       worldFog = env.fog.density > 0 ? new THREE.FogExp2(env.fog.color, env.fog.density) : null;
       scene.fog = mode === "3d" ? worldFog : null; // the flat map's camera sits 60 units up: fog would wash it out
-      edgeFx.setPalette(new THREE.Color(env.edges.colorA), new THREE.Color(env.edges.colorB));
+      const e = env.edges;
+      edgeFx.setPalette(new THREE.Color(e.colorA), new THREE.Color(e.colorB));
+      edgeFx.setStyle(e.style);
+      edgeFx.setTokens({ token: e.token ?? "orb", color: e.tokenColor ? new THREE.Color(e.tokenColor) : null, paint: e.paintToken?.bind(e), stamp: e.tokenStamp?.bind(e) });
       chargeWorld.set(env.chargeColor);
     }
     scene.background = bgTex;
     for (const ed of edges.values()) { edgeColors(ed); ed.conduit.set(ed.intensity, ed.frozen, ed.dead, ed.color, ed.colorTo); }
-    rebuildAmbient();
   }
 
   /** The ambient layer: built for the active world (spread over the scene) and the current 2D/3D mode. */
@@ -1102,13 +1282,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (ambient) { scene.remove(ambient.object); ambient.dispose(); ambient = null; }
     const make = activeWorld?.def.environment.createAmbient;
     if (!make) return;
-    ambient = make(Math.max(8, sceneRadius() * 1.4), mode === "2d", o.detail);
+    ambient = make(Math.max(8, sceneRadius() * 1.4), mode === "2d", o.detail, o.tier); // P-VIZ.GPU1: tier beside detail
     scene.add(ambient.object);
   }
 
-  /** An edge's two colors: the persona colors of its ends (the built-ins), or the world's pair. */
+  /** An edge's two colors: the persona colors of its ends (the built-ins), or the world's pair for its options. */
   function edgeColors(ed: EdgeObj): void {
-    const env = activeWorld?.def.environment;
+    const env = activeWorld ? worldEnv : null;
     if (env) { ed.color.set(env.edges.colorA); ed.colorTo.set(env.edges.colorB); return; }
     if (ed.ring) { const hub = nodes.get(ed.from); if (hub) ed.color.set(PERSONAS[hub.persona].color); ed.colorTo.copy(ed.color); return; }
     const a = nodes.get(ed.from), b = nodes.get(ed.to);
@@ -1489,10 +1669,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     persp.aspect = W / H;
     persp.updateProjectionMatrix();
     orthoFrame(orthoHalf);
-    if (composer && bloom) {
+    if (composer) { // P-VIZ.GPU1: every pass (MSAA target, SSAO, DOF) follows the size, not only bloom
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(W, H);
-      bloom.resolution.set(W * renderer.getPixelRatio(), H * renderer.getPixelRatio());
+      bloom?.resolution.set(W * renderer.getPixelRatio(), H * renderer.getPixelRatio());
     }
     kick();
   }
@@ -1587,12 +1767,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const boltLive = updateBolts(t);
     const burstLive = updateBursts(t);
     const worldLive = updateWorldLayers(t, dt);
-    if (fxLive || boltLive || burstLive || throwLive || worldLive) effectsUntil = Math.max(effectsUntil, t + 50);
+    const anchorLive = updateAnchors(t, dt); // P-WORLDS.BUILD1 (ADR-0653): build scaffolding
+    if (fxLive || boltLive || burstLive || throwLive || worldLive || anchorLive) effectsUntil = Math.max(effectsUntil, t + 50);
     pointScale();
     hoverNow();
     aimLights();
     // No bloom in 2D: the flat map is cel-shaded figures on tiles and renders plain.
-    if (composer && renderPass && mode === "3d") { renderPass.camera = camera; composer.render(dt); }
+    if (composer && renderPass && mode === "3d") { renderPass.camera = camera; aimDof(); composer.render(dt); }
     else renderer.render(scene, camera);
   }
 
@@ -1605,6 +1786,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     let interval = frameInterval(o, busy, recording);
     if (interval === null && (t < effectsUntil || interacting || busyCam)) interval = 1000 / IDLE_FPS; // color transitions and a snap only
     if (interval !== null && t - lastFrame < interval - 1.5) { raf = requestAnimationFrame(frame); return; }
+    // P-VIZ.GPU1 (ADR-0651): the frame-time governor measures busy frames that follow a busy frame (the loop asked
+    // for the tier's cadence both times); idle cadence, a fresh chain after a kick and reduced motion are not counted.
+    if (busy && governBusy && interval !== null && lastFrame > 0 && governor.verdict() === "pending") {
+      const v = governor.sample(t, t - lastFrame, interval);
+      // after this frame: a step-down remounts, which must not destroy the scene inside its own frame
+      if (v !== "pending") window.setTimeout(() => { if (!stopped) budgetCb?.(v, governor.stats()); }, 0);
+    }
+    governBusy = busy;
     lastFrame = t;
     inFrame = true; wanted = false;
     try { render(t); } finally { inFrame = false; }
@@ -1651,7 +1840,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         if (obj.parentKind !== n.parentKind) { obj.parentKind = n.parentKind; if (activeWorld) { drop3d(obj); drop2d(obj); ensureParts(obj); } }
         paintLabel(obj, n.label);
       }
-      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); cast.release(id); } // P-WORLDS.CAST1: its slot stays reserved
+      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); cast.release(id); dropAnchors(id); } // P-WORLDS.CAST1: its slot stays reserved
       const want = new Set<string>();
       for (const e of links) {
         if (!nodes.has(e.from) || !nodes.has(e.to)) continue;
@@ -1715,7 +1904,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         style = next;
         activeWorld = w;
         if (!sameWorld) { clearWorldStorms(); applyWorldEnvironment(); cast.clear(); } // P-WORLDS.CAST1: new options keep the cast
-        edgeFx.setStyle(w.def.environment.edges.style);
+        else applyWorldLook(); // P-WORLDS.FX1 (ADR-0652): new options re-resolve environmentFor (sky, fog, edges, charge)
       }
       for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
       kick();
@@ -1760,6 +1949,56 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     castOf(id) {
       const obj = nodes.get(id);
       return activeWorld && obj ? cast.appearanceFor(id, castGroupOf(activeWorld.def.castRoles, obj.kind)) : null;
+    },
+    edgeFxInfo() {
+      // P-WORLDS.FX1 (ADR-0652): probe-only (a few calls per demo), so it may allocate
+      const r = canvas.getBoundingClientRect();
+      const list: { from: string; to: string; points: { x: number; y: number }[] }[] = [];
+      for (const ed of edges.values()) {
+        const points: { x: number; y: number }[] = [];
+        for (let u = 0.3; u <= 0.701; u += 0.1) {
+          world.localToWorld(ed.conduit.sample(u, anchorAt)).project(camera);
+          if (anchorAt.z > 1 || anchorAt.z < -1) continue;
+          points.push({ x: r.left + ((anchorAt.x + 1) / 2) * r.width, y: r.top + ((1 - anchorAt.y) / 2) * r.height });
+        }
+        list.push({ from: ed.from, to: ed.to, points });
+      }
+      return { ...edgeFx.stats(), chargeColor: activeWorld ? `#${chargeWorld.getHexString()}` : null, edges: list };
+    },
+    previewEdges(patch) {
+      if (!activeWorld || !worldEnv) return false;
+      const base = worldEnvironment(activeWorld.def, activeWorld.options);
+      if (patch) {
+        const m = mergeEnvironment(base, { edges: patch });
+        if (!m.ok) return false;
+        worldEnv = m.env;
+      } else worldEnv = base;
+      paintWorldLook();
+      kick();
+      return true;
+    },
+    anchor(id, key, a) {
+      if (stopped) return false;
+      const m = anchors.get(id);
+      const prev = m?.get(key);
+      if (!a) {
+        if (prev) { m!.delete(key); dropAnchor(prev); if (!m!.size) anchors.delete(id); kick(); }
+        return true;
+      }
+      if (!nodes.has(id)) return false;
+      if (prev === a) { kick(); return true; }
+      if (prev) dropAnchor(prev);
+      if (m) m.set(key, a); else anchors.set(id, new Map([[key, a]]));
+      anchorRoot.add(a.object);
+      kick();
+      return true;
+    },
+    wake() { effectsUntil = Math.max(effectsUntil, performance.now() + 50); kick(); },
+    setCast(prefs) {
+      cast.setPrefs(prefs);
+      if (!activeWorld) return; // built-in casts do not read it; a world picks it up when it is drawn
+      for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
+      kick();
     },
     throwAt(nodeId, kind, from) {
       const obj = nodes.get(nodeId);
@@ -1848,6 +2087,19 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       kick();
     },
     onLost(cb) { lostCb = cb; },
+    onFrameBudget(cb) { budgetCb = cb; },
+    quality() {
+      let shadows = 0;
+      for (const n of nodes.values()) if (n.d3) for (const x of n.d3.holder.children) if ((x as THREE.Mesh).material === contactMat && contactMat) shadows++;
+      return {
+        tier: o.tier, pixelRatio: renderer.getPixelRatio(), dprCap: o.dprCap,
+        antialias: renderer.getContextAttributes()?.antialias === true,
+        msaa: composer ? composer.renderTarget1.samples : 0,
+        post: !!composer && mode === "3d", bloom: !!bloom, bloomStrength: bloom?.strength ?? 0, lightTheme: theme.light,
+        ssao: !!ssao, dof: !!bokeh, dofActive: !!bokeh?.enabled, contactShadows: shadows,
+        particles: o.particles, fps: o.fps, governor: governor.stats(),
+      };
+    },
     destroy() {
       stopped = true;
       park();
@@ -1860,6 +2112,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("webglcontextlost", onLostCtx);
       controls.dispose();
+      for (const id of [...anchors.keys()]) dropAnchors(id); // P-WORLDS.BUILD1 (ADR-0653)
       for (const obj of nodes.values()) disposeNode(obj);
       nodes.clear();
       cast.clear(); // P-WORLDS.CAST1
@@ -1882,6 +2135,12 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       bgTex.dispose();
       envRT.dispose();
       bloom?.dispose();
+      // P-VIZ.GPU1: SSAO's own dispose misses its AO material and noise texture; the composer frees its (MSAA) targets.
+      if (ssao) { ssao.dispose(); ssao.ssaoMaterial.dispose(); ssao.noiseTexture.dispose(); }
+      bokeh?.dispose();
+      outputPass?.dispose();
+      contactMat?.dispose();
+      contactTex?.dispose();
       composer?.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
@@ -1891,6 +2150,34 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 }
 
 // ------------------------------------------------------------------------------------------ helpers
+
+/** P-VIZ.GPU1 (ADR-0651): a pass that draws nothing and runs `fn` at its place in the chain (hide what an override
+ *  render must not see before SSAO or the DOF depth, and put it back after). */
+class HookPass extends Pass {
+  private readonly fn: () => void;
+  constructor(fn: () => void) {
+    super();
+    this.fn = fn;
+    this.needsSwap = false;
+  }
+  override render(): void { this.fn(); }
+}
+
+/** P-VIZ.GPU1: the contact shadow's soft disc (dark center fading to clear), alpha in the texture. */
+function contactShadowTexture(): THREE.CanvasTexture {
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 128;
+  const c = cv.getContext("2d");
+  if (c) {
+    const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.45, "rgba(255,255,255,0.55)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    c.fillStyle = g;
+    c.fillRect(0, 0, 128, 128);
+  }
+  return new THREE.CanvasTexture(cv);
+}
 
 function easeIn(x: number): number { return x * x * x; }
 function easeOut(x: number): number { return 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3); }

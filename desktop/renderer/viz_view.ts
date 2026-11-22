@@ -51,6 +51,21 @@
 // cannot be shown, Export... (the signed package file) per world, Import world file... and Get more worlds. The
 // View menu gains the selected world's options; a change saves it and rebuilds the figures. A saved world style
 // draws as anime until its world loads (and stays saved if it is gone).
+//
+// P-WORLDS.CAST2 (ADR-0650): while a world is drawn the View menu has a Cast section (Balanced fleet or Same for
+// all, a 10-shade skin ramp with warm, neutral and cool undertones, a hair-color ramp, hair style chips) and the
+// node panel of the hub or a lane has "Customize look" (pin that node's presentation, skin, hair style and hair
+// color). Both persist in viz_cast_prefs (lucid.viz.cast.v1) and rebuild the figures (scene.setCast). A world's
+// `swatch` options draw as the same swatch buttons.
+//
+// P-WORLDS.BUILD1 (ADR-0653): every event the model takes also feeds the build book (viz_build_model): a subagent
+// spawn adds scaffold pieces at the node's build site (the world's buildSites, else a holo ring beside the stage;
+// viz_build.createScaffold riding the node through scene.anchor), a settled tool locks one in, a failed one flickers
+// it red, and done or a commit reveals the build. A build with an artifact puts a chip over its node that opens the
+// artifact popup (viz_artifact_popup: the engine's security gate first, then a sandboxed frame). The node panel of
+// the hub or a live lane offers the world's mini-game templates (miniGames, else the host's two): one starts the
+// brief as an ordinary prompt through the panel's own send path, and only that run's output can become an artifact.
+// The ?vizDemo=1 feed plays one build per demo agent on a separate build channel, each ending in a labeled sample.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -61,7 +76,11 @@ import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridg
 import { hubLanes } from "./orbit_layout.ts";
 import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
-import { createDemo, type VizDemo } from "./viz_demo.ts";
+import { createDemo, DEMO_GAME, type VizDemo } from "./viz_demo.ts";
+import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifactPopup, type ArtifactChips } from "./viz_artifact_popup.ts"; // P-WORLDS.BUILD1 (ADR-0653)
+import { createScaffold } from "./viz_build.ts";
+import { armSample, armTemplate, artifactOf, buildEvent, buildSiteFor, createBuildBook, discardArtifact, dropBuild, keepArtifact, miniGamesFor, type BuildStep } from "./viz_build_model.ts";
+import type { WorldDefinition, WorldScaffold } from "./viz_world_api.ts";
 import { vizBrandFor } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641): the demo probe reports each figure's sponsor
 import { mountLedger, type LedgerView } from "./viz_ledger.ts";
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
@@ -75,8 +94,11 @@ import { mountVizScene, type SceneHit, type SceneNode, type SceneWorld, type Viz
 import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
 import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
+import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
 import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { loadOptions, loadWorlds, parseStyle, saveOption, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
+import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
 
 export interface VizDeps {
   fleetStatus: LucidBridge["fleetStatus"];
@@ -327,8 +349,8 @@ async function importWorldFile(file: File): Promise<void> {
   await refreshWorlds();
 }
 
-/** The View menu's World options (the selected world's colors, choices and toggles). A change saves the value
- *  and rebuilds the figures with it. */
+/** The View menu's World options (the selected world's colors, choices, toggles and swatch ramps). A change
+ *  saves the value and rebuilds the figures with it. */
 function worldOptionsHtml(): string {
   const w = curWorld;
   if (!w || !w.def.options.length) return "";
@@ -337,6 +359,10 @@ function worldOptionsHtml(): string {
     const k = esc(o.key);
     if (o.type === "color") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
     if (o.type === "toggle") return `<label class="viz-wopt"><span>${esc(o.label)}</span><input type="checkbox" data-viz-wopt="${k}"${v === true ? " checked" : ""}></label>`;
+    if (o.type === "swatch") { // P-WORLDS.CAST2 (ADR-0650): a named ramp, drawn as swatch buttons
+      const cur = o.swatches.find((s) => s.value === v) ?? o.swatches.find((s) => s.value === o.default);
+      return `<div class="viz-wopt-sw">${castRowHead(o.label, cur?.label ?? "")}${swatchGrid(o.label, `wopt-${o.key}`, `data-viz-wopt-sw="${k}"`, o.swatches.map((s) => ({ ...s, color: s.value })), cur?.value ?? null, Math.min(10, o.swatches.length))}</div>`;
+    }
     return `<label class="viz-wopt"><span>${esc(o.label)}</span><select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
   };
   return `<div class="viz-vmenu-h">World options</div><div class="viz-wopts" data-viz-wopts>${w.def.options.map(row).join("")}</div>`;
@@ -347,26 +373,177 @@ function fullHex(c: string): string {
   return /^#[0-9a-fA-F]{3}$/.test(c) ? `#${c[1]}${c[1]}${c[2]}${c[2]}${c[3]}${c[3]}` : c;
 }
 
-/** Repaint the World options section of an open View menu (the selection changed under it). */
+/** Repaint the World options and Cast sections of an open View menu (the selection changed under it). */
 function paintWorldOptions(): void {
   const slot = viewPop?.node.querySelector<HTMLElement>("[data-viz-wopts-slot]");
-  if (slot) { slot.innerHTML = worldOptionsHtml(); viewPop?.reposition(); }
+  if (slot) { repaintKeepingFocus(slot, worldOptionsHtml()); viewPop?.reposition(); }
+  paintCast();
+  paintLook();
 }
 
 function onWorldOption(input: HTMLInputElement | HTMLSelectElement): void {
-  const w = curWorld;
-  const key = input.dataset.vizWopt;
-  const o = w?.def.options.find((x) => x.key === key);
-  if (!w || !o) return;
-  const value = o.type === "toggle" ? (input as HTMLInputElement).checked : input.value;
-  curWorld = { def: w.def, options: saveOption(localStorage, w.def, o.key, value) };
-  if (scene) scene.setStyle(effStyle(), curWorld);
+  const o = curWorld?.def.options.find((x) => x.key === input.dataset.vizWopt);
+  if (o) setWorldOption(o.key, o.type === "toggle" ? (input as HTMLInputElement).checked : input.value);
 }
 
-/** The scene's theme: the app's, or (a world) the world's sky decides light, its fog color the base color. */
+function setWorldOption(key: string, value: string | boolean): void {
+  const w = curWorld;
+  if (!w || !w.def.options.some((x) => x.key === key)) return;
+  curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+  if (!scene) return;
+  if (view && JSON.stringify(sceneTheme(view)) !== themeSig) { remount(); return; } // ADR-0652: an option turned the sky light or dark
+  scene.setStyle(effStyle(), curWorld);
+}
+
+// ---------------------------------------------------------------------------------------------- P-WORLDS.CAST2 (ADR-0650)
+// Cast customization for world figures: the View menu's Cast section (the fleet mode, a skin ramp with its
+// undertone, a hair-color ramp and hair style chips) and a node's "Customize look" (its panel), which pins that
+// lane's (or the hub's) look. Both persist in viz_cast_prefs (localStorage lucid.viz.cast.v1) and reach the
+// scene's CastBook through scene.setCast, which rebuilds the figures. Shown while a world is drawn: the built-in
+// Anime and Office casts do not read it.
+
+let castPrefs: CastPrefs = loadCastPrefs(localStorage);
+let lookPop: { id: string; node: HTMLElement; close: () => void; reposition: () => void } | null = null;
+
+/** A ramp of named swatch buttons (one pressed, or none). `attrs` marks each button for the click router, which
+ *  reads the button's data-value; `k` keys them so a repaint keeps keyboard focus. */
+function swatchGrid(label: string, k: string, attrs: string, items: readonly { value: string; label: string; color: string }[], current: string | null, cols: number): string {
+  return `<div class="viz-swatches" role="group" aria-label="${esc(label)}" style="--cols:${cols}">${items.map((s) =>
+    `<button type="button" class="viz-swatch" ${attrs} data-value="${esc(s.value)}" data-k="${esc(`${k}:${s.value}`)}" aria-pressed="${s.value === current}" aria-label="${esc(s.label)}" data-tip="${tipAttr(s.label, label)}" style="--sw:${esc(s.color)}"></button>`).join("")}</div>`;
+}
+
+/** A row of text chips (one pressed, or none), the same contract as swatchGrid. */
+function chipRow(label: string, k: string, attrs: string, items: readonly { value: string; label: string }[], current: string | null, cls: "viz-seg" | "viz-chips"): string {
+  return `<div class="${cls}" role="group" aria-label="${esc(label)}">${items.map((c) =>
+    `<button type="button" class="${cls === "viz-seg" ? "" : "viz-chip"}${c.value === current ? " on" : ""}" ${attrs} data-value="${esc(c.value)}" data-k="${esc(`${k}:${c.value}`)}" aria-pressed="${c.value === current}">${esc(c.label)}</button>`).join("")}</div>`;
+}
+
+/** A one-line label with the current value at its end (and an optional control after it). */
+function castRowHead(label: string, value: string, extra = ""): string {
+  return `<div class="viz-wopt"><span>${esc(label)}</span><span class="viz-cast-val"><b>${esc(value)}</b>${extra}</span></div>`;
+}
+
+/** Replace a section's markup; the focused control (by data-k) keeps focus. */
+function repaintKeepingFocus(root: HTMLElement, html: string): void {
+  const a = document.activeElement instanceof HTMLElement && root.contains(document.activeElement) ? document.activeElement.dataset.k : undefined;
+  root.innerHTML = html;
+  if (a) root.querySelector<HTMLElement>(`[data-k="${CSS.escape(a)}"]`)?.focus({ preventScroll: true });
+}
+
+const hairColorName = (hex: string): string => HAIR_SWATCHES.find((s) => s.value === hex)?.label ?? "";
+const hairStyleName = (id: string): string => HAIR_STYLES.find((h) => h.id === id)?.label ?? id;
+const skinItems = (undertone: Undertone): { value: string; label: string; color: string }[] =>
+  SKIN_RAMP.map((_, i) => ({ value: String(i), label: SKIN_NAMES[i]!, color: skinTone(i, undertone) }));
+const HAIR_COLOR_ITEMS = HAIR_SWATCHES.map((s) => ({ value: s.value, label: s.label, color: s.value }));
+const UNDERTONE_ITEMS = UNDERTONES.map((u) => ({ value: u.id, label: u.label }));
+
+/** The View menu's Cast section (fleet defaults). In Balanced fleet no shade is pressed (the fleet mixes them);
+ *  picking a shade, color or style switches to Same for all. The undertone applies in both modes. */
+function castHtml(): string {
+  if (!curWorld) return "";
+  const f = castPrefs.fleet;
+  const same = f.mode === "same";
+  return `<div class="viz-vmenu-h">Cast</div>
+    <div class="viz-cast">
+      ${chipRow("Cast mode", "cast-mode", `data-viz-cast="mode"`, [{ value: "balanced", label: "Balanced fleet" }, { value: "same", label: "Same for all" }], f.mode, "viz-seg")}
+      ${castRowHead("Skin", same ? SKIN_NAMES[f.skin]! : "Mixed")}
+      ${swatchGrid("Skin shade", "cast-skin", `data-viz-cast="skin"`, skinItems(f.undertone), same ? String(f.skin) : null, 10)}
+      ${chipRow("Undertone", "cast-ut", `data-viz-cast="undertone"`, UNDERTONE_ITEMS, f.undertone, "viz-seg")}
+      ${castRowHead("Hair color", same ? hairColorName(f.hairColor) : "Mixed")}
+      ${swatchGrid("Hair color", "cast-hc", `data-viz-cast="hairColor"`, HAIR_COLOR_ITEMS, same ? f.hairColor : null, 8)}
+      ${castRowHead("Hair style", same ? hairStyleName(f.hair) : "Mixed")}
+      ${chipRow("Hair style", "cast-hair", `data-viz-cast="hair"`, HAIR_STYLES.map((h) => ({ value: h.id, label: h.label })), same ? f.hair : null, "viz-chips")}
+      <p class="viz-cast-note">${same ? "Every figure wears these. Pin one agent's look from its panel." : "Each agent gets its own mixed look. Pick a shade or style to give everyone the same."}</p>
+    </div>`;
+}
+
+function paintCast(): void {
+  const slot = viewPop?.node.querySelector<HTMLElement>("[data-viz-cast-slot]");
+  if (slot) { repaintKeepingFocus(slot, castHtml()); viewPop?.reposition(); }
+}
+
+/** Save, hand to the scene (it rebuilds the figures) and repaint whatever shows them. */
+function setCastPrefs(next: CastPrefs): void {
+  castPrefs = next;
+  saveCastPrefs(localStorage, next);
+  scene?.setCast(next);
+  paintCast();
+  paintLook();
+}
+
+function onCastPick(field: string, value: string): void {
+  const patch: Partial<FleetCast> | null =
+    field === "mode" ? { mode: value === "same" ? "same" : "balanced" }
+    : field === "skin" ? { mode: "same", skin: Number(value) }
+    : field === "undertone" ? { undertone: value as Undertone }
+    : field === "hairColor" ? { mode: "same", hairColor: value }
+    : field === "hair" ? { mode: "same", hair: value as HairStyle }
+    : null;
+  if (patch) setCastPrefs(withFleet(castPrefs, patch)); // withFleet drops anything invalid
+}
+
+/** "Customize look" (the node panel): pin this node's presentation, skin, hair style and hair color. */
+function openLook(id: string): void {
+  if (lookPop) { const again = lookPop.id === id; lookPop.close(); lookPop = null; if (again) return; }
+  if (!view) return;
+  const p = popover(panelEl("[data-viz-panel-acts]"), `<div class="viz-vmenu viz-look" data-viz-look-root></div>`, () => { if (lookPop?.node === p.node) lookPop = null; });
+  lookPop = { id, ...p };
+  paintLook();
+  p.node.addEventListener("click", (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLElement>("[data-viz-look]");
+    if (b) onLookPick(id, b.dataset.vizLook ?? "", b.dataset.value ?? "");
+  });
+  (p.node.querySelector<HTMLElement>("button[aria-pressed=true]") ?? p.node.querySelector<HTMLElement>("button"))?.focus({ preventScroll: true });
+}
+
+function closeLook(): void {
+  lookPop?.close();
+  lookPop = null;
+}
+
+function paintLook(): void {
+  const lp = lookPop;
+  const root = lp?.node.querySelector<HTMLElement>("[data-viz-look-root]");
+  if (!lp || !root) return;
+  const n = model?.nodes.get(lp.id);
+  const a = scene?.castOf(lp.id) ?? null;
+  if (!n || !a || !curWorld) { closeLook(); return; } // the node left, or the world is gone
+  const name = n.kind === "hub" ? "Main" : n.name;
+  const pin: Readonly<CastPin> = pinOf(castPrefs, lp.id) ?? {};
+  const auto = (field: string, on: boolean): string =>
+    `<button type="button" class="viz-chip viz-chip-auto${on ? " on" : ""}" data-viz-look="${field}" data-value="" data-k="look-${field}:auto" aria-pressed="${on}" data-tip="${tipAttr("Auto", "Let the fleet decide this one.")}">Auto</button>`;
+  const styles = HAIR_STYLES.filter((h) => !pin.presentation || h.suits.includes(pin.presentation));
+  repaintKeepingFocus(root, `<div class="viz-vmenu-h">Look of ${esc(name)}</div>
+    ${chipRow("Presentation", "look-pres", `data-viz-look="presentation"`, [{ value: "", label: "Auto" }, ...PRESENTATIONS.map((x) => ({ value: x.id, label: x.label }))], pin.presentation ?? "", "viz-seg")}
+    ${castRowHead("Skin", SKIN_NAMES[a.skinIndex] ?? "", auto("skin", pin.skin === undefined))}
+    ${swatchGrid("Skin shade", "look-skin", `data-viz-look="skin"`, skinItems(pin.undertone ?? castPrefs.fleet.undertone), pin.skin === undefined ? null : String(pin.skin), 10)}
+    ${chipRow("Undertone", "look-ut", `data-viz-look="undertone"`, UNDERTONE_ITEMS, pin.undertone ?? castPrefs.fleet.undertone, "viz-seg")}
+    ${castRowHead("Hair color", hairColorName(a.hairColor), auto("hairColor", pin.hairColor === undefined))}
+    ${swatchGrid("Hair color", "look-hc", `data-viz-look="hairColor"`, HAIR_COLOR_ITEMS, pin.hairColor ?? null, 8)}
+    ${castRowHead("Hair style", hairStyleName(a.hair), auto("hair", pin.hair === undefined))}
+    ${chipRow("Hair style", "look-hair", `data-viz-look="hair"`, styles.map((h) => ({ value: h.id, label: h.label })), pin.hair ?? null, "viz-chips")}
+    <div class="viz-vmenu-row"><button type="button" class="btn-mini orbit-btn" data-viz-look="reset" data-k="look-reset"${Object.keys(pin).length ? "" : " disabled"}>Reset to balanced</button></div>
+    <p class="viz-cast-note">This look follows ${esc(name)} across worlds and restarts.</p>`);
+  lp.reposition();
+}
+
+function onLookPick(id: string, field: string, value: string): void {
+  if (field === "reset") { setCastPrefs(withPin(castPrefs, id, null)); return; }
+  const pin: CastPin = { ...(pinOf(castPrefs, id) ?? {}) };
+  if (field === "presentation") { if (value) pin.presentation = value as Presentation; else delete pin.presentation; }
+  else if (field === "skin") { if (value) pin.skin = Number(value); else { delete pin.skin; delete pin.undertone; } }
+  else if (field === "undertone") pin.undertone = value as Undertone;
+  else if (field === "hair") { if (value) pin.hair = value as HairStyle; else delete pin.hair; }
+  else if (field === "hairColor") { if (value) pin.hairColor = value; else delete pin.hairColor; }
+  else return;
+  setCastPrefs(withPin(castPrefs, id, pin)); // withPin drops anything invalid (and a style the pinned presentation does not wear)
+}
+
+/** The scene's theme: the app's, or (a world) the world's sky decides light, its fog color the base color; both
+ *  for the user's options (P-WORLDS.FX1, ADR-0652: environmentFor). */
 function sceneTheme(at: HTMLElement): VizTheme {
   const t = readTheme(at);
-  const env = curWorld?.def.environment;
+  const env = curWorld ? worldEnvironment(curWorld.def, curWorld.options) : null;
   if (!env) return t;
   return { ...t, light: env.light, bg: toHex(env.fog.color, t.bg), txt: env.light ? "#1a1d26" : "#e8eaf2" };
 }
@@ -444,11 +621,39 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // so a script can show a world; false when that style cannot be drawn now.
     worlds: () => worlds.map((e) => ({ id: e.installed.id, style: e.style, label: e.label, access: e.access, error: e.error })),
     style: (id: string): boolean => selectStyle(parseStyle(id)) && effStyle() === id,
+    // P-WORLDS.FX1 (ADR-0652): what the edges draw and where (read-only), and a QA preview of a world's edges
+    // (plasma-light, a token) merged as if its environmentFor returned them, for packs not yet migrated to v2.
+    fx: () => scene?.edgeFxInfo() ?? null,
+    fxPreview: (edges: Parameters<VizSceneHandle["previewEdges"]>[0]): boolean => scene?.previewEdges(edges) ?? false,
+    // P-WORLDS.CAST2 (ADR-0650): the cast preferences in effect (a frozen copy of lucid.viz.cast.v1).
+    castPrefs: (): CastPrefs => castPrefs,
+    // P-WORLDS.KIT2 (ADR-0654): the character kit's lineup (presets, hair at every tier, the sleeve coverage pass
+    // and three PNG sheets), drawn in its own offscreen renderer and freed before it returns; never the scene's.
+    kitLineup: (o?: Parameters<typeof kitLineup>[0]): KitLineupReport => kitLineup(o),
+    // P-VIZ.GPU1 (ADR-0651): the Quality mode and tier, the probed GPU, a governor step-down, and what the renderer
+    // is doing (pixel ratio, MSAA, bloom, SSAO, DOF, contact shadows, the frame-time check). Read-only.
+    quality: () => (deps ? { mode: deps.perf.mode(), tier: deps.perf.tier(), gpu: deps.perf.gpu(), steppedFrom: deps.perf.steppedFrom(), scene: scene?.quality() ?? null } : null),
+    // P-WORLDS.BUILD1 (ADR-0653): each node's build (the book and the scaffold drawn for it, with its chip's box)
+    // and the artifact popup's state (gate verdict, iframe sandbox and src). Read-only.
+    builds: () => [...builds.builds].map(([id, b]) => {
+      const sc = scaffolds.get(id);
+      const chip = view?.querySelector<HTMLElement>(`[data-viz-art-chip="${CSS.escape(id)}"]`);
+      const r = chip && !chip.hidden ? chip.getBoundingClientRect() : null;
+      return {
+        id, pieces: b.pieces, locked: b.locked, failed: b.failed, revealed: b.revealed, template: b.template?.id ?? null,
+        artifact: b.artifact ? { id: b.artifact.id, title: b.artifact.title, demo: b.artifact.demo, kept: b.artifact.kept, bytes: b.artifact.html.length } : null,
+        scaffold: sc ? { pieces: sc.pieces, locked: sc.locked, revealed: sc.revealed } : null,
+        chip: r ? { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height } : null,
+      };
+    }),
+    artifact: () => artifactPopupState(),
   };
   void refreshWorlds(); // P-WORLDS.1: the scene starts in what it can draw now and switches once the saved world loads
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
   ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
+  builds = createBuildBook(); // P-WORLDS.BUILD1 (ADR-0653): builds live as long as the model
+  chips = mountArtifactChips($("[data-viz-stage]", view) as HTMLElement, (id) => scene?.screenBoxOf(id) ?? null, openChip);
   const rows = ledgerRows(ledger); // what this session already counted; the scene's nodes join on the first tick
   ledgerView.paint(rows, ledgerSummary(rows));
   paintToggles();
@@ -473,6 +678,7 @@ export function closeViz(): void {
   tray?.disarm();
   offBus?.(); offBus = null;
   ledgerView?.destroy(); ledgerView = null;
+  closeArtifactPopup(); chips?.destroy(); chips = null; // P-WORLDS.BUILD1 (ADR-0653); the scene disposes the scaffolds
   headRo?.disconnect(); headRo = null;
   stopTimers();
   for (const w of watches.values()) w.stop();
@@ -588,6 +794,10 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-viz-panel-expand]")) { expandPanel(); return; }
   const act = t.closest("[data-viz-act]") as HTMLElement | null;
   if (act) { void runAction(act.dataset.vizNode ?? "", act.dataset.vizAct as VizAsk, act); return; }
+  const look = t.closest<HTMLElement>("[data-viz-look-open]");
+  if (look) { openLook(look.dataset.vizLookOpen ?? ""); return; } // P-WORLDS.CAST2 (ADR-0650)
+  const game = t.closest<HTMLButtonElement>("[data-viz-game]");
+  if (game && !game.disabled) { void startMiniGame(game.dataset.vizNode ?? "", game.dataset.vizGame ?? ""); return; } // P-WORLDS.BUILD1 (ADR-0653)
 }
 
 /** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). A narrow
@@ -608,6 +818,7 @@ function openViewMenu(anchor: HTMLElement): void {
     <div class="viz-vmenu-h">Quality</div>
     <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
     <div data-viz-wopts-slot>${worldOptionsHtml()}</div>
+    <div data-viz-cast-slot>${castHtml()}</div>
     ${recRows}
   </div>`, () => { viewPop = null; });
   viewPop = p;
@@ -625,7 +836,12 @@ function openViewMenu(anchor: HTMLElement): void {
     if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintViewMenu(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
     if (t.closest("[data-viz-quality]")) { cycleQuality(); return; }
     if (t.closest("[data-viz-rec]")) { if (rec) stopRec("user"); else startRec(); return; }
-    if (t.closest("[data-viz-recs]")) { p.close(); viewPop = null; openRecs(anchor); }
+    if (t.closest("[data-viz-recs]")) { p.close(); viewPop = null; openRecs(anchor); return; }
+    // P-WORLDS.CAST2 (ADR-0650): a world's swatch option, and the Cast section.
+    const sw = t.closest<HTMLElement>("[data-viz-wopt-sw]");
+    if (sw) { setWorldOption(sw.dataset.vizWoptSw ?? "", sw.dataset.value ?? ""); paintWorldOptions(); return; }
+    const cb = t.closest<HTMLElement>("[data-viz-cast]");
+    if (cb) onCastPick(cb.dataset.vizCast ?? "", cb.dataset.value ?? "");
   });
 }
 
@@ -707,14 +923,27 @@ function paintQuality(): void {
   const b = viewPop ? ($("[data-viz-quality]", viewPop.node) as HTMLElement | null) : null;
   if (!b || !deps) return;
   const m = deps.perf.mode(), tier = deps.perf.tier();
-  b.innerHTML = `${icon("gauge", 13)} ${m === "auto" ? `Auto \u00b7 ${tier}` : m[0]!.toUpperCase() + m.slice(1)}`;
-  b.setAttribute("data-tip", tipValue("Quality", `Auto, Full, Reduced or Minimal: the same Performance mode as the Knowledge Graph. Full: 6000 particles, 60 fps, glass refraction and bloom. Reduced: 2500 particles, 30 fps. Minimal: 600 particles, 20 fps, no lightning. Now: ${tier}.`));
+  // P-VIZ.GPU1 (ADR-0651): Auto names the GPU it decided on ("Auto · ultra (RTX 4070)").
+  const gpu = deps.perf.gpu();
+  const from = deps.perf.steppedFrom();
+  b.innerHTML = `${icon("gauge", 13)} ${esc(m === "auto" ? `Auto \u00b7 ${tier}${gpu?.name ? ` (${gpu.name})` : ""}` : m[0]!.toUpperCase() + m.slice(1))}`;
+  const gpuLine = gpu?.cls ? ` GPU: ${gpu.name ?? "unknown"}, ${gpu.cls}.` : "";
+  const stepLine = from ? ` Stepped down from ${from}: frames missed the budget.` : "";
+  b.setAttribute("data-tip", tipValue("Quality", `Auto, Full, Reduced, Minimal, Ultra or Cinematic: the same Performance mode as the Knowledge Graph. Auto picks by GPU, battery and CPU, and steps down one level when frames miss the budget. Cinematic: ultra plus ambient occlusion and depth of field. Ultra: 12000 particles, sharper pixels, smoothed edges, contact shadows, bloom on light worlds too. Full: 6000 particles, 60 fps, glass refraction and bloom. Reduced: 2500 particles, 30 fps. Minimal: 600 particles, 20 fps, no lightning. Now: ${tier}.${gpuLine}${stepLine}`));
 }
 
 function cycleQuality(): void {
   if (!deps) return;
   const m = deps.perf.cycleMode(); // notifies onChange, which repaints and remounts
-  showToast({ title: `Quality: ${m}`, desc: m === "auto" ? `Following battery and CPU (now: ${deps.perf.tier()}). The Knowledge Graph uses the same mode.` : "The Knowledge Graph uses the same mode.", timeout: 2400 });
+  showToast({ title: `Quality: ${m}`, desc: m === "auto" ? `Following GPU, battery and CPU (now: ${deps.perf.tier()}). The Knowledge Graph uses the same mode.` : "The Knowledge Graph uses the same mode.", timeout: 2400 });
+}
+
+/** P-VIZ.GPU1 (ADR-0651): the scene's 3 s frame-time check missed: Auto steps down one tier (an explicit tier
+ *  is the user's and stays). The tier change remounts through perf.onChange. */
+function onFrameBudget(verdict: "ok" | "miss"): void {
+  if (verdict !== "miss" || !deps || deps.perf.mode() !== "auto") return;
+  const next = deps.perf.stepDown();
+  if (next) showToast({ title: `Quality: Auto \u00b7 ${next}`, desc: "Frames missed the budget, so Visualize stepped down one level. Pick a Quality level in View to choose your own.", timeout: 3200 });
 }
 
 // ---------------------------------------------------------------------------------------------- scene
@@ -773,10 +1002,13 @@ function mount(): void {
   scene.onPick(onPick);
   scene.onDoublePick(onDoublePick);
   scene.onUserCamera(onUserCamera);
+  scene.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
   scene.setStyle(effStyle(), curWorld);
   tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
+  scene.onFrameBudget(onFrameBudget); // P-VIZ.GPU1 (ADR-0651): the 3 s frame-time check
   syncScene();
+  scaffoldSig = ""; syncScaffolds(); // P-WORLDS.BUILD1 (ADR-0653): every build stands again on the new scene
   requestAnimationFrame(() => requestAnimationFrame(() => { loading.hidden = true; }));
   scene.canvas.focus({ preventScroll: true });
 }
@@ -823,6 +1055,7 @@ function syncScene(): void {
 function onBus(ev: VizBusEvent): void {
   if (!model || !applyEvent(model, ev, Date.now())) return;
   noteLedger(ev);
+  noteBuild(ev.source, ev.e); // P-WORLDS.BUILD1 (ADR-0653)
   if (ev.source === HUB_ID) return;
   let out = outputs.get(ev.source);
   if (!out) { out = createOutput(); outputs.set(ev.source, out); }
@@ -869,7 +1102,12 @@ function onTick(): void {
     const st = demo.step(demoPrev, now);
     demoPrev = now;
     for (const a of st.asks) markAsked(model, a.id, a.ask);
-    for (const e of st.events) if (applyEvent(model, e, now)) noteLedger(e);
+    for (const e of st.events) if (applyEvent(model, e, now)) { noteLedger(e); noteBuild(e.source, e.e); }
+    // P-WORLDS.BUILD1 (ADR-0653): the demo's build channel; each build's spawn arms the labeled sample it ends in.
+    for (const b of st.builds) {
+      if (b.e.type === "subagent") armSample(builds, b.source, DEMO_GAME);
+      noteBuild(b.source, b.e);
+    }
   }
   tick(model, now);
   const fresh = drainEvents(model);
@@ -880,6 +1118,7 @@ function onTick(): void {
     paintCensus(now);
     paintLedger(now);
     if (hover) paintTip(hover.hit, hover.x, hover.y);
+    syncScaffolds(); // P-WORLDS.BUILD1: a style, view or tier change rebuilds them; a gone node's build goes
     if (panel) paintPanel();
     if (view && themeSig && JSON.stringify(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
   }
@@ -1083,6 +1322,7 @@ function openPanel(id: string): void {
 }
 
 function closePanel(): void {
+  closeLook(); // P-WORLDS.CAST2: the look menu belongs to the panel
   if (!panel || !view) { panel = null; return; }
   cancelAnimationFrame(panel.raf);
   window.clearTimeout(panel.flipTimer);
@@ -1145,7 +1385,9 @@ function paintPanel(): void {
   const parent = n.parent ? model.nodes.get(n.parent) : undefined;
   const ended = n.goneAt !== null || n.laneStatus === "stopped";
   const busy = n.status === "active" || n.status === "waiting" || sending.has(id);
-  const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, demo ? 1 : 0, parent?.name].join("|");
+  // P-WORLDS.CAST2 (ADR-0650): a world's human figure (the hub or a lane) can have its look pinned.
+  const castable = n.kind !== "subagent" && !!curWorld && !!scene?.castOf(id);
+  const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, demo ? 1 : 0, parent?.name, castable, buildWorld()?.id ?? ""].join("|"); // P-WORLDS.BUILD1: the templates follow the world
   ($("[data-viz-panel-st]", box) as HTMLElement).textContent = status;
   if (headSig !== panel.headSig) {
     panel.headSig = headSig;
@@ -1174,6 +1416,11 @@ function paintPanel(): void {
         + btn("end", "End agent", alive, alive ? "Stops the agent. Its card stays readable and Respawn brings it back." : "This agent has already ended.")
         + btn("kill", armed ? `Click again to kill ${n.name}` : "Kill", n.goneAt === null, "Removes the agent now, even mid-turn. Asks once more before it acts.", true);
     }
+    if (castable) {
+      const who = n.kind === "hub" ? "Main" : n.name;
+      acts += `<button type="button" class="viz-panel-act" data-viz-look-open="${esc(id)}" aria-haspopup="true" data-tip="${tipAttr("Customize look", `Pin ${who}'s presentation, skin, hair style and hair color. The look follows ${who} across worlds and restarts.`)}">Customize look</button>`;
+    }
+    if (n.kind !== "subagent") acts += miniGameActs(n, ended); // P-WORLDS.BUILD1 (ADR-0653)
     panelEl("[data-viz-panel-acts]").innerHTML = acts;
     // The prompt box: what it does here, or why it is off.
     const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
@@ -1350,6 +1597,8 @@ function onKey(e: KeyboardEvent): void {
   if (active && active !== document.body && !view.contains(active)) return; // a layer above us owns this Esc
   e.preventDefault(); e.stopPropagation();
   if (ledgerView?.ownsFocus()) { ledgerView.collapse(); return; } // P-VIZ.6: Esc inside the ledger folds it back
+  if (lookPop) { closeLook(); return; } // P-WORLDS.CAST2 (ADR-0650)
+  if (artifactPopupState().open) { closeArtifactPopup(); return; } // P-WORLDS.BUILD1 (ADR-0653)
   if (viewPop) { viewPop.close(); viewPop = null; return; }
   if (playerOpen()) { closePlayer(); return; }
   if (recPop) { recPop.close(); recPop = null; return; }
@@ -1526,3 +1775,133 @@ function clockStr(ms: number): string {
 }
 
 function mb(bytes: number): string { return `${(bytes / 1_048_576).toFixed(bytes < 10_485_760 ? 1 : 0)} MB`; }
+
+// ---------------------------------------------------------------------------------------------- P-WORLDS.BUILD1 (ADR-0653)
+// Build sites: the build book (viz_build_model, fed after the model took an event), the scaffold riding each building
+// node (viz_build through scene.anchor), the artifact chips and popup (viz_artifact_popup) and the mini-game templates
+// in the node panel.
+
+/** What each node builds and its artifact; made new on every open, like the model. */
+let builds = createBuildBook();
+/** The scaffold drawn for each node on the current scene (the scene disposes them with itself or their node). */
+const scaffolds = new Map<string, WorldScaffold>();
+/** The style, world, view and tier the scaffolds were made for; a change rebuilds them from the book. */
+let scaffoldSig = "";
+let chips: ArtifactChips | null = null;
+
+/** The world being drawn (its build sites and templates), or null in a built-in style. */
+function buildWorld(): WorldDefinition | null {
+  const s = effStyle();
+  return s === "anime" || s === "professional" ? null : curWorld?.def ?? null;
+}
+
+/** The node's scaffold, made empty at its build site when it has none yet. Null without a scene, for a subagent, or
+ *  when the scene does not have the node yet (syncScaffolds tries again). */
+function scaffoldFor(id: string): WorldScaffold | null {
+  const have = scaffolds.get(id);
+  if (have) return have;
+  const n = model?.nodes.get(id);
+  if (!scene || !deps || !n || n.kind === "subagent") return null;
+  const def = buildWorld();
+  const site = buildSiteFor(def, n.kind === "hub" ? "hub" : "agent", def ? def.environment.edges.colorA : effStyle() === "professional" ? "#ffd166" : "#8fe3ff");
+  let seed = 7;
+  for (let i = 0; i < id.length; i++) seed = (seed * 31 + id.charCodeAt(i)) | 0;
+  const sc = createScaffold({ style: site.style, color: site.color, tier: deps.perf.tier(), flat: prefs.view === "2d", seed });
+  const ok = scene.anchor(id, "build", {
+    object: sc.group, offset: site.anchor, update: sc.update,
+    dispose: () => { sc.dispose(); if (scaffolds.get(id) === sc) scaffolds.delete(id); },
+  });
+  if (!ok) { sc.dispose(); return null; }
+  scaffolds.set(id, sc);
+  return sc;
+}
+
+/** Play the book's steps on the scaffolds and chips. A scaffold made by a step starts from the book's state before it. */
+function applyBuildSteps(steps: readonly BuildStep[]): void {
+  for (const s of steps) {
+    const b = builds.builds.get(s.node);
+    const fresh = !scaffolds.has(s.node);
+    switch (s.kind) {
+      case "reset":
+        scaffolds.get(s.node)?.reset();
+        chips?.set(s.node, artifactOf(builds, s.node)); // a kept artifact stays
+        break;
+      case "add": {
+        const sc = scaffoldFor(s.node);
+        if (sc && fresh && b) sc.restore(Math.max(0, b.pieces - s.count), Math.min(b.locked, Math.max(0, b.pieces - s.count)), false);
+        sc?.addPieces(s.count);
+        break;
+      }
+      case "lock": scaffolds.get(s.node)?.lockIn(); break;
+      case "fail": scaffolds.get(s.node)?.fail(); break;
+      case "reveal": {
+        const sc = scaffoldFor(s.node);
+        if (sc && fresh && b) sc.restore(b.pieces, 0, false);
+        sc?.reveal();
+        if (s.artifact) chips?.set(s.node, s.artifact);
+        break;
+      }
+    }
+  }
+  if (steps.length) scene?.wake();
+}
+
+/** An event the model took on `source` (or the demo's build channel) also drives its build. */
+function noteBuild(source: string, e: { readonly type: string }): void {
+  applyBuildSteps(buildEvent(builds, source, e, Date.now()));
+}
+
+/** Twice a second and after a mount: rebuild the scaffolds when the style, world, view or tier changed, stand up a
+ *  build whose node joined the scene late, and drop the build of a node that left. */
+function syncScaffolds(): void {
+  if (!scene || !deps || !model) return;
+  const sig = `${effStyle()}|${buildWorld()?.id ?? ""}|${prefs.view}|${deps.perf.tier()}`;
+  if (sig !== scaffoldSig) {
+    scaffoldSig = sig;
+    for (const id of [...scaffolds.keys()]) scene.anchor(id, "build", null);
+  }
+  for (const [id, b] of builds.builds) {
+    if (!model.nodes.has(id)) { dropBuild(builds, id); chips?.set(id, null); continue; }
+    if ((b.pieces > 0 || b.revealed) && !scaffolds.has(id)) scaffoldFor(id)?.restore(b.pieces, b.locked, b.revealed);
+  }
+}
+
+/** A chip was clicked: its artifact's popup (the gate first; Keep and Discard act on the book). */
+function openChip(node: string, chip: HTMLElement): void {
+  const a = artifactOf(builds, node);
+  if (!a) { chips?.set(node, null); return; }
+  openArtifactPopup(chip, a, {
+    keep: (x) => { keepArtifact(builds, x.id); },
+    discard: (x) => { applyBuildSteps(discardArtifact(builds, x.id)); chips?.set(x.node, null); },
+  });
+}
+
+/** The node panel's Mini game row: the world's templates (or the host's), each an ordinary task for this node. */
+function miniGameActs(n: VizNode, ended: boolean): string {
+  const who = n.kind === "hub" ? "Main" : n.name;
+  const def = buildWorld();
+  const site = buildSiteFor(def, n.kind === "hub" ? "hub" : "agent", "#ffffff").label.toLowerCase();
+  const off = demo ? "DEMO: the demo agents build their own sample game. Templates go to real agents."
+    : n.kind === "agent" && (ended || n.status === "killed") ? `${who} has ended. Respawn it from the Fleet panel first.`
+    : "";
+  const why = `Sends this brief to ${who} as an ordinary task. Its subagents build at the ${site}; the single HTML file it ends with opens from a chip over ${who} after the security gate, untrusted and sandboxed.`;
+  return `<div class="viz-panel-build" role="group" aria-label="Mini games"><span class="viz-panel-build-h">Mini game</span>${miniGamesFor(def).map((g) =>
+    `<button type="button" class="viz-panel-act" data-viz-game="${esc(g.id)}" data-viz-node="${esc(n.id)}"${off ? " disabled" : ""} data-tip="${tipAttr(g.label, off || why)}">${esc(g.label)}</button>`).join("")}</div>`;
+}
+
+/** Start a template on the panel's node: arm the build book (only this run's output can become an artifact), then
+ *  send the brief through the panel's own send path (Main via the composer; a lane gets it now or staged). */
+async function startMiniGame(id: string, gameId: string): Promise<void> {
+  if (!view || !model || !panel || panel.id !== id || demo) return;
+  const n = model.nodes.get(id);
+  const game = miniGamesFor(buildWorld()).find((g) => g.id === gameId);
+  if (!n || n.kind === "subagent" || !game) return;
+  const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
+  if (input.disabled) return;
+  const staged = n.kind === "hub" ? !!deps?.mainBusy() : sending.has(id) || n.status === "active" || n.status === "waiting" || n.laneStatus === "starting";
+  applyBuildSteps(armTemplate(builds, id, game, staged, Date.now()));
+  const draft = input.value;
+  input.value = game.brief;
+  await sendFromPanel();
+  if (!input.value && draft) input.value = draft; // sent: the user's own draft comes back
+}

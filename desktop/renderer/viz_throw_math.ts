@@ -91,6 +91,8 @@ const STORM_FX: Readonly<Record<PerfTier, StormFx>> = {
   full: { strikes: 6, papers: 36, sparks: 30 },
   reduced: { strikes: 3, papers: 16, sparks: 12 },
   minimal: { strikes: 1, papers: 6, sparks: 0 },
+  ultra: { strikes: 8, papers: 48, sparks: 44 }, // P-VIZ.GPU1 (ADR-0651)
+  cinematic: { strikes: 8, papers: 48, sparks: 44 },
 };
 const STORM_NONE: StormFx = { strikes: 0, papers: 0, sparks: 0 };
 

@@ -13,6 +13,8 @@
 // says which folder each agent works in, so the session ledger fills through the same calls.
 // P-VIZ.7 (ADR-0641): six agents on six sponsors and every size class (a self-hosted model wears TL187), and
 // three git commits a cycle (a lane's commit then push, a private lane's commit, Main's commit-namespace commit).
+// P-WORLDS.BUILD1 (ADR-0653): one build per demo agent a cycle on a separate build channel (DemoStep.builds: pieces,
+// lock-ins, a red flicker, the reveal), each ending in DEMO_GAME, a small sample game labeled as a demo sample.
 
 import type { VizBusEvent } from "./viz_bus.ts";
 import { HUB_ID, type VizAsk, type VizLaneInput, type VizRunInput } from "./viz_model.ts";
@@ -59,7 +61,56 @@ const demoEdit = (id: string, path: string, status: "open" | undefined, del: num
   demoTool(id, "edit", path, { oldText: demoLines("old", del), newText: demoLines("new", add) }, status);
 const demoWrite = (id: string, path: string, lines: number) => demoTool(id, "write", path, { content: demoLines("line", lines) }, "open");
 
-export interface DemoStep { events: VizBusEvent[]; asks: { id: string; ask: VizAsk }[] }
+/** `builds` (P-WORLDS.BUILD1, ADR-0653): the build channel. The view feeds these to the build book only (never to
+ *  the model or the ledger), so the demo's nodes and totals stay as they were. */
+export interface DemoStep { events: VizBusEvent[]; asks: { id: string; ask: VizAsk }[]; builds: VizBusEvent[] }
+
+/** P-WORLDS.BUILD1 (ADR-0653): one build per demo agent a cycle: [lane, phase s it starts, helpers, then the steps
+ *  at their phase seconds]. Each build starts with a subagent spawn on the build channel (its pieces) and ends with
+ *  the turn's done, except demo-1, whose git commit at 27 s (a real event above) reveals its build. Every build ends
+ *  in DEMO_GAME, a sample labeled as one. */
+const BUILDS: readonly { lane: string; at: number; helpers: number; steps: readonly (readonly [number, "lock" | "fail" | "done"])[] }[] = [
+  { lane: "demo-3", at: 3, helpers: 3, steps: [[5, "lock"], [6.5, "fail"], [8, "lock"], [10, "lock"], [12, "done"]] },
+  { lane: "demo-2", at: 8, helpers: 3, steps: [[10, "lock"], [12, "lock"], [13, "fail"], [14, "lock"], [16, "done"]] },
+  { lane: "demo-4", at: 14, helpers: 2, steps: [[17, "lock"], [19, "lock"], [21, "done"]] },
+  { lane: "demo-1", at: 20, helpers: 2, steps: [[22, "lock"], [23.5, "lock"]] },
+  { lane: "demo-5", at: 24, helpers: 3, steps: [[26, "lock"], [28, "lock"], [30, "lock"], [32, "done"]] },
+  { lane: "demo-6", at: 30, helpers: 2, steps: [[33, "lock"], [34, "fail"], [36, "lock"], [38, "done"]] },
+];
+
+/** P-WORLDS.BUILD1 (ADR-0653): the demo's sample mini game, a self-contained HTML target-tap game (inline CSS and
+ *  JS, no network), labeled DEMO SAMPLE in its title, its top bar and every chip and popup that shows it. It sets
+ *  body[data-ready] once its script ran (the real-UI demo checks the sandbox let it run). Under 8 KB. */
+export const DEMO_GAME: { readonly title: string; readonly html: string } = {
+  title: "Target tap (demo sample)",
+  html: `<!doctype html><html><head><meta charset="utf-8"><title>Target tap (demo sample)</title><style>
+html,body{margin:0;height:100%;font:14px system-ui,sans-serif;background:#0f1724;color:#e8eefc;overflow:hidden;user-select:none}
+#bar{display:flex;gap:14px;align-items:center;padding:8px 12px;background:#17233a}#bar b{color:#ffd166}
+#tag{margin-left:auto;font-size:11px;letter-spacing:.08em;color:#ff9f43;border:1px solid #ff9f43;border-radius:999px;padding:1px 8px;white-space:nowrap}
+#field{position:absolute;left:0;right:0;top:38px;bottom:0}
+.t{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;padding:0;border-radius:50%;border:0;cursor:pointer;animation:p .25s ease-out;
+background:radial-gradient(circle,#fff 0 18%,#ff4d6d 19% 42%,#fff 43% 60%,#ff4d6d 61%)}
+@keyframes p{from{transform:scale(.2)}}
+#go{position:absolute;left:0;right:0;top:38px;bottom:0;display:grid;place-items:center;text-align:center}
+#start{font:inherit;font-weight:700;padding:10px 22px;border-radius:10px;border:0;background:#ffd166;color:#111;cursor:pointer}
+</style></head><body>
+<div id="bar"><span>Score <b id="sc">0</b></span><span>Time <b id="tm">30</b></span><span id="tag">DEMO SAMPLE</span></div>
+<div id="field"></div>
+<div id="go"><div><p id="msg">Tap the targets before they fade.</p><button id="start" type="button">Play</button></div></div>
+<script>
+(function(){
+var f=document.getElementById("field"),sc=document.getElementById("sc"),tm=document.getElementById("tm"),go=document.getElementById("go"),msg=document.getElementById("msg"),st=document.getElementById("start");
+var score=0,left=30,spawn=0,tick=0;
+function add(){var t=document.createElement("button");t.className="t";t.type="button";t.setAttribute("aria-label","target");
+t.style.left=(8+Math.random()*84)+"%";t.style.top=(10+Math.random()*80)+"%";
+t.onclick=function(){score++;sc.textContent=score;t.remove();};f.appendChild(t);setTimeout(function(){t.remove();},1400);}
+function end(){clearInterval(spawn);clearInterval(tick);f.textContent="";msg.textContent="Time! You hit "+score+" targets.";st.textContent="Play again";go.style.display="grid";}
+st.onclick=function(){score=0;left=30;sc.textContent="0";tm.textContent="30";go.style.display="none";
+spawn=setInterval(add,650);tick=setInterval(function(){left--;tm.textContent=left;if(left<=0)end();},1000);add();};
+document.body.setAttribute("data-ready","1");
+})();
+</script></body></html>`,
+};
 
 export interface VizDemo {
   lanes(now: number): VizLaneInput[];
@@ -158,14 +209,28 @@ export function createDemo(t0: number): VizDemo {
     step(prev, now) {
       const events: VizBusEvent[] = [];
       const asks: { id: string; ask: VizAsk }[] = [];
-      if (now <= prev) return { events, asks };
+      const builds: VizBusEvent[] = [];
+      if (now <= prev) return { events, asks, builds };
       const a = prev - t0, b = now - t0;
+      const due = (k: number, phase: number): boolean => { const at = k * DEMO_CYCLE_MS + phase * 1000; return at > a && at <= b; };
       for (let k = Math.floor(a / DEMO_CYCLE_MS); k <= Math.floor(b / DEMO_CYCLE_MS); k++) {
         for (const [phase, source, what] of oneShots(k)) {
-          const at = k * DEMO_CYCLE_MS + phase * 1000;
-          if (at <= a || at > b) continue;
+          if (!due(k, phase)) continue;
           if (typeof what === "string") asks.push({ id: source, ask: what });
           else events.push({ source, origin: "demo", e: what });
+        }
+        // P-WORLDS.BUILD1 (ADR-0653): the build channel, in phase order per lane.
+        for (const bd of BUILDS) {
+          if (due(k, bd.at)) {
+            const assignments = Array.from({ length: bd.helpers }, (_, i) => `Build part ${i + 1} of the mini game`);
+            const spawn = { type: "subagent", id: `build-${bd.lane}-${k}`, agent: "task", title: "Build the mini game", assignments };
+            builds.push({ source: bd.lane, origin: "demo", e: spawn });
+          }
+          bd.steps.forEach(([phase, what], i) => {
+            if (!due(k, phase)) return;
+            const e = what === "done" ? { type: "done" } : { type: "tool", id: `build-${bd.lane}-${k}-${i}`, name: "edit", status: what === "lock" ? "done" : "failed" };
+            builds.push({ source: bd.lane, origin: "demo", e });
+          });
         }
       }
       const dt = Math.min(1000, now - prev) / 1000;
@@ -176,7 +241,7 @@ export function createDemo(t0: number): VizDemo {
           events.push({ source, origin: "demo", e: token });
         }
       }
-      return { events, asks };
+      return { events, asks, builds };
     },
     act(id, ask, now) {
       if (LANES.some((l) => l.id === id)) acts.set(id, { ask, at: now });

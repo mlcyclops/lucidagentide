@@ -83,7 +83,7 @@ import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBI
 import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
-import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
 import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
@@ -1025,11 +1025,11 @@ async function renderSessions(): Promise<void> {
 // and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
 let warmedTranscripts = false;
 async function warmTranscripts(data: SessionList): Promise<void> {
-  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  if (warmedTranscripts || baseTier(perfWatch.tier()) !== "full") return;
   warmedTranscripts = true;
   const run = async (): Promise<void> => {
     for (const s of data.sessions.slice(0, 5)) {
-      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (baseTier(perfWatch.tier()) !== "full") break; // unplugged mid-warm -> stop spending
       if (cachedTranscript(s.id)) continue;
       const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
       if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
@@ -6503,7 +6503,7 @@ function sceneFor(season: SeasonDef | undefined): SceneId | null {
 }
 function backdropMotion(): BackdropMotion {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
-  const tier = perfWatch.tier();
+  const tier = baseTier(perfWatch.tier());
   return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
 }
 /** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
@@ -18529,24 +18529,26 @@ function wire(): void {
     hideKgResults();
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
-  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal (-> ultra -> cinematic, P-VIZ.GPU1:
+  // the graph treats both as full); auto follows battery, CPU and GPU.
   $("#kgPerf")?.addEventListener("click", () => {
     const m = perfWatch.cycleMode();
     paintPerfChip();
     kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
     showToast({
       title: `Performance mode: ${m}`,
-      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+      desc: m === "auto" ? `Following battery, CPU and GPU (now: ${perfWatch.tier()}).`
         : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
         : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
-        : "Full fidelity.",
+        : m === "full" ? "Full fidelity."
+        : `Full fidelity here; Visualize renders its ${m} tier.`,
       timeout: 2600,
     });
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || baseTier(perfWatch.tier()) !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing

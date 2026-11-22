@@ -14,8 +14,10 @@ import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeom
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ANIME_HEIGHT } from "./viz_anime.ts";
 import { drawEmblem } from "./viz_brand.ts";
+import { createScaffold } from "./viz_build.ts";
 import { CUBE } from "./viz_model.ts";
 import { WORLD_API_VERSION, type WorldHost, type WorldKit } from "./viz_world_api.ts";
+import { character } from "./viz_world_character.ts";
 
 /** viz_anime.toonGrad's tones: 2 steps flat, 3 in 3D. */
 const GRADS = new Map<number, THREE.DataTexture>();
@@ -138,6 +140,8 @@ const kit: WorldKit = {
     in: (t) => { const x = clamp01(t); return x * x * x; },
     back: (t) => { const x = clamp01(t), c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); },
   },
+  scaffold: createScaffold, // P-WORLDS.BUILD1 (ADR-0653): the build-site scaffolding the host draws too
+  character, // P-WORLDS.KIT2 (ADR-0654): bodies, hair, sleeve-safe shoulders, torso and face features (viz_world_character.ts)
 };
 
 /** The host every world module's default export receives: three.js, the contract version and the kit. */

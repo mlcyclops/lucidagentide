@@ -1765,3 +1765,28 @@ demo-P-WORLDS.1: ## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds: signed world pack
 demo-P-WORLDS.CAST1: ## P-WORLDS.CAST1 (ADR-0649): balanced casting for world figures: world API v2 (appearance, castRoles), mixed world seeds so v1 packs vary too, one cast book per scene. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_cast_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_worlds_cast_1.mjs
+
+.PHONY: demo-P-WORLDS.KIT2
+demo-P-WORLDS.KIT2: ## P-WORLDS.KIT2 (ADR-0654): the shared character kit (WorldKit.character): body shapes for feminine, masculine and neutral in 4 builds, 16 hair styles at every tier with strand cards from ultra and capSafe variants, sleeve-safe shoulders (a shirt-material cap over the arm capsule's round top at every angle), the torso lathe and face features (no role-locked beards). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] [LUCID_DEMO_OUT=<dir>] node desktop/scripts/demo_p_worlds_kit_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_world_character.test.ts desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_kit_2.mjs
+
+.PHONY: demo-P-WORLDS.BUILD1
+demo-P-WORLDS.BUILD1: ## P-WORLDS.BUILD1 (ADR-0653): world build sites: scaffolding (wireframe build-up, holo beams, panels, a progress ring, a lock-in flash; per-tier budgets) driven by subagent, tool and done or commit events, an artifact chip over the node, and the artifact popup (the engine's fail-closed security gate first, then a sandboxed allow-scripts frame with no network); world buildSites, miniGames and kit.scaffold. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_build_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_build_model.test.ts desktop/renderer/viz_build.test.ts desktop/viz_artifact_gate.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_build_1.mjs
+
+.PHONY: demo-P-VIZ.GPU1
+demo-P-VIZ.GPU1: ## P-VIZ.GPU1 (ADR-0651): GPU-aware quality tiers: a GPU probe (WebGL renderer string plus Electron's feature status and GPU info over a read-only preload IPC) classifies software, integrated or discrete; Auto picks minimal, reduced/full or ultra and steps down one tier after a missed 3 s frame-time check; ultra (dpr 2, MSAA, contact shadows, 12000 particles, bloom on light themes) and cinematic (plus SSAO and depth of field on the auto camera); Quality reads "Auto · ultra (GPU name)". Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_gpu_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/gpu_probe.test.ts desktop/renderer/perf_tier.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/orbit_mode.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_gpu_1.mjs
+
+.PHONY: demo-P-WORLDS.CAST2
+demo-P-WORLDS.CAST2: ## P-WORLDS.CAST2 (ADR-0650): cast customization: the View menu's Cast section (Balanced fleet / Same for all, a 10-shade skin ramp with warm, neutral and cool undertones, natural and fashion hair colors, hair style chips), "Customize look" pins in the node panel, persisted in lucid.viz.cast.v1, and the world `swatch` option type. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_cast_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_cast_prefs.test.ts desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_cast_2.mjs
+
+.PHONY: demo-P-WORLDS.FX1
+demo-P-WORLDS.FX1: ## P-WORLDS.FX1 (ADR-0652): plasma-light world streams (a saturated core tube in a sheath, normal-blended packets with a bright rim, spark trails from ultra), packet tokens (orb, coin, petal, snowflake, spark, custom; instanced spinning coins with an embossed face, a reeded edge and a glint), per-tier token budgets, and environmentFor(options) re-applied with the sky on every option change. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_fx_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_fx_1.mjs

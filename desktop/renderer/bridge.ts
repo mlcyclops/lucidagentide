@@ -1748,6 +1748,8 @@ interface NativeShell {
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
+  // P-VIZ.GPU1 (ADR-0651): read-only GPU facts (feature status, PCI ids, GL strings); gpu_probe.ts validates them.
+  gpuInfo?(): Promise<unknown>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;

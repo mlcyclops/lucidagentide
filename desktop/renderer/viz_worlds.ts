@@ -7,7 +7,9 @@
 // same-origin URL (/worlds/<id>/<version>/world.js), calls its default export with the host (viz_world_kit) and
 // VALIDATES what it returns (validateWorld: the contract version, the id, exactly three throwables with unique
 // kinds and plain SVG path icons, the storm, the options and their defaults, the environment, the cast roles (v2,
-// ADR-0649) and the factories). A module built for any apiVersion up to WORLD_API_VERSION loads.
+// ADR-0649) and the factories). A module built for any apiVersion up to WORLD_API_VERSION loads. v2 (ADR-0652):
+// edges may be "plasma-light" with a packet token, and environmentFor(options) must be a function whose patch for
+// the default options validates; worldEnvironment merges it over the environment for the user's values.
 // A world that fails to load or validate is still listed, with its error, and is never offered.
 //
 // Activation (the store's rule, market_gate's provider): with no provider configured a world is allowed. With one,
@@ -17,13 +19,16 @@
 // entitled: the world shows as "Get" (the view opens the store) instead of being selected.
 //
 // A world's option values persist per world id under OPTIONS_KEY; mergeOptions keeps only values valid for the
-// option (a saved color, a choice still offered, a boolean), anything else falls back to the default.
+// option (a saved color, a choice or swatch still offered, a boolean), anything else falls back to the default.
 // Pure helpers are exported for viz_worlds.test.ts; only loadWorlds and the storage helpers touch the outside.
 
 import { decidePackAction, type AuthState, type Entitlement } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
 import type { VizStyle } from "./viz_model.ts";
-import { WORLD_API_VERSION, worldKey, type InstalledWorld, type WorldDefinition, type WorldHost, type WorldOption, type WorldOptionValues } from "./viz_world_api.ts";
+import {
+  WORLD_API_VERSION, worldKey, type InstalledWorld, type WorldDefinition, type WorldEdges, type WorldEnvironment, type WorldHost, type WorldOption,
+  type WorldOptionValues,
+} from "./viz_world_api.ts";
 
 export const RECEIPTS_KEY = "lucid.worlds.receipts.v1";
 export const OPTIONS_KEY = "lucid.worlds.options.v1";
@@ -103,23 +108,79 @@ function checkOption(o: unknown, i: number): string | null {
       }
       return typeof o.default === "string" && values.has(o.default) ? null : `option "${o.key}" default is not one of its choices`;
     }
+    case "swatch": { // P-WORLDS.CAST2 (ADR-0650): a named ramp of #rrggbb colors
+      if (!Array.isArray(o.swatches) || !o.swatches.length) return `option "${o.key}" has no swatches`;
+      const values = new Set<string>();
+      for (const s of o.swatches) {
+        if (!isRec(s) || typeof s.value !== "string" || !COLOR_RE.test(s.value) || !nonEmpty(s.label)) return `option "${o.key}" has a malformed swatch (a #rrggbb value and a label)`;
+        if (values.has(s.value)) return `option "${o.key}" repeats the swatch "${s.value}"`;
+        values.add(s.value);
+      }
+      return typeof o.default === "string" && values.has(o.default) ? null : `option "${o.key}" default is not one of its swatches`;
+    }
     default:
       return `option "${o.key}" has an unknown type`;
   }
 }
 
-function checkEnvironment(e: unknown): string | null {
+const EDGE_STYLES: readonly string[] = ["plasma", "fiber", "plasma-light"];
+const TOKENS: readonly string[] = ["orb", "coin", "petal", "snowflake", "spark", "custom"];
+
+/** What is wrong with an environment (the base one, or one merged with environmentFor's patch), or null. */
+export function environmentError(e: unknown): string | null {
   if (!isRec(e)) return "the environment is missing";
   if (typeof e.light !== "boolean") return "environment.light is not true or false";
   if (!isFn(e.paintSky)) return "environment.paintSky is not a function";
   const fog = e.fog;
   if (!isRec(fog) || typeof fog.color !== "string" || !COLOR_RE.test(fog.color) || typeof fog.density !== "number" || !Number.isFinite(fog.density) || fog.density < 0) return "environment.fog is malformed";
   const edges = e.edges;
-  if (!isRec(edges) || (edges.style !== "plasma" && edges.style !== "fiber")) return "environment.edges.style is not plasma or fiber";
+  if (!isRec(edges) || typeof edges.style !== "string" || !EDGE_STYLES.includes(edges.style)) return "environment.edges.style is not plasma, plasma-light or fiber";
   if (typeof edges.colorA !== "string" || !COLOR_RE.test(edges.colorA) || typeof edges.colorB !== "string" || !COLOR_RE.test(edges.colorB)) return "environment.edges colors are not #rrggbb";
+  // P-WORLDS.FX1 (ADR-0652): the packet token, its color and its painters
+  if (edges.token !== undefined && (typeof edges.token !== "string" || !TOKENS.includes(edges.token))) return "environment.edges.token is not orb, coin, petal, snowflake, spark or custom";
+  if (edges.tokenColor !== undefined && (typeof edges.tokenColor !== "string" || !COLOR_RE.test(edges.tokenColor))) return "environment.edges.tokenColor is not a #rrggbb color";
+  if (edges.paintToken !== undefined && !isFn(edges.paintToken)) return "environment.edges.paintToken is not a function";
+  if (edges.tokenStamp !== undefined && !isFn(edges.tokenStamp)) return "environment.edges.tokenStamp is not a function";
+  if (edges.token === "custom" && !isFn(edges.paintToken)) return "environment.edges.token custom needs paintToken";
   if (typeof e.chargeColor !== "string" || !COLOR_RE.test(e.chargeColor)) return "environment.chargeColor is not a #rrggbb color";
   if (e.createAmbient !== undefined && !isFn(e.createAmbient)) return "environment.createAmbient is not a function";
   return null;
+}
+
+/** P-WORLDS.FX1 (ADR-0652): `patch` (what environmentFor returned) over `base`. Only light, paintSky, fog, edges
+ *  and chargeColor are taken; fog and edges merge field by field (a patch may change only the colors). The
+ *  merged environment must validate. */
+export function mergeEnvironment(base: WorldEnvironment, patch: unknown): { ok: true; env: WorldEnvironment } | { ok: false; error: string } {
+  if (patch === undefined || patch === null) return { ok: true, env: base };
+  if (!isRec(patch)) return { ok: false, error: "environmentFor did not return an object" };
+  if (patch.fog !== undefined && !isRec(patch.fog)) return { ok: false, error: "environmentFor's fog is not an object" };
+  if (patch.edges !== undefined && !isRec(patch.edges)) return { ok: false, error: "environmentFor's edges is not an object" };
+  const env: WorldEnvironment = {
+    ...base,
+    ...(patch.light !== undefined ? { light: patch.light as boolean } : {}),
+    ...(patch.paintSky !== undefined ? { paintSky: patch.paintSky as WorldEnvironment["paintSky"] } : {}),
+    ...(patch.chargeColor !== undefined ? { chargeColor: patch.chargeColor as string } : {}),
+    fog: patch.fog ? { ...base.fog, ...(patch.fog as Partial<WorldEnvironment["fog"]>) } : base.fog,
+    edges: patch.edges ? { ...base.edges, ...(patch.edges as Partial<WorldEdges>) } : base.edges,
+  };
+  const err = environmentError(env);
+  return err ? { ok: false, error: `environmentFor: ${err}` } : { ok: true, env };
+}
+
+/** The world's environment for the user's option values: environmentFor's patch merged over `environment`. A
+ *  patch that throws or does not validate for these values leaves the base environment (validateWorld already
+ *  refused a world whose patch fails for its defaults). */
+export function worldEnvironment(def: WorldDefinition, options: WorldOptionValues): WorldEnvironment {
+  if (!def.environmentFor) return def.environment;
+  let patch: unknown;
+  try { patch = def.environmentFor(options); } catch (e) {
+    console.warn(`[viz] world "${def.id}" environmentFor failed`, e);
+    return def.environment;
+  }
+  const m = mergeEnvironment(def.environment, patch);
+  if (m.ok) return m.env;
+  console.warn(`[viz] world "${def.id}": ${m.error}`);
+  return def.environment;
 }
 
 /** Check what a world module returned against the contract and the package it came in. */
@@ -157,8 +218,18 @@ export function validateWorld(def: unknown, installed: InstalledWorld): { ok: tr
     if (optKeys.has(o.key)) return bad(`option "${o.key}" is repeated`);
     optKeys.add(o.key);
   }
-  const envErr = checkEnvironment(def.environment);
+  const envErr = environmentError(def.environment);
   if (envErr) return bad(envErr);
+  // P-WORLDS.FX1 (ADR-0652): environmentFor is a function whose patch for the default options validates
+  if (def.environmentFor !== undefined) {
+    if (typeof def.environmentFor !== "function") return bad("environmentFor is not a function");
+    let patch: unknown;
+    try { patch = (def.environmentFor as (o: WorldOptionValues) => unknown).call(def, optionDefaults(def.options as WorldOption[])); } catch (e) {
+      return bad(`environmentFor failed: ${errText(e)}`);
+    }
+    const merged = mergeEnvironment(def.environment as unknown as WorldEnvironment, patch);
+    if (!merged.ok) return bad(merged.error);
+  }
   // P-WORLDS.CAST1 (ADR-0649): which roles are people; anything but "human" or "creature" per role is refused.
   if (def.castRoles !== undefined) {
     if (!isRec(def.castRoles)) return bad("castRoles is not an object");
@@ -191,6 +262,7 @@ export function mergeOptions(options: readonly WorldOption[], saved: unknown): W
     let ok = false;
     if (o.type === "color") ok = typeof v === "string" && COLOR_RE.test(v);
     else if (o.type === "toggle") ok = typeof v === "boolean";
+    else if (o.type === "swatch") ok = typeof v === "string" && o.swatches.some((s) => s.value === v);
     else ok = typeof v === "string" && o.choices.some((c) => c.value === v);
     out[o.key] = ok ? (v as string | boolean) : o.default;
   }

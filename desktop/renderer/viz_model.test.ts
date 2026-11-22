@@ -391,6 +391,24 @@ describe("perf budgets", () => {
     expect(frameInterval(vizTierOpts("minimal", false), true, true)).toBeCloseTo(1000 / 30);
     expect(frameInterval(vizTierOpts("full", true), false, true)).toBeCloseTo(1000 / 60);
   });
+  // P-VIZ.GPU1 (ADR-0651): the GPU tiers above full.
+  test("ultra: dpr 2, MSAA, contact shadows, 12000 particles, bloom on light themes too; no SSAO or DOF", () => {
+    expect(vizTierOpts("ultra", false)).toMatchObject({ particles: 12000, fps: 60, dprCap: 2, antialias: true, bloom: true, msaa: 4, contactShadows: true, lightBloom: true, ssao: false, dof: false, tier: "ultra" });
+  });
+  test("cinematic: everything in ultra plus SSAO and depth of field", () => {
+    const u = vizTierOpts("ultra", false), c = vizTierOpts("cinematic", false);
+    expect(c).toEqual({ ...u, tier: "cinematic", ssao: true, dof: true });
+  });
+  test("full and below add none of the GPU extras", () => {
+    for (const t of ["full", "reduced", "minimal"] as const) expect(vizTierOpts(t, false)).toMatchObject({ msaa: 0, contactShadows: false, lightBloom: false, ssao: false, dof: false, tier: t });
+  });
+  test("v1 mapping: ultra and cinematic build figures at detail full (the tier rides beside it)", () => {
+    expect((["ultra", "cinematic"] as const).map((t) => vizTierOpts(t, false).detail)).toEqual(["full", "full"]);
+    expect((["ultra", "cinematic"] as const).map((t) => vizTierOpts(t, true).detail)).toEqual(["full", "full"]);
+  });
+  test("reduced motion strips motion from the GPU tiers too, and keeps their image quality", () => {
+    expect(vizTierOpts("cinematic", true)).toMatchObject({ motion: false, particles: 0, fx: 0, lightning: 0, msaa: 4, ssao: true, dprCap: 2 });
+  });
 });
 
 describe("demo feed (?vizDemo=1)", () => {

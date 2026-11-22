@@ -72,6 +72,34 @@ The host casts the fleet (`desktop/renderer/viz_cast.ts`) and passes every human
   nearby ids. v1 modules (`apiVersion: 1`) still load and get this mixed seed too, which is why installed v1 packs
   stopped rolling one look for the whole demo fleet without an update. They simply ignore `appearance`.
 
+### Build sites and mini games (contract v2, ADR-0653)
+
+Agents build at a site beside their stage while their subagents work: a `subagent` spawn adds scaffold pieces (one
+per subagent), a settled tool locks one in with a flash, a failed tool flickers it red, and the turn's `done` or a git
+commit reveals the build. The host draws the scaffolding (`kit.scaffold`); a world only says where and how.
+
+```ts
+buildSites: [{ roles: ["agent"], anchor: [0.95, -0.5, 0], style: "panels", color: "#ffd166", label: "Workbench" }],
+miniGames: [{ id: "scorekeeper", label: "Bowling scorekeeper", brief: "Build a bowling scorekeeper as ONE self-contained HTML file ... End with the file in one fenced html block." }],
+```
+
+- `buildSites` (optional): the first site whose `roles` include the node's role (default hub and agent) is used.
+  `anchor` is in cell units from the node's center (x right, y up, z front; default `[0.95, -0.5, 0]`, beside the
+  stage on its floor), `style` is `"wireframe" | "holo" | "panels"` (default `"holo"`), `color` a `#rrggbb` (default
+  your edge `colorA`). A malformed field falls back to its default; no site at all gives the default holo ring.
+- `miniGames` (optional, at most three): the node panel of Main or a lane lists them under Mini game. Starting one
+  sends `brief` to that agent as an ordinary task through the panel's own send path. Only that run's output can become
+  an artifact: its last fenced `html` block (or a whole `<!doctype html>` document), at most 256 KB. Without
+  `miniGames` the host offers its own two (a target-tap and a memory-cards game).
+- The artifact shows as a chip over the node. Its popup first sends it through the engine's security gate (the
+  scanner, fail-closed: a block or a scan that cannot run means it is never shown, and the popup says why), labels it
+  Untrusted, and runs nothing until Play. Play loads it in an iframe with `sandbox="allow-scripts"` (never
+  `allow-same-origin`) from an engine-served frame whose CSP is `default-src 'none'; script-src 'unsafe-inline';
+  style-src 'unsafe-inline'`, which holds the artifact in a `srcdoc` child: inline script and style run, no network,
+  no storage, no access to LUCID. Keep holds it on the node for the session; Discard drops it.
+- `kit.scaffold({ style, color, tier, flat, seed })` returns the same scaffolding as a prop (`addPieces`, `lockIn`,
+  `fail`, `reveal`, `reset`, `restore`, `update`, `dispose`); its piece, beam, panel and ring counts follow the tier.
+
 ## 2. Source layout
 
 ```
@@ -139,5 +167,8 @@ signature, hashes and scan are checked again there.
 | `POST /api/worlds/import` | raw package bytes (sent with a JSON content type, as the origin guard requires), header `x-lucid-filename` |
 | `GET /api/worlds/export?id=` | the kept signed package as an attachment |
 | `POST /api/worlds/uninstall` | `{ id }` removes the world |
+| `POST /api/viz/artifact` | `{ html }` runs a build artifact through the security gate (fail-closed); `{ ok: true, id, trust: "untrusted" }` or `{ ok: false, reason, trust: "quarantined" }` (a block is audited) |
+| `GET /api/viz/artifact/frame?id=&t=` | the passed artifact's sandboxed frame (its own CSP, the artifact in a `srcdoc` child); UI token only, as a query param |
+| `POST /api/viz/artifact/discard` | `{ id }` drops a passed artifact (they also expire after 30 minutes) |
 
 A world is never started by the plugin runtime; starting one is refused.

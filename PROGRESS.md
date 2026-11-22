@@ -6401,3 +6401,23 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-22):** desktop/renderer/viz_cast.ts (mix32 moved from viz_anime_pose unchanged, nodeSeed, worldSeed, a 10-tone skin ramp, 8 hair colors, the 16-style hair vocabulary, CastBook: any 6 consecutive slots hold 2 feminine, 2 masculine and light, medium and dark skin, stable per node); world API v2 (WorldAppearance, WorldFigureOptions.appearance, WorldDefinition.castRoles, validated in viz_worlds; v1 modules still load); the scene passes every world figure and stage a mixed seed and every human figure its appearance from one cast book per scene; the demo probe reports each figure's cast; docs/WORLDS.md casting section; demo_p_worlds_cast_1.mjs and make demo-P-WORLDS.CAST1.
 - **stubbed:** nothing in the host; worlds draw `appearance` only once their packs move to apiVersion 2 (until then they vary through the mixed seed alone).
 - **next:** P-WORLDS.CAST2 (ADR-0650): skin and hair shade selectors and per-agent pins that feed the cast book, then the shared character kit (ADR-0654) so packs draw every hair style and build.
+## P-WORLDS.CAST2 (ADR-0650): cast customization with remembered skin and hair shades
+- **shipped (2026-11-22):** a Cast section in the Visualize View menu (10 skin shades with warm, neutral and cool undertones, 14 hair colors, 16 hair styles, Balanced fleet or Same for all), Customize look on the node panel pinning presentation, skin, hair style and color per node, persisted in lucid.viz.cast.v1 and applied by the cast book; the `swatch` world option type; demo_p_worlds_cast_2.mjs passes (pick, pin, reload, auditBoxes).
+- **stubbed:** the built-in Anime and Office figures still cast themselves and ignore the Cast section; subagents cannot be pinned (their ids do not last).
+- **next:** wire the Cast section into the Anime and Office figures.
+## P-VIZ.GPU1 (ADR-0651): GPU-aware quality tiers with ultra and cinematic
+- **shipped (2026-11-22):** gpu_probe.ts (Electron GPU info over read-only IPC plus the WebGL renderer string; software, integrated or discrete), ultra and cinematic tiers (dpr 2, MSAA, contact shadows, 12000 particles, bloom on light themes; cinematic adds SSAO and depth of field), Auto by GPU class with a 3 s step-down governor, the Quality label shows the GPU, worlds get `tier`; demo_p_viz_gpu_1.mjs passes on a Radeon RX 580 (Auto picks ultra).
+- **stubbed:** no volumetric light shafts (too costly beside the agents).
+- **next:** tune SSAO, depth of field and contact shadows by eye on more GPUs.
+## P-WORLDS.FX1 (ADR-0652): plasma-light streams, tokens and option-driven environments
+- **shipped (2026-11-22):** the plasma-light edge style, orb, coin (instanced, reeded, stamped, glinting), petal, snowflake, spark and custom tokens with tier budgets, `environmentFor(options)` re-applying edges, fog, charge color and the sky on every option change; Anime and Office edges unchanged.
+- **stubbed:** nothing; packs adopt it through their v2 migration (store ADRs A123 to A151).
+- **next:** retune plasma-light on every light world once the v2 packs land.
+## P-WORLDS.BUILD1 (ADR-0653): build sites, scaffolding and the sandboxed mini-game popup
+- **shipped (2026-11-22):** viz_build.ts scaffolding (wireframe build-up, beams, panels, progress ring, lock-in flash, tier budgets) driven by subagent, tool and done/commit events; the artifact chip and popup (sandboxed iframe in an engine-served frame with its own CSP, gated by the in-process scanner, fail closed); a Mini game row on real lanes that sends a template brief; demo builds ending in a labeled sample game; demo_p_worlds_build_1.mjs passes.
+- **stubbed:** world-specific mini-game templates arrive with each pack's Deluxe update (the host ships two generic ones).
+- **next:** world templates per pack (store ADRs A123 to A151).
+## P-WORLDS.KIT2 (ADR-0654): the shared character kit
+- **shipped (2026-11-22):** kit.character (12 body presets, 16 hair styles at every tier with cards from ultra and cap-safe variants, sleeve-safe short and long sleeves with a shoulder cap, a reshaped torso lathe, a face painter for lashes, brows, lip tint, freckles and glasses, beards only on request); viz_world_character tests; demo_p_worlds_kit_2.mjs passes (zero skin above the kit's sleeves, the old soccer sleeve shows it).
+- **stubbed:** nothing in the host.
+- **next:** every pack moves to the kit (store ADRs A123 to A151).

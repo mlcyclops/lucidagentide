@@ -20,12 +20,23 @@
 //              looks are stable as others come and go. Inside a slot, hair style (filtered by presentation),
 //              hair color, body build and face variant come from mix32(seed ^ salt) per attribute.
 // Creature roles (WorldDefinition.castRoles) take no slot and get no appearance, only the mixed seed.
+//
+// P-WORLDS.CAST2 (ADR-0650): the user's cast preferences (viz_cast_prefs, the View menu's Cast section and a
+// node's "Customize look") reach the book through setPrefs. applyCastPrefs lays them over the balanced look:
+// a node's pin wins (presentation, skin with its undertone, hair style, hair color), then the fleet mode
+// ("same" gives every human figure the fleet's skin, hair style and hair color; "balanced" keeps the sequence),
+// and the fleet undertone tints every skin not pinned with its own. Hair always suits the presentation. Each
+// skin step has warm, neutral (the SKIN_RAMP hex) and cool variants (SKIN_TONES); hair color picks come from
+// HAIR_SWATCHES (the natural HAIR_COLORS plus six fashion colors; the balance only draws natural ones).
 
 import type { WorldAppearance, WorldCastRole, WorldDefinition, WorldRole } from "./viz_world_api.ts";
+import type { CastPrefs } from "./viz_cast_prefs.ts";
 
 export type Presentation = WorldAppearance["presentation"];
 export type SkinBand = WorldAppearance["skinBand"];
 export type CastGroup = WorldCastRole;
+/** P-WORLDS.CAST2 (ADR-0650): a skin step's undertone (neutral is the SKIN_RAMP hex). */
+export type Undertone = "warm" | "neutral" | "cool";
 
 /** A 32-bit integer finalizer (murmur3 fmix32 over a golden-ratio offset). Shared with viz_anime_pose. */
 export function mix32(x: number): number {
@@ -76,29 +87,76 @@ export const HAIR_COLORS: readonly string[] = Object.freeze([
   "#e6d8b8", // platinum
 ]);
 
+/** P-WORLDS.CAST2 (ADR-0650): a name per SKIN_RAMP step (swatch labels). */
+export const SKIN_NAMES: readonly string[] = Object.freeze(["Porcelain", "Ivory", "Beige", "Honey", "Golden", "Caramel", "Bronze", "Chestnut", "Mocha", "Espresso"]);
+
+export const UNDERTONES: readonly { readonly id: Undertone; readonly label: string }[] = Object.freeze([
+  { id: "warm", label: "Warm" }, { id: "neutral", label: "Neutral" }, { id: "cool", label: "Cool" },
+] as const);
+
+/** Per-channel offsets: warm leans golden (more red, less blue), cool leans rosy (less green, more blue). Small
+ *  enough that every step keeps its place on the light-to-deep ramp. */
+const UNDERTONE_SHIFT: Readonly<Record<Undertone, readonly [number, number, number]>> = { warm: [8, 3, -14], neutral: [0, 0, 0], cool: [-6, -4, 12] };
+
+function shiftHex(hex: string, d: readonly [number, number, number]): string {
+  const v = parseInt(hex.slice(1), 16);
+  const ch = (x: number, k: number): string => Math.max(0, Math.min(255, x + d[k]!)).toString(16).padStart(2, "0");
+  return `#${ch((v >> 16) & 255, 0)}${ch((v >> 8) & 255, 1)}${ch(v & 255, 2)}`;
+}
+
+/** Every SKIN_RAMP step in each undertone (neutral is the ramp itself). */
+export const SKIN_TONES: Readonly<Record<Undertone, readonly string[]>> = Object.freeze({
+  warm: Object.freeze(SKIN_RAMP.map((s) => shiftHex(s.hex, UNDERTONE_SHIFT.warm))),
+  neutral: Object.freeze(SKIN_RAMP.map((s) => s.hex)),
+  cool: Object.freeze(SKIN_RAMP.map((s) => shiftHex(s.hex, UNDERTONE_SHIFT.cool))),
+});
+
+/** The hex of skin step `index` (0 lightest, 9 deepest) in an undertone. */
+export function skinTone(index: number, undertone: Undertone): string {
+  return SKIN_TONES[undertone][index] ?? SKIN_RAMP[0]!.hex;
+}
+
+/** P-WORLDS.CAST2 (ADR-0650): the hair-color picker's ramp: the eight natural HAIR_COLORS (black to platinum),
+ *  then six fashion colors. A pick is one of these values. */
+export const HAIR_SWATCHES: readonly { readonly value: string; readonly label: string; readonly fashion: boolean }[] = Object.freeze([
+  ...["Black", "Soft black", "Dark brown", "Medium brown", "Auburn", "Light brown", "Blonde", "Platinum"].map((label, i) => ({ value: HAIR_COLORS[i]!, label, fashion: false })),
+  { value: "#d9609a", label: "Pink", fashion: true },
+  { value: "#9277d1", label: "Lavender", fashion: true },
+  { value: "#3466cf", label: "Blue", fashion: true },
+  { value: "#1f948a", label: "Teal", fashion: true },
+  { value: "#b3203a", label: "Cherry", fashion: true },
+  { value: "#a9b0bc", label: "Silver", fashion: true },
+]);
+
 export type HairStyle =
   | "short" | "buzz" | "curls" | "coils" | "afro" | "puffs" | "locs" | "braids"
   | "long" | "wavy" | "bob" | "pixie" | "bun" | "ponytail" | "headscarf" | "hijab";
 
-/** The shared hair vocabulary (ADR-0654's library uses the same ids) and the presentations each one suits. */
-export const HAIR_STYLES: readonly { readonly id: HairStyle; readonly suits: readonly Presentation[] }[] = Object.freeze([
-  { id: "short", suits: ["masculine", "neutral", "feminine"] },
-  { id: "buzz", suits: ["masculine", "neutral"] },
-  { id: "curls", suits: ["feminine", "masculine", "neutral"] },
-  { id: "coils", suits: ["feminine", "masculine", "neutral"] },
-  { id: "afro", suits: ["feminine", "masculine", "neutral"] },
-  { id: "puffs", suits: ["feminine", "neutral"] },
-  { id: "locs", suits: ["feminine", "masculine", "neutral"] },
-  { id: "braids", suits: ["feminine", "masculine", "neutral"] },
-  { id: "long", suits: ["feminine", "neutral"] },
-  { id: "wavy", suits: ["feminine", "neutral"] },
-  { id: "bob", suits: ["feminine", "neutral"] },
-  { id: "pixie", suits: ["feminine", "neutral"] },
-  { id: "bun", suits: ["feminine", "neutral"] },
-  { id: "ponytail", suits: ["feminine", "neutral"] },
-  { id: "headscarf", suits: ["feminine"] },
-  { id: "hijab", suits: ["feminine"] },
+/** The shared hair vocabulary (ADR-0654's library uses the same ids), the presentations each one suits (the
+ *  first is the one a fixed style moves an unpinned figure to when its own does not suit) and a chip label. */
+export const HAIR_STYLES: readonly { readonly id: HairStyle; readonly suits: readonly Presentation[]; readonly label: string }[] = Object.freeze([
+  { id: "short", suits: ["masculine", "neutral", "feminine"], label: "Short" },
+  { id: "buzz", suits: ["masculine", "neutral"], label: "Buzz" },
+  { id: "curls", suits: ["feminine", "masculine", "neutral"], label: "Curls" },
+  { id: "coils", suits: ["feminine", "masculine", "neutral"], label: "Coils" },
+  { id: "afro", suits: ["feminine", "masculine", "neutral"], label: "Afro" },
+  { id: "puffs", suits: ["feminine", "neutral"], label: "Puffs" },
+  { id: "locs", suits: ["feminine", "masculine", "neutral"], label: "Locs" },
+  { id: "braids", suits: ["feminine", "masculine", "neutral"], label: "Braids" },
+  { id: "long", suits: ["feminine", "neutral"], label: "Long" },
+  { id: "wavy", suits: ["feminine", "neutral"], label: "Wavy" },
+  { id: "bob", suits: ["feminine", "neutral"], label: "Bob" },
+  { id: "pixie", suits: ["feminine", "neutral"], label: "Pixie" },
+  { id: "bun", suits: ["feminine", "neutral"], label: "Bun" },
+  { id: "ponytail", suits: ["feminine", "neutral"], label: "Ponytail" },
+  { id: "headscarf", suits: ["feminine"], label: "Headscarf" },
+  { id: "hijab", suits: ["feminine"], label: "Hijab" },
 ] as const);
+
+/** Whether a hair style suits a presentation (an unknown id suits none). */
+export function hairSuits(hair: string, p: Presentation): boolean {
+  return HAIR_STYLES.some((h) => h.id === hair && h.suits.includes(p));
+}
 
 /** How many face variants `WorldAppearance.face` ranges over (0 to FACE_VARIANTS - 1). */
 export const FACE_VARIANTS = 8;
@@ -149,12 +207,51 @@ function appearanceAt(slot: number, presentationOffset: number, skinOffset: numb
   });
 }
 
+/** P-WORLDS.CAST2 (ADR-0650): the user's preferences over a node's balanced look. The node's pin wins, then the
+ *  fleet mode; body and face stay the node's own. A fixed hair style that does not suit an unpinned presentation
+ *  moves the figure to the style's first presentation; a pinned presentation keeps it and the figure draws the
+ *  style its seed picks for that presentation instead. */
+export function applyCastPrefs(base: WorldAppearance, prefs: CastPrefs, nodeId: string, seed: number): WorldAppearance {
+  const fleet = prefs.fleet;
+  const pin = Object.prototype.hasOwnProperty.call(prefs.pinned, nodeId) ? prefs.pinned[nodeId] : undefined;
+  const same = fleet.mode === "same";
+  const skinIndex = pin?.skin ?? (same ? fleet.skin : base.skinIndex);
+  const fixedHair = pin?.hair ?? (same ? fleet.hair : null);
+  let presentation = pin?.presentation ?? base.presentation;
+  let hair = base.hair;
+  if (fixedHair && (hairSuits(fixedHair, presentation) || pin?.presentation === undefined)) {
+    hair = fixedHair;
+    if (!hairSuits(fixedHair, presentation)) presentation = HAIR_STYLES.find((h) => h.id === fixedHair)!.suits[0]!;
+  } else if (!hairSuits(hair, presentation)) {
+    const hairs = HAIR_BY_PRESENTATION[presentation];
+    hair = hairs[mix32((seed ^ SALT_HAIR) | 0) % hairs.length]!;
+  }
+  return Object.freeze({
+    ...base,
+    presentation,
+    skin: skinTone(skinIndex, pin?.undertone ?? fleet.undertone),
+    skinIndex,
+    skinBand: SKIN_RAMP[skinIndex]!.band,
+    hair,
+    hairColor: pin?.hairColor ?? (same ? fleet.hairColor : base.hairColor),
+  });
+}
+
 /** One scene's cast: slots handed out in first-seen order, kept for the book's life. */
 export class CastBook {
   private readonly slots = new Map<string, number>();
   private readonly cache = new Map<string, WorldAppearance>();
   private presentationOffset = 0;
   private skinOffset = 0;
+  /** P-WORLDS.CAST2 (ADR-0650): the user's preferences; null casts the pure balance. */
+  private prefs: CastPrefs | null = null;
+
+  /** New preferences: every look is resolved again (slots are kept, so the balance under them does not move).
+   *  The caller rebuilds the figures. */
+  setPrefs(prefs: CastPrefs | null): void {
+    this.prefs = prefs;
+    this.cache.clear();
+  }
 
   /** The node's appearance (a slot is taken the first time a human-cast node is seen); null for a creature. */
   appearanceFor(nodeId: string, group: CastGroup): WorldAppearance | null {
@@ -171,7 +268,9 @@ export class CastBook {
       slot = this.slots.size;
       this.slots.set(nodeId, slot);
     }
-    const a = appearanceAt(slot, this.presentationOffset, this.skinOffset, nodeSeed(nodeId));
+    const seed = nodeSeed(nodeId);
+    const balanced = appearanceAt(slot, this.presentationOffset, this.skinOffset, seed);
+    const a = this.prefs ? applyCastPrefs(balanced, this.prefs, nodeId, seed) : balanced;
     this.cache.set(nodeId, a);
     return a;
   }
@@ -182,7 +281,7 @@ export class CastBook {
     this.cache.delete(nodeId);
   }
 
-  /** Forget every slot (the world or the scene was torn down). */
+  /** Forget every slot (the world or the scene was torn down). The preferences stay: they follow the lane. */
   clear(): void {
     this.slots.clear();
     this.cache.clear();

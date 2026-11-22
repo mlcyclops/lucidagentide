@@ -128,7 +128,7 @@ export function createThrowFx(scene: THREE.Scene, sink: ThrowSink, o: ThrowFxOpt
     if (!x) { x = make(); mats.set(key, x); }
     return x;
   };
-  const sparkK = o.detail === "full" ? 1 : o.detail === "reduced" ? 0.5 : 0.25;
+  const sparkK = o.detail === "minimal" ? 0.25 : o.detail === "reduced" ? 0.5 : 1; // full, ultra, cinematic
   const glowBlend = o.light ? THREE.NormalBlending : THREE.AdditiveBlending;
   const projs: Proj[] = [];
   let active = 0;
