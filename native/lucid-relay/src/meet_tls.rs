@@ -412,18 +412,105 @@ fn roots_of(path: &str) -> Result<RootCertStore, String> {
     Ok(roots)
 }
 
+/// API-1 3.3: who an expired Meet leaf is, for the applicable grace: its kind and orgs (`cert_kind`), its principal
+/// (the first email, lower case; an SSO service `sso:<serial>`) and its `notAfter`.
+pub struct GraceSubject {
+    pub kind: String,
+    pub principal: String,
+    pub orgs: Vec<String>,
+    pub not_after: i64,
+}
+
+impl GraceSubject {
+    /// None for a relay certificate or one `cert_kind` refuses (no grace).
+    pub fn of(cert: &Cert) -> Option<GraceSubject> {
+        if cert.names.uris.iter().any(|u| u == crate::meet::RELAY_URI) {
+            return None;
+        }
+        let (kind, orgs) = crate::meet_hub::pc::cert_kind(&cert.names.uris).ok()?;
+        let principal = if kind == "sso" { format!("sso:{}", cert.serial) } else { cert.names.emails.first()?.trim().to_lowercase() };
+        Some(GraceSubject { kind, principal, orgs, not_after: cert.not_after })
+    }
+}
+
+/// API-1 3.3: the effective end (seconds) of a subject at `now`, read from the relay's live api map store.
+pub type GraceSource = Arc<dyn Fn(&GraceSubject, i64) -> i64 + Send + Sync>;
+
+static GRACE: std::sync::OnceLock<GraceSource> = std::sync::OnceLock::new();
+
+/// Set once at start, before the first `tls_config`: every Meet TLS config built after it carries the source.
+pub fn set_grace_source(source: GraceSource) {
+    let _ = GRACE.set(source);
+}
+
+fn grace_end_with(source: Option<&GraceSource>, cert: &Cert, now: i64) -> i64 {
+    match (source, GraceSubject::of(cert)) {
+        (Some(f), Some(s)) => f(&s, now).max(cert.not_after),
+        _ => cert.not_after,
+    }
+}
+
+/// API-1 3.2: the effective end of a Meet client certificate (its `notAfter` without a grace).
+pub fn cert_grace_end(cert: &Cert, now: i64) -> i64 {
+    grace_end_with(GRACE.get(), cert, now)
+}
+
+#[derive(Clone)]
+struct Grace(Option<GraceSource>);
+
+impl std::fmt::Debug for Grace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Grace(source)" } else { "Grace(none)" })
+    }
+}
+
 /// The client verifier: the chain to the Meet CA by webpki, then revocation as OpenSSL checks it with
 /// VERIFY_CRL_CHECK_LEAF or _CHAIN (meet_pki's CRLs carry no CRL number, which webpki's own CRL parser requires):
 /// each checked certificate needs a current CRL from its issuer, signed by that issuer, that does not list it.
+/// API-1 3.3: an expired leaf may pass on the grace path (`in_grace`).
 #[derive(Debug)]
 struct MeetVerifier {
     inner: Arc<dyn ClientCertVerifier>,
     roots: Vec<Cert>,
     crls: Vec<Crl>,
     chain: bool,
+    /// A CRL file is in force (the revocation checks run).
+    revoke: bool,
+    grace: Grace,
 }
 
 impl MeetVerifier {
+    /// API-1 3.3: the grace path for a leaf webpki refused as expired. Admitted only when the applicable grace covers
+    /// `now`, the whole webpki verification passes at the leaf's `notAfter`, every issuer of the chain is valid at
+    /// `now`, and the CRL checks pass at `now`.
+    fn in_grace(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: i64) -> Option<ClientCertVerified> {
+        let source = self.grace.0.as_ref()?;
+        let leaf = Cert::from_der(end_entity)?;
+        if now <= leaf.not_after || now > grace_end_with(Some(source), &leaf, now) {
+            return None;
+        }
+        let at = UnixTime::since_unix_epoch(Duration::from_secs(u64::try_from(leaf.not_after).ok()?));
+        let verified = self.inner.verify_client_cert(end_entity, intermediates, at).ok()?;
+        let inters: Vec<Cert> = intermediates.iter().filter_map(|c| Cert::from_der(c)).collect();
+        let mut cert = leaf;
+        let mut rooted = false;
+        for _ in 0..8 {
+            let (issuer, is_root) = self.issuer_of(&cert, &inters)?;
+            if issuer.not_before > now || issuer.not_after < now {
+                return None;
+            }
+            if is_root {
+                rooted = true;
+                break;
+            }
+            cert = issuer.clone();
+        }
+        if !rooted || (self.revoke && self.revocation(end_entity, intermediates, now).is_err()) {
+            return None;
+        }
+        Some(verified)
+    }
+
     fn issuer_of<'a>(&'a self, cert: &Cert, intermediates: &'a [Cert]) -> Option<(&'a Cert, bool)> {
         if let Some(c) = intermediates.iter().find(|c| c.subject == cert.issuer && cert.signed.verified_by(&c.spki)) {
             return Some((c, false));
@@ -468,8 +555,16 @@ impl ClientCertVerifier for MeetVerifier {
     }
 
     fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
-        let verified = self.inner.verify_client_cert(end_entity, intermediates, now)?;
-        self.revocation(end_entity, intermediates, now.as_secs() as i64).map_err(rustls::Error::InvalidCertificate)?;
+        let verified = match self.inner.verify_client_cert(end_entity, intermediates, now) {
+            Ok(v) => v,
+            Err(e @ rustls::Error::InvalidCertificate(CertificateError::Expired | CertificateError::ExpiredContext { .. })) => {
+                return self.in_grace(end_entity, intermediates, now.as_secs() as i64).ok_or(e);
+            }
+            Err(e) => return Err(e),
+        };
+        if self.revoke {
+            self.revocation(end_entity, intermediates, now.as_secs() as i64).map_err(rustls::Error::InvalidCertificate)?;
+        }
         Ok(verified)
     }
 
@@ -493,19 +588,21 @@ pub fn tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     let key = load_key(&s.key)?;
     let roots = Arc::new(roots_of(&s.client_ca)?);
     let inner = WebPkiClientVerifier::builder_with_provider(roots, provider.clone()).build().map_err(|e| format!("the client CA does not load: {e}"))?;
-    let verifier: Arc<dyn ClientCertVerifier> = match active_crl(s) {
-        None => inner,
+    let (crls, chain, revoke) = match active_crl(s) {
+        None => (Vec::new(), false, false),
         Some(crl) => {
             let data = std::fs::read(&crl).map_err(|e| format!("cannot read the CRL {}: {e}", crl.display()))?;
             let crls = crls_in(&data);
             if crls.is_empty() {
                 return Err(format!("the CRL file {} holds no CRL", crl.display()));
             }
-            let ca_data = std::fs::read(&s.client_ca).map_err(|e| format!("cannot read the CA file {}: {e}", s.client_ca))?;
-            let roots: Vec<Cert> = pem_blocks(&ca_data, "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
-            Arc::new(MeetVerifier { inner, roots, crls, chain: bundle_checks_chain(&crl, Path::new(&s.client_ca)) })
+            (crls, bundle_checks_chain(&crl, Path::new(&s.client_ca)), true)
         }
     };
+    let ca_data = std::fs::read(&s.client_ca).map_err(|e| format!("cannot read the CA file {}: {e}", s.client_ca))?;
+    let roots: Vec<Cert> = pem_blocks(&ca_data, "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    // API-1 3.3: without a CRL file and a grace source this is the plain webpki verifier, as before
+    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(MeetVerifier { inner, roots, crls, chain, revoke, grace: Grace(GRACE.get().cloned()) });
     let cfg = ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|e| e.to_string())?
@@ -1146,6 +1243,27 @@ pub(crate) mod testpki {
         /// with `cn` as its DNS name.
         pub fn leaf(&self, serial: &[u8], cn: &str, email: Option<&str>, uris: &[&str], key: &Key, client: bool) -> Vec<u8> {
             let now = crate::meet_json::now() as i64;
+            self.leaf_valid(serial, cn, email, uris, key, client, now - 3600, now + 90 * 86_400)
+        }
+
+        /// An intermediate CA under this one, valid from `not_before` to `not_after` (seconds).
+        pub fn sub(&self, cn: &str, not_before: i64, not_after: i64) -> Ca {
+            let key = Key::new();
+            let exts = [
+                ext(&[0x55, 0x1d, 0x13], true, &tlv(0x30, &tlv(0x01, &[0xff]))),
+                ext(&[0x55, 0x1d, 0x0f], true, &tlv(0x03, &[0x01, 0x06])),
+                ext(&[0x55, 0x1d, 0x0e], false, &tlv(0x04, &key.id())),
+                ext(&[0x55, 0x1d, 0x23], false, &tlv(0x30, &tlv(0x80, &self.key.id()))),
+            ]
+            .concat();
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(&[7]), alg(), name(&self.cn), tlv(0x30, &[time(not_before), time(not_after)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts))].concat());
+            let der = self.key.signed(tbs);
+            Ca { key, cn: cn.to_string(), der }
+        }
+
+        /// `leaf` valid from `not_before` to `not_after` (seconds).
+        #[allow(clippy::too_many_arguments)]
+        pub fn leaf_valid(&self, serial: &[u8], cn: &str, email: Option<&str>, uris: &[&str], key: &Key, client: bool, not_before: i64, not_after: i64) -> Vec<u8> {
             let mut san: Vec<u8> = Vec::new();
             if let Some(e) = email {
                 san.extend(tlv(0x81, e.as_bytes()));
@@ -1166,7 +1284,7 @@ pub(crate) mod testpki {
             if !san.is_empty() {
                 exts.push(ext(&[0x55, 0x1d, 0x11], false, &tlv(0x30, &san)));
             }
-            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(serial), alg(), name(&self.cn), tlv(0x30, &[time(now - 3600), time(now + 90 * 86_400)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts.concat()))].concat());
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(serial), alg(), name(&self.cn), tlv(0x30, &[time(not_before), time(not_after)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts.concat()))].concat());
             self.key.signed(tbs)
         }
 
@@ -1234,12 +1352,78 @@ mod tests {
         assert!(WebPkiClientVerifier::builder_with_provider(roots.clone(), provider.clone()).with_crls(crls).build().is_ok());
         // the relay's verifier: listed is revoked, the clean list passes
         let inner = WebPkiClientVerifier::builder_with_provider(roots, provider).build().unwrap();
-        let verifier = |der: &[u8]| MeetVerifier { inner: inner.clone(), roots: vec![root.clone()], crls: vec![Crl::from_der(der).unwrap()], chain: false };
+        let verifier = |der: &[u8]| MeetVerifier { inner: inner.clone(), roots: vec![root.clone()], crls: vec![Crl::from_der(der).unwrap()], chain: false, revoke: true, grace: Grace(None) };
         assert_eq!(verifier(&listed).revocation(&leaf, &[], t), Err(CertificateError::Revoked));
         assert_eq!(verifier(&clean).revocation(&leaf, &[], t), Ok(()));
         // a list whose thisUpdate has not passed does not count yet (check_one's zero tolerance)
         let ahead = ca.crl(t + 30, t + 120 * DAY, &[], Some(&[0x02]));
         assert_eq!(verifier(&ahead).revocation(&leaf, &[], t), Err(CertificateError::UnknownRevocationStatus));
+    }
+
+    /// API-1 3.3: a verifier over `ca` (its CRL `crl`, if any, in force) whose grace source gives `hours` to everyone.
+    fn grace_verifier(ca: &Ca, crl: Option<Vec<u8>>, hours: Option<i64>) -> MeetVerifier {
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(ca.der.clone())).unwrap();
+        let inner = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::new(crate::server::provider())).build().unwrap();
+        let grace = hours.map(|h| -> GraceSource { Arc::new(move |g: &GraceSubject, _now: i64| g.not_after + h * 3600) });
+        let crls: Vec<Crl> = crl.iter().filter_map(|d| Crl::from_der(d)).collect();
+        MeetVerifier { inner, roots: vec![Cert::from_der(&ca.der).unwrap()], revoke: !crls.is_empty(), crls, chain: false, grace: Grace(grace) }
+    }
+
+    fn verify(v: &MeetVerifier, leaf: &[u8], inters: &[&[u8]]) -> Result<(), rustls::Error> {
+        let inters: Vec<CertificateDer<'static>> = inters.iter().map(|d| CertificateDer::from(d.to_vec())).collect();
+        v.verify_client_cert(&CertificateDer::from(leaf.to_vec()), &inters, UnixTime::now()).map(|_| ())
+    }
+
+    fn expired(r: &Result<(), rustls::Error>) -> bool {
+        matches!(r, Err(rustls::Error::InvalidCertificate(CertificateError::Expired | CertificateError::ExpiredContext { .. })))
+    }
+
+    const HOUR: i64 = 3600;
+
+    #[test]
+    fn api1_an_expired_leaf_passes_inside_the_grace_only() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        let leaf = ca.leaf_valid(&[0x61], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        let late = ca.leaf_valid(&[0x62], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 40 * HOUR, t - 25 * HOUR);
+        let clean = ca.crl(t - 300, t + 120 * DAY, &[], None);
+        // inside a 24 hour grace, the CRL checked at now
+        assert_eq!(verify(&grace_verifier(&ca, Some(clean.clone()), Some(24)), &leaf, &[]), Ok(()));
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(24)), &leaf, &[]), Ok(()));
+        // past it: the original error
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean.clone()), Some(24)), &late, &[])));
+        // grace 0 and no grace source refuse alike, with webpki's own error
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean.clone()), Some(0)), &leaf, &[])));
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean), None), &leaf, &[])));
+        // a leaf that has not expired is today's path
+        let fresh = ca.leaf(&[0x63], "Ann", Some("ann@x.org"), &[], &Key::new(), true);
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(0)), &fresh, &[]), Ok(()));
+    }
+
+    #[test]
+    fn api1_the_grace_never_covers_a_revoked_leaf_an_expired_issuer_or_a_broken_chain() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        // revoked: the CRL at now lists it
+        let leaf = ca.leaf_valid(&[0x71], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        let listed = ca.crl(t - 300, t + 120 * DAY, &[&[0x71]], None);
+        assert!(expired(&verify(&grace_verifier(&ca, Some(listed), Some(24)), &leaf, &[])));
+        // an expired CRL refuses too
+        let stale = ca.crl(t - 10 * DAY, t - DAY, &[], None);
+        assert!(expired(&verify(&grace_verifier(&ca, Some(stale), Some(24)), &leaf, &[])));
+        // the intermediate was valid at the leaf's notAfter but is expired now
+        let old = ca.sub("Lucid Meet Issuing", t - 20 * HOUR, t - HOUR);
+        let under_old = old.leaf_valid(&[0x72], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &under_old, &[old.der.as_slice()]).is_err());
+        let good = ca.sub("Lucid Meet Issuing", t - 20 * HOUR, t + DAY);
+        let under_good = good.leaf_valid(&[0x73], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(24)), &under_good, &[good.der.as_slice()]), Ok(()));
+        // the chain does not build: another CA's leaf, or the intermediate missing
+        let other = Ca::new("Another CA");
+        let stranger = other.leaf_valid(&[0x74], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &stranger, &[]).is_err());
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &under_good, &[]).is_err());
     }
 
     #[test]

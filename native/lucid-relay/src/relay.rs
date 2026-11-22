@@ -589,6 +589,9 @@ impl State {
             } else if let Err(reason) = st.directory.accept(&st.trust, &stored, t) {
                 st.logger.warn("directory.stored-refused", &Fields::new().with("reason", reason));
             }
+            // API-1 3.5: node certificates get the held directory's grace
+            let hours = st.directory.cert_grace_hours();
+            st.trust.set_cert_grace_hours(hours);
         }
         if let Some(file) = st.seen_file.clone() {
             // A bad entry is skipped, a bad file is an empty book: spokes come back on their next poll.
@@ -886,6 +889,8 @@ impl State {
                         write_private(file, format!("{token}\n").as_bytes()).map_err(|e| e.to_string())?;
                     }
                     self.logger.ops("directory.accepted", &by.clone().with("version", self.directory.version()), Level::Info);
+                    // API-1 3.5: node certificates get the held directory's grace
+                    self.trust.set_cert_grace_hours(self.directory.cert_grace_hours());
                 }
                 Ok(Ok(self.directory.version()))
             }
@@ -1239,6 +1244,12 @@ impl State {
             return Err(("auth.replay", "nonce already used".into(), Some(cert.node)));
         }
         self.nonces.insert(nonce.to_owned(), t);
+        if cert.exp <= t_sec {
+            // API-1 3.5: verify_cert passed it inside the held directory's grace
+            let left = (cert.exp + self.directory.cert_grace_hours() * 3600 - t_sec).max(0);
+            let f = Fields::new().with("node", cert.node.clone()).with("serial", cert.serial.clone()).with("exp", cert.exp).with("hours_left", left / 3600);
+            self.logger.security("cert.grace-used", &f, Level::Warn);
+        }
         Ok(cert)
     }
 

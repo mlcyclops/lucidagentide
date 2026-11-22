@@ -764,6 +764,9 @@ pub struct Fleet {
     crl_failing: Mutex<bool>,
     /// AC-2b-D 8.5 divergence: the reported root CRL (sha256) each relay was last asked for with `meet-crl-get`.
     diverge_seen: Mutex<HashMap<String, String>>,
+    /// API-1: the org api maps, tightening journals and pseudonym keys this console holds and delivers (2.4 to 2.6),
+    /// and the relay grace of the fleet verifier (3.4).
+    pub api: Arc<crate::console_api::ConsoleApi>,
 }
 
 /// A request as the fleet section sees it (console.rs builds it after the role, origin and size checks).
@@ -1068,6 +1071,7 @@ impl Fleet {
         let console_id = book.console_id.clone();
         // AC-2b-D 8.3: the CA's files and its sealed key; a CA whose key does not unseal opens `lost`.
         let meet = with_vault(console, |v| crate::meet_ca::MeetCa::open(&state_dir, &*v));
+        let api = Arc::new(crate::console_api::ConsoleApi::open(Some(&state_dir), logger.clone(), Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console)))));
         let _ = t;
         let fleet = Arc::new_cyclic(|weak: &Weak<Fleet>| {
             let bridge: Arc<dyn crate::fleet_people::PeopleHost> = Arc::new(PeopleBridge { fleet: weak.clone() });
@@ -1091,6 +1095,7 @@ impl Fleet {
                 meet: Mutex::new(meet),
                 crl_failing: Mutex::new(false),
                 diverge_seen: Mutex::new(HashMap::new()),
+                api,
             }
         });
         console.attach_fleet(fleet.clone());
@@ -3078,6 +3083,26 @@ impl Fleet {
     /// After the port sent `welcome` (the relay refuses any other first frame): scopes narrowed while the relay was
     /// offline first (4.1), then the roster and policy updates it lacks and the Meeting Hub list push (8.5).
     pub fn on_welcomed(&self, relay: &str, t: i64) {
+        let Ok(c) = self.console() else { return };
+        // API-1 2.5: `api-heads`, then the pseudonym key, maps and journal entries the relay lacks go before any other
+        // request (only when this console holds any api state; an older relay is marked as having no api).
+        self.api.on_welcomed(relay);
+        if self.api.needs_sync(relay) {
+            if let (Some(link), Some(me)) = (self.link.get().cloned(), c.fleet()) {
+                let relay = relay.to_owned();
+                let _ = std::thread::Builder::new().name("fleet-catch-up".into()).spawn(move || {
+                    // a failed api request is tried again at the next contact; the other updates still follow it
+                    me.api.sync(&*link, &relay, t.div_euclid(1000));
+                    me.welcomed_rest(&relay, t);
+                });
+                return;
+            }
+        }
+        self.welcomed_rest(relay, t);
+    }
+
+    /// `on_welcomed` after the api catch-up.
+    fn welcomed_rest(&self, relay: &str, t: i64) {
         let Ok(c) = self.console() else { return };
         let (ours, theirs) = {
             let reg = self.registry.lock();
@@ -5719,6 +5744,7 @@ mod tests {
                 "nonce" => json!({ "nonces": [b64u(&[7u8; 32])], "ttl": 120 }),
                 "call" => self.call_answer.lock().clone().unwrap_or(json!({ "status": 200, "body": { "ok": true } })),
                 "roster" | "policy" => json!({ "seq": body["seq"], "held": [], "unattested": [] }),
+                "api-heads" => json!({ "acme": { "seq": 0, "tseq": 0 } }),
                 _ => json!({}),
             })
         }
@@ -6216,6 +6242,26 @@ mod tests {
         let audit = h.c.audit.lock().entries().iter().map(|e| stringify(&Value::Object(e.clone()))).collect::<String>();
         assert!(audit.contains("fleet.call"));
         assert!(!audit.contains(&b64u(&[7u8; 32])), "nonces never enter the audit");
+    }
+
+    #[test]
+    fn api_journal_entries_reach_a_reconnecting_relay_before_any_other_request() {
+        let h = boot("api-journal");
+        h.f.sync_roster(&h.c, crate::codec::now_ms());
+        let relay = h.seed(Product::Meet);
+        let t = crate::codec::now_ms();
+        // two tightenings while the relay is offline
+        h.f.api.append(None, "acme", "client_suspend", json!("c_5f1a2b3c4d5e6f70"), None, t / 1000).unwrap();
+        h.f.api.append(None, "acme", "scrape_deny", json!("a".repeat(64)), None, t / 1000).unwrap();
+        // reconnect: welcome carries no api key; api-heads goes first, then both entries in order
+        h.hello(&relay, "done", &["read-health"]);
+        assert!(wait_for(|| h.sent("api-tighten").len() == 2));
+        let tightens = h.sent("api-tighten");
+        assert_eq!((tightens[0]["entry"]["tseq"].as_u64(), tightens[1]["entry"]["tseq"].as_u64()), (Some(1), Some(2)));
+        let ops: Vec<String> = h.link.sent.lock().iter().filter(|(r, _, _)| *r == relay).map(|(_, o, _)| o.clone()).collect();
+        assert_eq!(&ops[..3], ["api-heads", "api-tighten", "api-tighten"], "{ops:?}");
+        assert!(wait_for(|| h.f.api.acked(&relay, "acme") == 2));
+        let _ = t;
     }
 
     #[test]

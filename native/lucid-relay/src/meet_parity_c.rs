@@ -1083,6 +1083,38 @@ impl State {
         self.api_maps().accept(&wire, &trust, pj::now() as i64, policy.as_ref(), edition).map_err(api_error)
     }
 
+    /// API-1 3.3: the effective end of a Meet certificate of `kind` (from `cert_kind`) for `principal` with SAN org
+    /// URIs `orgs`: `not_after` plus the smallest grace among the orgs that bind it (app, archive and SSO: its org
+    /// URIs; a connector: the org the bridge configuration gives its principal; a person: every org whose newest
+    /// policy's `domains` hold its email domain, plus its `organizations` org). No org, or another kind: `not_after`.
+    pub(crate) fn api_cert_end(&mut self, kind: &str, principal: &str, orgs: &[String], not_after: i64, now: i64) -> i64 {
+        let relay_org = || match self.org(principal) {
+            Value::Object(o) => o.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string),
+            _ => None,
+        };
+        let (grace_kind, mut bound): (&str, Vec<String>) = match kind {
+            "app" | "archive" | "sso" => ("app", orgs.to_vec()),
+            "connector" => ("connector", relay_org().into_iter().collect()),
+            "person" => {
+                let mut bound: Vec<String> = relay_org().into_iter().collect();
+                let domain = principal.rsplit_once('@').map(|(_, d)| d.to_lowercase()).unwrap_or_default();
+                if !domain.is_empty() {
+                    if let Some(store) = self.pc_store() {
+                        let covers = |p: &Obj| p.get("domains").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).any(|d| d.eq_ignore_ascii_case(&domain));
+                        bound.extend(store.newest.iter().filter(|(_, v)| covers(&v.policy)).map(|(o, _)| o.clone()));
+                    }
+                }
+                ("person", bound)
+            }
+            _ => return not_after,
+        };
+        bound.sort();
+        bound.dedup();
+        let maps = self.api_maps();
+        let hours: Vec<Option<u32>> = bound.iter().map(|o| maps.grace_hours(o, grace_kind, now)).collect();
+        crate::api_map::effective_end(not_after, &hours)
+    }
+
     /// The AI map the org's current policy names (the one devices and the gateway use), if the relay holds it.
     pub(crate) fn ai_current_map(&mut self, org: &str) -> Option<Obj> {
         let named = self.ai_named(org);
@@ -2602,6 +2634,58 @@ impl Hub {
         Ok(obj([("signed", Value::Object(wire)), ("signer_policy", signer_policy)]))
     }
 
+    /// API-1 3.3: the Meet verifier's view of the live api map store (`State::api_cert_end`), holding the hub weakly.
+    pub fn api_grace_source(self: &std::sync::Arc<Self>) -> crate::meet_tls::GraceSource {
+        let weak = std::sync::Arc::downgrade(self);
+        std::sync::Arc::new(move |g: &crate::meet_tls::GraceSubject, now: i64| match weak.upgrade() {
+            Some(hub) => hub.st.lock().api_cert_end(&g.kind, &g.principal, &g.orgs, g.not_after, now),
+            None => g.not_after,
+        })
+    }
+
+    // ── API-1: the fleet channel's api ops (docs/api/contract.md 2.4 to 2.6) ──
+
+    /// The org ids this relay serves (relay.json `organizations`).
+    fn api_served(st: &State) -> std::collections::BTreeSet<String> {
+        st.organizations.values().filter_map(|v| v.get("id").and_then(Value::as_str)).map(str::to_string).collect()
+    }
+
+    /// The `api-heads` answer (2.5): `{org: {seq, tseq}}` for every org this relay serves, 0 and 0 when it holds nothing.
+    pub fn api_hello_heads(&self) -> Value {
+        let mut st = self.st.lock();
+        let orgs = Self::api_served(&st);
+        let store = st.api_maps();
+        let heads: Obj = orgs.into_iter().map(|o| {
+            let (seq, tseq) = store.head(&o);
+            (o, serde_json::json!({"seq": seq, "tseq": tseq}))
+        }).collect();
+        Value::Object(heads)
+    }
+
+    /// The fleet requests `api-map` and `api-tighten` (2.6), answered only after the store is flushed to disk.
+    pub fn api_fleet_request(&self, op: &str, body: &Value) -> Result<Value, crate::fleet_wire::Refusal> {
+        let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut st = self.st.lock();
+        if !Self::api_served(&st).contains(org) {
+            return Err(crate::fleet_wire::Refusal::new(403, "org-not-served", "This relay does not serve that organization."));
+        }
+        match op {
+            "api-map" => {
+                if body.get("map").and_then(|m| m.get("map")).and_then(|m| m.get("org")).and_then(Value::as_str) != Some(org) {
+                    return Err(crate::fleet_wire::Refusal::new(400, "bad-map", "The api map is for another organization."));
+                }
+                let r = st.api_accept(body.get("map"), edition).map_err(|e| match e {
+                    E::Coded(_, code, msg) => crate::api_map::ApiMapError::new(code, msg),
+                    other => crate::api_map::ApiMapError::new("bad-map", format!("{other:?}")),
+                });
+                crate::fleet_agent::api_map_pinned(r, st.api_maps(), body, &crate::console_meet::logger())
+            }
+            "api-tighten" => crate::fleet_agent::api_tighten_answer(st.api_maps(), body),
+            _ => Err(crate::fleet_wire::Refusal::of("fleet-op")),
+        }
+    }
+
     // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──
 
     /// `POST /v1/org/storage {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
@@ -3376,5 +3460,42 @@ mod tests {
         assert_eq!(pols(Some(&json!([a, b]))).unwrap().len(), 2);
         assert!(pols(Some(&json!([b, a]))).is_err());
         assert!(pols(Some(&json!(["x"]))).is_err());
+    }
+
+    /// API-1 3.3: the applicable grace is the smallest among the orgs that bind a certificate; an org without a pinned
+    /// map counts 0, no org gives none.
+    #[test]
+    fn api1_a_person_in_two_orgs_gets_the_smallest_grace() {
+        let now = pj::now() as i64;
+        let dir = crate::meet_tls::testpki::dir("api-grace");
+        let maps = dir.join("api-maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        for (org, person, app) in [("acme", 24, 24), ("beta", 0, 6)] {
+            let map = json!({"org": org, "seq": 1, "expires": now + 86_400, "grace": {"person": person, "app": app, "connector": 12, "relay": 0}});
+            let held = json!({"pinned": {"signed": {"map": map, "sig": "", "chain": []}, "signer": "root"}});
+            std::fs::write(maps.join(format!("{org}.json")), serde_json::to_vec(&held).unwrap()).unwrap();
+        }
+        let hub = Hub::new(None, &[], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        let mut st = hub.st.lock();
+        st.pc.api_maps = Some(crate::api_map::ApiMapStore::load(Some(&dir)));
+        st.organizations = json!({"ann@acme.example": {"id": "acme", "label": "Acme"}, "con@apps.acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        let na = now - 3600;
+        // the organizations map alone: acme's 24 hours
+        assert_eq!(st.api_cert_end("person", "ann@acme.example", &[], na, now), na + 24 * 3600);
+        // beta's newest policy covers the domain too: beta's 0 wins
+        let policy = json!({"org": "beta", "domains": ["ACME.example"]}).as_object().unwrap().clone();
+        let beta = op::Verified { wire: Obj::new(), policy, org: "beta".into(), label: "Beta".into(), seq: 1, hash: String::new(), signer: "root".into() };
+        let mut store = op::Store::default();
+        store.newest.insert("beta".into(), beta);
+        st.pc.store = Some(store);
+        assert_eq!(st.api_cert_end("person", "ann@acme.example", &[], na, now), na);
+        // services: their org URIs; a connector: its bridge org; nobody bound: no grace
+        assert_eq!(st.api_cert_end("app", "x@apps.acme.example", &["acme".into()], na, now), na + 24 * 3600);
+        assert_eq!(st.api_cert_end("sso", "sso:01", &["acme".into(), "beta".into()], na, now), na + 6 * 3600);
+        assert_eq!(st.api_cert_end("connector", "con@apps.acme.example", &[], na, now), na + 12 * 3600);
+        assert_eq!(st.api_cert_end("connector", "lost@apps.acme.example", &[], na, now), na);
+        assert_eq!(st.api_cert_end("person", "zed@elsewhere.example", &[], na, now), na);
+        // an org whose map is not pinned counts 0
+        assert_eq!(st.api_cert_end("app", "x@apps.acme.example", &["acme".into(), "gamma".into()], na, now), na);
     }
 }

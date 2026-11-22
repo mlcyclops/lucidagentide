@@ -683,6 +683,10 @@ pub struct Identity {
     /// device record so the relay knows which devices hold a certificate that is not expired.
     pub not_before: i64,
     pub not_after: i64,
+    /// API-1 3.2, 3.3: the certificate is past its `notAfter` and inside its org's grace, which ends at `grace_end`
+    /// (seconds; 0 when not in grace).
+    pub in_grace: bool,
+    pub grace_end: i64,
 }
 
 /// AC-1 (contract 4.9, L9): the kind of the in-process Identity the Admin Console passes for a relay admin.
@@ -735,6 +739,21 @@ pub fn uri_value(uris: &[String], prefix: &str) -> String {
     uris.iter().find_map(|u| u.strip_prefix(prefix).filter(|v| is_device_id(v)).map(str::to_string)).unwrap_or_default()
 }
 
+/// API-1 3.3: `(in_grace, grace_end)` of a verified client certificate. The handshake admitted an expired leaf only
+/// inside its grace, but rustls hands the verifier's verdict to no connection, so the same grace view is asked again.
+fn grace_of(cert: &Cert) -> (bool, i64) {
+    let now = pj::now() as i64;
+    if now <= cert.not_after {
+        return (false, 0);
+    }
+    let end = crate::meet_tls::cert_grace_end(cert, now);
+    if now <= end {
+        (true, end)
+    } else {
+        (false, 0)
+    }
+}
+
 /// identity_from_cert: CN and email SAN of the verified client certificate, the device from the SAN URI (label:
 /// the first OU), a seed's token, or `legacy-` plus the serial's first 16 hex.
 pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
@@ -754,7 +773,8 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
     if kind == "sso" {
         // the SSO service has no email or device: it is named by its serial, sso routes only
         let name = if cn.is_empty() { "Lucid Meet SSO".to_string() } else { cn };
-        return Ok(Identity { principal: format!("sso:{}", cert.serial), name: pj::clip(name.trim(), 80), serial: cert.serial.clone(), kind, orgs, ..Default::default() });
+        let (in_grace, grace_end) = grace_of(&cert);
+        return Ok(Identity { principal: format!("sso:{}", cert.serial), name: pj::clip(name.trim(), 80), serial: cert.serial.clone(), kind, orgs, in_grace, grace_end, ..Default::default() });
     }
     let emails = &cert.names.emails;
     if cn.is_empty() || emails.is_empty() {
@@ -780,6 +800,7 @@ pub fn identity_from_cert(der: Option<&[u8]>) -> R<Identity> {
         not_after: cert.not_after,
         ..Default::default()
     };
+    (who.in_grace, who.grace_end) = grace_of(&cert);
     let token = uri_value(uris, SEED_URI_PREFIX);
     if !token.is_empty() {
         who.seed = true;
@@ -1423,6 +1444,14 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
             r.pki_switched();
         }
     }
+
+    fn api_heads(&self) -> Value {
+        self.relay.upgrade().map(|r| r.hub.api_hello_heads()).unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        self.relay.upgrade().map(|r| r.hub.api_fleet_request(op, body))
+    }
 }
 
 impl Relay {
@@ -1515,6 +1544,8 @@ fn serve(settings: Settings) -> ! {
     hub.pc_configure(&settings);
     hub.wave3_configure(&settings).unwrap_or_else(|e| die(&e));
     hub.push_configure(&settings);
+    // API-1 3.3: every Meet TLS config reads the live api map store for the certificate grace
+    crate::meet_tls::set_grace_source(hub.api_grace_source());
     let tls = tls_config(&settings).unwrap_or_else(|e| die(&e));
     let listener = TcpListener::bind((settings.host.as_str(), settings.port)).unwrap_or_else(|e| die(&format!("cannot listen on {}:{}: {e}", settings.host, settings.port)));
     let console = Console::new(&settings, links).unwrap_or_else(|e| die(&e));
@@ -2083,6 +2114,10 @@ impl Ctx<'_> {
         }
         if who.seed && !seed_ok {
             return forbidden(FINISH_SETUP);
+        }
+        if who.in_grace {
+            let left = (who.grace_end - pj::now() as i64).max(0) as f64 / 3600.0;
+            log_warn(&format!("cert.grace-used principal={} serial={} not_after={} grace_end={} hours_left={left:.1}", who.principal, who.serial, pj::iso_utc(who.not_after), pj::iso_utc(who.grace_end)));
         }
         if let Some(der) = self.der {
             who.cert_pem = der_to_pem(der);

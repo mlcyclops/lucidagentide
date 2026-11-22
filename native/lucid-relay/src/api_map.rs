@@ -912,7 +912,6 @@ const DENY_ACTIONS: [&str; 2] = ["token_deny", "scrape_deny"];
 
 /// One journal entry.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))] // `org` and `tseq` are read by the fleet channel's api-tighten
 pub struct TightenEntry {
     pub id: String,
     pub org: String,
@@ -999,7 +998,6 @@ impl TightenEntry {
 
 /// 2.5 delivery: the entry, applied only when its `tseq` is exactly `applied_tseq + 1` (`tseq-gap`).
 /// The tseq is checked first (`not-tightening` when it is not a whole number), then the rest.
-#[cfg_attr(not(test), allow(dead_code))] // the fleet channel's api-tighten
 pub fn check_tighten(entry: &Value, applied_tseq: u64) -> Result<TightenEntry, ApiMapError> {
     let Some(tseq) = entry.get("tseq").and_then(Value::as_u64).filter(|n| (1..=MAX_INT as u64).contains(n)) else {
         return not_tightening("tseq must be a whole number from 1");
@@ -1084,7 +1082,6 @@ pub fn fold(active: &[TightenEntry], new_map: &Value) -> Result<Vec<String>, Api
 
 /// `raw_end + hours * 3600` with the applicable grace: the minimum over the orgs that bind the credential, an org with
 /// no pinned or an expired map (None) counting 0; no org at all is 0.
-#[cfg_attr(not(test), allow(dead_code))] // the TLS verifiers
 pub fn effective_end(raw_end: i64, hours: &[Option<u32>]) -> i64 {
     let h = hours.iter().map(|h| h.unwrap_or(0)).min().unwrap_or(0);
     raw_end.saturating_add(i64::from(h) * 3600)
@@ -1244,8 +1241,23 @@ impl ApiMapStore {
         Ok(AcceptOutcome::Pinned(vm))
     }
 
+    /// 2.5 rebase: after pinning a map that came with the console's pruned `base`, an applied tseq below it moves up
+    /// to it (the pinned map holds the pruned entries' effect), flushed before Ok(Some(previous)). A base at or below
+    /// the applied tseq changes nothing (Ok(None)).
+    pub fn rebase(&mut self, org: &str, base: u64) -> Result<Option<u64>, ApiMapError> {
+        let cur = self.orgs.get(org).cloned().unwrap_or_default();
+        if base <= cur.applied || cur.pinned.is_none() {
+            return Ok(None);
+        }
+        let from = cur.applied;
+        let mut next = cur;
+        next.applied = base;
+        self.save_journal(org, &next)?;
+        self.orgs.insert(org.to_string(), next);
+        Ok(Some(from))
+    }
+
     /// 2.5: apply one journal entry for `org` (its tseq exactly the next) and flush the journal before Ok(tseq).
-    #[cfg_attr(not(test), allow(dead_code))] // the fleet channel's api-tighten
     pub fn apply_tighten(&mut self, org: &str, entry: &Value) -> Result<u64, ApiMapError> {
         self.room_for(org)?;
         let cur = self.orgs.get(org).cloned().unwrap_or_default();

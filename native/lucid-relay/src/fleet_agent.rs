@@ -2638,6 +2638,104 @@ pub trait MeetHooks: Send + Sync {
     fn ca_held(&self) -> bool;
     /// A renewal switched `pki/current`: reload the TLS configuration and the signer client (8.4).
     fn pki_switched(&self);
+    /// API-1 2.5 `api-heads`: `{org: {seq, tseq}}` for every org the relay serves.
+    fn api_heads(&self) -> Value {
+        json!({})
+    }
+    /// API-1 2.6 `api-map` and `api-tighten`, answered after the store is flushed (None: the relay is stopping).
+    fn api_request(&self, _op: &str, _body: &Value) -> Option<Result<Value, Refusal>> {
+        None
+    }
+}
+
+// ── API-1: the relay end of the api ops (docs/api/contract.md 2.4 to 2.6) ──────────────────────────────────
+
+/// The folder of the relay's pseudonym key records (`<org>.json` = `{pkv, not_before}`; the key itself is sealed).
+pub const API_PSEUDONYM_DIR: &str = "api-pseudonym";
+
+/// The sealed name of an org's pseudonym key version.
+pub fn api_pseudonym_seal_name(org: &str, pkv: u64) -> String {
+    format!("api-pseudonym-{org}-{pkv}")
+}
+
+/// An api map refusal as a `res` refusal with its contract code.
+pub fn api_refusal(e: crate::api_map::ApiMapError) -> Refusal {
+    let status = match e.code {
+        "signature" | "map-expired" => 403,
+        "license" | "issuer-taken" | "seq-not-higher" | "conflict" | "tseq-gap" => 409,
+        "io" => 500,
+        _ => 400,
+    };
+    Refusal::new(status, e.code, &e.message)
+}
+
+/// `api-map` (2.4): `{ok: true, seq}` once pinned (or already pinned); the pinned seq with another hash raises the
+/// alarm `api.map.conflict` and answers `conflict`.
+pub fn api_map_answer(r: Result<crate::api_map::AcceptOutcome, crate::api_map::ApiMapError>, logger: &Logger) -> Result<Value, Refusal> {
+    use crate::api_map::AcceptOutcome;
+    match r.map_err(api_refusal)? {
+        AcceptOutcome::Pinned(vm) | AcceptOutcome::Unchanged(vm) => {
+            logger.ops("api.map.pinned", &Fields::new().with("org", vm.org.as_str()).with("seq", vm.seq).with("hash", vm.hash.as_str()), Level::Info);
+            Ok(json!({ "ok": true, "seq": vm.seq }))
+        }
+        AcceptOutcome::Conflict { org, seq, pinned_hash, offered_hash } => {
+            let f = Fields::new().with("org", org.as_str()).with("seq", seq).with("pinned", pinned_hash.as_str()).with("offered", offered_hash.as_str()).with("via", "fleet");
+            logger.security("api.map.conflict", &f, Level::Error);
+            Err(Refusal::new(409, "conflict", &format!("{org}'s api map {seq} was seen with two different hashes")))
+        }
+    }
+}
+
+/// `api-map` after the accept: the answer of `api_map_answer`, then (2.5 rebase) the optional `base` the console
+/// sends a relay behind its pruned journal: an applied tseq below it moves up to it, logged `api.journal.rebased`.
+/// The answer carries the relay's applied `tseq` after it.
+pub fn api_map_pinned(r: Result<crate::api_map::AcceptOutcome, crate::api_map::ApiMapError>, store: &mut crate::api_map::ApiMapStore, body: &Value, logger: &Logger) -> Result<Value, Refusal> {
+    let mut answer = api_map_answer(r, logger)?;
+    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+    if let Some(base) = body.get("base").and_then(Value::as_u64) {
+        if let Some(from) = store.rebase(org, base).map_err(api_refusal)? {
+            logger.security("api.journal.rebased", &Fields::new().with("org", org).with("from", from).with("to", base), Level::Warn);
+        }
+    }
+    answer["tseq"] = json!(store.head(org).1);
+    Ok(answer)
+}
+
+/// `api-tighten` (2.5): apply the entry (its tseq exactly the next, never widening) and flush the journal before
+/// answering `{ok: true, tseq}`.
+pub fn api_tighten_answer(store: &mut crate::api_map::ApiMapStore, body: &Value) -> Result<Value, Refusal> {
+    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+    let entry = body.get("entry").unwrap_or(&Value::Null);
+    let tseq = store.apply_tighten(org, entry).map_err(api_refusal)?;
+    Ok(json!({ "ok": true, "tseq": tseq }))
+}
+
+/// `api-pseudonym-key` (2.6, 11.4): the 32-byte key sealed as `api-pseudonym-<org>-<pkv>`, then the owner-only
+/// record `api-pseudonym/<org>.json` `{pkv, not_before}` flushed to disk, then `{ok: true, pkv}`. The same version
+/// again with the same key changes nothing; with another key it is refused (`conflict`). The key is never logged.
+pub fn api_pseudonym_key_store(dir: &Path, vault: &dyn VaultLock, body: &Value) -> Result<Value, Refusal> {
+    let bad = |why: &str| Refusal::new(400, "bad-key", why);
+    let org = body.get("org").and_then(Value::as_str).filter(|o| (1..=32).contains(&o.len()) && o.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')).ok_or_else(|| bad("org is not an organization id"))?;
+    let pkv = body.get("pkv").and_then(Value::as_u64).filter(|n| (1..=(1u64 << 53)).contains(n)).ok_or_else(|| bad("pkv must be a whole number from 1"))?;
+    let not_before = body.get("not_before").and_then(Value::as_i64).filter(|n| *n >= 0).ok_or_else(|| bad("not_before must be a time"))?;
+    let key = body.get("key").and_then(Value::as_str).and_then(unb64u).filter(|k| k.len() == 32).ok_or_else(|| bad("key must be 32 bytes in base64url"))?;
+    let name = api_pseudonym_seal_name(org, pkv);
+    let path = dir.join(API_PSEUDONYM_DIR).join(format!("{org}.json"));
+    let held = parse_json(&std::fs::read_to_string(&path).unwrap_or_default()).and_then(|v| v.get("pkv").and_then(Value::as_u64));
+    if held.is_some_and(|h| h > pkv) {
+        return Err(Refusal::new(409, "pkv-not-higher", "This relay already holds a newer pseudonym key version."));
+    }
+    vault_do(vault, |v| -> Result<(), Refusal> {
+        match v.get(&name) {
+            Some(k) if k == key => Ok(()),
+            Some(_) => Err(Refusal::new(409, "conflict", "That pseudonym key version was seen with another key.")),
+            None => v.put(&name, &key).map_err(|_| Refusal::new(500, "io", "The key could not be sealed.")),
+        }
+    })?;
+    crate::store::make_dir(&dir.join(API_PSEUDONYM_DIR)).map_err(|_| Refusal::new(500, "io", "The key record could not be written."))?;
+    let record = stringify(&json!({ "pkv": pkv, "not_before": not_before }));
+    crate::fleet_local::write_durable(&path, record.as_bytes()).map_err(|_| Refusal::new(500, "io", "The key record could not be written."))?;
+    Ok(json!({ "ok": true, "pkv": pkv }))
 }
 
 static MEET_HOOKS: LazyLock<Mutex<HashMap<PathBuf, Arc<dyn MeetHooks>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -2654,7 +2752,7 @@ fn meet_hooks(dir: &Path) -> Option<Arc<dyn MeetHooks>> {
 /// Requests a High relay that holds a console's CA still answers (8.7): `nonce`, `meet-crl-get` and reading calls.
 fn write_frame(op: &str, body: &Map<String, Value>) -> bool {
     match op {
-        "nonce" | "meet-crl-get" => false,
+        "nonce" | "meet-crl-get" | "api-heads" => false,
         "call" => body.get("method").and_then(Value::as_str) != Some("GET"),
         _ => true,
     }
@@ -3543,6 +3641,31 @@ impl Agent {
                                 if !tx.text(w::res_err_text(id, &Refusal::of("fleet-ca-held"))).await {
                                     break;
                                 }
+                            }
+                            Ok(Frame::Req { id, op, body }) if op.starts_with("api-") => {
+                                // API-1 2.6: answered only after the store (or the sealed key) is on disk
+                                let (hooks, console, dir, ans) = (self.meet(), self.console.clone(), self.dir.clone(), ans_tx.clone());
+                                tokio::task::spawn_blocking(move || {
+                                    let body = Value::Object(body);
+                                    let answer = match (op, hooks) {
+                                        ("api-heads", Some(h)) => Ok(h.api_heads()),
+                                        ("api-pseudonym-key", Some(h)) => {
+                                            let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+                                            if h.api_heads().get(org).is_none() {
+                                                Err(Refusal::new(403, "org-not-served", "This relay does not serve that organization."))
+                                            } else {
+                                                api_pseudonym_key_store(&dir, &*console, &body)
+                                            }
+                                        }
+                                        (_, Some(h)) => h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op"))),
+                                        (_, None) => Err(Refusal::of("fleet-op")),
+                                    };
+                                    let text = match answer {
+                                        Ok(v) => w::res_ok_text(id, v),
+                                        Err(r) => w::res_err_text(id, &r),
+                                    };
+                                    let _ = ans.send(text);
+                                });
                             }
                             Ok(Frame::Req { id, op, body }) => {
                                 let (frames, ans) = (frames.clone(), ans_tx.clone());

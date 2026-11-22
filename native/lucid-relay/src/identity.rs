@@ -516,6 +516,9 @@ pub struct TrustStore {
     lowering: Option<Item>,
     /// Two different signed items with one version were seen: enforcement of new rules stops (5.4 alarm).
     conflict: bool,
+    /// API-1 3.5: the held relay directory's `cert_grace_hours` (0: none): a node certificate past `exp` passes until
+    /// `exp + hours * 3600`, never when revoked.
+    cert_grace_hours: i64,
 }
 
 impl TrustStore {
@@ -534,7 +537,13 @@ impl TrustStore {
             rules: None,
             lowering: None,
             conflict: false,
+            cert_grace_hours: 0,
         }
+    }
+
+    /// API-1 3.5: the grace of the relay directory held now (`DirectoryHolder::cert_grace_hours`).
+    pub fn set_cert_grace_hours(&mut self, hours: i64) {
+        self.cert_grace_hours = hours;
     }
 
     /// The verified release gates (tests and vectors only; the relay runs with RELAY_GATES).
@@ -1000,7 +1009,8 @@ impl TrustStore {
         if iat > now + CLOCK_SKEW_SEC {
             return Err(Refusal::new("certificate is not valid yet"));
         }
-        if exp <= now {
+        // API-1 3.5: inside the directory's grace an expired certificate passes (the revocation check below still runs)
+        if exp <= now && (self.cert_grace_hours == 0 || now > exp.saturating_add(self.cert_grace_hours * 3600)) {
             return Err(Refusal::new("certificate expired"));
         }
         let serial = str_of(p.get("serial")).unwrap_or_default().to_owned();
@@ -1117,9 +1127,18 @@ pub struct DirectoryHolder {
     version: i64,
     token: Option<String>,
     urls: Vec<String>,
+    cert_grace_hours: i64,
 }
 
+/// API-1 3.5 (D15): the most a relay directory's `cert_grace_hours` may give.
+pub const CERT_GRACE_MAX_HOURS: i64 = 168;
+
 impl DirectoryHolder {
+    /// API-1 3.5: the held directory's `cert_grace_hours` (0 when it carries none).
+    pub fn cert_grace_hours(&self) -> i64 {
+        self.cert_grace_hours
+    }
+
     pub fn version(&self) -> i64 {
         self.version
     }
@@ -1139,7 +1158,14 @@ impl DirectoryHolder {
         let Some(p) = open_compact(Some(&tv), trust.root_key(), MAX_DIRECTORY_TOKEN) else { return Err("relay directory is not signed by this root".into()) };
         let malformed = || Err("malformed relay directory".to_string());
         let keys = ["v", "typ", "root", "version", "relays", "iat", "exp"];
-        if !exact_keys(&p, &keys, &keys) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-relay-directory") || str_of(p.get("root")) != Some(trust.root_id.as_str()) {
+        // API-1 3.5: optional `cert_grace_hours`, an integer 1 to 168 (absent: 0)
+        let allowed = ["v", "typ", "root", "version", "relays", "iat", "exp", "cert_grace_hours"];
+        let grace = match p.get("cert_grace_hours") {
+            None => Some(0),
+            Some(h) => is_int(Some(h)).filter(|h| (1..=CERT_GRACE_MAX_HOURS).contains(h)),
+        };
+        let Some(grace) = grace else { return malformed() };
+        if !exact_keys(&p, &allowed, &keys) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-relay-directory") || str_of(p.get("root")) != Some(trust.root_id.as_str()) {
             return malformed();
         }
         let (Some(version), Some(iat), Some(exp)) = (is_int(p.get("version")), is_int(p.get("iat")), is_int(p.get("exp"))) else { return malformed() };
@@ -1164,6 +1190,7 @@ impl DirectoryHolder {
         self.version = version;
         self.token = Some(token.to_owned());
         self.urls = relays.iter().filter_map(|r| str_of(r.get("url")).map(str::to_owned)).collect();
+        self.cert_grace_hours = grace;
         Ok(true)
     }
 }
@@ -1185,6 +1212,89 @@ mod tests {
         assert!(!is_label("tab\there"));
         assert!(is_node_id("n_0123456789abcdef0123456789abcdef"));
         assert!(!is_node_id("n_0123456789ABCDEF0123456789abcdef"));
+    }
+
+    mod grace {
+        use super::super::*;
+        use crate::codec::{b64u, stringify};
+        use p256::ecdsa::signature::Signer;
+        use p256::ecdsa::{Signature, SigningKey};
+        use serde_json::json;
+
+        const NOW: i64 = 1_800_000_000;
+        const HOUR: i64 = 3600;
+
+        fn compact(key: &SigningKey, payload: &Value) -> String {
+            let body = stringify(payload);
+            let sig: Signature = key.sign(body.as_bytes());
+            format!("{}.{}", b64u(body.as_bytes()), b64u(sig.to_der().as_bytes()))
+        }
+
+        fn root() -> SigningKey {
+            SigningKey::from_slice(&[7; 32]).unwrap()
+        }
+
+        fn root_id(root: &SigningKey) -> String {
+            node_id_of(&p256_spki_der(&root.verifying_key().into()))
+        }
+
+        fn directory(root: &SigningKey, version: i64, grace: Option<Value>) -> String {
+            let mut p = json!({
+                "v": 1, "typ": "lucid-relay-directory", "root": root_id(root), "version": version,
+                "relays": [{ "url": "https://relay.example.com", "region": "eu", "priority": 1 }], "iat": NOW - 60, "exp": NOW + 86_400,
+            });
+            if let Some(g) = grace {
+                p["cert_grace_hours"] = g;
+            }
+            compact(root, &p)
+        }
+
+        /// A spoke certificate with serial 0x11 that expired at `exp`.
+        fn cert(root: &SigningKey, exp: i64) -> Value {
+            let key = SigningKey::from_slice(&[9; 32]).unwrap();
+            let spki = p256_spki_der(&key.verifying_key().into());
+            let p = json!({
+                "v": 1, "typ": "lucid-node-cert", "serial": format!("{:032x}", 0x11), "root": root_id(root), "node": node_id_of(&spki),
+                "role": "spoke", "label": "Desk", "spki": b64u(&spki), "scopes": [], "iat": exp - 30 * 86_400, "exp": exp,
+            });
+            Value::String(compact(root, &p))
+        }
+
+        /// API-1 3.5: `cert_grace_hours` is optional, an integer 1 to 168; anything else is a malformed directory.
+        #[test]
+        fn api1_the_directory_carries_an_optional_cert_grace() {
+            let root = root();
+            let trust = TrustStore::new(root.verifying_key().into());
+            let mut held = DirectoryHolder::default();
+            assert_eq!(held.accept(&trust, &directory(&root, 1, None), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 0);
+            assert_eq!(held.accept(&trust, &directory(&root, 2, Some(json!(24))), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 24);
+            assert_eq!(held.accept(&trust, &directory(&root, 3, Some(json!(168))), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 168);
+            for bad in [json!(0), json!(169), json!(1.5), json!(-1), json!("24"), Value::Null] {
+                assert_eq!(held.accept(&trust, &directory(&root, 4, Some(bad.clone())), NOW), Err("malformed relay directory".to_string()), "{bad}");
+            }
+            assert_eq!(held.cert_grace_hours(), 168);
+            assert_eq!(held.accept(&trust, &directory(&root, 5, None), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 0);
+        }
+
+        /// API-1 3.5: a node certificate past `exp` passes inside the directory's grace, never past it, never revoked,
+        /// and grace 0 refuses exactly as before.
+        #[test]
+        fn api1_a_node_certificate_passes_inside_the_directory_grace_only() {
+            let root = root();
+            let mut trust = TrustStore::new(root.verifying_key().into());
+            let expired = cert(&root, NOW - 2 * HOUR);
+            assert_eq!(trust.verify_cert(Some(&expired), NOW).err().as_deref(), Some("certificate expired"));
+            trust.set_cert_grace_hours(24);
+            assert!(trust.verify_cert(Some(&expired), NOW).is_ok());
+            assert_eq!(trust.verify_cert(Some(&cert(&root, NOW - 25 * HOUR)), NOW).err().as_deref(), Some("certificate expired"));
+            let crl = compact(&root, &json!({ "v": 1, "typ": "lucid-crl", "root": root_id(&root), "version": 1, "serials": [format!("{:032x}", 0x11)], "iat": NOW - 60 }));
+            assert_eq!(trust.accept_crl(&crl), Ok(true));
+            assert_eq!(trust.verify_cert(Some(&expired), NOW).err().as_deref(), Some("certificate revoked"));
+        }
     }
 
     #[test]

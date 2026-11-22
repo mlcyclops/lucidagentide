@@ -536,10 +536,26 @@ pub const OPS: &[OpSpec] = &[
     OpSpec { op: "meet-cert", kind: Kind::Req, to: Some(Side::Console), keys: &["csr", "signerCsr"], opt: &[] },
     OpSpec { op: "meet-crl", kind: Kind::Evt, to: Some(Side::Relay), keys: &["crl"], opt: &[] },
     OpSpec { op: "meet-crl-get", kind: Kind::Req, to: Some(Side::Relay), keys: &[], opt: &[] },
+    // API-1 2.6: the relay's api heads (asked first after `welcome`; an older relay answers fleet-op), the org api
+    // map, its tightening journal and the pseudonym key.
+    OpSpec { op: "api-heads", kind: Kind::Req, to: Some(Side::Relay), keys: &[], opt: &[] },
+    OpSpec { op: "api-map", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "map"], opt: &["base"] },
+    OpSpec { op: "api-tighten", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "entry"], opt: &[] },
+    OpSpec { op: "api-pseudonym-key", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "pkv", "key", "not_before"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
     OPS.iter().find(|s| s.op == op)
+}
+
+/// API-1 2.6: the size limit of an op's whole request frame, below the side's frame limit (3.8).
+pub fn op_frame_max(op: &str) -> Option<usize> {
+    match op {
+        "api-map" => Some(300 * 1024),
+        "api-tighten" => Some(8 * 1024),
+        "api-pseudonym-key" => Some(1024),
+        _ => None,
+    }
 }
 
 /// A frame that passed the 4.8 step 2 shape check.
@@ -613,6 +629,9 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             let Some(spec) = o.get("op").and_then(Value::as_str).and_then(op_spec) else { return bad(id, "op") };
             if spec.kind != Kind::Req || spec.to.is_some_and(|s| s != at) {
                 return bad(id, "op");
+            }
+            if op_frame_max(spec.op).is_some_and(|m| text.len() > m) {
+                return bad(id, "size");
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(id, "body") };
             if !exact_opt(body, spec.keys, spec.opt) {
@@ -1104,6 +1123,25 @@ mod tests {
         // answers
         assert_eq!(parse_frame(&res_err_text(5, &Refusal::of("fleet-op")), Side::Console).unwrap(), Frame::Res { id: 5, answer: Err(Refusal::of("fleet-op")) });
         assert!(matches!(parse_frame(&res_ok_text(5, json!({})), Side::Relay), Ok(Frame::Res { id: 5, answer: Ok(_) })));
+    }
+
+    #[test]
+    fn api_ops_have_their_keys_directions_and_size_limits() {
+        let entry = json!({"id": "t_acme_000001", "tseq": 1, "ts": 1, "action": "client_suspend", "target": "c_5f1a2b3c4d5e6f70"});
+        assert!(matches!(parse_frame(&req_text(1, "api-tighten", json!({"org": "acme", "entry": entry.clone()})), Side::Relay), Ok(Frame::Req { op: "api-tighten", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-tighten", json!({"org": "acme", "entry": entry})), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-tighten", json!({"org": "acme"})), Side::Relay).err().unwrap().why, "body");
+        assert_eq!(parse_frame(&req_text(1, "api-tighten", json!({"org": "acme", "entry": "x".repeat(8 * 1024)})), Side::Relay).err().unwrap().why, "size");
+        assert_eq!(parse_frame(&req_text(1, "api-map", json!({"org": "acme", "map": "x".repeat(300 * 1024)})), Side::Relay).err().unwrap().why, "size");
+        assert!(parse_frame(&req_text(1, "api-map", json!({"org": "acme", "map": "x".repeat(200 * 1024)})), Side::Relay).is_ok());
+        let key = json!({"org": "acme", "pkv": 1, "key": "A".repeat(43), "not_before": 1});
+        assert!(parse_frame(&req_text(1, "api-pseudonym-key", key), Side::Relay).is_ok());
+        assert_eq!(parse_frame(&req_text(1, "api-pseudonym-key", json!({"org": "acme", "pkv": 1, "key": "A".repeat(1024), "not_before": 1})), Side::Relay).err().unwrap().why, "size");
+        // api-heads has no body keys; hello and welcome carry no api key (mixed versions)
+        assert!(matches!(parse_frame(&req_text(1, "api-heads", json!({})), Side::Relay), Ok(Frame::Req { op: "api-heads", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-heads", json!({"org": "acme"})), Side::Relay).err().unwrap().why, "body");
+        let welcome = json!({"consoleId": "c_0123456789abcdef", "time": 1, "policySeq": 0, "rosterSeq": 0, "trustSeq": 1, "api": {"acme": {"seq": 0, "tseq": 0}}});
+        assert_eq!(parse_frame(&evt_text("welcome", welcome), Side::Relay).err().unwrap().why, "body");
     }
 
     #[test]

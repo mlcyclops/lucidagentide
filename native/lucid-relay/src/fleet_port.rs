@@ -119,6 +119,11 @@ pub trait Desk: Send + Sync {
     fn download_enrollment_ok(&self, id: &str, t: i64) -> bool;
     /// AC-2b-D 8.4 `meet-cert {csr, signerCsr}` from a connected relay: `{cert, signerCert}` or a refusal.
     fn meet_cert(&self, relay: &str, body: &Value, t: i64) -> Result<Value, Refusal>;
+    /// API-1 3.4: the `relay` grace in hours at `t` (ms): the minimum of `grace.relay` over every org api map the
+    /// console holds, 0 when it holds none or any of them has expired.
+    fn relay_grace_hours(&self, _t: i64) -> u32 {
+        0
+    }
 }
 
 /// A certificate the port issued (enrollment, renewal, recovery).
@@ -221,6 +226,9 @@ impl Desk for FleetDesk {
     }
     fn meet_cert(&self, relay: &str, body: &Value, t: i64) -> Result<Value, Refusal> {
         self.fleet.meet_cert(relay, body, t).map_err(refusal)
+    }
+    fn relay_grace_hours(&self, t: i64) -> u32 {
+        self.fleet.api.relay_grace_hours(t.div_euclid(1000))
     }
 }
 
@@ -416,11 +424,51 @@ impl PortState {
 
     /// Classify a presented client certificate (the verifier and, after the handshake, the connection).
     pub fn classify(&self, der: &[u8], t: i64) -> Peer {
+        self.classify_logged(der, t, false)
+    }
+
+    /// `classify` for an accepted connection: a graced certificate writes `cert.grace-used` once per connection
+    /// (the verifier's own `classify` during the handshake writes nothing).
+    pub fn classify_connection(&self, der: &[u8], t: i64) -> Peer {
+        self.classify_logged(der, t, true)
+    }
+
+    fn classify_logged(&self, der: &[u8], t: i64, log: bool) -> Peer {
+        let peer = self.classify_at(der, t, t);
+        if peer != Peer::Refused {
+            return peer;
+        }
+        // API-1 3.4: a leaf past its notAfter (never one not yet valid) is judged as at its notAfter, every other
+        // check at now, and admitted within notAfter + the console-wide relay grace.
+        let Some(not_after) = crate::meet_x509::Cert::from_der(der).map(|c| c.not_after) else { return peer };
+        let now_s = t.div_euclid(1000);
+        if now_s <= not_after {
+            return peer;
+        }
+        let hours = self.desk.relay_grace_hours(t);
+        let end = not_after + i64::from(hours) * 3600;
+        if hours == 0 || now_s > end {
+            return peer;
+        }
+        let graced = self.classify_at(der, not_after * 1000, t);
+        let who = match &graced {
+            Peer::Relay { relay, serial, .. } | Peer::Recovery { relay, serial } if log => Some((relay.clone(), serial.clone())),
+            _ => None,
+        };
+        if let Some((relay, serial)) = who {
+            let f = Fields::new().with("relay", relay).with("serial", serial).with("notAfter", not_after).with("hoursLeft", (end - now_s) / 3600);
+            self.logger.security("cert.grace-used", &f, Level::Warn);
+        }
+        graced
+    }
+
+    /// `classify` with the leaf's dates judged at `leaf_t` and everything else (recovery records) at `t`.
+    fn classify_at(&self, der: &[u8], leaf_t: i64, t: i64) -> Peer {
         let (normal, recovery) = {
             let ca = self.ca.lock();
-            let normal = ca.accepted().find_map(|g| x509::relay_leaf(der, &g.cert, t).ok().map(|(id, serial, c)| (id, serial, g.generation, c.spki)));
+            let normal = ca.accepted().find_map(|g| x509::relay_leaf(der, &g.cert, leaf_t).ok().map(|(id, serial, c)| (id, serial, g.generation, c.spki)));
             let normal = normal.filter(|(_, s, _, _)| !ca.denied.contains(s));
-            let recovery = ca.recovery_only().find_map(|g| x509::relay_leaf(der, &g.cert, t).ok()).filter(|(id, serial, c)| ca.recovery_candidate(id, serial, &c.spki, t)).map(|(id, serial, _)| (id, serial));
+            let recovery = ca.recovery_only().find_map(|g| x509::relay_leaf(der, &g.cert, leaf_t).ok()).filter(|(id, serial, c)| ca.recovery_candidate(id, serial, &c.spki, t)).map(|(id, serial, _)| (id, serial));
             (normal, recovery)
         };
         // The registry is f-console's: asked with the PKI lock released.
@@ -1660,7 +1708,7 @@ async fn serve_conn(state: Arc<PortState>, acceptor: TlsAcceptor, tcp: TcpStream
     let presented = tls.get_ref().1.peer_certificates().and_then(|c| c.first()).map(|c| c.as_ref().to_vec());
     let peer = match &presented {
         None => Peer::Anonymous,
-        Some(der) => state.classify(der, now_ms()),
+        Some(der) => state.classify_connection(der, now_ms()),
     };
     if peer == Peer::Refused {
         return;
@@ -1835,7 +1883,7 @@ pub fn start(console: Arc<crate::console::Console>, cfg: PortConfig, logger: Arc
 /// network, then the same channel code runs over `Local`.
 pub fn attach_local(end: LocalEnd, cert_der: &[u8]) -> Result<(), String> {
     let state = global().ok_or("the console's management state is not running in this process")?;
-    let peer = state.classify(cert_der, now_ms());
+    let peer = state.classify_connection(cert_der, now_ms());
     if !matches!(peer, Peer::Relay { .. }) {
         return Err("the same-process relay's certificate is not accepted".into());
     }
@@ -1876,6 +1924,8 @@ pub(crate) mod tests {
         pub meet_certs: Mutex<Vec<(String, Value)>>,
         /// AC-2b-D 6.2: the preview's `deploy` object (none when null).
         pub deploy: Mutex<Value>,
+        /// API-1 3.4: the console-wide `relay` grace (hours).
+        pub grace: AtomicU32,
     }
 
     impl TestDesk {
@@ -1983,6 +2033,9 @@ pub(crate) mod tests {
             self.meet_certs.lock().push((relay.into(), body.clone()));
             Ok(json!({ "cert": "-----BEGIN CERTIFICATE-----", "signerCert": null }))
         }
+        fn relay_grace_hours(&self, _t: i64) -> u32 {
+            self.grace.load(Ordering::SeqCst)
+        }
     }
 
     pub(crate) fn test_port(name: &str) -> (Arc<PortState>, Arc<TestDesk>, Arc<Mutex<MemVault>>) {
@@ -2058,6 +2111,38 @@ pub(crate) mod tests {
         assert!(desk.enroll_secret(&code.id()).is_none());
         assert_eq!(state.enroll(&enroll_body(&code, &p1, &key, &relay_value()), HOST, "x", t).err().unwrap().code, "fleet-code-expired");
         assert_eq!(state.preview(&preview_req(&code, HOST), HOST, t).err().unwrap().code, "fleet-code-expired");
+    }
+
+    #[test]
+    fn the_fleet_verifier_admits_an_expired_relay_certificate_only_inside_the_relay_grace() {
+        let (state, desk, vault) = test_port("api-grace");
+        let t = now_ms();
+        let hour = 3_600_000;
+        let relay = "r_00000000000000a1";
+        let key = Key::generate(Curve::P256).unwrap();
+        let issue = |at: i64| {
+            let ca = state.ca.lock();
+            let g = ca.issuing;
+            let (cert, serial, _) = vault_do(&*vault, |v| ca.issue_relay(v, relay, &key.spki(), g, at)).unwrap();
+            desk.serials.lock().entry(relay.into()).or_default().push(serial);
+            cert
+        };
+        // notAfter two hours ago
+        let expired = issue(t - x509::LEAF_DAYS * 24 * hour - 2 * hour);
+        assert_eq!(state.classify(&expired, t), Peer::Refused, "grace 0: the verifier is exactly today's");
+        desk.grace.store(12, Ordering::SeqCst);
+        assert!(matches!(state.classify(&expired, t), Peer::Relay { .. }), "inside grace.relay");
+        desk.grace.store(1, Ordering::SeqCst);
+        assert_eq!(state.classify(&expired, t), Peer::Refused, "past notAfter + grace");
+        // a denied serial stays refused inside the grace
+        desk.grace.store(12, Ordering::SeqCst);
+        let (_, serial, _) = x509::relay_leaf(&expired, &state.ca.lock().issuing_cert().unwrap().cert, t - 3 * hour).unwrap();
+        desk.serials.lock().get_mut(relay).unwrap().retain(|s| *s != serial);
+        assert_eq!(state.classify(&expired, t), Peer::Refused, "a serial the console no longer lists is never graced");
+        // not yet valid: never graced
+        desk.grace.store(168, Ordering::SeqCst);
+        let early = issue(t + 24 * hour);
+        assert_eq!(state.classify(&early, t), Peer::Refused);
     }
 
     #[test]

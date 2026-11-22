@@ -1356,6 +1356,10 @@ fn hello(c: &mut Ctx) -> R<Obj> {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
     }
+    // API-1 3.2: a device whose certificate is in its grace hears when the grace ends
+    if who.in_grace && !who.device.is_empty() {
+        reply.insert("grace".into(), Value::from(pj::iso_utc(who.grace_end)));
+    }
     Ok(reply)
 }
 
