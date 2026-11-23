@@ -1746,3 +1746,8 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_exec_1.ts
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
+
+.PHONY: demo-P-AUTH.RELOGIN1
+demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or that vanished) gets a callout under the model pill and a Login row under the picker's model name; logging back in restores the displaced model. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_auth_relogin_1.mjs against a seeded QA engine (ADR-0640)
+	$(BUN) test $(TEST_IGNORES) desktop/oauth_relogin.test.ts desktop/renderer/relogin.test.ts desktop/release_cleanup.test.ts desktop/auth_vault.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_auth_relogin_1.mjs

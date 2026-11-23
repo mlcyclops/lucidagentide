@@ -662,10 +662,16 @@ export interface ProviderAuth {
   /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
    *  without persisting a credential). Present only while the provider is NOT connected. */
   oauthError?: { message: string; at: number };
+  /** P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone (expired = omp disabled it after a
+   *  failed refresh; missing = LUCID saw it signed in and it vanished). Never set on a deliberate sign-out. */
+  relogin?: { reason: "expired" | "missing"; detail?: string };
+  /** P-AUTH.RELOGIN1: the model the user was on when this sign-in was lost. */
+  restoreModel?: string;
 }
 /** P-VAULT-KEYS.1 (ADR-0472): where saved keys live (mirrors desktop/engine_vault.ts VaultStatus). */
 export interface KeyVaultStatus { custody: "dpapi" | "keychain" | "libsecret" | "plaintext-file"; state: "ok" | "unavailable" | "unreadable"; detail?: string }
-export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus }
+/** `upgradedFrom` (P-AUTH.RELOGIN1): the version the previous engine start ran, when it differs. */
+export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus; upgradedFrom?: string }
 export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
@@ -1423,6 +1429,8 @@ export interface LucidBridge {
   oauthLogoutAll(): Promise<AuthStatus | null>;
   /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
   oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
+  /** P-AUTH.RELOGIN1 (ADR-0640): forget the model a lost sign-in displaced (restored, or the user kept another). */
+  reloginRestored(oauthId: string): Promise<boolean | null>;
   // AskSage gov gateway (ADR-0007)
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
@@ -2409,6 +2417,7 @@ export const bridge: LucidBridge = {
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
   oauthLogoutAll: () => post("/api/auth/logout-all", {}),
   oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
+  reloginRestored: (oauthId) => post("/api/auth/relogin-restored", { oauthId }),
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),
   asksageTokens: () => getData("/api/asksage/tokens"),
