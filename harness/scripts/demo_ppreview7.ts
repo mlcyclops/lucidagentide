@@ -20,6 +20,8 @@
 import { PREVIEW_BRIDGE_JS, injectPreviewBridge } from "../../desktop/preview_bridge.ts";
 import { detectElectronApp, electronLaunchPlan } from "../../desktop/preview_electron.ts";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function fail(m: string): never { console.error(`FAIL: ${m}`); process.exit(1); }
 function ok(m: string): void { console.log(`  PASS  ${m}`); }
@@ -74,7 +76,7 @@ console.log("P-PREVIEW.7 demo - explain the silent-white preview + user-clicked 
 
 // [4] LIVE detection on this machine's demo app (informational - absent dir is fine)
 {
-  const demo = "C:/Users/neorc/AppData/Local/Temp/lucid-electron-demo/index.html";
+  const demo = join(tmpdir(), "lucid-electron-demo", "index.html");
   if (existsSync(demo)) {
     const det = detectElectronApp(demo);
     console.log(`  info  LIVE: ${det.electron ? "detected" : "not detected"} - ${det.reasons.join("; ") || "no evidence"}${det.localElectron ? " · app-local electron present" : ""}`);

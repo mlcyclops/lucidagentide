@@ -321,6 +321,8 @@ export class PluginRuntime {
   private async doStart(id: string, gen: number): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
     const p = readInstalled(id, this.root());
     if (!p) return { ok: false, error: "that plugin is not installed" };
+    // A Lucid Agent World is an ES module the Visualize view imports; it has no process or page to start.
+    if (p.manifest.kind === "world") return { ok: false, error: `"${id}" is a Lucid Agent World: open it in Visualize, it is not started as a plugin` };
     const old = this.running.get(id);
     if (old) await this.stopInstance(id); // a crashed instance: clear it before a fresh start
     let port: number;
