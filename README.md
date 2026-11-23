@@ -30,7 +30,7 @@
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Windows%20Build&logo=windows&logoColor=white&style=flat-square" alt="Windows Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=macOS%20Build&logo=apple&logoColor=white&style=flat-square" alt="macOS Build" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml"><img src="https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=Linux%20Build&logo=linux&logoColor=white&style=flat-square" alt="Linux Build" /></a>
-<img src="https://img.shields.io/badge/tests-7256%20gated%20%2B%2057%20sidecar-46d27e?style=flat-square" alt="tests" />
+<img src="https://img.shields.io/badge/tests-10%2C000%2B-46d27e?style=flat-square" alt="10,000+ tests" />
 <img src="https://img.shields.io/badge/gate-fail--closed-e07bf0?style=flat-square" alt="fail-closed gate" />
 
 <br/>
@@ -73,22 +73,22 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 <br/>
 
-<!-- v2.5 RELEASE BANNER -->
+<!-- v2.6 RELEASE BANNER -->
 <table align="center" width="100%">
 <tr>
 <td align="center">
 
-# 🚀 LUCID v2.5.3 is here
+# 🚀 LUCID v2.6.1 is here
 
-<p align="center"><b>🎄 special themes for U.S. holidays</b> · <b>🧠 omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2</b> · <b>⚡ a faster Windows boot</b> · <b>🔀 Push now in a parallel lane</b> · <b>🖥 the Private AI Platform</b> · <b>🔐 provider keys in your OS vault</b> · <b>🧮 FIPS 140 crypto at rest</b> · <b>📋 NIST SP 800-171 evidence</b> · <b>🪐 an Orbit view for the Knowledge graph</b> · <b>🧩 a Plugins drawer with premium plugins</b> · <b>🎯 one fleet goal with a heartbeat and verified tasks</b> · <b>🕹 <code>lucid hub</code> as a control plane any agent can drive</b> · <b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
+<p align="center"><b>🌍 Lucid Agent Worlds: 29 themed worlds for Visualize</b> · <b>✅ approve tool calls without leaving Visualize</b> · <b>👥 a mixed cast with your choice of skin and hair</b> · <b>🎮 a playable sample game in every world</b> · <b>✨ Ultra and Cinematic quality on capable graphics cards</b> · <b>🛡️ a Windows sandbox that names what is missing</b> · <b>🧭 a Fleet button that always brings the fleet back</b> · <b>🔑 a notice when a sign-in is lost, with Login in the model picker</b> · <b>📚 a step-by-step docs site on the way</b> · <b>🎄 special themes for U.S. holidays</b> · <b>🧠 omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2</b> · <b>⚡ a faster Windows boot</b> · <b>🔀 Push now in a parallel lane</b> · <b>🖥 the Private AI Platform</b> · <b>🔐 provider keys in your OS vault</b> · <b>🧮 FIPS 140 crypto at rest</b> · <b>📋 NIST SP 800-171 evidence</b> · <b>🪐 an Orbit view for the Knowledge graph</b> · <b>🧩 a Plugins drawer with premium plugins</b> · <b>🎯 one fleet goal with a heartbeat and verified tasks</b> · <b>🕹 <code>lucid hub</code> as a control plane any agent can drive</b> · <b>✍️ Windows installers signed by TECHLEAD 187 LLC</b> · <b>🎮 a paired controller with its own token scope</b> · <b>🔑 OpenAI sign-in by device code</b> · <b>🛡️ Microsoft's container behind the Windows sandbox</b> · <b>🗓 scheduled jobs</b> · <b>🛟 settings that survive a crash</b> · <b>🌐 LAN model servers through the sandbox</b></p>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3"><img src="https://img.shields.io/badge/Download-v2.5.3-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.5.3" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1"><img src="https://img.shields.io/badge/Download-v2.6.1-c64bd6?style=for-the-badge&logo=github&logoColor=white" alt="Download LUCID v2.6.1" /></a>
 <a href="https://github.com/mlcyclops/lucidagentide/issues/new?template=bug_report.yml"><img src="https://img.shields.io/badge/Found%20a%20bug%3F-Open%20an%20issue-d73a49?style=for-the-badge&logo=github&logoColor=white" alt="Found a bug? Open an issue" /></a>
 <a href="#how-to-pull-your-logs"><img src="https://img.shields.io/badge/How%20to-pull%20your%20logs-555555?style=for-the-badge" alt="How to pull your logs" /></a>
 
-<p align="center"><sub>v2.5.3 promotes the four 2.5.3 betas to stable: special themes for U.S. holidays and event months, omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2, a Windows boot that no longer stalls the workspace bar, fleet lanes that fit the dock, Push now running a staged prompt in a parallel lane, the DGX Loader renamed the Private AI Platform, three holiday games in the arcade, and a promoted fleet lane that keeps its whole answer. Everything 2.5.2 brought stays. Installers stay signed by TECHLEAD 187 LLC. It is the current stable release, backed by <b>7,300+ tests</b>, and the download buttons above, Homebrew and the in-app updater all point at it. <a href="#-whats-new-in-v253"><b>What's new in 2.5.3</b></a> · <a href="#-whats-new-in-v252"><b>What's new in 2.5.2</b></a> · <a href="#-install-or-update-lucid-v253"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
+<p align="center"><sub>v2.6.1 is the app 2.6.0 shipped, with new documentation: this README, the lucid-agents.com website, and the plan for a step-by-step docs site. 2.6.0 brought Lucid Agent Worlds (29 themed worlds for Visualize from the LUCID store), approving tool calls right inside Visualize, easier-to-read pop-outs, a Windows sandbox that names exactly what is missing and a host prep that survives a restart, a Fleet button that always brings the fleet back, a notice when a sign-in is lost, and Preview and Fleet fixes. Everything 2.5.3 brought stays. Installers stay signed by TECHLEAD 187 LLC. It is the current stable release, backed by <b>10,000+ tests</b>, and the download buttons above, Homebrew and the in-app updater all point at it. <a href="#-lucid-agent-worlds"><b>Lucid Agent Worlds</b></a> · <a href="#-whats-new-in-v26"><b>What's new in 2.6</b></a> · <a href="#-whats-new-in-v253"><b>What's new in 2.5.3</b></a> · <a href="#-install-or-update-lucid-v261"><b>How to update, and how to report a bug with screenshots and logs</b></a>.</sub></p>
 
-<p align="center"><sub><b>No beta channel is open right now.</b> Installing 2.5.3 over 2.5.2, 2.5.1 or a 2.5.3 beta keeps your settings, sessions and keys.</sub></p>
+<p align="center"><sub><b>No beta channel is open right now.</b> Installing 2.6.1 over 2.6.0, a 2.5.4 beta or 2.5.3 keeps your settings, sessions and keys.</sub></p>
 
 </td>
 </tr>
@@ -98,18 +98,36 @@ personalization internals are proprietary and intentionally undocumented here - 
 
 ---
 
-## 🚀 Install or update LUCID v2.5.3
+## 🌍 Lucid Agent Worlds
 
-> **v2.5.3 is the current stable release** and the repository's Latest: the 2.5.3 betas promoted, with **7,300+ tests** behind it. What it brings is in [What's new in v2.5.3](#-whats-new-in-v253).
+> **Turn Visualize into a place.** Visualize already draws your AI agents as characters and the work flowing between them as streams of light. A world pack dresses that scene as a themed setting, from a snowy workshop to a packed stadium, so you can watch a team of agents work the way you would watch a game.
+
+<div align="center">
+<img src="docs/images/worlds/worlds-hero.webp" alt="Four Lucid Agent Worlds in Visualize. Top left, the Christmas world: Santa stands at the lead agent's desk while red and green streams of light run out to elf helpers. Top right, the Basketball world: an agent in a green jersey under a hoop, with a pop-out beside it asking to run a command and offering Approve, Auto and Deny. Bottom left, the Soccer world: a Penalty shootout sample game open in a window marked Untrusted, which says it runs sandboxed with no network and no access to LUCID. Bottom right, the Football world: a coach figure with a headset on the sideline of a lit stadium." width="100%" />
+<br><sub><b>Four of the 29 worlds:</b> Christmas, Basketball (approving a command), Soccer (a sample game) and Football.</sub>
+</div>
+
+- **🏟 29 worlds to choose from** - Christmas, Valentine's Day, St. Patrick's Day, Football, Soccer, Baseball, Basketball, Hockey, Winter Games, Summer Games, Golf, Tennis, Horse Racing, Esports, Dog Show, Farm, Talent Show, Circus, Magic Show, Chef Showdown, Hospital, University, Construction, Grand Prix, Bowling, Figure Skating, Extreme Sports, Wave Riders, and Swim and Dive.
+- **👥 A cast that looks like real people** - every world mixes skin tones, hair and body types across your agents. You can pick skin and hair for the whole fleet at once or for one agent, and LUCID remembers your choice.
+- **🏗 Watch your agents build** - when an agent builds something, scaffolding rises on its stage. Every world comes with a small sample game you can play. Like anything an agent makes, it opens only after LUCID's security check passes, and it runs in a sealed box with no internet and no access to LUCID.
+- **✨ Looks its best on your graphics card** - Auto picks a quality level for your computer, and a strong graphics card can turn on Ultra or Cinematic.
+- **🛒 Where to get them** - buy one world or a bundle (Sponsor or Patron Class) at the **[LUCID store](https://store.lucid-agents.com)**. Then, in LUCID, open the **Plugins** drawer in the Preview panel, choose **Premium**, then **Lucid Agent Worlds**, and install it. Pick your world from the **Worlds** menu in Visualize. What changed in each release is in [What's new in v2.6](#-whats-new-in-v26).
+
+---
+
+## 🚀 Install or update LUCID v2.6.1
+
+> **v2.6.1 is the current stable release** and the repository's Latest, with **10,000+ tests** behind it. It is the 2.6.0 app with new documentation, so updating from 2.6.0 changes nothing in how LUCID works. What 2.6 brings is in [What's new in v2.6](#-whats-new-in-v26).
 
 ### Install or update
 
-1. **Already on LUCID?** On Windows the in-app updater offers 2.5.3; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.5.3 over a 2.5.3 beta, 2.5.2, 2.5.1, 2.5.0 or 2.4.1 keeps your settings, sessions and keys; coming from 2.5.0 or older, on the first start your saved keys move into the OS vault (Windows DPAPI, macOS Keychain, Linux Secret Service) without asking you to re-enter them.
-2. **New install:** use the download buttons at the top of this page, or open the **[v2.5.3 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
+1. **Already on LUCID?** On Windows the in-app updater offers 2.6.1; its installer carries the TECHLEAD 187 LLC signature (the updater checks it before installing). On macOS run `brew update && brew upgrade --cask lucidagentide` (Homebrew is the macOS update channel, see [Homebrew](#homebrew-macos); the cask is an app cask that also puts `lucid` and `lucid-hub` on PATH). On Linux, download the new AppImage, `.deb` or `.rpm` and install it over the old one. Installing 2.6.1 over 2.6.0, a 2.5.4 beta, 2.5.3, 2.5.2, 2.5.1, 2.5.0 or 2.4.1 keeps your settings, sessions and keys; coming from 2.5.0 or older, on the first start your saved keys move into the OS vault (Windows DPAPI, macOS Keychain, Linux Secret Service) without asking you to re-enter them.
+2. **New install:** use the download buttons at the top of this page, or open the **[v2.6.1 release](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1)** and pick the file for your machine: the Windows installer or portable `.exe`, the macOS `.pkg` or `.zip` (Apple Silicon or Intel), or the Linux AppImage, `.deb` or `.rpm` (plus an arm64 AppImage).
 
 ### Upgrade notes and known issues
 
-- **Windows: turn the sandbox on.** If you have never switched it on, do it from **Security > Runtime sandbox**; it asks for administrator approval once if Windows needs it. If the panel stays on **disclosed** instead of **isolated**, the contained runtime failed its boot check and LUCID fell back safely. That is exactly the report we want: a screenshot of the Runtime sandbox section plus the support zip below.
+- **Windows: turn the sandbox on.** If you have never switched it on, do it from **Security > Runtime sandbox**; it asks for administrator approval once if Windows needs it. If the panel stays on **disclosed** instead of **isolated**, it now says in one line exactly what is missing. When that line asks for host prep, press **Prepare host** under it (**Security > Runtime sandbox > Prepare host**); since 2.6.0 that prep survives a restart. If it still shows **disclosed** after that, the contained runtime failed its boot check and LUCID fell back safely. That is exactly the report we want: a screenshot of the Runtime sandbox section plus the support zip below.
+- **Lucid Agent Worlds are bought separately.** Visualize works as before without them; a world you buy at the [LUCID store](https://store.lucid-agents.com) installs from the Plugins drawer (see [Lucid Agent Worlds](#-lucid-agent-worlds)).
 - **The DGX Loader is now called the Private AI Platform.** Only the name you see changed; your provider settings, the mailbox and the enclave attestation carry over untouched.
 - **A local model you picked before 2.5.2 may need picking once more.** LUCID now restores a local model only from an explicit picker choice; if you had chosen one before this release, choose it again and it sticks.
 - **Going back to 2.5.0 shows saved keys as unset.** 2.5.0 cannot read the OS vault that 2.5.1 moves your keys into, so after a downgrade you enter them again.
@@ -244,11 +262,71 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 
 ---
 
+## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.6
+
+> **🌍 Lucid Agent Worlds, approvals inside Visualize, a Windows sandbox that explains itself.** v2.6.0 (2026-11-22) is 2.5.4-beta.8 plus everything merged since (ADR-0640 to ADR-0659). v2.6.1 is the same app with new documentation: this README, the lucid-agents.com website, and the plan for a teach-anyone docs site at docs.lucid-agents.com ([ADR-0660](DECISIONS.md)). The Windows installers stay signed by **TECHLEAD 187 LLC**.
+>
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over 2.6.0, a 2.5.4 beta or 2.5.3 keeps your settings, sessions and sign-ins.
+
+<table>
+<tr>
+<td align="center" valign="top" width="33%">
+<img src="docs/images/worlds/worlds-christmas.webp" alt="The Christmas world in Visualize: Santa stands on the lead agent's wooden stage with a sack of presents, red and green streams of light arc out to elf helpers on snowy stages, and a strip at the top counts 5 approvals waiting" width="100%" />
+<br/>
+<sub><b>↑ Christmas</b> - one of 29 worlds</sub>
+</td>
+<td align="center" valign="top" width="33%">
+<img src="docs/images/worlds/worlds-approve.webp" alt="The Basketball world in Visualize: an agent named Release Train asks to run a command, shown in a pop-out beside it with Approve, Auto and Deny buttons, while a strip at the top counts 2 approvals and 2 commands waiting" width="100%" />
+<br/>
+<sub><b>↑ Approve a tool call</b> without leaving Visualize</sub>
+</td>
+<td align="center" valign="top" width="33%">
+<img src="docs/images/worlds/worlds-game.webp" alt="The Soccer world in Visualize: a Penalty shootout sample game open in a window marked Untrusted, which says it passed the security gate and runs sandboxed with no network and no access to LUCID, with Restart, Keep and Discard buttons" width="100%" />
+<br/>
+<sub><b>↑ A sample game</b>, sandboxed after the security gate</sub>
+</td>
+</tr>
+</table>
+
+**Lucid Agent Worlds (2.6.0)**
+
+- **🌍 29 world packs for Visualize** - themed worlds you buy from the [LUCID store](https://store.lucid-agents.com), one at a time or in the Sponsor and Patron Class bundles, and install from the Plugins drawer (Premium, Lucid Agent Worlds). Each world is a signed package that passes the same checks as any plugin, and an installed world keeps working offline. See [Lucid Agent Worlds](#-lucid-agent-worlds). *(P-WORLDS.1, [ADR-0648](DECISIONS.md))*
+- **👥 Balanced casting** - any six agents in a row show a mix of looks and skin tones, and the View menu's Cast section lets you pick skin and hair shades for the whole fleet or pin a look to one agent. *(P-WORLDS.CAST1, CAST2, KIT2, [ADR-0649](DECISIONS.md), [ADR-0650](DECISIONS.md), [ADR-0654](DECISIONS.md))*
+- **✨ Ultra and Cinematic quality** - Auto reads your graphics card and picks a level, stepping down if the picture stutters; a strong card can run Ultra or Cinematic. *(P-VIZ.GPU1, [ADR-0651](DECISIONS.md))*
+- **🏗 Agents build on scaffolding, and every world has a sample game** - scaffolding rises as an agent builds, and each world's sample mini game opens only after the security gate passes, in a sandbox with no network and no access to LUCID. *(P-WORLDS.FX1, BUILD1, BUILD2, [ADR-0652](DECISIONS.md), [ADR-0653](DECISIONS.md))*
+
+**Visualize (2.6.0)**
+
+- **✅ Approve tool calls where you are watching** - an agent that asks permission gets a pulsing badge over it in 2D and 3D; tap it for a pop-out with **Approve**, **Auto** and **Deny**. A strip at the top counts the open asks by kind, and **View > Fly to approvals** moves the camera to each new ask. *(P-VIZ.APPROVE1, [ADR-0655](DECISIONS.md))*
+- **📖 Pop-outs you can read** - the View, Customize look, Worlds and Recordings pop-outs scroll inside their own padding with higher-contrast labels, and Esc closes the Worlds menu. *(P-VIZ.UI1, [ADR-0656](DECISIONS.md))*
+- **🎬 Header buttons that do what they say** - Record, Recordings, View and Auto camera work again, plus sponsor emblems per model and a commit animation. *(P-VIZ.REC1, P-VIZ.7, [ADR-0643](DECISIONS.md), [ADR-0641](DECISIONS.md))*
+
+**Windows sandbox (2.6.0)**
+
+- **🛡️ It names exactly what is missing** - when the sandbox cannot isolate, **Security > Runtime sandbox** shows one plain line with the reason, and **Prepare host** sits right under it. The host prep now survives a restart instead of lasting until the next boot. *(P-SANDBOX.WIN1, [ADR-0658](DECISIONS.md))*
+
+**Fleet, sign-in and Preview (2.6.0)**
+
+- **🧭 The Fleet button always brings the fleet back** - a minimized fleet is restored whichever view you pinned, and Fleet cards now show turns they did not start (another window's prompt, or a turn already running when the page loaded). *(P-FLEET.DOCK1, [ADR-0659](DECISIONS.md))*
+- **🔑 A lost sign-in is noticed** - when a provider drops your sign-in, a note under the model pill says so, the model picker gets a **Login** row, and signing back in returns you to the model you were using. *(P-AUTH.RELOGIN1, [ADR-0640](DECISIONS.md))*
+- **🖼 Preview fits the page** - an oversized page fits the Preview by default and every tab pans; the Preview fly-out opens above a floating Fleet dock. *(P-PREVIEW.FIT1, P-PREVIEW.OVERFLEET1, [ADR-0642](DECISIONS.md), [ADR-0645](DECISIONS.md))*
+- **🧱 Fleet fixes** - a staged prompt runs once even on a busy machine, tables in Fleet cards stay readable with a copy button you can always see, and touching a card's header no longer pulls that agent into the main chat (the Promote button does that). *(P-FLEET.DRAIN1, READ1, HEAD3, [ADR-0644](DECISIONS.md), [ADR-0646](DECISIONS.md), [ADR-0647](DECISIONS.md))*
+
+**Documentation (2.6.1)**
+
+- **📚 This README, the website and a docs plan** - Lucid Agent Worlds and 2.6 on this page and on lucid-agents.com, and the plan for docs.lucid-agents.com: a manual for everyone, including people who have never used an API, with numbered steps, annotated screenshots, short captioned videos, search, and **Learn how** links from inside the app. *(P-DOCS.0, [ADR-0660](DECISIONS.md))*
+
+**Tests**
+
+- **🧪 10,000+ tests** - the full suite now runs 10,033 tests.
+
+---
+
 ## <img src=".github/assets/icons/release-animated.svg" width="26" align="top" alt="" /> What's new in v2.5.3
 
 > **🎄 Four betas promoted to stable.** v2.5.3 is 2.5.3-beta.4 released unchanged: 2.5.2 plus everything the four 2.5.3 betas brought (#580, #586, #588, #597, #600). The Windows installers stay signed by **TECHLEAD 187 LLC**.
 >
-> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3). It is the repository's Latest release: the download buttons, the in-app updater and Homebrew follow it. Installing it over a 2.5.3 beta, 2.5.2 or 2.5.1 keeps your settings, sessions and sign-ins.
+> **➡️ Install it:** [github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.5.3). Superseded by v2.6.0 and v2.6.1, which the download buttons, the in-app updater and Homebrew now follow. Installing it over a 2.5.3 beta, 2.5.2 or 2.5.1 keeps your settings, sessions and sign-ins.
 
 - **🎄 Special themes for U.S. holidays and event months** - 21 seasons over 16 new palettes, an opt-in calendar switch and a swatch dropdown in Settings > Theme, animated backdrops on the LUCID Agent stage or behind every chat, and seasonal mascot costumes in the prompt-bar runner and the splash. *(P-SEASON.1, [ADR-0525](DECISIONS.md), #580)*
 - **🧠 omp 18.18.6 with Claude Fable 5.2 and Mythos 5.2** - the bundled agent engine moves to omp 18.18.6 on a bundled Bun 1.4.4. *(P-MODEL.10, [ADR-0526](DECISIONS.md), #586)*
@@ -458,7 +536,9 @@ The Main GUI ledger records only live, successfully completed write and edit cal
 
 ## Table of contents
 
-- [🚀 Install or update LUCID v2.5.3, report bugs, pull logs](#-install-or-update-lucid-v253)
+- [🌍 Lucid Agent Worlds](#-lucid-agent-worlds)
+- [🚀 Install or update LUCID v2.6.1, report bugs, pull logs](#-install-or-update-lucid-v261)
+- [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.6](#-whats-new-in-v26)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.3](#-whats-new-in-v253)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.2](#-whats-new-in-v252)
 - [<img src=".github/assets/icons/release-animated.svg" width="16" alt=""> What's new in v2.5.1](#-whats-new-in-v251)
@@ -845,7 +925,7 @@ cd scanner-sidecar && uv sync     # pinned Python sidecar venv
 
 # prove it end-to-end
 bun run demo-00                   # omp echo round-trip + scanner + fail-closed proof
-make test                         # full suite: harness + desktop + scanner sidecar (7,300+ tests)
+make test                         # full suite: harness + desktop + scanner sidecar (10,000+ tests)
 bun run demo-P4.3                 # poisoned memory can't auto-promote (keystone #2)
 bun run demo-P2.1                 # unicode scanner: every finding fires, clean corpus is FP-free
 ```
@@ -914,7 +994,7 @@ CI builds desktop installers for **all three platforms** on every tag push:
 |:--|:--|:--|:--|
 | **Windows** | NSIS installer + portable `.exe` (x64) | [![Windows Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=windows&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**Installer**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-Setup.exe) · [Portable](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-portable.exe) |
 | **macOS** | `.pkg` installer **+** `.zip` app bundle (arm64 + x64) | [![macOS Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=apple&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | `.pkg`: [**Apple Silicon**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.pkg) · [Intel](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.pkg) · `.zip`: [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.zip) · [x64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.zip) |
-| **Linux** | portable `AppImage` (x64 + arm64), `.deb` and `.rpm` (x64) | [![Linux Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=linux&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**AppImage**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage) · [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-arm64.AppImage) · [.deb](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop_2.3.1_amd64.deb) · [.rpm](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop-2.3.1.x86_64.rpm) |
+| **Linux** | portable `AppImage` (x64 + arm64), `.deb` and `.rpm` (x64) | [![Linux Build](https://img.shields.io/github/actions/workflow/status/mlcyclops/lucidagentide/build-desktop.yml?label=passing&logo=linux&logoColor=white&style=flat-square)](https://github.com/mlcyclops/lucidagentide/actions/workflows/build-desktop.yml) | [**AppImage**](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage) · [arm64](https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-arm64.AppImage) · [.deb](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop_2.6.1_amd64.deb) · [.rpm](https://github.com/mlcyclops/lucidagentide/releases/latest/download/lucidagentide-desktop-2.6.1.x86_64.rpm) |
 
 All builds bundle [Bun](https://bun.sh) and [uv](https://docs.astral.sh/uv/) runtimes so the installed app
 needs **zero prerequisites**. Code-signing and notarization are supported when certs are configured.
@@ -1004,7 +1084,12 @@ Obsidian-vault export), AI-authorship attribution, one-command import, a read-wr
 the **`/goal` loop** with full loop-engineering (after-action reports, a budget kill switch, and stall
 guards), a local **RAG knowledge spine** + the **compiled KB** with hybrid retrieval, the governed **skills
 directory** + **Skill Studio**, **local & hybrid providers**, the **Agent Builder**, the **agent firewall**,
-and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.5.3):** special themes for U.S. holidays *(ADR-0525)*, omp 18.18.6 with Fable/Mythos 5.2 *(ADR-0526)*, a
+and the **runtime execution boundary** (OS-isolated exec + mediated egress). **Newest (v2.6.1):** documentation only:
+this README, the website and the docs.lucid-agents.com plan *(ADR-0660)*. **v2.6.0:** **Lucid Agent Worlds**, 29
+world packs for Visualize with balanced casting, GPU quality tiers, build scaffolding and sandboxed sample games
+*(ADR-0648..0654)*; tool-call approvals inside Visualize *(ADR-0655)*; readable pop-outs *(ADR-0656)*; a Windows
+sandbox that names what is missing with reboot-proof host prep *(ADR-0658)*; the Fleet button and card backfill
+*(ADR-0659)*; the lost sign-in notice *(ADR-0640)*; Preview fit and Fleet fixes *(ADR-0642..0647)*. **v2.5.3:** special themes for U.S. holidays *(ADR-0525)*, omp 18.18.6 with Fable/Mythos 5.2 *(ADR-0526)*, a
 faster Windows boot *(ADR-0527)*, fleet autofit *(ADR-0528)*, Push now in a parallel lane *(ADR-0529)*, the Private AI
 Platform name *(ADR-0530)* and a holiday arcade. **v2.5.2:** bug fixes only:
 a cloud-only automatic model default with embedding models never used for chat *(ADR-0498)*, omp's `ask` tool off in
@@ -1036,7 +1121,7 @@ Microsoft's eXecution Container behind the Windows sandbox, scheduled jobs, atom
 servers through the egress proxy *(ADR-0439..0446)*. Earlier releases are on
 [GitHub Releases](https://github.com/mlcyclops/lucidagentide/releases).
 
-**7,300+ tests**: at v2.5.0 the Windows test gate ran **7,256 tests across 535 files** (7,244 pass, 0 fail;
+**10,000+ tests**: at v2.6.1 the full suite runs **10,033 tests**. Earlier, at v2.5.0, the Windows test gate ran **7,256 tests across 535 files** (7,244 pass, 0 fail;
 scope defined by exclusion, ADR-0303), the harness suite 2,251 tests across 190 files, plus the Python
 sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The table below is the recent slice;
 [`PROGRESS.md`](PROGRESS.md) has the full per-session log.
@@ -1045,6 +1130,8 @@ sidecar's 57, with `tsc --noEmit` clean on the shipping projects. The table belo
 
 | Phase | Feature | ADR |
 |:--|:--|:--|
+| **v2.6.1** | **📚 Documentation and website** - no app changes over 2.6.0. **DOCS** (`P-DOCS.0`, ADR-0660): this README and lucid-agents.com updated for 2.6, and the plan for docs.lucid-agents.com, a teach-anyone documentation site with screenshots, captioned videos, search and in-app **Learn how** links. | [ADR-0660](DECISIONS.md) |
+| **v2.6.0 batch** | **🌍 Lucid Agent Worlds, approvals in Visualize, a clearer Windows sandbox** - 2.5.4-beta.8 plus everything merged since. **WORLDS** (`P-WORLDS.1`, `CAST1`, `CAST2`, `FX1`, `BUILD1`, `BUILD2`, `KIT2`, ADR-0648..0654): 29 signed world packs from the LUCID store, balanced casting with skin and hair choices per fleet or per agent, plasma-light streams, build scaffolding and a sample mini game per world that runs sandboxed after the security gate with no network and no access to LUCID. **GPU** (`P-VIZ.GPU1`, ADR-0651): Auto quality by GPU class, Ultra and Cinematic tiers. **APPROVE** (`P-VIZ.APPROVE1`, ADR-0655): a badge over the asking agent in 2D and 3D, an Approve, Auto and Deny pop-out, a triage strip and Fly to approvals. **UI** (`P-VIZ.UI1`, ADR-0656): readable pop-outs. **SANDBOX** (`P-SANDBOX.WIN1`, ADR-0658): one named reason and host prep that survives reboots. **FLEET** (`P-FLEET.DOCK1`, ADR-0659; ADR-0644/0646/0647): the Fleet button always brings the fleet back, cards show turns they did not start, drain, table and header fixes. **AUTH** (`P-AUTH.RELOGIN1`, ADR-0640): a lost sign-in notice and Login in the model picker. **PREVIEW** (`P-PREVIEW.FIT1`, ADR-0642; ADR-0645): Preview fit and the fly-out above the Fleet dock. | [ADR-0640..0659](DECISIONS.md) |
 | **v2.5.3 batch** | **🎄 Four betas promoted to stable** - 2.5.3-beta.4 released unchanged (#580, #586, #588, #597, #600). **SEASON** (`P-SEASON.1`, ADR-0525): 21 seasons over 16 palettes, an opt-in calendar switch, animated backdrops and mascot costumes. **MODEL** (`P-MODEL.10`, ADR-0526): omp 18.18.6 on bundled Bun 1.4.4 with Claude Fable 5.2 and Mythos 5.2. **BOOT** (`P-BOOTPERF.1`, ADR-0527): the workspace bar and connection check no longer wait on heavy startup requests on Windows. **FLEET** (`P-FLEET.FIT1`, ADR-0528): lanes autofit the dock and still resize. **PUSH** (`P-PUSH.PAR1`, ADR-0529): Push now runs a staged prompt in a parallel worktree lane. **PRIVAI** (`P-PRIVAI.1`, ADR-0530): the DGX Loader is the Private AI Platform, identifiers kept. **GAME** (`P-GAME.11`, `11b`, `12`): three holiday arcade titles. **LANE** (#597): a promoted lane keeps its whole answer. | [ADR-0525..0530](DECISIONS.md) |
 | **v2.5.2 batch** | **🔧 Patch release: model defaults, questions, approval pulse, orbit ring** - bug fixes only (#570, #572, #574, #576). **MODEL** (`P-MODEL.9`, ADR-0498): the automatic default picks only cloud models, a local model is restored only from an explicit picker choice, embedding and reranker models are never a chat model or the `/goal` checker, and the "No response" card offers a provider refresh. **ASK** (`P-ASK.1`, ADR-0523): omp's `ask` tool is off in every ACP session, `lucid acp` included, so a declined question no longer ends the turn. **GLOW** (`P-GLOW.1`, ADR-0524): the needs-approval pulse animates opacity on the compositor. **ORBIT** (#575): the inner ring is drawn from the layout's own radii. Docs: the P-HERD design ADRs (ADR-0489..0497). | [ADR-0489..0498, 0523, 0524](DECISIONS.md) |
 | **v2.5.1 batch** | **🔐 The engine OS vault, promoted to stable** - 2.5.1-beta.1 plus its upgrade review fixes, released as the repository's Latest. **VAULT** (`P-VAULT-KEYS.1`, `P-VAULT-V2.1`, `P-VAULT-UI.1`, ADR-0472/0474/0475): provider keys, account keys, MCP tokens and the TURN credential sealed by DPAPI, Keychain or Secret Service on the first engine start, one v2 vault, a Settings list and a `.lucidvault` encrypted backup. **CRYPTO** (`P-FIPS.1`, ADR-0473): at-rest crypto through the OS FIPS 140 module with an honest claim. **SECRETS** (`P-SECRET-INTAKE.1`, `P-VAULT-ENV.1`, `P-VAULT-DEST.1`, ADR-0476..0478): a masked dialog, `.env` import, enterprise destinations. **EVIDENCE** (`P-COMPLY.1`, ADR-0479): NIST SP 800-171 Rev 3 matrix, POA&M, evidence report. **RECOVERY** (`P-RECOVER.4`, ADR-0481). **QUEUE** (`P-QUEUE-IMG.1`, ADR-0469). **KNOWLEDGE** (`P-KG-ORBIT.1`, `P-KG-FLAT.1`, ADR-0470/0471): the Orbit view, ranked search, a readable flat graph. | [ADR-0469..0481](DECISIONS.md) |
