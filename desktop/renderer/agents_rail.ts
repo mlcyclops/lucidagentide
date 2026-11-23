@@ -707,31 +707,20 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     if (!a) return;
     const name = names().get(a.id) ?? a.path;
     const fail = (e: unknown): { ok: boolean; message?: string } => ({ ok: false, message: e instanceof Error ? e.message : String(e) });
-    if (kind === "takeover") {
-      // Taking over a busy Main asks first in a sheet docked over the composer; the module must not sit on it.
-      // On failure the module comes back on its box with the reason.
-      const tile = cur.tile;
-      closeModule(false);
-      const r = await d.activate(kind, a.path, name).catch(fail);
-      if (r.ok) { void tick(); return; }
-      const t = tile.isConnected ? tile : tileOf(a.id);
-      if (!t) { d.toast({ tone: "warn", title: "Could not take over the main composer", desc: r.message || "Main did not move to this folder.", timeout: 6000 }); return; }
-      openModule(t, true);
-      showMsg(r.message || "Main did not move to this folder.");
-      return;
-    }
-    const buttons = [...pop.querySelectorAll<HTMLButtonElement>("[data-go]")];
-    buttons.forEach((b) => { b.disabled = true; });
-    showMsg("Starting…");
+    // Every choice gets out of the way at once: the take-over confirm docks over the composer, the Fleet card or the
+    // Agent Worlds panel opens right away while the agent loads (a real agent can take a minute), and the app's own
+    // toasts say what is happening. A failure brings the module back on its box with the reason, or a toast when
+    // the user has moved on.
+    const tile = cur.tile;
+    closeModule(false);
     const r = await d.activate(kind, a.path, name).catch(fail);
-    buttons.forEach((b) => { b.disabled = false; });
-    if (cur?.id !== a.id) { // the user moved on while it started: report a failure where it cannot be missed
-      if (!r.ok) d.toast({ tone: "warn", title: `${name}: the session did not start`, desc: r.message || "That session could not start.", timeout: 6000 });
-      void tick();
-      return;
-    }
-    if (r.ok) { showMsg(""); closeModule(false); void tick(); return; }
-    showMsg(r.message || "That session could not start.");
+    void tick();
+    if (r.ok) return;
+    const fallback = kind === "takeover" ? "Main did not move to this folder." : "That session could not start.";
+    const t = tile.isConnected ? tile : tileOf(a.id);
+    if (!t || cur) { d.toast({ tone: "warn", title: kind === "takeover" ? "Could not take over the main composer" : `${name}: the session did not start`, desc: r.message || fallback, timeout: 8000 }); return; }
+    openModule(t, true);
+    showMsg(r.message || fallback);
   }
 
   function confirmRemove(): void {

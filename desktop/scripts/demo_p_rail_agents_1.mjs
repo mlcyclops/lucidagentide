@@ -90,6 +90,8 @@ export async function verifyRailAgents(page, opts = {}) {
   const topmost = (sel) => page.$eval(sel, (n) => { const b = n.getBoundingClientRect(); return b.width > 0 && n.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)); });
   const center = (sel) => page.$eval(sel, (n) => { const b = n.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, w: b.width }; });
   const clickReal = async (sel, what, clickOpts) => {
+    // toasts stack at the top right, over the rail's header (the Activate flows post "Starting" and "ready" notes)
+    if (!(await topmost(sel))) await dismissToasts();
     const c = await center(sel);
     assert(c.w > 0, `${what} is not visible`);
     assert(await topmost(sel), `${what} is covered (elementFromPoint at its center hits something else)`);

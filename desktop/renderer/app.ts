@@ -3787,12 +3787,42 @@ let takeoverRunning = false;
 /** Take over main composer / Start new Fleet session / Agent World session, for the Agent `name` on `folder`. */
 async function activateAgentFolder(kind: "takeover" | "fleet" | "world", folder: string, name: string): Promise<ActivateResult> {
   const label = name.trim() || folderName(folder);
+  // A real move is announced by the workspace switch itself ("Workspace set"); takeOver says it is moving at once.
   if (kind === "takeover") return takeOver(folder, label, null);
   // Fleet and world both start a lane in the background (never promoted); a refusal carries the engine's reason.
-  const r = await bridge.fleetSpawn({ cwd: folder, name: label }).catch(() => null);
-  if (!r?.ok || !r.lane) return { ok: false, message: startFailure(r?.reason) };
-  if (kind === "fleet") { await revealFleetLane(r.lane.id); return { ok: true }; }
-  return (await openVizAgent(r.lane.id)) ? { ok: true } : { ok: false, message: worldMissing(r.lane.name) };
+  // A real agent takes a while to load (the engine answers the spawn only after its handshake), so the user sees the
+  // lane at once: the engine lists it as "starting" as soon as it registers, and that is shown while it loads.
+  // Nothing is awaited before this feedback: the engine can be slow to answer while other agents load.
+  const pending = showToast({
+    tone: "info", title: kind === "fleet" ? `Starting ${label} in the Fleet` : `Starting ${label} in Agent Worlds`,
+    desc: kind === "fleet" ? "The agent is loading. Its card appears now; it takes prompts as soon as it is ready."
+      : "The agent is loading. It appears in Agent Worlds with its prompt panel; it takes prompts as soon as it is ready.", timeout: 0,
+  });
+  if (kind === "fleet") openFleetGrid(); else if (!vizIsOpen()) toggleViz();
+  const spawn = bridge.fleetSpawn({ cwd: folder, name: label }).catch(() => null);
+  let settled = false;
+  void spawn.finally(() => { settled = true; });
+  let early: string | null = null;
+  while (!settled && !early) {
+    const lanes = (await bridge.fleetStatus().catch(() => null))?.lanes ?? [];
+    // ours: the lane still starting in this folder (the engine registers it before its slow handshake)
+    early = lanes.find((l) => l.status === "starting" && sameFolder(l.cwd, folder))?.id ?? null;
+    if (!early) { const t = Promise.withResolvers<void>(); window.setTimeout(t.resolve, 700); await t.promise; }
+  }
+  if (early) { if (kind === "fleet") void revealFleetLane(early, false); else void openVizAgent(early, 20_000); }
+  const r = await spawn;
+  if (!r?.ok || !r.lane) { pending(); return { ok: false, message: startFailure(r?.reason) }; }
+  if (kind === "fleet") {
+    await revealFleetLane(r.lane.id);
+    pending();
+    showToast({ tone: "ok", title: `${r.lane.name} is ready`, desc: "Type its first prompt in its card.", timeout: 5000 });
+    return { ok: true };
+  }
+  // The loading note stays until the agent stands in Agent Worlds (the fleet poll behind it can lag a busy engine).
+  const shown = await openVizAgent(r.lane.id, 45_000);
+  pending();
+  if (shown) showToast({ tone: "ok", title: `${r.lane.name} is ready in Agent Worlds`, desc: "Its prompt panel is open.", timeout: 5000 });
+  return shown ? { ok: true } : { ok: false, message: worldMissing(r.lane.name) };
 }
 
 /** What Main is doing, from the engine when it answers (busy + session id), else from this composer. */
@@ -3811,7 +3841,9 @@ async function readMainView(): Promise<MainView> {
 async function takeOver(folder: string, name: string, choice: BusyChoice | null): Promise<ActivateResult> {
   if (takeoverRunning) return { ok: false, message: "A takeover is already moving Main. Try again in a moment." };
   if (isLaneTarget(state.composerTarget)) demoteLane(); // "main composer" is Main's: leave an attached lane first
-  const main = await readMainView();
+  // Reading Main can take seconds while its agent is busy: acknowledge the click at once.
+  const reading = sameFolder(state.workspace?.current, folder) ? () => {} : showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Checking what Main is doing first.", timeout: 0 });
+  const main = await readMainView().finally(reading);
   const plan = planTakeover(main, folder, choice);
   if (plan.kind === "none") return { ok: true };
   // Planned again with the answer and a fresh view: a turn that ended while the sheet was open just hands off.
@@ -3819,8 +3851,10 @@ async function takeOver(folder: string, name: string, choice: BusyChoice | null)
   if (plan.kind === "queue") { queueTakeover(folder, name); return { ok: true }; }
   dropQueuedTakeover(); // this takeover supersedes one waiting for the turn
   takeoverRunning = true;
+  // Moving Main restarts its agent in the new folder (several seconds with a real model): say so at once.
+  const moving = showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Main's agent is restarting in this folder. The composer is ready when this note goes away.", timeout: 0 });
   try { return await runTakeover(plan.steps, main, folder, name); }
-  finally { takeoverRunning = false; }
+  finally { takeoverRunning = false; moving(); }
 }
 
 async function runTakeover(steps: readonly TakeoverStep[], main: MainView, folder: string, toName: string): Promise<ActivateResult> {

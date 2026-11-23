@@ -112,7 +112,7 @@ export function startFailure(reason: string | null | undefined): string {
 
 /** The world lane started but Agent Worlds never showed its node. */
 export function worldMissing(laneName: string): string {
-  return `${laneName} started in the Fleet, but Agent Worlds did not show it within 10 seconds. Open it from the Fleet dock.`;
+  return `${laneName} started in the Fleet, but Agent Worlds did not show it within 45 seconds. Open it from the Fleet dock.`;
 }
 
 /** Take over could not stop Main's turn: nothing moved. */
