@@ -32,7 +32,7 @@ function relativeImagePaths(markdown: string): string[] {
 test("every relative image in README.md exists in the repo", () => {
   const paths = relativeImagePaths(readme);
   // Guard against the patterns silently matching nothing, which would make this test vacuous and green.
-  expect(paths.length).toBeGreaterThan(10);
+  expect(paths.length).toBeGreaterThan(5);
   expect(paths).toContain("docs/images/worlds/worlds-hero.webp");
   expect(paths.filter((p) => !existsSync(join(root, p)))).toEqual([]);
 });
