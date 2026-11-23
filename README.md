@@ -105,13 +105,6 @@ Sign in with the subscriptions you already have or bring an API key. Keys stay i
 
 Visualize draws your AI agents as characters and their work as streams of light. A world turns that scene into a themed setting, so a team of agents reads like a game you can follow at a glance.
 
-<div align="center">
-<img src="docs/images/worlds/worlds-approve.webp" alt="Approving a command from a pop-out over the agent that asked, in the Basketball world" width="32%" />
-<img src="docs/images/worlds/worlds-game.webp" alt="A Penalty shootout sample game in a window marked Untrusted, running sandboxed with no network" width="32%" />
-<img src="docs/images/worlds/worlds-christmas.webp" alt="The Christmas world: Santa at the lead agent's desk with elf helpers" width="32%" />
-<br/><sub><b>Approve where you watch</b> · <b>Games run sealed, after the security check</b> · <b>29 worlds, from holidays to stadiums</b></sub>
-</div>
-
 - **29 worlds**, from Christmas and Football to Hospital, University and Grand Prix, each with a mixed cast whose skin and hair you choose.
 - **Approve tool calls inside Visualize**: a badge appears over the agent that is asking, with Approve, Auto and Deny.
 - **Sample games** in every world open only after LUCID's security check, with no internet and no access to LUCID.
