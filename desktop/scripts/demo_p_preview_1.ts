@@ -47,7 +47,7 @@ const cases: Array<[string, string]> = [
   ["C:/a/b.html", "file:///C:/a/b.html"],
   ["/home/n/b.html", "file:///home/n/b.html"],
   ["file:///already/url.html", "file:///already/url.html"],
-  ["C:/Users/x/OneDrive/Apps AI Vibe/app.html", "file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html"],
+  ["C:/Users/x/OneDrive/My Projects/app.html", "file:///C:/Users/x/OneDrive/My%20Projects/app.html"],
 ];
 for (const [inp, want] of cases) {
   const got = toFileUrl(inp);

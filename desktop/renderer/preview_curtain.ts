@@ -20,7 +20,7 @@
 // classification, its thresholds, the pending-chip registry and the small geometry/motion decisions.
 
 import { icon } from "./icons.ts"; // pure string markup, no DOM
-import type { PerfTier } from "./perf_tier.ts";
+import { baseTier, type PerfTier } from "./perf_tier.ts";
 
 export type CurtainVerdict = "ready" | "blank" | "error" | "loading";
 
@@ -295,11 +295,11 @@ export function curtainLabel(path: string): string {
 /** How many hidden probe frames may run at once (each one runs the page). The Knowledge Graph's tiering,
  *  applied here: a battery or low-spec machine probes one page at a time. */
 export function probeConcurrency(tier: PerfTier): number {
-  return tier === "full" ? 3 : tier === "reduced" ? 2 : 1;
+  return baseTier(tier) === "full" ? 3 : tier === "reduced" ? 2 : 1;
 }
 
 /** "full" animates everything; "calm" keeps the shimmer but drops the orbiting dots and the 3D swing
- *  depth; "still" animates nothing (reduced motion, or the minimal tier). */
+ *  depth; "still" animates nothing (reduced motion, or the minimal tier). ultra and cinematic are full here. */
 export function curtainMotion(tier: PerfTier, reducedMotion: boolean): "full" | "calm" | "still" {
   if (reducedMotion || tier === "minimal") return "still";
   return tier === "reduced" ? "calm" : "full";

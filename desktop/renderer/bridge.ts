@@ -190,6 +190,8 @@ export interface SandboxStateView {
   tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
+  /** P-SANDBOX.WIN1 (ADR-0658): why Windows exec fell back to the passthrough, headline first. */
+  fallback?: { kind: string; detail: string }[];
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
@@ -198,7 +200,7 @@ export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: 
 export interface SandboxControlView {
   available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean;
   /** P-MXC.1 (ADR-0441): the MXC executor on this host and the elevated steps it still needs. */
-  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string; reason?: string; bootTask?: boolean };
 }
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
@@ -297,6 +299,7 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
+import type { SeedRecord } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: a lane transcript record (types only, owned there)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
 import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
@@ -373,6 +376,7 @@ export interface StagedLanePromptView { text: string; images: LaneImage[]; attac
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): types only
+import type { InstalledWorld } from "./viz_world_api.ts"; // P-WORLDS.1 (ADR-0648): the frozen world contract, types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -401,7 +405,7 @@ export type LaneEvent =
   | { type: "staged"; queued: number }
   /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
    *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
-  | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
+  | { type: "watch-seed"; turns: SeedRecord[] };
 export interface FleetStatusView {
   lanes: LaneView[];
   /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
@@ -613,7 +617,7 @@ export interface KbPackImportView {
 }
 // P-PLUGINS.2 (ADR-0462): installed `.lplugin` plugins and their runtime (desktop/plugins/*). Every
 // running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
-export type PluginKind = "web" | "server" | "daemon";
+export type PluginKind = "web" | "server" | "daemon" | "world";
 export type PluginState = "installed" | "running" | "starting" | "error";
 export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 export interface InstalledPluginView {
@@ -662,10 +666,16 @@ export interface ProviderAuth {
   /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
    *  without persisting a credential). Present only while the provider is NOT connected. */
   oauthError?: { message: string; at: number };
+  /** P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone (expired = omp disabled it after a
+   *  failed refresh; missing = LUCID saw it signed in and it vanished). Never set on a deliberate sign-out. */
+  relogin?: { reason: "expired" | "missing"; detail?: string };
+  /** P-AUTH.RELOGIN1: the model the user was on when this sign-in was lost. */
+  restoreModel?: string;
 }
 /** P-VAULT-KEYS.1 (ADR-0472): where saved keys live (mirrors desktop/engine_vault.ts VaultStatus). */
 export interface KeyVaultStatus { custody: "dpapi" | "keychain" | "libsecret" | "plaintext-file"; state: "ok" | "unavailable" | "unreadable"; detail?: string }
-export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus }
+/** `upgradedFrom` (P-AUTH.RELOGIN1): the version the previous engine start ran, when it differs. */
+export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus; upgradedFrom?: string }
 export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
@@ -1270,7 +1280,9 @@ export interface LucidBridge {
   /** FOLLOW a lane's live events WITHOUT owning a turn. Resolves when the stream ends; call the returned
    *  aborter to leave. This is what lets a promote join a turn that is already running. */
   fleetWatch(laneId: string, onEvent: (e: LaneEvent) => void): { done: Promise<void>; stop: () => void };
-  fleetTranscript(laneId: string): Promise<{ turns: { role: "user" | "assistant"; text: string }[] } | null>;
+  /** The lane's bounded transcript (every settled turn, whoever started it, and the prompt of the running one).
+   *  P-FLEET.DOCK1: the records are rich (thinking, tool calls, error), which the grid card's backfill renders. */
+  fleetTranscript(laneId: string): Promise<{ turns: SeedRecord[] } | null>;
   // -- P-HEALTH.1: the harness's self-watch ---------------------------------------------------------
   /** Read-only: where the stall ladder stands for the master session and every lane. Takes no action. */
   health(): Promise<{
@@ -1332,6 +1344,14 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
+  worldsList(): Promise<InstalledWorld[]>;
+  /** Install a SIGNED world package file the user picked (an export from another machine). */
+  worldImport(bytes: ArrayBuffer, filename: string): Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
+  /** A download link for an installed world's original signed package (an attachment). It carries the UI token
+   *  as `?t=` (like previewServeUrl), because a download link cannot set a header. */
+  worldExportUrl(id: string): string;
+  worldUninstall(id: string): Promise<boolean>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -1423,6 +1443,8 @@ export interface LucidBridge {
   oauthLogoutAll(): Promise<AuthStatus | null>;
   /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
   oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
+  /** P-AUTH.RELOGIN1 (ADR-0640): forget the model a lost sign-in displaced (restored, or the user kept another). */
+  reloginRestored(oauthId: string): Promise<boolean | null>;
   // AskSage gov gateway (ADR-0007)
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
@@ -1739,6 +1761,8 @@ interface NativeShell {
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
+  // P-VIZ.GPU1 (ADR-0651): read-only GPU facts (feature status, PCI ids, GL strings); gpu_probe.ts validates them.
+  gpuInfo?(): Promise<unknown>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -2277,6 +2301,22 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  worldsList: async () => {
+    const d: unknown = await getData("/api/worlds");
+    return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];
+  },
+  worldImport: async (bytes, filename) => {
+    try {
+      // The raw package bytes ride a JSON content type on purpose: the origin guard admits only application/json
+      // POSTs, and the route reads the body as bytes (the creatorCadInspect convention).
+      const res = await fetch("/api/worlds/import", { method: "POST", headers: authHeaders({ "content-type": "application/json", "x-lucid-filename": encodeURIComponent(filename) }), body: bytes });
+      const j = await res.json() as { ok?: unknown; data?: { world?: InstalledWorld }; error?: unknown };
+      if (j.ok === true && j.data?.world) return { ok: true, world: j.data.world };
+      return { ok: false, error: typeof j.error === "string" ? j.error : `the engine answered ${res.status}` };
+    } catch { return { ok: false, error: "the LUCID engine could not be reached" }; }
+  },
+  worldExportUrl: (id) => `/api/worlds/export?id=${encodeURIComponent(id)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`,
+  worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
@@ -2409,6 +2449,7 @@ export const bridge: LucidBridge = {
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
   oauthLogoutAll: () => post("/api/auth/logout-all", {}),
   oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
+  reloginRestored: (oauthId) => post("/api/auth/relogin-restored", { oauthId }),
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),
   asksageTokens: () => getData("/api/asksage/tokens"),

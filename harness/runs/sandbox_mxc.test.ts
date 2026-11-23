@@ -6,7 +6,7 @@
 // `make demo-P-MXC.1` (harness/scripts/demo_p_mxc_1.ts); nothing here spawns it.
 
 import { describe, expect, test } from "bun:test";
-import { APPCONTAINER_MONIKER, resolveBackend, wrapForProfile, type SandboxCtx } from "./sandbox_exec.ts";
+import { APPCONTAINER_MONIKER, rankSandboxFallbacks, resolveBackend, wrapForProfile, type SandboxCtx } from "./sandbox_exec.ts";
 import { MXC_CONTAINER_ID, MXC_PROBE_MARKER, MxcBackend, mxcArgs, mxcNetwork, mxcProbeArgv, mxcProbePassed, mxcRequest, parseMxcTier, type MxcHost, type MxcRequest } from "./sandbox_mxc.ts";
 import type { ProfileCaps } from "./profiles.ts";
 import { MXC_SCHEMA_VERSION, mxcPlatformKey, verifyMxcAsset, MXC_ASSETS } from "./mxc_assets.ts";
@@ -148,5 +148,40 @@ describe("MxcBackend in resolveBackend", () => {
     }
     const noExec = wrapForProfile({ argv: ["x"], caps: { ...NET_OFF, canExec: false }, ctx, resolution: { ok: true, backend: b, disclosed: false } });
     expect(noExec.action).toBe("refuse");
+  });
+});
+
+describe("P-SANDBOX.WIN1: the disclosed passthrough says exactly why", () => {
+  const noHelper = { which: () => false, probe: () => false };
+  const pending = { kind: "mxc-prep-pending" as const, detail: "MXC staged but host prep pending: prepare-system-drive, prepare-null-device" };
+
+  test("prep pending is the headline, the missing helper follows; still the disclosed noop", () => {
+    const r = resolveBackend({ platform: "win32", ...noHelper, mxcFallback: pending });
+    expect(r.ok && r.backend.name).toBe("noop");
+    expect(r.ok && r.disclosed).toBe(true);
+    expect(r.ok && r.fallback).toEqual([pending, { kind: "helper-missing", detail: "lucid-appcontainer helper not built (`make build-appcontainer`)" }]);
+  });
+  test("a failed round trip carries what it measured; a present helper that fails its probe is named", () => {
+    const host: MxcHost = { exe: "C:\\mxc\\wxc-exec.exe", tier: "appcontainer-dacl", probe: () => false, probeDetail: () => "exit 5: Access is denied." };
+    const r = resolveBackend({ platform: "win32", which: (b) => b === "C:\\bin\\lucid-appcontainer.exe", probe: () => false, mxc: host, appContainerHelper: "C:\\bin\\lucid-appcontainer.exe" });
+    expect(r.ok && r.fallback?.map((f) => f.kind)).toEqual(["mxc-round-trip", "helper-probe"]);
+    expect(r.ok && r.fallback?.[0]?.detail).toBe("MXC round trip failed: exit 5: Access is denied.");
+  });
+  test("ranking: a staged-but-held MXC outranks an absent one; absence ranks below a failing helper", () => {
+    expect(rankSandboxFallbacks([{ kind: "helper-missing", detail: "h" }, { kind: "mxc-not-staged", detail: "m" }]).map((f) => f.kind)).toEqual(["mxc-not-staged", "helper-missing"]);
+    expect(rankSandboxFallbacks([{ kind: "mxc-not-staged", detail: "m" }, { kind: "helper-probe", detail: "h" }]).map((f) => f.kind)).toEqual(["helper-probe", "mxc-not-staged"]);
+    expect(rankSandboxFallbacks([{ kind: "helper-loopback", detail: "h" }, { kind: "mxc-loopback", detail: "m" }, { kind: "user-off", detail: "u" }]).map((f) => f.kind)).toEqual(["user-off", "mxc-loopback", "helper-loopback"]);
+  });
+  test("fail-closed unchanged: managed policy still refuses, now naming the pending prep", () => {
+    const r = resolveBackend({ platform: "win32", ...noHelper, mxcFallback: pending, requireIsolation: true });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe(`managed policy requires runtime isolation, but ${pending.detail}`);
+    // MXC simply absent: the helper's own sentence stands
+    const absent = resolveBackend({ platform: "win32", ...noHelper, mxcFallback: { kind: "mxc-not-staged", detail: "MXC not staged at C:\\x" }, requireIsolation: true });
+    expect(!absent.ok && absent.reason).toContain("lucid-appcontainer helper is not installed");
+  });
+  test("off Windows there is no fallback list (the generic disclosure stands)", () => {
+    const r = resolveBackend({ platform: "linux", which: () => false, probe: () => false });
+    expect(r.ok && r.fallback).toBeUndefined();
   });
 });

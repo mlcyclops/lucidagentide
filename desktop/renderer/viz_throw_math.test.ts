@@ -199,4 +199,13 @@ describe("armed state", () => {
       for (const k of ALL) expect(step(armState(style), { type: "arm", kind: k }).armed).toBe(offered.has(k) ? k : null);
     }
   });
+
+  test("P-WORLDS.1: a world style arms and fires its own kinds; a switch back to a built-in puts it down", () => {
+    const s = step(armState("world:christmas"), { type: "arm", kind: "snowball" });
+    expect(s.armed).toBe("snowball");
+    expect(armStep(s, { type: "release", onNode: true }).fire).toBe("snowball");
+    expect(armStep(s, { type: "release", onNode: false }).fire).toBeNull();
+    expect(step(armState("world:christmas"), { type: "arm", kind: "" }).armed).toBeNull();
+    expect(step(s, { type: "style", style: "anime" })).toEqual({ style: "anime", armed: null });
+  });
 });

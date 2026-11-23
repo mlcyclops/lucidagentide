@@ -8,9 +8,10 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  arcLengths, edgeBow, edgeBudget, edgeLift, edgeStyleFor, FIBER_IDLE_RATE, FLARE_MS, flareFront, flareLevel, plasmaLook, pointAt,
-  pulseRate, pulseSize, pulseSpeed, raySegment, sampleCircle, sampleQuadratic, tokenOrbit, tokenRate, tokenSize, tokenSpeed,
-  tubeIndex, writeTube, type PlasmaLook, type TubeOut,
+  arcLengths, COIN_RIDGE_DEPTH, coinGlint, coinRadius, coinRim, coinSegments, EDGE_TOKENS, edgeBow, edgeBudget, edgeLift, edgeStyleFor,
+  FIBER_IDLE_RATE, FLARE_MS, flareFront, flareLevel, isPlasmaStyle, LITE_SHEATH, liteRadius, plasmaLook, pointAt, pulseRate, pulseSize,
+  pulseSpeed, raySegment, sampleCircle, sampleQuadratic, sparkRate, tokenCap, tokenOrbit, tokenRate, tokenSize, tokenSpeed, tubeIndex,
+  writeTube, type PlasmaLook, type TubeOut,
 } from "./viz_plasma_math.ts";
 
 const look = (i: number): PlasmaLook => plasmaLook(i, { radius: 0, spin: 0, flow: 0, breath: 0 });
@@ -227,5 +228,98 @@ describe("the tube", () => {
       const avg = (out.nrm[a]! + out.nrm[b]! + out.nrm[c]!) * nx + (out.nrm[a + 1]! + out.nrm[b + 1]! + out.nrm[c + 1]!) * ny + (out.nrm[a + 2]! + out.nrm[b + 2]! + out.nrm[c + 2]!) * nz;
       expect(avg).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("plasma-light, tokens and tier budgets (ADR-0652)", () => {
+  const TIERS = ["minimal", "reduced", "full", "ultra", "cinematic"] as const;
+  // the flow budgets per tier (viz_model.vizTierOpts; ultra 12000 per ADR-0651)
+  const FLOW = { minimal: 600, reduced: 2500, full: 6000, ultra: 12000, cinematic: 12000 } as const;
+
+  test("plasma-light is a plasma style: same orb cadence, speed and size as the anime plasma", () => {
+    expect(isPlasmaStyle("plasma")).toBe(true);
+    expect(isPlasmaStyle("plasma-light")).toBe(true);
+    expect(isPlasmaStyle("fiber")).toBe(false);
+    for (const i of [0, 0.01, 0.3, 1]) {
+      expect(pulseRate("plasma-light", i)).toBe(pulseRate("plasma", i));
+      expect(pulseSpeed("plasma-light", i, 6)).toBe(pulseSpeed("plasma", i, 6));
+      expect(pulseSize("plasma-light", i)).toBe(pulseSize("plasma", i));
+    }
+    expect(EDGE_TOKENS).toEqual(["orb", "coin", "petal", "snowflake", "spark", "custom"]);
+  });
+
+  test("the built-in tiers keep their budgets (the anime and office edges look as before)", () => {
+    expect(edgeBudget("full", 6000, true)).toMatchObject({ rings: 64, loopRings: 72, radial: 12, octaves: 4, warp: true, halo: true, pulses: 150, tokens: 1200, sparks: 0 });
+    expect(edgeBudget("reduced", 2500, true)).toMatchObject({ rings: 40, loopRings: 48, radial: 8, octaves: 2, warp: true, halo: false, pulses: 63, tokens: 500, sparks: 0 });
+    expect(edgeBudget("minimal", 600, true)).toMatchObject({ rings: 24, loopRings: 32, radial: 6, octaves: 1, warp: false, halo: false, pulses: 15, tokens: 120, sparks: 0 });
+  });
+
+  test("ultra and cinematic keep full's conduit, smoother, and add spark trails", () => {
+    const full = edgeBudget("full", 12000, true), ultra = edgeBudget("ultra", 12000, true), cine = edgeBudget("cinematic", 12000, true);
+    for (const b of [ultra, cine]) {
+      expect(b).toMatchObject({ radial: full.radial, octaves: full.octaves, warp: true, halo: true, sheath: true, pulses: full.pulses, tokens: full.tokens });
+      expect(b.rings).toBeGreaterThan(full.rings);
+      expect(b.sparks).toBeGreaterThan(0);
+    }
+    expect(cine.sparks).toBeGreaterThan(ultra.sparks);
+    expect(full.sparks).toBe(0);
+    // the pool (orbs + stream + sparks) stays within the tier's flow budget
+    for (const t of TIERS) {
+      const b = edgeBudget(t, FLOW[t], true);
+      expect(b.pulses + b.tokens + b.sparks).toBeLessThanOrEqual(FLOW[t]);
+    }
+  });
+
+  test("the instanced coin budget grows with the tier and never exceeds the stream budget", () => {
+    let prev = 0, prevRidges = -1, prevTex = 0;
+    for (const t of TIERS) {
+      const b = edgeBudget(t, FLOW[t], true);
+      expect(b.coins).toBeGreaterThan(prev);
+      expect(b.coins).toBeLessThanOrEqual(b.tokens);
+      expect(b.coinRidges).toBeGreaterThan(prevRidges);
+      expect(b.tokenTex).toBeGreaterThanOrEqual(prevTex);
+      expect(tokenCap(b, "coin")).toBe(Math.min(b.tokens, b.coins));
+      for (const tok of ["orb", "petal", "snowflake", "spark", "custom"] as const) expect(tokenCap(b, tok)).toBe(b.tokens);
+      prev = b.coins; prevRidges = b.coinRidges; prevTex = b.tokenTex;
+    }
+    expect(edgeBudget("minimal", 600, true)).toMatchObject({ coins: 40, coinRidges: 0, sheath: false });
+    expect(edgeBudget("cinematic", 12000, true)).toMatchObject({ coins: 720, coinRidges: 48 });
+    // a tiny flow budget caps the coins at the stream budget; no motion means no particles of any kind
+    expect(edgeBudget("ultra", 100, true).coins).toBe(20);
+    const still = edgeBudget("cinematic", 12000, false);
+    expect(still.tokens + still.coins + still.sparks + still.pulses).toBe(0);
+    expect(tokenCap(still, "coin")).toBe(0);
+  });
+
+  test("a coin's reeded edge alternates in and out, one ridge per two segments", () => {
+    expect(coinSegments(0)).toBe(20);
+    expect(coinSegments(24)).toBe(48);
+    for (let j = 0; j < 20; j++) expect(coinRim((j / 20) * Math.PI * 2, 0)).toBe(1);
+    const ridges = 24, segs = coinSegments(ridges);
+    for (let j = 0; j < segs; j++) {
+      const r = coinRim((j / segs) * Math.PI * 2, ridges);
+      expect(r).toBeCloseTo(j % 2 === 0 ? 1 + COIN_RIDGE_DEPTH / 2 : 1 - COIN_RIDGE_DEPTH / 2, 6);
+    }
+  });
+
+  test("coins: bigger where there are fewer of them, a short glint as the face turns", () => {
+    expect(coinRadius(0.5, "minimal")).toBeGreaterThan(coinRadius(0.5, "full"));
+    expect(coinRadius(0.5, "full")).toBeGreaterThan(coinRadius(0.5, "ultra"));
+    expect(coinRadius(1, "full")).toBeGreaterThan(coinRadius(0, "full"));
+    expect(coinRadius(0, "cinematic")).toBeGreaterThan(tokenSize(0)); // a coin is larger than the dot it replaces
+    expect(coinGlint(0)).toBe(1);
+    expect(coinGlint(Math.PI / 2)).toBe(0);
+    expect(coinGlint(Math.PI)).toBe(0);
+    expect(coinGlint(0.5)).toBeLessThan(0.1);
+    expect(coinGlint(Math.PI * 2)).toBeCloseTo(1, 6);
+  });
+
+  test("sparks only from ultra, more at cinematic and at a burst; a plasma-light tube outweighs the hairline", () => {
+    for (const t of ["minimal", "reduced", "full"] as const) expect(sparkRate(1, t)).toBe(0);
+    expect(sparkRate(0, "ultra")).toBeGreaterThan(0);
+    expect(sparkRate(1, "ultra")).toBeGreaterThan(sparkRate(0, "ultra"));
+    expect(sparkRate(1, "cinematic")).toBeGreaterThan(sparkRate(1, "ultra"));
+    for (const i of [0, 0.25, 0.5, 1]) expect(liteRadius(i)).toBeGreaterThan(look(i).radius);
+    expect(LITE_SHEATH).toBeGreaterThan(1);
   });
 });

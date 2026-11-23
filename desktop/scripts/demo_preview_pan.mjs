@@ -226,10 +226,11 @@ export async function verifyPreviewPan(page, fixturePath) {
 
     await page.click('.prev-tab[data-lane="agent"]');
     const agent = await disabledPan("Agent lane drops pan mode");
-    assert(agent.buttonHidden || agent.buttonDisabled, "Pan remains available on the Agent lane");
+    // P-PREVIEW.FIT1: every tab pans now; an Agent tab with nothing loaded has nothing to pan.
+    assert(agent.buttonHidden || agent.buttonDisabled, "Pan is enabled on an empty Agent lane");
     await page.click('.prev-tab[data-lane="yours"]');
     await disabledPan("Returning to Yours does not restore pan mode");
-    checks.push("lane-switch-drops-pan-and-hides-agent-control");
+    checks.push("lane-switch-drops-pan-and-disables-it-on-an-empty-lane");
     await enablePan();
     await page.click("#prevClose");
     await poll("Preview closes", () => page.$eval("#preview", (panel) => panel.hidden));
