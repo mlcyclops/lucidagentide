@@ -624,7 +624,7 @@ fn assertion_auth(ctx: &IssueCtx, assertion: &str, id: &str, creds: &[&Value]) -
         }
     }
     let fetched: Vec<(&str, &[Value])> = docs.iter().map(|(u, k)| (u.as_str(), k.as_slice())).collect();
-    let verdict = tok::verify_client_assertion(assertion, id, ctx.token_endpoint, creds, &fetched, ctx.now, &mut ctx.state.assertions.lock());
+    let verdict = tok::verify_client_assertion(assertion, id, ctx.issuer, creds, &fetched, ctx.now, &mut ctx.state.assertions.lock());
     match (verdict, failed) {
         (Ok(end), _) => Ok(end),
         (Err(e), Some(f)) if e.code == "client-auth" => Err(f),
@@ -1010,7 +1010,7 @@ mod tests {
     }
 
     fn assertion(fx: &Fx, jti: &str) -> String {
-        tok::sign_es256(&fx.client, &json!({"alg": "ES256", "kid": "k1"}), &json!({"iss": CLIENT, "sub": CLIENT, "aud": ENDPOINT, "iat": NOW, "exp": NOW + 300, "jti": jti})).unwrap()
+        tok::sign_es256(&fx.client, &json!({"alg": "ES256", "kid": "k1"}), &json!({"iss": CLIENT, "sub": CLIENT, "aud": ISSUER, "iat": NOW, "exp": NOW + 300, "jti": jti})).unwrap()
     }
 
     fn proof(fx: &Fx, jti: &str) -> String {

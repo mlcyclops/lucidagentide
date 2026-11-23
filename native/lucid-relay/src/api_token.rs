@@ -445,14 +445,15 @@ fn assertion_key<'a>(credentials: &[&'a Value], fetched: &[(&str, &'a [Value])],
 
 /// 5.2 `private_key_jwt`: the assertion's header `kid` names a usable credential key (EC P-256 or RSA of 3072 bits or
 /// more) whose credential has not expired; ES256, RS256 or PS256 by that key; `iss` = `sub` = `client_id`; `aud`
-/// exactly `token_endpoint`; `iat` and `exp` with `exp - iat` at most 300; `iat` and `nbf` not more than 60 s ahead;
-/// `exp` after `now`; a `jti` unseen for 10 minutes. Every refusal is `client-auth` (a full cache share is `abuse`).
-/// Returns the credential's `expires` (the key end of 5.3).
+/// exactly the issuer identifier as its sole value (RFC 10070 4: the token endpoint URL is refused); `iat` and `exp`
+/// with `exp - iat` at most 300; `iat` and `nbf` not more than 60 s ahead; `exp` after `now`; a `jti` unseen for 10
+/// minutes. Every refusal is `client-auth` (a full cache share is `abuse`). Returns the credential's `expires` (the
+/// key end of 5.3).
 #[allow(clippy::too_many_arguments)]
 pub fn verify_client_assertion(
     assertion: &str,
     client_id: &str,
-    token_endpoint: &str,
+    issuer: &str,
     credentials: &[&Value],
     fetched: &[(&str, &[Value])],
     now: i64,
@@ -473,8 +474,8 @@ pub fn verify_client_assertion(
     if jws.claim_str("iss") != Some(client_id) || jws.claim_str("sub") != Some(client_id) {
         return Err(bad("the client assertion's iss and sub must be the client id"));
     }
-    if jws.claim_str("aud") != Some(token_endpoint) {
-        return Err(bad("the client assertion's aud is not the token endpoint"));
+    if jws.claim_str("aud") != Some(issuer) {
+        return Err(bad("the client assertion's aud must be the issuer alone"));
     }
     let (Some(iat), Some(exp)) = (jws.claim_int("iat"), jws.claim_int("exp")) else { return Err(bad("the client assertion needs iat and exp")) };
     if exp.saturating_sub(iat) > ASSERTION_SPAN_MAX {
@@ -1108,25 +1109,29 @@ mod tests {
         let s = store_of(&m, 7, &[], &[], NOW);
         let client = find_client(&s, ORG, CLIENT).unwrap();
         let creds = usable_credentials(client, s.active(ORG));
-        let claims = |jti: &str| json!({"iss": CLIENT, "sub": CLIENT, "aud": ENDPOINT, "iat": NOW, "exp": NOW + 300, "jti": jti});
+        // RFC 10070: the issuer identifier is the sole audience
+        let claims = |jti: &str| json!({"iss": CLIENT, "sub": CLIENT, "aud": ISSUER, "iat": NOW, "exp": NOW + 300, "jti": jti});
         let assert_with = |k: &EcdsaKeyPair, kid: &str, c: Value| sign_es256(k, &json!({"alg": "ES256", "kid": kid}), &c).unwrap();
         let mut cache = JtiCache::assertion();
         let a = assert_with(&pair, "k1", claims("a1"));
-        assert_eq!(verify_client_assertion(&a, CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache), Ok(NOW + 90 * DAY));
-        assert_eq!(code(verify_client_assertion(&a, CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache)), "client-auth", "replay");
-        assert_eq!(code(verify_client_assertion(&assert_with(&other, "k1", claims("a2")), CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache)), "client-auth");
-        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k9", claims("a3")), CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache)), "client-auth");
+        assert_eq!(verify_client_assertion(&a, CLIENT, ISSUER, &creds, &[], NOW, &mut cache), Ok(NOW + 90 * DAY));
+        assert_eq!(code(verify_client_assertion(&a, CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth", "replay");
+        assert_eq!(code(verify_client_assertion(&assert_with(&other, "k1", claims("a2")), CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth");
+        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k9", claims("a3")), CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth");
         let mut c = claims("a4");
-        c["aud"] = json!([ENDPOINT]);
-        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k1", c), CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache)), "client-auth");
+        c["aud"] = json!([ISSUER]);
+        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k1", c), CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth");
+        let mut c = claims("a4b");
+        c["aud"] = json!(ENDPOINT);
+        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k1", c), CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth", "RFC 10070: the token endpoint is refused");
         let mut c = claims("a5");
         c["exp"] = json!(NOW + 301);
-        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k1", c), CLIENT, ENDPOINT, &creds, &[], NOW, &mut cache)), "client-auth");
+        assert_eq!(code(verify_client_assertion(&assert_with(&pair, "k1", c), CLIENT, ISSUER, &creds, &[], NOW, &mut cache)), "client-auth");
         // a jwks_uri credential with its fetched keys
         let fetched_cred = json!({"type": "private_key_jwt", "jwks_uri": "https://keys.acme.example/jwks", "private_ok": false, "expires": NOW + DAY});
         let keys = [jwk.clone()];
         let a = assert_with(&pair, "k1", claims("a6"));
-        assert_eq!(verify_client_assertion(&a, CLIENT, ENDPOINT, &[&fetched_cred], &[("https://keys.acme.example/jwks", &keys[..])], NOW, &mut cache), Ok(NOW + DAY));
+        assert_eq!(verify_client_assertion(&a, CLIENT, ISSUER, &[&fetched_cred], &[("https://keys.acme.example/jwks", &keys[..])], NOW, &mut cache), Ok(NOW + DAY));
         // a dropped credential is not usable
         let s = store_of(&m, 7, &[entry("client_drop_credential", json!({"client": CLIENT, "kid": "k1"}))], &[], NOW);
         assert!(usable_credentials(find_client(&s, ORG, CLIENT).unwrap(), s.active(ORG)).is_empty());
@@ -1337,7 +1342,7 @@ mod tests {
 
         for c in doc["client_assertions"].as_array().unwrap() {
             let creds = find_client(&base, org, text(c, "client_id")).map(|cl| usable_credentials(cl, base.active(org))).unwrap_or_default();
-            let got = verify_client_assertion(text(c, "assertion"), text(c, "client_id"), text(&doc, "token_endpoint"), &creds, &[], now, &mut JtiCache::assertion());
+            let got = verify_client_assertion(text(c, "assertion"), text(c, "client_id"), text(&doc, "issuer"), &creds, &[], now, &mut JtiCache::assertion());
             t.verdict("client_assertions", c, code(got));
         }
 

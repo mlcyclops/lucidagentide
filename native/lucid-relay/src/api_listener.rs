@@ -910,7 +910,7 @@ mod tests {
 
     fn token_form(key: &EcdsaKeyPair, scope: &str) -> String {
         let header = json!({"alg": "ES256", "typ": "JWT", "kid": "k1"});
-        let claims = json!({"iss": "c_mon", "sub": "c_mon", "aud": format!("{L}/oauth/token"), "iat": NOW, "exp": NOW + 60, "jti": res::rid()});
+        let claims = json!({"iss": "c_mon", "sub": "c_mon", "aud": L, "iat": NOW, "exp": NOW + 60, "jti": res::rid()});
         let assertion = crate::api_token::sign_es256(key, &header, &claims).unwrap();
         format!(
             "grant_type=client_credentials&client_id=c_mon&client_assertion_type={}&client_assertion={assertion}&scope={}&resource={}",
