@@ -590,6 +590,7 @@ import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.
 import { MAX_DOWNLOAD_BYTES as MAX_PLUGIN_PACKAGE_BYTES, addonsDir, exportWorld, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, installWorldBytes, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons, ADR-0648 worlds
 import { listInstalledWorlds, readInstalled, resolveWorldAsset } from "./plugins/installed.ts" // ADR-0648 Lucid Agent Worlds
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
+import { createPluginHealer } from "./plugins/restore.ts" // P-WORLDS.HEAL1: purchased plugins and worlds come back after a glitch
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -2169,6 +2170,9 @@ const plugins = new PluginRuntime({
   onMcpChange: () => backend.restart(),
 });
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
+// P-WORLDS.HEAL1: the install ledger's self-heal (desktop/plugins/restore.ts). A restore stops a running copy before
+// the damaged folder moves aside, like an update's switch.
+const pluginHealer = createPluginHealer({ beforeSwitch: async (id) => { await plugins.stop(id); } });
 // ADR-0542: the first start of a release after a dev build removes the development modules (data kept), before
 // any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
 // P-AUTH.RELOGIN1 (ADR-0640): read the previous version FIRST (the cleanup rewrites the marker), so a re-login
@@ -6198,6 +6202,18 @@ return Bun.serve({
         return json({ ok: true, data: { plugins: plugins.list(), offered } });
       }
       if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      // P-WORLDS.HEAL1: every purchase the install ledger records against the disk (ok / missing / broken), the ids
+      // that need restoring and the reinstalls from backup since start; restore heals one id (or, with none, all)
+      // from its backup through every install gate. Both wait for a heal pass in flight.
+      if (p === "/api/plugins/health" && req.method === "GET") {
+        srv.timeout(req, 0); // the startup pass may be re-scanning a restored package
+        return json({ ok: true, data: await pluginHealer.health() });
+      }
+      if (p === "/api/plugins/restore" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await pluginHealer.restore(typeof b.id === "string" && b.id ? b.id : undefined) });
+      }
       if (p === "/api/plugins/install-from-url" && req.method === "POST") {
         srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
         const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
@@ -7639,7 +7655,9 @@ backend.startAutomationScheduler();
 jobScheduler.start();
 // P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
 // the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
-void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
+// P-WORLDS.HEAL1: first put back any purchased plugin or world that went missing or got damaged (from its backup,
+// through every install gate), so autostart finds it whole. Detached like autostart; startup() never throws.
+void pluginHealer.startup().then(() => plugins.autostart()).catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.

@@ -33,6 +33,11 @@
 // (installPluginFromUrl) or from a file the user imports (installWorldBytes: kind world and a valid signature
 // required, never the private path). Either way the ORIGINAL signed bytes are kept beside the version dir as
 // plugins/<id>/<id>-<version>.lplugin.zip, which exportWorld hands back for an offline move to another machine.
+//
+// P-WORLDS.HEAL1: every successful catalog-source install (a store download, a world import, an update, a restore)
+// is recorded in the install ledger with a backup of its signed package (ledger.ts), outside the plugins folder; only
+// the user's uninstall removes the record. restore.ts reinstalls a missing or damaged one from that backup through
+// these same gates.
 
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -51,6 +56,7 @@ import {
   PLUGIN_ID_RE, listInstalledWorlds, pluginDataDir, pluginsRoot, readInstalled, worldPackageName, worldPackagePath,
   type CurrentPointer, type InstalledPlugin, type InstalledWorldView, type PluginSource,
 } from "./installed.ts";
+import { forgetInstall, readLedger, recordInstall } from "./ledger.ts";
 import { extractHost } from "../egress_policy.ts";
 import { managedConfig, type ManagedEgressPolicy } from "../managed_config.ts";
 import { isScannerUnavailable } from "../kb_pack.ts";
@@ -332,12 +338,13 @@ export async function installPluginBytes(bytes: Buffer, expectId: string, deps: 
   return installVerified(bytes, v.entries, v.check, deps);
 }
 
-type ZipEntry = { name: string; data: Buffer };
-type VerifiedPackage = Extract<PackageCheck, { ok: true }>;
+export type ZipEntry = { name: string; data: Buffer };
+export type VerifiedPackage = Extract<PackageCheck, { ok: true }>;
 
 /** The disk-free gates over package bytes: zip, manifest, hashes, signature. `expectId` null takes the id the
- *  manifest declares (a world imported from a file has no catalog id to match). */
-function verifyPackageBytes(bytes: Buffer, expectId: string | null, deps: InstallDeps): { ok: true; entries: ZipEntry[]; check: VerifiedPackage } | { ok: false; gate: PluginGate; reason: string } {
+ *  manifest declares (a world imported from a file has no catalog id to match). Writes nothing; restore.ts uses it
+ *  to check a world's kept package before adopting it as the backup. */
+export function verifyPackageBytes(bytes: Buffer, expectId: string | null, deps: InstallDeps): { ok: true; entries: ZipEntry[]; check: VerifiedPackage } | { ok: false; gate: PluginGate; reason: string } {
   let entries: ZipEntry[];
   try { entries = readAllZipEntries(bytes, { maxTotalBytes: MAX_EXPANDED_BYTES }); }
   catch (e) { return { ok: false, gate: "manifest", reason: `not a valid .lplugin.zip: ${(e as Error).message}` }; }
@@ -418,14 +425,30 @@ async function installVerified(bytes: Buffer, entries: ZipEntry[], check: Verifi
     cleanup();
     return { ok: false, gate: "manifest", reason: `install failed: ${(e as Error).message}` };
   }
+  // P-WORLDS.HEAL1: a store install or world import is recorded with a backup of its signed bytes. The install
+  // already succeeded, so a ledger problem is logged, never turned into a failed install.
+  if ((deps.source ?? "catalog") === "catalog") {
+    try {
+      const entry = recordInstall(manifest, bytes, root);
+      if (entry.backupSkipped) logPluginAttempt({ action: "backup", id: manifest.id, version: manifest.version, ok: false, reason: entry.backupSkipped });
+    } catch (e) {
+      logPluginAttempt({ action: "ledger", id: manifest.id, version: manifest.version, ok: false, reason: `the install ledger could not be written: ${(e as Error).message}` });
+    }
+  }
   return { ok: true, id: manifest.id, version: manifest.version, signed: check.signed, keyId: check.keyId };
 }
 
-/** Remove the installed package. The data dir stays unless `keepData` is false. */
+/** Remove the installed package: the USER's uninstall (only the runtime's uninstall, behind the uninstall routes,
+ *  calls this). The data dir stays unless `keepData` is false. P-WORLDS.HEAL1: the install-ledger record and the
+ *  backup go FIRST (if that write fails nothing is removed, so the next start never restores an uninstall); a
+ *  recorded item whose package is already gone is just forgotten. */
 export function uninstallPlugin(id: string, keepData: boolean, root = pluginsRoot()): { ok: true } | { ok: false; error: string } {
   if (!PLUGIN_ID_RE.test(id)) return { ok: false, error: "invalid plugin id" };
   const dir = join(root, id);
-  if (!existsSync(dir)) return { ok: false, error: "that plugin is not installed" };
+  const recorded = readLedger(root).entries[id] !== undefined;
+  if (!existsSync(dir) && !recorded) return { ok: false, error: "that plugin is not installed" };
+  try { forgetInstall(id, root); }
+  catch (e) { return { ok: false, error: `uninstall failed: the install ledger could not be written: ${(e as Error).message}` }; }
   try {
     rmSync(dir, { recursive: true, force: true });
     if (!keepData) rmSync(pluginDataDir(id), { recursive: true, force: true });
@@ -444,8 +467,9 @@ export type WorldInstallResult =
  *  Every gate of a store install runs (manifest, hashes, signature, scan), and on top the package must be kind
  *  "world" and SIGNED by the publisher key: an unsigned world is refused whatever its tier. This is the ONLY
  *  file path a world installs through (privatePluginProblem refuses worlds). Whether the user may USE the world is
- *  the Visualize host's entitlement check, not this gate. Logs one line per attempt. */
-export async function installWorldBytes(bytes: Buffer, filename: string, deps: InstallDeps = {}): Promise<WorldInstallResult> {
+ *  the Visualize host's entitlement check, not this gate. Logs one line per attempt. `expectId` (a restore from the
+ *  install ledger's backup, P-WORLDS.HEAL1) also requires exactly that world id. */
+export async function installWorldBytes(bytes: Buffer, filename: string, deps: InstallDeps = {}, expectId: string | null = null): Promise<WorldInstallResult> {
   const startedAt = Date.now();
   const source = `file:${(filename.split(/[\\/]/).pop() ?? "").slice(0, 200) || "(unnamed)"}`;
   const fail = (gate: PluginGate, reason: string): WorldInstallResult => {
@@ -454,7 +478,8 @@ export async function installWorldBytes(bytes: Buffer, filename: string, deps: I
   };
   if (!/\.zip$/i.test(filename)) return fail("manifest", "a world package is a .lplugin.zip file");
   if (bytes.length > MAX_DOWNLOAD_BYTES) return fail("manifest", `package is over the ${MAX_DOWNLOAD_BYTES}-byte limit`);
-  const v = verifyPackageBytes(bytes, null, deps);
+  if (expectId !== null && !PLUGIN_ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
+  const v = verifyPackageBytes(bytes, expectId, deps);
   if (!v.ok) return fail(v.gate, v.reason);
   if (v.check.manifest.kind !== "world") return fail("manifest", "this package is not a Lucid Agent World");
   if (!v.check.signed) return fail("signature", "a world must be signed by TECHLEAD 187 LLC; this package is not");

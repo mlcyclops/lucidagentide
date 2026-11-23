@@ -165,7 +165,15 @@ for 6 worlds first, and its credits show as **Use a credit** on the worlds the a
 After purchase the IDE's store path (Google sign-in, getEntitlement, getPackDownload signed URL,
 `/api/plugins/install-from-url`) installs it unchanged.
 
-## 6. Offline moves
+## 6. Keeping purchases (ADR-0662)
+
+Every store install and world import is recorded in `<dataRoot>/plugin-ledger.json` with a signed backup in
+`<dataRoot>/plugin-backups/`. At engine start a recorded item whose folder is missing or damaged moves to
+`plugins-quarantine/` and reinstalls from its backup through every install gate; anything the backup cannot fix
+reinstalls from the store when the account owns it (Plugins, Installed, **Restore purchases** runs the same pass).
+`GET /api/plugins/health` shows the state; `POST /api/plugins/restore {id?}` heals one item or all.
+
+## 7. Offline moves
 
 An installed world keeps its original signed package beside the install
 (`plugins/<id>/<id>-<version>.lplugin.zip`). **Export** on its card downloads exactly those bytes

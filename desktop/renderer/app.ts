@@ -85,7 +85,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
+import { initViz, openVizWorld, setPendingWorldRestores, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -18255,6 +18255,10 @@ const pluginsFlyout = createPluginsFlyout({
   // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
   worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
   worldExportUrl: (id) => bridge.worldExportUrl(id),
+  // P-WORLDS.HEAL1: purchases that went missing or got damaged come back (engine backup first, then the store).
+  pluginsHealth: () => bridge.pluginsHealth(),
+  pluginsRestore: () => bridge.pluginsRestore(),
+  worldsPending: setPendingWorldRestores,
   openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
@@ -22044,6 +22048,9 @@ onNetChange(() => {
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
 initMarket(readMarketBootConfig());
+// P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
+// (the engine's backup restore, then the store) and say so.
+void pluginsFlyout.restorePurchases("auto");
 // P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
 // store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
 bridge.onKgDeviceUnlocked((r) => {

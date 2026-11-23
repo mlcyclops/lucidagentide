@@ -29,6 +29,12 @@
 // a picker of exactly SPONSOR_PICKS worlds (the picks travel to checkout); a world the Sponsor pack can still
 // unlock offers Use a credit instead of Buy.
 //
+// P-WORLDS.HEAL1: restorePurchases (app start, every drawer open, and the Installed tab's Restore purchases) reads the
+// engine's install-ledger health, lets the engine restore from its verified backups first, then reinstalls what is
+// still missing through the store card's own install when the account is entitled (plugin_restore.ts decides), and
+// says what happened once: Repaired N after an update, Restored N, or a persistent "needs restoring" with Sign in
+// and Retry.
+//
 // Media is bundled under assets/plugins/ (offline). A loop only gets its `src` while its card is on screen
 // (IntersectionObserver), and never under prefers-reduced-motion: then the poster is the picture.
 
@@ -45,8 +51,13 @@ import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
 import { isEntitled, type AuthState, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider, RedeemResult } from "./market_gate.ts";
 import type {
-  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginInstallView, PluginLicenseView, PluginStartView, PluginsListView,
+  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginHealthItem, PluginHealthView, PluginInstallView, PluginKind, PluginLicenseView,
+  PluginRepairView, PluginStartView, PluginsListView,
 } from "./bridge.ts";
+import {
+  REPAIRS_SEEN_KEY, RESTORE_GIVEN_UP_KEY, newestRepairAt, notEntitledCopy, notInStoreCopy, parseIdList, pendingCopy, planRestore, repairedCopy,
+  restorableStoreItem, restoredCopy, unseenRepairs, type EntitlementAnswer,
+} from "./plugin_restore.ts";
 import type { ToastOpts } from "./ui.ts";
 import type { InstalledWorld } from "./viz_world_api.ts";
 
@@ -294,7 +305,10 @@ export function installedFootHtml(p: InstalledPluginView, note: CardNote | null,
 export function installedCardHtml(p: InstalledPluginView, note: CardNote | null, canExport = false): string {
   const chip = provenanceChip(p);
   const tone: PosterTone = p.source === "catalog" ? "green" : p.signed ? "cyan" : "amber";
-  return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, { loop: false, poster: "generated", glyph: "plugins", tone })}
+  // A store install shows its store card's picture (a world's loop over its poster); a private package, the glyph.
+  const store = p.source === "catalog" ? PREMIUM_PLUGINS.find((x) => x.id === p.id) : undefined;
+  const media: PluginMedia = store?.media.poster === "webp" ? store.media : { loop: false, poster: "generated", glyph: "plugins", tone };
+  return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, media)}
     <div class="plg-cbody">
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(KIND_LABEL[p.kind])} ${esc(p.version)}<span class="plg-chip" data-status="${chip.tone === "warn" ? "unsigned" : "verified"}">${esc(chip.label)}</span></span>
@@ -304,12 +318,14 @@ export function installedCardHtml(p: InstalledPluginView, note: CardNote | null,
   </article>`;
 }
 
-/** The whole INSTALLED tab: the explicit install-from-file entry, then every installed plugin. */
-export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean, canExport = false): string {
+/** The whole INSTALLED tab: the explicit install-from-file entry (and, P-WORLDS.HEAL1, Restore purchases: put back
+ *  every purchase recorded on this machine that is missing or damaged), then every installed plugin. */
+export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean, canExport = false, canRestore = false): string {
   const pick = canPick
     ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>`
     : `<span class="plg-meta">Installing from a file needs the LUCID desktop app.</span>`;
-  const lede = `<div class="plg-inst-head"><p class="plg-lede">Plugins on this machine. Store plugins install and update from their cards. A private plugin is a .lplugin.zip you install here yourself: it runs in the same sandbox as a store plugin, is marked when it is unsigned, and is never updated automatically.</p>${pick}</div>`;
+  const restore = canRestore ? `<button type="button" class="plg-act" data-kind="restore" data-plg-restore data-tip="${esc(tipEsc("Check every store plugin and world installed on this machine, and reinstall any that is missing or damaged."))}">${icon("refresh", 13)}Restore purchases</button>` : "";
+  const lede = `<div class="plg-inst-head"><p class="plg-lede">Plugins on this machine. Store plugins install and update from their cards. A private plugin is a .lplugin.zip you install here yourself: it runs in the same sandbox as a store plugin, is marked when it is unsigned, and is never updated automatically.</p>${restore}${pick}</div>`;
   const shown = list.filter((p) => matchesQuery([p.name, p.id, KIND_LABEL[p.kind], provenanceChip(p).label], query));
   if (!list.length) return lede + `<p class="plg-empty">No plugins are installed yet.</p>`;
   if (!shown.length) return lede + `<p class="plg-empty">No plugins match "${esc(query.trim())}".</p>`;
@@ -400,7 +416,14 @@ export interface PluginsFlyoutDeps {
   worldImport?: (bytes: ArrayBuffer, filename: string) => Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
   /** ADR-0648: the download link of an installed world's package (bridge.worldExportUrl); absent hides Export. */
   worldExportUrl?: (id: string) => string;
-  toast: (t: ToastOpts) => void;
+  /** P-WORLDS.HEAL1: the engine's install-ledger health report (bridge.pluginsHealth). */
+  pluginsHealth: () => Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the engine restores from its verified backups, then answers the health report. */
+  pluginsRestore: () => Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the world package ids still waiting for a restore (empty once none is); Visualize says so. */
+  worldsPending?: (ids: readonly string[]) => void;
+  /** Show a toast; showToast returns its dismiss, which a persistent "needs restoring" toast uses. */
+  toast: (t: ToastOpts) => (() => void) | void;
   /** Where the drawer sits (drawerAnchor: the open Preview panel's left edge, else the work area's right edge). */
   anchor: () => DrawerAnchor | null;
   /** The left rail's right edge, which the drawer never slides under. */
@@ -420,6 +443,10 @@ export interface PluginsFlyout {
   onSignedIn(): boolean;
   /** The window regained focus: finish a checkout the user completed in the browser. */
   onWindowFocus(): void;
+  /** P-WORLDS.HEAL1: bring back purchases that went missing or got damaged. `auto` (app start, drawer open) reports
+   *  quietly and never re-asks about an item already reported as not restorable; `manual` (Restore purchases) asks
+   *  the engine and the store again about everything and always says the outcome. */
+  restorePurchases(mode: "auto" | "manual"): Promise<void>;
 }
 
 /** Plain-language reasons for each install gate (ADR-0462), so a refusal says what failed. */
@@ -521,7 +548,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, optional add-ons that install only when you press Install, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }
-    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile, !!deps.worldExportUrl);
+    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile, !!deps.worldExportUrl, true);
     // A card with a `group` (the world packs and the Lucid Agent Worlds) is listed under that heading, not its
     // section's. P-WORLDS.STORE1: packs first, then worlds, then Civilian and Government.
     const cards = (keep: (p: PremiumPlugin) => boolean) => PREMIUM_PLUGINS
@@ -684,6 +711,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     window.addEventListener("resize", onResize);
     for (const b of document.querySelectorAll("[data-plg-toggle]")) b.setAttribute("aria-expanded", "true");
     void refresh();
+    void restorePurchases("auto"); // P-WORLDS.HEAL1: a purchase that went missing since the last look comes back
   }
 
   function close(): void {
@@ -742,6 +770,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-govopen]")) { openGovForm(); return; }
     if (hit("[data-plg-govcancel]")) { govFormOpen = false; govError = ""; paintGov(); return; }
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
+    if (hit("[data-plg-restore]")) { void restorePurchases("manual"); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
     if (hit("[data-plg-wimport]")) { pickWorldFile(); return; }
     if ((el = hit("[data-plg-wexport]"))) { exportWorld(el.dataset.plgWexport!); return; }
@@ -990,26 +1019,30 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     paintGov();
   }
 
-  async function install(p: PremiumPlugin): Promise<void> {
+  /** Download and install a store card's package. `quiet` (a restore, P-WORLDS.HEAL1) skips the success toast: the
+   *  restore says it once for all of them. True when it installed. */
+  async function install(p: PremiumPlugin, quiet = false): Promise<boolean> {
     busy.add(p.id);
     setNote(p.id, { tone: "info", text: "Downloading the signed package." });
     try {
       const url = await deps.provider().downloadUrl(p.id).catch(() => null);
-      if (!url) { setNote(p.id, { tone: "danger", text: "No download link came back. The purchase may still be processing, or the package is not published yet." }); return; }
+      if (!url) { setNote(p.id, { tone: "danger", text: "No download link came back. The purchase may still be processing, or the package is not published yet." }); return false; }
       setNote(p.id, { tone: "info", text: "Checking the signature, checksums, and security scan." });
       const r = await deps.installFromUrl(url, p.id);
-      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return; }
+      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return false; }
       if (!r.ok) {
         const why = `${GATE_TEXT[r.gate]}: ${r.reason}`;
         setNote(p.id, { tone: "danger", text: `Not installed. ${why}` });
         deps.toast({ tone: "danger", title: `${p.name} was not installed`, desc: why, timeout: 0, actions: [{ label: "OK" }] });
-        return;
+        return false;
       }
       const list = await deps.pluginsList().catch(() => null);
       for (const x of list?.plugins ?? []) installed.set(x.id, x);
       setNote(p.id, { tone: "ok", text: `Installed version ${r.version}.` });
+      if (quiet) return true;
       if (isWorldPlugin(p)) deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "Pick it in the Visualize view's style picker.", timeout: 6000, actions: [{ label: "Open in Visualize", kind: "ok", run: () => openWorld(p) }] });
       else deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(p) }] });
+      return true;
     } finally {
       busy.delete(p.id);
       paintFoot(p.id);
@@ -1038,6 +1071,109 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     }
     deps.openWorld(p.id);
     close();
+  }
+
+  // ── P-WORLDS.HEAL1: restoring purchases ─────────────────────────────────────────────────────────────
+  // The engine already put back what it could from its verified backups; what is still missing comes back from the
+  // store through `install` (the card's own path) when the account is entitled. plugin_restore.ts decides and words it.
+
+  let restoring: Promise<void> | null = null;
+  /** The persistent "needs restoring" toast on screen and what it names (an automatic re-check does not stack it). */
+  let pendingToast: { dismiss: () => void; key: string } | null = null;
+  /** The last check stopped on sign-in: the next sign-in checks again. */
+  let restoreOnSignIn = false;
+
+  function restorePurchases(mode: "auto" | "manual"): Promise<void> {
+    restoring ??= runRestore(mode === "manual").catch(() => { /* a restore check never breaks the drawer */ }).finally(() => { restoring = null; });
+    return restoring;
+  }
+
+  function closePendingToast(): void {
+    pendingToast?.dismiss();
+    pendingToast = null;
+  }
+
+  /** The engine's reinstalls from backup, each announced once (REPAIRS_SEEN_KEY holds the newest one shown). */
+  function announceRepairs(repairs: readonly PluginRepairView[]): void {
+    let seen: string | null = null;
+    try { seen = deps.storage.getItem(REPAIRS_SEEN_KEY); } catch { /* none seen */ }
+    const fresh = unseenRepairs(repairs, seen);
+    if (!fresh.length) return;
+    const mark = newestRepairAt(fresh, seen);
+    if (mark) try { deps.storage.setItem(REPAIRS_SEEN_KEY, mark); } catch { /* at worst shown again next launch */ }
+    deps.toast({ tone: "ok", ...repairedCopy(fresh.map((r) => ({ name: restorableStoreItem(r.id)?.name ?? r.name, kind: r.kind }))), timeout: 10_000 });
+  }
+
+  function showPending(names: readonly string[], signedOut: boolean, manual: boolean, key: string): void {
+    if (!names.length) { closePendingToast(); return; }
+    if (!manual && pendingToast?.key === key) return;
+    closePendingToast();
+    const dismiss = deps.toast({
+      tone: "warn", ...pendingCopy(names, signedOut), timeout: 0,
+      actions: [
+        ...(signedOut ? [{ label: "Sign in", kind: "ok" as const, run: () => { pendingToast = null; signIn(null); } }] : []),
+        { label: "Retry", run: () => { pendingToast = null; void restorePurchases("manual"); } },
+      ],
+    });
+    pendingToast = typeof dismiss === "function" ? { dismiss, key } : null;
+  }
+
+  async function runRestore(manual: boolean): Promise<void> {
+    const first = await deps.pluginsHealth().catch(() => null);
+    if (!first) {
+      if (manual) deps.toast({ tone: "danger", title: "Purchases were not checked", desc: "The install service did not answer. Is the LUCID engine running?", timeout: 6000 });
+      return;
+    }
+    // The engine first, from its own verified backups (a pass a dead scanner interrupted runs again here).
+    const health = manual || first.items.some((i) => i.status !== "ok" && i.backup) ? (await deps.pluginsRestore().catch(() => null)) ?? first : first;
+    announceRepairs(health.repairs);
+    const broken = health.items.filter((i) => i.status !== "ok");
+    const byId = new Map(broken.map((i): [string, PluginHealthItem] => [i.id, i]));
+    const label = (id: string): string => restorableStoreItem(id)?.name ?? byId.get(id)?.name ?? id;
+    const worldIds = (ids: readonly string[]): string[] => ids.filter((id) => byId.get(id)?.kind === "world");
+    if (!broken.length) {
+      closePendingToast();
+      restoreOnSignIn = false;
+      deps.worldsPending?.([]);
+      if (root) void refresh();
+      if (manual) {
+        const n = health.items.length;
+        deps.toast({ tone: "ok", title: "Your purchases are in place", timeout: 5000, desc: n ? `All ${n} store ${n === 1 ? "item" : "items"} on this machine ${n === 1 ? "is" : "are"} installed and intact.` : "Nothing from the LUCID store is recorded on this machine yet." });
+      }
+      return;
+    }
+    deps.worldsPending?.(worldIds(broken.map((i) => i.id)));
+    const prov = deps.provider();
+    const signedIn = deps.user().signedIn;
+    const storeReachable = prov.configured() && (typeof navigator === "undefined" || navigator.onLine !== false);
+    let givenUp = new Set<string>();
+    try { givenUp = parseIdList(deps.storage.getItem(RESTORE_GIVEN_UP_KEY)); } catch { /* none */ }
+    const entitlements = new Map<string, EntitlementAnswer>();
+    if (storeReachable && signedIn) {
+      await Promise.all(broken.filter((i) => restorableStoreItem(i.id) && (manual || !givenUp.has(i.id))).map(async (i) => {
+        entitlements.set(i.id, await prov.entitlement(i.id).catch((): EntitlementAnswer => "unreachable"));
+      }));
+    }
+    const plan = planRestore(broken, { signedIn, storeReachable, entitlements, nowIso: new Date(deps.now()).toISOString(), givenUp, manual });
+    const restored: { name: string; kind: PluginKind }[] = [];
+    const failed: string[] = [];
+    for (const id of plan.install) {
+      const p = premium(id);
+      if (p && await install(p, true)) { restored.push({ name: p.name, kind: byId.get(id)?.kind ?? "world" }); givenUp.delete(id); }
+      else failed.push(id);
+    }
+    if (restored.length) deps.toast({ tone: "ok", ...restoredCopy(restored), timeout: 8000 });
+    // Told once, then left alone: only Restore purchases asks the store again about these.
+    for (const id of [...plan.notEntitled, ...plan.notInStore]) givenUp.add(id);
+    try { deps.storage.setItem(RESTORE_GIVEN_UP_KEY, JSON.stringify([...givenUp].sort())); } catch { /* this session only */ }
+    if (plan.notEntitled.length) deps.toast({ tone: "warn", ...notEntitledCopy(plan.notEntitled.map(label)), timeout: 0, actions: [{ label: "OK" }] });
+    if (plan.notInStore.length) deps.toast({ tone: "warn", ...notInStoreCopy(plan.notInStore.map(label)), timeout: 0, actions: [{ label: "OK" }] });
+    const pending = [...plan.signin, ...plan.offline, ...failed];
+    const signedOut = plan.signin.length > 0;
+    restoreOnSignIn = signedOut;
+    deps.worldsPending?.(worldIds(pending));
+    showPending(pending.map(label), signedOut, manual, `${signedOut}:${pending.join(",")}`);
+    if (root) void refresh();
   }
 
   /** ADR-0648: install a world package file (an export from another machine). The engine requires a world signed
@@ -1111,9 +1247,12 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   return {
     open,
     close,
+    restorePurchases,
     toggle(btn) { if (root) close(); else { opener = btn ?? null; open(); } },
     isOpen: () => root !== null,
     onSignedIn() {
+      // P-WORLDS.HEAL1: purchases waiting on sign-in come back from the store now.
+      if (restoreOnSignIn) { restoreOnSignIn = false; void restorePurchases("auto"); }
       const pend = pending;
       if (pend?.stage === "signin" && shouldResumeCheckout(pend, deps.now())) {
         pending = null;

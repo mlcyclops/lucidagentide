@@ -8,8 +8,9 @@ import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
 import type { GpuProbe } from "./gpu_probe.ts";
 import {
-  baseTier, capGraph, capTier, createFrameGovernor, GOVERNOR_MISS_SHARE, GOVERNOR_SETTLE_MS, GOVERNOR_SLACK, GOVERNOR_WINDOW_MS,
-  graphOpts, normalizePerfMode, pollDelay, resolveTier, stepDownTier, watchPerfTier, type PerfTier, type PerfTierWatcher,
+  baseTier, capGraph, capTier, createFrameGovernor, GOVERNOR_MISS_SHARE, GOVERNOR_MISS_WINDOWS, GOVERNOR_SETTLE_MS, GOVERNOR_SLACK,
+  GOVERNOR_STALL_MS, GOVERNOR_STEP_GAP_MS, GOVERNOR_WINDOW_MS, graphOpts, isSlowFrame, isStall, mayStepDown, normalizePerfMode, pollDelay,
+  resolveTier, stepDownTier, supportedTier, watchPerfTier, windowVerdict, type FrameGovernor, type PerfTier, type PerfTierWatcher,
 } from "./perf_tier.ts";
 import type { KVStore } from "./swr_cache.ts";
 
@@ -245,6 +246,87 @@ describe("createFrameGovernor - the 3 s frame-time check", () => {
   });
 });
 
+describe("P-VIZ.NOFLASH1 - governor hysteresis under CPU pressure", () => {
+  const BUDGET = 1000 / 60;
+  /** Feed `ms`-long frames for `forMs`; returns the time reached. */
+  const feed = (g: FrameGovernor, from: number, ms: number, forMs: number): number => {
+    let now = from;
+    while (now < from + forMs && g.verdict() === "pending") { now += ms; g.sample(now, ms, BUDGET); }
+    return now;
+  };
+
+  test("the pure thresholds", () => {
+    expect(isStall(GOVERNOR_STALL_MS)).toBe(false);
+    expect(isStall(GOVERNOR_STALL_MS + 1)).toBe(true);
+    expect(isSlowFrame(BUDGET * GOVERNOR_SLACK, BUDGET)).toBe(false);
+    expect(isSlowFrame(BUDGET * GOVERNOR_SLACK + 0.01, BUDGET)).toBe(true);
+    expect(windowVerdict(100, 90, GOVERNOR_WINDOW_MS - 1)).toBe("pending"); // not a whole window yet
+    expect(windowVerdict(9, 9, GOVERNOR_WINDOW_MS)).toBe("pending"); // too few frames to judge
+    expect(windowVerdict(100, 50, GOVERNOR_WINDOW_MS)).toBe("ok"); // exactly the share is not more than it
+    expect(windowVerdict(100, 51, GOVERNOR_WINDOW_MS)).toBe("miss");
+  });
+
+  test("a miss takes GOVERNOR_MISS_WINDOWS missed checks in a row", () => {
+    expect(GOVERNOR_MISS_WINDOWS).toBeGreaterThanOrEqual(2);
+    const g = createFrameGovernor(0);
+    let now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // one whole slow window
+    expect(g.verdict()).toBe("pending");
+    now = feed(g, now, 40, 20000);
+    expect(g.verdict()).toBe("miss");
+    expect(now).toBeGreaterThanOrEqual(GOVERNOR_SETTLE_MS + GOVERNOR_MISS_WINDOWS * GOVERNOR_WINDOW_MS);
+  });
+
+  test("a transient slow stretch (a GC burst, a window drag) is followed by a healthy check: ok, no step-down", () => {
+    const g = createFrameGovernor(0);
+    const now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40);
+    expect(g.verdict()).toBe("pending");
+    feed(g, now, BUDGET, 20000);
+    expect(g.verdict()).toBe("ok");
+  });
+
+  test("a stall restarts the check in progress", () => {
+    const g = createFrameGovernor(0);
+    const now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS / 2);
+    expect(g.stats().frames).toBeGreaterThan(0);
+    g.sample(now + 400, 400, BUDGET);
+    expect(g.stats().frames).toBe(0);
+    expect(g.verdict()).toBe("pending");
+  });
+
+  test("hold: frames right after a swap, a resize or the window coming back are not counted, and the checks start over", () => {
+    const g = createFrameGovernor(0);
+    let now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // one missed check
+    g.hold(now);
+    expect(g.stats().frames).toBe(0);
+    expect(g.sample(now + GOVERNOR_SETTLE_MS - 1, 40, BUDGET)).toBe("pending");
+    expect(g.stats().frames).toBe(0);
+    now = feed(g, now + GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // the missed count started over
+    expect(g.verdict()).toBe("pending");
+    feed(g, now, 40, 20000);
+    expect(g.verdict()).toBe("miss");
+    g.hold(now + 30000); // no effect once decided
+    expect(g.verdict()).toBe("miss");
+  });
+
+  test("supportedTier: a miss lands where the measured frame time fits, at least one step down", () => {
+    const budget = (t: PerfTier): number => (t === "reduced" ? 1000 / 30 : t === "minimal" ? 1000 / 20 : 1000 / 60);
+    expect(supportedTier("ultra", 40, budget)).toBe("full"); // full's share of 40 ms fits 60 fps
+    expect(supportedTier("ultra", 80, budget)).toBe("reduced"); // full would still miss: straight past it
+    expect(supportedTier("full", 200, budget)).toBe("minimal"); // nothing fits: the floor
+    expect(supportedTier("cinematic", 17, budget)).toBe("ultra"); // a barely missed check still steps once
+    expect(supportedTier("full", 17, budget)).toBe("reduced");
+    expect(supportedTier("reduced", 500, budget)).toBe("minimal");
+    expect(supportedTier("minimal", 500, budget)).toBe("minimal");
+  });
+
+  test("Auto steps down at most once per step gap", () => {
+    expect(GOVERNOR_STEP_GAP_MS).toBeGreaterThanOrEqual(GOVERNOR_SETTLE_MS + GOVERNOR_MISS_WINDOWS * GOVERNOR_WINDOW_MS);
+    expect(mayStepDown(1000, -Infinity)).toBe(true);
+    expect(mayStepDown(1000 + GOVERNOR_STEP_GAP_MS - 1, 1000)).toBe(false);
+    expect(mayStepDown(1000 + GOVERNOR_STEP_GAP_MS, 1000)).toBe(true);
+  });
+});
+
 describe("watchPerfTier - GPU probe and governor step-down", () => {
   const mem = (): { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } => {
     const store = new Map<string, string>();
@@ -289,6 +371,19 @@ describe("watchPerfTier - GPU probe and governor step-down", () => {
     w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); // back to auto
     expect(w.mode()).toBe("auto");
     expect(w.tier()).toBe(before); // the cap went with the user's choice
+  });
+  test("P-VIZ.NOFLASH1: stepDown(to) lands further down in one go; a `to` not below one step is one step", async () => {
+    const kv = mem();
+    const { w, ready } = watch(kv, "discrete");
+    await ready;
+    const before = w.tier();
+    if (before === "minimal" || before === "reduced") return; // nothing further down to skip to on this machine
+    expect(w.stepDown("minimal")).toBe("minimal");
+    expect(w.tier()).toBe("minimal");
+    expect(w.steppedFrom()).toBe(before);
+    w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); // back to auto, cap cleared
+    expect(w.tier()).toBe(before);
+    expect(w.stepDown(before)).toBe(stepDownTier(before)); // not below one step: one step
   });
   test("an explicit tier is never stepped down", async () => {
     const kv = mem();

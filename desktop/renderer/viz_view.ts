@@ -13,6 +13,11 @@
 // Opening never changes an agent. Closing stops every timer and watch, unsubscribes the bus and tears the
 // WebGL scene down completely (viz_scene.destroy). The rules live in viz_model.ts (pure, tested); the
 // drawing in viz_scene.ts. A deterministic DEMO feed (viz_demo.ts) runs only with ?vizDemo=1 in the URL.
+// P-VIZ.NOFLASH1: a remount (quality, theme, motion, a restored GPU context) never shows a blank frame: the scene on
+// screen stays as the `outgoing` picture (relieved to the new tier at once) above the new canvas until the new scene
+// reports its first whole frame; the Auto step-down is spaced by perf_tier.mayStepDown and lands on supportedTier. A
+// saved world not loaded yet holds the first mount (an opaque spinner on its last backdrop), so the scene never shows
+// anime first and then pops to the world.
 //
 // P-VIZ.2 (ADR-0623): the header's Auto camera checkbox (persisted in localStorage `lucid.viz.autoCamera`,
 // on by default) hands the camera to the scene's director, which follows the action. The scene unchecks it
@@ -81,7 +86,7 @@ import { popover, showToast } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
 import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridge.ts";
 import { hubLanes } from "./orbit_layout.ts";
-import { pollDelay, type PerfTierWatcher } from "./perf_tier.ts";
+import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
 import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifactPopup, type ArtifactChips } from "./viz_artifact_popup.ts"; // P-WORLDS.BUILD1 (ADR-0653)
@@ -93,7 +98,7 @@ import { mountLedger, type LedgerView } from "./viz_ledger.ts";
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
   applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
-  isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
+  isBuiltinStyle, isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
   type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
@@ -104,7 +109,7 @@ import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
 import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
 import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
 import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
 
@@ -160,6 +165,26 @@ let deps: VizDeps | null = null;
 let view: HTMLElement | null = null;
 let model: VizState | null = null;
 let scene: VizSceneHandle | null = null;
+/** P-VIZ.NOFLASH1: the scene a remount replaces. Every call goes to `scene` (the new one, rendering beneath); this one
+ *  stays on top as the picture, relieved to the new tier's lighter settings and deaf to the pointer, until the new
+ *  scene's first whole frame, then goes. Never a blank frame between them. */
+let outgoing: VizSceneHandle | null = null;
+/** P-VIZ.NOFLASH1: a lost WebGL context waits this long for the browser to restore it before the error shows. */
+const RESTORE_WAIT_MS = 5000;
+/** P-VIZ.NOFLASH1: one rebuild per loss; a loss again this soon after a restore is a crash loop, and the error shows. */
+const RESTORE_AGAIN_MS = 60_000;
+const LOST_MSG = "The graphics driver reset the 3D view. Your agents are not affected.";
+let restoreTimer = 0;
+let restoredAt = -Infinity;
+/** P-VIZ.NOFLASH1: when the governor last stepped Auto down (perf_tier.mayStepDown spaces them). */
+let lastStepAt = -Infinity;
+/** P-VIZ.NOFLASH1: the saved style is a world not loaded yet. The scene mounts once the worlds have loaded (drawn as
+ *  that world from its first frame, or anime when it turned out unavailable), never anime first and then the world;
+ *  until then the spinner, on the world's last known backdrop (BACKDROP_KEY). `openSeq` tells this open's load from
+ *  an earlier one's. */
+let styleWait = false;
+let openSeq = 0;
+const BACKDROP_KEY = "lucid.viz.backdrop.v1";
 let demo: VizDemo | null = null;
 let demoPrev = 0;
 let offBus: (() => void) | null = null;
@@ -231,6 +256,17 @@ let worlds: WorldEntry[] = [];
 let curWorld: SceneWorld | null = null;
 let worldsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 let worldsSeq = 0;
+/** P-WORLDS.HEAL1: world package ids a purchase restore is still bringing back (plugins_flyout restorePurchases). */
+let pendingRestores: ReadonlySet<string> = new Set();
+/** The installed worlds were listed at least once (before that, a saved world is not "missing", just loading). */
+let worldsListed = false;
+
+/** P-WORLDS.HEAL1: the restore flow says which worlds are still on their way back. The saved style is left alone, so
+ *  an open view re-lists the worlds and takes the saved one back the moment it is installed again. */
+export function setPendingWorldRestores(ids: readonly string[]): void {
+  pendingRestores = new Set(ids);
+  if (isOpen()) void refreshWorlds();
+}
 
 /** The style the scene draws: the saved one, or anime while a saved world is not (or no longer) usable. */
 function effStyle(): VizStyle {
@@ -260,8 +296,10 @@ function applyStyle(): void {
   paintToggles();
   paintWorldOptions();
   if (!scene || !view) return;
-  if (JSON.stringify(sceneTheme(view)) !== themeSig) { remount(); return; }
+  const theme = sceneTheme(view);
+  if (JSON.stringify(theme) !== themeSig) { remount(); return; }
   scene.setStyle(style, curWorld);
+  rememberBackdrop(theme.bg); // P-VIZ.NOFLASH1: the next open's spinner wears this world's backdrop
 }
 
 /** Pick a style (the toggle, a world in the Worlds menu, or the probe). False when it cannot be drawn now. */
@@ -292,6 +330,7 @@ async function refreshWorlds(): Promise<void> {
   });
   if (seq !== worldsSeq) return; // a newer refresh (an import) owns the list
   worlds = list;
+  worldsListed = true;
   resolveWorld();
   if (isOpen()) applyStyle();
   if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
@@ -352,8 +391,15 @@ function paintWorldsMenu(node: HTMLElement): void {
       ${e.error ? `<p class="viz-world-err" role="note">${esc(e.error)}</p>` : ""}
     </div>`;
   }).join("");
+  // P-WORLDS.HEAL1: say why the saved world is not drawn instead of silently showing Anime.
+  const saved = worldsListed ? savedWorldState(prefs.style, worlds.map((e) => e.style), pendingRestores) : null;
+  const savedNote = saved === "pending"
+    ? `<p class="viz-world-none" role="status" data-viz-world-saved="pending">Your saved world is being restored. Anime shows until it is back, then Visualize switches to it.</p>`
+    : saved === "missing"
+      ? `<p class="viz-world-none" role="note" data-viz-world-saved="missing">Your saved world is not installed here, so Anime shows. Reinstall it from the store or import its world file.</p>`
+      : "";
   root.innerHTML = `<div class="viz-vmenu-h">Worlds</div>
-    ${rows || `<p class="viz-world-none">No worlds installed yet.</p>`}
+    ${savedNote}${rows || (savedNote ? "" : `<p class="viz-world-none">No worlds installed yet.</p>`)}
     <div class="viz-world-acts">
       <button type="button" class="btn-mini orbit-btn" data-viz-world-import data-tip="${tipAttr("Import world file...", "Install a signed .lplugin.zip world file exported from another machine. Its signature and contents are checked first.")}">${icon("folder", 13)}<span>Import world file...</span></button>
       <button type="button" class="btn-mini orbit-btn" data-viz-world-store data-tip="${tipAttr("Get more worlds", "Open the Plugins store on its premium worlds.")}">${icon("plugins", 13)}<span>Get more worlds</span></button>
@@ -596,7 +642,14 @@ let headRo: ResizeObserver | null = null;
 /** Called once from app.ts with the bridge seam. */
 export function initViz(d: VizDeps): void {
   deps = d;
-  d.perf.onChange(() => { if (isOpen()) { paintQuality(); remount(); } });
+  // P-VIZ.NOFLASH1: the scene on screen takes the new tier's lighter settings at once (live, same context) while the
+  // new tier's scene builds beneath it; the swap happens on that scene's first whole frame.
+  d.perf.onChange((tier) => {
+    if (!isOpen()) return;
+    paintQuality();
+    (outgoing ?? scene)?.relieve(vizTierOpts(tier, !!motionMq?.matches));
+    remount();
+  });
 }
 
 /** True from open until close is asked (the fade-out that follows is not "open"). */
@@ -662,6 +715,14 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // P-VIZ.GPU1 (ADR-0651): the Quality mode and tier, the probed GPU, a governor step-down, and what the renderer
     // is doing (pixel ratio, MSAA, bloom, SSAO, DOF, contact shadows, the frame-time check). Read-only.
     quality: () => (deps ? { mode: deps.perf.mode(), tier: deps.perf.tier(), gpu: deps.perf.gpu(), steppedFrom: deps.perf.steppedFrom(), scene: scene?.quality() ?? null } : null),
+    // P-VIZ.NOFLASH1: a missed frame budget, through the very path the scene's governor takes (Auto only, spaced by
+    // mayStepDown; no measured frames, so one step), so demo_p_viz_noflash_1.mjs can force the step-down remount.
+    // True when the tier stepped down.
+    governorMiss: (): boolean => {
+      const before = deps?.perf.tier();
+      onFrameBudget("miss", null);
+      return deps?.perf.tier() !== before;
+    },
     // P-WORLDS.BUILD1 (ADR-0653): each node's build (the book and the scaffold drawn for it, with its chip's box)
     // and the artifact popup's state (gate verdict, iframe sandbox and src). Read-only.
     builds: () => [...builds.builds].map(([id, b]) => {
@@ -680,7 +741,12 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // setting, the flights it started and the node a flight is framing now. Read-only.
     approvals: () => (asks ? { ...asks.probe(), flyToApprovals: flyAsks, flights, flying: scene?.flying() ?? null } : null),
   };
-  void refreshWorlds(); // P-WORLDS.1: the scene starts in what it can draw now and switches once the saved world loads
+  // P-WORLDS.1: the worlds load; P-VIZ.NOFLASH1: a saved world not loaded yet holds the mount until they have (styleWait)
+  styleWait = !isBuiltinStyle(prefs.style) && !curWorld;
+  const seq = ++openSeq;
+  void refreshWorlds()
+    .catch((e: unknown) => console.warn("[viz] the installed worlds did not load", e))
+    .finally(() => { if (seq === openSeq) endStyleWait(); });
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
   ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
@@ -700,7 +766,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   paintRecs();
   headRo = new ResizeObserver(fitHead);
   headRo.observe($("[data-viz-head]", view) as HTMLElement); // fires once now, then on every width change
-  mount();
+  if (styleWait) showStarting(savedBackdrop()); else mount();
   startTimers();
   fleetBusy = false; // a reply still in flight from a previous open is dropped by its model check
   void pollFleet();
@@ -723,6 +789,9 @@ export function closeViz(): void {
   stopTimers();
   for (const w of watches.values()) w.stop();
   watches.clear();
+  window.clearTimeout(restoreTimer); restoreTimer = 0;
+  styleWait = false;
+  retireOutgoing();
   scene?.destroy(); scene = null;
   model = null; demo = null; hover = null;
   outputs.clear(); sending.clear(); lastLanes = [];
@@ -986,12 +1055,19 @@ function cycleQuality(): void {
   showToast({ title: `Quality: ${m}`, desc: m === "auto" ? `Following GPU, battery and CPU (now: ${deps.perf.tier()}). The Knowledge Graph uses the same mode.` : "The Knowledge Graph uses the same mode.", timeout: 2400 });
 }
 
-/** P-VIZ.GPU1 (ADR-0651): the scene's 3 s frame-time check missed: Auto steps down one tier (an explicit tier
- *  is the user's and stays). The tier change remounts through perf.onChange. */
-function onFrameBudget(verdict: "ok" | "miss"): void {
+/** P-VIZ.GPU1 (ADR-0651): the scene's 3 s frame-time check missed: Auto steps down (an explicit tier is the user's
+ *  and stays). The tier change remounts through perf.onChange. P-VIZ.NOFLASH1: as far as the measured frame time
+ *  says (perf_tier.supportedTier; one tier without measured frames), and at most once per mayStepDown gap. */
+function onFrameBudget(verdict: "ok" | "miss", stats: GovernorStats | null): void {
   if (verdict !== "miss" || !deps || deps.perf.mode() !== "auto") return;
-  const next = deps.perf.stepDown();
-  if (next) showToast({ title: `Quality: Auto \u00b7 ${next}`, desc: "Frames missed the budget, so Visualize stepped down one level. Pick a Quality level in View to choose your own.", timeout: 3200 });
+  const now = performance.now();
+  if (!mayStepDown(now, lastStepAt)) return; // P-VIZ.NOFLASH1: at most one step per settle and checks
+  // P-VIZ.NOFLASH1: straight to the tier the measured frame time supports (one remount, not one per tier)
+  const to = stats?.frames ? supportedTier(deps.perf.tier(), stats.meanMs, (t) => 1000 / vizTierOpts(t, false).fps) : undefined;
+  const next = deps.perf.stepDown(to);
+  if (!next) return;
+  lastStepAt = now;
+  showToast({ title: `Quality: Auto \u00b7 ${next}`, desc: "Frames missed the budget, so Visualize stepped down one level. Pick a Quality level in View to choose your own.", timeout: 3200 });
 }
 
 // ---------------------------------------------------------------------------------------------- scene
@@ -1030,43 +1106,138 @@ function luminance(hex: string): number {
   return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
 }
 
-function mount(): void {
+/** Mount a scene into the stage. P-VIZ.NOFLASH1: with an `outgoing` scene up, the new canvas goes in beneath it
+ *  (mountVizScene prepends; the stage paints later siblings on top) and the spinner stays hidden; either way the
+ *  spinner and the outgoing picture go on the new scene's first whole frame (its onFirstFrame, in the task that drew
+ *  it), not on a guess. `failMsg` replaces the could-not-start text (a rebuild after a lost context keeps its own). */
+function mount(failMsg: string | null = null): void {
   if (!view || !deps) return;
   const stage = $("[data-viz-stage]", view) as HTMLElement;
   const loading = $("[data-viz-loading]", view) as HTMLElement;
-  const err = $("[data-viz-error]", view) as HTMLElement;
-  loading.hidden = false; err.hidden = true;
   const theme = sceneTheme(view); // P-WORLDS.1: a world's sky decides light
   themeSig = JSON.stringify(theme);
+  if (outgoing) ($("[data-viz-error]", view) as HTMLElement).hidden = true;
+  else showStarting(theme.bg);
+  let s: VizSceneHandle;
   try {
-    scene = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
+    s = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
   } catch (e) {
     scene = null;
+    retireOutgoing();
     loading.hidden = true;
-    showError(`The 3D view could not start on this machine: ${e instanceof Error ? e.message : String(e)}. Your agents are not affected.`);
+    showError(failMsg ?? `The 3D view could not start on this machine: ${e instanceof Error ? e.message : String(e)}. Your agents are not affected.`);
     return;
   }
-  scene.onHover(onHover);
-  scene.onPick(onPick);
-  scene.onDoublePick(onDoublePick);
-  scene.onUserCamera(onUserCamera);
-  scene.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
-  scene.setStyle(effStyle(), curWorld);
+  scene = s;
+  s.onHover(onHover);
+  s.onPick(onPick);
+  s.onDoublePick(onDoublePick);
+  s.onUserCamera(onUserCamera);
+  s.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
+  s.setStyle(effStyle(), curWorld);
   tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
-  scene.onLost(() => { scene?.destroy(); scene = null; showError("The graphics driver reset the 3D view. Your agents are not affected."); });
-  scene.onFrameBudget(onFrameBudget); // P-VIZ.GPU1 (ADR-0651): the 3 s frame-time check
+  s.onLost(() => onSceneLost(s));
+  s.onRestored(() => onSceneRestored(s));
+  s.onFrameBudget((v, st) => { if (s === scene) onFrameBudget(v, st); }); // P-VIZ.GPU1 (ADR-0651): the 3 s frame-time check
   syncScene();
   scaffoldSig = ""; syncScaffolds(); // P-WORLDS.BUILD1 (ADR-0653): every build stands again on the new scene
-  requestAnimationFrame(() => requestAnimationFrame(() => { loading.hidden = true; }));
-  scene.canvas.focus({ preventScroll: true });
+  s.onFirstFrame(() => {
+    if (s !== scene) return;
+    loading.hidden = true;
+    retireOutgoing();
+    rememberBackdrop(theme.bg);
+  });
+  s.canvas.focus({ preventScroll: true });
 }
 
+/** P-VIZ.NOFLASH1: the spinner, opaque on `backdrop` (the scene's or the saved world's backdrop color; null: the
+ *  theme's --bg-0) with text that reads on it, and no error. */
+function showStarting(backdrop: string | null): void {
+  if (!view) return;
+  const stage = $("[data-viz-stage]", view) as HTMLElement;
+  const loading = $("[data-viz-loading]", view) as HTMLElement;
+  if (backdrop) stage.style.setProperty("--viz-backdrop", backdrop); else stage.style.removeProperty("--viz-backdrop");
+  loading.classList.toggle("viz-state-light", !!backdrop && luminance(backdrop) > 0.5);
+  loading.hidden = false;
+  ($("[data-viz-error]", view) as HTMLElement).hidden = true;
+}
+
+/** P-VIZ.NOFLASH1: the worlds have loaded (or failed to): the saved world is applied or known unavailable, so the
+ *  scene mounts now, drawing it (or anime) from its first frame. */
+function endStyleWait(): void {
+  if (!styleWait) return;
+  styleWait = false;
+  if (isOpen() && !scene) mount();
+}
+
+/** P-VIZ.NOFLASH1: the saved style's backdrop color from the last time it was drawn, else null. */
+function savedBackdrop(): string | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(BACKDROP_KEY) ?? "null") as { style?: unknown; bg?: unknown } | null;
+    return v && v.style === prefs.style && typeof v.bg === "string" && /^#[0-9a-f]{6}$/i.test(v.bg) ? v.bg : null;
+  } catch { return null; }
+}
+
+/** P-VIZ.NOFLASH1: keep the drawn world's backdrop color for the next open's spinner (built-in styles need none). */
+function rememberBackdrop(bg: string): void {
+  if (!curWorld) return;
+  try { localStorage.setItem(BACKDROP_KEY, JSON.stringify({ style: prefs.style, bg })); } catch { /* the next open starts on the theme's backdrop */ }
+}
+
+/** Rebuild the scene (a tier, theme or motion change, Try again). P-VIZ.NOFLASH1: the scene on screen becomes the
+ *  `outgoing` picture until its replacement has drawn; when a replacement was still building, that one (never shown)
+ *  goes and the picture on screen stays. */
 function remount(): void {
-  if (!isOpen()) return;
+  replaceScene(null);
+}
+
+function replaceScene(failMsg: string | null): void {
+  if (!isOpen() || styleWait) return; // still waiting for the saved world: that mount takes the current tier and theme
   if (rec) stopRec("quality");
   hideTip(); // the node panel stays: it finds its node again on the new scene
+  window.clearTimeout(restoreTimer); restoreTimer = 0;
+  if (outgoing) scene?.destroy();
+  else if (scene) { outgoing = scene; outgoing.canvas.classList.add("viz-cv-out"); }
+  scene = null;
+  mount(failMsg);
+}
+
+/** P-VIZ.NOFLASH1: drop the outgoing picture (its replacement drew, failed, or the view closes). */
+function retireOutgoing(): void {
+  outgoing?.destroy();
+  outgoing = null;
+}
+
+/** P-VIZ.NOFLASH1: a scene's WebGL context was lost. The outgoing picture simply goes (the spinner covers until its
+ *  replacement draws). The live scene waits RESTORE_WAIT_MS for the browser to restore the context and is rebuilt
+ *  once on it; no restore, or a loss again within RESTORE_AGAIN_MS of a restore, shows the error. */
+function onSceneLost(s: VizSceneHandle): void {
+  if (!view) return;
+  const loading = $("[data-viz-loading]", view) as HTMLElement;
+  if (s === outgoing) { retireOutgoing(); loading.hidden = false; return; }
+  if (s !== scene) return;
+  if (performance.now() - restoredAt < RESTORE_AGAIN_MS) { failLost(); return; }
+  if (!outgoing) loading.hidden = false; // the lost canvas shows nothing: the spinner, not a blank stage
+  window.clearTimeout(restoreTimer);
+  restoreTimer = window.setTimeout(() => { restoreTimer = 0; if (scene === s) failLost(); }, RESTORE_WAIT_MS);
+}
+
+/** P-VIZ.NOFLASH1: the browser restored the lost context: rebuild the scene once (its GPU resources are gone). The
+ *  lost scene never becomes the outgoing picture (it has none); a picture already up stays until the rebuild draws. */
+function onSceneRestored(s: VizSceneHandle): void {
+  if (s !== scene || !restoreTimer) return;
+  window.clearTimeout(restoreTimer); restoreTimer = 0;
+  restoredAt = performance.now();
+  if (!outgoing) { s.destroy(); scene = null; }
+  replaceScene(LOST_MSG);
+}
+
+function failLost(): void {
+  window.clearTimeout(restoreTimer); restoreTimer = 0;
   scene?.destroy(); scene = null;
-  mount();
+  retireOutgoing();
+  if (view) ($("[data-viz-loading]", view) as HTMLElement).hidden = true;
+  showError(LOST_MSG);
 }
 
 function showError(msg: string): void {

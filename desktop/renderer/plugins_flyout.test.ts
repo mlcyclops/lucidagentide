@@ -47,6 +47,14 @@ describe("the INSTALLED tab", () => {
     expect(html).toContain("data-plg-file");
   });
 
+  // P-WORLDS.HEAL1: the Installed tab's header offers Restore purchases, even with nothing installed (that is when it
+  // matters most: the packages went missing).
+  test("Restore purchases sits in the Installed header when offered, also with nothing installed", () => {
+    expect(installedBodyHtml([], "", new Map(), true, false, true)).toContain("data-plg-restore");
+    expect(installedBodyHtml([row({})], "", new Map(), false, false, true)).toContain(">Restore purchases</button>");
+    expect(installedBodyHtml([], "", new Map(), true)).not.toContain("data-plg-restore");
+  });
+
   test("installing from a file is offered only where a native picker exists; search narrows the rows", () => {
     expect(installedBodyHtml([], "", new Map(), false)).not.toContain("data-plg-file");
     expect(installedBodyHtml([], "", new Map(), true)).toContain("No plugins are installed yet.");

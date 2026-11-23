@@ -16,6 +16,9 @@
 //                    localStorage-persisted user mode - the pure core stays headlessly testable.
 //   - P-VIZ.GPU1 (ADR-0651): the GPU class (gpu_probe.ts) joins the signals, `ultra` and `cinematic` sit above
 //     `full`, and createFrameGovernor is the 3 s frame-time check Visualize uses to step Auto down one tier.
+//   - P-VIZ.NOFLASH1: the governor has hysteresis (GOVERNOR_MISS_WINDOWS missed checks in a row, a stall restarts the
+//     check, hold() re-settles after a swap, a resize or a hidden window), mayStepDown spaces step-downs apart, and
+//     supportedTier lands a miss on the tier the measured frame time supports (stepDown(to)) in one remount.
 
 import type { PersonalGraphData } from "./bridge.ts";
 import { probeGpu, type GpuClass, type GpuProbe } from "./gpu_probe.ts";
@@ -88,34 +91,95 @@ export const GOVERNOR_WINDOW_MS = 3000;
 export const GOVERNOR_SLACK = 1.75;
 /** The check misses when more than this share of its frames missed. */
 export const GOVERNOR_MISS_SHARE = 0.5;
-/** Gaps longer than this are a stall (tab switch, a dialog, a GC pause), not a frame rate: not counted. */
-const GOVERNOR_STALL_MS = 250;
+/** Gaps longer than this are a stall (tab switch, a dialog, a GC pause), not a frame rate: not counted, and the check
+ *  in progress starts over (P-VIZ.NOFLASH1: the slow frames around a stall are not the tier's either). */
+export const GOVERNOR_STALL_MS = 250;
 const GOVERNOR_MIN_FRAMES = 10;
+/** P-VIZ.NOFLASH1: hysteresis. A miss takes this many missed checks in a row, so one transient stretch of slow frames
+ *  (a GC burst, a window drag, another app's spike) never steps the tier down on its own; one passed check is "ok". */
+export const GOVERNOR_MISS_WINDOWS = 2;
+/** P-VIZ.NOFLASH1: Auto steps down at most once in this long: the next scene's settle plus the checks a miss takes. */
+export const GOVERNOR_STEP_GAP_MS = GOVERNOR_SETTLE_MS + GOVERNOR_MISS_WINDOWS * GOVERNOR_WINDOW_MS;
 
 export type GovernorVerdict = "pending" | "ok" | "miss";
 export interface GovernorStats { verdict: GovernorVerdict; frames: number; meanMs: number; slowShare: number; budgetMs: number }
+
+/** A gap too long to be a frame rate (see GOVERNOR_STALL_MS). */
+export function isStall(frameMs: number): boolean {
+  return frameMs > GOVERNOR_STALL_MS;
+}
+
+/** A frame that missed its budget, past vsync quantization (see GOVERNOR_SLACK). */
+export function isSlowFrame(frameMs: number, budgetMs: number): boolean {
+  return frameMs > budgetMs * GOVERNOR_SLACK;
+}
+
+/** One check's result: "pending" until it measured GOVERNOR_WINDOW_MS over at least GOVERNOR_MIN_FRAMES frames, then
+ *  "miss" when more than GOVERNOR_MISS_SHARE of them were slow, else "ok". */
+export function windowVerdict(frames: number, slow: number, sumMs: number): GovernorVerdict {
+  if (sumMs < GOVERNOR_WINDOW_MS || frames < GOVERNOR_MIN_FRAMES) return "pending";
+  return slow / frames > GOVERNOR_MISS_SHARE ? "miss" : "ok";
+}
+
+/** P-VIZ.NOFLASH1: the rendering work of a Visualize frame per tier, full = 1 (particles, post passes, pixel ratio).
+ *  Rough by design: it only decides how far one missed check steps down. */
+const TIER_WORK: Record<PerfTier, number> = { minimal: 0.3, reduced: 0.55, full: 1, ultra: 1.7, cinematic: 2.4 };
+
+/** P-VIZ.NOFLASH1: where a miss lands: the highest tier below `current` whose frames (the measured mean, scaled by
+ *  its share of the work) fit its own budget past GOVERNOR_SLACK; minimal when none does, and always at least one
+ *  step. Under sustained load this goes straight there, instead of one remount, settle and two checks per tier. */
+export function supportedTier(current: PerfTier, meanMs: number, budgetMs: (t: PerfTier) => number): PerfTier {
+  for (let i = PERF_TIERS.indexOf(current) - 1; i > 0; i--) {
+    const t = PERF_TIERS[i]!;
+    if (!isSlowFrame((meanMs * TIER_WORK[t]) / TIER_WORK[current], budgetMs(t))) return t;
+  }
+  return "minimal";
+}
+
+/** P-VIZ.NOFLASH1: whether Auto may step down at `now`, its last step-down at `lastStepAt` (-Infinity: none yet). */
+export function mayStepDown(now: number, lastStepAt: number): boolean {
+  return now - lastStepAt >= GOVERNOR_STEP_GAP_MS;
+}
 
 /** Measures delivered frame intervals while the scene is busy and gives one verdict per mount. Counters only:
  *  safe to call every frame. The caller decides what a miss does (Visualize steps Auto down one tier). */
 export interface FrameGovernor {
   /** One busy frame: `frameMs` since the previous busy frame, `budgetMs` the interval the loop asked for. */
   sample(now: number, frameMs: number, budgetMs: number): GovernorVerdict;
+  /** P-VIZ.NOFLASH1: the frames from here are not representative (the scene was just swapped in, the window came back
+ *  into view, the canvas was resized): nothing before `now` + GOVERNOR_SETTLE_MS counts, and the checks (with their
+ *  missed count) start over. No effect once there is a verdict. */
+  hold(now: number): void;
   verdict(): GovernorVerdict;
   stats(): GovernorStats;
 }
 
 export function createFrameGovernor(startedAt: number): FrameGovernor {
   let verdict: GovernorVerdict = "pending";
-  let frames = 0, slow = 0, sumMs = 0, budget = 0;
+  let settleUntil = startedAt + GOVERNOR_SETTLE_MS;
+  let frames = 0, slow = 0, sumMs = 0, budget = 0, missed = 0;
+  const restart = (): void => { frames = 0; slow = 0; sumMs = 0; };
   return {
     sample(now, frameMs, budgetMs) {
-      if (verdict !== "pending" || now - startedAt < GOVERNOR_SETTLE_MS || frameMs <= 0 || frameMs > GOVERNOR_STALL_MS) return verdict;
+      if (verdict !== "pending" || now < settleUntil || frameMs <= 0) return verdict;
+      if (isStall(frameMs)) { restart(); return verdict; }
       frames++;
       sumMs += frameMs;
       budget = budgetMs;
-      if (frameMs > budgetMs * GOVERNOR_SLACK) slow++;
-      if (sumMs >= GOVERNOR_WINDOW_MS && frames >= GOVERNOR_MIN_FRAMES) verdict = slow / frames > GOVERNOR_MISS_SHARE ? "miss" : "ok";
+      if (isSlowFrame(frameMs, budgetMs)) slow++;
+      const w = windowVerdict(frames, slow, sumMs);
+      if (w === "ok") verdict = "ok";
+      else if (w === "miss") {
+        if (++missed >= GOVERNOR_MISS_WINDOWS) verdict = "miss";
+        else restart();
+      }
       return verdict;
+    },
+    hold(now) {
+      if (verdict !== "pending") return;
+      settleUntil = Math.max(settleUntil, now + GOVERNOR_SETTLE_MS);
+      missed = 0;
+      restart();
     },
     verdict: () => verdict,
     stats: () => ({ verdict, frames, meanMs: frames ? sumMs / frames : 0, slowShare: frames ? slow / frames : 0, budgetMs: budget }),
@@ -184,8 +248,9 @@ export interface PerfTierWatcher {
   gpu(): GpuProbe | null;
   /** P-VIZ.GPU1: the frame-time governor missed its budget. Under Auto, cap the tier one below the current one for
    *  the rest of the session (or until the user picks a mode) and notify; an explicit mode is never touched.
-   *  Returns the new tier, or null when nothing changed. */
-  stepDown(): PerfTier | null;
+   *  Returns the new tier, or null when nothing changed. P-VIZ.NOFLASH1: `to` (supportedTier) lands further down in
+   *  one go; a `to` that is not below the next tier down is ignored (one step). */
+  stepDown(to?: PerfTier): PerfTier | null;
   /** P-VIZ.GPU1: the tier the governor stepped Auto down from (null: no step-down). */
   steppedFrom(): PerfTier | null;
 }
@@ -270,9 +335,10 @@ export function watchPerfTier(kv?: KVStore | null, gpuProbe: () => Promise<GpuPr
       subs.push(cb);
     },
     gpu: () => gpuInfo,
-    stepDown() {
+    stepDown(to) {
       if (mode !== "auto") return null;
-      const next = stepDownTier(cur);
+      const one = stepDownTier(cur);
+      const next = to !== undefined && PERF_TIERS.indexOf(to) < PERF_TIERS.indexOf(one) ? to : one;
       if (next === cur) return null;
       cap = next;
       recompute();

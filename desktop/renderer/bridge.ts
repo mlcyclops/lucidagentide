@@ -650,6 +650,15 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** P-WORLDS.HEAL1: one purchase the engine's install ledger records, against the disk (desktop/plugins/restore.ts
+ *  HealthItem). `backup`: the engine still has a verified-at-install backup to restore it from. */
+export interface PluginHealthItem {
+  id: string; name: string; kind: PluginKind; version: string; status: "ok" | "missing" | "broken";
+  problem?: string; backup: boolean; restoreProblem?: string;
+}
+/** One reinstall the engine made from a backup since it started (shown once: "Repaired N worlds after an update"). */
+export interface PluginRepairView { id: string; name: string; kind: PluginKind; version: string; at: string }
+export interface PluginHealthView { items: PluginHealthItem[]; needsRestore: string[]; repairs: PluginRepairView[] }
 /** ADR-0542: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
 export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
@@ -1344,6 +1353,11 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** P-WORLDS.HEAL1: every recorded purchase against the disk (waits for the engine's startup self-heal). */
+  pluginsHealth(): Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the engine restores one id (or, with none, every recorded one) from its backup, through every
+   *  install gate, then answers the health report. */
+  pluginsRestore(id?: string): Promise<PluginHealthView | null>;
   /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
   worldsList(): Promise<InstalledWorld[]>;
   /** Install a SIGNED world package file the user picked (an export from another machine). */
@@ -2301,6 +2315,8 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  pluginsHealth: () => getData("/api/plugins/health"),
+  pluginsRestore: (id) => post("/api/plugins/restore", id ? { id } : {}),
   worldsList: async () => {
     const d: unknown = await getData("/api/worlds");
     return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];

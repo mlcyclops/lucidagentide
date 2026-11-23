@@ -61,6 +61,11 @@
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
 // nothing moves and parks entirely when hidden or under reduced motion with nothing changing. destroy()
 // disposes every geometry, material, texture, render target, figure, the controls and the WebGL context.
+// P-VIZ.NOFLASH1: a cleared drawing buffer never reaches the screen. onFirstFrame tells the view when the first whole
+// frame rendered (it swaps the canvas in then, never on a guess); a resize sizes the buffer and draws in one task (a
+// burst is coalesced into the next frame); relieve() takes a lighter tier's cadence, pixel ratio and post passes live;
+// a frame that throws puts the sky and every hidden object back and the loop goes on; a lost context stays parked and
+// onRestored lets the view rebuild once. The canvas's CSS background is the backdrop's base color.
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -203,6 +208,17 @@ export interface VizSceneHandle {
    *  delivered to onPick at once (no double click wait). */
   setThrowArmed(cursor: string | null): void;
   onLost(cb: () => void): void;
+  /** P-VIZ.NOFLASH1: the browser gave the lost WebGL context back. The scene stays parked (its GPU resources are
+   *  gone); the view rebuilds it once, off screen. */
+  onRestored(cb: () => void): void;
+  /** P-VIZ.NOFLASH1: `cb` runs once, right after the first frame rendered whole, in the task that drew it (a caller
+   *  that swaps this canvas in shows that frame, never an empty buffer). At once when that frame already happened. */
+  onFirstFrame(cb: () => void): void;
+  /** P-VIZ.NOFLASH1: take on, live and without a new WebGL context, what a lighter tier changes that a running
+   *  renderer can: the frame cadence, the pixel ratio cap (redrawn in the same task) and the post passes (bloom,
+   *  SSAO, depth of field). Never adds work. The view calls it on the scene that stays on screen while the new
+   *  tier's scene builds beneath it. */
+  relieve(next: VizTierOpts): void;
   /** P-VIZ.GPU1 (ADR-0651): the frame-time governor's one verdict for this mount (3 s of busy frames after the
    *  scene settles). The view steps Auto down one tier on "miss"; an explicit tier is never changed. */
   onFrameBudget(cb: (verdict: "ok" | "miss", stats: GovernorStats) => void): void;
@@ -321,6 +337,9 @@ const GRAB_PX = 4;
 const DOUBLE_MS = 260;
 /** P-VIZ.4: full-cadence frames after a reaction; covers the longest one (the office outburst plus its glare, 3.45 s). */
 const REACT_MS = 3600;
+/** P-VIZ.NOFLASH1: within this long (ms) of a resize drawn at once, further resizes wait for the next frame (a window
+ *  drag fires the ResizeObserver every frame; one extra synchronous draw per burst, not one per callback). */
+const RESIZE_COALESCE_MS = 50;
 
 const BOLT_PTS = 33;
 const BRANCH_PTS = 9;
@@ -382,10 +401,14 @@ interface Burst { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; start: number; du
 
 /** Mount the scene into `host`. Throws when WebGL cannot start (the view shows that honestly). */
 export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTheme, initialView: VizViewMode, initialAuto: boolean): VizSceneHandle {
-  const o = tier;
+  const o: VizTierOpts = { ...tier }; // P-VIZ.NOFLASH1: relieve() lowers fps and dprCap on this copy, never the caller's
   const renderer = new THREE.WebGLRenderer({ antialias: o.antialias, alpha: false, powerPreference: "high-performance" });
   const canvas = renderer.domElement;
   canvas.className = "viz-cv";
+  // P-VIZ.NOFLASH1: a canvas with nothing drawn yet (a fresh mount, a lost context) shows its CSS background: the
+  // backdrop's base color (the theme's, a world's fog color; paintWorldLook keeps it current), never plain black.
+  canvas.style.backgroundColor = theme.bg;
+  renderer.setClearColor(theme.bg);
   canvas.setAttribute("aria-label", "Agent visualization. Drag to move the view, scroll to zoom, click a node for its panel.");
   canvas.tabIndex = 0;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, o.dprCap));
@@ -495,12 +518,19 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let bokeh: BokehPass | null = null;
   let bokehFocus: THREE.IUniform<number> | null = null;
   const dofHooks: HookPass[] = [];
+  const ssaoHooks: HookPass[] = []; // P-VIZ.NOFLASH1: relieve() turns them off with the SSAO pass
   /** What an override render (SSAO's normals, the DOF depth) must not see: points, lines, see-through meshes (the
    *  glass, world FX), the sky, and for SSAO the label sprites (their quads would cast AO halos). Restored right
    *  after; the array is reused, so the hooks allocate nothing per frame. */
   const overrideHidden: THREE.Object3D[] = [];
   let hideSprites = false;
   let hiddenBg: THREE.Scene["background"] = null;
+  /** P-VIZ.NOFLASH1: an override is in effect (hidden objects and the sky are out until restoreOverride). */
+  let overrideOn = false;
+  /** P-VIZ.NOFLASH1: relieve() turned depth of field off for good (aimDof must not turn it back on), or every post
+   *  pass (the frame renders straight to the canvas, like a scene built without a composer). */
+  let dofOff = false;
+  let postOff = false;
   const hideForOverride = (x: THREE.Object3D): void => {
     if (!x.visible) return;
     const m = (x as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
@@ -508,9 +538,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (hide) { x.visible = false; overrideHidden.push(x); }
   };
   const hideOverride = (sprites: boolean): void => {
+    if (overrideOn) restoreOverride(); // never stack two: the first one's sky would be lost
     hideSprites = sprites;
     hiddenBg = scene.background;
     scene.background = null;
+    overrideOn = true;
     scene.traverse(hideForOverride);
   };
   const restoreOverride = (): void => {
@@ -518,6 +550,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     overrideHidden.length = 0;
     scene.background = hiddenBg;
     hiddenBg = null;
+    overrideOn = false;
   };
   if (bloomOn || o.ssao || o.dof) {
     composer = new EffectComposer(renderer, o.msaa ? new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: o.msaa }) : undefined);
@@ -528,9 +561,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       ssao.kernelRadius = 0.35; // world units: contact-scale occlusion (feet on a stage, a figure at a desk)
       ssao.minDistance = 0.00002; // linear depth over near..far (0.05..500): about 1 cm to 1 m
       ssao.maxDistance = 0.002;
-      composer.addPass(new HookPass(() => hideOverride(true)));
+      ssaoHooks.push(new HookPass(() => hideOverride(true)), new HookPass(restoreOverride));
+      composer.addPass(ssaoHooks[0]!);
       composer.addPass(ssao);
-      composer.addPass(new HookPass(restoreOverride));
+      composer.addPass(ssaoHooks[1]!);
     }
     if (bloomOn) {
       bloom = theme.light
@@ -552,7 +586,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** P-VIZ.GPU1: depth of field follows the auto camera only (a user's own camera stays sharp everywhere). */
   function aimDof(): void {
     if (!bokeh || !bokehFocus) return;
-    const on = auto && mode === "3d" && nodes.size > 0;
+    const on = !dofOff && auto && mode === "3d" && nodes.size > 0;
     bokeh.enabled = on;
     for (const h of dofHooks) h.enabled = on;
     if (on) bokehFocus.value = persp.position.distanceTo(controls.target);
@@ -659,6 +693,16 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let pickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let doublePickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let lostCb: (() => void) | null = null;
+  /** P-VIZ.NOFLASH1: the context is lost (nothing draws until the view rebuilds), its restore callback, whether a
+   *  frame has rendered whole (and who waits for the first), a resize the next frame applies before it draws, the
+   *  last resize drawn at once, and whether a failed frame was already reported. */
+  let lost = false;
+  let restoredCb: (() => void) | null = null;
+  let drawn = false;
+  let firstFrameCb: (() => void) | null = null;
+  let sizeDirty = false;
+  let sizedAt = -Infinity;
+  let failReported = false;
   let userCamCb: (() => void) | null = null;
   let pointer: { x: number; y: number; dirty: boolean } | null = null;
   let lastHitKey = "";
@@ -1296,6 +1340,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       chargeWorld.set(env.chargeColor);
     }
     scene.background = bgTex;
+    // P-VIZ.NOFLASH1: an undrawn canvas shows the sky's base color (the fog's, as sceneTheme picks it), not the last world's
+    const base = env ? env.fog.color : theme.bg;
+    canvas.style.backgroundColor = base;
+    renderer.setClearColor(base);
     for (const ed of edges.values()) { edgeColors(ed); ed.conduit.set(ed.intensity, ed.frozen, ed.dead, ed.color, ed.colorTo); }
   }
 
@@ -1687,10 +1735,21 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     fx.mat.uniforms.uOrtho!.value = isOrtho ? 1 : 0;
   }
 
-  function resize(): void {
+  /** The drawing buffer no longer matches the host's size or the pixel ratio the tier allows on this display. */
+  function sizeStale(): boolean {
     const w = host.clientWidth, h = host.clientHeight;
-    if (!w || !h || (w === W && h === H)) return;
+    return !!w && !!h && (w !== W || h !== H || renderer.getPixelRatio() !== Math.min(window.devicePixelRatio || 1, o.dprCap));
+  }
+
+  /** Size the drawing buffer (and every post pass) to the host. setSize and setPixelRatio CLEAR the buffer, so a
+   *  caller with a picture on screen draws right after, in the same task (P-VIZ.NOFLASH1). */
+  function applySize(): void {
+    sizeDirty = false;
+    const w = host.clientWidth, h = host.clientHeight;
+    if (!w || !h) return;
     W = w; H = h;
+    const r = Math.min(window.devicePixelRatio || 1, o.dprCap);
+    if (renderer.getPixelRatio() !== r) renderer.setPixelRatio(r);
     renderer.setSize(W, H, false);
     persp.aspect = W / H;
     persp.updateProjectionMatrix();
@@ -1700,7 +1759,40 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       composer.setSize(W, H);
       bloom?.resolution.set(W * renderer.getPixelRatio(), H * renderer.getPixelRatio());
     }
-    kick();
+  }
+
+  /** The ResizeObserver (and relieve's new pixel ratio). P-VIZ.NOFLASH1: a cleared buffer must never reach the
+   *  screen. Before the first frame nothing is on screen: size now, the first frame draws. With a picture up, the
+   *  first resize of a burst sizes and draws at once, in this task; the rest of the burst (and any resize while a
+   *  frame runs, the loop is parked or hidden, or the context is lost) is coalesced into the next frame, which sizes
+   *  right before it draws. Until then the browser stretches the last picture: never cleared, never black. */
+  function resize(): void {
+    if (!sizeStale()) return;
+    const now = performance.now();
+    governor.hold(now); // every target is reallocated: the frames right after are not the tier's
+    if (!drawn) { applySize(); kick(); return; }
+    if (inFrame || stopped || !visible || lost || now - sizedAt < RESIZE_COALESCE_MS) { sizeDirty = true; kick(); return; }
+    sizedAt = now;
+    applySize();
+    drawNow(now);
+  }
+
+  /** P-VIZ.NOFLASH1: render one frame right now, outside the loop (after a resize cleared the buffer). The loop's
+   *  own cadence is untouched. */
+  function drawNow(t: number): void {
+    if (inFrame) { wanted = true; return; }
+    inFrame = true;
+    try { render(t); } catch (e) { frameFailed(e); } finally { inFrame = false; }
+  }
+
+  /** P-VIZ.NOFLASH1: a frame threw (a pass, a world's update, a driver error). The sky and every hidden object are
+   *  back (render's finally), the renderer draws to the screen again, and the loop goes on; reported once. */
+  function frameFailed(e: unknown): void {
+    if (overrideOn) restoreOverride();
+    renderer.setRenderTarget(null);
+    if (failReported) return;
+    failReported = true;
+    console.warn("[viz] a frame failed to render; the view keeps drawing", e);
   }
 
   // ------------------------------------------------------------------ hover + pick + taking the camera
@@ -1769,8 +1861,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   canvas.addEventListener("pointerdown", onDown);
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("wheel", onWheel, { passive: true });
-  const onLostCtx = (e: Event): void => { e.preventDefault(); park(); lostCb?.(); };
+  // preventDefault lets the browser restore the context; P-VIZ.NOFLASH1: nothing draws on it until the view rebuilds.
+  const onLostCtx = (e: Event): void => { e.preventDefault(); lost = true; park(); lostCb?.(); };
+  const onRestoredCtx = (): void => { if (!stopped) restoredCb?.(); };
   canvas.addEventListener("webglcontextlost", onLostCtx);
+  canvas.addEventListener("webglcontextrestored", onRestoredCtx);
 
   // ------------------------------------------------------------------ the loop
   let busyNodes = false, busyCam = false;
@@ -1799,38 +1894,52 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     hoverNow();
     aimLights();
     // No bloom in 2D: the flat map is cel-shaded figures on tiles and renders plain.
-    if (composer && renderPass && mode === "3d") { renderPass.camera = camera; aimDof(); composer.render(dt); }
-    else renderer.render(scene, camera);
+    if (composer && renderPass && mode === "3d" && !postOff) {
+      renderPass.camera = camera;
+      aimDof();
+      // P-VIZ.NOFLASH1: a pass that throws between an override's hide and restore hooks must not leave the sky (and
+      // every hidden object) out for good: that is a blank background on every later frame.
+      try { composer.render(dt); } finally { if (overrideOn) restoreOverride(); }
+    } else renderer.render(scene, camera);
   }
 
   /** One loop chain only: a kick() from inside a frame (controls damping, a fit) sets `wanted` and the frame
    *  continues, instead of starting a second chain. */
   function frame(t: number): void {
     raf = 0;
-    if (stopped || !visible) return;
+    if (stopped || !visible || lost) return;
     const busy = busyFlow || busyNodes || busyCam || t < effectsUntil || interacting;
     let interval = frameInterval(o, busy, recording);
     if (interval === null && (t < effectsUntil || interacting || busyCam)) interval = 1000 / IDLE_FPS; // color transitions and a snap only
-    if (interval !== null && t - lastFrame < interval - 1.5) { raf = requestAnimationFrame(frame); return; }
+    // P-VIZ.NOFLASH1: a coalesced resize draws now (the browser is stretching the last picture until it does)
+    if (!sizeDirty && interval !== null && t - lastFrame < interval - 1.5) { raf = requestAnimationFrame(frame); return; }
     // P-VIZ.GPU1 (ADR-0651): the frame-time governor measures busy frames that follow a busy frame (the loop asked
     // for the tier's cadence both times); idle cadence, a fresh chain after a kick and reduced motion are not counted.
-    if (busy && governBusy && interval !== null && lastFrame > 0 && governor.verdict() === "pending") {
+    // P-VIZ.NOFLASH1: nor a hidden document (the frames that slip through while it hides are not the tier's).
+    if (busy && governBusy && interval !== null && lastFrame > 0 && governor.verdict() === "pending" && !document.hidden) {
       const v = governor.sample(t, t - lastFrame, interval);
       // after this frame: a step-down remounts, which must not destroy the scene inside its own frame
       if (v !== "pending") window.setTimeout(() => { if (!stopped) budgetCb?.(v, governor.stats()); }, 0);
     }
     governBusy = busy;
     lastFrame = t;
+    if (sizeDirty) applySize(); // P-VIZ.NOFLASH1: setSize clears the buffer: only right before a draw
     inFrame = true; wanted = false;
-    try { render(t); } finally { inFrame = false; }
+    let ok = false;
+    // P-VIZ.NOFLASH1: a frame that throws is reported once and the loop goes on (before, the exception left the
+    // rAF callback and the view froze on whatever was last presented).
+    try { render(t); ok = true; } catch (e) { frameFailed(e); } finally { inFrame = false; }
+    const first = ok && !drawn;
+    if (first) { drawn = true; governor.hold(t); } // the frames right after a mount or swap are not the tier's
     const after = busyFlow || busyNodes || busyCam || t < effectsUntil || interacting;
     if (stopped || !visible) return;
-    if (wanted || frameInterval(o, after, recording) !== null || t < effectsUntil || interacting || busyCam) raf = requestAnimationFrame(frame);
+    if (wanted || sizeDirty || frameInterval(o, after, recording) !== null || t < effectsUntil || interacting || busyCam) raf = requestAnimationFrame(frame);
+    if (first && firstFrameCb) { const cb = firstFrameCb; firstFrameCb = null; cb(); } // last: the loop is already scheduled
   }
 
   function kick(): void {
     if (inFrame) { wanted = true; return; }
-    if (stopped || !visible || raf) return;
+    if (stopped || !visible || lost || raf) return;
     lastFrame = 0;
     raf = requestAnimationFrame(frame);
   }
@@ -1944,6 +2053,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     },
     onUserCamera(cb) { userCamCb = cb; },
     setVisible(on) {
+      if (on && !visible) governor.hold(performance.now()); // P-VIZ.NOFLASH1: back from hidden (or the player): settle again
       visible = on;
       if (on) kick(); else park();
     },
@@ -2122,16 +2232,32 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       kick();
     },
     onLost(cb) { lostCb = cb; },
+    onRestored(cb) { restoredCb = cb; },
+    onFirstFrame(cb) {
+      if (drawn) cb(); else firstFrameCb = cb;
+    },
+    relieve(next) {
+      if (stopped) return;
+      o.fps = Math.min(o.fps, next.fps);
+      o.dprCap = Math.min(o.dprCap, next.dprCap);
+      if (bloom && !(next.bloom && (!theme.light || next.lightBloom))) bloom.enabled = false;
+      if (ssao && !next.ssao) { ssao.enabled = false; for (const h of ssaoHooks) h.enabled = false; }
+      if (bokeh && !next.dof) { dofOff = true; aimDof(); }
+      if (contactMat && !next.contactShadows) contactMat.visible = false; // one shared material: every contact shadow goes
+      postOff = !bloom?.enabled && !ssao?.enabled && (!bokeh || dofOff);
+      resize(); // a lower pixel ratio sizes the buffer and draws in this task (or the next frame, in a burst)
+      kick();
+    },
     onFrameBudget(cb) { budgetCb = cb; },
     quality() {
       let shadows = 0;
-      for (const n of nodes.values()) if (n.d3) for (const x of n.d3.holder.children) if ((x as THREE.Mesh).material === contactMat && contactMat) shadows++;
+      for (const n of nodes.values()) if (n.d3) for (const x of n.d3.holder.children) if ((x as THREE.Mesh).material === contactMat && contactMat?.visible) shadows++;
       return {
         tier: o.tier, pixelRatio: renderer.getPixelRatio(), dprCap: o.dprCap,
         antialias: renderer.getContextAttributes()?.antialias === true,
         msaa: composer ? composer.renderTarget1.samples : 0,
-        post: !!composer && mode === "3d", bloom: !!bloom, bloomStrength: bloom?.strength ?? 0, lightTheme: theme.light,
-        ssao: !!ssao, dof: !!bokeh, dofActive: !!bokeh?.enabled, contactShadows: shadows,
+        post: !!composer && mode === "3d" && !postOff, bloom: !!bloom?.enabled, bloomStrength: bloom?.enabled ? bloom.strength : 0, lightTheme: theme.light,
+        ssao: !!ssao?.enabled, dof: !!bokeh && !dofOff, dofActive: !!bokeh?.enabled, contactShadows: shadows,
         particles: o.particles, fps: o.fps, governor: governor.stats(),
       };
     },
@@ -2146,6 +2272,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("webglcontextlost", onLostCtx);
+      canvas.removeEventListener("webglcontextrestored", onRestoredCtx);
+      firstFrameCb = null; restoredCb = null;
       controls.dispose();
       for (const id of [...anchors.keys()]) dropAnchors(id); // P-WORLDS.BUILD1 (ADR-0653)
       for (const obj of nodes.values()) disposeNode(obj);

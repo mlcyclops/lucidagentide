@@ -1844,6 +1844,21 @@ demo-P-WORLDS.STORE1: ## P-WORLDS.STORE1: the worlds store in the Plugins drawer
 	node --check desktop/scripts/demo_p_worlds_store_1.mjs
 	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_store_1.mjs; else echo "demo-P-WORLDS.STORE1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-WORLDS.STORE1b
+demo-P-WORLDS.STORE1b: ## P-WORLDS.STORE1b: LIVE store proof from the desktop origin http://127.0.0.1: a throwaway account presses Buy on a world, Patron Class and Sponsor (6 picks) and each opens a real Stripe Checkout with the right price (unpaid sessions expire; the account is deleted). Opt-in: LUCID_DEMO_LIVE_STORE=1 LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/
+	node --check desktop/scripts/demo_p_worlds_checkout_1.mjs
+	@if [ "$$LUCID_DEMO_LIVE_STORE" = "1" ] && [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_checkout_1.mjs; else echo "demo-P-WORLDS.STORE1b: set LUCID_DEMO_LIVE_STORE=1, LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the live checkout proof"; fi
+
+.PHONY: demo-P-WORLDS.HEAL1
+demo-P-WORLDS.HEAL1: ## P-WORLDS.HEAL1 (ADR-0662): purchased worlds and store plugins survive upgrades and glitches: an install ledger outside plugins/ plus a signed backup per package; at engine start (and GET /api/plugins/health, POST /api/plugins/restore) a missing or damaged install is moved to plugins-quarantine and reinstalled from its backup through every install gate (a tampered backup is refused); what is still missing reinstalls from the store when the account owns it, else the user is told how to restore it
+	$(BUN) test $(TEST_IGNORES) desktop/plugins/restore.test.ts desktop/plugins/install.test.ts desktop/plugins/runtime.test.ts desktop/renderer/plugin_restore.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts
+
+.PHONY: demo-P-VIZ.NOFLASH1
+demo-P-VIZ.NOFLASH1: ## P-VIZ.NOFLASH1 (ADR-0663): Visualize never flashes a black or white frame under CPU pressure: a tier change swaps the new scene in on its first whole frame (the old picture stays, relieved, until then), resize draws in the same task, the governor has hysteresis and steps (spaced) straight to the tier the measured frame time supports, a lost GPU context is rebuilt once, and a saved world is drawn from the first visible frame (the spinner waits for it). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 bun desktop/scripts/demo_p_viz_noflash_1.mjs against a QA instance (CPU throttled x6 then x10, screencast luminance per frame)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/perf_tier.test.ts
+	node --check desktop/scripts/demo_p_viz_noflash_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_viz_noflash_1.mjs; else echo "demo-P-VIZ.NOFLASH1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-FLEET.DEMO1
 demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA and video: FAKE_ACP_MODE=script replays the security-first scripts (prose, tools, one permission ask, a delegation, cancel). Live: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --every 60
 	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts
