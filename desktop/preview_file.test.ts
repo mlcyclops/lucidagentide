@@ -18,7 +18,7 @@ const io = (content: string, bytes = content.length) => ({ read: () => content, 
 
 describe("toFsPath (round-trip partner of toFileUrl's percent-encoding)", () => {
   test("decodes %20 segments back to spaces (OneDrive-style dirs)", () => {
-    expect(toFsPath("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html")).toBe("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    expect(toFsPath("file:///C:/Users/x/OneDrive/My%20Projects/app.html")).toBe("C:/Users/x/OneDrive/My Projects/app.html");
     expect(toFsPath("file:///home/n/my%20app/x.html")).toBe("/home/n/my app/x.html");
   });
   test("decodes %25 back to a literal percent sign", () => {

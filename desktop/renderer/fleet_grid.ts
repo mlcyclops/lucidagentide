@@ -33,7 +33,9 @@ import { adoptStagedIds, bindFileDrop, clipboardFiles, createAttachTray, folderD
 // P-PUSH.PAR1 (ADR-pending): staged chips get the shared right-click / long-press menu, and Push now runs the
 // prompt in a new worktree lane (the decision rules are pure, in queue_model).
 import { bindItemMenu, copyToClipboard, openCtxMenu, writeClipboard, type CtxMenuEntry } from "./ctxmenu.ts";
-import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, stageKeyFor, stageSignature, type PushSource } from "./queue_model.ts";
+import { canSteer, laneDrainReady, mainCheckoutCwd, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pollLaneView, pushLaneName, stageKeyFor, stageSignature, type PushSource } from "./queue_model.ts";
+// P-FLEET.DOCK1: the Fleet button's grid state, and the card's transcript backfill + follow rules (pure, tested).
+import { laneBusy, pickFollows, seedTail, seedText, shouldFollow, turnKey, type GridState, type SeedRecord } from "./fleet_dock_model.ts";
 // P-FLEET.L18: the grid and the orbit are two faces of one fleet - the grid links back to the map and
 // shares the "which view does the Fleet button open" pin. Acyclic: fleet_orbit never imports the grid.
 import { fleetHome, openFleetOrbit, setFleetHome } from "./fleet_orbit.ts";
@@ -78,7 +80,7 @@ import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the More menu's 
 
 /** The seven lane functions, typed straight off the bridge so the seam can never drift (results are
  *  nullable: getData/post resolve null on transport failure and the panel treats that as "offline"). */
-type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
+type FleetFns = Pick<LucidBridge, "fleetStatus" | "fleetSpawn" | "fleetPrompt" | "fleetRetry" | "fleetRespawn" | "fleetQueueAdd" | "fleetQueueRemove" | "fleetQueuePeek" | "fleetQueueTake" | "fleetQueueMove" | "fleetDrain" | "fleetAnswer" | "fleetAuto" | "fleetCancel" | "fleetStop" | "fleetRemove" | "fleetWatch" | "fleetTranscript" | "fleetSetModel" | "interject" | "stopCall" | "repoChoices" | "repoGithub"
   | "fleetBoards" | "fleetBoardCreate" | "fleetBoardRename" | "fleetBoardRemove" | "fleetBoardMove" | "fleetBoardAgents" | "fleetBoardLayout" | "fleetBoardsPrune">; // P-FLEET-BOARDS.1
 type FleetResources = FleetStatusView["resources"];
 
@@ -131,7 +133,11 @@ const UP_ARROW = `<svg class="sd-up" viewBox="0 0 24 24" width="13" height="13" 
 
 /** P-ATTACH.1 (ADR-0598): a lane turn plus the display data of the files that went with it (never paths or
  *  text). Kept in the lane's own run state, so a card rebuilt on reopen shows the same chips. */
-type GridTurn = LaneTurnRow & { files?: SentFileMeta[] };
+type GridTurn = LaneTurnRow & {
+  files?: SentFileMeta[];
+  /** P-FLEET.DOCK1: a followed reply folded before the card saw all of it (fleet_dock_model.CardTurn). */
+  partial?: boolean;
+};
 
 /** Per-lane render state: the LATEST server view + the locally accumulated stream transcript. Kept in the
  *  module (not the DOM) so a close/reopen of the panel repaints the full history.
@@ -160,7 +166,8 @@ interface LaneRun {
    *  later - the stream wins while it is open). */
   health?: { action: "probe" | "recover"; reason: string };
   /** P-FLEET.L11: the FOLLOW subscription held open while the MAIN COMPOSER drives this lane, so turns it
-   *  asked for still land in this card's transcript. Null whenever the card owns the turn itself. */
+   *  asked for still land in this card's transcript. P-FLEET.DOCK1: also while the lane runs a turn started
+   *  anywhere else (fleet_dock_model.shouldFollow). Null whenever the card owns the turn itself. */
   follow: { done: Promise<void>; stop: () => void } | null;
   /** P-PROGRESS.1: the freshest progress view (stream or poll) and when it arrived, aged locally on the
    *  card's ticker so the numbers move between samples. */
@@ -174,6 +181,17 @@ interface LaneRun {
   /** P-FLEET.STAGE1: the stage id of the last draft that was NOT confirmed staged, with its signature. Pressing
    *  Stage again on the same draft reuses the id, so an earlier attempt that did land is not staged twice. */
   stageKey: { id: string; sig: string } | null;
+  /** P-FLEET.DRAIN1 (ADR-0644): when this card last popped its queue head. A status poll asked before it is
+   *  older than the drain and may not restore the queue it popped (queue_model.pollLaneView). */
+  drainAt: number;
+  /** P-FLEET.DOCK1: a lane transcript read is in flight (the card says it is loading while it has nothing else to
+   *  show); `seedAgain` asks for one more read after it, because this one may predate what was asked for. */
+  seeding: boolean;
+  seedAgain: boolean;
+  /** P-FLEET.DOCK1: the live block holds output the FOLLOW delivered, a turn this card did not start. */
+  followed: boolean;
+  /** P-FLEET.DOCK1: that followed turn has ended; the next transcript read settles it from the recorded turn. */
+  followEnded: boolean;
 }
 
 function newRun(view: LaneView): LaneRun {
@@ -182,7 +200,8 @@ function newRun(view: LaneView): LaneRun {
     streaming: false, collapsed: false, card: null, attached: [], files: null,
     seq: 0, meter: newMeter(Date.now()), follow: null,
     progress: null, progressAt: 0, waiting: null,
-    staging: false, stageKey: null,
+    staging: false, stageKey: null, drainAt: 0,
+    seeding: false, seedAgain: false, followed: false, followEnded: false,
   };
 }
 
@@ -301,10 +320,11 @@ export function initFleetGrid(d: FleetGridDeps): void {
   onRemoteChange(onRemoteSnapshot); // P-RS-LANES.1 (ADR-0551)
 }
 
-export function toggleFleetGrid(): void {
-  if (!dock) { openFleetGrid(); return; }
-  if (dockState?.minimized) { restore(); return; }
-  closeFleetGrid();
+/** P-FLEET.DOCK1: the dock as the Fleet button sees it (app.ts asks fleet_dock_model.fleetButtonAction what a press
+ *  does; openFleetGrid restores a minimized dock, closeFleetGrid closes a shown one). */
+export function fleetGridState(): GridState {
+  if (!dock) return "none";
+  return dockState?.minimized || dock.hidden ? "minimized" : "shown";
 }
 
 export function openFleetGrid(): void {
@@ -380,7 +400,12 @@ export function closeFleetGrid(): void {
   // Transcripts survive in the module for the next open, but the FOLLOW streams must not: a closed panel
   // has nothing to paint, and leaving them open would hold one NDJSON connection per promoted lane for
   // the life of the process. The next refresh after reopening re-establishes exactly the ones still due.
-  for (const r of runs.values()) { r.card = null; r.follow?.stop(); r.follow = null; }
+  // P-FLEET.DOCK1: what a follow streamed is dropped with it: no further event would ever settle it, and the reopened
+  // card's transcript read brings the whole recorded turn back instead.
+  for (const r of runs.values()) {
+    r.card = null; r.follow?.stop(); r.follow = null;
+    if (r.followed) { r.pending = ""; r.pendingThinking = ""; r.pendingTools = []; r.followed = false; r.followEnded = false; }
+  }
 }
 
 // ---------------------------------------------------------------- dock chrome (drag / resize / minimize)
@@ -1486,6 +1511,7 @@ async function refresh(): Promise<void> {
   const remoteRead = refreshRemote();
   if (Date.now() - boardsAt >= BOARDS_MS) void loadBoards(); // P-FLEET-BOARDS.1: not every 2.5s
   let st: FleetStatusView | null = null;
+  const askedAt = Date.now(); // P-FLEET.DRAIN1 (ADR-0644): polls overlap on a loaded machine and answer out of order
   try { st = await deps.fleetStatus(); } catch { st = null; }
   if (dockState?.minimized) mountPill();
   const hr = dock ? $("#fleetHeadroom", dock) : null;
@@ -1499,21 +1525,27 @@ async function refresh(): Promise<void> {
       run = newRun(lane);
       runs.set(lane.id, run);
     } else {
-      run.view = lane; // the server is the source of truth on poll; stream events fill the gaps between
+      // P-FLEET.DOCK1: a turn ended that no stream of this card saw (it started and finished between two polls, or its
+      // lane was over the follow cap): read the record. A turn the card streamed itself lands here too and appends
+      // nothing. A turn that ends without counting (an error, a cancel) shows as the status leaving working.
+      const ended = lane.turns !== run.view.turns || (laneBusy(run.view.status) && !laneBusy(lane.status));
+      if (ended && run.card && !run.streaming && !run.follow) void backfill(run);
+      // the server is the source of truth on poll; stream events fill the gaps between. P-FLEET.DRAIN1: except
+      // the queue and status of a poll asked before this card's last drain, which predate the pop.
+      run.view = pollLaneView(lane, run.view, askedAt, run.drainAt);
     }
     // P-PROGRESS.1: the poll's view is the truth for progress and the wait too (a stream sample between
     // polls only fills the gap; the poll's absence of either clears it).
     run.progress = lane.progress ?? null; run.progressAt = Date.now();
     run.waiting = lane.waiting ?? null;
-    if (grid && !run.card) { run.card = buildCard(run); grid.append(run.card); wireLaneAttach(run); paintOutput(run); paintAttach(run); }
+    if (grid && !run.card) {
+      run.card = buildCard(run); grid.append(run.card); wireLaneAttach(run); paintAttach(run);
+      // P-FLEET.DOCK1: a new card (page load, dock opened) shows the lane's recorded turns it does not hold yet,
+      // whoever started them; it paints "Loading..." meanwhile.
+      void backfill(run);
+    }
     paintFrame(run);
     maybeDrain(run); // P-FLEET.L3: an idle lane with staged prompts runs the next one, streamed visibly
-    // P-FLEET.L11: while the MAIN COMPOSER drives this lane, the card owns no stream, so before this the
-    // card saw nothing of those turns and the history did not come back when the lane was released. The
-    // card FOLLOWS instead: fleetWatch owns no turn (it cannot start one), and its events go through the
-    // same onLaneEvent the card's own prompts use, so a composer-driven turn lands in the card's
-    // transcript identically to a card-driven one, tool chips and all.
-    syncFollow(run);
   }
   for (const [id, run] of [...runs]) {
     if (!seen.has(id)) { run.follow?.stop(); run.follow = null; run.card?.remove(); runs.delete(id); } // lane fully gone (stopped lanes still list, dimmed)
@@ -1522,6 +1554,20 @@ async function refresh(): Promise<void> {
   // the store can neither grow forever nor hold a slot for a lane that is gone.
   layout = reconcile(layout, st.lanes.map((l) => l.id));
   if (grid) { applyOrder(grid); applySizes(); }
+  // P-FLEET.L11: while the MAIN COMPOSER drives a lane, the card owns no stream, so before this the card saw
+  // nothing of those turns and the history did not come back when the lane was released. The card FOLLOWS
+  // instead: fleetWatch owns no turn (it cannot start one), and its events go through the same onLaneEvent the
+  // card's own prompts use, so a composer-driven turn lands in the card's transcript identically to a card-driven
+  // one, tool chips and all. P-FLEET.DOCK1: any turn the card did not start is followed the same way (another
+  // client's prompt, a turn running before the page loaded), at most FOLLOW_MAX at once, picked after layout so
+  // "visible" is measured on the cards as placed now.
+  const followed = pickFollows([...runs.values()]
+    .filter((r) => shouldFollow({ card: r.card !== null, streaming: r.streaming, promoted: !!r.view.promoted, status: r.view.status }))
+    .map((r) => ({ id: r.view.id, promoted: !!r.view.promoted, visible: cardInView(r), following: r.follow !== null, lastActivityAt: r.view.lastActivityAt })));
+  for (const run of runs.values()) {
+    syncFollow(run, followed.has(run.view.id));
+    if (run.seedAgain && run.card && !run.streaming && !run.seeding) { run.seedAgain = false; void backfill(run); } // P-FLEET.DOCK1: a read deferred past the card's own turn
+  }
   paintRemoteSection();
   if (hr) paintHeadroom(hr, st.resources, st.lanes.length);
   paintEmpty();
@@ -2101,6 +2147,9 @@ function liveCopy(run: LaneRun): { text: string; thinking?: string; tools: reado
 function idleLabel(run: LaneRun): string {
   if (run.view.status === "starting") return "Starting the agent\u2026";
   if (run.view.status === "stopped") return "Agent stopped.";
+  // P-FLEET.DOCK1: never "No output yet" while the record is being read or a turn is running: it was, and it was wrong.
+  if (run.seeding) return "Loading this agent's recent output\u2026";
+  if (laneBusy(run.view.status)) return "Working on a turn. Its output shows here as it arrives\u2026";
   return "No output yet - prompt this agent below.";
 }
 
@@ -2337,6 +2386,7 @@ function sendPrompt(run: LaneRun): void {
     });
     return;
   }
+  beginOwnTurn(run); // P-FLEET.DOCK1: this prompt's stream must not also arrive on a follow
   if (input) { input.value = ""; input.style.height = ""; }
   run.attached = [];
   const turnId = nextId(run, "t");
@@ -2565,6 +2615,7 @@ export async function pushToNewLane(src: PushSource, text: string, images: LaneI
   let run = runs.get(lane.id);
   if (!run) { run = newRun(lane); runs.set(lane.id, run); }
   const target = run;
+  beginOwnTurn(target); // P-FLEET.DOCK1: the refresh above may have opened a follow on the new lane
   const full = parallelPushPrompt(src, { branch, path: lane.cwd }, text);
   target.turns.push({ id: nextId(target, "t"), role: "user", text: full, tools: [], ...(images.length ? { images: images.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
   target.pending = ""; target.pendingThinking = ""; target.pendingTools = [];
@@ -2597,7 +2648,9 @@ function maybeDrain(run: LaneRun): void {
   if (!deps || !laneDrainReady({ streaming: run.streaming, queued: run.view.queued.length, status: run.view.status, pushing: pushingLanes.has(run.view.id) })) return;
   const id = run.view.id;
   const next = run.view.queued[0]!;
+  beginOwnTurn(run); // P-FLEET.DOCK1: the drained turn streams here, never also on a follow
   run.view.queued = run.view.queued.slice(1);
+  run.drainAt = Date.now(); // P-FLEET.DRAIN1 (ADR-0644): polls asked before this cannot restore the popped head
   // The poll carries only counts, so a drained turn names its images and files by number (P-ATTACH.1).
   const extras = [next.images ? `${next.images} image${next.images === 1 ? "" : "s"}` : "", next.files ? `${next.files} file${next.files === 1 ? "" : "s"}` : ""].filter(Boolean);
   run.turns.push({ id: nextId(run, "t"), role: "user", text: next.text + (extras.length ? ` [${extras.join(", ")}]` : ""), tools: [] });
@@ -2621,27 +2674,141 @@ function maybeDrain(run: LaneRun): void {
  *
  *  A watcher owns no turn and cannot start one, so this can never collide with a real prompt stream. It
  *  is also gated on NOT streaming: when the card itself owns the turn the events already arrive on the
- *  prompt stream, and a second subscription would render everything twice. */
-function syncFollow(run: LaneRun): void {
+ *  prompt stream, and a second subscription would render everything twice (beginOwnTurn closes it the
+ *  moment the card starts one).
+ *
+ *  P-FLEET.DOCK1: the same follow now covers EVERY turn the card did not start (fleet_dock_model.shouldFollow):
+ *  another client's POST /api/fleet/prompt, a queue drained elsewhere, a turn already running when the page
+ *  loaded. Before, the card stayed on "No output yet" while the lane worked. A follow may join mid-turn, so what
+ *  it streams is shown live and then SETTLED from the lane transcript, which recorded the whole turn: the seed
+ *  and the settle both go through backfill, which appends only what the card does not already show.
+ *  `want` is refresh's pick (fleet_dock_model.shouldFollow, capped by pickFollows at FOLLOW_MAX). */
+function syncFollow(run: LaneRun, want: boolean): void {
   if (!deps) return;
-  const want = run.view.promoted && !run.streaming;
   if (want && !run.follow) {
     const id = run.view.id;
-    const w = deps.fleetWatch(id, (e) => {
-      // The seed is the engine's bounded replay, which the card does not need: it already holds the
-      // richer local transcript this stream is about to extend. Rendering it would duplicate history.
-      if (e.type === "watch-seed") return;
-      onLaneEvent(id, e);
-      // A composer-driven turn ends with `done`, and nothing else will fold it: the card's own prompt
+    const w: NonNullable<LaneRun["follow"]> = deps.fleetWatch(id, (e) => {
+      if (run.follow !== w) return; // a stopped follow's last chunks belong to nobody
+      // The engine's bounded replay: the turns the card does not hold yet, the one now running included.
+      if (e.type === "watch-seed") { applySeed(run, e.turns); paintOutput(run); return; }
+      // A turn ends with `done` (or `error`), and nothing else will settle it: the card's own prompt
       // finally-block is what normally does that, and there is no prompt here.
-      if (e.type === "done" || e.type === "error") { foldPending(run); paintFrame(run); paintOutput(run); }
+      if (e.type === "done" || e.type === "error") { endFollowed(run, e); return; }
+      if (e.type === "token" || e.type === "thinking" || e.type === "tool" || e.type === "auto-approved") {
+        // A new turn's first output while the last one still waits on its settle read: that one keeps what it saw.
+        if (run.followEnded) foldFollowed(run);
+        run.followed = true;
+      }
+      onLaneEvent(id, e);
     });
     run.follow = w;
     w.done.catch(() => { /* a stream ending, or being stopped on release, is not an error */ });
+    paintOutput(run); // a blank card says the lane is working, not "No output yet"
   } else if (!want && run.follow) {
     run.follow.stop();
     run.follow = null;
+    if (!run.followed || run.followEnded) return;
+    if (laneBusy(run.view.status) && run.card && !run.streaming) {
+      // Over the cap with its turn still running: the live copy stops here and would only ever be a fragment. It goes,
+      // the card says it is working, and the record comes in whole when the turn ends (refresh's transcript read).
+      run.pending = ""; run.pendingThinking = ""; run.pendingTools = []; run.followed = false;
+      paintOutput(run);
+      return;
+    }
+    // The lane went idle (or was released) before this follow saw the turn end: settle it from the record.
+    run.followEnded = true;
+    void backfill(run);
   }
+}
+
+/** P-FLEET.DOCK1: whether a card is inside the dock's visible area (pickFollows prefers those). A hidden or
+ *  minimized dock, a card off the shown board or in a collapsed group, or one scrolled out of the body is not. */
+function cardInView(run: LaneRun): boolean {
+  const card = run.card;
+  if (!dock || dock.hidden || !card || card.offsetParent === null) return false;
+  const body = $(".fleet-body", dock) as HTMLElement | null;
+  if (!body) return false;
+  const c = card.getBoundingClientRect(), b = body.getBoundingClientRect();
+  return c.width > 0 && c.bottom > b.top && c.top < b.bottom && c.right > b.left && c.left < b.right;
+}
+
+/** P-FLEET.DOCK1: a followed turn ended. Visualize hears it as from any stream, but the card settles its output
+ *  from a transcript read, not from what this follow happened to see: the record has the whole turn (the error
+ *  included), and it also brings a turn whose output all came before the follow attached. */
+function endFollowed(run: LaneRun, e: { type: "done" } | { type: "error"; message: string }): void {
+  vizBus.emit(run.view.id, "lane", e); // P-VIZ.1: as onLaneEvent would
+  if (e.type === "error") { run.view.status = "error"; paintFrame(run); paintPill(); }
+  if (run.followed) run.followEnded = true;
+  void backfill(run);
+}
+
+/** P-FLEET.DOCK1: keep what the follow streamed as a settled turn, marked partial (the follow may have joined
+ *  mid-turn, so its text cannot identify the recorded turn and never anchors a later backfill). */
+function foldFollowed(run: LaneRun): void {
+  const at = run.turns.length;
+  foldPending(run);
+  if (run.turns.length > at) run.turns[at]!.partial = true;
+  run.followed = false; run.followEnded = false;
+}
+
+/** P-FLEET.DOCK1: the card is about to own the lane's stream (a prompt, a drain, a retry, a parallel push): the
+ *  follow closes first so no event arrives twice, and whatever it streamed stays as a settled partial turn. */
+function beginOwnTurn(run: LaneRun): void {
+  run.follow?.stop();
+  run.follow = null;
+  if (run.followed) foldFollowed(run);
+}
+
+/** P-FLEET.DOCK1: one lane transcript record as a card turn. The record's tool calls become chips (settled by their
+ *  `ok`), so the text drops the engine's `[ran: ...]` lines that stood for them. */
+function seedTurn(run: LaneRun, r: SeedRecord): GridTurn {
+  const tools: LaneToolRow[] = (r.tools ?? []).map((t) => ({
+    id: nextId(run, "c"), name: t.name, detail: t.detail, open: false,
+    ...(t.code ? { code: t.code } : {}), ...(t.input ? { input: t.input } : {}), ...(t.intent ? { intent: t.intent } : {}),
+    ...(t.id ? { callId: t.id } : {}), ...(t.ok === undefined ? {} : { status: t.ok ? "done" as const : "failed" as const }),
+    ...(t.elapsedMs !== undefined ? { elapsedMs: t.elapsedMs } : {}),
+  }));
+  return {
+    id: nextId(run, "t"), role: r.role, text: seedText(r), tools,
+    ...(r.thinking?.trim() ? { thinking: r.thinking.trim() } : {}), ...(r.error ? { error: r.error } : {}),
+  };
+}
+
+/** P-FLEET.DOCK1: append the transcript records the card does not show yet (fleet_dock_model.seedTail). A card that
+ *  matches none of them takes none: a gap beats a duplicate. */
+function applySeed(run: LaneRun, records: readonly SeedRecord[]): void {
+  const from = seedTail(run.turns, records);
+  if (from === null) return;
+  for (const r of records.slice(from)) {
+    if (turnKey(r.role, r.text) === undefined && !r.error && !r.tools?.length && !r.thinking?.trim()) continue; // nothing to show
+    run.turns.push(seedTurn(run, r));
+  }
+}
+
+/** P-FLEET.DOCK1: read the lane's transcript into the card: on its first paint (page load, dock opened) and to
+ *  settle a followed turn that ended. A read already in flight is followed by one more, since it may predate what
+ *  is wanted now. A settle replaces the followed live output with the recorded turn; when that record is not there
+ *  (or the read failed) the output is kept as a partial turn, so nothing the user saw disappears. */
+async function backfill(run: LaneRun): Promise<void> {
+  if (!deps) return;
+  if (run.seeding) { run.seedAgain = true; return; }
+  run.seeding = true;
+  paintOutput(run);
+  const settling = run.followEnded; // only a read that started after the turn ended can hold its record
+  const mark = run.turns.length;
+  const t = await deps.fleetTranscript(run.view.id).catch(() => null);
+  run.seeding = false;
+  // The card's own turn started meanwhile: this read may predate its prompt, so it is read again once that turn
+  // ends (refresh picks seedAgain up).
+  if (run.streaming) { run.seedAgain = true; paintOutput(run); return; }
+  if (t) applySeed(run, t.turns);
+  if (settling && run.followEnded) {
+    // The recorded reply arrived (from this read, or a watch seed meanwhile): it replaces the live copy.
+    if (run.turns.slice(mark).some((x) => x.role === "assistant")) { run.pending = ""; run.pendingThinking = ""; run.pendingTools = []; run.followed = false; run.followEnded = false; }
+    else foldFollowed(run);
+  }
+  paintFrame(run); paintOutput(run);
+  if (run.seedAgain) { run.seedAgain = false; void backfill(run); }
 }
 
 /** The pasted-image strip above the composer: thumbnails with an x each, cleared on send/stage. */
@@ -2711,6 +2878,7 @@ function pickIntoLane(run: LaneRun, folder: boolean): void {
  *  shows the prompt from the failed attempt; only the fresh reply is new. */
 function runRetry(run: LaneRun): void {
   if (!deps || run.streaming) return;
+  beginOwnTurn(run); // P-FLEET.DOCK1: the retried turn streams here, never also on a follow
   run.pending = ""; run.pendingThinking = ""; run.pendingTools = [];
   run.streaming = true;
   run.view.status = "working"; // optimistic; the stream's status events correct it
@@ -2794,10 +2962,24 @@ function toggleAuto(run: LaneRun): void {
   openAutoRiskModal(run);
 }
 
-/** The full auto-mode risk gate (the app.ts first-open modal pattern; classes are global). Esc and Cancel
- *  close without action; Accept sends acceptRisk: true, which the server persists as the risk timestamp.
- *  The checkbox widens the switch to ALL lanes, including ones spawned later. */
+/** The full auto-mode risk gate for one card. Accept sends acceptRisk: true, which the server persists as the risk
+ *  timestamp; the checkbox widens the switch to ALL lanes, including ones spawned later. */
 function openAutoRiskModal(run: LaneRun): void {
+  autoRiskModal((allLanes) => {
+    void deps?.fleetAuto({ ...(allLanes ? {} : { laneId: run.view.id }), on: true, acceptRisk: true })
+      .then((r) => {
+        if (!r?.ok) return; // no toast surface in this module - the next poll re-states the truth
+        const targets = allLanes ? [...runs.values()] : [run];
+        for (const t of targets) { t.view.autoApprove = true; paintFrame(t); }
+      })
+      .catch(() => { /* the next poll corrects it */ });
+  });
+}
+
+/** The full auto-mode risk modal (the app.ts first-open modal pattern; classes are global). Esc and Cancel close
+ *  without action; Accept runs `onAccept` with the "all agents" choice, and only Accept may send acceptRisk: true.
+ *  P-VIZ.APPROVE1 (ADR-0655): Visualize's Auto on a lane's approval asks through this same gate. */
+export function autoRiskModal(onAccept: (allLanes: boolean) => void): void {
   const ov = el(`<div class="modal-ov" id="fleetAutoRisk">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="fleetAutoRiskTitle">
       <div class="modal-icon">${icon("bolt", 24)}</div>
@@ -2820,16 +3002,11 @@ function openAutoRiskModal(run: LaneRun): void {
   $("[data-auto-cancel]", ov)?.addEventListener("click", close);
   $("[data-auto-accept]", ov)?.addEventListener("click", () => {
     const allLanes = ($("[data-auto-all]", ov) as HTMLInputElement | null)?.checked ?? false;
-    void deps?.fleetAuto({ ...(allLanes ? {} : { laneId: run.view.id }), on: true, acceptRisk: true })
-      .then((r) => {
-        if (!r?.ok) return; // no toast surface in this module - the next poll re-states the truth
-        const targets = allLanes ? [...runs.values()] : [run];
-        for (const t of targets) { t.view.autoApprove = true; paintFrame(t); }
-      })
-      .catch(() => { /* the next poll corrects it */ });
     close();
+    onAccept(allLanes);
   });
   document.body.appendChild(ov);
+  ($("[data-auto-cancel]", ov) as HTMLElement | null)?.focus(); // the safe choice holds focus, so Enter never accepts by accident
 }
 
 // ---------------------------------------------------------------- the + Lane form

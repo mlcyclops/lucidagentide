@@ -67,6 +67,8 @@ contextBridge.exposeInMainWorld("lucid", {
   // engine answers its nonce health check ("engine-healthy") and allows one restart a minute ("rate-limited").
   // On ok:true the renderer reloads the window.
   restartEngine: (): Promise<{ ok: boolean; reason: string; incidentId?: string }> => ipcRenderer.invoke("lucid:engineRestart"),
+  // P-VIZ.GPU1 (ADR-0651): read-only GPU facts for the quality tier (feature status, PCI ids, GL strings), or null.
+  gpuInfo: (): Promise<unknown> => ipcRenderer.invoke("lucid:gpuInfo"),
   // P-KGMARKET.4 (ADR-0206): the OS forwards the lucid://auth?token=... deep link (after hosted marketplace
   // sign-in) to the main process, which relays it here for market_boot.handleAuthCallback.
   onAuthCallback: (cb: (url: string) => void): void => { ipcRenderer.on("lucid:authCallback", (_e, url: string) => cb(url)); },

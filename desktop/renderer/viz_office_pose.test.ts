@@ -22,6 +22,14 @@ import {
   CAN_DROP_S, CAN_GRAB_S, FEMALE_HAIRS, longSleeves, MALE_HAIRS, newOfficeHitSample, OFFICE_HIT_CLIPS, officeHitCharge, officeHitPlay, PAPER_S,
   planOfficeHit, sampleOfficeHit, STORM_PAPERS_AT, workerCast, type OfficeHit, type OfficeHitPlan, type OfficeHitSample, type WorkerTop,
 } from "./viz_office_pose.ts";
+import {
+  applyTyping, buttonPress, COMMIT_BLEND_S, commitLook, COPIER_BUTTON, COPY_EJECTS, COPY_HIPS, COPY_LEN, COPY_PRESS_S, COPY_SIP, copiesStarted,
+  copyProgress, copyStartAt, DESK_MUG, EJECT_S, FLICK_S, flickAt, FLICKS, HANDSET_AT, handsetHeld, HEADPHONE_STAND, HEADPHONE_STAND_H,
+  keyboardLocal, keyboardPoint, KEYBOARD, LIP_GAP, mugRimNear, mugTilt, OFFICE_ARM_GOALS, OFFICE_RIG, officeArmPoint,
+  officeDeskSet, officeFacing, officeHeadPoint, officeMugAt, officePoseHips, officePoseTable, officeVariant, PALM_ALONG, PALM_REST,
+  PHONE_DROP_S, PHONE_GRAB_S, PHONES_BACK_S, PHONES_GRAB_S, PHONES_OFF_S, PHONES_ON_S, phonesAt, REF_FIT, SHOULDER_X, SIP_TIP, STAND_LIFT,
+  TAP_DRIFT, workerOutfit, type OfficePoseName, type OfficePoseTable, type RigFit, type Vec3,
+} from "./viz_office_pose.ts";
 import { chargeLevel, decayCharge, DRINK_S, HIT_BLEND_S, HIT_KINDS, HIT_OUT_S, HIT_TURN_S, newCharge, seededGender } from "./viz_anime_pose.ts";
 import { lookFor, MINI_ACTIVITIES, relativeLuminance } from "./viz_mini_look.ts";
 
@@ -624,5 +632,297 @@ describe("P-VIZ.6: hits", () => {
       expect(end.can).toBe(false);
       expect(end.papers).toBe(-1);
     }
+  });
+});
+
+// ------------------------------------------------------------------------------------------ P-VIZ.7 (ADR-0641)
+
+/** Every build a figure solves its hands for: the worker man and woman, the two managers, the size classes. */
+const FITS: readonly RigFit[] = [
+  REF_FIT, { shoulderX: SHOULDER_X.woman, scale: 1 }, { shoulderX: SHOULDER_X.bossMan, scale: 1 }, { shoulderX: SHOULDER_X.bossWoman, scale: 1.1 },
+  { shoulderX: SHOULDER_X.man, scale: 1.1 }, { shoulderX: SHOULDER_X.man, scale: 0.88 }, { shoulderX: SHOULDER_X.woman, scale: 0.88 },
+];
+const TABLES = new Map<RigFit, OfficePoseTable>(FITS.map((f) => [f, officePoseTable(f)]));
+const v3 = (): Vec3 => ({ x: 0, y: 0, z: 0 });
+const at = (p: readonly [number, number, number]): Vec3 => ({ x: p[0], y: p[1], z: p[2] });
+const gap = (a: Vec3, b: Vec3): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+const posed = (fit: RigFit, clip: OfficeClipName, t: number): Float32Array => {
+  const pose = new Float32Array(OFFICE_POSE_LEN);
+  sampleOfficeClip(OFFICE_CLIPS[clip], t, pose, { emotion: "neutral", gaze: 0 }, TABLES.get(fit)!);
+  return pose;
+};
+const palmOf = (pose: Float32Array, fit: RigFit, side: -1 | 1, hips: readonly [number, number, number] | null = null): Vec3 =>
+  officeArmPoint(pose, fit, side, PALM_ALONG, v3(), hips);
+const span = (from: number, to: number, step: number): number[] => Array.from({ length: Math.floor((to - from) / step) + 1 }, (_, i) => from + i * step);
+
+describe("P-VIZ.7: the solved hands", () => {
+  test("every build's goals are reached: palms over the keys, the mug on its coaster, the handset, the stand", () => {
+    for (const fit of FITS) {
+      const P = TABLES.get(fit)!;
+      for (const side of [-1, 1] as const) {
+        expect(gap(palmOf(P.type, fit, side), keyboardPoint(side * 0.07, PALM_REST, v3()))).toBeLessThan(1e-3);
+        expect(gap(palmOf(P.frantic, fit, side), keyboardPoint(side * 0.07, PALM_REST, v3()))).toBeLessThan(1e-3);
+      }
+      expect(gap(officeMugAt(P.reachMug, fit, 0, v3()), at(DESK_MUG))).toBeLessThan(1e-3);
+      expect(gap(palmOf(P.reachPhone, fit, -1), at(HANDSET_AT))).toBeLessThan(1e-3);
+      const stand = { x: HEADPHONE_STAND[0], y: HEADPHONE_STAND[1] + HEADPHONE_STAND_H, z: HEADPHONE_STAND[2] };
+      expect(gap(palmOf(P.reachPhones, fit, -1), stand)).toBeLessThan(1e-3);
+    }
+    // the poses that stand at the copier were solved with its hips offset; everything else sits
+    expect(officePoseHips("copyPress")).toBe(COPY_HIPS);
+    expect(officePoseHips("type")).toBeNull();
+    expect(COPY_HIPS[1] - OFFICE_RIG.hipY).toBeCloseTo(STAND_LIFT, 9);
+    for (const name of Object.keys(OFFICE_ARM_GOALS) as OfficePoseName[]) for (const x of OFFICE_POSE_VECTORS[name]) expect(Number.isFinite(x)).toBe(true);
+  });
+
+  test("typing: both palms stay over the keyboard, wrists low and forearms near level, through every tap", () => {
+    for (const fit of FITS) {
+      const local = v3();
+      const check = (pose: Float32Array, side: -1 | 1): void => {
+        const palm = palmOf(pose, fit, side);
+        keyboardLocal(palm, local);
+        expect(Math.abs(local.x)).toBeLessThan(KEYBOARD.w / 2);
+        expect(Math.abs(local.z)).toBeLessThan(KEYBOARD.d / 2 + 0.01);
+        expect(local.y).toBeGreaterThan(0.02); // the hand's underside on the keys, not through them
+        expect(local.y).toBeLessThan(0.07); // and never hovering up in front of the screen
+        const elbow = officeArmPoint(pose, fit, side, 0, v3());
+        expect(Math.abs(elbow.y - palm.y)).toBeLessThan(0.05); // the forearm near level (under ~13 degrees)
+      };
+      for (const clip of ["type", "frantic"] as const) {
+        for (const t of span(0, OFFICE_CLIPS[clip].len, 0.1)) {
+          for (const ph of span(0, 1, 0.05)) {
+            const pose = posed(fit, clip, t);
+            applyTyping(pose, ph + 7, 1);
+            check(pose, -1);
+            check(pose, 1);
+          }
+        }
+      }
+      // Enter: the left hand types all through; the right only off the wind-up and the smug beat
+      for (const t of span(0, OFFICE_CLIPS.enter.len - 0.01, 0.05)) {
+        const pose = posed(fit, "enter", t);
+        check(pose, -1);
+        if (t < 1.5 || t >= 2.75) check(pose, 1);
+      }
+    }
+  });
+
+  test("the typing taps alternate, dip the hand onto the keys and leave the pose alone at weight 0", () => {
+    const rest = Float32Array.from(OFFICE_POSE_VECTORS.type);
+    const same = Float32Array.from(rest);
+    applyTyping(same, 0.19, 0);
+    expect(Array.from(same)).toEqual(Array.from(rest));
+    const left = Float32Array.from(rest);
+    applyTyping(left, 0.19, 1); // the left hand's tap at its peak, the right hand resting
+    const eL = officeJointOffset("elL"), eR = officeJointOffset("elR");
+    expect(left[eL]!).toBeGreaterThan(rest[eL]!);
+    expect(left[eR]!).toBeCloseTo(rest[eR]!, 6);
+    expect(palmOf(left, REF_FIT, -1).y).toBeLessThan(palmOf(rest, REF_FIT, -1).y);
+    expect(TAP_DRIFT).toBeLessThan(0.1);
+  });
+
+  test("the sip: the mug off the coaster, its rim at the lips with the head tipped back and the elbow up, back on the coaster", () => {
+    const head = officeJointOffset("head");
+    expect(OFFICE_POSE_VECTORS.sipUp[head]!).toBeLessThan(-0.1);
+    for (const fit of FITS) {
+      for (const t of [MUG_GRAB_S, MUG_DROP_S]) {
+        expect(mugTilt("sip", t)).toBeCloseTo(0, 9);
+        expect(gap(officeMugAt(posed(fit, "sip", t), fit, 0, v3()), at(DESK_MUG))).toBeLessThan(1e-3);
+      }
+      for (const t of span(1.3, 2.6, 0.1)) {
+        const pose = posed(fit, "sip", t);
+        const tilt = mugTilt("sip", t);
+        expect(tilt).toBeCloseTo(SIP_TIP, 6);
+        const mug = officeMugAt(pose, fit, tilt, v3());
+        const rim = mugRimNear(officeFacing(pose), tilt, mug, v3());
+        const mouth = officeHeadPoint(pose, fit, OFFICE_RIG.mouth, v3());
+        expect(gap(rim, mouth)).toBeLessThan(LIP_GAP + 0.003);
+        expect(rim.z).toBeGreaterThan(mouth.z); // at the lips, not inside the face
+        expect(mug.z).toBeGreaterThan(mouth.z + 0.05); // the mug's body out in front, not under the chin
+        // the hand clears the (big, toon) head
+        const skull = officeHeadPoint(pose, fit, [0, OFFICE_RIG.skullY, 0], v3());
+        expect(gap(palmOf(pose, fit, -1), skull)).toBeGreaterThan(0.17 * fit.scale + 0.035);
+        // the elbow raised well above where it was reaching for the desk
+        const elbow = officeArmPoint(pose, fit, -1, 0, v3());
+        expect(elbow.y).toBeGreaterThan(officeArmPoint(posed(fit, "sip", MUG_GRAB_S), fit, -1, 0, v3()).y + 0.08);
+      }
+    }
+  });
+
+  test("the phone: the handset is in hand between the reach keys; the headphones go stand, hand, head, hand, stand", () => {
+    const keys = OFFICE_CLIPS.phone.keys;
+    expect(keys.some((k) => k.at === PHONE_GRAB_S && k.pose === "reachPhone")).toBe(true);
+    expect(keys.some((k) => k.at === PHONE_DROP_S && k.pose === "reachPhone")).toBe(true);
+    expect(handsetHeld("phone", PHONE_GRAB_S - 0.01)).toBe(false);
+    expect(handsetHeld("phone", 3)).toBe(true);
+    expect(handsetHeld("phone", PHONE_DROP_S)).toBe(false);
+    expect(handsetHeld("type", 3)).toBe(false);
+    const hk = OFFICE_CLIPS.headphones.keys;
+    for (const [s, pose] of [[PHONES_GRAB_S, "reachPhones"], [PHONES_ON_S, "phonesOn"], [PHONES_OFF_S, "phonesOn"], [PHONES_BACK_S, "reachPhones"]] as const) {
+      expect(hk.some((k) => k.at === s && k.pose === pose)).toBe(true);
+    }
+    expect(phonesAt("headphones", PHONES_GRAB_S - 0.01)).toBe("stand");
+    expect(phonesAt("headphones", PHONES_GRAB_S + 0.01)).toBe("hand");
+    expect(phonesAt("headphones", 3)).toBe("head");
+    expect(phonesAt("headphones", PHONES_OFF_S + 0.01)).toBe("hand");
+    expect(phonesAt("headphones", PHONES_BACK_S)).toBe("stand");
+    expect(phonesAt("type", 3)).toBe("stand");
+    // both palms at the ears putting them on, the handset's palm at the left ear
+    for (const fit of FITS) {
+      const P = TABLES.get(fit)!;
+      for (const side of [-1, 1] as const) {
+        const ear = officeHeadPoint(P.phonesOn, fit, [side * OFFICE_RIG.ear[0], OFFICE_RIG.ear[1], 0], v3());
+        expect(gap(palmOf(P.phonesOn, fit, side), ear)).toBeLessThan(0.09 * fit.scale);
+      }
+      const earL = officeHeadPoint(P.phoneEar, fit, [-OFFICE_RIG.ear[0], OFFICE_RIG.ear[1], 0], v3());
+      expect(gap(palmOf(P.phoneEar, fit, -1), earL)).toBeLessThan(0.09 * fit.scale);
+    }
+  });
+
+  test("the boss flicks through a report: a page turns near each flick key and only then", () => {
+    const flicks = OFFICE_CLIPS.flip.keys.filter((k) => k.pose === "reportsFlip");
+    expect(flicks.length).toBe(FLICKS.length);
+    for (const s of FLICKS) {
+      expect(flicks.some((k) => Math.abs(k.at - s) < 0.05)).toBe(true);
+      expect(flickAt(s + FLICK_S / 2)).toBeGreaterThan(0);
+    }
+    expect(flickAt(3)).toBe(-1);
+  });
+});
+
+describe("P-VIZ.7: variants", () => {
+  test("the variant is the brand's, else the seed's, always 0..3", () => {
+    expect(officeVariant(2, 99)).toBe(2);
+    expect(officeVariant(null, 7)).toBe(3);
+    expect(officeVariant(undefined, -1)).toBe(3);
+    expect(officeVariant(Number.NaN, 5)).toBe(1);
+    expect(officeVariant(5.7, 0)).toBe(1);
+    for (let s = -20; s < 20; s++) expect([0, 1, 2, 3]).toContain(officeVariant(null, s));
+  });
+
+  test("outfits: the cast's own top, a vest, rolled sleeves or a cardigan, a hoodie; gender and hair untouched", () => {
+    const man = NODE_IDS.map(idSeed).map(workerCast).find((c) => c.gender === "male")!;
+    const woman = NODE_IDS.map(idSeed).map(workerCast).find((c) => c.gender === "female")!;
+    expect(workerOutfit(man, 0)).toBe(man.top);
+    expect(workerOutfit(woman, 0)).toBe(woman.top);
+    expect(workerOutfit(man, 1)).toBe("vest");
+    expect(workerOutfit(man, 2)).toBe("rolled");
+    expect(workerOutfit(woman, 2)).toBe("cardigan");
+    expect(workerOutfit(woman, 3)).toBe("hoodie");
+    expect(longSleeves("hoodie")).toBe(true);
+    expect(longSleeves("rolled")).toBe(false);
+    expect(longSleeves("vest")).toBe(false);
+    const look = lookFor("#38bdf8");
+    const seed = idSeed("agent-3");
+    const plain = officeLook(look, seed, "worker");
+    const hoodie = officeLook(look, seed, "worker", "man", "hoodie");
+    const vest = officeLook(look, seed, "worker", "man", "vest");
+    expect(hoodie.jacket).not.toBe(vest.jacket);
+    expect(hoodie.skin).toBe(plain.skin);
+    expect(hoodie.hair).toBe(plain.hair);
+    expect(officeLook(look, seed, "worker", "man", workerCast(seed).top)).toEqual(plain);
+  });
+
+  test("desk sets differ per variant, the boss always has his phone, and a variant's action has its prop", () => {
+    const sets = [0, 1, 2, 3].map((v) => officeDeskSet("worker", v).join());
+    expect(new Set(sets).size).toBe(4);
+    for (let v = 0; v < 4; v++) {
+      expect(officeDeskSet("boss", v)).toContain("phone");
+      expect(officeDeskSet("worker", v).length).toBeGreaterThanOrEqual(2);
+      for (const role of ["worker", "boss"] as const) {
+        for (const a of MINI_ACTIVITIES) {
+          const clip = activityClip(role, a, v);
+          if (clip === "phone") expect(officeDeskSet(role, v)).toContain("phone");
+          if (clip === "headphones") expect(officeDeskSet(role, v)).toContain("headphones");
+        }
+      }
+    }
+  });
+
+  test("the variants' own actions ride existing activity slots; no variant (-1) keeps the plain table", () => {
+    expect(activityClip("worker", "scan", 3)).toBe("phone");
+    expect(activityClip("worker", "kata", 1)).toBe("headphones");
+    expect(activityClip("worker", "scan", 0)).toBe("squint");
+    expect(activityClip("worker", "typing", 2)).toBe("type");
+    expect(activityClip("boss", "scan", 0)).toBe("phone");
+    expect(activityClip("boss", "scan", 1)).toBe("supervise");
+    expect(activityClip("boss", "supervise", 3)).toBe("flip");
+    expect(activityClip("worker", "scan", -1)).toBe("squint");
+    expect(activityClip("boss", "supervise", -1)).toBe("supervise");
+    expect(officeClipFor("boss", "idle", "supervise", 120, 1)).toBe("flip");
+    expect(officeClipFor("worker", "paused", "scan", 0, 3)).toBe("blank");
+  });
+});
+
+describe("P-VIZ.7: the commit at the copier", () => {
+  test("the copy clip: a snap press on the button, a sip with the rim at the lips, standing at the copier", () => {
+    const keys = OFFICE_CLIPS.copy.keys;
+    expect(OFFICE_CLIPS.copy.loop).toBe(true);
+    expect(OFFICE_CLIPS.copy.len).toBe(COPY_LEN);
+    expect(keys.some((k) => k.at === COPY_PRESS_S && k.pose === "copyPress" && k.ease === "snap")).toBe(true);
+    expect(buttonPress(COPY_PRESS_S)).toBeCloseTo(1, 6);
+    expect(buttonPress(0)).toBe(0);
+    expect(buttonPress(COPY_SIP[0])).toBe(0);
+    expect(COMMIT_BLEND_S).toBeGreaterThan(0.3);
+    expect(COMMIT_BLEND_S).toBeLessThan(1);
+    for (const fit of FITS) {
+      const press = posed(fit, "copy", COPY_PRESS_S);
+      const palm = palmOf(press, fit, 1, COPY_HIPS);
+      const button = at(COPIER_BUTTON);
+      expect(gap(palm, button)).toBeLessThan(0.05);
+      expect(palm.y).toBeGreaterThan(button.y);
+      for (const t of span(COPY_SIP[0], COPY_SIP[1], 0.1)) {
+        const pose = posed(fit, "copy", t);
+        const tilt = mugTilt("copy", t);
+        expect(tilt).toBeCloseTo(SIP_TIP, 6);
+        const mug = officeMugAt(pose, fit, tilt, v3(), COPY_HIPS);
+        const rim = mugRimNear(officeFacing(pose), tilt, mug, v3());
+        const mouth = officeHeadPoint(pose, fit, OFFICE_RIG.mouth, v3(), COPY_HIPS);
+        expect(gap(rim, mouth)).toBeLessThan(LIP_GAP + 0.003);
+        expect(rim.x).toBeGreaterThan(mouth.x); // he faces the copier (+X): the rim in front of his lips
+      }
+    }
+    // he holds the mug upright between the sips (and turns to face the copier)
+    expect(mugTilt("copy", 0.5)).toBeCloseTo(0, 9);
+    expect(officeFacing(OFFICE_POSE_VECTORS.copyIdle)).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  test("copies start one after another, each slides out over EJECT_S, the count keeps rising", () => {
+    expect(copiesStarted(0)).toBe(0);
+    expect(copiesStarted(Number.NaN)).toBe(0);
+    expect(copiesStarted(COPY_EJECTS[0]!)).toBe(1);
+    expect(copiesStarted(COPY_LEN + COPY_EJECTS[1]!)).toBe(2 * COPY_EJECTS.length);
+    for (const s of COPY_EJECTS) {
+      expect(s).toBeGreaterThan(COPY_PRESS_S); // the button first
+      expect(s + EJECT_S).toBeLessThanOrEqual(COPY_LEN);
+    }
+    let prev = 0;
+    for (let t = 0; t < 30; t += 0.05) {
+      const n = copiesStarted(t);
+      expect(n).toBeGreaterThanOrEqual(prev);
+      prev = n;
+    }
+    for (let j = 0; j < 12; j++) {
+      const s = copyStartAt(j);
+      expect(copiesStarted(s)).toBe(j + 1);
+      expect(copiesStarted(s - 1e-6)).toBe(j);
+      expect(copyProgress(j, s)).toBe(0);
+      expect(copyProgress(j, s + EJECT_S / 2)).toBeCloseTo(0.5, 6);
+      expect(copyProgress(j, s + EJECT_S)).toBeCloseTo(1, 9);
+    }
+  });
+
+  test("he glances around (a full look over the shoulder among them), but not while he sips", () => {
+    let min = 0, max = 0;
+    for (let t = 0; t < 7.2; t += 0.02) {
+      const y = commitLook(t, 0.5);
+      min = Math.min(min, y);
+      max = Math.max(max, y);
+    }
+    expect(min).toBeLessThan(-1.2);
+    expect(max).toBeGreaterThan(0.5);
+    const mid = (COPY_SIP[0] + COPY_SIP[1]) / 2;
+    for (let t = 0; t < 7.2; t += 0.1) expect(Math.abs(commitLook(t, mid))).toBeLessThan(1e-9);
+    expect(commitLook(Number.NaN, 0)).toBe(0);
   });
 });

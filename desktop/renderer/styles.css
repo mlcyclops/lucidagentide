@@ -4056,7 +4056,7 @@ body.preview-open .thread{font-size:.9em}
 .preview-zoom .btn-mini{min-width:26px;justify-content:center;font-variant-numeric:tabular-nums;padding:4px 6px}
 #prevZoomReset{min-width:46px}
 #prevPan{white-space:nowrap;flex:none;align-self:center}
-#prevPan[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+#prevPan[aria-pressed="true"],#prevZoomFit[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
 .preview-pan-surface{position:absolute;inset:0;z-index:4;cursor:grab;touch-action:none;user-select:none}
 .preview-pan-surface[hidden]{display:none}
 .preview-pan-surface.dragging{cursor:grabbing}
@@ -4881,6 +4881,39 @@ body.preview-open .thread{font-size:.9em}
 /* the always-visible model-picker footer button */
 .cfg-provhub{-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:8px 10px;background:none;border:1px dashed var(--line-strong);border-radius:9px;color:var(--txt-2);font:inherit;font-size:12px;cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t)}
 .cfg-provhub:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+/* P-AUTH.RELOGIN1 (ADR-0640): the Login row under the picker's model name. Each button holds ONE text span
+   (icons are flex:none), and every label stays on one line (invariant 11). */
+.cfg-login{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.cfg-login-btn{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;
+  padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt-2);
+  font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t)}
+.cfg-login-btn>.ic{flex:none}
+.cfg-login-btn>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-login-btn:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+.cfg-login-btn[aria-expanded="true"]>.ic:last-child{transform:rotate(180deg)}
+.cfg-login-btn.warn,.btn-mini.warn{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber-txt);background:var(--amber-dim)}
+.cfg-login-btn.warn:hover,.btn-mini.warn:hover{border-color:var(--amber);color:var(--amber-txt)}
+.cfg-login-list{flex:1 1 100%;display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-2)}
+.cfg-login-list[hidden]{display:none}
+.cfg-login-row{display:flex;align-items:center;gap:10px;padding:4px 6px;min-width:0}
+.cfg-login-row>.nm{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--txt)}
+.cfg-login-row>.btn-mini,.cfg-login-st{flex:none;white-space:nowrap}
+.cfg-login-st{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--green-txt)}
+/* The titlebar callout under the model pill when a sign-in that used to work is gone. Under the picker's
+   z (95) so an opened picker always wins; the picker carries the same Login anyway. */
+.relogin-notice{position:fixed;z-index:94;width:340px;max-width:calc(100vw - 16px);padding:12px 14px;
+  background:var(--bg-1);background-image:var(--emboss);border:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));
+  border-radius:12px;box-shadow:var(--shadow-lg);animation:reloginIn var(--t) var(--ease-out)}
+.relogin-notice::before{content:"";position:absolute;top:-6px;left:var(--arrow-x,24px);width:10px;height:10px;background:var(--bg-1);
+  border-left:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));border-top:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));transform:rotate(45deg)}
+@keyframes reloginIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.relogin-h{position:relative;padding:0 26px 0 23px;font-size:13px;font-weight:650;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relogin-h>.ic{position:absolute;left:0;top:1px;color:var(--amber-txt)}
+.relogin-x{position:absolute;right:-4px;top:-3px;border:0;background:transparent;color:var(--txt-3);cursor:pointer;padding:3px;border-radius:6px;display:inline-flex}
+.relogin-x:hover{color:var(--txt);background:var(--bg-3)}
+.relogin-b{margin:6px 0 10px;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.relogin-acts{display:flex;flex-wrap:wrap;gap:8px}
+.model-badge.needs-login .dot{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 /* P-LOCAL.4: one-click model-preset chips in the Local Providers add form (each chip nowraps; the row wraps). */
 .lp-presets{margin-bottom:9px}
 .lp-presets-lbl{font-size:11px;color:var(--txt-3);display:flex;align-items:center;gap:5px;margin-bottom:6px}
@@ -8435,7 +8468,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-legend-i{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:10.5px;color:var(--txt-2);padding:2px 8px;border-radius:999px;
   background:color-mix(in srgb,var(--bg-1) 80%,transparent);border:1px solid var(--line-soft)}
 .viz-legend-i i{width:8px;height:8px;border-radius:50%;background:var(--viz-c)}
-.viz-tip{position:absolute;z-index:4;display:flex;flex-direction:column;gap:2px;max-width:280px;padding:8px 10px;border-radius:10px;
+.viz-tip{position:absolute;z-index:4;display:flex;flex-direction:column;gap:3px;max-width:280px;padding:10px 12px;border-radius:10px;
   font-size:11.5px;color:var(--txt-2);pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
   background:color-mix(in srgb,var(--bg-1) 92%,transparent);border:1px solid var(--line);box-shadow:0 8px 24px rgb(0 0 0 / .25)}
 .viz-tip[hidden]{display:none}
@@ -8472,7 +8505,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel{position:absolute;left:0;top:0;z-index:5;width:min(340px,calc(100% - 16px));perspective:900px;--viz-ry:0deg;--viz-tail:50%}
 .viz-panel[hidden]{display:none}
 .viz-panel.lost{opacity:.6}
-.viz-panel-card{position:relative;display:flex;flex-direction:column;gap:7px;padding:10px 11px 9px;border-radius:14px;
+.viz-panel-card{position:relative;display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:14px;
   transform:rotateX(7deg) rotateY(var(--viz-ry));transform-origin:50% 100%;transition:transform 260ms var(--ease-out);
   background:color-mix(in srgb,var(--bg-1) 94%,transparent);border:1px solid var(--line);
   border-top:2px solid var(--viz-c,var(--accent));box-shadow:0 18px 40px rgb(0 0 0 / .34),0 2px 0 rgb(var(--accent-rgb) / .08) inset;
@@ -8483,7 +8516,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel-dot{flex:none;width:10px;height:10px;border-radius:50%;background:var(--viz-c,var(--accent));box-shadow:0 0 8px var(--viz-c,var(--accent))}
 .viz-panel-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .viz-panel-id b{font-size:13px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-panel-id span{font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-id span{font-size:11px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-panel-btn{flex:none;display:inline-flex;align-items:center;gap:4px;padding:4px 7px;border:1px solid var(--line);border-radius:7px;
   background:var(--bg-2);color:var(--txt-2);font:inherit;font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer}
 .viz-panel-btn:hover{color:var(--txt);border-color:var(--line-strong)}
@@ -8493,12 +8526,12 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel-out{max-height:168px;min-height:44px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:7px 8px;border-radius:9px;
   background:var(--bg-0);border:1px solid var(--line-soft);scrollbar-width:thin}
 .viz-panel-turn{display:flex;flex-direction:column;gap:2px;min-width:0}
-.viz-panel-turn b{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-turn b{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-panel-turn.user b{color:var(--viz-c,var(--accent))}
 .viz-panel-turn p{margin:0;font-family:var(--mono);font-size:11px;line-height:1.45;color:var(--txt-2);white-space:pre-wrap;overflow-wrap:anywhere}
 .viz-panel-turn.live p{color:var(--txt)}
-.viz-panel-empty{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
-.viz-panel-acts{display:flex;flex-wrap:wrap;gap:5px}
+.viz-panel-empty{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
+.viz-panel-acts{display:flex;flex-wrap:wrap;gap:6px}
 .viz-panel-acts:empty{display:none}
 .viz-panel-act{font:inherit;font-size:11.5px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt);cursor:pointer;
   white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
@@ -8506,7 +8539,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel-act:disabled{color:var(--txt-4);cursor:default}
 .viz-panel-act.danger{color:var(--red)}
 .viz-panel-act.danger.armed{background:rgb(var(--red-rgb) / .14);border-color:rgb(var(--red-rgb) / .55)}
-.viz-panel-why{margin:0;font-size:11px;line-height:1.45;color:var(--txt-3)}
+.viz-panel-why{margin:0;font-size:11px;line-height:1.45;color:var(--txt-2)}
 .viz-panel-ask{display:flex;align-items:flex-end;gap:6px;margin:0}
 .viz-panel-in{flex:1;min-width:0;resize:none;max-height:96px;padding:6px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg-2);
   color:var(--txt);font:inherit;font-size:12px;line-height:1.4}
@@ -8519,9 +8552,140 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel-send:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .viz-panel-note{margin:0;font-size:11px;line-height:1.4;color:var(--txt-2)}
 .viz-panel-note:empty,.viz-panel-note[hidden]{display:none}
-/* The header's View menu (in a .popover, z 95): Layout and Quality. */
-.viz-vmenu{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:200px}
-.viz-vmenu-h{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--txt-4)}
+/* P-WORLDS.BUILD1 (ADR-0653): the node panel's Mini game row; the artifact chip over a node (z 3 in .viz-stage: over
+   the canvas and legend, under the hover tip and the node panel; viz_artifact_popup moves it every frame); the
+   artifact popup (a .popover). Labels stay on one line and ellipsize (AGENTS.md 11).
+   P-WORLDS.BUILD2: one row per template (its label, Build, Play sample); the popup is a framed card whose game area
+   is 16:10 (viz_artifact_popup sets the card's width; the grip resizes it) and whose content scrolls inside its
+   padding when the viewport is short. Every text is --txt or --txt-2 (AA on every theme). */
+.viz-panel-build{flex-basis:100%;display:flex;flex-direction:column;gap:8px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.viz-panel-build-h{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-game{display:flex;align-items:center;gap:6px;min-width:0}
+.viz-panel-game-l{flex:1;min-width:0;font-size:12px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-panel-game .viz-panel-act{flex:none;display:inline-flex;align-items:center;gap:5px}
+.viz-art-chip{position:absolute;left:0;top:0;z-index:3;display:inline-flex;align-items:center;gap:5px;max-width:220px;padding:4px 9px 4px 7px;border-radius:999px;
+  font:inherit;font-size:11px;font-weight:600;color:var(--txt);background:color-mix(in srgb,var(--bg-1) 92%,transparent);border:1px solid rgb(var(--accent-rgb) / .6);
+  box-shadow:0 6px 16px rgb(0 0 0 / .28);cursor:pointer;white-space:nowrap}
+.viz-art-chip[hidden]{display:none}
+.viz-art-chip .ic,.viz-art-chip svg{flex:none;color:var(--accent)}
+.viz-art-chip span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.viz-art-chip:hover,.viz-art-chip:focus-visible{border-color:var(--accent);outline:none}
+.viz-art-badge{flex:none;font-size:9px;letter-spacing:.08em;padding:0 5px;border-radius:999px;color:#1a1200;background:#ff9f43}
+.popover.viz-art-pop{width:min(672px,calc(100vw - 24px));min-width:min(352px,calc(100vw - 24px))}
+.popover:has(> .viz-art){display:flex;flex-direction:column;overflow:hidden}
+.viz-art{min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:14px 16px;scroll-padding:12px 0}
+.viz-art-h{display:flex;align-items:center;gap:8px;min-width:0}
+.viz-art-ic{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:8px;color:var(--red);background:rgb(var(--red-rgb) / .12)}
+.viz-art-title{flex:1;min-width:0;font-size:14px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-art-tags{flex:none;display:flex;align-items:center;gap:6px}
+.viz-art-tag{flex:none;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;white-space:nowrap;color:var(--txt)}
+.viz-art-tag.untrusted{border:1px solid rgb(var(--red-rgb) / .6);background:rgb(var(--red-rgb) / .12)}
+.viz-art-tag.sample{border:1px solid rgb(var(--accent-rgb) / .6);background:rgb(var(--accent-rgb) / .12)}
+.viz-art-tag.demo{border:1px solid #ff9f43;background:rgb(255 159 67 / .16)}
+.viz-art-x{flex:none;display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--txt-2);cursor:pointer}
+.viz-art-x:hover{color:var(--txt)}
+.viz-art-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-art-st{margin:0;font-size:12px;line-height:1.45;color:var(--txt-2)}
+.viz-art-st.blocked{color:var(--txt);padding:8px 10px;border-radius:8px;border-left:3px solid var(--red);background:rgb(var(--red-rgb) / .1)}
+.viz-art-stage{position:relative;flex:none;display:grid;place-items:center;width:100%;aspect-ratio:16 / 10;box-sizing:border-box;border-radius:12px;overflow:hidden;
+  border:1px solid var(--line);background:radial-gradient(120% 90% at 50% 30%,var(--bg-2),var(--bg-0));box-shadow:inset 0 0 0 1px rgb(var(--tint-rgb) / .03),inset 0 18px 40px rgb(0 0 0 / .18)}
+.viz-art-stage:empty{display:none}
+.viz-art-ph{margin:0;padding:0 16px;font-size:12.5px;color:var(--txt-2);text-align:center}
+.viz-art-frame{position:absolute;inset:0;display:block;width:100%;height:100%;border:0;background:#070b18}
+.viz-art-pop.resizing .viz-art-frame{pointer-events:none}
+.viz-art-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.viz-art-acts .viz-panel-act{display:inline-flex;align-items:center;gap:5px}
+.viz-art-grip{flex:none;margin-left:auto;width:22px;height:22px;padding:0;border:0;border-radius:6px;cursor:nwse-resize;touch-action:none;background-color:transparent;
+  background-image:linear-gradient(135deg,transparent 46%,var(--txt-2) 46% 52%,transparent 52% 64%,var(--txt-2) 64% 70%,transparent 70% 82%,var(--txt-2) 82% 88%,transparent 88%)}
+.viz-art-grip[hidden]{display:none}
+.viz-art-grip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* The header's View menu (in a .popover, z 95): Layout and Quality.
+   P-VIZ.UI1: every Visualize menu card (the View menu, a node's Customize look, the Worlds menu, Recordings) is a
+   flex column whose ONE child is its scroll area, with the padding INSIDE the scroller and matching scroll-padding:
+   the first header and the last note never sit under the card's edge or its rounded corners, scrolled or not.
+   popover() still caps the card to the room beside its anchor (inline max-height); the child shrinks to it. */
+.popover:has(> :is(.viz-vmenu,.viz-worlds,.viz-recs)){display:flex;flex-direction:column;overflow:hidden}
+.popover:has(> .viz-vmenu){width:min(380px,calc(100vw - 20px))}
+:is(.viz-vmenu,.viz-worlds,.viz-recs){flex:0 1 auto;min-height:0;box-sizing:border-box;padding:12px 14px;overflow-y:auto;
+  overscroll-behavior:contain;scroll-padding:12px 0;scrollbar-width:thin}
+.viz-vmenu{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:200px;max-height:min(680px,calc(100vh - 96px));scrollbar-gutter:stable}
+/* Section headers: readable size and contrast (--txt-2 is AA on --bg-1 in every theme), one line, a quiet divider
+   above every section but the first. */
+.viz-vmenu-h{max-width:100%;font-size:11px;font-weight:700;line-height:1.3;letter-spacing:.09em;text-transform:uppercase;color:var(--txt-2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-vmenu>*{flex:none}
+.viz-vmenu .viz-vmenu-h{align-self:stretch;margin-top:6px;padding-top:12px;border-top:1px solid var(--line)}
+.viz-vmenu>.viz-vmenu-h:first-child{margin-top:0;padding-top:0;border-top:0}
+.viz-vmenu .viz-seg{border-color:var(--line-strong)}
+.viz-vmenu .viz-seg button{padding:5px 12px;font-size:11.5px;color:var(--txt-2)}
+.viz-vmenu .viz-seg button.on{color:var(--txt)}
+.viz-vmenu [data-viz-quality]{max-width:100%;min-width:0;padding:5px 10px}
+.viz-vmenu [data-viz-quality]>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-WORLDS.1 (ADR-0648): the World options in the View menu, and the Worlds menu (installed worlds, Get, Export, Import). */
+.viz-vmenu [data-viz-wopts-slot]{align-self:stretch;display:flex;flex-direction:column;gap:8px}
+.viz-vmenu [data-viz-wopts-slot]:empty{display:none}
+.viz-wopts{display:flex;flex-direction:column;gap:6px}
+/* A row: the label takes the room and ellipsizes (its title has the full text), the control keeps its size. */
+.viz-wopt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px;font-size:12.5px;color:var(--txt)}
+.viz-wopt>span:first-child{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-wopt input[type=color]{flex:none;width:26px;height:26px;margin:0 3px;padding:0;border:0;border-radius:50%;background:transparent;cursor:pointer;
+  box-shadow:0 0 0 2px var(--bg-1),0 0 0 3px var(--line-strong)}
+.viz-wopt input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+.viz-wopt input[type=color]::-webkit-color-swatch{border:1px solid rgb(0 0 0 / .22);border-radius:50%}
+.viz-wopt input[type=color]:hover{box-shadow:0 0 0 2px var(--bg-1),0 0 0 3px var(--txt-3)}
+.viz-wopt input[type=checkbox]{flex:none;width:16px;height:16px;margin:0 3px;accent-color:var(--accent);cursor:pointer}
+/* A select: a comfortable height and a visible chevron (two gradient triangles in the text color, so every theme
+   draws it). The native arrow is off, so the right padding leaves the chevron its room. */
+.viz-wopt select{flex:0 1 auto;min-width:96px;max-width:58%;height:30px;padding:0 28px 0 10px;font:inherit;font-size:12px;color:var(--txt);
+  background-color:var(--bg-2);border:1px solid var(--line-strong);border-radius:8px;cursor:pointer;appearance:none;-webkit-appearance:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  background-image:linear-gradient(45deg,transparent 50%,var(--txt-2) 50%),linear-gradient(135deg,var(--txt-2) 50%,transparent 50%);
+  background-position:calc(100% - 16px) 50%,calc(100% - 11px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.viz-wopt select:hover{background-color:var(--bg-3)}
+.viz-wopt select option{background:var(--bg-1);color:var(--txt)}
+.viz-wopt :is(input,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* P-WORLDS.CAST2 (ADR-0650): swatch ramps (a world's swatch options, the Cast section, a node's Customize look) and
+   chips. Tracks of at least 220 px; a pressed swatch has an accent ring over a gap in the card's color, and the
+   focus ring is two-tone (text color over the card color) so it reads on any swatch and any theme. */
+.viz-vmenu [data-viz-cast-slot]{align-self:stretch;display:flex;flex-direction:column;gap:8px}
+.viz-vmenu [data-viz-cast-slot]:empty{display:none}
+.viz-cast,.viz-wopt-sw{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.viz-wopt-sw>.viz-wopt,.viz-cast>.viz-wopt,.viz-look>.viz-wopt{align-self:stretch}
+.viz-cast-val{flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:60%}
+.viz-cast-val b{min-width:0;font-weight:600;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-VIZ.UI1: round swatches with a ring in the text color, so the darkest hair and the lightest skin both read on
+   any card. 10 x 26 px + 9 gaps + the ring's room fit the 380 px card with its scrollbar gutter. */
+.viz-swatches{display:grid;grid-template-columns:repeat(var(--cols,10),26px);gap:6px;min-width:220px;padding:4px}
+.viz-swatch{width:26px;height:26px;padding:0;border:1px solid color-mix(in srgb,var(--txt) 24%,transparent);border-radius:50%;background:var(--sw);cursor:pointer;
+  box-shadow:inset 0 0 0 1px rgb(0 0 0 / .18)}
+.viz-swatch:hover{filter:brightness(1.12) saturate(1.1)}
+.viz-swatch[aria-pressed=true]{box-shadow:0 0 0 2px var(--bg-1),0 0 0 4px var(--accent)}
+.viz-swatch:focus-visible{outline:2px solid var(--txt);outline-offset:2px;box-shadow:0 0 0 2px var(--bg-1)}
+.viz-swatch[aria-pressed=true]:focus-visible{box-shadow:0 0 0 2px var(--bg-1),0 0 0 4px var(--accent)}
+.viz-chips{display:flex;flex-wrap:wrap;gap:6px;max-width:300px}
+.viz-chip{font:inherit;font-size:11px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--bg-2);color:var(--txt-2);cursor:pointer;white-space:nowrap}
+.viz-chip:hover{color:var(--txt);border-color:var(--line-strong)}
+.viz-chip.on{color:var(--txt);background:rgb(var(--accent-rgb) / .18);border-color:rgb(var(--accent-rgb) / .6)}
+.viz-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-chip-auto{padding:1px 7px;font-size:10.5px}
+.viz-vmenu .viz-chips{max-width:none}
+.viz-vmenu .viz-chip:not(.viz-chip-auto){padding:4px 11px;font-size:11.5px}
+/* The footer note: a block paragraph across the menu's padded width (never flexed prose, AGENTS.md 11). */
+.viz-cast-note{align-self:stretch;margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
+.viz-look{min-width:260px}
+.viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px}
+.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
+.viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font:inherit;font-size:12.5px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
+.viz-world-pick b{min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-world-pick:disabled{cursor:default;color:var(--txt-3)}
+.viz-world-pick:focus-visible,.viz-world-export:focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:4px}
+.viz-world-get{flex:none;display:inline-flex;align-items:center;gap:4px;margin-left:auto;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:700;color:var(--accent-2);border:1px solid rgb(var(--accent-rgb) / .5);white-space:nowrap}
+.viz-world-export{font-size:11.5px;color:var(--txt-2);text-decoration:none;white-space:nowrap}
+.viz-world-export:hover{color:var(--txt)}
+.viz-world-err{grid-column:1 / -1;margin:0;font-size:11px;line-height:1.35;color:var(--red-txt,var(--red))}
+.viz-world-none{margin:0;font-size:12px;color:var(--txt-2)}
+.viz-world-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;padding-top:10px;border-top:1px solid var(--line)}
 @keyframes vizPanelIn{from{opacity:0;transform:rotateX(18deg) rotateY(var(--viz-ry)) translateY(6px)}to{opacity:1}}
 @media (prefers-reduced-motion: reduce){
   .viz-panel-card{animation:none;transition:none}
@@ -8535,10 +8699,10 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-recs{display:flex;flex-direction:column;gap:6px;min-width:300px}
 .viz-recs-h{display:flex;align-items:baseline;gap:8px}
 .viz-recs-h b{font-size:13px;color:var(--txt)}
-.viz-recs-h span{font-size:11px;color:var(--txt-3);white-space:nowrap}
+.viz-recs-h span{min-width:0;font-size:11px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-rec-row{display:flex;align-items:center;gap:6px}
 .viz-rec-name{flex:1;min-width:0;font-family:var(--mono);font-size:11px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-recs-empty{margin:0;max-width:300px;font-size:12px;line-height:1.5;color:var(--txt-3)}
+.viz-recs-empty{margin:0;font-size:12px;line-height:1.5;color:var(--txt-2)}
 @keyframes vizSpin{to{transform:rotate(360deg)}}
 @keyframes vizRec{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.8)}}
 @media (prefers-reduced-motion: reduce){
@@ -8573,7 +8737,7 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-panel-card::after{left:-7px;top:var(--viz-tail);bottom:auto;margin:-6px 0 0;border:0;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
 .viz-panel[data-side=left] .viz-panel-card::after{left:auto;right:-7px;border:0;border-top:1px solid var(--line);border-right:1px solid var(--line)}
 .viz-panel.flip{transition:left 260ms var(--ease-out),top 260ms var(--ease-out)}
-/* The header (viz_view.fitHead) measures itself and sets data-viz-fit to the widest density that fits on one row:
+/* The header (viz_view.fitHead) measures itself and sets data-viz-density to the widest density that fits on one row:
    wide (everything labeled), medium (no subtitle, the census as one chip, Record and Recordings as icons with their
    tooltips), narrow (2D/3D, Anime/Professional and Auto camera as icons; Record and Recordings move into the View
    menu; the census chip ellipsizes). Nothing in it ever wraps (invariant #11), and the close X stays pinned at the
@@ -8586,19 +8750,19 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-head .viz-seg button{display:inline-flex;align-items:center;gap:5px}
 .viz-head .viz-seg .ic,.viz-auto .ic{display:none}
 .viz-head [data-viz-close]{position:sticky;right:0;flex:none}
-.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .orbit-sub,
-.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .viz-census-full,
-.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) :is([data-viz-rec],[data-viz-recs])>span{display:none}
-.viz-head:is([data-viz-fit=medium],[data-viz-fit=narrow]) .viz-census-one{display:inline-block}
-.viz-head[data-viz-fit=narrow]{gap:6px;padding-left:10px;padding-right:10px}
-.viz-head[data-viz-fit=narrow] .viz-census{flex:0 1 auto;min-width:0;overflow:hidden}
-.viz-head[data-viz-fit=narrow] .viz-census>.viz-chip{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.viz-head[data-viz-fit=narrow] .viz-seg button{padding:4px 7px}
-.viz-head[data-viz-fit=narrow] :is(.viz-seg button,.viz-auto)>span{display:none}
-.viz-head[data-viz-fit=narrow] :is(.viz-seg,.viz-auto) .ic{display:block}
-.viz-head[data-viz-fit=narrow] .viz-auto{position:relative;padding:4px 7px}
-.viz-head[data-viz-fit=narrow] .viz-auto input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0}
-.viz-head[data-viz-fit=narrow] :is([data-viz-rec],[data-viz-recs]){display:none}
+.viz-head:is([data-viz-density=medium],[data-viz-density=narrow]) .orbit-sub,
+.viz-head:is([data-viz-density=medium],[data-viz-density=narrow]) .viz-census-full,
+.viz-head:is([data-viz-density=medium],[data-viz-density=narrow]) :is([data-viz-rec],[data-viz-recs])>span{display:none}
+.viz-head:is([data-viz-density=medium],[data-viz-density=narrow]) .viz-census-one{display:inline-block}
+.viz-head[data-viz-density=narrow]{gap:6px;padding-left:10px;padding-right:10px}
+.viz-head[data-viz-density=narrow] .viz-census{flex:0 1 auto;min-width:0;overflow:hidden}
+.viz-head[data-viz-density=narrow] .viz-census>.viz-chip{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.viz-head[data-viz-density=narrow] .viz-seg button{padding:4px 7px}
+.viz-head[data-viz-density=narrow] :is(.viz-seg button,.viz-auto)>span{display:none}
+.viz-head[data-viz-density=narrow] :is(.viz-seg,.viz-auto) .ic{display:block}
+.viz-head[data-viz-density=narrow] .viz-auto{position:relative;padding:4px 7px}
+.viz-head[data-viz-density=narrow] .viz-auto input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0}
+.viz-head[data-viz-density=narrow] :is([data-viz-rec],[data-viz-recs]){display:none}
 /* Record and Recordings inside the View menu (narrow header only). */
 .viz-vmenu-row{display:flex;align-items:center;gap:6px}
 @media (prefers-reduced-motion: reduce){
@@ -8665,4 +8829,106 @@ body.ald-dragging .ald-head{cursor:grabbing}
   .viz-ledger-pill,.viz-ledger-card{transition:none}
   .viz-ledger-pill.zoom-in,.viz-ledger-row .bump{animation:none}
   .viz-ledger-card.dragging{transform:none}
+}
+/* ============================== P-VIZ.APPROVE1 (ADR-0655): approvals in Visualize ==============================
+   The badge rides its node (viz_approvals sets its transform every frame; z 3 like the artifact chips): amber, red
+   for a command, a website, a local file in the browser or a flagged danger. It pulses, harder while .fresh (a new
+   ask); reduced motion keeps a still ring. The pop-out takes the node panel's slot (z 5; the view never shows both)
+   beside its node with the same tail. The triage strip (z 4) sits at the top center of the stage, which starts below
+   the header, so it can never cover a header control; it steps down while the REC pill or the camera hint shows. */
+.viz-ask-badge{--ask:var(--amber);--ask-rgb:var(--amber-rgb);--ask-txt:var(--amber-txt);position:absolute;left:0;top:0;z-index:3;
+  display:inline-flex;align-items:center;justify-content:center;gap:2px;min-width:28px;height:28px;padding:0 6px;box-sizing:border-box;
+  border-radius:999px;font:inherit;font-size:11px;font-weight:800;color:var(--txt);cursor:pointer;
+  background:color-mix(in srgb,var(--bg-1) 84%,rgb(var(--ask-rgb)));border:2px solid var(--ask);
+  box-shadow:0 0 0 0 rgb(var(--ask-rgb) / .5),0 4px 12px rgb(0 0 0 / .3)}
+.viz-ask-badge[data-risk=danger]{--ask:var(--red);--ask-rgb:var(--red-rgb);--ask-txt:var(--red-txt)}
+.viz-ask-badge[hidden]{display:none}
+.viz-ask-badge .ic{flex:none;color:var(--ask-txt)}
+.viz-ask-badge.fresh{box-shadow:0 0 0 4px rgb(var(--ask-rgb) / .45),0 4px 12px rgb(0 0 0 / .3)}
+.viz-ask-badge:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.viz-ask{--ask:var(--amber);--ask-rgb:var(--amber-rgb);--ask-txt:var(--amber-txt);--viz-tail:50%;position:absolute;left:0;top:0;z-index:5;width:min(320px,calc(100% - 16px))}
+.viz-ask[data-risk=danger]{--ask:var(--red);--ask-rgb:var(--red-rgb);--ask-txt:var(--red-txt)}
+.viz-ask[hidden]{display:none}
+.viz-ask.lost{opacity:.6}
+.viz-ask-card{position:relative;display:flex;flex-direction:column;gap:9px;padding:10px 11px;border-radius:14px;
+  background:color-mix(in srgb,var(--bg-1) 95%,transparent);border:1px solid var(--line);border-top:2px solid var(--ask);
+  box-shadow:0 18px 40px rgb(0 0 0 / .34);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.viz-ask-card::after{content:"";position:absolute;left:-7px;top:var(--viz-tail);width:12px;height:12px;margin-top:-6px;transform:rotate(45deg);
+  background:inherit;border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.viz-ask[data-side=left] .viz-ask-card::after{left:auto;right:-7px;border:0;border-top:1px solid var(--line);border-right:1px solid var(--line)}
+.viz-ask-h{display:flex;align-items:center;gap:8px;min-width:0}
+.viz-ask-dot{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;color:var(--ask-txt);background:rgb(var(--ask-rgb) / .16)}
+.viz-ask-id{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.viz-ask-id b{font-size:13px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ask-id span{font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-ask-sum{margin:0;padding:7px 8px;border-radius:9px;font-family:var(--mono);font-size:11.5px;line-height:1.45;color:var(--txt);
+  background:color-mix(in srgb,var(--bg-0) 60%,transparent);overflow-wrap:anywhere;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical}
+.viz-ask-acts{display:flex;gap:6px}
+.viz-ask-btn{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:30px;padding:0 10px;
+  border-radius:8px;font:inherit;font-size:12px;font-weight:650;white-space:nowrap;color:var(--txt);background:var(--bg-2);border:1px solid var(--line);cursor:pointer}
+.viz-ask-btn[hidden]{display:none}
+.viz-ask-btn .ic{flex:none}
+.viz-ask-btn span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.viz-ask-btn:hover:not(:disabled){background:var(--bg-3);border-color:var(--line-strong)}
+.viz-ask-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-ask-btn:disabled{opacity:.55;cursor:default}
+.viz-ask-btn.ok{color:var(--green-txt);border-color:rgb(var(--green-rgb) / .6)}
+.viz-ask-btn.no{color:var(--red-txt);border-color:rgb(var(--red-rgb) / .6)}
+.viz-ask-note{margin:0;font-size:11.5px;line-height:1.4;color:var(--amber-txt)}
+.viz-ask-note[hidden]{display:none}
+.viz-demo-tag{flex:none;padding:1px 6px;border-radius:999px;font-size:9.5px;font-weight:800;letter-spacing:.12em;white-space:nowrap;
+  color:var(--amber-txt,var(--amber));background:rgb(var(--amber-rgb) / .14);border:1px solid rgb(var(--amber-rgb) / .45)}
+.viz-demo-tag[hidden]{display:none}
+.viz-tri{position:absolute;top:10px;left:0;right:0;z-index:4;width:fit-content;max-width:min(620px,calc(100% - 28px));margin:0 auto;
+  display:flex;flex-direction:column;align-items:center;gap:6px}
+.viz-tri[hidden]{display:none}
+.viz-stage:has(> .viz-recind:not([hidden]),> .viz-auto-hint:not([hidden])) .viz-tri{top:52px}
+.viz-tri-pill{display:inline-flex;align-items:center;gap:8px;max-width:100%;height:30px;padding:0 11px;box-sizing:border-box;border-radius:999px;
+  font:inherit;font-size:11.5px;color:var(--txt);white-space:nowrap;overflow:hidden;cursor:pointer;
+  background:color-mix(in srgb,var(--bg-1) 90%,transparent);border:1px solid var(--line);box-shadow:0 6px 18px rgb(0 0 0 / .22);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.viz-tri[data-hot=normal] .viz-tri-pill{border-color:rgb(var(--amber-rgb) / .75)}
+.viz-tri[data-hot=danger] .viz-tri-pill{border-color:rgb(var(--red-rgb) / .8)}
+.viz-tri-pill:hover{background:var(--bg-2)}
+.viz-tri-pill:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.viz-tri-pill>.ic{flex:none;color:var(--txt-2)}
+.viz-tri-n{flex:none;font-weight:700}
+.viz-tri-c{flex:none;display:inline-flex;align-items:center;gap:4px;color:var(--txt-2);font-variant-numeric:tabular-nums}
+.viz-tri-c i,.viz-tri-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--c,var(--txt-3))}
+:is(.viz-tri-c,.viz-tri-dot)[data-type=tool]{--c:var(--accent)}
+:is(.viz-tri-c,.viz-tri-dot)[data-type=exec]{--c:var(--red)}
+:is(.viz-tri-c,.viz-tri-dot)[data-type=egress]{--c:var(--amber)}
+:is(.viz-tri-c,.viz-tri-dot)[data-type=file]{--c:var(--green)}
+.viz-tri-c[data-st=working]{--c:var(--cyan)}
+.viz-tri-c[data-st=waiting]{--c:var(--blue)}
+.viz-tri-c[data-st=failed]{--c:var(--red)}
+.viz-tri-sep{flex:none;width:1px;height:14px;background:var(--line)}
+.viz-tri.open .viz-tri-chev{transform:rotate(180deg)}
+.viz-tri-list{box-sizing:border-box;width:min(560px,100%);max-height:min(280px,50vh);overflow-y:auto;overscroll-behavior:contain;
+  display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:12px;background:color-mix(in srgb,var(--bg-1) 95%,transparent);
+  border:1px solid var(--line);box-shadow:0 14px 32px rgb(0 0 0 / .3);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.viz-tri-list[hidden]{display:none}
+.viz-tri-row{flex:none;display:flex;align-items:center;gap:8px;min-width:0;padding:4px 4px 4px 8px;border-radius:9px;background:var(--bg-2);
+  box-shadow:inset 3px 0 0 var(--amber)}
+.viz-tri-row[data-risk=danger]{box-shadow:inset 3px 0 0 var(--red)}
+.viz-tri-what{flex:1;min-width:0;font-size:11.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viz-tri-what b{color:var(--txt);font-weight:650}
+.viz-tri-btn{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;box-sizing:border-box;border-radius:7px;
+  font:inherit;font-size:11px;font-weight:600;white-space:nowrap;color:var(--txt);background:var(--bg-1);border:1px solid var(--line);cursor:pointer}
+.viz-tri-btn .ic{flex:none}
+.viz-tri-btn:hover:not(:disabled){background:var(--bg-3);border-color:var(--line-strong)}
+.viz-tri-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-tri-btn:disabled{opacity:.55;cursor:default}
+.viz-tri-btn.ok{color:var(--green-txt);border-color:rgb(var(--green-rgb) / .6)}
+.viz-tri-btn.no{color:var(--red-txt);border-color:rgb(var(--red-rgb) / .6)}
+.viz-tri-empty{margin:0;padding:6px;font-size:11.5px;color:var(--txt-2);text-align:center;white-space:nowrap}
+.viz-vmenu>.viz-wopt{align-self:stretch}
+@keyframes vizAskPulse{0%,100%{box-shadow:0 0 0 0 rgb(var(--ask-rgb) / .55),0 4px 12px rgb(0 0 0 / .3)}60%{box-shadow:0 0 0 8px rgb(var(--ask-rgb) / 0),0 4px 12px rgb(0 0 0 / .3)}}
+@keyframes vizAskIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: no-preference){
+  .viz-ask-badge{animation:vizAskPulse 1.8s ease-out infinite}
+  .viz-ask-badge.fresh{animation-duration:.6s}
+  .viz-ask-card{animation:vizAskIn 160ms var(--ease-out)}
+  .viz-tri-chev{transition:transform .15s}
 }

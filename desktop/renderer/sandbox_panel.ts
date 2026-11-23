@@ -33,12 +33,17 @@ export function mxcPrepSection(c: SandboxControlView | undefined): string {
   if (!m?.staged) return "";
   const steps = [
     ...(m.prepNeeded.includes("prepare-system-drive") ? ["grant the container read access to the system-drive root"] : []),
-    ...(m.prepNeeded.includes("prepare-null-device") ? ["make the NUL device usable by the container (resets at every boot)"] : []),
+    ...(m.prepNeeded.includes("prepare-null-device") ? [m.bootTask ? "make the NUL device usable by the container (resets at every boot)" : "make the NUL device usable by the container and install a startup task that redoes it after every reboot"] : []),
     ...(m.loopbackNeeded ? ["register the container's loopback exemption so it can reach the egress proxy"] : []),
   ];
-  if (!steps.length) return `<div class="sbx-row muted"><span>MXC executor staged (${esc(TIER_LABEL[m.tier ?? ""] ?? m.tier ?? "unknown tier")}); the host is prepared.</span></div>`;
+  // P-SANDBOX.WIN1 (ADR-0658): on the AppContainer tier Windows resets the NUL device at every boot; say
+  // whether the startup task that redoes it is installed.
+  const boot = m.bootTask === undefined ? ""
+    : m.bootTask ? " A startup task re-prepares the NUL device after every reboot."
+    : " No startup task is installed yet, so after a reboot this host may need Prepare host again.";
+  if (!steps.length) return `<div class="sbx-row muted"><span>MXC executor staged (${esc(TIER_LABEL[m.tier ?? ""] ?? m.tier ?? "unknown tier")}); the host is prepared.${boot}</span></div>`;
   return `<div class="sbx-ctl"><div class="sbx-ctl-txt">The <b>Microsoft eXecution Container</b> executor is staged (${esc(TIER_LABEL[m.tier ?? ""] ?? m.tier ?? "unknown tier")}) but this host still needs ${steps.length === 1 ? "one" : String(steps.length)} administrator step${steps.length === 1 ? "" : "s"}: ${esc(steps.join("; "))}. Until then the agent runs on the previous sandbox or the disclosed passthrough.</div>
-    <div class="sbx-ctl-btns"><button class="btn-mini ok" data-mxc-prepare data-tip="Prepare host (administrator)|Runs wxc-host-prep and the loopback registration behind one Windows administrator prompt. Nothing runs without that approval; LUCID re-checks the real state afterwards.">${icon("shield", 13)} Prepare host (administrator)</button></div></div>`;
+    <div class="sbx-ctl-btns"><button class="btn-mini ok" data-mxc-prepare data-tip="Prepare host (administrator)|Runs wxc-host-prep, the loopback registration and the NUL device startup task behind one Windows administrator prompt. Nothing runs without that approval; LUCID re-checks the real state afterwards.">${icon("shield", 13)} Prepare host (administrator)</button></div></div>`;
 }
 
 /** P-SANDBOX.12 (ADR-0390): the user's Windows sandbox switch. Policy-locked ⇒ a note, never a button;
@@ -74,9 +79,34 @@ function postureLine(s: SandboxStateView, c?: SandboxControlView): string {
     return `<div class="sbx-row good"><span class="pill">${icon("shield", 12)} isolated</span>
       <span>Exec runs runtime-isolated via <b>${esc(BACKEND_LABEL[s.backend ?? "noop"] ?? s.backend ?? "?")}</b>${s.tier ? ` (${esc(TIER_LABEL[s.tier] ?? s.tier)})` : ""} - declared network/exec caps enforced.</span></div>`;
   }
+  const head = s.fallback?.[0];
+  const headline = head ? FALLBACK_HEADLINE[head.kind] : undefined;
+  if (head && headline) {
+    const rest = s.fallback!.slice(1);
+    return `<div class="sbx-row warn"><span class="pill dismissed">not isolated</span>
+    <span><b>${esc(headline)}</b>. ${esc(head.detail)}. Until then exec runs as the disclosed passthrough; the argv gate + in-process scanner still apply.</span></div>${rest.length ? `<div class="sbx-row muted"><span>Also: ${esc(rest.map((f) => f.detail).join("; "))}.</span></div>` : ""}`;
+  }
   return `<div class="sbx-row warn"><span class="pill dismissed">not isolated</span>
     <span>Exec is <b>not runtime-isolated</b> on ${esc(s.platform)} (disclosed passthrough). The argv gate + in-process scanner still apply; no capable sandbox backend on this host - on Windows the MXC executor or the lucid-appcontainer helper is missing, needs host prep, or failed its containment probe.</span></div>`;
 }
+
+/** P-SANDBOX.WIN1 (ADR-0658): the one actionable cause, in plain words, keyed by the engine's fallback kind.
+ *  An unknown kind keeps the generic disclosure (never guess at a cause). */
+const FALLBACK_HEADLINE: Record<string, string> = {
+  "user-off": "Not isolated: you turned the Windows sandbox off",
+  "mxc-prep-pending": "Not isolated yet: this PC needs a one-time admin step",
+  "mxc-loopback": "Not isolated yet: this PC needs a one-time admin step",
+  "helper-loopback": "Not isolated yet: the sandbox's one-time network registration is missing",
+  "runtime-probe": "Not isolated: the agent could not start inside the container",
+  "mxc-round-trip": "Not isolated: the container started but failed its self-test",
+  "mxc-refused": "Not isolated: the container files on disk do not match the trusted version",
+  "mxc-no-probe": "Not isolated: the container program did not answer",
+  "helper-probe": "Not isolated: the Windows AppContainer helper failed its self-test",
+  "mxc-not-staged": "Not isolated: no container runtime is installed on this PC",
+  "helper-missing": "Not isolated: no container runtime is installed on this PC",
+};
+/** The kinds whose fix is the "Prepare host" button: it renders directly under the headline. */
+const PREP_KINDS: Record<string, true> = { "mxc-prep-pending": true, "mxc-loopback": true };
 
 /** The mediated-egress line (only meaningful when isolated). Pure. */
 function egressLine(s: SandboxStateView): string {
@@ -139,7 +169,12 @@ export function renderSandboxSection(status: SandboxStatusView | null | undefine
     return accordion("sec.sandbox", "Runtime sandbox", grants.length ? `${grants.length} directory grant${grants.length === 1 ? "" : "s"}` : "not started", ctl + folders, open, grants.length ? String(grants.length) : undefined);
   }
   const blocks = status?.egressBlocks ?? [];
-  let inner = postureLine(s, status?.control) + egressLine(s) + ctl + folders;
+  // P-SANDBOX.WIN1 (ADR-0658): when the headline's fix is "Prepare host", the button sits right under it.
+  const prepFirst = !s.isolated && !s.execBlocked && !status?.control?.userOff && !!PREP_KINDS[s.fallback?.[0]?.kind ?? ""];
+  const prep = mxcPrepSection(status?.control);
+  let inner = prepFirst
+    ? postureLine(s, status?.control) + prep + egressLine(s) + controlSection(status?.control) + folders
+    : postureLine(s, status?.control) + egressLine(s) + ctl + folders;
 
   if (blocks.length) {
     const rows = blocks

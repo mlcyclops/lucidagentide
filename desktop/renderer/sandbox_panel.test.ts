@@ -188,3 +188,42 @@ test("P-MXC.1 (ADR-0441): the MXC backend is named with its tier, and the pendin
   expect(ready).not.toContain("data-mxc-prepare");
   expect(ready).toContain("the host is prepared");
 });
+
+test("P-SANDBOX.WIN1 (ADR-0658): prep pending is ONE plain headline with Prepare host directly under it", () => {
+  const h = renderSandboxSection({
+    ...st({ backend: "noop", isolated: false, disclosed: true, platform: "win32", proxied: false, fallback: [
+      { kind: "mxc-prep-pending", detail: "MXC staged but host prep pending: prepare-system-drive, prepare-null-device" },
+      { kind: "helper-missing", detail: "lucid-appcontainer helper not built" },
+    ] }),
+    control: { available: true, userOff: false, policyLocked: false, registered: true, mxc: { staged: true, tier: "appcontainer-dacl", prepNeeded: ["prepare-system-drive", "prepare-null-device"], loopbackNeeded: false, bootTask: false } },
+  });
+  expect(h).toContain("Not isolated yet: this PC needs a one-time admin step");
+  expect(h).toContain("host prep pending: prepare-system-drive, prepare-null-device");
+  expect(h).toContain("Also: lucid-appcontainer helper not built");
+  expect(h).not.toContain("is missing, needs host prep, or failed"); // no generic either/or paragraph
+  expect(h).toContain("install a startup task that redoes it after every reboot");
+  // the button follows the headline before anything else (the Turn off switch comes after it)
+  const head = h.indexOf("one-time admin step");
+  const btn = h.indexOf("data-mxc-prepare");
+  expect(head).toBeGreaterThan(-1);
+  expect(btn).toBeGreaterThan(head);
+  expect(btn).toBeLessThan(h.indexOf('data-sbx-mode="off"'));
+  expect(h.split("data-mxc-prepare").length).toBe(2); // rendered once
+});
+
+test("P-SANDBOX.WIN1: each concrete cause gets its own headline; unknown keeps the generic disclosure", () => {
+  const win = (fallback?: { kind: string; detail: string }[]) => renderSandboxSection(st({ backend: "noop", isolated: false, disclosed: true, platform: "win32", proxied: false, ...(fallback ? { fallback } : {}) }));
+  expect(win([{ kind: "mxc-refused", detail: "MXC executor refused: sha256 mismatch" }])).toContain("do not match the trusted version");
+  expect(win([{ kind: "mxc-round-trip", detail: "MXC round trip failed: exit 5" }])).toContain("MXC round trip failed: exit 5");
+  expect(win([{ kind: "mxc-not-staged", detail: "MXC not staged at C:\\a, C:\\b" }])).toContain("no container runtime is installed on this PC");
+  expect(win([{ kind: "mxc-no-probe", detail: "MXC --probe did not answer" }])).toContain("did not answer");
+  expect(win()).toContain("is missing, needs host prep, or failed its containment probe");
+  expect(win([{ kind: "something-new", detail: "x" }])).toContain("is missing, needs host prep, or failed its containment probe");
+});
+
+test("P-SANDBOX.WIN1: a prepared AppContainer-tier host says whether the boot task is installed", () => {
+  const ctl = (bootTask?: boolean) => ({ available: true, userOff: false, policyLocked: false, registered: true, mxc: { staged: true, tier: "appcontainer-dacl", prepNeeded: [], loopbackNeeded: false, ...(bootTask === undefined ? {} : { bootTask }) } });
+  expect(renderSandboxSection({ ...st({ backend: "mxc", tier: "appcontainer-dacl" }), control: ctl(true) })).toContain("A startup task re-prepares the NUL device after every reboot");
+  expect(renderSandboxSection({ ...st({ backend: "mxc", tier: "appcontainer-dacl" }), control: ctl(false) })).toContain("No startup task is installed yet");
+  expect(renderSandboxSection({ ...st({ backend: "mxc", tier: "base-container" }), control: ctl() })).not.toContain("startup task");
+});

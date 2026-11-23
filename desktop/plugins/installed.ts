@@ -9,8 +9,8 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { PLUGIN_MANIFEST, validatePluginManifest, type PluginManifest } from "../../harness/plugins/package.ts";
+import { extname, join } from "node:path";
+import { PLUGIN_MANIFEST, safeRelPath, validatePluginManifest, type PluginManifest } from "../../harness/plugins/package.ts";
 
 export const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -58,4 +58,47 @@ export function listInstalled(root = pluginsRoot()): InstalledPlugin[] {
   let names: string[];
   try { names = readdirSync(root); } catch { return []; }
   return names.sort().map((n) => readInstalled(n, root)).filter((p): p is InstalledPlugin => !!p);
+}
+
+// ── Lucid Agent Worlds (ADR-0648) ──────────────────────────────────────────────────────────────────
+
+/** The file name of a world's kept original package (the signed bytes the user exports). */
+export function worldPackageName(id: string, version: string): string { return `${id}-${version}.lplugin.zip`; }
+
+/** userData/plugins/<id>/<id>-<version>.lplugin.zip: the original signed package, kept OUTSIDE the version dir
+ *  so the installed payload still matches its signed `files` list. */
+export function worldPackagePath(id: string, version: string, root = pluginsRoot()): string { return join(root, id, worldPackageName(id, version)); }
+
+/** What GET /api/worlds lists per world; the same shape as desktop/renderer/viz_world_api.ts InstalledWorld. */
+export interface InstalledWorldView { id: string; version: string; name: string; module: string; apiVersion: number; installedAt: string }
+
+/** The installed world packages (kind "world"), with the same-origin module URL the engine serves. */
+export function listInstalledWorlds(root = pluginsRoot()): InstalledWorldView[] {
+  return listInstalled(root).filter((p) => p.manifest.kind === "world").map((p) => {
+    const m = p.manifest;
+    const entry = m.entry as { module: string };
+    return { id: m.id, version: m.version, name: m.name, module: `/worlds/${m.id}/${m.version}/${entry.module}`, apiVersion: Number(m.apiVersion), installedAt: p.installedAt };
+  });
+}
+
+/** The only file types a world serves, and how. Anything else (LICENSE, signature, the manifest) is not served. */
+const WORLD_CONTENT_TYPES: Readonly<Record<string, string>> = {
+  ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".png": "image/png", ".webp": "image/webp",
+  ".svg": "image/svg+xml", ".jpg": "image/jpeg", ".ktx2": "application/octet-stream",
+};
+
+/** Map a `/worlds/<id>/<version>/<path>` request path to an installed world's file, or null (404). Only kind world,
+ *  only the CURRENT version, only a safe relative path (no `..`, no absolute or drive form, no backslash) that the
+ *  signed manifest `files` lists, and only the served content types. */
+export function resolveWorldAsset(pathname: string, root = pluginsRoot()): { file: string; contentType: string } | null {
+  const m = /^\/worlds\/([a-z0-9][a-z0-9-]{0,63})\/([^/]{1,60})\/(.{1,400})$/.exec(pathname);
+  if (!m) return null;
+  let rel: string;
+  try { rel = decodeURIComponent(m[3]!); } catch { return null; }
+  if (!safeRelPath(rel)) return null;
+  const contentType = WORLD_CONTENT_TYPES[extname(rel).toLowerCase()];
+  if (!contentType) return null;
+  const p = readInstalled(m[1]!, root);
+  if (!p || p.manifest.kind !== "world" || p.manifest.version !== m[2] || !p.manifest.files || !Object.hasOwn(p.manifest.files, rel)) return null;
+  return { file: join(p.dir, rel), contentType };
 }

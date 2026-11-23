@@ -138,6 +138,8 @@ export interface MxcHost {
   tier: MxcTier;
   /** The round-trip probe result for `exe`, cached per run by the caller. */
   probe: (exe: string) => boolean;
+  /** P-SANDBOX.WIN1: what the failed round trip measured (exit code, stderr head), for the fallback reason. */
+  probeDetail?: (exe: string) => string | undefined;
 }
 
 /** Windows ProcessContainer via MXC. `isolates` is true: an AppContainer SID (DACL tier) or a kernel
