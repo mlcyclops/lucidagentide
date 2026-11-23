@@ -3796,7 +3796,9 @@ body.set-open .popover{z-index:99}
 /* P-PREVIEW.1 (ADR-0096): in-app browser preview fly-out — reuses the .kg shell but its own width var. */
 /* The preview is HARD-capped at 50vw so the chat + the Electron frame controls always keep at least half the
    window — even if an old saved --preview-w or a drag tried to make it bigger. (P-PREVIEW fly-out cap fix.) */
-#preview{width:var(--preview-w,min(760px,50vw));max-width:50vw}
+/* P-PREVIEW.OVERFLEET1 (ADR-0645): the side-panel tier, above the floating Fleet dock (55), so a lane's Preview
+   opens on top of Fleet with its resize edge reachable instead of painting under the dock. */
+#preview{z-index:90;width:var(--preview-w,min(760px,50vw));max-width:50vw}
 /* When the preview is open the chat column is narrower, so shrink its text a notch to keep it readable. */
 body.preview-open .thread{font-size:.9em}
 /* ============================================================================================
@@ -3992,7 +3994,7 @@ body.preview-open .thread{font-size:.9em}
 .preview-panel .set-head{padding:4px 10px;gap:8px;flex-wrap:nowrap;min-height:38px;container-type:inline-size}
 .preview-panel .set-title{min-width:0;flex:1 1 auto;font-size:13px;overflow:hidden;white-space:nowrap}
 .preview-panel .set-title .set-sub{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.preview-panel .kg-tools{gap:5px;flex:none;justify-content:flex-end;min-width:0;flex-wrap:nowrap}
+.preview-panel .kg-tools{gap:6px;flex:none;justify-content:flex-end;min-width:0;flex-wrap:nowrap}
 .preview-panel .btn-mini .bl{white-space:nowrap}
 #prevMoreBtn[aria-expanded="true"]{color:var(--accent);border-color:var(--accent)}
 .markup-pop.prev-more{display:flex;flex-direction:column;gap:2px;padding:5px;min-width:230px;width:max-content;max-width:min(320px,calc(100vw - 24px))}

@@ -1747,6 +1747,11 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
 
+.PHONY: demo-P-PREVIEW.OVERFLEET1
+demo-P-PREVIEW.OVERFLEET1: ## P-PREVIEW.OVERFLEET1 (ADR-0645): the Preview fly-out opens on top of a floating Fleet dock, its edge resizes it there and the width is saved, Fleet stays open. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_preview_over_fleet_1.mjs
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_over_fleet_1.mjs
+
 .PHONY: demo-P-FLEET.DRAIN1
 demo-P-FLEET.DRAIN1: ## P-FLEET.DRAIN1 (ADR-0644): a staged lane prompt runs once even when status polls answer late and out of order (no duplicate user turn, no red "queue is empty"). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ LUCID_DEMO_LANE=<lane id> node desktop/scripts/demo_p_fleet_drain_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/queue_model.test.ts desktop/fleet_lanes.test.ts harness/adr_numbering.test.ts

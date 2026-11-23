@@ -6381,6 +6381,10 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-PREVIEW.OVERFLEET1 (ADR-0645): the Preview opens on top of a floating Fleet dock and resizes there
+- **shipped (2026-11-21):** `#preview` sits at the side-panel tier (z 90) instead of no tier, so a lane's Preview opens above the floating Fleet dock (z 55) with its resize edge reachable, and Fleet stays open; the preview header's button gap goes from 5 to 6 px for the spacing audit; demo_p_preview_over_fleet_1.mjs passes at 1000x720 and 1600x1000 and fails on the old CSS ("#fleetDock paints over the preview").
+- **stubbed:** nothing; the 50vw width cap is unchanged, so the chat keeps half the window.
+- **next:** open a lane's Preview from its Fleet card in the installed app with Fleet floating, and resize it over the dock.
 ## P-FLEET.DRAIN1 (ADR-0644): a staged lane prompt runs once when status polls answer out of order
 - **shipped (2026-11-21):** a Fleet status poll asked before a card's last drain keeps the card's own queue and status (queue_model.pollLaneView), so a late poll can no longer put the popped prompt back and run it a second time; demo_p_fleet_drain_1.mjs holds every other poll answer back 4 s, passes with each prompt shown and run once, and fails on the old bundle (a prompt shown twice).
 - **stubbed:** nothing; the composer focus loss seen once while filming did not reproduce in seven traced runs, so it has no increment.
