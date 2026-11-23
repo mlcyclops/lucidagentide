@@ -58,7 +58,7 @@ import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, eta
 import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
-import { createPluginsFlyout } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
+import { createPluginsFlyout, drawerAnchor } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -10312,7 +10312,9 @@ function openPreviewFile(path: string): void {
   loadPreview(path, "yours");
 }
 function closePreview(): void {
-  if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
+  // P-PLUGINS.1: another right-edge surface opening (this runs then) or the Preview panel it sits beside closing
+  // also closes the drawer. P-WORLDS.STORE1: the drawer no longer opens Preview to anchor itself.
+  if (document.querySelector(".plg-layer")) pluginsFlyout.close();
   closeArcadeMenu?.();
   setPreviewPan(false);
   // P-PREVIEW-CURTAIN.1 (ADR-0621): closing no longer dismisses the agent's document or cancels its pending
@@ -18219,9 +18221,9 @@ function openJoinPanel(): void {
   if (dockState.minimized) { dockState.minimized = false; persist(); } // a fresh open always SHOWS the dock
 }
 
-// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge, so every entry
-// point opens the Preview panel first. The ADR-0158 marketplace modal is gone; its rail button and palette
-// entry now open the drawer on FREE, where its catalog lives.
+// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge when that panel is
+// open, else out of the main work area's right edge (P-WORLDS.STORE1). The ADR-0158 marketplace modal is gone;
+// its rail button and palette entry now open the drawer on FREE, where its catalog lives.
 const pluginsFlyout = createPluginsFlyout({
   provider: getMarketProvider,
   user: marketUser,
@@ -18240,7 +18242,13 @@ const pluginsFlyout = createPluginsFlyout({
   // P-RS-WINDOW.1 (ADR-0543): Remote Spokes' panel opens in its own window, not as one more Preview tab.
   openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? void openRemoteAdmin(url) : openPluginTab(id, name, url)),
   toast: showToast,
-  anchor: () => $("#preview") as HTMLElement | null,
+  // P-WORLDS.STORE1: an open Preview panel anchors the drawer on its left edge; with it closed, the drawer sits on
+  // the right edge of the main work area (between the title bar and the status bar, never under the rail).
+  anchor: () => {
+    const prev = $("#preview") as HTMLElement | null;
+    const work = $("#app-inner > .body") as HTMLElement | null;
+    return drawerAnchor(previewOpen && prev && !prev.hidden ? prev.getBoundingClientRect() : null, work?.getBoundingClientRect() ?? null);
+  },
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
@@ -18250,9 +18258,9 @@ const pluginsFlyout = createPluginsFlyout({
   openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
-  const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
-  if (!previewOpen) openPreview();
-  pluginsFlyout.open(tier, from);
+  // P-WORLDS.STORE1: never open the Preview panel just to anchor the drawer (it flew out behind the drawer and
+  // stayed open after the drawer closed); pluginsFlyout anchors to the work area when Preview is closed.
+  pluginsFlyout.open(tier, document.activeElement as HTMLElement | null); // Esc returns focus here
 }
 /** ADR-0542: once after start, tell the user what the move from a dev build to this release removed (data kept)
  *  and which dev settings it now ignores. Shown once: acknowledged as soon as it appears. */

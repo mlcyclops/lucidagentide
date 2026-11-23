@@ -1838,6 +1838,12 @@ demo-P-WORLDS.FX1: ## P-WORLDS.FX1 (ADR-0652): plasma-light world streams (a sat
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_worlds_fx_1.mjs
 
+.PHONY: demo-P-WORLDS.STORE1
+demo-P-WORLDS.STORE1: ## P-WORLDS.STORE1: the worlds store in the Plugins drawer: Lucid Agent World Packs (Patron Class, Sponsor with its 6-world picker and world credits) above the worlds, every world and pack card plays its own loop, and Get more worlds opens the drawer on the work area without the Preview panel (X and Esc close only the drawer). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ bun desktop/scripts/demo_p_worlds_store_1.mjs against a QA instance
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/market_gate.test.ts desktop/renderer/firebase_market_provider.test.ts desktop/renderer/market_stub_provider.test.ts desktop/renderer/viz_worlds.test.ts
+	node --check desktop/scripts/demo_p_worlds_store_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_store_1.mjs; else echo "demo-P-WORLDS.STORE1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-FLEET.DEMO1
 demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA and video: FAKE_ACP_MODE=script replays the security-first scripts (prose, tools, one permission ask, a delegation, cancel). Live: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --every 60
 	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts

@@ -153,6 +153,14 @@ In `lucidagentIDEaddon/entitlements` (see its README, "Lucid Agent Worlds"):
    creates the product and the `PLG-WORLD-<KEY>-OTF` price.
 3. Catalog: the world's row in `catalog.json`, `functions/src/catalog.ts` and the website buy catalog, plus its card in
    `desktop/renderer/plugin_catalog.ts` (group "Lucid Agent Worlds", price "$9.99", the same lookup key).
+4. Card media: the card plays `desktop/renderer/assets/plugins/world-<key>-loop.mp4` over `world-<key>-poster.webp`
+   (720x406 H.264, no audio, under 900 KB; poster 720x405 webp). Build both from the world's filmed short with
+   `plugin-media/_build/build_worlds.py build <key>` (outside the repo; tuning in `worlds.json`), then rebuild the two
+   pack collages (`build bundle-patron bundle-sponsor`), since they cut from every world.
+
+The two World Packs (Patron Class `bundle-patron`, Sponsor `bundle-sponsor`, ADR-0661) sit above the worlds on the
+Premium tab. A pack installs nothing: it unlocks worlds, which then install from their own cards. Sponsor's Buy asks
+for 6 worlds first, and its credits show as **Use a credit** on the worlds the account does not own.
 
 After purchase the IDE's store path (Google sign-in, getEntitlement, getPackDownload signed URL,
 `/api/plugins/install-from-url`) installs it unchanged.

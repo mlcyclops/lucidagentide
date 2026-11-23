@@ -328,7 +328,7 @@ function openWorldsMenu(anchor: HTMLElement): void {
   });
 }
 
-/** The store lives in the Plugins drawer beside the Preview panel, under this overlay: close it first. */
+/** The store lives in the Plugins drawer, under this overlay: close it first. */
 function openStore(packId?: string): void {
   const d = deps;
   closeViz();

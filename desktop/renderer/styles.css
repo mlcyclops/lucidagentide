@@ -2088,6 +2088,24 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-sheet{width:min(520px,100%);max-height:100%;overflow:auto;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;padding:18px 20px;
   background:var(--bg-1);border:1px solid var(--line-strong);border-radius:14px;box-shadow:0 20px 60px rgb(var(--sh-rgb) / .55);animation:rise var(--t-slow) var(--ease-out)}
 .plg-sheet-wide{width:min(760px,100%)}
+/* P-WORLDS.STORE1: the Sponsor picker. Tiles are a thumbnail, ONE ellipsized name and a nowrap tag in a grid (not a
+   flex row of prose), on generous 220px tracks so names never fold; the pressed state is the tile's aria-pressed. */
+.plg-pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;max-height:min(52vh,460px);overflow-y:auto;padding:2px}
+.plg-pick{display:grid;grid-template-columns:72px minmax(0,1fr) auto;align-items:center;gap:10px;min-width:0;padding:6px 10px 6px 6px;
+  border:1px solid var(--line);border-radius:10px;background:var(--bg-2);color:var(--txt);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color var(--t),background var(--t),opacity var(--t)}
+.plg-pick:hover:not(:disabled){border-color:rgb(var(--cyan-rgb) / .45)}
+.plg-pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.plg-pick[aria-pressed="true"]{border-color:color-mix(in srgb,var(--accent) 65%,var(--line));background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-2-rgb) / .35)}
+.plg-pick:disabled{cursor:default;opacity:.55}
+.plg-pick-grid[data-full] .plg-pick[aria-pressed="false"]:not(:disabled){opacity:.6}
+.plg-pick-img{display:block;width:72px;height:auto;aspect-ratio:16/9;object-fit:cover;border-radius:6px;background:var(--bg-sunk)}
+.plg-pick-name{min-width:0;font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plg-pick-tag{font-size:10px;font-weight:700;letter-spacing:.06em;white-space:nowrap;border-radius:999px;padding:1.5px 7px;border:1px solid rgb(var(--green-rgb) / .35);color:var(--green);background:rgb(var(--green-rgb) / .12)}
+.plg-pick-count{margin-right:auto;font-family:var(--mono);font-size:11.5px;color:var(--txt-2);white-space:nowrap}
+.plg-act[data-kind="redeem"]{border-color:rgb(var(--green-rgb) / .5);background:rgb(var(--green-rgb) / .14)}
+.plg-act[data-kind="redeem"]:hover{background:rgb(var(--green-rgb) / .24);box-shadow:none}
+.plg-act[data-kind="owned"]:disabled{opacity:1;color:var(--green);border-color:rgb(var(--green-rgb) / .35);background:rgb(var(--green-rgb) / .1)}
 .plg-sheet-h{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:15px;color:var(--txt)}
 .plg-sheet-price{margin:0;font-size:13px;line-height:1.5;color:var(--txt)}
 .plg-sheet-sub{margin:4px 0 0;font-size:12px;font-weight:650;color:var(--txt-3)}
