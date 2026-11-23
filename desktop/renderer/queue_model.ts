@@ -201,6 +201,15 @@ export function laneDrainReady(ctx: { streaming: boolean; queued: number; status
   return !ctx.streaming && ctx.queued > 0 && !ctx.pushing && (ctx.status === "awaiting-input" || ctx.status === "done");
 }
 
+/** P-FLEET.DRAIN1 (ADR-0644): the lane view to keep from a status poll. A poll ASKED before this lane's last
+ *  drain describes the queue before that drain popped its head: taking its `queued` and `status` would put the
+ *  drained prompt back, and the drain's own end would then run it a second time (the engine answers "queue is
+ *  empty" and the card shows the prompt twice). Such a poll keeps the local queue and status; everything else
+ *  it carries (model, usage, names) is still news. A poll asked at or after the drain is the truth. */
+export function pollLaneView<V extends { queued: unknown; status: unknown }>(polled: V, local: V, askedAt: number, drainAt: number): V {
+  return askedAt < drainAt ? { ...polled, queued: local.queued, status: local.status } : polled;
+}
+
 /** P-FLEET.STAGE1 (ADR-0609): one stage request's time budget per attempt. Each retry carries the SAME stage
  *  id, which the engine dedups, so a retry is safe even when the first attempt landed and only its answer was
  *  late. About a minute in all: under a pegged CPU the engine still answers within it, and the composer never

@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Attachment } from "./composer_attachments.ts";
-import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, stageKeyFor, stageSignature, type PushSource, type QueuedItem } from "./queue_model.ts";
+import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pollLaneView, pushLaneName, pushNowRoute, pushRecovery, stageKeyFor, stageSignature, type PushSource, type QueuedItem } from "./queue_model.ts";
 
 const hold = (text: string): QueuedItem => ({ text, mode: "hold" });
 const push = (text: string): QueuedItem => ({ text, mode: "push" });
@@ -296,6 +296,27 @@ describe("laneDrainReady (P-PUSH.PAR1)", () => {
     expect(laneDrainReady({ ...idle, status: "needs-approval" })).toBe(false);
     expect(laneDrainReady({ ...idle, streaming: true })).toBe(false);
     expect(laneDrainReady({ ...idle, queued: 0 })).toBe(false);
+  });
+});
+
+// P-FLEET.DRAIN1 (ADR-0644): measured in the real UI with one status answer held back 4 s (what a pegged machine
+// does): the late answer restored the drained prompt, the drain's end ran it again, and the card printed the
+// prompt twice plus a red "queue is empty".
+describe("pollLaneView (P-FLEET.DRAIN1)", () => {
+  const local = { queued: [] as string[], status: "working", model: "a", usage: 1 };
+  const stale = { queued: ["drained already"], status: "done", model: "b", usage: 2 };
+  test("a poll asked before the last drain cannot put the drained prompt back or mark the lane idle", () => {
+    const v = pollLaneView(stale, local, 1_000, 1_500);
+    expect(v.queued).toEqual([]);
+    expect(v.status).toBe("working");
+    expect(laneDrainReady({ streaming: false, queued: v.queued.length, status: v.status, pushing: false })).toBe(false);
+  });
+  test("the rest of a stale poll is still taken", () => {
+    expect(pollLaneView(stale, local, 1_000, 1_500)).toMatchObject({ model: "b", usage: 2 });
+  });
+  test("a poll asked at or after the drain is the truth, queue and status included", () => {
+    expect(pollLaneView(stale, local, 1_500, 1_500)).toEqual(stale);
+    expect(pollLaneView(stale, local, 2_000, 1_500)).toEqual(stale);
   });
 });
 
