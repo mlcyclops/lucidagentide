@@ -190,6 +190,8 @@ export interface SandboxStateView {
   tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
+  /** P-SANDBOX.WIN1 (ADR-0658): why Windows exec fell back to the passthrough, headline first. */
+  fallback?: { kind: string; detail: string }[];
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
@@ -198,7 +200,7 @@ export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: 
 export interface SandboxControlView {
   available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean;
   /** P-MXC.1 (ADR-0441): the MXC executor on this host and the elevated steps it still needs. */
-  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string; reason?: string; bootTask?: boolean };
 }
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
@@ -297,6 +299,7 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
+import type { SeedRecord } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: a lane transcript record (types only, owned there)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
 import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
@@ -402,7 +405,7 @@ export type LaneEvent =
   | { type: "staged"; queued: number }
   /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
    *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
-  | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
+  | { type: "watch-seed"; turns: SeedRecord[] };
 export interface FleetStatusView {
   lanes: LaneView[];
   /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
@@ -1271,7 +1274,9 @@ export interface LucidBridge {
   /** FOLLOW a lane's live events WITHOUT owning a turn. Resolves when the stream ends; call the returned
    *  aborter to leave. This is what lets a promote join a turn that is already running. */
   fleetWatch(laneId: string, onEvent: (e: LaneEvent) => void): { done: Promise<void>; stop: () => void };
-  fleetTranscript(laneId: string): Promise<{ turns: { role: "user" | "assistant"; text: string }[] } | null>;
+  /** The lane's bounded transcript (every settled turn, whoever started it, and the prompt of the running one).
+   *  P-FLEET.DOCK1: the records are rich (thinking, tool calls, error), which the grid card's backfill renders. */
+  fleetTranscript(laneId: string): Promise<{ turns: SeedRecord[] } | null>;
   // -- P-HEALTH.1: the harness's self-watch ---------------------------------------------------------
   /** Read-only: where the stall ladder stands for the master session and every lane. Takes no action. */
   health(): Promise<{

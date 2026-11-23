@@ -119,7 +119,7 @@ import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } 
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
 import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
-import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
+import { mxcBootTaskInstalled, mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
 import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
@@ -2834,13 +2834,15 @@ return Bun.serve({
         if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
         const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
         if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
-        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps, m.executors.prepSha256);
         resetMxcProbeCache(); resetLoopbackExemptCache();
         const after = sandboxControlNow();
         const remaining = mxcHostPrepSteps(after);
-        const changed = launched && !remaining;
+        // P-SANDBOX.WIN1: the re-read state decides; a failed boot-task registration (script exit 5) leaves the
+        // host prepared for this boot, so it still counts as changed, and the detail says the task is missing.
+        const changed = !remaining && (launched || !!steps.bootTask);
         const detail = changed
-          ? "the host is prepared - the agent restarts inside the MXC container"
+          ? `the host is prepared${steps.bootTask ? (after.mxc?.bootTask ? " and the NUL step re-runs at every boot" : " but the boot task could not be confirmed, so the NUL step may be needed again after a restart") : ""} - the agent restarts inside the MXC container`
           : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
           : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
         emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
@@ -7640,9 +7642,11 @@ function sandboxControlNow(): SandboxControlView {
   let mxc: SandboxControlView["mxc"];
   if (process.platform === "win32") {
     const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    // P-SANDBOX.WIN1 (ADR-0658): the concrete reason when it is not usable, and whether the boot task that
+    // re-prepares the NUL device at every startup is registered (the NUL step exists only on the DACL tier).
     mxc = m.host
-      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
-      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source, ...(m.host.tier === "appcontainer-dacl" ? { bootTask: mxcBootTaskInstalled(m.executors.prepSha256) } : {}) }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false, reason: m.reason };
   }
   return sandboxControlView({
     platform: process.platform,

@@ -655,12 +655,41 @@ export function sandboxDisclosure(platform: NodeJS.Platform = process.platform):
   );
 }
 
+/** P-SANDBOX.WIN1: why Windows exec fell back to the disclosed passthrough, as a stable kind (the panel's
+ *  headline keys off it) and the concrete detail (what was measured). Only what was actually observed;
+ *  an empty list means the cause is unknown and the generic disclosure stands. */
+export type SandboxFallbackKind =
+  | "user-off"
+  | "mxc-prep-pending"
+  | "mxc-loopback"
+  | "runtime-probe"
+  | "mxc-round-trip"
+  | "mxc-refused"
+  | "mxc-no-probe"
+  | "helper-loopback"
+  | "helper-probe"
+  | "mxc-not-staged"
+  | "helper-missing";
+export interface SandboxFallback { kind: SandboxFallbackKind; detail: string }
+
+/** The headline order: the first entry is the ONE actionable cause. A staged runtime that only needs a
+ *  host step outranks a runtime that is absent, and a present-but-failing one outranks absence. */
+const FALLBACK_RANK: readonly SandboxFallbackKind[] = ["user-off", "mxc-prep-pending", "mxc-loopback", "runtime-probe", "mxc-round-trip", "mxc-refused", "mxc-no-probe", "helper-loopback", "helper-probe", "mxc-not-staged", "helper-missing"];
+
+/** PURE: the fallbacks in headline order (stable for equal kinds). */
+export function rankSandboxFallbacks(list: readonly SandboxFallback[]): SandboxFallback[] {
+  return [...list].sort((a, b) => FALLBACK_RANK.indexOf(a.kind) - FALLBACK_RANK.indexOf(b.kind));
+}
+
 export type BackendResolution =
   | {
       ok: true;
       backend: SandboxBackend;
       /** true ⇒ passthrough in use; the caller MUST emit `sandboxDisclosure()`. */
       disclosed: boolean;
+      /** P-SANDBOX.WIN1: on a disclosed Windows passthrough, why each container runtime was not used,
+       *  headline first. Absent when isolated or off Windows. */
+      fallback?: SandboxFallback[];
     }
   | { ok: false; reason: string };
 
@@ -680,6 +709,29 @@ export interface ResolveBackendOpts {
    *  passes this ONLY when all three held and the network precondition for the profile is met). Tried
    *  BEFORE the first-party helper; its round-trip probe decides, like every other backend's. */
   mxc?: MxcHost;
+  /** P-SANDBOX.WIN1: why the caller did NOT pass `mxc` (not staged, refused, no --probe answer, host prep
+   *  pending, loopback missing, user off). Carried into the disclosed resolution's `fallback`. */
+  mxcFallback?: SandboxFallback;
+  /** P-SANDBOX.WIN1: why the caller did NOT pass the bundled helper (its loopback exemption is missing).
+   *  Absent ⇒ the helper's reason is derived here from `which` + the probe. */
+  helperFallback?: SandboxFallback;
+}
+
+/** PURE: why each Windows runtime was passed over, headline first. Called only once both were tried. */
+function windowsFallbacks(opts: ResolveBackendOpts, which: WhichFn): SandboxFallback[] {
+  const out: SandboxFallback[] = [];
+  if (opts.mxc) {
+    const detail = opts.mxc.probeDetail?.(opts.mxc.exe);
+    out.push({ kind: "mxc-round-trip", detail: `MXC round trip failed: ${detail || "the smallest container did not echo its marker back"}` });
+  } else if (opts.mxcFallback) out.push(opts.mxcFallback);
+  if (opts.helperFallback) out.push(opts.helperFallback);
+  else {
+    const helper = opts.appContainerHelper ?? "lucid-appcontainer";
+    out.push(which(helper)
+      ? { kind: "helper-probe", detail: `lucid-appcontainer helper failed its containment probe (${helper})` }
+      : { kind: "helper-missing", detail: "lucid-appcontainer helper not built (`make build-appcontainer`)" });
+  }
+  return rankSandboxFallbacks(out);
 }
 
 /** Pick the backend for this platform. PURE given its inputs (platform/which/probe injectable). */
@@ -710,6 +762,14 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
     const ac = new AppContainerBackend(which, opts.appContainerHelper ?? "lucid-appcontainer", opts.probe ?? appContainerDefaultProbe);
     if (ac.available()) return { ok: true, backend: ac, disclosed: false };
   }
+  const fallback = platform === "win32" ? windowsFallbacks(opts, which) : undefined;
+  // P-SANDBOX.WIN1: a staged MXC that is held back (prep pending, loopback, round trip, refused) is the
+  // actionable cause under managed policy too; otherwise the helper sentences below stand unchanged.
+  const headline = fallback?.[0];
+  const mxcCause = headline?.kind.startsWith("mxc-") ? headline : undefined;
+  if (opts.requireIsolation && mxcCause && mxcCause.kind !== "mxc-not-staged") {
+    return { ok: false, reason: `managed policy requires runtime isolation, but ${mxcCause.detail}` };
+  }
   if (opts.requireIsolation) {
     return {
       ok: false,
@@ -729,7 +789,7 @@ export function resolveBackend(opts: ResolveBackendOpts = {}): BackendResolution
               : `managed policy requires runtime isolation, but no sandbox backend exists for ${platform} yet`,
     };
   }
-  return { ok: true, backend: new NoopBackend(), disclosed: true };
+  return { ok: true, backend: new NoopBackend(), disclosed: true, ...(fallback ? { fallback } : {}) };
 }
 
 export type SandboxDecision =

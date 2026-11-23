@@ -139,8 +139,9 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { autoRiskModal, closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -19069,7 +19070,8 @@ function wire(): void {
     fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
-    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving (P-FLEET.DOCK1: or any turn it did not start)
+    fleetTranscript: bridge.fleetTranscript, // P-FLEET.DOCK1: a card seeds from the lane's recorded turns
     fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
     fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
@@ -19215,7 +19217,17 @@ function wire(): void {
   // header links to the other, so neither choice ever strands you. One fleet view at a time: the orbit
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
-  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
+  // P-FLEET.DOCK1: the pin alone used to route the press, so with the orbit pinned a MINIMIZED grid was destroyed
+  // (opening the orbit closes the grid) and never came back. What is on screen decides first: a minimized grid is
+  // restored, a shown view closes, and only with nothing up does the pin pick what opens. The grid is brought up
+  // with the orbit closed, so it is never left underneath it.
+  $("#ctFleet")?.addEventListener("click", () => {
+    const act = fleetButtonAction({ home: fleetHome(), grid: fleetGridState(), orbit: fleetOrbitShown() });
+    if (act === "restore-grid" || act === "open-grid") { closeFleetOrbit(); openFleetGrid(); }
+    else if (act === "close-grid") closeFleetGrid();
+    else if (act === "close-orbit") closeFleetOrbit();
+    else openFleetOrbit();
+  });
   // P-STUCK-SHOW.1 (ADR-0519): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.

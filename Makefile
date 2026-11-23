@@ -1761,6 +1761,11 @@ demo-P-VIZ.APPROVE1: ## P-VIZ.APPROVE1 (ADR-0655): tool-call approvals inside Vi
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts desktop/renderer/viz_panel_place.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_viz_approve_1.mjs
 
+.PHONY: demo-P-FLEET.DOCK1
+demo-P-FLEET.DOCK1: ## P-FLEET.DOCK1 (ADR-0659): the Fleet button brings a minimized grid dock back on top whichever view is pinned (a shown view still toggles closed), and a lane card seeds from the lane transcript and follows any turn it did not start (another client's prompt, the main composer, a turn running before the page loaded) without painting a turn twice. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_fleet_dock_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/fleet_dock_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_fleet_dock_1.mjs
+
 .PHONY: demo-P-WORLDS.1
 demo-P-WORLDS.1: ## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds: signed world packs (kind "world") import, load and render in Visualize with their stage, sky, throwables, storm and options; export the package. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 LUCID_DEMO_WORLD=<path to .lplugin.zip> node desktop/scripts/demo_p_worlds_1.mjs
 	$(BUN) test $(TEST_IGNORES) harness/plugins desktop/plugins desktop/renderer/viz_worlds.test.ts desktop/renderer/plugin_catalog.test.ts tools/build_world.test.ts harness/adr_numbering.test.ts
@@ -1812,3 +1817,7 @@ demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA 
 	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/fleet_demo/start_qa_fleet.mjs
 	node --check desktop/scripts/fleet_demo/seed_fleet.mjs
+
+.PHONY: demo-P-SANDBOX.WIN1
+demo-P-SANDBOX.WIN1: ## P-SANDBOX.WIN1 (ADR-0658): the Windows sandbox names the one concrete reason it is not isolated (headline + Prepare host under it), host prep pending skips the round trip, and the same UAC prompt registers the "LUCID MXC null device" boot task at a pinned copy under Program Files
+	$(BUN) test $(TEST_IGNORES) desktop/mxc_runtime.test.ts harness/runs/sandbox_mxc.test.ts harness/runs/sandbox_exec.test.ts desktop/renderer/sandbox_panel.test.ts harness/adr_numbering.test.ts
