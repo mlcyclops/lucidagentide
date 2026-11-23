@@ -19,10 +19,11 @@ and proof of which model wrote every line. It works with the models your teams a
 
 <br/>
 
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-Setup.exe"><img src="https://img.shields.io/badge/Windows-Download-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.pkg"><img src="https://img.shields.io/badge/macOS%20Apple%20Silicon-Download-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS Apple Silicon" /></a>
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.pkg"><img src="https://img.shields.io/badge/macOS%20Intel-Download-555555?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS Intel" /></a>
-<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage"><img src="https://img.shields.io/badge/Linux-Download-f0a500?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux" /></a>
+<b>Download</b><br/>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-Setup.exe"><img src="https://img.shields.io/badge/Windows-2ea44f?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-arm64.pkg"><img src="https://img.shields.io/badge/macOS%20Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS Apple Silicon" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-mac-x64.pkg"><img src="https://img.shields.io/badge/macOS%20Intel-555555?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS Intel" /></a>
+<a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage"><img src="https://img.shields.io/badge/Linux-f0a500?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux" /></a>
 
 <a href="https://lucid-agents.com"><b>Website</b></a> ·
 <a href="https://store.lucid-agents.com"><b>Store</b></a> ·
@@ -82,17 +83,18 @@ Sign in with the subscriptions you already have or bring an API key. Keys stay i
 ## See it
 
 <div align="center">
-<img src=".github/assets/chat-metrics-rail.JPG" alt="LUCID chat with the Memory and Context rail showing prompt-cache savings, context window, turns, security findings and quarantines" height="240" />
-<img src=".github/assets/model-picker-gemini3.1pro.JPG" alt="The LUCID model picker: a searchable list of models across providers with intelligence ratings and a detail card" height="240" />
+<img src="docs/images/readme/fleet.webp" alt="LUCID Fleet: six agents working in parallel on Intake API, Access Reviews, Auth Hardening, SOC 2 Evidence, Checkout Service and Upload Security, each with its own transcript and prompt box" width="100%" />
+<br/><sub><b>A fleet of agents, each on its own task</b>, every one behind the same security gate</sub>
+<br/><br/>
+<img src="docs/images/readme/security.webp" alt="The Security panel's Active protection card: every tool call is scanned before it runs, with counters for quarantined items, items awaiting review, findings and promoted facts" height="260" />
+<img src=".github/assets/model-picker-gemini3.1pro.JPG" alt="The LUCID model picker: a searchable list of models across providers with intelligence ratings and a detail card" height="260" />
 <br/><sub><b>Every tool call is checked before it runs</b> · <b>Pick any model your teams already use</b></sub>
 <br/><br/>
-<img src=".github/assets/memory-cost-panel.7.4.26-2.JPG" alt="The Cost and Savings ledger: spend, cache savings and cost per model" height="300" />
-<img src=".github/assets/onboarding-roles.JPG" alt="First-run role picker with Developer, Security engineer, Manager and Executive cards" height="300" />
-<img src=".github/assets/remote-pwa-session.png" alt="LUCID Remote on a phone, driving the desktop agent with a live transcript and prompt box" height="300" />
-<br/><sub><b>Spend and savings per model</b> · <b>A first view for each role</b> · <b>Drive your desktop agent from your phone</b></sub>
-<br/><br/>
-<img src=".github/assets/knowledge-graph.JPG" alt="The personalization knowledge graph: preferences and decisions learned from imported chat history, each fact with a trust label" width="100%" />
-<br/><sub><b>Memory that learns how you work</b>, with a trust label on every fact. Import your ChatGPT, Claude or Gemini history in one step.</sub>
+<img src=".github/assets/memory-cost-panel.7.4.26-2.JPG" alt="The Cost and Savings ledger: spend, cache savings and cost per model" height="250" />
+<img src=".github/assets/onboarding-roles.JPG" alt="First-run role picker with Developer, Security engineer, Manager and Executive cards" height="250" />
+<img src=".github/assets/remote-pwa-session.png" alt="LUCID Remote on a phone, driving the desktop agent with a live transcript and prompt box" height="250" />
+<img src="docs/images/readme/knowledge-graph.webp" alt="The personalization knowledge graph: preferences and decisions learned from imported chat history, each fact with a trust label" height="250" />
+<br/><sub><b>Spend per model</b> · <b>A first view for each role</b> · <b>Your agent on your phone</b> · <b>Memory with a trust label on every fact</b></sub>
 </div>
 
 ## New in v2.6: Lucid Agent Worlds
