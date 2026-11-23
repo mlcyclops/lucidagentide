@@ -48,6 +48,7 @@ import { agentsOn, BOARD_AGENTS_MAX, BOARD_LAYOUTS, BOARD_NAME_MAX, boardHasNeed
 // P-FLEET.L18: named lane groups - pure model; this file owns only chips, dividers and storage.
 import { assignLane, createGroup, groupSections, laneCollapsed, loadGroups, pruneLanes, removeGroup, saveGroups, toggleCollapsed, type LaneGroups } from "./lane_groups.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { fitTables } from "./md_table_fit.ts"; // P-FLEET.READ1 (ADR-0646)
 import { clampToViewport, DOCK_MIN_H, DOCK_MIN_W, loadDockState, saveDockState, snapDecision, type DockShape, type DockState, type DockStorage } from "./share_dock.ts";
 import { isAutoPreviewPath } from "./preview_tabs.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with the main chat thread so the two cannot drift.
@@ -61,7 +62,7 @@ import { githubPickNote, mountRepoPicker, repoPickerHtml } from "./repo_picker.t
 import { displayStatus, laneRollup } from "../collab/fleet_status.ts"; // P-PWA-FLEET.2: order + wording + counts shared with the phone's fleet bar
 // P-FLEET.L7: the transcript MODEL - stable ids, the chip glance line, the chevron body, the clipboard text.
 // Every one of those was hand-rolled here before; a lane chip and a composer chip can now not disagree.
-import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnCopyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
+import { laneChip, laneChipBody, laneToolDoing, mintId, settleToolRow, transcriptCopyText, turnReplyText, type LaneToolRow, type LaneTurnRow } from "./lane_transcript.ts";
 import { agedProgress, humanMs, progressLine, STREAMING_MS, withoutEstimate, type ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1: pure (DOM-free)
 import { ringView, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
@@ -2091,7 +2092,12 @@ function chipRow(t: LaneToolRow): HTMLElement {
 
 /** A SETTLED turn. Built once per turn id, then left alone forever - the whole point of the increment. */
 function buildTurn(t: GridTurn): HTMLElement {
-  const wrap = el(`<div data-lane-turn="${esc(t.id)}"></div>`);
+  const wrap = el(`<div data-lane-turn="${esc(t.id)}" data-role="${t.role}"></div>`);
+  // P-FLEET.READ1 (ADR-0646): the copy button rides a zero-height sticky strip FIRST in the turn, so on a long
+  // reply it stays at the top-right of the visible part instead of scrolling away with the turn's first line.
+  // An answer copies its reply as written (lane_transcript.turnReplyText), like the main chat's Copy.
+  const tip = t.role === "assistant" ? "Copy this reply|The reply as the agent wrote it, tables and all" : "Copy this prompt";
+  wrap.append(el(`<div class="fleet-turn-acts"><button class="fleet-turn-copy" type="button" data-fleet-turn-copy="${esc(t.id)}" data-tip="${esc(tip)}" aria-label="${t.role === "assistant" ? "Copy this reply" : "Copy this prompt"}">${icon("copy", 13)}</button></div>`));
   if (t.role === "user") {
     const line = el(`<div class="fleet-turn-user"></div>`);
     for (const src of t.images ?? []) line.append(el(`<img class="fleet-thumb" src="${esc(src)}" alt="pasted image" />`));
@@ -2105,7 +2111,7 @@ function buildTurn(t: GridTurn): HTMLElement {
     if (thinking) { const th = el(`<div class="fleet-think"></div>`); th.textContent = thinking; wrap.append(th); }
     for (const tool of t.tools) wrap.append(chipRow(tool));
     // A settled turn earns real markdown; only the live stream stays escaped text.
-    if (t.text.trim()) { const md = el(`<div class="fleet-md"></div>`); md.innerHTML = renderMarkdown(t.text); wrap.append(md); }
+    if (t.text.trim()) { const md = el(`<div class="fleet-md"></div>`); md.innerHTML = renderMarkdown(t.text); fitTables(md); wrap.append(md); }
     if (t.error) {
       const err = el(`<div class="fleet-errline">${icon("info", 11)}<span></span></div>`);
       const s = $("span", err) as HTMLElement;
@@ -2113,8 +2119,6 @@ function buildTurn(t: GridTurn): HTMLElement {
       wrap.append(err);
     }
   }
-  // Absolutely positioned, so it is last in the DOM and still top-right of the turn it copies.
-  wrap.append(el(`<button class="fleet-turn-copy" type="button" data-fleet-turn-copy="${esc(t.id)}" data-tip="Copy this turn as plain text" aria-label="Copy this turn as plain text">${icon("copy", 11)}</button>`));
   return wrap;
 }
 
@@ -3324,7 +3328,7 @@ function onClick(ev: Event): void {
   const copyTurn = t.closest("[data-fleet-turn-copy]") as HTMLElement | null;
   if (copyTurn) {
     const turn = run.turns.find((x) => x.id === copyTurn.dataset.fleetTurnCopy);
-    if (turn) void copyOut(copyTurn, turnCopyText(turn));
+    if (turn) void copyOut(copyTurn, turnReplyText(turn));
     return;
   }
   // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready mini chip swings the Preview panel out on this lane's tab; a

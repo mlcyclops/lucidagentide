@@ -5788,7 +5788,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-serve-lbl{display:block;font-size:11.5px;font-weight:600;color:var(--txt-2);margin:9px 0 5px;letter-spacing:.01em}
 .share-serve-select{flex:1;min-width:0;cursor:pointer;appearance:none;-webkit-appearance:none;
   background-image:linear-gradient(45deg,transparent 50%,var(--txt-3) 50%),linear-gradient(135deg,var(--txt-3) 50%,transparent 50%);
-  background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:26px}
+  background-position:calc(100% - 15px) 50%,calc(100% - 10px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:28px}
 .share-serve-select:disabled{opacity:.5;cursor:not-allowed}
 #shareServeHost:not([hidden]){margin-top:7px;width:100%;box-sizing:border-box}
 
@@ -6001,6 +6001,16 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-text{white-space:pre-wrap;word-break:break-word}
 .fleet-md{word-break:break-word}
 .fleet-md p{margin:0 0 4px}
+/* P-FLEET.READ1 (ADR-0646): a table in a card. Cells break only BETWEEN words (the card's break-anywhere rule
+   let a short column shrink to one character, "Ti / me"), a text column keeps a readable minimum and wraps,
+   a compact column (md_table_fit: numbers, times, dates, sizes) never wraps, and a table wider than the card
+   scrolls sideways inside itself instead of crushing its columns. */
+.fleet-md table{border-collapse:collapse;margin:2px 0 6px;display:block;overflow-x:auto;max-width:100%;border:1px solid var(--line);border-radius:7px}
+.fleet-md th,.fleet-md td{padding:4px 9px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line-soft);word-break:normal;overflow-wrap:normal;min-width:9ch}
+.fleet-md th{background:var(--bg-2);font-weight:650;color:var(--txt)}
+.fleet-md td{color:var(--txt-2)}
+.fleet-md tr:last-child td{border-bottom:0}
+.fleet-md th.md-num,.fleet-md td.md-num{white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
 .fleet-cursor{color:var(--cyan);animation:sharePulse 1s steps(2) infinite;margin-left:1px}
 .fleet-errline{display:flex;align-items:center;gap:5px;min-width:0;font-size:11px;color:var(--red)}
 .fleet-errline .ic{flex:none}
@@ -6068,11 +6078,18 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-copy{color:var(--txt-3)}
 .fleet-copy:hover{color:var(--cyan)}
 .fleet-copy.copied,.fleet-turn-copy.copied{color:var(--green)}
-.fleet-turn-copy{position:absolute;top:0;right:0;width:18px;height:18px;display:inline-flex;align-items:center;
-  justify-content:center;border:0;border-radius:5px;background:var(--bg-2);color:var(--txt-4);cursor:pointer;
+/* P-FLEET.READ1 (ADR-0646): the button sits in a zero-height sticky strip that leads the turn, so it stays at the
+   top-right of whatever part of a long reply is in view. A reply's button shows faintly at rest (it is the
+   card's "copy the output"); a prompt's appears on hover only. */
+.fleet-turn-acts{position:sticky;top:0;height:0;z-index:1;align-self:stretch;margin-bottom:-4px}
+.fleet-turn-copy{position:absolute;top:0;right:0;width:22px;height:22px;display:inline-flex;align-items:center;
+  justify-content:center;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);color:var(--txt-2);cursor:pointer;
   opacity:0;transition:opacity var(--t)}
 [data-lane-turn]{position:relative;min-width:0;display:flex;flex-direction:column;gap:4px}
-[data-lane-turn]:hover .fleet-turn-copy{opacity:1}
+[data-lane-turn][data-role="assistant"] .fleet-turn-copy{opacity:.7}
+[data-lane-turn]:hover .fleet-turn-copy,.fleet-turn-copy:focus-visible{opacity:1}
+/* the reply's first block keeps clear of the button */
+[data-lane-turn][data-role="assistant"]>.fleet-turn-acts+*{padding-right:28px}
 .fleet-turn-copy:hover{color:var(--cyan)}
 [data-lane-live]{min-width:0;display:flex;flex-direction:column;gap:4px}
 /* P-FLEET.L7: this lane's MEASURED context fill. Deliberately its own class rather than a health variant:

@@ -17,6 +17,7 @@ import {
   mintId,
   transcriptCopyText,
   turnCopyText,
+  turnReplyText,
   type LaneToolRow,
   type LaneTurnRow,
 } from "./lane_transcript.ts";
@@ -329,5 +330,20 @@ describe("laneToolDoing (P-PROGRESS.1)", () => {
   test("the intent line wins; a code-less call falls back to its command", () => {
     expect(laneToolDoing({ id: "c1", name: "run", detail: "bun test", intent: "Running the lane tests", open: false })).toBe("Running the lane tests");
     expect(laneToolDoing({ id: "c2", name: "execute", detail: "execute", input: "bun test desktop", open: false })).toBe("Running bun test desktop");
+  });
+});
+
+// P-FLEET.READ1 (ADR-0646): a reply's copy button writes the reply as written, tables intact, not the tool log.
+describe("turnReplyText (P-FLEET.READ1)", () => {
+  const table = "| Time | Section |\n|---|---|\n| 0:00 | Office |";
+  it("an answer copies its markdown exactly, without the role header, thinking or tool rows", () => {
+    const t = turn({ text: `\n${table}\n`, thinking: "hmm", tools: [row({ name: "read", detail: "a.ts" })] });
+    expect(turnReplyText(t)).toBe(table);
+  });
+  it("a prompt, or an answer with no text, copies as the plain turn does", () => {
+    const prompt = turn({ role: "user", text: "do it" });
+    expect(turnReplyText(prompt)).toBe(turnCopyText(prompt));
+    const toolsOnly = turn({ tools: [row({ name: "read", detail: "a.ts" })] });
+    expect(turnReplyText(toolsOnly)).toBe(turnCopyText(toolsOnly));
   });
 });

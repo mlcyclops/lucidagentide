@@ -6381,6 +6381,10 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-FLEET.READ1 (ADR-0646): readable tables and a visible reply copy in Fleet cards
+- **shipped (2026-11-21):** Fleet card tables break only between words, keep a 9ch minimum for text columns and never wrap compact columns (md_table_fit: times, numbers, dates, durations, sizes, versions); a wide table scrolls inside itself; each reply has a copy button in a sticky strip that stays in view down a long reply and copies the reply's markdown (lane_transcript.turnReplyText); demo_p_fleet_read_1.mjs passes in a narrow and a wide card, dark and light, and fails on the old bundle.
+- **stubbed:** nothing; the main chat's tables keep their own rules (they were not squeezed), and the header's whole-transcript copy is unchanged.
+- **next:** read a few real lane reports with tables in the installed app at the user's usual card size.
 ## P-PREVIEW.OVERFLEET1 (ADR-0645): the Preview opens on top of a floating Fleet dock and resizes there
 - **shipped (2026-11-21):** `#preview` sits at the side-panel tier (z 90) instead of no tier, so a lane's Preview opens above the floating Fleet dock (z 55) with its resize edge reachable, and Fleet stays open; the preview header's button gap goes from 5 to 6 px for the spacing audit; demo_p_preview_over_fleet_1.mjs passes at 1000x720 and 1600x1000 and fails on the old CSS ("#fleetDock paints over the preview").
 - **stubbed:** nothing; the 50vw width cap is unchanged, so the chat keeps half the window.

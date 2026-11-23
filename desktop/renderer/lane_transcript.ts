@@ -246,6 +246,13 @@ export function turnCopyText(t: LaneTurnRow): string {
   return `${t.role === "user" ? "[user]" : "[assistant]"}\n${blocks.join("\n")}`;
 }
 
+/** P-FLEET.READ1 (ADR-0646): what a turn's own copy button writes. An answer copies its reply exactly as the
+ *  agent wrote it (the markdown, tables intact), like the main chat's Copy; thinking and tool rows stay in the
+ *  whole-transcript copy in the card header. A prompt, or a turn with no reply text, copies as before. */
+export function turnReplyText(t: LaneTurnRow): string {
+  return t.role === "assistant" && t.text.trim() ? t.text.trim() : turnCopyText(t);
+}
+
 export function transcriptCopyText(
   turns: readonly LaneTurnRow[],
   live?: { text: string; thinking?: string; tools: readonly LaneToolRow[] },
