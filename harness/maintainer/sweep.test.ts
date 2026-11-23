@@ -23,25 +23,25 @@ const target: MaintainerTarget = {
   id: "lucid-core",
   repoUrl: "https://github.com/techlead187/LucidAgentIDE.git",
   provider: "github",
-  localPath: "C:/Apps AI Vibe/LucidAgentIDE",
+  localPath: "C:/My Projects/LucidAgentIDE",
   cadence: { kind: "daily", hhmm: "02:30" },
   openPr: false,
   openTracker: false,
 };
 
 const FILES: Record<string, string> = {
-  "C:/Apps AI Vibe/LucidAgentIDE/package.json": JSON.stringify({
+  "C:/My Projects/LucidAgentIDE/package.json": JSON.stringify({
     dependencies: { "loud-dep": "^1.0.0", "quiet-dep": "2.3.1", "clean-dep": "9.9.9" },
     devDependencies: { typescript: "5.9.2" },
   }),
-  "C:/Apps AI Vibe/LucidAgentIDE/go.mod": "module x\n\ngo 1.22\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.10.0\n)\n",
-  "C:/Apps AI Vibe/LucidAgentIDE/scanner-sidecar/requirements.txt": "flask==3.0.2\n-r base.txt\n",
+  "C:/My Projects/LucidAgentIDE/go.mod": "module x\n\ngo 1.22\n\nrequire (\n\tgithub.com/gin-gonic/gin v1.10.0\n)\n",
+  "C:/My Projects/LucidAgentIDE/scanner-sidecar/requirements.txt": "flask==3.0.2\n-r base.txt\n",
 };
 
 const DIRS: Record<string, string[]> = {
-  "C:/Apps AI Vibe/LucidAgentIDE": ["package.json", "go.mod", "README.md", "harness"],
-  "C:/Apps AI Vibe/LucidAgentIDE/scanner-sidecar": ["requirements.txt"],
-  "C:/Apps AI Vibe/LucidAgentIDE/harness": ["maintainer"],
+  "C:/My Projects/LucidAgentIDE": ["package.json", "go.mod", "README.md", "harness"],
+  "C:/My Projects/LucidAgentIDE/scanner-sidecar": ["requirements.txt"],
+  "C:/My Projects/LucidAgentIDE/harness": ["maintainer"],
 };
 
 /** OSV stand-in: loud-dep is critical with a fix, quiet-dep is low with no fix, everything else clean. */
@@ -103,9 +103,9 @@ test("a full multi-ecosystem sweep counts deps, finds advisories, and orders the
   expect(report.targetId).toBe("lucid-core");
   expect(report.at).toBe(AT);
   expect(outcome.manifests).toEqual([
-    "C:/Apps AI Vibe/LucidAgentIDE/package.json",
-    "C:/Apps AI Vibe/LucidAgentIDE/go.mod",
-    "C:/Apps AI Vibe/LucidAgentIDE/scanner-sidecar/requirements.txt",
+    "C:/My Projects/LucidAgentIDE/package.json",
+    "C:/My Projects/LucidAgentIDE/go.mod",
+    "C:/My Projects/LucidAgentIDE/scanner-sidecar/requirements.txt",
   ]);
   // 4 npm + 1 go + 1 pypi = 6 declarations read across three manifests.
   expect(report.deps).toBe(6);
@@ -149,7 +149,7 @@ test("manifest errors ride into the report attributed to their file", async () =
   const outcome = await sweepTarget(target, makeIo());
   const errors = outcome.report.findings.filter((f) => f.kind === "manifest-error");
   expect(errors).toHaveLength(1);
-  expect(errors[0]?.name).toBe("C:/Apps AI Vibe/LucidAgentIDE/scanner-sidecar/requirements.txt");
+  expect(errors[0]?.name).toBe("C:/My Projects/LucidAgentIDE/scanner-sidecar/requirements.txt");
   expect(errors[0]?.summary).toContain("include not followed (-r base.txt)");
   expect(errors[0]?.ecosystem).toBe("n/a");
 });
@@ -250,8 +250,8 @@ test("the sweep is read-only: it reads exactly the manifests it discovered and n
   const outcome = await sweepTarget(target, io);
   expect(read).toEqual(outcome.manifests);
   // Listing is confined to the target root plus one level of known source directories.
-  expect(listed[0]).toBe("C:/Apps AI Vibe/LucidAgentIDE");
-  expect(listed.every((d) => d.startsWith("C:/Apps AI Vibe/LucidAgentIDE"))).toBe(true);
+  expect(listed[0]).toBe("C:/My Projects/LucidAgentIDE");
+  expect(listed.every((d) => d.startsWith("C:/My Projects/LucidAgentIDE"))).toBe(true);
   // There is no writer to call: the contract itself makes a mutating sweep impossible.
   const keys = Object.keys(io).sort();
   expect(keys).toEqual(["fetchImpl", "listDir", "loadPrevSbom", "now", "readFile"]);

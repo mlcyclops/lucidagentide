@@ -6,6 +6,7 @@
 // the 16 kHz speech fixture, and score a transcript against the sentence it speaks.
 
 import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseWav } from "../brief/tts_backend.ts";
 import { pcm16ToMonoFloat } from "./resample.ts";
@@ -20,7 +21,7 @@ export const WHISTLE_MODEL_SHA256_PIN = WHISTLE_TEST_PINS[2]!.sha256;
 /** What harness/fixtures/whistle/quick_fox_16k.wav says (12.28 s, Kokoro, on-device). */
 export const FIXTURE_TEXT = "The quick brown fox jumps over the lazy dog. Lucid Creator Edition transcribes audio on this machine, with word level timestamps, and sends nothing over the network.";
 export const FIXTURE_WAV = join(import.meta.dir, "..", "fixtures", "whistle", "quick_fox_16k.wav");
-const SCRATCH_DIR = "C:\\Users\\neorc\\AppData\\Local\\Temp\\whistle-spike";
+const SCRATCH_DIR = join(tmpdir(), "whistle-spike");
 
 /** env LUCID_WHISTLE_DIR -> desktop/whistle (repo) -> the spike's scratch dir; a dir counts only with all three files. */
 export function findWhistleAssetDir(): string | null {

@@ -96,8 +96,8 @@ describe("imageForAction", () => {
 
 describe("paths on a narrow card", () => {
   test("break only after a separator, and join back to the path", () => {
-    const win = "C:\\Users\\neorc\\.omp\\ask-lucid\\images\\2026-11-15\\m3x-1a2b.png";
-    expect(pathBreakParts(win)).toEqual(["C:\\", "Users\\", "neorc\\", ".omp\\", "ask-lucid\\", "images\\", "2026-11-15\\", "m3x-1a2b.png"]);
+    const win = "C:\\Users\\operator\\.omp\\ask-lucid\\images\\2026-11-15\\m3x-1a2b.png";
+    expect(pathBreakParts(win)).toEqual(["C:\\", "Users\\", "operator\\", ".omp\\", "ask-lucid\\", "images\\", "2026-11-15\\", "m3x-1a2b.png"]);
     expect(pathBreakParts(win).join("")).toBe(win);
     const posix = "/home/u/.omp/ask-lucid/images/x.webp";
     expect(pathBreakParts(posix)).toEqual(["/", "home/", "u/", ".omp/", "ask-lucid/", "images/", "x.webp"]);

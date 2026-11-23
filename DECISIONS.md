@@ -9210,7 +9210,7 @@ on close), and `Ctrl/⌘+D` toggles the mic from anywhere. Both are shown in the
 Typecheck clean (root + desktop). Live preview: cost note renders as one span (svg + span, single line);
 mic tooltip shows "Ctrl+D", Listen tooltip shows "Ctrl+Space"; Ctrl+Space dispatched into the open viewer
 fires the Listen handler; the real print doc built from a saved brief has `body{background:#fff}`, a
-`.print-title`, and a `.print-foot` reading "Prepared for: nicholas.chadwick.ctr@gmail.com". No console errors.
+`.print-title`, and a `.print-foot` reading "Prepared for: operator@example.com". No console errors.
 
 ### Relates to
 
@@ -21119,7 +21119,7 @@ The agent's `preview_open` tool stopped opening the Preview panel. Observed live
 ack, no panel appears, and a following `preview_inspect` times out with "no preview is open (or it
 didn't respond)". The workspace sits in a OneDrive path with spaces, which made that the obvious
 suspect. It was not: `/api/preview/serve` was proven to return HTTP 200 and 34,409 bytes for the exact
-space-bearing, dot-dir path (`.../Apps AI Vibe/.../.omp/tmp/hardening.html`), with the inspect bridge
+space-bearing, dot-dir path (`.../My Projects/.../.omp/tmp/hardening.html`), with the inspect bridge
 injected. Containment, `isLocalFileTarget`, and `toFileUrl` percent-encoding all handle it.
 
 The real cause is a chain through omp's ACP mapper, read in the vendored source:
