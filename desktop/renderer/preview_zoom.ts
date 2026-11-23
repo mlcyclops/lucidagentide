@@ -21,6 +21,39 @@ export function stepPreviewZoom(zoom: number, dir: 1 | -1): number {
   return Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, next / 100));
 }
 
+/** P-PREVIEW.FIT1: what the previewed document reported about its own size (preview_bridge PREVIEW_ZOOM_JS):
+ *  its content box `w` x `h`, and `fixed` when html/body cannot scroll (a slide, a video card, a poster), so the
+ *  content past the frame's edge is only reachable if the panel lays it out whole. */
+export interface PreviewContentSize { w: number; h: number; fixed: boolean }
+
+/** Never lay a document out wider or taller than this (a page sized in vw/vh grows with its frame). */
+export const PREVIEW_CONTENT_MAX_PX = 8192;
+
+/**
+ * The stage (iframe) size and CSS zoom for one preview tab in the desktop device mode.
+ * - The frame is at least as wide as the panel. A document wider than that (a 1920 px video card in a 780 px
+ *   panel) gets a frame as wide as its content, so nothing is cut off and the panel pans across it.
+ * - A document that cannot scroll itself (`fixed`) also gets a frame as tall as its content.
+ * - `fit` (the default) picks the zoom that shows all of an oversized document: the panel width over the content
+ *   width (and height, for a fixed document), never above 100%. A document that already fits keeps 100%.
+ * - Otherwise the user's manual zoom applies.
+ */
+export function previewLayout(o: { viewportW: number; viewportH: number; content: PreviewContentSize | null; fit: boolean; manualZoom: number }): { stageW: number; stageH: number; zoom: number; fitZoom: number } {
+  const vw = Math.max(1, o.viewportW), vh = Math.max(1, o.viewportH);
+  const c = o.content;
+  const cw = c ? Math.min(PREVIEW_CONTENT_MAX_PX, Math.max(0, c.w)) : 0;
+  const ch = c && c.fixed ? Math.min(PREVIEW_CONTENT_MAX_PX, Math.max(0, c.h)) : 0;
+  let fitZoom = 1;
+  if (cw > vw + 1) fitZoom = Math.min(fitZoom, vw / cw);
+  if (ch > vh + 1) fitZoom = Math.min(fitZoom, vh / ch);
+  fitZoom = Math.max(PREVIEW_ZOOM_MIN, fitZoom);
+  const zoom = o.fit ? fitZoom : Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, o.manualZoom));
+  // Below 100% the frame grows so the shrunken page still fills the panel; above 100% the page keeps the panel's
+  // layout width and is magnified (the panel scrolls and pans across it), as before.
+  const fill = Math.min(zoom, 1);
+  return { stageW: Math.max(vw / fill, cw), stageH: Math.max(vh / fill, ch), zoom, fitZoom };
+}
+
 /** Turns wheel travel into whole zoom steps: one notch is one step, small trackpad deltas add up, and a
  *  reversal starts over. */
 export class PreviewWheelSteps {

@@ -14,18 +14,29 @@
 //   - capGraph    : pure top-hubs node cap (the P-KG-CODE.1 CAP=600 idea, reusable + snapshot-safe)
 //   - watchPerfTier: thin runtime sampler (Battery API + hardwareConcurrency + reduced-motion) with a
 //                    localStorage-persisted user mode - the pure core stays headlessly testable.
+//   - P-VIZ.GPU1 (ADR-0651): the GPU class (gpu_probe.ts) joins the signals, `ultra` and `cinematic` sit above
+//     `full`, and createFrameGovernor is the 3 s frame-time check Visualize uses to step Auto down one tier.
 
 import type { PersonalGraphData } from "./bridge.ts";
+import { probeGpu, type GpuClass, type GpuProbe } from "./gpu_probe.ts";
 import type { KVStore } from "./swr_cache.ts";
 
-export type PerfTier = "full" | "reduced" | "minimal";
+/** P-VIZ.GPU1 (ADR-0651): `ultra` and `cinematic` sit above `full`. They only add Visualize fidelity; every other
+ *  consumer (Knowledge Graph, poll cadence, preview curtain) reads them as `full` through baseTier. */
+export type PerfTier = "full" | "reduced" | "minimal" | "ultra" | "cinematic";
 export type PerfMode = "auto" | PerfTier;
+/** The three tiers everything outside Visualize knows. */
+export type BaseTier = "full" | "reduced" | "minimal";
+/** Weakest first: the governor steps down along it. */
+export const PERF_TIERS: readonly PerfTier[] = ["minimal", "reduced", "full", "ultra", "cinematic"];
 
 export interface PerfSignals {
   onBattery: boolean; // discharging right now
   batteryLevel: number | null; // 0..1, null = unknown
   cores: number | null; // navigator.hardwareConcurrency, null = unknown
   reducedMotion: boolean; // OS prefers-reduced-motion
+  /** P-VIZ.GPU1: the GPU class (gpu_probe.ts); null or absent = unknown (never degrades). */
+  gpu?: GpuClass | null;
 }
 
 const LOW_BATTERY = 0.2; // discharging at/below this → minimal (stop discretionary rendering)
@@ -33,26 +44,89 @@ const WEAK_CORES = 4; // at/below this many logical cores → reduced even on AC
 
 /** Fail-safe normalize of a persisted mode (P-ROLE.1 pattern): anything unrecognized → "auto". */
 export function normalizePerfMode(raw: string | null | undefined): PerfMode {
-  return raw === "full" || raw === "reduced" || raw === "minimal" || raw === "auto" ? raw : "auto";
+  return raw === "auto" || (PERF_TIERS as readonly (string | null | undefined)[]).includes(raw) ? (raw as PerfMode) : "auto";
+}
+
+/** ultra and cinematic are `full` to everything that is not Visualize. */
+export function baseTier(t: PerfTier): BaseTier {
+  return t === "ultra" || t === "cinematic" ? "full" : t;
+}
+
+/** One tier down (minimal stays minimal). */
+export function stepDownTier(t: PerfTier): PerfTier {
+  return PERF_TIERS[Math.max(0, PERF_TIERS.indexOf(t) - 1)]!;
+}
+
+/** `t`, but never above `cap` (null = no cap). */
+export function capTier(t: PerfTier, cap: PerfTier | null): PerfTier {
+  return cap !== null && PERF_TIERS.indexOf(t) > PERF_TIERS.indexOf(cap) ? cap : t;
 }
 
 /** The active render tier. An explicit user mode ALWAYS wins; "auto" derives from the machine:
- *  low battery → minimal; on battery or a weak CPU or OS reduced-motion → reduced; else full.
+ *  a software GPU or low battery → minimal; on battery or a weak CPU or OS reduced-motion → reduced;
+ *  a discrete GPU on AC → ultra; else (an integrated or unknown GPU) full. Auto never picks cinematic.
  *  Unknown signals never degrade (no battery info reads as plugged in) - degrade only on evidence. */
 export function resolveTier(mode: PerfMode, s: PerfSignals): PerfTier {
   if (mode !== "auto") return mode;
+  if (s.gpu === "software") return "minimal";
   if (s.onBattery && s.batteryLevel !== null && s.batteryLevel <= LOW_BATTERY) return "minimal";
   if (s.onBattery) return "reduced";
   if (s.cores !== null && s.cores > 0 && s.cores <= WEAK_CORES) return "reduced";
   if (s.reducedMotion) return "reduced";
+  if (s.gpu === "discrete") return "ultra";
   return "full";
+}
+
+// ── P-VIZ.GPU1: the frame-time governor ──────────────────────────────────────
+
+/** Frames are ignored this long after a mount (shader compiles, texture uploads, the first fit). */
+export const GOVERNOR_SETTLE_MS = 2000;
+/** The check: this much busy rendering is measured before a verdict. */
+export const GOVERNOR_WINDOW_MS = 3000;
+/** A frame misses when it takes longer than this many times its budget (vsync quantization on 75 Hz or 144 Hz
+ *  panels stretches a healthy 60 fps budget to at most ~1.6x). */
+export const GOVERNOR_SLACK = 1.75;
+/** The check misses when more than this share of its frames missed. */
+export const GOVERNOR_MISS_SHARE = 0.5;
+/** Gaps longer than this are a stall (tab switch, a dialog, a GC pause), not a frame rate: not counted. */
+const GOVERNOR_STALL_MS = 250;
+const GOVERNOR_MIN_FRAMES = 10;
+
+export type GovernorVerdict = "pending" | "ok" | "miss";
+export interface GovernorStats { verdict: GovernorVerdict; frames: number; meanMs: number; slowShare: number; budgetMs: number }
+
+/** Measures delivered frame intervals while the scene is busy and gives one verdict per mount. Counters only:
+ *  safe to call every frame. The caller decides what a miss does (Visualize steps Auto down one tier). */
+export interface FrameGovernor {
+  /** One busy frame: `frameMs` since the previous busy frame, `budgetMs` the interval the loop asked for. */
+  sample(now: number, frameMs: number, budgetMs: number): GovernorVerdict;
+  verdict(): GovernorVerdict;
+  stats(): GovernorStats;
+}
+
+export function createFrameGovernor(startedAt: number): FrameGovernor {
+  let verdict: GovernorVerdict = "pending";
+  let frames = 0, slow = 0, sumMs = 0, budget = 0;
+  return {
+    sample(now, frameMs, budgetMs) {
+      if (verdict !== "pending" || now - startedAt < GOVERNOR_SETTLE_MS || frameMs <= 0 || frameMs > GOVERNOR_STALL_MS) return verdict;
+      frames++;
+      sumMs += frameMs;
+      budget = budgetMs;
+      if (frameMs > budgetMs * GOVERNOR_SLACK) slow++;
+      if (sumMs >= GOVERNOR_WINDOW_MS && frames >= GOVERNOR_MIN_FRAMES) verdict = slow / frames > GOVERNOR_MISS_SHARE ? "miss" : "ok";
+      return verdict;
+    },
+    verdict: () => verdict,
+    stats: () => ({ verdict, frames, meanMs: frames ? sumMs / frames : 0, slowShare: frames ? slow / frames : 0, budgetMs: budget }),
+  };
 }
 
 /** Poll cadence for a base interval: battery tiers stretch 4x, a hidden window stretches 4x more
  *  (nothing visible needs freshness; the caller catches up on visibilitychange). Compounding is
  *  deliberate: hidden-on-battery is the case that drains laptops. */
 export function pollDelay(baseMs: number, tier: PerfTier, hidden: boolean): number {
-  return baseMs * (tier === "full" ? 1 : 4) * (hidden ? 4 : 1);
+  return baseMs * (baseTier(tier) === "full" ? 1 : 4) * (hidden ? 4 : 1);
 }
 
 export interface GraphTierOpts {
@@ -64,7 +138,7 @@ export interface GraphTierOpts {
 /** Per-tier rendering knobs for mountGraph. "minimal" is only reached via the user's explicit
  *  "Render anyway" (the default minimal experience is the paused card - no mount at all). */
 export function graphOpts(tier: PerfTier): GraphTierOpts {
-  if (tier === "full") return { forceCalm: false, settleFrames: 480, nodeCap: null };
+  if (baseTier(tier) === "full") return { forceCalm: false, settleFrames: 480, nodeCap: null };
   if (tier === "reduced") return { forceCalm: true, settleFrames: 240, nodeCap: 400 };
   return { forceCalm: true, settleFrames: 120, nodeCap: 250 };
 }
@@ -96,12 +170,24 @@ interface BatteryLike {
 
 const MODE_KEY = "lucid.perfMode";
 
+/** The cycle order: the original four first (auto → full → reduced → minimal), then the GPU tiers. */
+const MODE_CYCLE: readonly PerfMode[] = ["auto", "full", "reduced", "minimal", "ultra", "cinematic"];
+
 export interface PerfTierWatcher {
   tier(): PerfTier;
   mode(): PerfMode;
-  /** Cycle auto → full → reduced → minimal → auto; persists; notifies subscribers. */
+  /** Cycle auto → full → reduced → minimal → ultra → cinematic → auto; persists; notifies subscribers. Clears a
+   *  governor step-down. */
   cycleMode(): PerfMode;
   onChange(cb: (tier: PerfTier, mode: PerfMode) => void): void;
+  /** P-VIZ.GPU1: the probed GPU (null until the probe answers). */
+  gpu(): GpuProbe | null;
+  /** P-VIZ.GPU1: the frame-time governor missed its budget. Under Auto, cap the tier one below the current one for
+   *  the rest of the session (or until the user picks a mode) and notify; an explicit mode is never touched.
+   *  Returns the new tier, or null when nothing changed. */
+  stepDown(): PerfTier | null;
+  /** P-VIZ.GPU1: the tier the governor stepped Auto down from (null: no step-down). */
+  steppedFrom(): PerfTier | null;
 }
 
 /** localStorage when available (renderer), else null (tests inject their own store). */
@@ -117,7 +203,7 @@ function defaultStore(): KVStore | null {
 /** Sample the machine + user mode and keep the resolved tier current. Battery state arrives async
  *  (Battery API is promise-based) and updates on charging/level events; until it resolves the machine
  *  is treated as plugged in (degrade only on evidence). */
-export function watchPerfTier(kv?: KVStore | null): PerfTierWatcher {
+export function watchPerfTier(kv?: KVStore | null, gpuProbe: () => Promise<GpuProbe | null> = probeGpu): PerfTierWatcher {
   const store = kv !== undefined ? kv : defaultStore();
   let mode = normalizePerfMode(store?.getItem(MODE_KEY));
   const signals: PerfSignals = {
@@ -125,19 +211,34 @@ export function watchPerfTier(kv?: KVStore | null): PerfTierWatcher {
     batteryLevel: null,
     cores: typeof navigator !== "undefined" ? (navigator.hardwareConcurrency ?? null) : null,
     reducedMotion: typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches,
+    gpu: null,
   };
-  let cur = resolveTier(mode, signals);
+  let gpuInfo: GpuProbe | null = null;
+  /** P-VIZ.GPU1: the governor's cap under Auto (null = none). */
+  let cap: PerfTier | null = null;
+  const resolve = (): PerfTier => capTier(resolveTier(mode, signals), mode === "auto" ? cap : null);
+  let cur = resolve();
   const subs: Array<(t: PerfTier, m: PerfMode) => void> = [];
   const notify = (): void => {
     for (const s of subs) s(cur, mode);
   };
   const recompute = (): void => {
-    const next = resolveTier(mode, signals);
+    const next = resolve();
     if (next !== cur) {
       cur = next;
       notify();
     }
   };
+  // P-VIZ.GPU1: the GPU class arrives once (WebGL string + Electron info); until then the GPU is unknown.
+  gpuProbe()
+    .then((p) => {
+      gpuInfo = p;
+      signals.gpu = p?.cls ?? null;
+      recompute();
+    })
+    .catch(() => {
+      /* no probe - the GPU stays unknown */
+    });
   const nav = typeof navigator !== "undefined" ? (navigator as Navigator & { getBattery?: () => Promise<BatteryLike> }) : null;
   nav?.getBattery
     ?.()
@@ -158,14 +259,29 @@ export function watchPerfTier(kv?: KVStore | null): PerfTierWatcher {
     tier: () => cur,
     mode: () => mode,
     cycleMode() {
-      mode = mode === "auto" ? "full" : mode === "full" ? "reduced" : mode === "reduced" ? "minimal" : "auto";
+      mode = MODE_CYCLE[(MODE_CYCLE.indexOf(mode) + 1) % MODE_CYCLE.length]!;
       store?.setItem(MODE_KEY, mode);
-      cur = resolveTier(mode, signals);
+      cap = null; // a user choice re-arms the governor from the machine's own tier
+      cur = resolve();
       notify();
       return mode;
     },
     onChange(cb) {
       subs.push(cb);
+    },
+    gpu: () => gpuInfo,
+    stepDown() {
+      if (mode !== "auto") return null;
+      const next = stepDownTier(cur);
+      if (next === cur) return null;
+      cap = next;
+      recompute();
+      return cur;
+    },
+    steppedFrom() {
+      if (mode !== "auto" || cap === null) return null;
+      const uncapped = resolveTier(mode, signals);
+      return uncapped !== cur ? uncapped : null;
     },
   };
 }

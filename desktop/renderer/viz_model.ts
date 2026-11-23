@@ -22,15 +22,24 @@
 // them: the lane's own run poll (applyRuns with the lane as parent) does, or the lane stopping. Only a
 // task call that FAILED ends its batch at once. Every node keeps `idleSince` (the office figure dozes off
 // after a minute), and `teamOf` says how many of a node's team work while it does not (it supervises).
+//
+// P-VIZ.APPROVE1 (ADR-0655): every node keeps the tool-call approvals waiting on the user (`approvals`; a subagent's
+// on the node it works for), from the `permission` events and the fleet poll, until they are answered, time out at the
+// engine, are auto-approved or die with the turn; `triage` counts them with the fleet's working, waiting and failed lanes.
 
 import { orbitSlots } from "./orbit_layout.ts";
-import type { PerfTier } from "./perf_tier.ts";
+import type { BaseTier, PerfTier } from "./perf_tier.ts";
 import type { VizBusEvent, VizOrigin } from "./viz_bus.ts";
 
 export const HUB_ID = "main";
 
 /** P-VIZ.4 (ADR-0625): how the figures are drawn: the anime mini Lucids, or office workers at desks. */
-export type VizStyle = "anime" | "professional";
+export type BuiltinStyle = "anime" | "professional";
+/** P-WORLDS.1 (ADR-0648): or an installed Lucid Agent World (`world:<key>`, viz_worlds.ts). */
+export type VizStyle = BuiltinStyle | `world:${string}`;
+
+/** True for the two styles the app ships (anime, professional). */
+export function isBuiltinStyle(s: VizStyle): s is BuiltinStyle { return s === "anime" || s === "professional"; }
 
 export type VizKind = "hub" | "agent" | "subagent";
 
@@ -147,6 +156,12 @@ export interface VizNode {
   /** When the node last stopped working (null while it works). */
   idleSince: number | null;
   usage: { used: number; size: number; cost: number } | null;
+  /** P-VIZ.7 (ADR-0641): git commit / push calls still running (call id -> opened at), and until when the commit
+   *  animation holds after the last one settles (so a fast commit still reads). */
+  commit: { open: Map<string, number>; holdUntil: number };
+  /** P-VIZ.APPROVE1 (ADR-0655): the tool-call approvals waiting on the user here, oldest first. A subagent's ask
+   *  surfaces on the lane (or Main) it works for, so a subagent's own list stays empty. */
+  approvals: VizApproval[];
 }
 
 export type VizEvent =
@@ -163,6 +178,8 @@ export interface VizState {
   /** Which stream feeds each source right now (one per source; see `accepts`). */
   feeds: Map<string, { origin: VizOrigin; at: number }>;
   lastTick: number;
+  /** P-VIZ.APPROVE1 (ADR-0655): the lane ask id counter, and the ids of asks the view has not seen yet (fly-to). */
+  asks: { seq: number; fresh: string[] };
 }
 
 export const RATE_TAU_MS = 1000;
@@ -193,7 +210,7 @@ export const LOG_MAX = 400;
 const FRESH_MAX = 200;
 
 export function createVizState(now: number, hubModel = ""): VizState {
-  const s: VizState = { nodes: new Map(), log: [], fresh: [], feeds: new Map(), lastTick: now };
+  const s: VizState = { nodes: new Map(), log: [], fresh: [], feeds: new Map(), lastTick: now, asks: { seq: 0, fresh: [] } };
   s.nodes.set(HUB_ID, newNode({ id: HUB_ID, kind: "hub", parent: null, name: "Main", label: "Main", persona: "lead", model: hubModel }, now));
   return s;
 }
@@ -203,7 +220,42 @@ function newNode(p: { id: string; kind: VizKind; parent: string | null; name: st
     ...p, status: "idle", laneStatus: null, rate: 0, mean: 0, pending: 0, totalTok: 0, tools: 0, toolFails: 0, activity: 0,
     tappedAt: 0, lastAt: now, bornAt: now, endedAt: null, goneAt: null, asked: null, surgeAt: 0,
     agentType: null, assignment: null, runName: null, batch: null, polled: false, idleSince: now, usage: null,
+    commit: { open: new Map(), holdUntil: 0 }, approvals: [],
   };
+}
+
+// ---------------------------------------------------------------------------------------------- commits
+
+/** P-VIZ.7 (ADR-0641): a tool call that commits or pushes: `git [opts] commit|push` in a shell command (options
+ *  such as `-C <dir>` or `-c k=v` may sit between), or the commit namespace's `.commit("subject"` in eval code. */
+export const COMMIT_CALL_RE = /\bgit(?:\s+-{1,2}[\w-]+(?:[= ](?:"[^"]*"|'[^']*'|\S+))?)*\s+(?:commit|push)\b|\.commit\(\s*["'`]/;
+/** After the last commit call settles, the animation holds this long (a quick commit still reads). */
+export const COMMIT_HOLD_MS = 3000;
+/** A commit call that never reports back stops animating after this long. */
+export const COMMIT_MAX_MS = 180_000;
+
+function isCommitCall(e: Loose): boolean {
+  for (const v of [e.input, e.detail, e.intent]) if (typeof v === "string" && COMMIT_CALL_RE.test(v)) return true;
+  return false;
+}
+
+function commitSettled(n: VizNode, id: unknown, now: number): void {
+  if (typeof id !== "string" || !n.commit.open.delete(id)) return;
+  n.commit.holdUntil = Math.max(n.commit.holdUntil, now + COMMIT_HOLD_MS);
+}
+
+/** Every open commit call is over (the turn ended or died): hold, then stop. */
+function commitsEnded(n: VizNode, now: number): void {
+  if (!n.commit.open.size) return;
+  n.commit.open.clear();
+  n.commit.holdUntil = Math.max(n.commit.holdUntil, now + COMMIT_HOLD_MS);
+}
+
+/** Is the node committing right now (a commit or push call is running, or one just settled)? */
+export function committing(n: VizNode, now: number): boolean {
+  if (now < n.commit.holdUntil) return true;
+  for (const at of n.commit.open.values()) if (now - at < COMMIT_MAX_MS) return true;
+  return false;
 }
 
 /** chars / 4: the usual rough count for English text and code. An estimate, labeled as one everywhere. */
@@ -249,13 +301,18 @@ function wake(n: VizNode, now: number): void {
   if (n.status !== "active") { n.status = "active"; n.endedAt = null; }
 }
 
-type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown; detail?: unknown; turns?: unknown };
+type Loose = { type: string; text?: unknown; status?: unknown; ok?: unknown; name?: unknown; id?: unknown; agent?: unknown; title?: unknown; assignments?: unknown; names?: unknown; message?: unknown; used?: unknown; size?: unknown; cost?: unknown; detail?: unknown; turns?: unknown; input?: unknown; intent?: unknown;
+  /** P-VIZ.APPROVE1: a permission ask (Main's ChatEvent or a lane's LaneEvent). */
+  tool?: unknown; url?: unknown; options?: unknown; exec?: unknown; egress?: unknown; localFile?: unknown; danger?: unknown; summary?: unknown; kind?: unknown };
 
 /** Fold one tapped event in. Events for a source that is neither Main nor a known agent are dropped
  *  (another hub's lane, or a lane the fleet poll has not listed yet). True when the event was taken (not a
  *  duplicate from a second stream), so the view can keep the same one-stream record of the output. */
 export function applyEvent(s: VizState, ev: VizBusEvent, now: number): boolean {
   const n = s.nodes.get(ev.source);
+  // P-VIZ.APPROVE1 (ADR-0655): a subagent's ask surfaces on the node it works for (askOwner); nothing else of a
+  // subagent's rides the bus. False: the ask is not output of the source's stream (no ledger, build or panel record).
+  if (n?.kind === "subagent" && ev.e.type === "permission") { takeAsk(s, n, ev.e as Loose, now); return false; }
   if (!n || n.kind === "subagent" || n.goneAt !== null) return false;
   if (!accepts(s, ev.source, ev.origin, now)) return false;
   fold(s, n, ev.e as Loose, now);
@@ -273,26 +330,45 @@ function fold(s: VizState, n: VizNode, e: Loose, now: number): void {
       return;
     }
     case "tool":
+      // P-VIZ.7: a lane settles a call with its own tool event (done or failed); Main settles it with tool-meta.
+      if (e.status === "done" || e.status === "failed") commitSettled(n, e.id, now);
       if (e.status === "failed") { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); return; }
-      if (e.status === undefined || e.status === "open") { n.tools++; n.activity = 1; wake(n, now); }
+      if (e.status === undefined || e.status === "open") {
+        n.tools++; n.activity = 1; wake(n, now);
+        if (isCommitCall(e)) n.commit.open.set(typeof e.id === "string" ? e.id : `commit-${now}`, now);
+      }
       return;
     case "tool-meta":
+      if (e.ok !== undefined) commitSettled(n, e.id, now);
       if (e.ok === false) { toolFailed(s, n, now, typeof e.name === "string" ? e.name : "tool"); failBatch(s, n, e.id, now); }
       return;
     case "subagent":
       addSubagents(s, n, e, now);
       return;
     case "status":
+      // P-VIZ.APPROVE1: the lane's live status is current, so a lane that left needs-approval has no open ask.
+      if (n.kind === "agent" && e.status !== "needs-approval") n.approvals = [];
       if (typeof e.status === "string") applyLaneStatus(s, n, e.status, now);
+      return;
+    case "permission":
+      takeAsk(s, n, e, now);
+      return;
+    case "permission-resolved": // app.ts: Main's chat card was answered (here, in the chat, by voice, or the turn ended)
+      if (typeof e.id === "string") resolveApproval(s, e.id);
+      return;
+    case "auto-approved":
+      n.approvals = [];
       return;
     case "usage":
       if (typeof e.used === "number" && typeof e.size === "number") n.usage = { used: e.used, size: e.size, cost: typeof e.cost === "number" ? e.cost : 0 };
       return;
     case "done":
+      n.approvals = []; // an unanswered ask dies with its turn (the chat card finalizes it as a deny)
       turnEnd(s, n, now);
       return;
     case "error":
     case "no-response":
+      n.approvals = [];
       die(s, n, now, typeof e.message === "string" && e.message ? e.message : "the turn failed");
       return;
     default:
@@ -307,6 +383,7 @@ function toolFailed(s: VizState, n: VizNode, now: number, tool: string): void {
 }
 
 function die(s: VizState, n: VizNode, now: number, why: string): void {
+  commitsEnded(n, now);
   if (n.status === "killed") return;
   n.status = "killed"; n.endedAt = now; n.rate = 0; n.pending = 0; n.asked = null;
   power(s, n, "killed", now, why);
@@ -317,6 +394,7 @@ function die(s: VizState, n: VizNode, now: number, why: string): void {
  *  Delegations that rode a LANE turn end with it (lanes have no run poll); Main's background runs are
  *  governed by the run poll instead. */
 function turnEnd(s: VizState, n: VizNode, now: number): void {
+  commitsEnded(n, now);
   if (n.asked === "cancel") {
     n.asked = null; n.status = "paused"; n.rate = 0;
     power(s, n, "paused", now, "turn stopped");
@@ -416,7 +494,8 @@ function addSubagents(s: VizState, parent: VizNode, e: Loose, now: number): void
 
 // ----------------------------------------------------------------------------------- poll inputs
 
-export interface VizLaneInput { id: string; name: string; model: string; status: string; usage?: { used: number; size: number; cost: number } }
+/** `pendingApproval` (P-VIZ.APPROVE1): the lane's open ask as the poll reports it (LaneView.pendingApproval). */
+export interface VizLaneInput { id: string; name: string; model: string; status: string; usage?: { used: number; size: number; cost: number }; pendingApproval?: { summary: string; kind: string } }
 
 /** The fleet poll (the current hub's lanes, in fleet order). New lanes join; a lane that left the list
  *  powers down (killed if the user force-removed it or it was mid-work, else ended) and is dropped once
@@ -438,6 +517,7 @@ export function applyFleet(s: VizState, lanes: readonly VizLaneInput[], now: num
     n.model = l.model;
     if (l.usage) n.usage = l.usage;
     applyLaneStatus(s, n, l.status, now);
+    pollAsk(s, n, l, now);
   }
   for (const n of s.nodes.values()) {
     if (n.kind !== "agent" || seen.has(n.id) || n.goneAt !== null) continue;
@@ -446,7 +526,7 @@ export function applyFleet(s: VizState, lanes: readonly VizLaneInput[], now: num
     if (kill && n.status !== "killed") power(s, n, "killed", now, n.asked === "kill" ? "removed" : "removed while working");
     else if (!kill && n.status !== "ended" && n.status !== "killed") power(s, n, "ended", now, "removed");
     n.status = kill ? "killed" : n.status === "killed" ? "killed" : "ended";
-    n.goneAt = now; n.endedAt = now; n.rate = 0;
+    n.goneAt = now; n.endedAt = now; n.rate = 0; n.approvals = [];
     endChildren(s, n, now, "its agent was removed");
   }
 }
@@ -527,6 +607,8 @@ export function tick(s: VizState, now: number): void {
     }
     if (n.status === "active") n.idleSince = null;
     else n.idleSince ??= now;
+    // P-VIZ.APPROVE1: an ask nobody answered timed out at the engine (fail-closed: a deny), so it leaves here too.
+    if (n.approvals.some((x) => x.expiresAt <= now)) n.approvals = n.approvals.filter((x) => x.expiresAt > now);
     if (n.goneAt !== null && now - n.goneAt >= GONE_MS) { drop(s, n.id); continue; }
     if (n.kind !== "subagent") continue;
     if ((n.status === "ended" || n.status === "killed") && n.endedAt !== null && now - n.endedAt >= SUB_LINGER_MS) { drop(s, n.id); continue; }
@@ -667,6 +749,178 @@ export function describeNode(n: VizNode, now: number, team?: VizTeam): { title: 
   if (n.toolFails > 0) lines.push(`${n.toolFails} failed tool call${n.toolFails === 1 ? "" : "s"}`);
   if (n.model) lines.push(n.model);
   return { title: n.name, lines };
+}
+
+// ------------------------------------------------------------------------------------------ approvals
+
+/** P-VIZ.APPROVE1 (ADR-0655): a tool-call approval waiting on the user. Main's comes from the chat's `permission`
+ *  ChatEvent (its engine id and options; answered through the chat card's own path), a lane's from the lane's
+ *  `permission` LaneEvent or the fleet poll's pendingApproval (one open ask per lane; answered with fleetAnswer). */
+export type AskType = "tool" | "exec" | "egress" | "file";
+export const ASK_TYPES: readonly AskType[] = ["tool", "exec", "egress", "file"];
+export interface AskOption { optionId: string; name: string; kind?: string }
+export interface VizApproval {
+  /** Main: the engine's permission id. A lane: `<lane>#<n>`, minted once per ask and kept while it is open. */
+  id: string;
+  /** The node it shows on (askOwner: a subagent's ask rides its parent). */
+  node: string;
+  /** The node that asked (a subagent id when its ask was folded onto the parent). */
+  from: string;
+  /** The tool (Main) or the ask's kind (a lane). */
+  tool: string;
+  summary: string;
+  type: AskType;
+  /** Shown red: a command, a website or local file in the browser, a flagged danger, or a lane ask the exec floor always asks. */
+  danger: boolean;
+  /** Main's options (the chat card's buttons); null for a lane (allow or deny, the grid card's choice). */
+  options: AskOption[] | null;
+  createdAt: number;
+  /** The engine's fail-closed timeout: unanswered by then, it was denied. */
+  expiresAt: number;
+}
+
+/** acp_backend.ts PERM_MS and fleet_lanes.ts APPROVAL_TIMEOUT_MS. */
+export const MAIN_ASK_MS = 300_000;
+export const LANE_ASK_MS = 600_000;
+/** A fleet poll that left before a fresh ask can still say the lane works: the poll clears only asks this old. */
+export const ASK_POLL_GRACE_MS = 4000;
+
+const EXEC_TOOL = /^(execute|exec|bash|shell|sh|terminal|eval|run|command)\b/i;
+const EGRESS_TOOL = /^(fetch|browser|web|web_search|websearch|navigate|http|curl)\b/i;
+const FILE_TOOL = /^(edit|write|delete|move|create|patch|rename|file|notebook)\b/i;
+
+/** The triage type of an ask: Main's flags first, else the tool or kind name (ACP kinds: execute, fetch, edit...). */
+export function askTypeOf(tool: string, flags: { exec?: boolean; egress?: boolean; localFile?: boolean } = {}): AskType {
+  if (flags.exec) return "exec";
+  if (flags.localFile) return "file";
+  if (flags.egress) return "egress";
+  const t = tool.trim();
+  return EXEC_TOOL.test(t) ? "exec" : EGRESS_TOOL.test(t) ? "egress" : FILE_TOOL.test(t) ? "file" : "tool";
+}
+
+/** The node an ask surfaces on: a subagent's rides the lane (or Main) it works for. Null when that is gone. */
+export function askOwner(s: VizState, id: string): VizNode | null {
+  let n = s.nodes.get(id);
+  for (let hops = 0; n?.kind === "subagent" && hops < 8; hops++) n = n.parent ? s.nodes.get(n.parent) : undefined;
+  return n && n.kind !== "subagent" && n.goneAt === null ? n : null;
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+/** A `permission` event from `from` (Main, a lane, or a subagent, folded onto its owner). Main's asks are keyed by
+ *  the engine id (a re-attach replays them, so a known id is not a new ask); a lane holds one open ask, so a
+ *  different one replaces it (the engine denied the older) and the same one again (a second stream, or the poll saw
+ *  it first) changes nothing. */
+function takeAsk(s: VizState, from: VizNode, e: Loose, now: number): void {
+  const owner = askOwner(s, from.id);
+  if (!owner) return;
+  if (owner.kind === "hub") {
+    const id = str(e.id);
+    if (!id || owner.approvals.some((a) => a.id === id)) return;
+    const tool = str(e.tool) || "tool";
+    const flags = { exec: e.exec === true, egress: e.egress === true, localFile: e.localFile === true };
+    const type = askTypeOf(tool, flags);
+    const options = Array.isArray(e.options)
+      ? e.options.flatMap((o): AskOption[] => (o && typeof o === "object" && typeof o.optionId === "string" && o.optionId
+        ? [{ optionId: o.optionId, name: str(o.name) || o.optionId, ...(typeof o.kind === "string" ? { kind: o.kind } : {}) }] : []))
+      : [];
+    addAsk(s, owner, {
+      id, node: owner.id, from: from.id, tool, summary: str(e.detail) || str(e.url) || tool, type,
+      danger: e.danger === true || flags.exec || flags.egress || type === "exec" || type === "egress",
+      options, createdAt: now, expiresAt: now + MAIN_ASK_MS,
+    });
+    return;
+  }
+  const summary = str(e.summary) || "a privileged action";
+  const kind = str(e.kind) || "action";
+  const open = owner.approvals[0];
+  if (open && open.summary === summary && open.tool === kind) {
+    if (from.kind === "subagent") open.from = from.id; // the poll saw it first and cannot know which helper asked
+    return;
+  }
+  const type = askTypeOf(kind);
+  owner.approvals = [];
+  addAsk(s, owner, {
+    id: `${owner.id}#${++s.asks.seq}`, node: owner.id, from: from.id, tool: kind, summary, type,
+    danger: type === "exec" || type === "egress" || /\(always asks: /.test(summary),
+    options: null, createdAt: now, expiresAt: now + LANE_ASK_MS,
+  });
+}
+
+function addAsk(s: VizState, owner: VizNode, a: VizApproval): void {
+  owner.approvals.push(a);
+  s.asks.fresh.push(a.id);
+  if (s.asks.fresh.length > FRESH_MAX) s.asks.fresh.splice(0, s.asks.fresh.length - FRESH_MAX);
+}
+
+/** The fleet poll's word on a lane's ask: an open one it reports joins (a stream may not carry it, or Visualize
+ *  opened after it was asked); a lane it says is past needs-approval has none, except an ask newer than the poll. */
+function pollAsk(s: VizState, n: VizNode, l: VizLaneInput, now: number): void {
+  if (l.status === "needs-approval" && l.pendingApproval) {
+    takeAsk(s, n, { type: "permission", summary: l.pendingApproval.summary, kind: l.pendingApproval.kind }, now);
+  } else if (l.status !== "needs-approval" && n.approvals.length) {
+    n.approvals = n.approvals.filter((a) => now - a.createdAt < ASK_POLL_GRACE_MS);
+  }
+}
+
+/** The ask with this id was settled (answered here or elsewhere): it leaves. The ask, or null when none was open. */
+export function resolveApproval(s: VizState, id: string): VizApproval | null {
+  for (const n of s.nodes.values()) {
+    const i = n.approvals.findIndex((a) => a.id === id);
+    if (i >= 0) return n.approvals.splice(i, 1)[0] ?? null;
+  }
+  return null;
+}
+
+/** The asks that arrived since the last call and are still open (the view flies the camera to the newest). */
+export function drainNewApprovals(s: VizState): VizApproval[] {
+  if (!s.asks.fresh.length) return [];
+  const ids = new Set(s.asks.fresh);
+  s.asks.fresh = [];
+  return pendingApprovals(s).filter((a) => ids.has(a.id));
+}
+
+/** Every open ask, oldest first. */
+export function pendingApprovals(s: VizState): VizApproval[] {
+  const out: VizApproval[] = [];
+  for (const n of s.nodes.values()) out.push(...n.approvals);
+  return out.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export interface VizTriage {
+  total: number;
+  byType: Record<AskType, number>;
+  danger: number;
+  /** Fleet lanes by state: working (active), waiting (on you: an ask or input), failed (stopped on an error or killed). */
+  working: number;
+  waiting: number;
+  failed: number;
+}
+
+/** The triage strip's counts. */
+export function triage(s: VizState): VizTriage {
+  const t: VizTriage = { total: 0, byType: { tool: 0, exec: 0, egress: 0, file: 0 }, danger: 0, working: 0, waiting: 0, failed: 0 };
+  for (const n of s.nodes.values()) {
+    for (const a of n.approvals) { t.total++; t.byType[a.type]++; if (a.danger) t.danger++; }
+    if (n.kind !== "agent" || n.goneAt !== null) continue;
+    if (n.status === "active") t.working++;
+    else if (n.status === "waiting" || n.approvals.length) t.waiting++;
+    else if (n.status === "killed") t.failed++;
+  }
+  return t;
+}
+
+/** Main's option for a choice, by the chat card's own reading of kinds: `once` the first allow that is neither a
+ *  standing grant nor the all-commands danger option; `always` a standing grant for this program, site or tool
+ *  (never the danger option: Auto must not widen to every command or site); `deny` the reject option, else null
+ *  (no option is a deny at the engine: fail-closed). Null for once or always when the ask does not offer it. */
+export function askChoice(options: readonly AskOption[], choice: "once" | "always" | "deny"): AskOption | null {
+  const allow = (o: AskOption): boolean => /allow|approve|grant|accept|yes/i.test(`${o.kind ?? ""} ${o.optionId}`) && o.kind !== "danger" && !/reject|deny|block/i.test(`${o.kind ?? ""} ${o.optionId}`);
+  const always = (o: AskOption): boolean => o.kind === "allow_always" || /always/i.test(`${o.optionId} ${o.name}`);
+  if (choice === "deny") return options.find((o) => /reject|deny|block/i.test(`${o.kind ?? ""} ${o.optionId}`)) ?? null;
+  if (choice === "always") return options.find((o) => allow(o) && always(o) && !/every/i.test(o.name)) ?? null;
+  return options.find((o) => allow(o) && !always(o) && (o.kind === "allow_once" || /once/i.test(`${o.optionId} ${o.name}`)))
+    ?? options.find((o) => allow(o) && !always(o)) ?? null;
 }
 
 // ------------------------------------------------------------------------------ an agent's output
@@ -852,18 +1106,37 @@ export interface VizTierOpts {
   lightning: 0 | 1 | 2;
   /** Any automatic motion (bobbing, flowing particles, shakes). Off under prefers-reduced-motion. */
   motion: boolean;
-  /** How detailed each mini Lucid figure is built (P-VIZ.2): the tier itself. */
-  detail: PerfTier;
+  /** How detailed each mini Lucid figure is built (P-VIZ.2): the tier, with ultra and cinematic built as "full"
+   *  (v1 worlds and the built-in casts know three levels; P-VIZ.GPU1 passes `tier` beside it). */
+  detail: BaseTier;
+  /** P-VIZ.GPU1 (ADR-0651): the tier itself (world figures, stages and ambient get it next to `detail`). */
+  tier: PerfTier;
+  /** P-VIZ.GPU1: multisample count of the post-processing target (0 = none; the canvas keeps `antialias`). */
+  msaa: 0 | 4;
+  /** P-VIZ.GPU1: a soft contact shadow under each 3D figure. */
+  contactShadows: boolean;
+  /** P-VIZ.GPU1: bloom also on light themes, at a low strength and above the sky's brightness. */
+  lightBloom: boolean;
+  /** P-VIZ.GPU1: screen-space ambient occlusion (3D only). */
+  ssao: boolean;
+  /** P-VIZ.GPU1: a subtle depth of field focused where the auto camera looks (3D, auto camera on). */
+  dof: boolean;
 }
 
-/** The perf tier (perf_tier.ts, the same Auto / Full / Reduced / Minimal the Knowledge Graph uses) decides
- *  the budgets; prefers-reduced-motion removes all automatic motion and leaves effects as color changes. */
+const NO_GPU_EXTRAS = { msaa: 0, contactShadows: false, lightBloom: false, ssao: false, dof: false } as const;
+
+/** The perf tier (perf_tier.ts, the same Auto / Full / Reduced / Minimal the Knowledge Graph uses, plus the
+ *  P-VIZ.GPU1 ultra and cinematic tiers) decides the budgets; prefers-reduced-motion removes all automatic motion
+ *  and leaves effects as color changes. Ultra: dpr 2, MSAA, contact shadows, 12000 particles, bloom on light
+ *  themes too. Cinematic: ultra plus SSAO and depth of field. */
 export function vizTierOpts(tier: PerfTier, reducedMotion: boolean): VizTierOpts {
-  const base: VizTierOpts = tier === "full"
-    ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full" }
-    : tier === "reduced"
-      ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, lightning: 1, motion: true, detail: "reduced" }
-      : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, lightning: 0, motion: true, detail: "minimal" };
+  const base: VizTierOpts = tier === "ultra" || tier === "cinematic"
+    ? { particles: 12000, fx: 3200, fps: 60, dprCap: 2, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full", tier, msaa: 4, contactShadows: true, lightBloom: true, ssao: tier === "cinematic", dof: tier === "cinematic" }
+    : tier === "full"
+      ? { particles: 6000, fx: 1600, fps: 60, dprCap: 1.5, antialias: true, bloom: true, lightning: 2, motion: true, detail: "full", tier, ...NO_GPU_EXTRAS }
+      : tier === "reduced"
+        ? { particles: 2500, fx: 600, fps: 30, dprCap: 1.25, antialias: false, bloom: false, lightning: 1, motion: true, detail: "reduced", tier, ...NO_GPU_EXTRAS }
+        : { particles: 600, fx: 150, fps: 20, dprCap: 1, antialias: false, bloom: false, lightning: 0, motion: true, detail: "minimal", tier, ...NO_GPU_EXTRAS };
   return reducedMotion ? { ...base, particles: 0, fx: 0, lightning: 0, motion: false } : base;
 }
 

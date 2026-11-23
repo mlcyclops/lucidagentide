@@ -43,6 +43,20 @@
 // the storm front. A figure's `charge` (a drink, a bolt, absorbed energy balls) brightens its node's edges and
 // plate while it lasts. Reduced motion: no flight and no flashes, the hit lands at once.
 //
+// P-WORLDS.1 (ADR-0648): setStyle(`world:<key>`, world) builds every node with an installed Lucid Agent World
+// (viz_world_api.WorldDefinition, loaded and validated by viz_worlds): its figures (hub, agent, subagent with its
+// parent's role), its stage under each one (else the glass cube and plate; an invisible pick box either way; the
+// stage gets the node's status color), its sky painted into the backdrop, its fog, its edge look and colors, its
+// charge tint and its ambient layer (built on activation and on a 2D/3D switch, updated every frame). Its
+// throwables fly the same arc (viz_throw.launchWorld) and its storm is its own effect (createStorm, updated until
+// it ends) while the figures are hit("storm") along the front from the sky like the anime storm. The view passes
+// a theme whose `light` follows the world's sky (it remounts when that flips), so lights, bloom and labels match.
+// P-WORLDS.CAST1 (ADR-0649): world figures and stages get viz_cast.worldSeed (the id hash, mixed) instead of the raw
+// id hash the built-in casts keep, and each human figure gets its appearance from the scene's CastBook (a slot per
+// node in first-seen order, kept while the world lasts; cleared on a world switch and on destroy).
+// P-WORLDS.BUILD1 (ADR-0653): anchor(id, key, object) rides a host object on a node (the view's build scaffolding,
+// viz_build.ts): placed beside the node every frame, disposed with its node, on replace and on destroy.
+//
 // Resource contract (the orbit canvas's, ADR-0522): a DPR-capped canvas sized by a ResizeObserver, a frame
 // loop capped by the perf tier (viz_model.vizTierOpts / frameInterval) that drops to an idle cadence when
 // nothing moves and parks entirely when hidden or under reduced motion with nothing changing. destroy()
@@ -56,27 +70,66 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js"; // P-VIZ.GPU1 (ADR-0651): cinematic DOF
+import { Pass } from "three/examples/jsm/postprocessing/Pass.js";
+import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js"; // P-VIZ.GPU1: cinematic SSAO
+import { createFrameGovernor, type GovernorStats, type PerfTier } from "./perf_tier.ts";
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
-import { ANIME_HEIGHT, createAnimeFigure, type AnimeFigure, type AnimeState } from "./viz_anime.ts";
-import { createOfficeFigure, type OfficeFigure } from "./viz_office.ts";
+import { ANIME_HEIGHT, createAnimeFigure, type AnimeState } from "./viz_anime.ts";
+import { createOfficeFigure } from "./viz_office.ts";
+import { vizBrandFor, type VizBrand } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641)
 import { activityAt, lookFor, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
-import { createEdgeFx, type EdgeConduit } from "./viz_plasma.ts";
+import { createEdgeFx, type EdgeConduit, type EdgeFxStats } from "./viz_plasma.ts";
 import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
 import { createThrowFx, skyAbove } from "./viz_throw.ts";
-import type { HitKind, ThrowKind } from "./viz_throw_kinds.ts";
+import { isThrowKind } from "./viz_throw_kinds.ts";
 import { launchPx, stormSchedule, volley } from "./viz_throw_math.ts";
-import { CUBE, frameInterval, IDLE_FPS, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
+import { CUBE, frameInterval, IDLE_FPS, isBuiltinStyle, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
+import type { WorldAmbient, WorldAppearance, WorldDefinition, WorldEdges, WorldEnvironment, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
+import { mergeEnvironment, worldEnvironment } from "./viz_worlds.ts"; // P-WORLDS.FX1 (ADR-0652)
+import { CastBook, castGroupOf, nodeSeed, worldSeed } from "./viz_cast.ts"; // P-WORLDS.CAST1 (ADR-0649)
+import type { CastPrefs } from "./viz_cast_prefs.ts"; // P-WORLDS.CAST2 (ADR-0650)
 
 export type VizViewMode = "2d" | "3d";
 
 /** P-VIZ.4 (ADR-0625): `team` = how many of the node's team work right now (viz_model.teamOf; an idle node
- *  with a working team supervises), `idleSec` = whole seconds since it last worked (figure.setIdleSeconds). */
-export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number; team: number; idleSec: number }
+ *  with a working team supervises), `idleSec` = whole seconds since it last worked (figure.setIdleSeconds).
+ *  `model` (P-VIZ.7, ADR-0641) picks the figure's sponsor, size and variant (viz_brand); `committing` plays the
+ *  style's git commit animation while a commit or push call runs. `parentKind` (P-WORLDS.1, ADR-0648): the kind
+ *  of a subagent's parent node (a world casts the hub's helpers and an agent's differently); null otherwise. */
+export interface SceneNode { id: string; kind: VizKind; persona: Persona; label: string; status: VizStatus; pos: Vec3; glow: number; team: number; idleSec: number; model: string; committing: boolean; parentKind: VizKind | null }
+
+/** P-WORLDS.1 (ADR-0648): the world a `world:<key>` style draws with, and the user's option values for it. A
+ *  new object (new options) rebuilds the figures and stages. */
+export interface SceneWorld { readonly def: WorldDefinition; readonly options: WorldOptionValues }
 export interface SceneEdge { from: string; to: string; intensity: number; frozen: boolean; dead: boolean }
 export type SceneHit = { kind: "node"; id: string } | { kind: "edge"; from: string; to: string };
 
+/** P-WORLDS.BUILD1 (ADR-0653): a host object that rides a node (a build site's scaffolding). The scene places it
+ *  every frame at the node's center plus `offset` (cell units, CUBE, scaled by the node's kind: x right, y up, z toward
+ *  the front; on the 2D map it lies on the tile plane), scales it with the node, and disposes it when it is replaced,
+ *  removed, when its node leaves, or when the scene goes. Never pickable. */
+export interface SceneAnchor {
+  readonly object: THREE.Object3D;
+  readonly offset: readonly [number, number, number];
+  /** One frame; true while it still animates (the scene keeps its full frame rate). */
+  update(tSec: number, dt: number, motion: boolean): boolean;
+  dispose(): void;
+}
+
 /** Theme colors, already normalized to #rrggbb by the view (read from the CSS custom properties). */
 export interface VizTheme { bg: string; txt: string; accent: string; cyan: string; light: boolean }
+
+/** P-VIZ.GPU1 (ADR-0651): the renderer settings a tier produced, and the frame-time governor's numbers. */
+export interface VizQualityStats {
+  tier: PerfTier; pixelRatio: number; dprCap: number; antialias: boolean; msaa: number;
+  /** Post-processing runs (a composer exists and the view is 3D). */
+  post: boolean; bloom: boolean; bloomStrength: number; lightTheme: boolean;
+  ssao: boolean; dof: boolean; dofActive: boolean;
+  /** How many 3D figures stand on a contact shadow. */
+  contactShadows: number;
+  particles: number; fps: number; governor: GovernorStats;
+}
 
 export interface VizSceneHandle {
   readonly canvas: HTMLCanvasElement;
@@ -84,8 +137,9 @@ export interface VizSceneHandle {
   fire(events: readonly VizEvent[]): void;
   setView(mode: VizViewMode): void;
   /** P-VIZ.4 (ADR-0627): rebuild every node's figure in the style (anime mini Lucids in glass cubes, or the
-   *  office cast in cubicles) and switch the edges with it (plasma or fiber, viz_plasma). */
-  setStyle(style: VizStyle): void;
+   *  office cast in cubicles) and switch the edges with it (plasma or fiber, viz_plasma). P-WORLDS.1: a world
+   *  style needs its `world` (ignored without it); calling it again with new options rebuilds the figures. */
+  setStyle(style: VizStyle, world?: SceneWorld | null): void;
   /** Re-frame the camera on every node (after a layout switch, or on demand). Leaves auto as it is. */
   fit(): void;
   /** Auto camera on (glides from the current view to the action) or off (the user's controls only). */
@@ -105,19 +159,55 @@ export interface VizSceneHandle {
    *  Still reported when the node is off to a side (the panel docks at that edge); null when it is behind the
    *  camera or gone. The node panel sits beside it. */
   screenBoxOf(id: string): { x: number; y: number; r: number } | null;
+  /** P-WORLDS.CAST1 (ADR-0649): the appearance the node's world figure was cast with; null in a built-in style,
+   *  for a role the world casts as a creature, or for an unknown node. */
+  castOf(id: string): WorldAppearance | null;
+  /** P-WORLDS.FX1 (ADR-0652), for the demo probe: what the edges draw (style, token, live particles, coins,
+   *  sparks, the tier's caps), the charge tint, and where each edge's middle stretch is on screen (client pixels,
+   *  u 0.3 to 0.7 along it; points behind the camera are left out). */
+  edgeFxInfo(): EdgeFxStats & { chargeColor: string | null; edges: { from: string; to: string; points: { x: number; y: number }[] }[] };
+  /** P-WORLDS.FX1, QA only (the ?vizDemo=1 probe): `edges` merged over the active world's edges, as if its
+   *  environmentFor had returned them, until the world or its options change; null drops the preview. False
+   *  without a world or when the merged edges do not validate. */
+  previewEdges(edges: Partial<WorldEdges> | null): boolean;
+  /** P-WORLDS.BUILD1 (ADR-0653): set the node's anchored object under `key` (replacing and disposing the one there), or
+   *  remove it (null). False (and `a` untouched) when there is no such node. */
+  anchor(id: string, key: string, a: SceneAnchor | null): boolean;
+  /** P-WORLDS.BUILD1: an anchored object changed: draw (the loop parks under reduced motion when nothing moves). */
+  wake(): void;
+  /** P-WORLDS.CAST2 (ADR-0650): the user's cast preferences (pins, then the fleet mode); a world's figures are
+   *  rebuilt with them. Kept across style changes. */
+  setCast(prefs: CastPrefs): void;
   /** P-VIZ.6 (ADR-0636): throw `kind` at the node: it flies (an arc from `from`, stage px where the throw
    *  started, or the viewer's side; the bolt strikes from above) and the figure reacts on arrival. Reduced
-   *  motion: no flight, the hit lands at once. False when there is no such node. */
-  throwAt(nodeId: string, kind: ThrowKind, from?: { x: number; y: number }): boolean;
+   *  motion: no flight, the hit lands at once. False when there is no such node, or `kind` is not a built-in
+   *  ThrowKind (built-in styles) or not one of the world's three kinds (a world style, P-WORLDS.1). */
+  throwAt(nodeId: string, kind: string, from?: { x: number; y: number }): boolean;
   /** P-VIZ.6: the style's storm (anime: dark sky and lightning strikes; professional: a gust of papers) and every
    *  figure hit("storm") as the front reaches it. The caller rate limits it (viz_throw tray). */
   storm(): void;
+  /** P-VIZ.7 (ADR-0641): a scripted camera shot for recorded demos (the view exposes it only with ?vizScript=1).
+   *  The camera springs to `offset` in the node's own frame (its desk, its stapler, the cloud above it) at `dist`,
+   *  `polar` and `az` (radians; az relative to the way the figure faces), drifting `azSpeed` radians a second; the
+   *  node stops turning to the camera while it is the subject. null hands the camera back (to auto, if it is on). */
+  scriptShot(id: string | null, opts?: { offset?: Vec3; dist?: number; polar?: number; az?: number; azSpeed?: number }): void;
+  /** P-VIZ.APPROVE1 (ADR-0655): frame the node for `holdMs` (3D: the auto camera's close frame; 2D: pan and zoom to
+   *  it), whether or not Auto camera is on; after that the camera stays (auto off) or auto takes over again. Reduced
+   *  motion cuts instead of flying. The user's drag, pan or zoom ends it. False when there is no such node. */
+  flyTo(id: string, holdMs: number): boolean;
+  /** The node a flyTo is framing right now, else null (read by the demo probe). */
+  flying(): string | null;
   /** P-VIZ.6: the node under client (x, y), or null. */
   nodeAt(x: number, y: number): string | null;
   /** P-VIZ.6: a throwable is armed (`cursor`, a CSS cursor showing it) or not (null). While armed every click is
    *  delivered to onPick at once (no double click wait). */
   setThrowArmed(cursor: string | null): void;
   onLost(cb: () => void): void;
+  /** P-VIZ.GPU1 (ADR-0651): the frame-time governor's one verdict for this mount (3 s of busy frames after the
+   *  scene settles). The view steps Auto down one tier on "miss"; an explicit tier is never changed. */
+  onFrameBudget(cb: (verdict: "ok" | "miss", stats: GovernorStats) => void): void;
+  /** P-VIZ.GPU1: what the renderer is actually doing (read by the demo probe; read-only). */
+  quality(): VizQualityStats;
   destroy(): void;
 }
 
@@ -200,6 +290,8 @@ const TILE = 1.5;
 const FIG_2D_SCALE = (TILE * 0.8) / ANIME_HEIGHT;
 /** In 3D he stands about 0.85 of the cube's height, so he reads as the subject and not a figurine in a box. */
 const FIG_3D_SCALE = 1.15;
+/** P-VIZ.GPU1 (ADR-0651): the contact shadow's radius in the holder's frame (a little wider than his stance). */
+const CONTACT_R = 0.36;
 const FIG_2D_FEET_Z = 0.56;
 /** 2D layers above the node's plane: the tile covers the edge ends; the figure lies face up high enough that
  *  his hair and the spikes behind his head clear the tile; the caption sits above the figure. */
@@ -241,20 +333,24 @@ const LOOP_R = 1.55, LOOP_LIFT = 0.1;
 
 interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
 
-/** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. */
-interface FigureSlot { fig: AnimeFigure | OfficeFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null }
+/** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. The
+ *  anime and office figures have the same surface as a world's (viz_world_api.WorldFigure). `stage`
+ *  (P-WORLDS.1): the world's ground under the figure, when the world brings one. */
+interface FigureSlot { fig: WorldFigure; holder: THREE.Group; activity: MiniActivity | null; state: AnimeState | null; committing: boolean; stage: WorldStage | null }
 
 /** The 3D parts of a node: the figure in its glass cube. `office`: the professional style, where the glass is an
- *  invisible pick box, the cubicle rides the figure and `edgeMat` draws the cubicle's top edges. */
+ *  invisible pick box, the cubicle rides the figure and `edgeMat` draws the cubicle's top edges. With a world's
+ *  stage the glass is an invisible pick box too, `edgeMat` draws nothing (its color goes to the stage) and there
+ *  is no plate. */
 interface Node3D extends FigureSlot {
-  glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial; office: boolean;
+  glass: THREE.Mesh; glassMat: THREE.MeshPhysicalMaterial; edgeMat: THREE.LineBasicMaterial; plateMat: THREE.MeshStandardMaterial | null; office: boolean;
 }
 
 /** The 2D parts of a node: the flat figure on its tile. */
 interface Node2D extends FigureSlot { tile: THREE.Mesh; tileMat: THREE.MeshBasicMaterial; rimMat: THREE.LineBasicMaterial }
 
 interface NodeObj {
-  id: string; kind: VizKind; persona: Persona; size: number; seed: number;
+  id: string; kind: VizKind; parentKind: VizKind | null; persona: Persona; size: number; seed: number;
   look: MiniLook; base: THREE.Color; tileBase: THREE.Color;
   root: THREE.Group; pivot: THREE.Group;
   d3: Node3D | null; d2: Node2D | null;
@@ -267,7 +363,13 @@ interface NodeObj {
   /** P-VIZ.4: working team members (an idle node with a team at work supervises) and idle seconds, with the
    *  figure that last heard the idle seconds (a rebuilt figure, after a mode or style switch, hears them again). */
   team: number; idleSec: number; idleTold: { fig: unknown; sec: number };
+  /** P-VIZ.7 (ADR-0641): the sponsor the figure wears (from the node's model; null = model not known yet), its
+   *  signature (a change rebuilds the figure), and whether a git commit or push is running. */
+  brand: VizBrand | null; brandSig: string; committing: boolean;
 }
+
+/** A brand's rebuild signature: the emblem, the size class and the variant are baked into the figure. */
+function brandSig(b: VizBrand | null): string { return b ? `${b.key}:${b.size}:${b.variant}` : ""; }
 
 interface EdgeObj {
   key: string; from: string; to: string; ring: boolean; conduit: EdgeConduit;
@@ -293,7 +395,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   host.prepend(canvas);
 
   const scene = new THREE.Scene();
-  const bgTex = backdrop(theme);
+  let bgTex = backdrop(theme); // P-WORLDS.1: a world's sky replaces it (applyWorldEnvironment)
   scene.background = bgTex;
   const pmrem = new THREE.PMREMGenerator(renderer);
   const room = new RoomEnvironment();
@@ -324,6 +426,33 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   }
   const world = new THREE.Group();
   scene.add(world);
+  // P-WORLDS.BUILD1 (ADR-0653): node-anchored host objects (build scaffolding), by node id then key.
+  const anchorRoot = new THREE.Group();
+  world.add(anchorRoot);
+  const anchors = new Map<string, Map<string, SceneAnchor>>();
+  function dropAnchor(a: SceneAnchor): void { anchorRoot.remove(a.object); a.dispose(); }
+  function dropAnchors(id: string): void {
+    const m = anchors.get(id);
+    if (!m) return;
+    anchors.delete(id);
+    for (const a of m.values()) dropAnchor(a);
+  }
+  /** Place and update every anchored object; true while any animates. */
+  function updateAnchors(t: number, dt: number): boolean {
+    let live = false;
+    for (const [id, m] of anchors) {
+      const obj = nodes.get(id);
+      if (!obj) continue;
+      const k = CUBE * obj.size;
+      for (const a of m.values()) {
+        const y = mode === "2d" ? obj.cur.y + TILE_Y : obj.cur.y + a.offset[1] * k;
+        a.object.position.set(obj.cur.x + a.offset[0] * k, y, obj.cur.z + a.offset[2] * k);
+        a.object.scale.setScalar(obj.size);
+        if (a.update(t / 1000, dt, o.motion)) live = true;
+      }
+    }
+    return live;
+  }
 
   // Cameras: a perspective one orbiting in 3D, an orthographic one looking straight down in 2D.
   const persp = new THREE.PerspectiveCamera(45, 1, 0.05, 500);
@@ -335,23 +464,104 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let mode: VizViewMode = initialView;
   /** P-VIZ.4: which cast the nodes are built with (the view calls setStyle with the saved preference). */
   let style: VizStyle = "anime";
+  /** P-WORLDS.1 (ADR-0648): the world a world style draws with (null for the built-ins), its charge tint, its
+   *  ambient layer and its storms in progress. */
+  let activeWorld: SceneWorld | null = null;
+  /** P-WORLDS.FX1 (ADR-0652): the active world's environment for its options (environmentFor over environment). */
+  let worldEnv: WorldEnvironment | null = null;
+  const chargeWorld = new THREE.Color();
+  let ambient: WorldAmbient | null = null;
+  let worldFog: THREE.FogExp2 | null = null;
+  const worldStorms: { group: THREE.Group; storm: WorldStorm }[] = [];
+  /** P-WORLDS.CAST1 (ADR-0649): who each world figure is, balanced over the fleet, stable per node until the
+   *  world changes or the scene goes. */
+  const cast = new CastBook();
   let camera: THREE.PerspectiveCamera | THREE.OrthographicCamera = mode === "3d" ? persp : ortho;
   let controls = makeControls();
   let interacting = false;
 
-  // Bloom: the full tier only, and never on the light theme (it would wash the page out).
-  const bloomOn = o.bloom && !theme.light;
+  // Bloom: the full tier and up, and below ultra never on the light theme (it would wash the page out).
+  // P-VIZ.GPU1 (ADR-0651): ultra blooms light themes too, weakly and with the threshold above the sky's brightness
+  // (only HDR highlights glow: particles, arcs, sparks), and renders through a 4x MSAA target (the canvas's own
+  // antialias does not reach a post-processing target). Cinematic adds SSAO and a subtle depth of field focused
+  // where the auto camera looks. Volumetric light shafts are left out: a raymarched shaft pass is another full
+  // screen pass per light on top of SSAO and DOF, too costly for a view that runs beside the agents.
+  const bloomOn = o.bloom && (!theme.light || o.lightBloom);
   let composer: EffectComposer | null = null;
   let renderPass: RenderPass | null = null;
   let bloom: UnrealBloomPass | null = null;
-  if (bloomOn) {
-    composer = new EffectComposer(renderer);
+  let outputPass: OutputPass | null = null;
+  let ssao: SSAOPass | null = null;
+  let bokeh: BokehPass | null = null;
+  let bokehFocus: THREE.IUniform<number> | null = null;
+  const dofHooks: HookPass[] = [];
+  /** What an override render (SSAO's normals, the DOF depth) must not see: points, lines, see-through meshes (the
+   *  glass, world FX), the sky, and for SSAO the label sprites (their quads would cast AO halos). Restored right
+   *  after; the array is reused, so the hooks allocate nothing per frame. */
+  const overrideHidden: THREE.Object3D[] = [];
+  let hideSprites = false;
+  let hiddenBg: THREE.Scene["background"] = null;
+  const hideForOverride = (x: THREE.Object3D): void => {
+    if (!x.visible) return;
+    const m = (x as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    const hide = (x as THREE.Sprite).isSprite ? hideSprites : (x as THREE.Points).isPoints || (x as THREE.Line).isLine || (!!m && !Array.isArray(m) && m.transparent);
+    if (hide) { x.visible = false; overrideHidden.push(x); }
+  };
+  const hideOverride = (sprites: boolean): void => {
+    hideSprites = sprites;
+    hiddenBg = scene.background;
+    scene.background = null;
+    scene.traverse(hideForOverride);
+  };
+  const restoreOverride = (): void => {
+    for (const x of overrideHidden) x.visible = true;
+    overrideHidden.length = 0;
+    scene.background = hiddenBg;
+    hiddenBg = null;
+  };
+  if (bloomOn || o.ssao || o.dof) {
+    composer = new EffectComposer(renderer, o.msaa ? new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: o.msaa }) : undefined);
     renderPass = new RenderPass(scene, camera);
-    bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.4, 0.93); // glow on particles, arcs and cube edges; figures stay readable
     composer.addPass(renderPass);
-    composer.addPass(bloom);
-    composer.addPass(new OutputPass());
+    if (o.ssao) {
+      ssao = new SSAOPass(scene, persp, 1, 1, 16);
+      ssao.kernelRadius = 0.35; // world units: contact-scale occlusion (feet on a stage, a figure at a desk)
+      ssao.minDistance = 0.00002; // linear depth over near..far (0.05..500): about 1 cm to 1 m
+      ssao.maxDistance = 0.002;
+      composer.addPass(new HookPass(() => hideOverride(true)));
+      composer.addPass(ssao);
+      composer.addPass(new HookPass(restoreOverride));
+    }
+    if (bloomOn) {
+      bloom = theme.light
+        ? new UnrealBloomPass(new THREE.Vector2(256, 256), 0.14, 0.3, 1.0) // light theme (ultra): HDR highlights only, faint
+        : new UnrealBloomPass(new THREE.Vector2(256, 256), 0.34, 0.4, 0.93); // glow on particles, arcs and cube edges; figures stay readable
+      composer.addPass(bloom);
+    }
+    if (o.dof) {
+      bokeh = new BokehPass(scene, persp, { focus: 10, aperture: 0.0006, maxblur: 0.005 }); // subtle: a few px at most
+      bokehFocus = bokeh.materialBokeh.uniforms.focus as THREE.IUniform<number>;
+      dofHooks.push(new HookPass(() => hideOverride(false)), new HookPass(restoreOverride));
+      composer.addPass(dofHooks[0]!);
+      composer.addPass(bokeh);
+      composer.addPass(dofHooks[1]!);
+    }
+    outputPass = new OutputPass();
+    composer.addPass(outputPass);
   }
+  /** P-VIZ.GPU1: depth of field follows the auto camera only (a user's own camera stays sharp everywhere). */
+  function aimDof(): void {
+    if (!bokeh || !bokehFocus) return;
+    const on = auto && mode === "3d" && nodes.size > 0;
+    bokeh.enabled = on;
+    for (const h of dofHooks) h.enabled = on;
+    if (on) bokehFocus.value = persp.position.distanceTo(controls.target);
+  }
+
+  // P-VIZ.GPU1: the soft contact shadow under each 3D figure (ultra and up): one radial texture and one material
+  // for every figure, disposed with the scene.
+  const contactTex = o.contactShadows ? contactShadowTexture() : null;
+  const contactMat = contactTex ? new THREE.MeshBasicMaterial({ map: contactTex, color: 0x000000, transparent: true, opacity: theme.light ? 0.34 : 0.55, depthWrite: false, toneMapped: false }) : null;
 
   const geo = new Map<string, THREE.BufferGeometry>();
   const shared = <T extends THREE.BufferGeometry>(key: string, make: () => T): T => {
@@ -369,7 +579,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 
   // ------------------------------------------------------------------ edges (viz_plasma) + effect particles
   // The scene starts in the anime style; setStyle switches the edges with the figures.
-  const edgeFx = createEdgeFx(world, { detail: o.detail, particles: o.particles, motion: o.motion, light: theme.light, flat: mode === "2d", style: "plasma" });
+  const edgeFx = createEdgeFx(world, { detail: o.tier, particles: o.particles, motion: o.motion, light: theme.light, flat: mode === "2d", style: "plasma" });
   const fx = makePointPool(o.fx);
   const fxVel = new Float32Array(o.fx * 3);
   const fxLife = new Float32Array(o.fx);
@@ -441,6 +651,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let needFit = true;
   let W = 0, H = 0;
   const clock = { now: performance.now() };
+  /** P-VIZ.GPU1 (ADR-0651): one 3 s frame-time check per mount (perf_tier.createFrameGovernor). */
+  const governor = createFrameGovernor(performance.now());
+  let governBusy = false;
+  let budgetCb: ((verdict: "ok" | "miss", stats: GovernorStats) => void) | null = null;
   let hoverCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let pickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
   let doublePickCb: ((hit: SceneHit | null, x: number, y: number) => void) | null = null;
@@ -487,6 +701,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** The user really moved the camera (not a click, not the director): auto hands it over. */
   function userGrab(): void {
     userMoved = true;
+    shot = null; // P-VIZ.7: the user's hand always beats a scripted shot
+    flight = null; // P-VIZ.APPROVE1: and a fly-to an approval
     if (!auto) return;
     auto = false;
     userCamCb?.();
@@ -502,16 +718,17 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const size = KIND_SCALE[n.kind];
     root.scale.setScalar(size);
 
-    const labelMat = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, toneMapped: false });
+    // P-VIZ.UI1: the pill sits at floor level in front of the figure, so a world's stage plate (wider than the cube)
+    // and its glass came in front of its left end and cut the role tag ("ODER"). It is a name tag: it draws over
+    // the scene (no depth test), last (renderOrder 10, above every other layer's 1 to 8).
+    const labelMat = new THREE.SpriteMaterial({ transparent: true, depthWrite: false, depthTest: false, toneMapped: false });
     const label = new THREE.Sprite(labelMat);
     label.renderOrder = 10;
     pivot.add(label);
 
     world.add(root);
-    let seed = 7;
-    for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) >>> 0;
     const obj: NodeObj = {
-      id: n.id, kind: n.kind, persona: n.persona, size, seed,
+      id: n.id, kind: n.kind, parentKind: n.parentKind, persona: n.persona, size, seed: nodeSeed(n.id),
       look: lookFor(color), base, tileBase: base.clone().lerp(bgColor, theme.light ? 0.8 : 0.74),
       root, pivot, d3: null, d2: null,
       label, labelMat, labelText: "", cracks: null,
@@ -520,7 +737,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       tone: { tint: 0, dim: 0, frost: 0 },
       fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0 },
       team: n.team, idleSec: n.idleSec, idleTold: { fig: null, sec: -1 },
+      brand: vizBrandFor(n.model), brandSig: "", committing: n.committing,
     };
+    obj.brandSig = brandSig(obj.brand);
     paintLabel(obj, n.label);
     ensureParts(obj);
     return obj;
@@ -540,14 +759,36 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     // figure (it turns to the camera with him, open side front); the cube's glass stays as an invisible pick box,
     // and its edge material draws the cubicle's top edges, so every status color below still reads.
     const office = style === "professional";
+    const wd = activeWorld;
     const edgeMat = new THREE.LineBasicMaterial({ color: obj.base.clone().lerp(WHITE, 0.35), transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
-    const fig = office
-      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, cubicle: { status: edgeMat } })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false, seed: obj.seed });
+    const fig: WorldFigure = wd
+      ? worldFigure(wd, obj, false)
+      : office
+        ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: false, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, brand: obj.brand, cubicle: { status: edgeMat } })
+        : createAnimeFigure({ look: obj.look, detail: o.detail, flat: false, seed: obj.seed, brand: obj.brand });
     const holder = new THREE.Group();
     holder.position.y = FLOOR_Y + PLATE_H;
     holder.add(fig.group);
+    // P-VIZ.GPU1 (ADR-0651): ultra and up ground the figure with a soft contact shadow; it rides the holder (turns,
+    // scales and implodes with him), and its geometry and material are shared, so dropping the holder frees nothing.
+    if (contactMat) {
+      const shadow = new THREE.Mesh(shared("contact-shadow", () => new THREE.PlaneGeometry(CONTACT_R * 2, CONTACT_R * 2).rotateX(-Math.PI / 2)), contactMat);
+      shadow.position.y = 0.004;
+      holder.add(shadow);
+    }
     obj.pivot.add(holder);
+    // P-WORLDS.1: the world's own ground replaces the glass cube and plate; the glass stays as the pick box.
+    const stage = wd ? worldStage(wd, obj, false) : null;
+    if (stage) {
+      stage.group.position.y = FLOOR_Y;
+      obj.pivot.add(stage.group);
+      const glassMat = new THREE.MeshPhysicalMaterial({ visible: false });
+      const glass = new THREE.Mesh(shared("cube-glass", () => new RoundedBoxGeometry(CUBE, CUBE, CUBE, 3, 0.045)), glassMat);
+      glass.userData.nodeId = obj.id;
+      obj.pivot.add(glass);
+      hitMeshes.push(glass);
+      return { fig, holder, glass, glassMat, edgeMat, plateMat: null, office: false, activity: null, state: null, committing: false, stage };
+    }
     if (office) {
       const glassMat = new THREE.MeshPhysicalMaterial({ visible: false });
       const glass = new THREE.Mesh(shared("cube-glass", () => new RoundedBoxGeometry(CUBE, CUBE, CUBE, 3, 0.045)), glassMat);
@@ -559,7 +800,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
       plate.position.y = FLOOR_Y + PLATE_H / 2;
       obj.pivot.add(plate);
-      return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
+      return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null, committing: false, stage: null };
     }
 
     // The glass: CLEAR, not transmissive. Transmission rendered the dark space behind it as a milky gray slab that
@@ -583,7 +824,23 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const plate = new THREE.Mesh(shared("cube-plate", () => new RoundedBoxGeometry(CUBE * 0.84, PLATE_H, CUBE * 0.84, 2, 0.016)), plateMat);
     plate.position.y = FLOOR_Y + PLATE_H / 2;
     obj.pivot.add(plate);
-    return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null };
+    return { fig, holder, glass, glassMat, edgeMat, plateMat, office, activity: null, state: null, committing: false, stage: null };
+  }
+
+  /** P-WORLDS.1: the world's figure for the node (the hub, an agent, or a subagent with its parent's role).
+   *  P-WORLDS.CAST1 (ADR-0649): a mixed seed (the raw id hash gave nearby ids one look) and, unless the world
+   *  casts the role as a creature, the node's appearance from the scene's cast book. */
+  function worldFigure(w: SceneWorld, obj: NodeObj, flat: boolean): WorldFigure {
+    const appearance = cast.appearanceFor(obj.id, castGroupOf(w.def.castRoles, obj.kind));
+    return w.def.createFigure({
+      role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, look: obj.look, detail: o.detail, tier: o.tier, // P-VIZ.GPU1
+      flat, seed: worldSeed(obj.seed), brand: obj.brand, options: w.options, ...(appearance ? { appearance } : {}),
+    });
+  }
+
+  /** P-WORLDS.1: the world's ground for the node, when it brings one (P-WORLDS.CAST1: with the mixed seed). */
+  function worldStage(w: SceneWorld, obj: NodeObj, flat: boolean): WorldStage | null {
+    return w.def.createStage?.({ role: obj.kind, parentRole: obj.kind === "subagent" ? obj.parentKind : null, seed: worldSeed(obj.seed), detail: o.detail, tier: o.tier, flat, options: w.options }) ?? null;
   }
 
   function build2d(obj: NodeObj): Node2D {
@@ -600,16 +857,25 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     // The figure stands upright in its own frame; the holder tips him back so his front faces the top-down
     // camera, his head toward the top of the screen (the ortho camera's up is -Z). The office cast tips back the
     // same way with his desk (P-VIZ.4).
-    const fig = style === "professional"
-      ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed })
-      : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true, seed: obj.seed });
+    const wd = activeWorld;
+    const fig: WorldFigure = wd
+      ? worldFigure(wd, obj, true)
+      : style === "professional"
+        ? createOfficeFigure({ look: obj.look, detail: o.detail, flat: true, role: obj.kind === "hub" ? "boss" : "worker", seed: obj.seed, brand: obj.brand })
+        : createAnimeFigure({ look: obj.look, detail: o.detail, flat: true, seed: obj.seed, brand: obj.brand });
     const holder = new THREE.Group();
     holder.rotation.x = -Math.PI / 2;
     holder.position.set(0, FIG_2D_Y, FIG_2D_FEET_Z);
     holder.scale.setScalar(FIG_2D_SCALE);
     holder.add(fig.group);
     obj.pivot.add(holder);
-    return { fig, holder, tile, tileMat, rimMat, activity: null, state: null };
+    // P-WORLDS.1: the world's ground lies on the tile (seen from straight above); the tile stays the pick target.
+    const stage = wd ? worldStage(wd, obj, true) : null;
+    if (stage) {
+      stage.group.position.y = TILE_Y + 0.006;
+      obj.pivot.add(stage.group);
+    }
+    return { fig, holder, tile, tileMat, rimMat, activity: null, state: null, committing: false, stage };
   }
 
   /** Remove `x` from the node and dispose every material it holds (the geometries are shared or the figure's). */
@@ -627,7 +893,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     obj.pivot.remove(d.holder);
     d.fig.dispose();
     for (const x of [...obj.pivot.children]) if (x === d.glass || (x as THREE.Mesh).material === d.edgeMat || (x as THREE.Mesh).material === d.plateMat) detach(obj, x);
-    if (d.office) d.edgeMat.dispose(); // its lines rode the figure's cubicle, not the pivot
+    if (d.office || d.stage) d.edgeMat.dispose(); // its lines rode the figure's cubicle (or there are none), not the pivot
+    if (d.stage) { obj.pivot.remove(d.stage.group); d.stage.dispose(); }
     obj.d3 = null;
   }
 
@@ -636,6 +903,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     if (!d) return;
     obj.pivot.remove(d.holder);
     d.fig.dispose();
+    if (d.stage) { obj.pivot.remove(d.stage.group); d.stage.dispose(); }
     for (const x of [...obj.pivot.children]) if (x === d.tile || (x as THREE.Mesh).material === d.rimMat) detach(obj, x);
     obj.d2 = null;
   }
@@ -650,37 +918,49 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const key = `${role}|${text}`;
     if (obj.labelText === key) return;
     obj.labelText = key;
+    // P-VIZ.UI1: the role is a solid chip in the persona's color with dark or light ink by contrast (a light-blue
+    // "CODER" drawn straight on a white pill over a light sky was near invisible). Widths come from the INK bounds
+    // (actualBoundingBox), not the advance alone, so a glyph that overhangs its advance is never cut at an edge.
+    const color = PERSONAS[obj.persona].color;
     const scale = 3;
     const cv = document.createElement("canvas");
     const ctx = cv.getContext("2d");
     if (!ctx) return;
     const font = `600 ${22 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
-    const roleFont = `700 ${15 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    const roleFont = `700 ${13 * scale}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+    const inkOf = (m: TextMetrics): { left: number; w: number } => {
+      const left = Math.max(0, m.actualBoundingBoxLeft || 0);
+      return { left, w: Math.max(m.width, left + (m.actualBoundingBoxRight || 0)) };
+    };
     ctx.font = font;
-    const tw = ctx.measureText(text).width;
+    const t = inkOf(ctx.measureText(text));
     ctx.font = roleFont;
-    const rw = ctx.measureText(role).width;
-    const padX = 14 * scale, gap = 10 * scale;
-    const w = Math.ceil(padX * 2 + rw + (text ? gap + tw : 0));
+    const r = inkOf(ctx.measureText(role));
     const h = 40 * scale;
+    const pad = 7 * scale, chipH = h - 2 * pad, chipPadX = 9 * scale, gap = 9 * scale, padEnd = 16 * scale;
+    const chipW = Math.ceil(chipPadX * 2 + r.w);
+    const w = Math.ceil(pad + chipW + (text ? gap + t.w + padEnd : pad));
     cv.width = w; cv.height = h;
     const c2 = cv.getContext("2d")!;
-    c2.fillStyle = theme.light ? "rgba(255,255,255,0.86)" : "rgba(10,12,20,0.74)";
+    c2.fillStyle = theme.light ? "rgba(255,255,255,0.94)" : "rgba(10,12,20,0.84)";
     roundRect(c2, 0, 0, w, h, h / 2);
     c2.fill();
-    c2.strokeStyle = PERSONAS[obj.persona].color;
+    c2.strokeStyle = color;
     c2.globalAlpha = 0.7; c2.lineWidth = 2 * scale;
     roundRect(c2, scale, scale, w - 2 * scale, h - 2 * scale, h / 2 - scale);
     c2.stroke();
     c2.globalAlpha = 1;
+    c2.fillStyle = color;
+    roundRect(c2, pad, pad, chipW, chipH, chipH / 2);
+    c2.fill();
     c2.textBaseline = "middle";
     c2.font = roleFont;
-    c2.fillStyle = PERSONAS[obj.persona].color;
-    c2.fillText(role, padX, h / 2 + scale);
+    c2.fillStyle = inkOn(color);
+    c2.fillText(role, pad + chipPadX + r.left, h / 2 + scale);
     if (text) {
       c2.font = font;
       c2.fillStyle = theme.txt;
-      c2.fillText(text, padX + rw + gap, h / 2 + scale);
+      c2.fillText(text, pad + chipW + gap + t.left, h / 2 + scale);
     }
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -947,17 +1227,20 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     sparks: spawnFx,
     burst: burstAt,
     bolt: boltBetween,
-  }, { detail: o.detail, motion: o.motion, light: theme.light });
+  }, { detail: o.tier, motion: o.motion, light: theme.light }); // P-VIZ.GPU1: ultra storms strike harder
   throwFx.setFlat(mode === "2d");
   const throwTo = new THREE.Vector3(), throwFrom = new THREE.Vector3(), stormDir = new THREE.Vector3(), stormCenter = new THREE.Vector3();
   const throwPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   let throwCursor: string | null = null;
 
   /** Something reached the node's figure: it reacts (viz_anime / viz_office hit), with frames for the reaction. */
-  function hitFigure(id: string, kind: HitKind, from: THREE.Vector3): void {
+  function hitFigure(id: string, kind: string, from: THREE.Vector3): void {
     const obj = nodes.get(id);
     const slot = obj?.d3 ?? obj?.d2;
     if (!slot) return;
+    // P-WORLDS.1: a figure only hears the storm and its own style's throwables (a flight that left before a
+    // style switch lands as nothing).
+    if (kind !== "storm" && !(activeWorld ? activeWorld.def.throws.some((t) => t.kind === kind) : isThrowKind(kind))) return;
     slot.fig.hit(kind, from, camera);
     effectsUntil = Math.max(effectsUntil, clock.now + REACT_MS);
     kick();
@@ -974,11 +1257,107 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     return rc.ray.intersectPlane(throwPlane, out) ?? out.copy(target);
   }
 
+  // ------------------------------------------------------------------ P-WORLDS.1 (ADR-0648): a world's environment
+  /** The sky, fog, edge palette, charge tint and ambient layer of the active world, or the built-in backdrop with
+   *  none of them. Runs only when the style moves to, from or between worlds (anime and professional share one
+   *  backdrop, so a switch between them never touches it). */
+  function applyWorldEnvironment(): void {
+    applyWorldLook();
+    rebuildAmbient();
+  }
+
+  /** P-WORLDS.FX1 (ADR-0652): the part of the environment that follows the world's options. Resolves
+   *  environmentFor(options) over the environment, then paints it (paintWorldLook). Runs on every world switch and
+   *  on every option change of the same world. */
+  function applyWorldLook(): void {
+    worldEnv = activeWorld ? worldEnvironment(activeWorld.def, activeWorld.options) : null;
+    paintWorldLook();
+  }
+
+  /** The sky (repainted: a world's paintSky may close over its options), fog, edge style, palette and packet token,
+   *  and the charge tint of `worldEnv`, or the built-in backdrop with none of them. */
+  function paintWorldLook(): void {
+    bgTex.dispose();
+    const env = worldEnv;
+    if (!env) {
+      bgTex = backdrop(theme);
+      worldFog = null;
+      scene.fog = null;
+      edgeFx.setPalette(null, null);
+      edgeFx.setTokens(null);
+    } else {
+      bgTex = worldSky((c, width, height) => env.paintSky(c, width, height));
+      worldFog = env.fog.density > 0 ? new THREE.FogExp2(env.fog.color, env.fog.density) : null;
+      scene.fog = mode === "3d" ? worldFog : null; // the flat map's camera sits 60 units up: fog would wash it out
+      const e = env.edges;
+      edgeFx.setPalette(new THREE.Color(e.colorA), new THREE.Color(e.colorB));
+      edgeFx.setStyle(e.style);
+      edgeFx.setTokens({ token: e.token ?? "orb", color: e.tokenColor ? new THREE.Color(e.tokenColor) : null, paint: e.paintToken?.bind(e), stamp: e.tokenStamp?.bind(e) });
+      chargeWorld.set(env.chargeColor);
+    }
+    scene.background = bgTex;
+    for (const ed of edges.values()) { edgeColors(ed); ed.conduit.set(ed.intensity, ed.frozen, ed.dead, ed.color, ed.colorTo); }
+  }
+
+  /** The ambient layer: built for the active world (spread over the scene) and the current 2D/3D mode. */
+  function rebuildAmbient(): void {
+    if (ambient) { scene.remove(ambient.object); ambient.dispose(); ambient = null; }
+    const make = activeWorld?.def.environment.createAmbient;
+    if (!make) return;
+    ambient = make(Math.max(8, sceneRadius() * 1.4), mode === "2d", o.detail, o.tier); // P-VIZ.GPU1: tier beside detail
+    scene.add(ambient.object);
+  }
+
+  /** An edge's two colors: the persona colors of its ends (the built-ins), or the world's pair for its options. */
+  function edgeColors(ed: EdgeObj): void {
+    const env = activeWorld ? worldEnv : null;
+    if (env) { ed.color.set(env.edges.colorA); ed.colorTo.set(env.edges.colorB); return; }
+    if (ed.ring) { const hub = nodes.get(ed.from); if (hub) ed.color.set(PERSONAS[hub.persona].color); ed.colorTo.copy(ed.color); return; }
+    const a = nodes.get(ed.from), b = nodes.get(ed.to);
+    if (a) ed.color.copy(a.base);
+    if (b) ed.colorTo.copy(b.base);
+  }
+
+  /** Start the world's storm over the nodes (its own effect; the figures are hit along the front separately). */
+  function startWorldStorm(w: SceneWorld, center: THREE.Vector3, radius: number): void {
+    const group = new THREE.Group();
+    const targets = [...nodes.values()].map((n) => n.cur.clone());
+    const storm = w.def.createStorm({ group, center: center.clone(), radius, targets, flat: mode === "2d", motion: o.motion });
+    scene.add(group);
+    worldStorms.push({ group, storm });
+  }
+
+  function endWorldStorm(i: number): void {
+    const s = worldStorms[i]!;
+    scene.remove(s.group);
+    s.storm.dispose();
+    worldStorms.splice(i, 1);
+  }
+
+  function clearWorldStorms(): void {
+    for (let i = worldStorms.length - 1; i >= 0; i--) endWorldStorm(i);
+  }
+
+  /** One frame of the world's ambient layer and storms; true while anything there moves. */
+  function updateWorldLayers(t: number, dt: number): boolean {
+    let live = false;
+    if (ambient) { ambient.update(t / 1000, dt, o.motion); if (o.motion) live = true; }
+    for (let i = worldStorms.length - 1; i >= 0; i--) {
+      if (worldStorms[i]!.storm.update(t / 1000, dt)) live = true;
+      else endWorldStorm(i);
+    }
+    return live;
+  }
+
   // ------------------------------------------------------------------ per-frame update
   const tmpColor = new THREE.Color();
   const tintTarget = new THREE.Color();
   const tileTint = new THREE.Color();
   const camPos = new THREE.Vector3();
+  // P-VIZ.7: the scripted shot (scriptShot); while set it drives the camera instead of the director.
+  let shot: { id: string; offset: THREE.Vector3; dist: number; polar: number; az: number; azSpeed: number; at: number } | null = null;
+  /** P-VIZ.APPROVE1 (ADR-0655): a fly-to (flyTo) frames this node instead of the director's focus until `until`. */
+  let flight: { id: string; until: number } | null = null;
 
   /** What the figure plays: the node's status, with a tool failure's flinch on top while it lasts. */
   function figureState(obj: NodeObj, t: number): AnimeState {
@@ -1026,6 +1405,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (act !== slot.activity) { slot.fig.setActivity(act); slot.activity = act; }
       if (obj.idleTold.fig !== slot.fig || obj.idleTold.sec !== obj.idleSec) { slot.fig.setIdleSeconds(obj.idleSec); obj.idleTold = { fig: slot.fig, sec: obj.idleSec }; }
       slot.fig.setIntensity(obj.power);
+      // P-VIZ.7 (ADR-0641): the git commit animation plays while the node commits (and keeps the busy cadence).
+      if (slot.committing !== obj.committing) { slot.fig.setCommit(obj.committing); slot.committing = obj.committing; }
+      if (obj.committing) busyNodes = true;
       slot.fig.update(t / 1000, dt, o.motion);
       // P-VIZ.5: a manager handover is a 3.4 s walk-off; at the idle cadence it would stutter.
       if ("handingOver" in slot.fig && slot.fig.handingOver) busyNodes = true;
@@ -1034,7 +1416,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     // figure's charge lasts (it decays inside the figure's update, so the frames keep coming until it is gone).
     const charge = slot && st !== "killed" && st !== "ended" && !flicker ? slot.fig.charge : 0;
     if (charge > 0.01) {
-      tmpColor.lerp(style === "professional" ? CHARGE_PRO : CHARGE_ANIME, 0.6 * charge);
+      tmpColor.lerp(activeWorld ? chargeWorld : style === "professional" ? CHARGE_PRO : CHARGE_ANIME, 0.6 * charge);
       level += 1.6 * charge;
       busyNodes = true;
     }
@@ -1043,8 +1425,12 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const d = obj.d3;
       d.edgeMat.color.copy(tmpColor).multiplyScalar(level);
       d.edgeMat.opacity = st === "killed" ? 0.35 : st === "ended" ? 0.5 : 0.95;
-      d.plateMat.emissive.copy(flickOn ? RED : obj.base);
-      d.plateMat.emissiveIntensity = flickOn ? 0.6 : st === "ended" || st === "killed" ? 0.02 : 0.03 + 0.07 * obj.power + 0.25 * charge;
+      if (d.plateMat) {
+        d.plateMat.emissive.copy(flickOn ? RED : obj.base);
+        d.plateMat.emissiveIntensity = flickOn ? 0.6 : st === "ended" || st === "killed" ? 0.02 : 0.03 + 0.07 * obj.power + 0.25 * charge;
+      }
+      // P-WORLDS.1: the world's ground shows the same status color the cube edges would.
+      if (d.stage) { d.stage.setStatusColor(d.edgeMat.color); d.stage.update(t / 1000, dt, o.motion); }
       // glass: frosted when ended, dark gray when killed, icy when paused
       const g = d.glassMat;
       g.roughness = 0.04 + obj.tone.frost * 0.45;
@@ -1054,7 +1440,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const face = Math.atan2(camPos.x - obj.cur.x, camPos.z - obj.cur.z);
       let dy = face - d.holder.rotation.y;
       dy = Math.atan2(Math.sin(dy), Math.cos(dy));
-      d.holder.rotation.y += dy * (o.motion ? 1 - Math.exp(-dt * 3) : 1);
+      if (shot?.id !== obj.id) d.holder.rotation.y += dy * (o.motion ? 1 - Math.exp(-dt * 3) : 1); // a scripted shot's subject holds still
       g.color.copy(obj.base).lerp(WHITE, 0.85).lerp(tintTarget, Math.max(obj.tone.tint, st === "ended" ? 0.25 : 0)).multiplyScalar(1 - obj.tone.dim * 0.3);
       // killed: a quick implosion of the figure (the figure's own slump plays inside it)
       let scale = 1;
@@ -1068,12 +1454,13 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const d = obj.d2;
       d.rimMat.color.copy(tmpColor).multiplyScalar(Math.min(1.4 + charge, level));
       d.rimMat.opacity = st === "killed" ? 0.4 : st === "ended" ? 0.55 : 0.95;
+      if (d.stage) { d.stage.setStatusColor(d.rimMat.color); d.stage.update(t / 1000, dt, o.motion); }
       tileTint.copy(tintTarget).lerp(bgColor, 0.6);
       d.tileMat.color.copy(obj.tileBase).lerp(tileTint, obj.tone.tint).lerp(bgColor, obj.tone.dim * 0.5);
     }
     obj.labelMat.opacity = st === "ended" || st === "killed" ? 0.6 : 1;
 
-    if (st === "killed" && !obj.d3?.office) crack(obj); else healCracks(obj); // a cubicle has no glass to crack
+    if (st === "killed" && !obj.d3?.office && !obj.d3?.stage) crack(obj); else healCracks(obj); // a cubicle (or a world's ground) has no glass to crack
     if (obj.cracks) {
       if (mode === "3d") { obj.cracks.rotation.set(0, 0, 0); obj.cracks.position.set(0, 0, CUBE / 2 + 0.004); }
       else { obj.cracks.rotation.set(-Math.PI / 2, 0, 0); obj.cracks.position.set(0, TILE_Y + 0.006, 0); }
@@ -1216,7 +1603,9 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   /** One auto camera step: spring the target, distance (zoom in 2D) and angles toward the focus. */
   const aim = new THREE.Vector3();
   function driveCamera(t: number, dt: number): void {
-    const f = focusId ? nodes.get(focusId) : undefined;
+    if (flight && (t >= flight.until || !nodes.has(flight.id))) flight = null;
+    const fid = flight?.id ?? focusId;
+    const f = fid ? nodes.get(fid) : undefined;
     const sec = t / 1000;
     const swayOn = o.motion && !!f;
     const sway = swayOn ? Math.sin((sec * Math.PI * 2) / SWAY_S) : 0;
@@ -1227,6 +1616,27 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       return r;
     };
     if (f) aim.copy(f.cur); else aim.set(0, 0, 0);
+    const sn = shot ? nodes.get(shot.id) : undefined;
+    if (shot && sn?.d3 && mode === "3d") {
+      // P-VIZ.7: the scripted shot: a point in the subject's own frame, framed at the asked distance and angles.
+      const h = sn.d3.holder;
+      h.updateMatrixWorld();
+      aim.copy(shot.offset);
+      h.localToWorld(aim);
+      const az = h.rotation.y + shot.az + shot.azSpeed * (sec - shot.at);
+      [rig.tx, rig.vx] = track(rig.tx, rig.vx, aim.x);
+      [rig.ty, rig.vy] = track(rig.ty, rig.vy, aim.y);
+      [rig.tz, rig.vz] = track(rig.tz, rig.vz, aim.z);
+      [rig.dist, rig.vd] = track(rig.dist, rig.vd, shot.dist);
+      [rig.az, rig.va] = track(rig.az, rig.va, rig.az + angleDelta(rig.az, az));
+      [rig.polar, rig.vp] = track(rig.polar, rig.vp, shot.polar);
+      rig.dist = Math.max(0.05, rig.dist);
+      const sp = Math.sin(rig.polar);
+      persp.position.set(rig.tx + rig.dist * sp * Math.sin(rig.az), rig.ty + rig.dist * Math.cos(rig.polar), rig.tz + rig.dist * sp * Math.cos(rig.az));
+      controls.target.set(rig.tx, rig.ty, rig.tz);
+      rig.settled = shot.azSpeed === 0 && moving < 1e-3;
+      return;
+    }
     if (mode === "3d") {
       const wantDist = f ? frameDistance(CUBE * f.size * FRAME_PAD, persp.fov, FILL) : (sceneRadius() / Math.sin((persp.fov * Math.PI) / 360)) * 0.78;
       const wantAz = rig.az + angleDelta(rig.az, SWAY_AZ * sway);
@@ -1285,10 +1695,10 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     persp.aspect = W / H;
     persp.updateProjectionMatrix();
     orthoFrame(orthoHalf);
-    if (composer && bloom) {
+    if (composer) { // P-VIZ.GPU1: every pass (MSAA target, SSAO, DOF) follows the size, not only bloom
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(W, H);
-      bloom.resolution.set(W * renderer.getPixelRatio(), H * renderer.getPixelRatio());
+      bloom?.resolution.set(W * renderer.getPixelRatio(), H * renderer.getPixelRatio());
     }
     kick();
   }
@@ -1370,7 +1780,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     clock.now = t;
     if (needFit && nodes.size) fit();
     busyCam = false;
-    if (auto && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled; }
+    if ((auto || shot || flight) && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled || !!flight; }
     controls.update();
     busyNodes = false;
     for (const n of nodes.values()) {
@@ -1382,12 +1792,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const fxLive = updateFx(dt);
     const boltLive = updateBolts(t);
     const burstLive = updateBursts(t);
-    if (fxLive || boltLive || burstLive || throwLive) effectsUntil = Math.max(effectsUntil, t + 50);
+    const worldLive = updateWorldLayers(t, dt);
+    const anchorLive = updateAnchors(t, dt); // P-WORLDS.BUILD1 (ADR-0653): build scaffolding
+    if (fxLive || boltLive || burstLive || throwLive || worldLive || anchorLive) effectsUntil = Math.max(effectsUntil, t + 50);
     pointScale();
     hoverNow();
     aimLights();
     // No bloom in 2D: the flat map is cel-shaded figures on tiles and renders plain.
-    if (composer && renderPass && mode === "3d") { renderPass.camera = camera; composer.render(dt); }
+    if (composer && renderPass && mode === "3d") { renderPass.camera = camera; aimDof(); composer.render(dt); }
     else renderer.render(scene, camera);
   }
 
@@ -1400,6 +1812,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     let interval = frameInterval(o, busy, recording);
     if (interval === null && (t < effectsUntil || interacting || busyCam)) interval = 1000 / IDLE_FPS; // color transitions and a snap only
     if (interval !== null && t - lastFrame < interval - 1.5) { raf = requestAnimationFrame(frame); return; }
+    // P-VIZ.GPU1 (ADR-0651): the frame-time governor measures busy frames that follow a busy frame (the loop asked
+    // for the tier's cadence both times); idle cadence, a fresh chain after a kick and reduced motion are not counted.
+    if (busy && governBusy && interval !== null && lastFrame > 0 && governor.verdict() === "pending") {
+      const v = governor.sample(t, t - lastFrame, interval);
+      // after this frame: a step-down remounts, which must not destroy the scene inside its own frame
+      if (v !== "pending") window.setTimeout(() => { if (!stopped) budgetCb?.(v, governor.stats()); }, 0);
+    }
+    governBusy = busy;
     lastFrame = t;
     inFrame = true; wanted = false;
     try { render(t); } finally { inFrame = false; }
@@ -1438,9 +1858,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         obj.status = n.status;
         obj.glow = n.glow;
         obj.team = n.team; obj.idleSec = n.idleSec; // P-VIZ.4: read by updateNode
+        obj.committing = n.committing; // P-VIZ.7: read by updateNode
+        // P-VIZ.7: the sponsor, size and variant are baked into the figure: a new model rebuilds it.
+        const brand = vizBrandFor(n.model);
+        if (brandSig(brand) !== obj.brandSig) { obj.brand = brand; obj.brandSig = brandSig(brand); drop3d(obj); drop2d(obj); ensureParts(obj); }
+        // P-WORLDS.1: a world casts a subagent by its parent's role, so a late-known parent rebuilds it.
+        if (obj.parentKind !== n.parentKind) { obj.parentKind = n.parentKind; if (activeWorld) { drop3d(obj); drop2d(obj); ensureParts(obj); } }
         paintLabel(obj, n.label);
       }
-      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); }
+      for (const [id, obj] of [...nodes]) if (!keep.has(id)) { disposeNode(obj); nodes.delete(id); cast.release(id); dropAnchors(id); } // P-WORLDS.CAST1: its slot stays reserved
       const want = new Set<string>();
       for (const e of links) {
         if (!nodes.has(e.from) || !nodes.has(e.to)) continue;
@@ -1449,6 +1875,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         ed.intensity = e.intensity; ed.frozen = e.frozen; ed.dead = e.dead;
         ed.color.copy(nodes.get(e.from)!.base);
         ed.colorTo.copy(nodes.get(e.to)!.base);
+        if (activeWorld) edgeColors(ed); // P-WORLDS.1: the world's two edge colors
         ed.conduit.set(ed.intensity, ed.frozen, ed.dead, ed.color, ed.colorTo);
       }
       // Main's own tokens swirl around the hub.
@@ -1460,7 +1887,8 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
         ring.frozen = hub.status === "paused";
         ring.dead = false;
         ring.color.set(PERSONAS[hub.persona].color);
-        ring.conduit.set(ring.intensity, ring.frozen, ring.dead, ring.color, ring.color);
+        if (activeWorld) { edgeColors(ring); ring.conduit.set(ring.intensity, ring.frozen, ring.dead, ring.color, ring.colorTo); }
+        else ring.conduit.set(ring.intensity, ring.frozen, ring.dead, ring.color, ring.color);
       }
       for (const ed of [...edges.values()]) if (!want.has(ed.key)) dropEdge(ed);
       const prev = focusId;
@@ -1484,12 +1912,26 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       for (const obj of nodes.values()) ensureParts(obj);
       edgeFx.setFlat(mode === "2d");
       throwFx.setFlat(mode === "2d");
+      if (activeWorld) { rebuildAmbient(); scene.fog = mode === "3d" ? worldFog : null; } // P-WORLDS.1: the ambient layer is built for the mode; fog in 3D only
       fit();
     },
-    setStyle(next) {
-      if (next === style || (next !== "anime" && next !== "professional")) return;
-      style = next;
-      edgeFx.setStyle(edgeStyleFor(next));
+    setStyle(next, w = null) {
+      if (isBuiltinStyle(next)) {
+        if (next === style) return;
+        const fromWorld = activeWorld !== null;
+        style = next;
+        activeWorld = null;
+        if (fromWorld) { clearWorldStorms(); applyWorldEnvironment(); cast.clear(); }
+        edgeFx.setStyle(edgeStyleFor(next));
+      } else {
+        // P-WORLDS.1: a world style needs its definition; the same world with new options rebuilds the cast.
+        if (!w || (next === style && w === activeWorld)) return;
+        const sameWorld = next === style && activeWorld?.def === w.def;
+        style = next;
+        activeWorld = w;
+        if (!sameWorld) { clearWorldStorms(); applyWorldEnvironment(); cast.clear(); } // P-WORLDS.CAST1: new options keep the cast
+        else applyWorldLook(); // P-WORLDS.FX1 (ADR-0652): new options re-resolve environmentFor (sky, fog, edges, charge)
+      }
       for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
       kick();
     },
@@ -1530,9 +1972,80 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const tx = r.left + ((anchorAt.x + 1) / 2) * r.width, ty = r.top + ((1 - anchorAt.y) / 2) * r.height;
       return { x, y, r: Math.max(8, Math.hypot(tx - x, ty - y)) };
     },
+    castOf(id) {
+      const obj = nodes.get(id);
+      return activeWorld && obj ? cast.appearanceFor(id, castGroupOf(activeWorld.def.castRoles, obj.kind)) : null;
+    },
+    edgeFxInfo() {
+      // P-WORLDS.FX1 (ADR-0652): probe-only (a few calls per demo), so it may allocate
+      const r = canvas.getBoundingClientRect();
+      const list: { from: string; to: string; points: { x: number; y: number }[] }[] = [];
+      for (const ed of edges.values()) {
+        const points: { x: number; y: number }[] = [];
+        for (let u = 0.3; u <= 0.701; u += 0.1) {
+          world.localToWorld(ed.conduit.sample(u, anchorAt)).project(camera);
+          if (anchorAt.z > 1 || anchorAt.z < -1) continue;
+          points.push({ x: r.left + ((anchorAt.x + 1) / 2) * r.width, y: r.top + ((1 - anchorAt.y) / 2) * r.height });
+        }
+        list.push({ from: ed.from, to: ed.to, points });
+      }
+      return { ...edgeFx.stats(), chargeColor: activeWorld ? `#${chargeWorld.getHexString()}` : null, edges: list };
+    },
+    previewEdges(patch) {
+      if (!activeWorld || !worldEnv) return false;
+      const base = worldEnvironment(activeWorld.def, activeWorld.options);
+      if (patch) {
+        const m = mergeEnvironment(base, { edges: patch });
+        if (!m.ok) return false;
+        worldEnv = m.env;
+      } else worldEnv = base;
+      paintWorldLook();
+      kick();
+      return true;
+    },
+    anchor(id, key, a) {
+      if (stopped) return false;
+      const m = anchors.get(id);
+      const prev = m?.get(key);
+      if (!a) {
+        if (prev) { m!.delete(key); dropAnchor(prev); if (!m!.size) anchors.delete(id); kick(); }
+        return true;
+      }
+      if (!nodes.has(id)) return false;
+      if (prev === a) { kick(); return true; }
+      if (prev) dropAnchor(prev);
+      if (m) m.set(key, a); else anchors.set(id, new Map([[key, a]]));
+      anchorRoot.add(a.object);
+      kick();
+      return true;
+    },
+    wake() { effectsUntil = Math.max(effectsUntil, performance.now() + 50); kick(); },
+    setCast(prefs) {
+      cast.setPrefs(prefs);
+      if (!activeWorld) return; // built-in casts do not read it; a world picks it up when it is drawn
+      for (const obj of nodes.values()) { drop3d(obj); drop2d(obj); ensureParts(obj); }
+      kick();
+    },
     throwAt(nodeId, kind, from) {
       const obj = nodes.get(nodeId);
       if (!obj) return false;
+      const w = activeWorld;
+      if (w) {
+        // P-WORLDS.1: one of the world's own projectiles, on the same arc from the same launch point.
+        if (!w.def.throws.some((t) => t.kind === kind)) return false;
+        clock.now = performance.now();
+        nodeHead(obj, throwTo);
+        launchFrom(from ?? launchPx(W, H, 0, 1), throwTo, throwFrom);
+        if (!o.motion) hitFigure(nodeId, kind, throwFrom);
+        else {
+          const proj = w.def.createProjectile(kind, mode === "2d");
+          if (!throwFx.launchWorld(nodeId, kind, proj, throwFrom, 0, clock.now)) proj.dispose(); // THROW_CAP
+        }
+        effectsUntil = Math.max(effectsUntil, clock.now + REACT_MS);
+        kick();
+        return true;
+      }
+      if (!isThrowKind(kind)) return false;
       clock.now = performance.now(); // the loop may have been parked: the flight starts now, on the rAF timeline
       nodeHead(obj, throwTo);
       const shots = volley(kind);
@@ -1547,6 +2060,25 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       kick();
       return true;
     },
+    scriptShot(id, opts = {}) {
+      if (!id || !nodes.has(id)) { shot = null; kick(); return; }
+      const off = opts.offset ?? [0, 0.5, 0];
+      shot = {
+        id, offset: new THREE.Vector3(off[0], off[1], off[2]), dist: opts.dist ?? 1.6, polar: opts.polar ?? FOCUS_POLAR,
+        az: opts.az ?? 0, azSpeed: o.motion ? (opts.azSpeed ?? 0) : 0, at: performance.now() / 1000,
+      };
+      rig.settled = false;
+      kick();
+    },
+    flyTo(id, holdMs) {
+      if (stopped || !nodes.has(id)) return false;
+      if (!auto && !shot && !flight) seedRig(); // the springs start from wherever the user left the camera
+      flight = { id, until: performance.now() + holdMs };
+      rig.settled = false;
+      kick();
+      return true;
+    },
+    flying: () => (flight && performance.now() < flight.until ? flight.id : null),
     storm() {
       if (!nodes.size) return;
       clock.now = performance.now();
@@ -1560,14 +2092,21 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
           const n = nodes.get(h.id);
           if (!n) continue;
           nodeHead(n, throwTo);
-          if (style === "anime") skyAbove(throwTo, mode === "2d", throwFrom); else throwFrom.copy(throwTo).addScaledVector(stormDir, -3);
+          if (style !== "professional") skyAbove(throwTo, mode === "2d", throwFrom); else throwFrom.copy(throwTo).addScaledVector(stormDir, -3); // anime and the worlds: from the sky
           hitFigure(h.id, "storm", throwFrom);
+        }
+        if (activeWorld) { // P-WORLDS.1: the world's short, still storm
+          stormCenter.set(0, 0, 0);
+          for (const n of nodes.values()) stormCenter.add(n.cur);
+          startWorldStorm(activeWorld, stormCenter.divideScalar(nodes.size), sceneRadius());
+          kick();
         }
         return;
       }
       stormCenter.set(0, 0, 0);
       for (const n of nodes.values()) stormCenter.add(n.cur);
       stormCenter.divideScalar(nodes.size);
+      if (activeWorld) startWorldStorm(activeWorld, stormCenter, sceneRadius()); // P-WORLDS.1: the world's own storm
       const until = throwFx.storm(style, hits, stormDir, stormCenter, sceneRadius(), clock.now);
       effectsUntil = Math.max(effectsUntil, until + REACT_MS);
       kick();
@@ -1583,6 +2122,19 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       kick();
     },
     onLost(cb) { lostCb = cb; },
+    onFrameBudget(cb) { budgetCb = cb; },
+    quality() {
+      let shadows = 0;
+      for (const n of nodes.values()) if (n.d3) for (const x of n.d3.holder.children) if ((x as THREE.Mesh).material === contactMat && contactMat) shadows++;
+      return {
+        tier: o.tier, pixelRatio: renderer.getPixelRatio(), dprCap: o.dprCap,
+        antialias: renderer.getContextAttributes()?.antialias === true,
+        msaa: composer ? composer.renderTarget1.samples : 0,
+        post: !!composer && mode === "3d", bloom: !!bloom, bloomStrength: bloom?.strength ?? 0, lightTheme: theme.light,
+        ssao: !!ssao, dof: !!bokeh, dofActive: !!bokeh?.enabled, contactShadows: shadows,
+        particles: o.particles, fps: o.fps, governor: governor.stats(),
+      };
+    },
     destroy() {
       stopped = true;
       park();
@@ -1595,11 +2147,15 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("webglcontextlost", onLostCtx);
       controls.dispose();
+      for (const id of [...anchors.keys()]) dropAnchors(id); // P-WORLDS.BUILD1 (ADR-0653)
       for (const obj of nodes.values()) disposeNode(obj);
       nodes.clear();
+      cast.clear(); // P-WORLDS.CAST1
       for (const ed of [...edges.values()]) dropEdge(ed);
       edgeFx.dispose();
       throwFx.dispose();
+      clearWorldStorms(); // P-WORLDS.1
+      if (ambient) { scene.remove(ambient.object); ambient.dispose(); ambient = null; }
       const mats = new Set<THREE.Material>();
       const sharedGeo = new Set<THREE.BufferGeometry>(geo.values());
       scene.traverse((x) => {
@@ -1614,6 +2170,12 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       bgTex.dispose();
       envRT.dispose();
       bloom?.dispose();
+      // P-VIZ.GPU1: SSAO's own dispose misses its AO material and noise texture; the composer frees its (MSAA) targets.
+      if (ssao) { ssao.dispose(); ssao.ssaoMaterial.dispose(); ssao.noiseTexture.dispose(); }
+      bokeh?.dispose();
+      outputPass?.dispose();
+      contactMat?.dispose();
+      contactTex?.dispose();
       composer?.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
@@ -1623,6 +2185,34 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 }
 
 // ------------------------------------------------------------------------------------------ helpers
+
+/** P-VIZ.GPU1 (ADR-0651): a pass that draws nothing and runs `fn` at its place in the chain (hide what an override
+ *  render must not see before SSAO or the DOF depth, and put it back after). */
+class HookPass extends Pass {
+  private readonly fn: () => void;
+  constructor(fn: () => void) {
+    super();
+    this.fn = fn;
+    this.needsSwap = false;
+  }
+  override render(): void { this.fn(); }
+}
+
+/** P-VIZ.GPU1: the contact shadow's soft disc (dark center fading to clear), alpha in the texture. */
+function contactShadowTexture(): THREE.CanvasTexture {
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 128;
+  const c = cv.getContext("2d");
+  if (c) {
+    const g = c.createRadialGradient(64, 64, 0, 64, 64, 64);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.45, "rgba(255,255,255,0.55)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    c.fillStyle = g;
+    c.fillRect(0, 0, 128, 128);
+  }
+  return new THREE.CanvasTexture(cv);
+}
 
 function easeIn(x: number): number { return x * x * x; }
 function easeOut(x: number): number { return 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3); }
@@ -1641,6 +2231,15 @@ function roundRectShape(w: number, h: number, r: number): THREE.Shape {
   s.lineTo(x, y + r);
   s.quadraticCurveTo(x, y, x + r, y);
   return s;
+}
+
+/** P-VIZ.UI1: the ink for text on a solid `hex` fill: near-black or white, whichever has the higher WCAG contrast. */
+function inkOn(hex: string): string {
+  const n = Number.parseInt(hex.replace("#", "").padEnd(6, "0").slice(0, 6), 16);
+  const lin = (v: number): number => { const s = v / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  const lum = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  const dark = 0.0042; // #0b0d14
+  return (lum + 0.05) / (dark + 0.05) >= 1.05 / (lum + 0.05) ? "#0b0d14" : "#ffffff";
 }
 
 function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
@@ -1681,6 +2280,17 @@ function backdrop(theme: VizTheme): THREE.CanvasTexture {
       }
     }
   }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** P-WORLDS.1 (ADR-0648): a world's sky, painted by the world into the backdrop's canvas (no stars, no nebula). */
+function worldSky(paint: (ctx: CanvasRenderingContext2D, width: number, height: number) => void): THREE.CanvasTexture {
+  const cv = document.createElement("canvas");
+  cv.width = 1024; cv.height = 640;
+  const c = cv.getContext("2d");
+  if (c) paint(c, cv.width, cv.height);
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;

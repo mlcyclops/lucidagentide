@@ -76,7 +76,9 @@ function readJson(path: string): unknown {
   try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; }
 }
 
-function readMarker(dir: string): string | null {
+/** The version the previous engine start recorded, or null on a fresh machine. Read it BEFORE
+ *  runReleaseCleanup, which rewrites the marker (P-AUTH.RELOGIN1 uses it to word its notice). */
+export function readMarker(dir = dataRoot()): string | null {
   const m = readJson(join(dir, MARKER_FILE));
   return m && typeof m === "object" && "version" in m && typeof m.version === "string" ? m.version : null;
 }

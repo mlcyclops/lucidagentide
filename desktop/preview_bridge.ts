@@ -350,6 +350,23 @@ export const PREVIEW_ZOOM_JS = `(function(){
     window.parent.postMessage({__lucid:'preview-zoom-wheel',deltaY:Math.max(-1000,Math.min(1000,ev.deltaY)),deltaMode:ev.deltaMode},'*');
   },{passive:false,capture:true});
   window.parent.postMessage({__lucid:'preview-zoom-ready'},'*');
+  // P-PREVIEW.FIT1: report the document's own size so the panel can fit (or pan across) content wider than its
+  // frame. fixed: html/body cannot scroll, so content past the frame's bottom is unreachable from inside.
+  var sizeQueued=false;
+  function size(){
+    sizeQueued=false;
+    try{
+      var d=document.documentElement,b=document.body;
+      var w=Math.max(d.scrollWidth,b?b.scrollWidth:0),h=Math.max(d.scrollHeight,b?b.scrollHeight:0);
+      var fixed=/hidden|clip/.test(getComputedStyle(d).overflowY)||(!!b&&/hidden|clip/.test(getComputedStyle(b).overflowY));
+      window.parent.postMessage({__lucid:'preview-size',w:w,h:h,vw:window.innerWidth,vh:window.innerHeight,fixed:fixed},'*');
+    }catch(_){}
+  }
+  function queue(){ if(sizeQueued) return; sizeQueued=true; requestAnimationFrame(size); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',queue); else queue();
+  window.addEventListener('load',queue);
+  window.addEventListener('resize',queue);
+  try{ new ResizeObserver(queue).observe(document.documentElement); }catch(_){}
 })();`;
 
 /** Preserve SVG's XML MIME and document while adding the same bounded wheel channel as HTML. */

@@ -28,6 +28,11 @@
 // by `addons/index.json`, and installs only when the user presses Install on its card. It goes through the
 // private-install path with the index sha256 as the reviewed bytes, must carry exactly the index id, and must
 // be signed: an unsigned offered package is refused. An id the index does not name is refused.
+//
+// ADR-0648 (Lucid Agent Worlds): a package of kind "world" installs through the same gates, from the store
+// (installPluginFromUrl) or from a file the user imports (installWorldBytes: kind world and a valid signature
+// required, never the private path). Either way the ORIGINAL signed bytes are kept beside the version dir as
+// plugins/<id>/<id>-<version>.lplugin.zip, which exportWorld hands back for an offline move to another machine.
 
 import { randomBytes } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -38,11 +43,14 @@ import { DEFAULT_POLICY, scanAndDecide, type GateDecision } from "../../harness/
 import { readAllZipEntries } from "../../harness/personal/unzip.ts";
 import {
   ADDONS_INDEX, PLUGIN_LICENSE, PLUGIN_MANIFEST, PLUGIN_SIGNATURE, canonicalPluginBytes, parseOfferedIndex, verifyPluginEntries,
-  type OfferedAddon, type PluginGate, type PluginManifest,
+  type OfferedAddon, type PackageCheck, type PluginGate, type PluginManifest,
 } from "../../harness/plugins/package.ts";
 import { trustedPluginKeys } from "../../harness/plugins/publisher_key.ts";
 import { needsAuthenticode, probeAuthenticode, type AuthenticodeProbe } from "./authenticode.ts";
-import { PLUGIN_ID_RE, pluginDataDir, pluginsRoot, readInstalled, type CurrentPointer, type InstalledPlugin, type PluginSource } from "./installed.ts";
+import {
+  PLUGIN_ID_RE, listInstalledWorlds, pluginDataDir, pluginsRoot, readInstalled, worldPackageName, worldPackagePath,
+  type CurrentPointer, type InstalledPlugin, type InstalledWorldView, type PluginSource,
+} from "./installed.ts";
 import { extractHost } from "../egress_policy.ts";
 import { managedConfig, type ManagedEgressPolicy } from "../managed_config.ts";
 import { isScannerUnavailable } from "../kb_pack.ts";
@@ -184,6 +192,7 @@ const STORE_IDS = new Set(PREMIUM_PLUGINS.filter((p) => p.sale === "buy" && p.av
  *  Government rules stay with the store: a private install is free and civilian, and never displaces a
  *  store install (the user removes that first). */
 export function privatePluginProblem(m: PluginManifest, installed: InstalledPlugin | null): string | null {
+  if (m.kind === "world") return "a Lucid Agent World installs from Import world file under Lucid Agent Worlds in the Plugins drawer";
   if (m.tier !== "free") return "a premium plugin installs only from the LUCID store, where its license is checked";
   if (m.section !== "civilian") return "a Government plugin installs only from the LUCID store, after government access is verified";
   if (STORE_IDS.has(m.id)) return `"${m.id}" is a LUCID store plugin; install it from its card`;
@@ -318,11 +327,35 @@ async function scanPayload(payload: { name: string; data: Buffer }[], decide: (t
 /** Install from package bytes (the download path and the tests share it). Does not log; the URL entry
  *  point owns the one log line per attempt. */
 export async function installPluginBytes(bytes: Buffer, expectId: string, deps: InstallDeps = {}): Promise<InstallResult> {
-  let entries: { name: string; data: Buffer }[];
+  const v = verifyPackageBytes(bytes, expectId, deps);
+  if (!v.ok) return v;
+  return installVerified(bytes, v.entries, v.check, deps);
+}
+
+type ZipEntry = { name: string; data: Buffer };
+type VerifiedPackage = Extract<PackageCheck, { ok: true }>;
+
+/** The disk-free gates over package bytes: zip, manifest, hashes, signature. `expectId` null takes the id the
+ *  manifest declares (a world imported from a file has no catalog id to match). */
+function verifyPackageBytes(bytes: Buffer, expectId: string | null, deps: InstallDeps): { ok: true; entries: ZipEntry[]; check: VerifiedPackage } | { ok: false; gate: PluginGate; reason: string } {
+  let entries: ZipEntry[];
   try { entries = readAllZipEntries(bytes, { maxTotalBytes: MAX_EXPANDED_BYTES }); }
   catch (e) { return { ok: false, gate: "manifest", reason: `not a valid .lplugin.zip: ${(e as Error).message}` }; }
-  const check = verifyPluginEntries(entries, { expectId, trusted: deps.trusted ?? trustedPluginKeys() });
+  let id = expectId ?? "";
+  if (expectId === null) {
+    try {
+      const raw: unknown = JSON.parse(entries.find((e) => e.name === PLUGIN_MANIFEST)?.data.toString("utf8") ?? "");
+      if (raw && typeof raw === "object" && "id" in raw && typeof raw.id === "string") id = raw.id;
+    } catch { /* refused just below */ }
+    if (!PLUGIN_ID_RE.test(id)) return { ok: false, gate: "manifest", reason: `the package has no valid ${PLUGIN_MANIFEST} id` };
+  }
+  const check = verifyPluginEntries(entries, { expectId: id, trusted: deps.trusted ?? trustedPluginKeys() });
   if (!check.ok) return { ok: false, gate: check.gate, reason: check.reason };
+  return { ok: true, entries, check };
+}
+
+/** Unpack a verified package, run the disk and scan gates, then switch the version in atomically. */
+async function installVerified(bytes: Buffer, entries: ZipEntry[], check: VerifiedPackage, deps: InstallDeps): Promise<InstallResult> {
   const { manifest, payload } = check;
 
   const root = deps.root ?? pluginsRoot();
@@ -362,14 +395,22 @@ export async function installPluginBytes(bytes: Buffer, expectId: string, deps: 
     let displaced: string | null = null;
     if (existsSync(target)) { displaced = join(pluginDir, `.old-${randomBytes(6).toString("hex")}`); renameSync(target, displaced); }
     renameSync(staging, target);
+    // A world keeps its ORIGINAL signed package beside the version dir (never inside it, so the payload still
+    // matches the signed file list): Export hands back exactly these bytes, which install on any machine.
+    const kept = manifest.kind === "world" ? worldPackageName(manifest.id, manifest.version) : null;
+    if (kept) {
+      const tmpPkg = join(pluginDir, `.package-${randomBytes(4).toString("hex")}.zip`);
+      writeFileSync(tmpPkg, bytes);
+      renameSync(tmpPkg, join(pluginDir, kept));
+    }
     const ptr: CurrentPointer = { id: manifest.id, version: manifest.version, installedAt: new Date().toISOString(), signed: check.signed, keyId: check.keyId, source: deps.source ?? "catalog" };
     const tmp = join(pluginDir, `.current-${randomBytes(4).toString("hex")}.json`);
     writeFileSync(tmp, JSON.stringify(ptr, null, 2));
     renameSync(tmp, join(pluginDir, "current.json"));
-    mkdirSync(pluginDataDir(manifest.id), { recursive: true });
-    // Older versions and leftovers go; the data dir is elsewhere and untouched.
+    if (manifest.kind !== "world") mkdirSync(pluginDataDir(manifest.id), { recursive: true }); // a world has no fs permission
+    // Older versions and leftovers go (an older world's kept package too); the data dir is elsewhere and untouched.
     for (const n of readdirSync(pluginDir)) {
-      if (n === manifest.version || n === "current.json") continue;
+      if (n === manifest.version || n === "current.json" || n === kept) continue;
       try { rmSync(join(pluginDir, n), { recursive: true, force: true }); } catch { /* a locked file on Windows: retried on the next install */ }
     }
     if (displaced) try { rmSync(displaced, { recursive: true, force: true }); } catch { /* already handled above */ }
@@ -391,4 +432,45 @@ export function uninstallPlugin(id: string, keepData: boolean, root = pluginsRoo
   } catch (e) { return { ok: false, error: `uninstall failed: ${(e as Error).message}` }; }
   logPluginAttempt({ action: "uninstall", id, keepData, ok: true });
   return { ok: true };
+}
+
+// ── Lucid Agent Worlds (ADR-0648) ────────────────────────────────────────────────────────────────────
+
+export type WorldInstallResult =
+  | { ok: true; world: InstalledWorldView }
+  | { ok: false; gate: PluginGate; reason: string; logPath?: string };
+
+/** Install a world from a package file the user imported (offline: exported on one machine, imported on another).
+ *  Every gate of a store install runs (manifest, hashes, signature, scan), and on top the package must be kind
+ *  "world" and SIGNED by the publisher key: an unsigned world is refused whatever its tier. This is the ONLY
+ *  file path a world installs through (privatePluginProblem refuses worlds). Whether the user may USE the world is
+ *  the Visualize host's entitlement check, not this gate. Logs one line per attempt. */
+export async function installWorldBytes(bytes: Buffer, filename: string, deps: InstallDeps = {}): Promise<WorldInstallResult> {
+  const startedAt = Date.now();
+  const source = `file:${(filename.split(/[\\/]/).pop() ?? "").slice(0, 200) || "(unnamed)"}`;
+  const fail = (gate: PluginGate, reason: string): WorldInstallResult => {
+    (deps.record ?? recordBlock)({ tool: "plugin_install", severity: "high", findings: gate, reason: `world file refused at the ${gate} gate: ${reason}` });
+    return { ok: false, gate, reason, logPath: logPluginAttempt({ action: "install-world-file", source, ok: false, gate, reason, ms: Date.now() - startedAt }) };
+  };
+  if (!/\.zip$/i.test(filename)) return fail("manifest", "a world package is a .lplugin.zip file");
+  if (bytes.length > MAX_DOWNLOAD_BYTES) return fail("manifest", `package is over the ${MAX_DOWNLOAD_BYTES}-byte limit`);
+  const v = verifyPackageBytes(bytes, null, deps);
+  if (!v.ok) return fail(v.gate, v.reason);
+  if (v.check.manifest.kind !== "world") return fail("manifest", "this package is not a Lucid Agent World");
+  if (!v.check.signed) return fail("signature", "a world must be signed by TECHLEAD 187 LLC; this package is not");
+  const r = await installVerified(bytes, v.entries, v.check, { ...deps, source: "catalog" });
+  if (!r.ok) return fail(r.gate, r.reason);
+  const world = listInstalledWorlds(deps.root ?? pluginsRoot()).find((w) => w.id === r.id);
+  if (!world) return fail("manifest", "the world installed but could not be read back");
+  logPluginAttempt({ action: "install-world-file", source, ok: true, id: r.id, version: r.version, signed: r.signed, keyId: r.keyId, ms: Date.now() - startedAt });
+  return { ok: true, world };
+}
+
+/** The kept original package of an installed world, for Export. Refuses anything that is not an installed world. */
+export function exportWorld(id: string, root = pluginsRoot()): { ok: true; bytes: Buffer; name: string } | { ok: false; error: string } {
+  const p = readInstalled(id, root);
+  if (!p || p.manifest.kind !== "world") return { ok: false, error: "that world is not installed" };
+  const name = worldPackageName(p.manifest.id, p.manifest.version);
+  try { return { ok: true, bytes: readFileSync(worldPackagePath(p.manifest.id, p.manifest.version, root)), name }; }
+  catch { return { ok: false, error: "the installed world has no kept package; reinstall it to export" }; }
 }

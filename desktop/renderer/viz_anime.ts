@@ -31,6 +31,15 @@
 // reactions over the activity (viz_anime_pose's hit plan: turned toward the throw, blended in from the pose on
 // screen); the charge they leave (bolt, energy balls, Storm) speeds the activity up, lights the accent, keeps a
 // small aura burning (crackling while a bolt's boost lasts) and, for energy balls, grows him up to +12 percent.
+//
+// P-VIZ.7 (ADR-0641): the node's model sponsors him (viz_brand): its size class scales the whole figure (capped so
+// he stays inside his glass cube), its sponsor emblem is a patch on his chest and on his left thigh (riding those
+// joints; the 2D map and the lowest tier keep the chest one), and its variant picks his weapon: a katana on the
+// back, a kunai pair in thigh pouches, a bo staff on the back or a chakram on the back of the belt (shared
+// vertex-colored geometry per tier, ref-counted). The kata, dash and kiblast slots play the weapon move on some
+// loops (viz_anime_pose.weaponTurn); everything else keeps it on its mount. setCommit() is the git commit: the
+// raised arm, a jagged ribbon bolt (crossed strips re-jittered in place, BOLT_HZ times a second) up into a storm
+// cloud of toon puffs, sparks off the hand and glowing raiden eyes, all built on the first commit and reused.
 
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
@@ -43,7 +52,10 @@ import {
   type ShotName,
   animeHitCharge, chargeLevel, chargeTempo, clearHit, decayCharge, HIT_KINDS, newCharge, newHitSample, orbScale, planHit, sampleHit,
   seededGender, type HitPlan,
+  BOLT_AT, BOLT_HZ, clamp01, CLOUD_IN_S, CLOUD_OUT_S, COMMIT_IN_S, COMMIT_OUT_S, newWeaponSample, smoothEase, variantOf, WEAPON_CLIP, WEAPON_SLOTS, WEAPONS,
+  weaponAt, weaponTurn, type AnimeWeapon,
 } from "./viz_anime_pose.ts";
+import { drawEmblem, type VizBrand } from "./viz_brand.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
 
@@ -70,6 +82,10 @@ export interface AnimeFigure {
   readonly charge: number;
   /** How long the agent has been idle. The anime figure ignores it (the office worker uses it). */
   setIdleSeconds(sec: number): void;
+  /** P-VIZ.7 (ADR-0641): a git commit or push is running. He plants his feet, raises his right arm and holds a
+   *  jagged lightning bolt from his hand up into a storm cloud over his head, eyes glowing white-blue, for as long
+   *  as it stays on (seconds to minutes); off, the bolt cuts out, the cloud dissipates and he blends back. */
+  setCommit(on: boolean): void;
   setLook(l: MiniLook): void;
   update(tSec: number, dt: number, motion: boolean): void;
   dispose(): void;
@@ -132,6 +148,31 @@ function drawEyeBand(ctx: CanvasRenderingContext2D, p: EyePaint, emo: Emotion, b
       // > <  squeezed shut with effort
       ctx.strokeStyle = INK; ctx.lineWidth = 10;
       ctx.beginPath(); ctx.moveTo(ox, cy - 26); ctx.lineTo(ix - inner * 6, cy - 2); ctx.lineTo(ox, cy + 20); ctx.stroke();
+    } else if (emo.shape === "glow") {
+      // P-VIZ.7 (ADR-0641): raiden eyes. The light bleeds out over the skin first, a streak trails off the outer
+      // corner, then the almond is lit white-blue from within (no iris, no pupil), under the usual inked lash line.
+      const h = 92 * emo.open;
+      const top = cy - h * 0.62, bot = cy + h * 0.38 - emo.lower * 14;
+      const halo = ctx.createRadialGradient(cx, cy, 12, cx, cy, 118);
+      halo.addColorStop(0, "rgba(214,244,255,0.9)");
+      halo.addColorStop(0.4, "rgba(130,205,255,0.42)");
+      halo.addColorStop(1, "rgba(80,160,255,0)");
+      ctx.fillStyle = halo;
+      ctx.fillRect(cx - 128, cy - 104, 256, 208);
+      ctx.strokeStyle = "rgba(190,236,255,0.85)"; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.quadraticCurveTo(ox - inner * 40, oy - 2, ox - inner * 78, oy - 14); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ox, oy);
+      ctx.bezierCurveTo(ox + inner * w * 0.15, top - 4, ix - inner * w * 0.35, top + slantY * 0.9, ix, iy);
+      ctx.bezierCurveTo(ix - inner * w * 0.3, bot + 4, ox + inner * w * 0.25, bot + 2, ox, oy);
+      const lit = ctx.createRadialGradient(cx, cy, 4, cx, cy, 80);
+      lit.addColorStop(0, "#ffffff"); lit.addColorStop(0.45, "#c8f0ff"); lit.addColorStop(1, "#5cb6ff");
+      ctx.fillStyle = lit;
+      ctx.shadowColor = "#9fdcff"; ctx.shadowBlur = 26;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = INK; ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(ox - inner * 8, oy - 8); ctx.bezierCurveTo(ox + inner * w * 0.15, top - 4, ix - inner * w * 0.35, top + slantY * 0.9, ix, iy); ctx.stroke();
     } else {
       const open = Math.max(0.04, emo.open * (1 - blink));
       const h = 92 * open;
@@ -239,6 +280,9 @@ interface Tier {
   keyCols: number; keyRows: number; puffs: number; streaks: number; ring: number; aura: number;
   /** The eye canvas size relative to the lab's 768 x 168. */
   eyeScale: number;
+  /** P-VIZ.7: radial segments of the weapon rods (the torus rings scale from it), sponsor patch columns, the
+   *  commit bolt's segments, its side forks, the storm cloud's puffs and the sparks off the hand (0 = none). */
+  wpn: number; patch: number; bolt: number; forks: number; cloud: number; sparks: number;
 }
 
 const TIERS: Record<AnimeDetail, Tier> = {
@@ -247,18 +291,21 @@ const TIERS: Record<AnimeDetail, Tier> = {
     torso: 36, neck: 18, upperArm: 24, foreArm: 22, thigh: 26, shin: 26, cuff: 18, belt: [12, 40], headband: [12, 56], capsule: [4, 8], tail: [4, 10], box: 3,
     spikes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], bangs: [0, 1, 2, 3, 4], spikeRings: 10, spikeSides: 9, smallInk: true,
     keyCols: 10, keyRows: 3, puffs: 14, streaks: 8, ring: 48, aura: 40, eyeScale: 1,
+    wpn: 12, patch: 8, bolt: 24, forks: 3, cloud: 11, sparks: 16,
   },
   reduced: {
     pelvis: [16, 10], knot: [10, 6], trap: [14, 6], head: [28, 20], ear: [8, 6], mask: [28, 12], band: [32, 8], hairCap: [24, 12], deltoid: [12, 8], ki: [12, 8], smoke: [8, 6],
     torso: 18, neck: 10, upperArm: 12, foreArm: 12, thigh: 14, shin: 14, cuff: 10, belt: [8, 24], headband: [8, 32], capsule: [2, 6], tail: [2, 6], box: 1,
     spikes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], bangs: [0, 1, 2], spikeRings: 6, spikeSides: 6, smallInk: true,
     keyCols: 8, keyRows: 3, puffs: 8, streaks: 6, ring: 32, aura: 24, eyeScale: 1,
+    wpn: 8, patch: 6, bolt: 18, forks: 2, cloud: 8, sparks: 10,
   },
   minimal: {
     pelvis: [10, 6], knot: [6, 4], trap: [10, 4], head: [16, 12], ear: null, mask: [16, 6], band: [16, 4], hairCap: [14, 6], deltoid: [8, 6], ki: [8, 6], smoke: [6, 4],
     torso: 10, neck: 8, upperArm: 8, foreArm: 8, thigh: 8, shin: 8, cuff: 6, belt: [6, 14], headband: [6, 18], capsule: null, tail: [1, 4], box: 0,
     spikes: [0, 1, 2, 3, 4, 7, 8, 9], bangs: [], spikeRings: 4, spikeSides: 5, smallInk: false,
     keyCols: 6, keyRows: 2, puffs: 5, streaks: 4, ring: 20, aura: 12, eyeScale: 0.5,
+    wpn: 6, patch: 4, bolt: 12, forks: 1, cloud: 5, sparks: 0,
   },
 };
 
@@ -420,6 +467,8 @@ interface GeoSet {
   thigh: THREE.BufferGeometry; shin: THREE.BufferGeometry; ankle: THREE.BufferGeometry; boot: THREE.BufferGeometry;
   kbPlane: THREE.BufferGeometry; kbKey: THREE.BufferGeometry; kbEdges: THREE.BufferGeometry;
   ball: THREE.BufferGeometry; auraIn: THREE.BufferGeometry; auraOut: THREE.BufferGeometry; puff: THREE.BufferGeometry; ring: THREE.BufferGeometry; streak: THREE.BufferGeometry;
+  /** P-VIZ.7: the sponsor patches, curved to the chest and the thigh. */
+  patchChest: THREE.BufferGeometry; patchThigh: THREE.BufferGeometry;
 }
 
 const AURA_H = 2.6;
@@ -466,7 +515,222 @@ function buildGeo(t: Tier): GeoSet {
     puff: new THREE.SphereGeometry(1, t.smoke[0], t.smoke[1]),
     ring: new THREE.RingGeometry(0.45, 0.52, t.ring),
     streak: new THREE.PlaneGeometry(1, 1),
+    patchChest: patchGeo(PATCH_CHEST[0], PATCH_CHEST[1], 0.31, t.patch),
+    patchThigh: patchGeo(PATCH_THIGH[0], PATCH_THIGH[1], THIGH_R + PATCH_LIFT, t.patch),
   };
+}
+
+// ------------------------------------------------------------------------------------------ P-VIZ.7 patches and weapons
+
+/** Patch sizes (lab units, the patch canvas's aspect PATCH_W x PATCH_H) and how far a patch stands off the cloth.
+ *  The chest patch is a jersey sponsor across the front of the gi, big enough to read at the overview distance. */
+const PATCH_CHEST = [0.26, 0.19] as const;
+const PATCH_THIGH = [0.15, 0.11] as const;
+const PATCH_LIFT = 0.014;
+const PATCH_W = 320, PATCH_H = 234;
+/** The torso (TORSO on the spine) where the chest patch sits: its height on the spine, its radius there, and how
+ *  much the torso widens per unit of height (the patch tilts to match). */
+const CHEST_PATCH_Y = 0.235;
+const CHEST_PATCH_R = 0.235;
+const CHEST_SLOPE = 0.21;
+/** The thigh's radius where the patch sits (THIGH at about -0.15) and the patch's angle round it (front, toward -X). */
+const THIGH_R = 0.13;
+const THIGH_PATCH_A = -0.3;
+
+/** A plane bent round a vertical cylinder of radius `r` (it curves back at its sides, like the cloth under it). */
+function patchGeo(w: number, h: number, r: number, seg: number): THREE.BufferGeometry {
+  const g = new THREE.PlaneGeometry(w, h, seg, 1);
+  const p = g.attributes.position!;
+  for (let i = 0; i < p.count; i++) {
+    const a = p.getX(i) / r;
+    p.setXYZ(i, r * Math.sin(a), p.getY(i), r * Math.cos(a) - r);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A rod along +Z centered at `z` (radius r0 at the -Z end, r1 at the +Z end). */
+function rod(r0: number, r1: number, len: number, seg: number, z: number): THREE.BufferGeometry {
+  return new THREE.CylinderGeometry(r1, r0, len, seg).rotateX(Math.PI / 2).translate(0, 0, z);
+}
+
+/** Parts merged into one non-indexed, vertex-colored geometry (one draw per prop). The parts are consumed. */
+function paintedMerge(parts: readonly (readonly [THREE.BufferGeometry, string])[]): THREE.BufferGeometry {
+  const flat: THREE.BufferGeometry[] = [];
+  const c = new THREE.Color();
+  for (const [g, hex] of parts) {
+    const n = g.index ? g.toNonIndexed() : g;
+    if (n !== g) g.dispose();
+    for (const k of Object.keys(n.attributes)) if (k !== "position" && k !== "normal") n.deleteAttribute(k);
+    c.set(hex);
+    const col = new Float32Array(n.attributes.position!.count * 3);
+    for (let i = 0; i < col.length; i += 3) { col[i] = c.r; col[i + 1] = c.g; col[i + 2] = c.b; }
+    n.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    flat.push(n);
+  }
+  const merged = mergeGeometries(flat, false)!;
+  for (const g of flat) g.dispose();
+  return merged;
+}
+
+/** The katana's blade: a flat, slightly tapered strip along +Z from 0 to `len`, the tip swept up to the spine. */
+function bladeGeo(len: number): THREE.BufferGeometry {
+  const s = new THREE.Shape();
+  s.moveTo(0, -0.021);
+  s.lineTo(len * 0.82, -0.016);
+  s.lineTo(len, 0.026);
+  s.lineTo(len * 0.8, 0.03);
+  s.lineTo(0, 0.023);
+  s.closePath();
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.014, bevelEnabled: false, curveSegments: 1 });
+  g.translate(0, 0, -0.007);
+  g.rotateY(-Math.PI / 2);
+  return g;
+}
+
+const GOLD = "#c9a54b";
+const STEEL = "#dfe7ef";
+const WRAP = "#1d2230";
+
+/** A weapon's shared parts, built in its grip frame (the grip at the origin, the blade or shaft along +Z).
+ *  katana: held = blade + guard + hilt, hilt = guard + hilt (sheathed), sheath = the scabbard. kunai: held = one
+ *  kunai, sheath = a thigh pouch. staff: held = the staff. disc: held = the chakram, glow = its energy ring. */
+interface WeaponGeo { refs: number; held: THREE.BufferGeometry; hilt: THREE.BufferGeometry | null; sheath: THREE.BufferGeometry | null; glow: THREE.BufferGeometry | null }
+const WEAPON_GEO = new Map<string, WeaponGeo>();
+
+function buildWeaponGeo(w: AnimeWeapon, t: Tier): WeaponGeo {
+  const s = t.wpn;
+  switch (w) {
+    case "katana": {
+      const fittings = (): [THREE.BufferGeometry, string][] => [[rod(0.05, 0.05, 0.014, s, 0.118), GOLD], [rod(0.021, 0.023, 0.23, s, 0), WRAP], [rod(0.025, 0.025, 0.02, s, -0.12), GOLD]];
+      return {
+        refs: 0,
+        held: paintedMerge([[bladeGeo(0.8).translate(0, 0, 0.125), STEEL], ...fittings()]),
+        hilt: paintedMerge(fittings()),
+        sheath: paintedMerge([[rod(0.033, 0.028, 0.82, s, 0.535), "#3a1f2b"], [rod(0.036, 0.036, 0.03, s, 0.15), GOLD], [rod(0.03, 0.03, 0.03, s, 0.93), GOLD]]),
+        glow: null,
+      };
+    }
+    case "kunai": {
+      const blade = new THREE.ConeGeometry(0.032, 0.14, 4).rotateX(Math.PI / 2).scale(0.4, 1, 1).translate(0, 0, 0.11);
+      const ring = new THREE.TorusGeometry(0.022, 0.006, 4, Math.max(6, s)).rotateY(Math.PI / 2).translate(0, 0, -0.062);
+      return {
+        refs: 0,
+        held: paintedMerge([[blade, STEEL], [rod(0.012, 0.013, 0.08, Math.max(5, s >> 1), 0), WRAP], [ring, STEEL]]),
+        hilt: null,
+        sheath: paintedMerge([[new THREE.BoxGeometry(0.05, 0.13, 0.075), "#3b3f4a"], [new THREE.BoxGeometry(0.056, 0.03, 0.08).translate(0, 0.055, 0), "#2a2d36"]]),
+        glow: null,
+      };
+    }
+    case "staff":
+      return {
+        refs: 0,
+        held: paintedMerge([[rod(0.024, 0.024, 1.5, s, 0), "#7a5534"], [rod(0.03, 0.03, 0.07, s, 0.68), GOLD], [rod(0.03, 0.03, 0.07, s, -0.68), GOLD], [rod(0.028, 0.028, 0.18, s, 0), WRAP]]),
+        hilt: null, sheath: null, glow: null,
+      };
+    case "disc": {
+      const parts: [THREE.BufferGeometry, string][] = [[new THREE.TorusGeometry(0.15, 0.02, Math.max(4, s >> 1), Math.round(s * 2.5)), STEEL], [new THREE.TorusGeometry(0.11, 0.008, 3, Math.round(s * 2)), GOLD]];
+      for (let k = 0; k < 6; k++) {
+        const a = (k * Math.PI) / 3;
+        parts.push([new THREE.ConeGeometry(0.03, 0.085, 4).scale(1, 1, 0.35).rotateZ(a - Math.PI / 2).translate(0.19 * Math.cos(a), 0.19 * Math.sin(a), 0), STEEL]);
+      }
+      return { refs: 0, held: paintedMerge(parts), hilt: null, sheath: null, glow: new THREE.RingGeometry(0.03, 0.135, Math.round(s * 2)) };
+    }
+  }
+}
+
+function acquireWeaponGeo(detail: AnimeDetail, w: AnimeWeapon): WeaponGeo {
+  const key = `${detail}/${w}`;
+  let set = WEAPON_GEO.get(key);
+  if (!set) {
+    set = buildWeaponGeo(w, TIERS[detail]);
+    WEAPON_GEO.set(key, set);
+  }
+  set.refs++;
+  return set;
+}
+
+function releaseWeaponGeo(detail: AnimeDetail, w: AnimeWeapon): void {
+  const key = `${detail}/${w}`;
+  const set = WEAPON_GEO.get(key);
+  if (!set || --set.refs > 0) return;
+  set.held.dispose();
+  set.hilt?.dispose();
+  set.sheath?.dispose();
+  set.glow?.dispose();
+  WEAPON_GEO.delete(key);
+}
+
+// ------------------------------------------------------------------------------------------ P-VIZ.7 commit storm
+
+/** The storm cloud's center, high over the raised right hand (body space, lab units). The cube's top is about 2.9
+ *  here and one cube height is about 2.9 more, so the cloud rides about 1.2 cube heights above the cube, where it
+ *  reads from the overview camera too. */
+const CLOUD_X = 0.45, CLOUD_Y = 6.2, CLOUD_Z = 0.02;
+/** Floats per cloud puff in CommitFx.puffAt, and the cloud's overall size (about 1.6 lab units wide). */
+const CLOUD_FIELDS = 5;
+const CLOUD_SIZE = 0.85;
+/** How far the bolt's joints wander sideways at each re-jitter (lab units); forks have this many segments. */
+const BOLT_AMP = 0.17;
+const FORK_SEG = 6;
+const BOLT_BLUE = new THREE.Color("#8fd0ff");
+/** A ribbon's look across its width (uv.y): a white-hot core inside a blue-white glow, additive. */
+const BOLT_VS = "varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }";
+const BOLT_FS = "uniform vec3 uC; uniform float uA; varying vec2 vUv;\n" +
+  "void main(){ float d = abs(vUv.y-0.5)*2.; float core = 1.-smoothstep(0.12,0.32,d); float glow = pow(1.-d,2.2); float a = (glow*0.8+core)*uA; vec3 c = mix(uC, vec3(1.), core); gl_FragColor = vec4(c*a, a); }";
+
+/** A polyline drawn as two crossed strips (one spread along X, one along Z), so a mostly vertical bolt reads from
+ *  any side. `pts` (n + 1 points) is rewritten in place and pushed with writeRibbon; nothing is reallocated. */
+interface Ribbon { geo: THREE.BufferGeometry; pos: Float32Array; pts: Float32Array; n: number; mesh: THREE.Mesh }
+
+function ribbon(n: number, mat: THREE.Material): Ribbon {
+  const v = (n + 1) * 4;
+  const pos = new Float32Array(v * 3), uv = new Float32Array(v * 2), idx: number[] = [];
+  for (let s = 0; s < 2; s++) for (let i = 0; i <= n; i++) {
+    const k = (s * (n + 1) + i) * 2;
+    uv[k * 2] = i / n; uv[k * 2 + 1] = 0; uv[k * 2 + 2] = i / n; uv[k * 2 + 3] = 1;
+    if (i < n) idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  const attr = new THREE.BufferAttribute(pos, 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute("position", attr);
+  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.raycast = () => {};
+  mesh.visible = false;
+  return { geo, pos, pts: new Float32Array((n + 1) * 3), n, mesh };
+}
+
+/** Writes the ribbon's strips from its points, `w0` wide at the first point tapering to `w1` at the last. */
+function writeRibbon(r: Ribbon, w0: number, w1: number): void {
+  const { pos, pts, n } = r;
+  const second = (n + 1) * 6;
+  for (let i = 0; i <= n; i++) {
+    const w = (w0 + (w1 - w0) * (i / n)) * 0.5;
+    const x = pts[i * 3]!, y = pts[i * 3 + 1]!, z = pts[i * 3 + 2]!;
+    let k = i * 6;
+    pos[k] = x - w; pos[k + 1] = y; pos[k + 2] = z; pos[k + 3] = x + w; pos[k + 4] = y; pos[k + 5] = z;
+    k += second;
+    pos[k] = x; pos[k + 1] = y; pos[k + 2] = z - w; pos[k + 3] = x; pos[k + 4] = y; pos[k + 5] = z + w;
+  }
+  r.geo.attributes.position!.needsUpdate = true;
+}
+
+/** The commit storm, built on the first setCommit(true) and kept (a node that committed once will again). */
+interface CommitFx {
+  bolt: Ribbon; forks: Ribbon[]; mBolt: THREE.ShaderMaterial;
+  /** Per bolt point: the x, y, z wander of the current jitter. */
+  jit: Float32Array;
+  /** Per fork: its points relative to the bolt point it leaves from, that point, and whether it shows this tick. */
+  forkRel: Float32Array; forkAt: Int32Array; forkOn: Uint8Array;
+  cloud: THREE.Group; puffs: THREE.Mesh[]; puffAt: Float32Array; mCloud: THREE.MeshToonMaterial; mCloudInk: THREE.MeshBasicMaterial; mCloudRim: THREE.MeshBasicMaterial;
+  glow: THREE.Mesh; mGlow: THREE.MeshBasicMaterial; eyes: THREE.Mesh[]; mEye: THREE.MeshBasicMaterial;
+  sparks: THREE.Points | null; sparkGeo: THREE.BufferGeometry | null; sparkPos: Float32Array; sparkDir: Float32Array; mSpark: THREE.PointsMaterial;
+  /** The jitter tick last drawn (-1 = never). */
+  tick: number;
 }
 
 const GEO_CACHE = new Map<AnimeDetail, GeoSet>();
@@ -529,6 +793,13 @@ const STEAM_PUFFS = 4;
 const CHARGE_AURA = 0.45;
 /** The hit turn glares a little from under the brows too, less than the stare. */
 const HIT_DIP = 0.04;
+/** P-VIZ.7: the most the body may grow (size class x energy balls). viz_scene stands him ANIME_HEIGHT x 1.15 tall
+ *  on a plate inside a CUBE (1.5) glass cube: 1.455 / 1.265 is about 1.15 of headroom, less a margin. */
+const MAX_SIZE = 1.13;
+/** How far a thrown kunai flies and how far out the chakram arcs before it comes back (lab units). */
+const KUNAI_RANGE = 1.1;
+const DISC_RANGE = 1.0;
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 let instanceSeed = 1;
 
 /** The anger mark (the red cross-shaped vein): four bent strokes around a center, dark rim under a bright red. */
@@ -689,15 +960,54 @@ class Anime implements AnimeFigure {
   private readonly checkBoxes: THREE.Mesh[] = [];
   private wCheck = 0;
   private ticksNow = -1;
+  // P-VIZ.7 (ADR-0641): the sponsor patch, the variant's weapon and the git commit storm
+  private readonly flat: boolean;
+  /** The node seed (or a per-instance one): picks the weapon loops of the slots. */
+  private readonly seed: number;
+  private readonly weapon: AnimeWeapon;
+  private readonly patchTex: THREE.CanvasTexture | null = null;
+  private readonly mWeapon: THREE.MeshToonMaterial;
+  /** Additive accent: the staff's spin blur or the chakram's energy ring. */
+  private readonly mWeaponGlow: THREE.MeshBasicMaterial;
+  /** Shown while the weapon rests on its mount / is in the hand(s) / is in flight (the thrown copies, body space). */
+  private readonly onMount: THREE.Object3D[] = [];
+  private readonly inHand: THREE.Object3D[] = [];
+  private readonly thrown: THREE.Mesh[] = [];
+  private readonly spinner: THREE.Group | null = null;
+  private readonly spinBlur: THREE.Mesh | null = null;
+  private readonly ws = newWeaponSample();
+  /** What the activity's current loop plays: the activity's own clip or, in a weapon slot, the weapon move. */
+  private segClip: ClipName = "typing";
+  private cycle = 0;
+  private flying = false;
+  private readonly flyFrom = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly flyDir = [new THREE.Vector3(), new THREE.Vector3()];
+  private readonly v3 = new THREE.Vector3();
+  private discSpin = 0;
+  private commitOn = false;
+  private commitT = 0;
+  private wCommit = 0;
+  private wCloud = 0;
+  private wBolt = 0;
+  /** The bolt's brightness this jitter tick (1 under reduced motion). */
+  private flick = 1;
+  private readonly commitPose = new Float32Array(POSE_LEN);
+  private readonly commitInfo: ClipSample = { emotion: "raiden", gaze: 0 };
+  private commitFx: CommitFx | null = null;
 
-  constructor(look: MiniLook, detail: AnimeDetail, flat: boolean, seed: number) {
+  constructor(look: MiniLook, detail: AnimeDetail, flat: boolean, seed: number, brand: VizBrand | null) {
     this.detail = Object.prototype.hasOwnProperty.call(TIERS, detail) ? detail : "full";
     const t = (this.tier = TIERS[this.detail]);
     const g = (this.geo = acquireGeo(this.detail));
     // no node seed (a standalone figure): a per-instance one, so a set of them is still mixed
-    const female = (this.female = seededGender(Number.isFinite(seed) ? seed : instanceSeed) === "female");
+    this.seed = Number.isFinite(seed) ? seed : instanceSeed;
+    const female = (this.female = seededGender(this.seed) === "female");
     const fg = female ? acquireFemaleGeo(this.detail) : null;
-    this.size = female ? 0.97 : 1;
+    // P-VIZ.7: the sponsor's size class scales the whole figure (a flagship stands taller than a mini)
+    const brandScale = brand && Number.isFinite(brand.scale) && brand.scale > 0 ? brand.scale : 1;
+    this.size = (female ? 0.97 : 1) * brandScale;
+    this.flat = flat;
+    this.weapon = WEAPONS[variantOf(brand?.variant, this.seed)]!;
     this.paint.lashes = female;
     this.rng = (instanceSeed++ * 2654435761) >>> 0 || 1;
     this.phase = this.random() * TAU;
@@ -740,6 +1050,8 @@ class Anime implements AnimeFigure {
     this.mRing = basic({ ...fx, opacity: 0.7, side: THREE.DoubleSide });
     this.mStreak = basic({ ...fx, opacity: 0, side: THREE.DoubleSide });
     this.mSmoke = basic({ color: 0x4a4f5c, transparent: true, opacity: 0.35, depthWrite: false });
+    this.mWeapon = toon({ vertexColors: true });
+    this.mWeaponGlow = basic({ ...fx, opacity: this.weapon === "disc" ? 0.75 : 0, side: THREE.DoubleSide });
     this.setLook(look);
 
     // ---- the rig (the lab's buildFigure)
@@ -748,7 +1060,7 @@ class Anime implements AnimeFigure {
     const G = () => new THREE.Group();
     const root = (this.root = G()), hips = G(), spine = G(), chest = (this.chest = G()), neck = G(), head = G();
     this.group.add(this.body);
-    this.body.scale.setScalar(ANIME_SCALE * this.size);
+    this.body.scale.setScalar(ANIME_SCALE * Math.min(MAX_SIZE, this.size));
     this.body.add(root);
     root.add(hips); hips.position.y = 0.86; hips.add(spine); spine.add(chest); chest.position.y = 0.26; chest.add(neck); neck.position.y = 0.36; neck.add(head); head.position.y = 0.08;
 
@@ -817,6 +1129,107 @@ class Anime implements AnimeFigure {
     const [shL, elL] = arm(-1), [shR, elR] = arm(1), [hipL, kneeL] = leg(-1), [hipR, kneeR] = leg(1);
     const byName: Record<(typeof JOINTS)[number], THREE.Group> = { root, hips, spine, chest, neck, head, shL, elL, shR, elR, hipL, kneeL, hipR, kneeR };
     for (const j of JOINTS) this.joints.push(byName[j]);
+
+    // ---- P-VIZ.7 (ADR-0641): the sponsor patches, worn like a sponsored athlete's: across the front of the gi (on
+    // the spine, which carries the torso, just under the V) and on the front of the left thigh (on its hip, so it
+    // follows the leg); the 2D map and the lowest tier keep only the front patch. Each is the sponsor's emblem on a
+    // white stitched backing, so a dark sponsor field still reads on a dark gi.
+    if (brand) {
+      const cv = document.createElement("canvas");
+      cv.width = PATCH_W;
+      cv.height = PATCH_H;
+      const ctx = cv.getContext("2d");
+      if (ctx) {
+        ctx.fillStyle = "#f4f6fa";
+        ctx.strokeStyle = "#0a0a12";
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.roundRect(3, 3, PATCH_W - 6, PATCH_H - 6, 34);
+        ctx.fill();
+        ctx.stroke();
+        drawEmblem(ctx, brand, 16, 16, PATCH_W - 32, PATCH_H - 32);
+      }
+      const tex = (this.patchTex = new THREE.CanvasTexture(cv));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      const mPatch = toon({ map: tex, transparent: true, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.45, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+      // the torso's front at that height (its cross-section is the torso mesh's scale), tilted with its taper
+      const rz = CHEST_PATCH_R * (female ? 0.72 : 0.76);
+      const cp = new THREE.Mesh(g.patchChest, mPatch);
+      cp.position.set(0, CHEST_PATCH_Y, rz + PATCH_LIFT);
+      cp.rotation.x = CHEST_SLOPE;
+      spine.add(cp);
+      if (!flat && this.detail !== "minimal") {
+        const tp = new THREE.Mesh(g.patchThigh, mPatch);
+        tp.position.set((THIGH_R + PATCH_LIFT) * Math.sin(THIGH_PATCH_A), -0.15, (THIGH_R + PATCH_LIFT) * Math.cos(THIGH_PATCH_A));
+        tp.rotation.y = THIGH_PATCH_A;
+        hipL.add(tp);
+      }
+    }
+
+    // ---- P-VIZ.7: the variant's weapon on its mount, its in-hand copy (the right hand; the kunai both) and the
+    // thrown copies (body space); updateWeapon shows the one the weapon move's clock asks for
+    const wg = acquireWeaponGeo(this.detail, this.weapon);
+    const wInk = t.smallInk ? 2 : 0;
+    const handR = this.hands[1]!;
+    if (this.weapon === "katana") {
+      // diagonally across the back, the hilt up over the right shoulder
+      const back = G(); chest.add(back);
+      back.position.set(0.2, 0.47, -0.27);
+      back.quaternion.setFromUnitVectors(Z_AXIS, this.v1.set(-0.55, -0.83, 0.04).normalize());
+      this.add(back, wg.sheath!, this.mWeapon, wInk);
+      this.onMount.push(this.add(back, wg.hilt!, this.mWeapon, wInk));
+      // in the fist the blade tilts down toward the forearm's line, so a forward arm holds it level
+      const grip = G(); handR.add(grip);
+      grip.rotation.x = 0.5;
+      this.add(grip, wg.held, this.mWeapon, wInk);
+      this.inHand.push(grip);
+    } else if (this.weapon === "staff") {
+      const back = G(); chest.add(back);
+      back.position.set(0, 0.16, -0.3);
+      back.quaternion.setFromUnitVectors(Z_AXIS, this.v1.set(0.55, 0.83, 0).normalize());
+      this.onMount.push(this.add(back, wg.held, this.mWeapon, wInk));
+      // spun about the forearm's axis (the hand's Y), with a faint accent blur disc while it whirls
+      const spin = (this.spinner = G()); handR.add(spin);
+      this.add(spin, wg.held, this.mWeapon, wInk);
+      const blur = (this.spinBlur = new THREE.Mesh(g.ring, this.mWeaponGlow));
+      blur.rotation.x = Math.PI / 2;
+      blur.scale.setScalar(1.45);
+      blur.raycast = () => {};
+      spin.add(blur);
+      this.inHand.push(spin);
+    } else if (this.weapon === "kunai") {
+      const hipsLR = [hipL, hipR];
+      for (let i = 0; i < 2; i++) {
+        const s = i === 0 ? -1 : 1, hip = hipsLR[i]!;
+        // a pouch on the outside of each thigh, a kunai standing in it ring up
+        this.add(hip, wg.sheath!, this.mWeapon, wInk).position.set(s * 0.16, -0.135, 0);
+        const k = this.add(hip, wg.held, this.mWeapon, wInk);
+        k.position.set(s * 0.16, -0.03, 0);
+        k.rotation.x = Math.PI / 2;
+        this.onMount.push(k);
+        // held point out past the fist, in line with the forearm (a throwing grip)
+        const h = this.add(this.hands[i]!, wg.held, this.mWeapon, wInk);
+        h.rotation.x = Math.PI / 2;
+        this.inHand.push(h);
+        const f = this.add(this.body, wg.held, this.mWeapon, wInk);
+        f.rotation.order = "YXZ";
+        this.thrown.push(f);
+      }
+    } else {
+      // the chakram flat against the back of the belt; held at its rim, it lies in the hand's plane past the fingers
+      this.onMount.push(this.add(hips, wg.held, this.mWeapon, wInk));
+      this.onMount[0]!.position.set(0, 0.02, -0.25);
+      const h = this.add(handR, wg.held, this.mWeapon, wInk);
+      h.position.set(0, -0.17, 0);
+      h.add(new THREE.Mesh(wg.glow!, this.mWeaponGlow));
+      this.inHand.push(h);
+      const f = this.add(this.body, wg.held, this.mWeapon, wInk);
+      f.add(new THREE.Mesh(wg.glow!, this.mWeaponGlow));
+      this.thrown.push(f);
+    }
+    for (const m of this.inHand) m.visible = false;
+    for (const m of this.thrown) m.visible = false;
 
     // ---- effects
     // holo keyboard in front of the hands at chest height
@@ -893,7 +1306,18 @@ class Anime implements AnimeFigure {
     this.activity = a;
     this.actT = 0;
     this.kiFlying = false;
+    this.segClip = a;
+    this.cycle = 0;
     this.snapshot(BLEND_S, false);
+  }
+
+  setCommit(on: boolean): void {
+    if (this.disposed || on === this.commitOn) return;
+    this.commitOn = on === true;
+    if (!this.commitOn) return;
+    // a fresh commit starts the loop from its first key; one that lands while the last is still fading picks up
+    if (this.wCommit < 0.01) this.commitT = 0;
+    this.ensureCommitFx();
   }
 
   setIntensity(x: number): void {
@@ -987,6 +1411,13 @@ class Anime implements AnimeFigure {
     // supercharged: the activity runs faster
     const tempo = tempoFor(this.state, this.kS) * chargeTempo(this.chargeNow);
     this.actT += d * tempo;
+    // ---- P-VIZ.7: the commit layer's weights (the pose blends in fast, the cloud gathers slower and lingers, the
+    // bolt only fires once the arm is up and cuts out first); under reduced motion they jump
+    const committing = this.commitOn && this.state !== "killed";
+    this.commitT += d;
+    this.wCommit = approach(this.wCommit, committing ? 1 : 0, motion ? d / (committing ? COMMIT_IN_S : COMMIT_OUT_S) : 1);
+    this.wCloud = approach(this.wCloud, committing ? 1 : 0, motion ? d / (committing ? CLOUD_IN_S : CLOUD_OUT_S) : 1);
+    this.wBolt = approach(this.wBolt, committing && this.wCommit >= BOLT_AT ? 1 : 0, motion ? d / 0.12 : 1);
     if (!motion) this.shot = null;
     if (this.shot) {
       this.shotT += d;
@@ -1013,6 +1444,22 @@ class Anime implements AnimeFigure {
     // ---- the pose: a clip sample, blended from the last change
     const base: ClipName = clipFor(this.state, this.activity);
     const onActivity = base === this.activity;
+    // P-VIZ.7: each loop of a weapon slot is the activity's own clip or the variant's weapon move (decided at the
+    // loop boundary, blended across it)
+    if (onActivity && motion && WEAPON_SLOTS.includes(this.activity)) {
+      const len = CLIPS[this.segClip].len;
+      if (this.actT >= len) {
+        // (a clock that ran on while a state clip played catches up in one step)
+        const loops = Math.floor(this.actT / len);
+        this.actT -= loops * len;
+        this.cycle += loops;
+        const next: ClipName = weaponTurn(this.activity, this.seed, this.cycle) ? WEAPON_CLIP[this.weapon] : this.activity;
+        if (next !== this.segClip) {
+          this.segClip = next;
+          this.snapshot(0.25, false);
+        }
+      }
+    }
     const baseT = onActivity ? this.actT : this.stateT;
     const info = this.info;
     if (!motion) {
@@ -1021,7 +1468,7 @@ class Anime implements AnimeFigure {
       this.blendT = this.blendDur;
     } else {
       if (this.shot) sampleClip(CLIPS[this.shot], this.shotT, this.tgt, info);
-      else sampleClip(CLIPS[base], baseT, this.tgt, info);
+      else sampleClip(CLIPS[onActivity ? this.segClip : base], baseT, this.tgt, info);
       if (this.blendT >= this.blendDur) this.cur.set(this.tgt);
       else {
         const u = this.blendT / this.blendDur;
@@ -1029,11 +1476,16 @@ class Anime implements AnimeFigure {
         for (let i = 0; i < POSE_LEN; i++) this.cur[i] = this.from[i]! + (this.tgt[i]! - this.from[i]!) * w;
       }
     }
-    const emotion = hs.emotion ?? rs.emotion ?? (this.shot ? info.emotion : stateEmotion(this.state, info.emotion));
+    const emotion = hs.emotion ?? rs.emotion ?? (this.wCommit > 0.5 ? "raiden" : this.shot ? info.emotion : stateEmotion(this.state, info.emotion));
 
-    // ---- effect weights (a hit holding the body puts the activity's effects away)
-    const live = onActivity && this.shot === null && hs.body < 0.5;
+    // ---- effect weights (a hit holding the body puts the activity's effects away; so do a weapon move and the
+    // commit)
     const act = this.activity;
+    const live = onActivity && this.shot === null && hs.body < 0.5 && this.segClip === act && this.wCommit < 0.5;
+    // P-VIZ.7: where the weapon is (in the hand only during its move, never through the commit)
+    const ws = this.ws;
+    if (onActivity && motion && this.segClip !== act && this.shot === null && this.wCommit < 0.3) weaponAt(this.weapon, this.actT, ws);
+    else { ws.hand = false; ws.fly = -1; ws.spin = 0; ws.blur = 0; }
     const actClipT = clipTime(CLIPS[act], motion ? this.actT : STILL_T[act]);
     const speed = act === "dash" ? dashSpeed(actClipT) : 0;
     const rate = motion ? d / FX_S : 1;
@@ -1045,7 +1497,7 @@ class Anime implements AnimeFigure {
     const supervising = (act as ClipName) === "supervise";
     this.wCheck = approach(this.wCheck, live && supervising ? 1 : 0, rate);
     // the charge keeps a small aura burning (the hits flare it)
-    const auraT = Math.max(this.shot === "powerup" ? auraLevel(this.shotT) : 0, rs.aura, hs.aura, CHARGE_AURA * this.chargeNow);
+    const auraT = Math.max(this.shot === "powerup" ? auraLevel(this.shotT) : 0, rs.aura, hs.aura, CHARGE_AURA * this.chargeNow, 0.6 * this.wCommit);
     this.wAura = approach(this.wAura, auraT, rate * 2);
     this.wSmoke = approach(this.wSmoke, this.state === "killed" && this.stateT > 0.5 ? 1 : 0, motion ? d / 1.2 : 1);
     this.wPause = approach(this.wPause, this.state === "paused" ? 1 : 0, motion ? d / 0.8 : 1);
@@ -1053,6 +1505,12 @@ class Anime implements AnimeFigure {
     // ---- procedural layers
     const o = this.out;
     o.set(this.cur);
+    // P-VIZ.7: the commit stance over whatever he was doing, by its (smoothed) weight
+    if (this.wCommit > 0.001) {
+      sampleClip(CLIPS.commit, motion ? this.commitT : STILL_T.commit, this.commitPose, this.commitInfo);
+      const wc = this.wCommit * this.wCommit * (3 - 2 * this.wCommit), cp = this.commitPose;
+      for (let i = 0; i < POSE_LEN; i++) o[i] = o[i]! + (cp[i]! - o[i]!) * wc;
+    }
     const br = motion ? Math.sin((this.life * TAU) / (this.state === "paused" ? 5 : 3.2)) : 0;
     if (motion) {
       const amp = this.state === "killed" ? 0.3 : 1;
@@ -1065,6 +1523,9 @@ class Anime implements AnimeFigure {
       o[1] += 0.03 * Math.sin(this.life * 17) * this.wDash;
       const shake = Math.max(this.shot === "powerup" ? shakeLevel(this.shotT) : 0, this.state === "failed" ? shakeLevel(this.stateT) : 0);
       o[0] += 0.03 * Math.sin(this.life * 83) * shake;
+      // the bolt arm trembles with the current running through it
+      o[O_SHR] += 0.02 * Math.sin(this.life * 47) * this.wBolt;
+      o[O_SHR + 2] += 0.015 * Math.sin(this.life * 61 + 1) * this.wBolt;
       // typing: fast alternating taps, the tempo following the intensity; a key lights on every tap
       this.tapPh += d * tempo * (5 + 6 * this.kS);
       if (this.wType > 0.001) {
@@ -1083,8 +1544,8 @@ class Anime implements AnimeFigure {
     if (rs.turn > 0.001 || rs.rage > 0.001) this.layerReaction(o);
     if (hs.body > 0.001) this.layerHit(o, motion);
     this.apply(o);
-    // the energy balls grow him
-    this.body.scale.setScalar(ANIME_SCALE * this.size * orbScale(this.chg));
+    // the energy balls grow him (never out of his cube)
+    this.body.scale.setScalar(ANIME_SCALE * Math.min(MAX_SIZE, this.size * orbScale(this.chg)));
     const sway = motion ? 1 : 0;
     this.tails.rotation.set(0.12 * Math.sin(this.life * 3.1) * sway + 0.35 * this.wDash + 0.3 * this.dead, 0.18 * Math.sin(this.life * 2.3 + 1) * sway, 0);
     if (this.pony) this.pony.rotation.set(0.08 * Math.sin(this.life * 2.6 + 0.4) * sway + 0.3 * this.wDash + 0.25 * this.dead, 0.14 * Math.sin(this.life * 1.9 + 2) * sway, 0);
@@ -1114,6 +1575,8 @@ class Anime implements AnimeFigure {
     this.updateFx(d, motion, act === "kiblast" ? actClipT : -1, speed, br, auraT);
     this.updateChecklist(supervising ? (motion ? this.actT : STILL_T.supervise) : -1);
     this.updateRageFx();
+    this.updateWeapon(d);
+    this.updateCommitFx(motion);
   }
 
   dispose(): void {
@@ -1126,6 +1589,15 @@ class Anime implements AnimeFigure {
       this.rageFx.tex.dispose();
       this.rageFx.geo.dispose();
     }
+    this.patchTex?.dispose();
+    const cf = this.commitFx;
+    if (cf) {
+      cf.bolt.geo.dispose();
+      for (const f of cf.forks) f.geo.dispose();
+      cf.sparkGeo?.dispose();
+      this.commitFx = null;
+    }
+    releaseWeaponGeo(this.detail, this.weapon);
     this.reactCam = null;
     this.hitPlan = null;
     this.hitCam = null;
@@ -1301,6 +1773,291 @@ class Anime implements AnimeFigure {
     for (let i = 0; i < this.checkBoxes.length; i++) this.checkBoxes[i]!.material = i < n ? this.mKeyHot : this.mKey;
   }
 
+  /** P-VIZ.7: the weapon on its mount, in the hand(s) or in flight, as the move's clock says (ws, sampled in
+   *  update). A thrown kunai flies from its hand out along the throw and drops away; the chakram arcs out, curves
+   *  aside and comes back to the throwing hand, spinning flat. */
+  private updateWeapon(d: number): void {
+    const ws = this.ws;
+    const flying = ws.fly >= 0;
+    for (const m of this.onMount) m.visible = !ws.hand && !flying;
+    for (const m of this.inHand) m.visible = ws.hand;
+    if (this.spinner) {
+      this.spinner.rotation.y = ws.spin;
+      this.spinBlur!.visible = ws.blur > 0.02;
+      this.mWeaponGlow.opacity = 0.4 * ws.blur;
+    }
+    const n = this.thrown.length;
+    for (let i = 0; i < n; i++) this.thrown[i]!.visible = flying;
+    if (!flying) {
+      this.flying = false;
+      return;
+    }
+    if (!this.flying) {
+      // released: from the hand, away from the chest and forward
+      this.flying = true;
+      const c = this.body.worldToLocal(this.chest.getWorldPosition(this.v2));
+      for (let i = 0; i < n; i++) {
+        const from = this.body.worldToLocal(this.hands[n === 2 ? i : 1]!.getWorldPosition(this.flyFrom[i]!));
+        const dir = this.flyDir[i]!.subVectors(from, c).setY(0);
+        if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+        dir.normalize();
+        dir.z += 1.2;
+        dir.normalize();
+      }
+    }
+    const u = ws.fly;
+    if (this.weapon === "kunai") {
+      const fade = Math.max(0.001, 1 - smoothEase((u - 0.7) / 0.3));
+      for (let i = 0; i < n; i++) {
+        const m = this.thrown[i]!, dir = this.flyDir[i]!;
+        m.position.copy(this.flyFrom[i]!).addScaledVector(dir, u * KUNAI_RANGE);
+        m.position.y -= 0.12 * u * u;
+        m.rotation.set(0.25 * u, Math.atan2(dir.x, dir.z), 0);
+        m.scale.setScalar(fade);
+      }
+      return;
+    }
+    const m = this.thrown[0]!, f = this.flyDir[0]!;
+    const back = this.body.worldToLocal(this.hands[1]!.getWorldPosition(this.v3));
+    const out = Math.sin(Math.PI * u), side = 0.35 * Math.sin(TAU * u);
+    m.position.lerpVectors(this.flyFrom[0]!, back, smoothEase(u)).addScaledVector(f, DISC_RANGE * out);
+    m.position.x += f.z * side;
+    m.position.z -= f.x * side;
+    m.position.y += 0.15 * out;
+    this.discSpin += d * 28;
+    m.rotation.set(Math.PI / 2, 0, this.discSpin);
+  }
+
+  /** P-VIZ.7: builds the commit storm once (most nodes commit at some point; the parts are then reused). */
+  private ensureCommitFx(): void {
+    if (this.commitFx) return;
+    const t = this.tier, g = this.geo;
+    const noPick = (): void => {};
+    const fx = { transparent: true, blending: THREE.AdditiveBlending, depthWrite: false } as const;
+    const mBolt = this.own(new THREE.ShaderMaterial({
+      ...fx, side: THREE.DoubleSide,
+      uniforms: { uC: { value: BOLT_BLUE.clone() }, uA: { value: 0 } },
+      vertexShader: BOLT_VS, fragmentShader: BOLT_FS,
+    }));
+    const bolt = ribbon(t.bolt, mBolt);
+    bolt.mesh.renderOrder = 4;
+    this.body.add(bolt.mesh);
+    const forks: Ribbon[] = [];
+    for (let f = 0; f < t.forks; f++) {
+      const r = ribbon(FORK_SEG, mBolt);
+      r.mesh.renderOrder = 4;
+      this.body.add(r.mesh);
+      forks.push(r);
+    }
+    // the storm cloud, Raiden style: a dark charcoal-navy storm head (a flat dark underside, lumpy billows heaped on
+    // it), inked, with a thin bright rim so it reads against the dark sky, and lit blue-white from inside by the
+    // bolt's flashes
+    const mCloud = this.own(new THREE.MeshToonMaterial({ gradientMap: toonGrad(this.flat ? 2 : 3), toneMapped: false, color: "#151a28", emissive: "#a6dcff", emissiveIntensity: 0, transparent: true, opacity: 0 }));
+    // the puffs' ink fades with them (object space: about 0.02 lab units on a 0.4 puff), the rim just outside it
+    const mCloudInk = this.own(inkMat(0.05));
+    mCloudInk.transparent = true;
+    mCloudInk.opacity = 0;
+    const mCloudRim = this.own(inkMat(0.1));
+    mCloudRim.color.set("#8fd0ff");
+    mCloudRim.blending = THREE.AdditiveBlending;
+    mCloudRim.transparent = true;
+    mCloudRim.depthWrite = false;
+    mCloudRim.opacity = 0;
+    const cloud = new THREE.Group();
+    cloud.position.set(CLOUD_X, CLOUD_Y, CLOUD_Z);
+    cloud.visible = false;
+    this.body.add(cloud);
+    // per puff (CLOUD_FIELDS): angle, radius, height, size, flatness. Puff 0 is the flat dark underside the bolt
+    // hits, puff 1 the tall central billow; the rest are rounded billows of varied size heaped round it (lumpy from
+    // above and from the side), and the full tier's last puff is a subtle top shelf.
+    const puffAt = new Float32Array(t.cloud * CLOUD_FIELDS);
+    const puffs: THREE.Mesh[] = [];
+    const shelf = t.cloud >= 10 ? t.cloud - 1 : -1;
+    for (let k = 0; k < t.cloud; k++) {
+      const at = k * CLOUD_FIELDS;
+      if (k === 0) puffAt.set([0, 0, 0, 0.82, 0.18], at);
+      else if (k === 1) puffAt.set([0, 0, 0.24, 0.5, 0.85], at);
+      else if (k === shelf) puffAt.set([0.6, 0.1, 0.56, 0.5, 0.16], at);
+      else puffAt.set([k * 2.4, 0.32 + 0.26 * fract(k * 0.618), 0.1 + 0.2 * fract(k * 0.37), 0.28 + 0.2 * fract(k * 0.53), 0.82], at);
+      const p = new THREE.Mesh(g.puff, mCloud);
+      p.raycast = noPick;
+      if (t.smallInk) {
+        const ink = new THREE.Mesh(g.puff, mCloudInk);
+        ink.raycast = noPick;
+        p.add(ink);
+      }
+      const rim = new THREE.Mesh(g.puff, mCloudRim);
+      rim.raycast = noPick;
+      p.add(rim);
+      cloud.add(p);
+      puffs.push(p);
+    }
+    // the glow at the fist and over the eyes
+    const mGlow = this.own(new THREE.MeshBasicMaterial({ ...fx, color: 0xcdeeff, opacity: 0, toneMapped: false }));
+    const glow = new THREE.Mesh(g.puff, mGlow);
+    glow.position.y = -0.1;
+    glow.raycast = noPick;
+    glow.visible = false;
+    this.hands[1]!.add(glow);
+    const mEye = this.own(new THREE.MeshBasicMaterial({ ...fx, color: 0xbfe9ff, opacity: 0, toneMapped: false }));
+    const eyes: THREE.Mesh[] = [];
+    for (let s = -1; s <= 1; s += 2) {
+      // over the eye band's eyes (canvas x 384 +- 138, y 104 on the band's patch of the head sphere)
+      const e = new THREE.Mesh(g.puff, mEye);
+      e.position.set(s * 0.103, 0.041, 0.252);
+      e.scale.set(0.075, 0.04, 0.02);
+      e.renderOrder = 2;
+      e.raycast = noPick;
+      e.visible = false;
+      this.skull.add(e);
+      eyes.push(e);
+    }
+    // sparks spraying off the fist (none at the lowest tier)
+    const sparkPos = new Float32Array(t.sparks * 3), sparkDir = new Float32Array(t.sparks * 3);
+    const mSpark = this.own(new THREE.PointsMaterial({ ...fx, color: 0xdff4ff, size: 0.06, sizeAttenuation: true, opacity: 0, toneMapped: false }));
+    let sparks: THREE.Points | null = null, sparkGeo: THREE.BufferGeometry | null = null;
+    if (t.sparks > 0) {
+      for (let k = 0; k < t.sparks; k++) {
+        const a = this.random() * TAU, up = 0.2 + 0.8 * this.random(), h = Math.sqrt(1 - up * up);
+        sparkDir[k * 3] = Math.cos(a) * h;
+        sparkDir[k * 3 + 1] = up;
+        sparkDir[k * 3 + 2] = Math.sin(a) * h;
+      }
+      sparkGeo = new THREE.BufferGeometry();
+      const attr = new THREE.BufferAttribute(sparkPos, 3);
+      attr.setUsage(THREE.DynamicDrawUsage);
+      sparkGeo.setAttribute("position", attr);
+      sparks = new THREE.Points(sparkGeo, mSpark);
+      sparks.frustumCulled = false;
+      sparks.raycast = noPick;
+      sparks.visible = false;
+      this.body.add(sparks);
+    }
+    this.commitFx = {
+      bolt, forks, mBolt, jit: new Float32Array((t.bolt + 1) * 3),
+      forkRel: new Float32Array(t.forks * (FORK_SEG + 1) * 3), forkAt: new Int32Array(t.forks), forkOn: new Uint8Array(t.forks),
+      cloud, puffs, puffAt, mCloud, mCloudInk, mCloudRim, glow, mGlow, eyes, mEye, sparks, sparkGeo, sparkPos, sparkDir, mSpark, tick: -1,
+    };
+  }
+
+  /** A new jagged shape: every bolt joint wanders sideways (pinned at the hand and the cloud), and each fork picks
+   *  a joint to leave from, a heading and a zigzag climbing toward the cloud, or stays dark this tick. */
+  private jitterBolt(fx: CommitFx): void {
+    const n = fx.bolt.n, j = fx.jit;
+    for (let i = 0; i <= n; i++) {
+      const taper = i === 0 || i === n ? 0 : 0.35 + 0.65 * Math.sin((Math.PI * i) / n);
+      j[i * 3] = (this.random() * 2 - 1) * BOLT_AMP * taper;
+      j[i * 3 + 1] = (this.random() * 2 - 1) * 0.03 * taper;
+      j[i * 3 + 2] = (this.random() * 2 - 1) * BOLT_AMP * 0.7 * taper;
+    }
+    const m = FORK_SEG, rel = fx.forkRel;
+    for (let f = 0; f < fx.forks.length; f++) {
+      fx.forkOn[f] = this.random() < 0.6 ? 1 : 0;
+      fx.forkAt[f] = 2 + Math.floor(this.random() * (n - 4));
+      const a = this.random() * TAU, len = 0.5 + 0.45 * this.random();
+      const ca = Math.cos(a), sa = Math.sin(a), o = f * (m + 1) * 3;
+      for (let k = 0; k <= m; k++) {
+        const u = k / m, z = k === 0 ? 0 : (this.random() * 2 - 1) * 0.09;
+        rel[o + k * 3] = ca * len * u + z;
+        rel[o + k * 3 + 1] = 0.75 * len * u + 0.5 * z;
+        rel[o + k * 3 + 2] = 0.8 * sa * len * u - z;
+      }
+    }
+  }
+
+  /** P-VIZ.7: the commit storm. The bolt runs from the raised fist to the cloud's underside, re-jittered BOLT_HZ
+   *  times a second (its points rewritten in place), flickering, with forks, sparks and a glow at the fist; the
+   *  cloud gathers in and churns slowly, then spreads out as it fades; the eye glow follows the commit weight.
+   *  Without motion: one static bolt, a still cloud, no sparks, no flicker. */
+  private updateCommitFx(motion: boolean): void {
+    const fx = this.commitFx;
+    if (!fx) return;
+    const boltOn = this.wBolt > 0.01, cloudOn = this.wCloud > 0.01, eyesOn = this.wCommit > 0.05;
+    fx.bolt.mesh.visible = boltOn;
+    fx.glow.visible = boltOn;
+    fx.cloud.visible = cloudOn;
+    for (const e of fx.eyes) e.visible = eyesOn;
+    if (fx.sparks) fx.sparks.visible = boltOn && motion;
+    if (!boltOn) for (const f of fx.forks) f.mesh.visible = false;
+    if (!boltOn && !cloudOn && !eyesOn) return;
+    if (motion) {
+      const tick = Math.floor(this.life * BOLT_HZ);
+      if (tick !== fx.tick) {
+        fx.tick = tick;
+        this.jitterBolt(fx);
+        this.flick = 0.6 + 0.4 * this.random();
+      }
+    } else {
+      if (fx.tick < 0) {
+        fx.tick = 0;
+        this.jitterBolt(fx);
+      }
+      this.flick = 1;
+    }
+    fx.mEye.opacity = Math.min(1, this.wCommit * 1.2) * (motion ? 0.75 + 0.25 * this.flick : 0.9);
+    if (boltOn) {
+      const s = this.body.worldToLocal(this.hands[1]!.getWorldPosition(this.v1));
+      s.y += 0.1;
+      const b = fx.bolt, n = b.n, j = fx.jit, p = b.pts;
+      const ey = CLOUD_Y - 0.2;
+      for (let i = 0; i <= n; i++) {
+        const u = i / n;
+        p[i * 3] = s.x + (CLOUD_X - s.x) * u + j[i * 3]!;
+        p[i * 3 + 1] = s.y + (ey - s.y) * u + j[i * 3 + 1]!;
+        p[i * 3 + 2] = s.z + (CLOUD_Z - s.z) * u + j[i * 3 + 2]!;
+      }
+      writeRibbon(b, 0.3, 0.46);
+      const m = FORK_SEG;
+      for (let f = 0; f < fx.forks.length; f++) {
+        const r = fx.forks[f]!;
+        r.mesh.visible = fx.forkOn[f] === 1;
+        if (!r.mesh.visible) continue;
+        const at = fx.forkAt[f]! * 3, o = f * (m + 1) * 3;
+        for (let k = 0; k <= m; k++) {
+          r.pts[k * 3] = p[at]! + fx.forkRel[o + k * 3]!;
+          r.pts[k * 3 + 1] = p[at + 1]! + fx.forkRel[o + k * 3 + 1]!;
+          r.pts[k * 3 + 2] = p[at + 2]! + fx.forkRel[o + k * 3 + 2]!;
+        }
+        writeRibbon(r, 0.18, 0.05);
+      }
+      const pulse = motion ? 0.88 + 0.12 * Math.sin(this.life * 41) : 1;
+      fx.mBolt.uniforms.uA!.value = this.wBolt * this.flick * pulse;
+      fx.mGlow.opacity = 0.8 * this.wBolt * this.flick;
+      fx.glow.scale.setScalar(0.12 * (motion ? 1 + 0.25 * Math.sin(this.life * 33) : 1));
+      if (fx.sparks && motion) {
+        const sp = fx.sparkPos, dir = fx.sparkDir, count = sp.length / 3;
+        for (let k = 0; k < count; k++) {
+          const f = fract(this.life * 2.3 + k * 0.618);
+          const r = 0.05 + 0.34 * f;
+          sp[k * 3] = s.x + dir[k * 3]! * r;
+          sp[k * 3 + 1] = s.y + dir[k * 3 + 1]! * r - 0.2 * f * f;
+          sp[k * 3 + 2] = s.z + dir[k * 3 + 2]! * r;
+        }
+        fx.sparkGeo!.attributes.position!.needsUpdate = true;
+        fx.mSpark.opacity = 0.9 * this.wBolt * this.flick;
+      }
+    }
+    if (cloudOn) {
+      // gathers in from wide and small, spreads out wide as it fades
+      const w = this.wCloud, grow = CLOUD_SIZE * (0.35 + 0.65 * w * w * (3 - 2 * w)), spread = 1 + 0.9 * (1 - w);
+      fx.cloud.scale.setScalar(grow);
+      fx.mCloud.opacity = w * (this.flat ? 0.6 : 0.97);
+      fx.mCloudInk.opacity = w * w * (this.flat ? 0.6 : 1);
+      // the inside flashes with the bolt: the brighter jitter ticks light it hard, the dim ones barely (a steady
+      // middle glow under reduced motion)
+      const f = clamp01((this.flick - 0.6) / 0.4), flash = motion ? f * f : 0.35;
+      fx.mCloud.emissiveIntensity = this.wBolt * (0.06 + 0.55 * flash);
+      fx.mCloudRim.opacity = w * (0.3 + 0.45 * flash * this.wBolt);
+      const churn = motion ? this.life * 0.25 : 0, pa = fx.puffAt;
+      for (let k = 0; k < fx.puffs.length; k++) {
+        const q = fx.puffs[k]!, at = k * CLOUD_FIELDS;
+        const a = pa[at]! + (k % 2 === 0 ? churn : -churn), r = pa[at + 1]! * spread, sz = pa[at + 3]!;
+        q.position.set(Math.cos(a) * r, pa[at + 2]! + 0.25 * (spread - 1), Math.sin(a) * r * 0.75);
+        q.scale.set(sz, sz * pa[at + 4]!, sz * 0.9);
+      }
+    }
+  }
+
   private random(): number {
     let x = this.rng;
     x ^= x << 13;
@@ -1343,16 +2100,19 @@ class Anime implements AnimeFigure {
     if (this.hs.crackle > 0) acc.lerp(WHITE, 0.5 * this.hs.crackle);
     this.mAccent.color.copy(acc);
     this.mAccent.emissive.copy(acc);
-    this.mAccent.emissiveIntensity = (this.glow + this.flash + 0.6 * this.chargeNow + 0.5 * this.hs.crackle) * (1 - this.dead);
+    // P-VIZ.7: the commit lights him blue-white with the bolt's flicker (accent, hair and aura)
+    const wc = this.wCommit, lit = wc * (0.7 + 0.3 * this.flick);
+    this.mAccent.emissiveIntensity = (this.glow + this.flash + 0.6 * this.chargeNow + 0.5 * this.hs.crackle) * (1 - this.dead) + 0.5 * lit;
     // the powerup: the hair glows the accent
-    this.mHair.emissive.copy(acc);
-    this.mHair.emissiveIntensity = 0.35 * this.wAura;
+    this.mHair.emissive.copy(acc).lerp(BOLT_BLUE, wc);
+    this.mHair.emissiveIntensity = Math.max(0.35 * this.wAura, 0.55 * lit);
+    this.mWeaponGlow.color.copy(acc);
     this.mKbPlane.color.copy(acc);
     this.mKey.color.copy(acc);
     this.mKbLine.color.copy(acc);
     for (let i = 0; i < this.mKiHalo.length; i++) this.mKiHalo[i]!.color.copy(acc);
     // the outburst's flare burns toward red
-    (this.mAura.uniforms.uC!.value as THREE.Color).copy(acc).lerp(RAGE_RED, 0.7 * Math.min(1, this.rs.aura / 0.8));
+    (this.mAura.uniforms.uC!.value as THREE.Color).copy(acc).lerp(RAGE_RED, 0.7 * Math.min(1, this.rs.aura / 0.8)).lerp(BOLT_BLUE, 0.8 * wc);
     this.mRing.color.copy(acc);
     this.mStreak.color.copy(acc);
   }
@@ -1449,7 +2209,9 @@ class Anime implements AnimeFigure {
   }
 }
 
-/** `seed`: the node's id hash (viz_scene), which picks the ninja or the kunoichi stably for the node. */
-export function createAnimeFigure(o: { look: MiniLook; detail: AnimeDetail; flat: boolean; seed?: number }): AnimeFigure {
-  return new Anime(o.look, o.detail, o.flat, o.seed ?? Number.NaN);
+/** `seed`: the node's id hash (viz_scene), which picks the ninja or the kunoichi stably for the node.
+ *  `brand` (P-VIZ.7, ADR-0641): the node's sponsor from its model (viz_brand.vizBrandFor); null while the model is
+ *  unknown (no patches, scale 1, the weapon from the seed). Constructor-only: the scene rebuilds on a change. */
+export function createAnimeFigure(o: { look: MiniLook; detail: AnimeDetail; flat: boolean; seed?: number; brand?: VizBrand | null }): AnimeFigure {
+  return new Anime(o.look, o.detail, o.flat, o.seed ?? Number.NaN, o.brand ?? null);
 }
