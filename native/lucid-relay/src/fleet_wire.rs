@@ -548,6 +548,11 @@ pub const OPS: &[OpSpec] = &[
     OpSpec { op: "api-chains", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "after"], opt: &[] },
     OpSpec { op: "api-checkpoint-csr", kind: Kind::Req, to: Some(Side::Relay), keys: &["org"], opt: &[] },
     OpSpec { op: "api-checkpoint-cert", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "cert", "chain"], opt: &[] },
+    // API-1 12.3: a destination's failover credential on one relay (csr, install, delete); an older relay answers fleet-op.
+    OpSpec { op: "api-failover", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "destination", "action", "params"], opt: &[] },
+    // API-1 2.5, 12.2: the end of a catch-up that fully succeeded, `orgs` `{org: {seq, tseq}}` as the console holds
+    // them; the relay answers ok only when it holds at least that much (else `not-synced`).
+    OpSpec { op: "api-synced", kind: Kind::Req, to: Some(Side::Relay), keys: &["orgs"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
@@ -558,6 +563,8 @@ pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
 pub const API_AUDIT_MAX: usize = TO_CONSOLE_MAX;
 /// API-1 9.3: an `api-checkpoint-cert` request frame (a certificate and its chain to the org CA).
 pub const API_CHECKPOINT_CERT_MAX: usize = 32 * 1024;
+/// API-1 12.3: an `api-failover` request frame (a certificate with its chain, or a token).
+pub const API_FAILOVER_MAX: usize = 64 * 1024;
 
 /// API-1 2.6: the size limit of an op's whole request frame, below the side's frame limit (3.8).
 pub fn op_frame_max(op: &str) -> Option<usize> {
@@ -569,6 +576,8 @@ pub fn op_frame_max(op: &str) -> Option<usize> {
         "api-chains" => Some(256),
         "api-checkpoint-csr" => Some(256),
         "api-checkpoint-cert" => Some(API_CHECKPOINT_CERT_MAX),
+        "api-failover" => Some(API_FAILOVER_MAX),
+        "api-synced" => Some(4 * 1024),
         _ => None,
     }
 }
@@ -1180,6 +1189,28 @@ mod tests {
         assert!(matches!(parse_frame(&req_text(1, "api-checkpoint-cert", cert), Side::Relay), Ok(Frame::Req { op: "api-checkpoint-cert", .. })));
         assert_eq!(parse_frame(&req_text(1, "api-checkpoint-cert", json!({"org": "acme", "cert": "A"})), Side::Relay).err().unwrap().why, "body");
         assert_eq!(parse_frame(&req_text(1, "api-checkpoint-cert", json!({"org": "acme", "cert": "A".repeat(API_CHECKPOINT_CERT_MAX), "chain": []})), Side::Relay).err().unwrap().why, "size");
+    }
+
+    #[test]
+    fn api_failover_goes_console_to_relay_within_64_kib() {
+        let ok = json!({"org": "acme", "destination": "siem", "action": "csr", "params": {}});
+        assert!(matches!(parse_frame(&req_text(1, "api-failover", ok.clone()), Side::Relay), Ok(Frame::Req { op: "api-failover", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-failover", ok), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-failover", json!({"org": "acme", "destination": "siem", "action": "csr"})), Side::Relay).err().unwrap().why, "body");
+        let big = json!({"org": "acme", "destination": "siem", "action": "install", "params": {"cert_pem": "A".repeat(API_FAILOVER_MAX)}});
+        assert_eq!(parse_frame(&req_text(1, "api-failover", big), Side::Relay).err().unwrap().why, "size");
+        let fits = json!({"org": "acme", "destination": "siem", "action": "install", "params": {"cert_pem": "A".repeat(40 * 1024)}});
+        assert!(parse_frame(&req_text(1, "api-failover", fits), Side::Relay).is_ok());
+    }
+
+    #[test]
+    fn api_synced_goes_console_to_relay_within_4_kib() {
+        let ok = json!({"orgs": {"acme": {"seq": 3, "tseq": 7}}});
+        assert!(matches!(parse_frame(&req_text(1, "api-synced", ok.clone()), Side::Relay), Ok(Frame::Req { op: "api-synced", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-synced", ok), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-synced", json!({"acme": {"seq": 3, "tseq": 7}})), Side::Relay).err().unwrap().why, "body");
+        let big: Map<String, Value> = (0..200).map(|i| (format!("org-{i:04}-{}", "x".repeat(10)), json!({"seq": 1, "tseq": 1}))).collect();
+        assert_eq!(parse_frame(&req_text(1, "api-synced", json!({"orgs": big})), Side::Relay).err().unwrap().why, "size");
     }
 
     #[test]

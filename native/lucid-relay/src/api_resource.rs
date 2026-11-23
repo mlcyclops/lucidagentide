@@ -916,7 +916,7 @@ fn serve(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
                 .collect();
             let mut body = json!({"ok": true, "console": site.data.console(), "relays": relays});
             if site.side == Side::Relay {
-                body["mode"] = json!("normal");
+                body["mode"] = json!(crate::api_failover::mode(org));
             }
             Ok(Reply::json(200, body))
         }

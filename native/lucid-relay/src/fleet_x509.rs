@@ -825,6 +825,63 @@ pub fn csr(key: &Key, cn: &str, dns: &[String], ips: &[std::net::IpAddr], uris: 
     Ok(signed_p256(&info, &key.sign(&info)?))
 }
 
+const OID_RSA_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+
+/// An RSA private key on AWS-LC (API-1 12.3: a relay's failover key for Microsoft Entra certificate credentials,
+/// 3072 bits). `Debug` never prints it; its PKCS#8 bytes are only for sealing.
+pub struct RsaKey {
+    pair: sig::RsaKeyPair,
+    pkcs8: Redacted<Vec<u8>>,
+}
+
+impl std::fmt::Debug for RsaKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RsaKey(<redacted>)")
+    }
+}
+
+impl RsaKey {
+    /// A fresh 3072-bit key drawn by AWS-LC.
+    pub fn generate_3072() -> Result<RsaKey, String> {
+        use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+        let pair = sig::RsaKeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa3072).map_err(|_| "an RSA key could not be drawn".to_owned())?;
+        let pkcs8: Pkcs8V1Der = pair.as_der().map_err(|_| "an RSA key could not be encoded".to_owned())?;
+        RsaKey::from_pkcs8(pkcs8.as_ref())
+    }
+
+    /// A key from its PKCS#8 bytes (as sealed).
+    pub fn from_pkcs8(pkcs8: &[u8]) -> Result<RsaKey, String> {
+        let pair = sig::RsaKeyPair::from_pkcs8(pkcs8).map_err(|_| "a sealed key does not read".to_owned())?;
+        Ok(RsaKey { pair, pkcs8: Redacted::new(pkcs8.to_vec()) })
+    }
+
+    /// The PKCS#8 bytes, for the sealed store only.
+    pub fn pkcs8(&self) -> &[u8] {
+        self.pkcs8.expose()
+    }
+
+    /// The SubjectPublicKeyInfo DER (rsaEncryption with NULL parameters, RFC 3279).
+    pub fn spki(&self) -> Vec<u8> {
+        seq(&[seq(&[oid(OID_RSA_KEY), der(0x05, &[])]), bit_string(self.pair.public_key().as_ref(), 0)])
+    }
+
+    /// An RSASSA-PKCS1-v1_5 SHA-256 signature.
+    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, String> {
+        let mut out = vec![0u8; self.pair.public_modulus_len()];
+        self.pair.sign(&sig::RSA_PKCS1_SHA256, &SystemRandom::new(), msg, &mut out).map_err(|_| "a signature could not be made".to_owned())?;
+        Ok(out)
+    }
+}
+
+/// A PKCS#10 request for an RSA key, signed sha256WithRSAEncryption by that key (the same CertificationRequestInfo as
+/// `csr`).
+pub fn csr_rsa(key: &RsaKey, cn: &str, dns: &[String], ips: &[std::net::IpAddr], uris: &[String]) -> Result<Vec<u8>, String> {
+    let info = csr_info(&key.spki(), cn, dns, ips, uris);
+    let signature = key.sign(&info)?;
+    Ok(seq(&[info, seq(&[oid(OID_RSA_SHA256), der(0x05, &[])]), bit_string(&signature, 0)]))
+}
+
 /// What the console reads from a relay's request. Only `spki` ever reaches a certificate; the names are compared
 /// with the ones recorded at mint.
 #[derive(Clone, Debug, PartialEq, Eq)]

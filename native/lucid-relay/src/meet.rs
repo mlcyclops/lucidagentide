@@ -1330,6 +1330,8 @@ fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>,
         all.push((dir.clone(), fleet.clone()));
     }
     crate::fleet_agent::set_meet_hooks(&dir, fleet);
+    // API-1 12: the failover exporter (queues, `normal`/`failover` mode loop, this relay's spans and log events)
+    crate::api_failover::start(&dir, Arc::new(MeetFailover { relay: Arc::downgrade(relay), dir: dir.clone() }), logger.clone())?;
     // API-1 9.3, 9.4: the relay's audit chains close summary minutes, write checkpoints and apply retention every 10 s
     // (with or without `api_listen`), once they are open
     let weak = Arc::downgrade(relay);
@@ -1513,6 +1515,65 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
     fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
         let r = self.relay.upgrade()?;
         self.audit(&r)
+    }
+}
+
+/// API-1 12: what the relay's failover exporter (`api_failover`) reads of this relay.
+struct MeetFailover {
+    relay: std::sync::Weak<Relay>,
+    dir: PathBuf,
+}
+
+impl crate::api_failover::RelaySide for MeetFailover {
+    fn orgs(&self) -> Vec<String> {
+        self.relay.upgrade().and_then(|r| r.hub.api_hello_heads().as_object().map(|o| o.keys().cloned().collect())).unwrap_or_default()
+    }
+
+    fn api_map(&self, org: &str) -> Option<(Value, Vec<crate::api_map::TightenEntry>)> {
+        let store = self.relay.upgrade()?.hub.api_org_snapshot(org)?;
+        let map = Value::Object(store.get(org, "")?.map().clone());
+        Some((map, store.active(org).to_vec()))
+    }
+
+    fn edition(&self) -> Option<crate::api_map::Edition> {
+        crate::api_map::Edition::of(self.relay.upgrade()?.hub.ai_edition().as_deref())
+    }
+
+    fn relay_id(&self) -> Option<String> {
+        let map = crate::fleet_agent::load_link_json(&self.dir).ok().flatten()?;
+        Some(crate::fleet_agent::Link { map }.relay_id().to_string()).filter(|id| !id.is_empty())
+    }
+
+    fn audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
+        self.relay.upgrade()?.api_audit()
+    }
+
+    fn vault(&self) -> Option<Arc<dyn crate::fleet_ca::VaultLock>> {
+        let r = self.relay.upgrade()?;
+        let book = r.fleet.get().map(|f| f.book.clone()).or_else(|| r.admin_console.get().cloned())?;
+        Some(book as Arc<dyn crate::fleet_ca::VaultLock>)
+    }
+
+    fn channel_up(&self) -> bool {
+        crate::fleet_agent::channel_up(&self.dir)
+    }
+
+    fn caught_up(&self) -> bool {
+        crate::fleet_agent::api_caught_up(&self.dir)
+    }
+
+    fn metric_rows(&self, org: &str, now: i64) -> Vec<crate::api_export::MetricRow> {
+        let Some(id) = self.relay_id() else { return Vec::new() };
+        crate::api_export::parse_exposition(&crate::api_listener::own_exposition(&id, crate::license::Product::Meet, org, now))
+    }
+
+    fn make_sink(&self, destination: &Value, credential: crate::api_export_wire::Credential) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
+        if destination.get("kind").and_then(Value::as_str) == Some("syslog_cef") {
+            let host = self.relay.upgrade().map(|r| r.settings.host.clone()).filter(|h| !h.is_empty()).unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_ascii_lowercase());
+            crate::fleet_syslog::cef_sink(destination, credential, &host, env!("CARGO_PKG_VERSION"))
+        } else {
+            crate::api_export_wire::sink_for(destination, credential)
+        }
     }
 }
 

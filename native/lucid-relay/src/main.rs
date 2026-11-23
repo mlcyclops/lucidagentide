@@ -48,6 +48,7 @@ mod api_catalog;
 mod api_checkpoint;
 mod api_export;
 mod api_export_wire;
+mod api_failover;
 mod api_fetch;
 mod api_issue;
 mod api_listener;

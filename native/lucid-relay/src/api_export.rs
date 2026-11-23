@@ -1,5 +1,6 @@
 // Contract API-1 (docs/api/contract.md) 11.4 to 11.7 with 9.4 and 9.5 (the retention hold) and 13 (edition limits):
-// the console's export engine. The console is the single egress (relay failover push is slice 1a5).
+// the console's export engine. The console is the egress in normal mode; in catastrophe mode (12) a relay runs the
+// same engine over its own records through `api_failover`, whose `Host` adds a failover gate per destination.
 //
 // Config: the destinations of every org whose pinned map serves (not set aside, not expired), with the journal's
 // destination tightenings applied at once (`effective`); the standard edition allows one `otlp` destination plus
@@ -397,6 +398,24 @@ pub trait Host: Send + Sync {
     fn resource(&self, org: &str) -> Vec<(String, String)>;
     /// The sink for a destination entry (`syslog_cef` through `fleet_syslog::cef_sink`, the rest `sink_for`).
     fn make_sink(&self, destination: &Value, credential: Credential) -> Result<Box<dyn Sink>, SinkError>;
+    /// A relay's failover gate on one map entry (12.2, 12.3; `api_failover`). The console has none: None leaves the
+    /// destination as the map and the journal make it.
+    fn failover_gate(&self, _org: &str, _entry: &Value, _now: i64) -> Option<Gate> {
+        None
+    }
+}
+
+/// What a relay adds to a failover destination (12.2, 12.3).
+#[derive(Clone, Debug, Default)]
+pub struct Gate {
+    /// The org is in failover: direct delivery runs. Off, the destination is suspended and its queues kept.
+    pub on: bool,
+    /// The end of the destination's installed failover credential (unix seconds, 0 without one): the destination
+    /// stops at that instant, as at the map's `expires`, and never runs past it.
+    pub until: i64,
+    /// Per audit source, the first seq of each representation (`Repr::ALL` order) to deliver: the org's
+    /// `relay.failover.on` entry. A destination's audit cursor is raised to just before it, never lowered.
+    pub from: Vec<(String, [u64; 3])>,
 }
 
 // ── the disk queue (11.6) ────────────────────────────────────────────────────────────────────────────────────────
@@ -981,6 +1000,18 @@ fn global() -> Option<Arc<ExportEngine>> {
     GLOBAL.get().and_then(Weak::upgrade)
 }
 
+/// A relay's failover exporter (12.2, `api_failover`): the target of its listener's spans and of log lines.
+static RELAY: OnceLock<Weak<ExportEngine>> = OnceLock::new();
+
+/// Make this engine the process's relay failover exporter (the first relay to call it).
+pub fn install_relay(engine: &Arc<ExportEngine>) {
+    let _ = RELAY.set(Arc::downgrade(engine));
+}
+
+fn relay_global() -> Option<Arc<ExportEngine>> {
+    RELAY.get().and_then(Weak::upgrade)
+}
+
 /// One API call, as a span (10.3 traces).
 pub struct SpanCall<'a> {
     pub org: &'a str,
@@ -1008,30 +1039,35 @@ pub fn span_value(c: &SpanCall) -> Value {
     })
 }
 
-/// A finished API call (`api_resource::answer`): one span into the installed engine when one of the org's
-/// destinations carries traces; nothing otherwise (relays without a console, or no traces destination).
+/// A finished API call (`api_resource::answer`): one span when one of the org's destinations carries traces, into
+/// the console's engine for a front door call and into the relay's failover exporter for a relay listener call;
+/// nothing otherwise (no engine, or no traces destination live).
 pub fn api_span(c: &SpanCall) {
-    let Some(e) = global() else { return };
+    let Some(e) = (if c.relay == "console" { global() } else { relay_global() }) else { return };
     if e.wants(c.org, Signal::Traces) {
         e.push(Item::Span { org: c.org.to_string(), span: span_value(c) });
     }
 }
 
 /// The logger's export tap (`log::set_export_tap`): a catalog-listed event naming an org goes to that org's `logs`
-/// destinations. Lines without an `org` are console-wide and stay with the existing SIEM export.
+/// destinations, on the console's engine and on a relay's failover exporter. Lines without an `org` are console-wide
+/// and stay with the existing SIEM export.
 pub fn log_tap() -> crate::log::Tap {
     Arc::new(|_cat: &str, _level: Level, event: &str, json: &str| {
-        let Some(e) = global() else { return };
-        if catalog::catalog().record_type(event).is_none() {
+        let engines: Vec<Arc<ExportEngine>> = [global(), relay_global()].into_iter().flatten().collect();
+        if engines.is_empty() || catalog::catalog().record_type(event).is_none() {
             return;
         }
         let Some(line) = crate::codec::parse_json(json) else { return };
         let Some(org) = line.get("org").and_then(Value::as_str).map(str::to_string) else { return };
-        if !e.wants(&org, Signal::Logs) {
+        let wanted: Vec<&Arc<ExportEngine>> = engines.iter().filter(|e| e.wants(&org, Signal::Logs)).collect();
+        if wanted.is_empty() {
             return;
         }
         let t_ms = line.get("ts").and_then(Value::as_str).and_then(crate::meet_json::from_iso).map_or_else(now_ms, |s| (s * 1000.0).round() as i64);
-        e.push(Item::Log { org, event: event.to_string(), line, t_ms });
+        for e in wanted {
+            e.push(Item::Log { org: org.clone(), event: event.to_string(), line: line.clone(), t_ms });
+        }
     })
 }
 
@@ -1179,8 +1215,13 @@ impl ExportEngine {
                     otlp += 1;
                 }
                 dest.expires = oc.expires;
+                let gate = self.host.failover_gate(&oc.org, d, now_s);
+                if let Some(g) = &gate {
+                    dest.suspended |= !g.on;
+                    dest.expires = dest.expires.min(g.until);
+                }
                 seen.insert(dest.key());
-                self.upsert(dest, now);
+                self.upsert(dest, gate.as_ref().map_or(&[][..], |g| g.from.as_slice()), now);
             }
         }
         for rt in self.snapshot() {
@@ -1198,13 +1239,18 @@ impl ExportEngine {
         self.update_wanted();
     }
 
-    fn upsert(&self, dest: Dest, now: i64) {
+    /// `from`: a relay's failover start per audit source (`Gate::from`), applied before the new config can go live.
+    fn upsert(&self, dest: Dest, from: &[(String, [u64; 3])], now: i64) {
         let existing = self.dests.lock().get(&dest.key()).cloned();
         match existing {
-            Some(rt) => self.apply(&rt, dest, now),
+            Some(rt) => {
+                self.raise_cursors(&rt, &dest, from);
+                self.apply(&rt, dest, now)
+            }
             None => {
                 let dir = self.dir.join(&dest.org).join(&dest.id);
                 let rt = Arc::new(DestRt::open(dir, dest.clone()));
+                self.raise_cursors(&rt, &dest, from);
                 if let Err(e) = rt.save_meta(&dest) {
                     self.logger.ops("exports.meta-unsaved", &Fields::new().with("org", dest.org.as_str()).with("destination", dest.id.as_str()).with("why", e), Level::Error);
                 }
@@ -1294,6 +1340,45 @@ impl ExportEngine {
             self.logger.ops("exports.queue-not-removed", &f.clone().with("why", e.to_string()), Level::Error);
         }
         self.logger.ops("exports.destination-deleted", &f, Level::Info);
+    }
+
+    /// A relay's failover start (`Gate::from`): each source's audit cursor of the destination's representation is
+    /// raised to just before the org's `relay.failover.on` entry (never lowered), so that entry is the first audit
+    /// record a failover delivers after what was queued before.
+    fn raise_cursors(&self, rt: &DestRt, dest: &Dest, from: &[(String, [u64; 3])]) {
+        if from.is_empty() {
+            return;
+        }
+        let r = usize::from(repr_rank(repr_of(dest.identities)));
+        let mut q = rt.q.lock();
+        if q.gone {
+            return;
+        }
+        let mut moved = false;
+        for (source, firsts) in from {
+            let floor = firsts[r].saturating_sub(1);
+            let c = q.cursors.entry(source.clone()).or_insert(0);
+            if *c < floor {
+                *c = floor;
+                moved = true;
+            }
+        }
+        if moved {
+            if let Err(e) = rt.save_cursors(&q.cursors) {
+                q.last_error = Some(format!("The export cursors could not be written ({e})."));
+            }
+        }
+    }
+
+    /// A relay's failover retirement (`destination_delete`, `destination_disable_failover`, the `api-failover`
+    /// `delete`, 12.3): after any delivery in flight, delivery stops and the destination's queues and credential are
+    /// removed (`Host::delete_credential`). Nothing when the engine does not hold it.
+    pub fn remove(&self, org: &str, id: &str) {
+        let rt = self.dests.lock().get(&(org.to_string(), id.to_string())).cloned();
+        if let Some(rt) = rt {
+            self.delete(&rt);
+            self.update_wanted();
+        }
     }
 
     /// The destination's credential was stored again: the sink is made anew and a failed destination tries at once.
@@ -1891,8 +1976,9 @@ impl ExportEngine {
         out
     }
 
+    /// Tests: deliver every due batch now (the failover exporter's tests too).
     #[cfg(test)]
-    fn pump(&self, now: i64) -> usize {
+    pub(crate) fn pump(&self, now: i64) -> usize {
         let mut n = 0;
         for _ in 0..1000 {
             let did = self.snapshot().iter().filter(|rt| self.deliver_once(rt, now)).count();

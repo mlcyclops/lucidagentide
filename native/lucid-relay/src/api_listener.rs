@@ -155,23 +155,35 @@ struct Own<'a> {
     source: &'a dyn Source,
 }
 
-impl Own<'_> {
-    fn row(&self, m: &serde_json::Map<String, Value>) -> crate::fleet_export::RelayRow {
-        let code = |k: &str| m.get(k).and_then(Value::as_i64);
-        crate::fleet_export::RelayRow {
-            id: self.id.to_string(),
-            // the console's registry name and site are not known on the relay
-            name: self.id.to_string(),
-            site: String::new(),
-            product: self.source.product(),
-            // it is answering
-            connected: true,
-            last_contact_ms: None,
-            health: "ok".into(),
-            license_state: code("license_state"),
-            license_service: code("license_service"),
-        }
-    }
+/// This relay's own families for one org now, under its fleet id: what `v1/metrics` reports of it, and what its
+/// failover exporter sends (12.2). The console's own info family is the console's.
+pub fn own_exposition(id: &str, product: Product, org: &str, now: i64) -> String {
+    let p = crate::fleet_probe::peek(product);
+    let code = |k: &str| p.m.get(k).and_then(Value::as_i64);
+    let row = crate::fleet_export::RelayRow {
+        id: id.to_string(),
+        // the console's registry name and site are not known on the relay
+        name: id.to_string(),
+        site: String::new(),
+        product,
+        // it is answering
+        connected: true,
+        last_contact_ms: None,
+        health: "ok".into(),
+        license_state: code("license_state"),
+        license_service: code("license_service"),
+    };
+    let snap = crate::fleet_export::Snap { t: Some(p.ts), latest: p.m, totals: p.totals };
+    let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: "standard", fips: cfg!(feature = "fips") };
+    let text = crate::fleet_export::exposition(&console, &[&row], &[snap], p.ts);
+    let mut out = text.lines().filter(|l| !l.contains("lucid_console_info")).fold(String::with_capacity(text.len()), |mut out, l| {
+        out.push_str(l);
+        out.push('\n');
+        out
+    });
+    // API-1 10.1: this relay's own counters for the org
+    out.push_str(&crate::fleet_export::api_families(Some(org), now, true));
+    out
 }
 
 impl Data for Own<'_> {
@@ -199,20 +211,7 @@ impl Data for Own<'_> {
         if !ids.iter().any(|i| i == self.id) {
             return String::new();
         }
-        let p = crate::fleet_probe::peek(self.source.product());
-        let row = self.row(&p.m);
-        let snap = crate::fleet_export::Snap { t: Some(p.ts), latest: p.m, totals: p.totals };
-        let console = crate::fleet_export::ConsoleInfo { version: env!("CARGO_PKG_VERSION"), profile: "standard", fips: cfg!(feature = "fips") };
-        // the families of the console's exposition for this relay; the console's own info family is the console's
-        let text = crate::fleet_export::exposition(&console, &[&row], &[snap], p.ts);
-        let mut out = text.lines().filter(|l| !l.contains("lucid_console_info")).fold(String::with_capacity(text.len()), |mut out, l| {
-            out.push_str(l);
-            out.push('\n');
-            out
-        });
-        // API-1 10.1: this relay's own counters for the org
-        out.push_str(&crate::fleet_export::api_families(Some(org), now, true));
-        out
+        own_exposition(self.id, self.source.product(), org, now)
     }
 
     fn console(&self) -> Value {

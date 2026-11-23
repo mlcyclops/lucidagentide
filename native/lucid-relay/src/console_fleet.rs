@@ -3351,6 +3351,8 @@ impl Fleet {
         self.expire_pending(t);
         // API-1 9.3, 12.2: checkpoint certificate renewal and resumed `api-chains` backfills (on their own threads)
         if let Some(link) = self.link.get().cloned() {
+            // API-1 2.5, 12.2: a catch-up that failed (or whose `api-synced` was refused) is tried again
+            self.api.sync_tick(link.clone(), t.div_euclid(1000));
             self.api.audit_tick(link, t.div_euclid(1000));
         }
         // API-1 11: maps that expired this minute stop their org's exports; metrics snapshots, queue ages, refusal
@@ -3568,6 +3570,21 @@ impl Fleet {
         // API-1 11.6 `ExportAuditBacklog`: an audit destination over its queue limits; export paused, nothing dropped
         for (org, _, name) in self.export.audit_backlog() {
             out.push(item("export-audit-backlog", "bad", json!({ "destination": clean(&name), "org": org }), "#/security/exports".into()));
+        }
+        // API-1 12.3: armed failover credentials 14 days before they end, and once ended
+        for f in self.api.failover_attention(t.div_euclid(1000)) {
+            let relay = names.get(&f.relay).cloned().unwrap_or_else(|| f.relay.clone());
+            let args = |days: Option<i64>| {
+                let mut a = json!({ "destination": clean(&f.destination), "relay": clean(&relay), "org": f.org });
+                if let Some(d) = days {
+                    a["days"] = json!(d);
+                }
+                a
+            };
+            match f.days_left {
+                Some(d) => out.push(item("failover-credential-expiring", "warn", args(Some(d)), "#/security/exports".into())),
+                None => out.push(item("failover-credential-expired", "bad", args(None), "#/security/exports".into())),
+            }
         }
         for v in c.settings_now().tokens.iter().filter_map(crate::fleet_export::TokenRecord::from_json) {
             let days = (v.expires - t).div_euclid(86_400_000);

@@ -123,6 +123,11 @@ struct Inner {
     audit_busy: std::collections::HashSet<String>,
     /// 13: the license edition the maps were last held to (`set_edition`); None until first read.
     edition: Option<Option<Edition>>,
+    /// 2.5, 12.2: relays whose last `sync` did not fully succeed (or whose `api-synced` was refused); `sync_tick`
+    /// tries them again.
+    unsynced: std::collections::HashSet<String>,
+    /// Relays a `sync_tick` thread works on now.
+    sync_busy: std::collections::HashSet<String>,
 }
 
 /// The console's api maps, journals and pseudonym keys, and their delivery to the relays (2.4, 2.5, 2.6).
@@ -141,6 +146,90 @@ pub struct ConsoleApi {
     /// 11: told when the destinations may have changed (None: a map, a tightening or the edition; Some((org, id)):
     /// that destination's credential), so the export engine applies it at once (`set_export_hook`, at start).
     export_hook: std::sync::OnceLock<ExportHook>,
+    /// 12.3: the failover credential records, (org, destination, relay) -> record, kept in `FAILOVER_FILE`.
+    failover: Mutex<BTreeMap<(String, String, String), FailoverRecord>>,
+}
+
+/// 12.3: the console's failover credential records (not in the signed map), flushed to disk after every change.
+const FAILOVER_FILE: &str = "api-failover-console.json";
+/// 12.3: a failover credential lasts at most 90 days.
+const FAILOVER_MAX_S: i64 = 90 * 86_400;
+/// 12.3: renewal is asked for this long before `expires`.
+const FAILOVER_RENEW_S: i64 = 14 * 86_400;
+/// 12.3: what an older relay (`fleet-op` to `api-failover`) leaves the record with.
+pub const FAILOVER_TOO_OLD: &str = "This relay is too old to hold a failover credential. Update it, then try again.";
+
+/// One failover credential of a destination on one relay (12.3). No secret: once armed, `type`, `public_id`
+/// (the SPKI hash, the token hint `sha256:xxxxxxxx` or `client_email:private_key_id`), `not_before` and `expires`
+/// are as the relay answered its install; a pending record has none of them yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FailoverRecord {
+    pub org: String,
+    pub destination: String,
+    pub relay: String,
+    pub kind: String,
+    pub public_id: String,
+    pub not_before: i64,
+    pub expires: i64,
+    /// `pending`, `armed` or `deleted`.
+    pub state: &'static str,
+    /// Why it stays pending (an older relay), else empty.
+    pub note: String,
+}
+
+impl FailoverRecord {
+    fn to_json(&self) -> Value {
+        json!({ "org": self.org, "destination": self.destination, "relay": self.relay, "type": self.kind, "public_id": self.public_id,
+                "not_before": self.not_before, "expires": self.expires, "state": self.state, "note": self.note })
+    }
+
+    fn from_json(v: &Value) -> Option<FailoverRecord> {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+        let state = match v.get("state").and_then(Value::as_str)? {
+            "pending" => "pending",
+            "armed" => "armed",
+            "deleted" => "deleted",
+            _ => return None,
+        };
+        Some(FailoverRecord {
+            org: s("org")?,
+            destination: s("destination")?,
+            relay: s("relay")?,
+            kind: s("type")?,
+            public_id: s("public_id").unwrap_or_default(),
+            not_before: v.get("not_before").and_then(Value::as_i64).unwrap_or(0),
+            expires: v.get("expires").and_then(Value::as_i64).unwrap_or(0),
+            state,
+            note: s("note").unwrap_or_default(),
+        })
+    }
+}
+
+/// An attention item of `failover_attention`: `days_left` None once ended.
+pub struct FailoverAttention {
+    pub org: String,
+    /// The destination's name in the pinned map (its id when gone).
+    pub destination: String,
+    pub relay: String,
+    pub days_left: Option<i64>,
+}
+
+/// 12.3: the `public_id` a relay answers for installed material whose secret is `secret` (`token`: `sha256:` and the
+/// first 8 hex of its SHA-256; `key_json`: `<client_email>:<private_key_id>`; `cert_pem`: the SHA-256 hex of the
+/// certificate's SubjectPublicKeyInfo). None when the material does not read.
+fn failover_public_id(secret: &str, m: &Map<String, Value>) -> Option<String> {
+    let text = |k: &str| m.get(k).and_then(Value::as_str);
+    match secret {
+        "token" => Some(format!("sha256:{}", &crate::codec::sha256_hex(text("token")?.as_bytes())[..8])),
+        "key_json" => {
+            let k = parse_json(text("key_json")?)?;
+            Some(format!("{}:{}", k.get("client_email")?.as_str()?, k.get("private_key_id")?.as_str()?))
+        }
+        _ => {
+            let der = crate::der::pem_blocks(text("cert_pem")?, "CERTIFICATE").into_iter().next()?;
+            Some(crate::codec::sha256_hex(&crate::meet_x509::Cert::from_der(&der)?.spki))
+        }
+    }
 }
 
 /// See `ConsoleApi::set_export_hook`.
@@ -223,12 +312,22 @@ impl ConsoleApi {
             dir: dir.map(Path::to_path_buf),
             logger,
             vault,
-            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), no_audit: Default::default(), checkpoint_at: HashMap::new(), backfill: Default::default(), audit_busy: Default::default(), edition: None }),
+            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), no_audit: Default::default(), checkpoint_at: HashMap::new(), backfill: Default::default(), audit_busy: Default::default(), edition: None, unsynced: Default::default(), sync_busy: Default::default() }),
             sending: Mutex::new(HashMap::new()),
             issue: IssueState::new(),
             fetch: FetchCache::new(FETCH_MAX_AGE),
             audit: std::sync::OnceLock::new(),
             export_hook: std::sync::OnceLock::new(),
+            failover: Mutex::new(
+                dir.and_then(|d| std::fs::read_to_string(d.join(FAILOVER_FILE)).ok())
+                    .and_then(|t| parse_json(&t))
+                    .and_then(|v| v.get("records").and_then(Value::as_array).cloned())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| FailoverRecord::from_json(&r))
+                    .map(|r| ((r.org.clone(), r.destination.clone(), r.relay.clone()), r))
+                    .collect(),
+            ),
         }
     }
 
@@ -568,9 +667,28 @@ impl ConsoleApi {
 
     /// The reconnect catch-up of 2.5: `api-heads` when not known (an older relay's `fleet-op` marks it as having no
     /// api), then per org it reported the pseudonym key it lacks, the map newer than its seq, and every journal entry
-    /// after its tseq, strictly in order, each answered before the next; the acknowledgments are kept on disk. False
-    /// when a request failed (the next contact tries again).
+    /// after its tseq, strictly in order, each answered before the next; the acknowledgments are kept on disk. A sync
+    /// that fully succeeded ends with `api-synced` (the console's pinned seq and journal head of every org the relay
+    /// reported), which the relay accepts only when it holds that much: until then it stays in failover (12.2). False
+    /// when a request failed; `sync_tick` tries again.
     pub fn sync(&self, link: &dyn FleetLink, relay: &str, now: i64) -> bool {
+        let done = self.sync_once(link, relay, now);
+        // a relay that left is synced again by its next `welcome`
+        let settled = done || !link.connected(relay);
+        let mut inner = self.inner.lock();
+        if settled {
+            inner.unsynced.remove(relay);
+        } else {
+            inner.unsynced.insert(relay.to_string());
+            // a request whose answer was lost may have been applied: the retry asks `api-heads` first
+            if let Some(s) = inner.relays.get_mut(relay).filter(|s| matches!(s, RelayApi::Heads(_))) {
+                *s = RelayApi::Unknown;
+            }
+        }
+        done
+    }
+
+    fn sync_once(&self, link: &dyn FleetLink, relay: &str, now: i64) -> bool {
         let gate = self.sending.lock().entry(relay.to_string()).or_default().clone();
         let _one = gate.lock();
         let unknown = matches!(self.inner.lock().relays.get(relay), Some(RelayApi::Unknown));
@@ -596,7 +714,46 @@ impl ConsoleApi {
             // a relay that stays connected has its certificates checked again hourly (`audit_tick`)
             self.inner.lock().checkpoint_at.insert(relay.to_string(), now + CHECKPOINT_EVERY);
         }
-        done
+        done && self.synced(link, relay, &orgs)
+    }
+
+    /// `api-synced` after a catch-up that fully succeeded (2.5, 12.2). An older relay's `fleet-op` counts as done.
+    fn synced(&self, link: &dyn FleetLink, relay: &str, orgs: &[String]) -> bool {
+        let body: Map<String, Value> = {
+            let inner = self.inner.lock();
+            orgs.iter().map(|org| (org.clone(), json!({ "seq": inner.store.get(org, "").map_or(0, |m| m.seq), "tseq": inner.orgs.get(org).map_or(0, OrgJournal::head) }))).collect()
+        };
+        match link.request(relay, "api-synced", json!({ "orgs": body }), CALL_MS) {
+            Ok(_) => true,
+            Err(LinkError::Refused { code, .. }) if code == "fleet-op" => true,
+            Err(LinkError::Refused { code, .. }) => {
+                self.logger.ops("api.sync.not-synced", &Fields::new().with("relay", relay).with("code", code.as_str()), Level::Warn);
+                false
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The fleet's minute (`Fleet::tick`): every connected relay whose last `sync` did not fully succeed is synced
+    /// again, each on its own thread, at most one per relay at a time.
+    pub fn sync_tick(self: &Arc<Self>, link: Arc<dyn FleetLink>, now: i64) {
+        let waiting: Vec<String> = {
+            let inner = self.inner.lock();
+            inner.unsynced.iter().filter(|r| !inner.sync_busy.contains(*r)).cloned().collect()
+        };
+        for relay in waiting.into_iter().filter(|r| link.connected(r)) {
+            if !self.inner.lock().sync_busy.insert(relay.clone()) {
+                continue;
+            }
+            let (me, link, r) = (self.clone(), link.clone(), relay.clone());
+            let spawned = std::thread::Builder::new().name("api-sync-retry".into()).spawn(move || {
+                me.sync(&*link, &r, now);
+                me.inner.lock().sync_busy.remove(&r);
+            });
+            if spawned.is_err() {
+                self.inner.lock().sync_busy.remove(&relay);
+            }
+        }
     }
 
     fn sync_org(&self, link: &dyn FleetLink, relay: &str, org: &str, now: i64) -> bool {
@@ -657,6 +814,10 @@ impl ConsoleApi {
                     self.note(org, now, |j| {
                         j.acks.insert(relay.to_string(), got);
                     });
+                    // 12.3: the relay deleted its failover credential of the destination before acknowledging
+                    if matches!(e["action"].as_str(), Some("destination_delete" | "destination_disable_failover")) {
+                        self.failover_retired(org, e["target"].as_str().unwrap_or_default(), relay);
+                    }
                 }
                 Err(_) => return false,
             }
@@ -988,6 +1149,207 @@ impl ConsoleApi {
         Ok(())
     }
 
+    // ── failover credentials (12.3): one per destination and relay, made on the relay, recorded here ──
+
+    /// The destination's `credential.type` and name in the org's pinned map, which must mark it `failover: true`.
+    fn failover_destination(&self, org: &str, destination: &str) -> Result<(String, String), String> {
+        let d = {
+            let inner = self.inner.lock();
+            inner.store.get(org, "").and_then(|m| m.map().get("destinations")?.as_array()?.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(destination)).cloned())
+        };
+        let Some(d) = d else { return Err("That destination is not in the organization's api map.".into()) };
+        if d.get("failover").and_then(Value::as_bool) != Some(true) {
+            return Err("That destination is not marked for failover in the api map.".into());
+        }
+        let kind = d.pointer("/credential/type").and_then(Value::as_str).unwrap_or_default().to_string();
+        if crate::api_failover::FailoverKind::of(&kind).is_none() {
+            return Err("That destination's credential type has no failover credential.".into());
+        }
+        Ok((kind, d.get("name").and_then(Value::as_str).unwrap_or(destination).to_string()))
+    }
+
+    fn failover_save(&self, all: &BTreeMap<(String, String, String), FailoverRecord>) -> Result<(), String> {
+        let Some(dir) = &self.dir else { return Ok(()) };
+        fn failed<E>(_: E) -> String {
+            "The failover records could not be written.".to_string()
+        }
+        crate::store::make_dir(dir).map_err(failed)?;
+        let body = stringify(&json!({ "records": all.values().map(FailoverRecord::to_json).collect::<Vec<_>>() }));
+        crate::fleet_local::write_durable(&dir.join(FAILOVER_FILE), body.as_bytes()).map_err(failed)
+    }
+
+    /// Change (or add) one record and flush the file; on a failed write the record is left as it was.
+    fn failover_update(&self, org: &str, destination: &str, relay: &str, f: impl FnOnce(&mut FailoverRecord)) -> Result<(), String> {
+        let mut all = self.failover.lock();
+        let key = (org.to_string(), destination.to_string(), relay.to_string());
+        let old = all.get(&key).cloned();
+        let mut rec = old.clone().unwrap_or(FailoverRecord { org: org.into(), destination: destination.into(), relay: relay.into(), kind: String::new(), public_id: String::new(), not_before: 0, expires: 0, state: "pending", note: String::new() });
+        f(&mut rec);
+        all.insert(key.clone(), rec);
+        if let Err(e) = self.failover_save(&all) {
+            match old {
+                Some(o) => all.insert(key, o),
+                None => all.remove(&key),
+            };
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// A refused or failed `api-failover`: an older relay (`fleet-op`) leaves the record pending with `FAILOVER_TOO_OLD`.
+    fn failover_failed(&self, org: &str, destination: &str, relay: &str, kind: &str, e: LinkError) -> String {
+        match e {
+            LinkError::Refused { code, .. } if code == "fleet-op" => {
+                let _ = self.failover_update(org, destination, relay, |r| {
+                    if r.state != "armed" {
+                        (r.kind, r.state, r.note) = (kind.to_string(), "pending", FAILOVER_TOO_OLD.to_string());
+                    }
+                });
+                self.logger.ops("api.failover.relay-too-old", &Fields::new().with("org", org).with("destination", destination).with("relay", relay), Level::Warn);
+                FAILOVER_TOO_OLD.to_string()
+            }
+            LinkError::Refused { code, error, .. } => {
+                self.logger.security("api.failover.refused", &Fields::new().with("org", org).with("destination", destination).with("relay", relay).with("code", code.as_str()), Level::Error);
+                error
+            }
+            LinkError::Offline => "The relay is not connected.".into(),
+            _ => "The relay did not answer.".into(),
+        }
+    }
+
+    /// 12.3: ask the relay for a certificate request for the destination's failover key (made on the relay, never
+    /// leaving it); the admin registers the CSR with the tool. The record is `pending` (an armed one stays armed
+    /// until the renewed certificate is installed). Called by the admin screen (slice 1a6).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn failover_request_csr(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str) -> Result<String, String> {
+        let (kind, _) = self.failover_destination(org, destination)?;
+        if !crate::api_failover::FailoverKind::of(&kind).is_some_and(|k| k.uses_csr()) {
+            return Err("This destination needs no certificate request. Enter its secret for this relay instead.".into());
+        }
+        let params = json!({ "type": kind, "subject_cn": format!("{destination}.{relay}") });
+        let csr = match link.request(relay, "api-failover", json!({ "org": org, "destination": destination, "action": "csr", "params": params }), CALL_MS) {
+            Ok(a) => a.get("csr").and_then(Value::as_str).filter(|c| c.contains("CERTIFICATE REQUEST")).map(str::to_string).ok_or_else(|| "The relay answered no certificate request.".to_string())?,
+            Err(e) => return Err(self.failover_failed(org, destination, relay, &kind, e)),
+        };
+        self.failover_update(org, destination, relay, |r| {
+            if r.state != "armed" {
+                (r.kind, r.public_id, r.not_before, r.expires, r.state, r.note) = (kind.clone(), String::new(), 0, 0, "pending", String::new());
+            }
+        })?;
+        self.logger.ops("api.failover.csr", &Fields::new().with("org", org).with("destination", destination).with("relay", relay), Level::Info);
+        Ok(csr)
+    }
+
+    /// 12.3: install the failover credential on the relay: for a certificate kind `{cert_pem, chain_pem?}` (after a
+    /// CSR from that relay), for a token `{token}` and for a service account key `{key_json}`, each entered for that
+    /// relay only; with `expires` (unix seconds, at most 90 days from now) and the credential's non-secret fields.
+    /// The record is `armed` only after the relay acknowledged, with the type, `public_id` (SPKI hash, token hint or
+    /// `client_email:private_key_id`), `not_before` and `expires` the relay answered (its `expires` no later than the
+    /// one asked, and after now). The material never enters a log or the record.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn failover_install(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str, material: Value, now: i64) -> Result<(), String> {
+        const KEYS: &[&str] = &["cert_pem", "chain_pem", "ca_pem", "token", "key_json", "expires", "tenant", "client_id", "cloud", "trust_anchor_arn", "profile_arn", "role_arn", "region"];
+        let (kind, _) = self.failover_destination(org, destination)?;
+        let Value::Object(m) = material else { return Err("The credential must be an object.".into()) };
+        let asked = m.get("expires").and_then(Value::as_i64).filter(|e| *e > now && *e <= now + FAILOVER_MAX_S).ok_or_else(|| "The failover credential must end within 90 days from now.".to_string())?;
+        let s = |k: &str| m.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
+        // the one secret this kind takes, and the others it refuses
+        let (secret, others, missing): (&str, &[&str], &str) = match crate::api_failover::FailoverKind::of(&kind) {
+            Some(k) if k.uses_csr() => ("cert_pem", &["token", "key_json"], "Paste the certificate (PEM) issued for this relay's request."),
+            Some(crate::api_failover::FailoverKind::GcpServiceAccountKey) => ("key_json", &["cert_pem", "chain_pem", "ca_pem", "token"], "Paste the service account key (JSON) for this relay."),
+            _ => ("token", &["cert_pem", "chain_pem", "ca_pem", "key_json"], "Enter the token for this relay."),
+        };
+        if s(secret).is_none() || (secret == "cert_pem" && !s(secret).is_some_and(|c| c.contains("BEGIN CERTIFICATE"))) {
+            return Err(missing.into());
+        }
+        if let Some(k) = others.iter().find(|k| m.contains_key(**k)) {
+            return Err(format!("This destination does not take {k}."));
+        }
+        if secret == "cert_pem" && self.failover.lock().get(&(org.to_string(), destination.to_string(), relay.to_string())).is_none_or(|r| r.state == "deleted") {
+            return Err("Ask this relay for a certificate request first.".into());
+        }
+        let expected = failover_public_id(secret, &m).ok_or_else(|| missing.to_string())?;
+        let params: Map<String, Value> = m.iter().filter(|(k, _)| KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let answer = match link.request(relay, "api-failover", json!({ "org": org, "destination": destination, "action": "install", "params": params }), CALL_MS) {
+            Ok(a) => a,
+            Err(e) => return Err(self.failover_failed(org, destination, relay, &kind, e)),
+        };
+        // the relay's record of what it installed, taken as answered once it fits what was sent
+        let got = (
+            answer.get("ok").and_then(Value::as_bool),
+            answer.get("type").and_then(Value::as_str),
+            answer.get("public_id").and_then(Value::as_str),
+            answer.get("not_before").and_then(Value::as_i64),
+            answer.get("expires").and_then(Value::as_i64),
+        );
+        let (Some(true), Some(t), Some(public_id), Some(not_before), Some(expires)) = got else {
+            self.logger.security("api.failover.answer-unusable", &Fields::new().with("org", org).with("destination", destination).with("relay", relay), Level::Error);
+            return Err("The relay installed the credential but answered no usable record of it. Install it again.".into());
+        };
+        if t != kind || public_id != expected || expires > asked || expires <= now || not_before > expires {
+            self.logger.security("api.failover.answer-unusable", &Fields::new().with("org", org).with("destination", destination).with("relay", relay), Level::Error);
+            return Err("The relay's record of the installed credential does not match what was asked. Install it again.".into());
+        }
+        let public_id = public_id.to_string();
+        self.failover_update(org, destination, relay, |r| {
+            (r.kind, r.public_id, r.not_before, r.expires, r.state, r.note) = (kind.clone(), public_id, not_before, expires, "armed", String::new());
+        })?;
+        self.logger.ops("api.failover.armed", &Fields::new().with("org", org).with("destination", destination).with("relay", relay).with("expires", expires), Level::Info);
+        Ok(())
+    }
+
+    /// 12.3: delete the destination's failover credential (and its failover queue) on the relay; the record is
+    /// `deleted` after the relay acknowledged. Allowed whatever the map says now (it only ever removes).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn failover_delete(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str) -> Result<(), String> {
+        if !org_ok(org) {
+            return Err("That is not an organization id.".into());
+        }
+        if let Err(e) = link.request(relay, "api-failover", json!({ "org": org, "destination": destination, "action": "delete", "params": {} }), CALL_MS) {
+            let kind = self.failover.lock().get(&(org.to_string(), destination.to_string(), relay.to_string())).map(|r| r.kind.clone()).unwrap_or_default();
+            return Err(self.failover_failed(org, destination, relay, &kind, e));
+        }
+        self.failover_retired(org, destination, relay);
+        Ok(())
+    }
+
+    /// The relay acknowledged the deletion (an `api-failover` delete or a retiring journal entry): the record of
+    /// that destination on that relay is `deleted`.
+    fn failover_retired(&self, org: &str, destination: &str, relay: &str) {
+        let key = (org.to_string(), destination.to_string(), relay.to_string());
+        if self.failover.lock().get(&key).is_none_or(|r| r.state == "deleted") {
+            return;
+        }
+        if let Err(why) = self.failover_update(org, destination, relay, |r| (r.state, r.note) = ("deleted", String::new())) {
+            self.logger.security("api.failover.record-unsaved", &Fields::new().with("org", org).with("destination", destination).with("relay", relay).with("why", why), Level::Error);
+        }
+        self.logger.ops("api.failover.deleted", &Fields::new().with("org", org).with("destination", destination).with("relay", relay), Level::Info);
+    }
+
+    /// 12.3: the failover credential records of an org (for the admin screen).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn failover_records(&self, org: &str) -> Vec<FailoverRecord> {
+        self.failover.lock().values().filter(|r| r.org == org).cloned().collect()
+    }
+
+    /// 12.3: armed records within 14 days of `expires` (`days_left`, rounded up), or past it (None: the relay
+    /// stops using it on its own).
+    pub fn failover_attention(&self, now: i64) -> Vec<FailoverAttention> {
+        let due: Vec<FailoverRecord> = self.failover.lock().values().filter(|r| r.state == "armed" && r.expires - now <= FAILOVER_RENEW_S).cloned().collect();
+        let inner = self.inner.lock();
+        due.into_iter()
+            .map(|r| {
+                let name = inner
+                    .store
+                    .get(&r.org, "")
+                    .and_then(|m| m.map().get("destinations")?.as_array()?.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(r.destination.as_str()))?.get("name")?.as_str().map(str::to_string))
+                    .unwrap_or_else(|| r.destination.clone());
+                let days_left = (r.expires > now).then(|| (r.expires - now + 86_399).div_euclid(86_400));
+                FailoverAttention { org: r.org, destination: name, relay: r.relay, days_left }
+            })
+            .collect()
+    }
+
     fn sealed_destination(&self, org: &str, id: &str) -> Option<Value> {
         let raw = vault_do(&*self.vault, |v| v.get(&crate::api_export::seal_name(org, id)))?;
         parse_json(std::str::from_utf8(&raw).ok()?)
@@ -1315,15 +1677,35 @@ mod tests {
         no_audit: bool,
         /// The relay's clock for its checkpoint renewal check (`api-checkpoint-csr`).
         csr_now: Mutex<i64>,
+        /// See `caught_up`.
+        caught_up: Mutex<bool>,
+        /// The failover retirement of a `destination_delete` or `destination_disable_failover` entry fails.
+        fail_retire: Mutex<bool>,
+        /// The next applied `api-tighten` answers an error instead (an answer lost after the entry was applied).
+        lose_answer: Mutex<bool>,
     }
 
     impl FakeRelay {
         fn new(id: &'static str, org: &str, dir: &Path, logger: Arc<Logger>) -> FakeRelay {
-            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Arc::new(Mutex::new(MemVault::default())), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger, audit: Mutex::new(None), page: 2, no_audit: false, csr_now: Mutex::new(NOW) }
+            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Arc::new(Mutex::new(MemVault::default())), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger, audit: Mutex::new(None), page: 2, no_audit: false, csr_now: Mutex::new(NOW), caught_up: Mutex::new(false), fail_retire: Mutex::new(false), lose_answer: Mutex::new(false) }
         }
 
+        /// The ops sent, without the `api-synced` that ends every catch-up that fully succeeded (see `caught_up`).
         fn ops(&self) -> Vec<String> {
-            self.sent.lock().iter().map(|(op, _)| op.clone()).collect()
+            self.sent.lock().iter().map(|(op, _)| op.clone()).filter(|op| op != "api-synced").collect()
+        }
+
+        /// As `fleet_agent::api_caught_up`: set by an accepted `api-synced`, cleared by `api-heads`, a failed
+        /// `api-tighten` or `api-map`, and a reconnect.
+        fn caught_up(&self) -> bool {
+            *self.caught_up.lock()
+        }
+
+        fn heads_now(&self) -> Value {
+            let (seq, tseq) = self.store.lock().head(&self.org);
+            let mut o = Map::new();
+            o.insert(self.org.clone(), json!({ "seq": seq, "tseq": tseq }));
+            Value::Object(o)
         }
 
         fn answer(&self, op: &str, body: &Value) -> Result<Value, Refusal> {
@@ -1340,13 +1722,41 @@ mod tests {
                 },
                 "api-checkpoint-csr" => crate::fleet_agent::api_checkpoint_csr_answer(&self.dir, &*self.vault, body, *self.csr_now.lock()),
                 "api-checkpoint-cert" => crate::fleet_agent::api_checkpoint_cert_answer(&self.dir, &*self.vault, body),
-                "api-heads" => Ok(self.heads.lock().clone().unwrap_or_else(|| {
-                    let (seq, tseq) = self.store.lock().head(&self.org);
-                    let mut o = Map::new();
-                    o.insert(self.org.clone(), json!({ "seq": seq, "tseq": tseq }));
-                    Value::Object(o)
-                })),
-                "api-tighten" => crate::fleet_agent::api_tighten_answer(&mut self.store.lock(), body, &mut Vec::new()),
+                "api-heads" => {
+                    *self.caught_up.lock() = false;
+                    Ok(self.heads.lock().clone().unwrap_or_else(|| self.heads_now()))
+                }
+                "api-synced" => {
+                    // what the relay holds on disk for every org asked about
+                    let store = self.store.lock();
+                    let held: Map<String, Value> = body["orgs"].as_object().into_iter().flatten().map(|(org, _)| (org.clone(), { let (seq, tseq) = store.head(org); json!({ "seq": seq, "tseq": tseq }) })).collect();
+                    drop(store);
+                    let r = crate::fleet_agent::api_synced_answer(&Value::Object(held), body);
+                    *self.caught_up.lock() = r.is_ok();
+                    r
+                }
+                "api-failover" => crate::fleet_agent::api_failover_answer(&self.dir, &*self.vault, body, NOW),
+                "api-tighten" => {
+                    let retiring = matches!(body["entry"]["action"].as_str(), Some("destination_delete" | "destination_disable_failover"));
+                    // as the relay: check, retire and apply under the store's lock
+                    let mut store = self.store.lock();
+                    let applied = store.head(body["org"].as_str().unwrap_or_default()).1;
+                    let r = if retiring && *self.fail_retire.lock() {
+                        Err(Refusal::new(500, "io", "The failover credential could not be deleted."))
+                    } else {
+                        crate::fleet_agent::api_tighten_retire_failover(&self.dir, &*self.vault, applied, body).and_then(|_| crate::fleet_agent::api_tighten_answer(&mut store, body, &mut Vec::new()))
+                    };
+                    drop(store);
+                    // applied, but the answer never reached the console
+                    let r = match r {
+                        Ok(_) if std::mem::take(&mut *self.lose_answer.lock()) => Err(Refusal::new(504, "timeout", "The answer was lost.")),
+                        r => r,
+                    };
+                    if r.is_err() {
+                        *self.caught_up.lock() = false;
+                    }
+                    r
+                }
                 "api-pseudonym-key" => crate::fleet_agent::api_pseudonym_key_store(&self.dir, &*self.vault, body),
                 "api-map" => {
                     let wire = body["map"].as_object().unwrap().clone();
@@ -1405,6 +1815,316 @@ mod tests {
         (relay, link)
     }
 
+    // ── API-1 12.3: failover credentials ──
+
+    const D_CERT: &str = "d_0123456789abcdef";
+    const D_TOKEN: &str = "d_9a8b7c6d5e4f3a2b";
+    const D_GCP: &str = "d_00000000000000a1";
+    const FAILOVER_TOKEN: &str = "failover-token-secret-7f3a";
+
+    fn failover_map(seq: i64, failover: bool) -> VerifiedApiMap {
+        let mut vm = map(seq, 12, NOW + 30 * 86_400);
+        let dest = |id: &str, kind: &str, preset: &str, cred: &str, endpoint: &str| {
+            json!({"id": id, "name": format!("Dest {id}"), "kind": kind, "preset": preset, "signals": ["audit"], "ceiling": "internal",
+                   "identities": "as_is", "failover": failover, "private_ok": false, "endpoint": endpoint,
+                   "credential": {"type": cred, "ref": format!("secret:{id}")}, "queue": {"max_bytes": 1_073_741_824u64, "max_age_s": 259_200}})
+        };
+        vm.wire["map"]["destinations"] = json!([
+            dest(D_CERT, "otlp", "otlp_generic", "mtls", "https://collector.acme.example:4318"),
+            dest(D_TOKEN, "splunk_hec", "splunk_hec", "token", "https://hec.acme.example:8088/services/collector/event"),
+            dest(D_GCP, "otlp", "google_cloud", "gcp_service_account_key", "https://telemetry.googleapis.com"),
+        ]);
+        vm.hash = api_map_hash(&vm.wire["map"]);
+        vm
+    }
+
+    fn failover_setup(name: &str, failover: bool) -> (PathBuf, Lines, Arc<FakeRelay>, Arc<dyn FleetLink>, Arc<ConsoleApi>) {
+        let d = temp(name);
+        let (log, lines) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        api.publish_verified(None, failover_map(1, failover), NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        (d, lines, relay, link, api)
+    }
+
+    fn record(api: &ConsoleApi, destination: &str) -> Option<FailoverRecord> {
+        api.failover_records("acme").into_iter().find(|r| r.destination == destination && r.relay == RELAY)
+    }
+
+    fn token_material(expires: i64) -> Value {
+        json!({ "token": FAILOVER_TOKEN, "expires": expires })
+    }
+
+    fn relay_holds(relay: &FakeRelay, destination: &str) -> bool {
+        crate::api_failover::failover_credential(&relay.dir, &*relay.vault, "acme", destination, NOW).is_some()
+    }
+
+    #[test]
+    fn failover_csr_round_trips_through_the_relay_and_stays_pending() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-csr", true);
+        let csr = api.failover_request_csr(&*link, "acme", D_CERT, RELAY).unwrap();
+        assert!(csr.contains("BEGIN CERTIFICATE REQUEST"), "{csr}");
+        let sent = relay.sent.lock().iter().rev().find(|(op, _)| op == "api-failover").cloned().unwrap().1;
+        assert_eq!((sent["action"].as_str(), sent["params"]["type"].as_str()), (Some("csr"), Some("mtls")));
+        let r = record(&api, D_CERT).unwrap();
+        assert_eq!((r.state, r.kind.as_str(), r.public_id.as_str()), ("pending", "mtls", ""));
+        // a token or service account key destination takes no CSR
+        assert!(api.failover_request_csr(&*link, "acme", D_TOKEN, RELAY).is_err());
+        assert!(api.failover_request_csr(&*link, "acme", D_GCP, RELAY).is_err());
+    }
+
+    #[test]
+    fn failover_install_arms_only_after_the_relay_acknowledged_and_never_logs_the_material() {
+        let (d, lines, relay, link, api) = failover_setup("failover-install", true);
+        // more than 90 days is refused before anything is sent
+        assert!(api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 91 * 86_400), NOW).is_err());
+        assert!(!relay.ops().contains(&"api-failover".to_string()));
+        // offline: no ack, nothing armed
+        *relay.up.lock() = false;
+        assert!(api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).is_err());
+        assert!(record(&api, D_TOKEN).is_none_or(|r| r.state != "armed"));
+        *relay.up.lock() = true;
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).unwrap();
+        // the record is the relay's answer: its token hint, its clock's not_before, the expires it took
+        let r = record(&api, D_TOKEN).unwrap();
+        assert_eq!((r.state, r.kind.as_str(), r.expires), ("armed", "token", NOW + 30 * 86_400));
+        assert!(r.public_id.starts_with("sha256:") && !r.public_id.contains(FAILOVER_TOKEN), "{}", r.public_id);
+        assert!(r.not_before > 0 && r.not_before <= r.expires);
+        assert!(relay_holds(&relay, D_TOKEN));
+        // a token where a certificate or key is due, and a key where a token is due, are refused before sending
+        let sent = relay.ops().len();
+        assert!(api.failover_install(&*link, "acme", D_TOKEN, RELAY, json!({"token": FAILOVER_TOKEN, "key_json": "{}", "expires": NOW + 86_400}), NOW).is_err());
+        assert!(api.failover_install(&*link, "acme", D_GCP, RELAY, token_material(NOW + 86_400), NOW).is_err());
+        assert_eq!(relay.ops().len(), sent);
+        // durable, and the material is in no log line and not in the record file
+        let again = ConsoleApi::open(Some(&d.join("console")), logger().0, vault());
+        assert_eq!(record(&again, D_TOKEN), Some(r));
+        assert!(lines.lock().iter().all(|l| !l.contains(FAILOVER_TOKEN)));
+        assert!(!std::fs::read_to_string(d.join("console").join(FAILOVER_FILE)).unwrap().contains(FAILOVER_TOKEN));
+        // a certificate kind needs this relay's CSR first
+        assert!(api.failover_install(&*link, "acme", D_CERT, RELAY, json!({"cert_pem": "-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----\n", "expires": NOW + 86_400}), NOW).is_err());
+    }
+
+    #[test]
+    fn failover_is_refused_for_a_destination_without_failover() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-refused", false);
+        assert!(api.failover_request_csr(&*link, "acme", D_CERT, RELAY).is_err());
+        assert!(api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 86_400), NOW).is_err());
+        assert!(api.failover_request_csr(&*link, "acme", "d_ffffffffffffffff", RELAY).is_err());
+        assert!(!relay.ops().contains(&"api-failover".to_string()));
+        assert!(api.failover_records("acme").is_empty());
+    }
+
+    #[test]
+    fn failover_delete_marks_deleted_after_the_ack() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-delete", true);
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).unwrap();
+        *relay.up.lock() = false;
+        assert!(api.failover_delete(&*link, "acme", D_TOKEN, RELAY).is_err());
+        assert_eq!(record(&api, D_TOKEN).unwrap().state, "armed");
+        *relay.up.lock() = true;
+        api.failover_delete(&*link, "acme", D_TOKEN, RELAY).unwrap();
+        assert_eq!(record(&api, D_TOKEN).unwrap().state, "deleted");
+        assert!(!relay_holds(&relay, D_TOKEN));
+    }
+
+    #[test]
+    fn disabling_failover_in_the_journal_deletes_on_the_relay_before_the_ack() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-journal", true);
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).unwrap();
+        assert!(relay_holds(&relay, D_TOKEN));
+        api.append(Some(link.clone()), "acme", "destination_disable_failover", json!(D_TOKEN), None, NOW).unwrap();
+        assert!(wait_for(|| api.acked(RELAY, "acme") == 1));
+        assert!(wait_for(|| record(&api, D_TOKEN).is_some_and(|r| r.state == "deleted")));
+        assert!(!relay_holds(&relay, D_TOKEN), "deleted on the relay before it acknowledged");
+    }
+
+    #[test]
+    fn failover_attention_at_14_days_and_at_expiry() {
+        let (_d, _lines, _relay, link, api) = failover_setup("failover-attention", true);
+        let expires = NOW + 20 * 86_400;
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(expires), NOW).unwrap();
+        assert!(api.failover_attention(NOW).is_empty());
+        assert!(api.failover_attention(expires - 14 * 86_400 - 1).is_empty());
+        let soon = api.failover_attention(expires - 14 * 86_400);
+        assert_eq!(soon.len(), 1);
+        assert_eq!((soon[0].destination.as_str(), soon[0].relay.as_str(), soon[0].days_left), (format!("Dest {D_TOKEN}").as_str(), RELAY, Some(14)));
+        assert_eq!(api.failover_attention(expires - 1)[0].days_left, Some(1));
+        assert_eq!(api.failover_attention(expires)[0].days_left, None);
+    }
+
+    #[test]
+    fn an_older_relay_keeps_the_failover_record_pending_as_too_old() {
+        let d = temp("failover-old");
+        let (log, _lines) = logger();
+        let mut fake = FakeRelay::new(RELAY, "acme", &d.join("relay"), log.clone());
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        api.publish_verified(None, failover_map(1, true), NOW).unwrap();
+        fake.old = true;
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![Arc::new(fake)]));
+        assert_eq!(api.failover_request_csr(&*link, "acme", D_CERT, RELAY).unwrap_err(), FAILOVER_TOO_OLD);
+        let r = record(&api, D_CERT).unwrap();
+        assert_eq!((r.state, r.note.as_str()), ("pending", FAILOVER_TOO_OLD));
+        assert_eq!(api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 86_400), NOW).unwrap_err(), FAILOVER_TOO_OLD);
+        assert_eq!(record(&api, D_TOKEN).unwrap().state, "pending");
+    }
+
+    #[test]
+    fn a_gcp_service_account_key_is_armed_with_the_relays_public_id() {
+        let (_d, lines, relay, link, api) = failover_setup("failover-gcp", true);
+        let key = json!({"type": "service_account", "project_id": "acme-prod", "private_key_id": "kid1", "private_key": "-----BEGIN PRIVATE KEY-----\nMIIsecretsecret\n-----END PRIVATE KEY-----\n",
+                         "client_email": "lucid@acme-prod.iam.gserviceaccount.com", "token_uri": "https://oauth2.googleapis.com/token"})
+        .to_string();
+        assert!(api.failover_install(&*link, "acme", D_GCP, RELAY, json!({"cert_pem": "-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----\n", "expires": NOW + 86_400}), NOW).is_err());
+        api.failover_install(&*link, "acme", D_GCP, RELAY, json!({"key_json": key, "expires": NOW + 30 * 86_400}), NOW).unwrap();
+        let r = record(&api, D_GCP).unwrap();
+        assert_eq!((r.state, r.kind.as_str(), r.public_id.as_str(), r.expires), ("armed", "gcp_service_account_key", "lucid@acme-prod.iam.gserviceaccount.com:kid1", NOW + 30 * 86_400));
+        assert!(relay_holds(&relay, D_GCP));
+        assert!(lines.lock().iter().all(|l| !l.contains("secretsecret")));
+    }
+
+    /// A channel whose relay answers `api-failover` install with `answer` (after really installing).
+    struct InstallAnswer(Arc<dyn FleetLink>, Value);
+
+    impl FleetLink for InstallAnswer {
+        fn request(&self, relay: &str, op: &str, body: Value, timeout_ms: u64) -> Result<Value, LinkError> {
+            let install = op == "api-failover" && body["action"] == "install";
+            let a = self.0.request(relay, op, body, timeout_ms)?;
+            Ok(if install { self.1.clone() } else { a })
+        }
+        fn event(&self, relay: &str, op: &str, body: Value) -> bool {
+            self.0.event(relay, op, body)
+        }
+        fn connected(&self, relay: &str) -> bool {
+            self.0.connected(relay)
+        }
+        fn close(&self, relay: &str, code: u16) {
+            self.0.close(relay, code)
+        }
+    }
+
+    #[test]
+    fn an_install_answer_that_does_not_fit_the_request_arms_nothing() {
+        let (_d, lines, _relay, link, api) = failover_setup("failover-answer", true);
+        let asked = NOW + 30 * 86_400;
+        // the token hint the relay must answer for the token sent
+        let hint = format!("sha256:{}", &crate::codec::sha256_hex(FAILOVER_TOKEN.as_bytes())[..8]);
+        let bad = [
+            json!({"ok": true}),
+            json!({"type": "token", "public_id": hint, "not_before": NOW, "expires": asked}),
+            json!({"ok": false, "type": "token", "public_id": hint, "not_before": NOW, "expires": asked}),
+            json!({"ok": true, "type": "mtls", "public_id": hint, "not_before": NOW, "expires": asked}),
+            json!({"ok": true, "type": "token", "public_id": "sha256:abcd1234", "not_before": NOW, "expires": asked}),
+            json!({"ok": true, "type": "token", "public_id": "", "not_before": NOW, "expires": asked}),
+            json!({"ok": true, "type": "token", "public_id": hint, "not_before": NOW, "expires": asked + 1}),
+            json!({"ok": true, "type": "token", "public_id": hint, "not_before": NOW - 10, "expires": NOW}),
+        ];
+        for answer in bad {
+            let lying: Arc<dyn FleetLink> = Arc::new(InstallAnswer(link.clone(), answer.clone()));
+            assert!(api.failover_install(&*lying, "acme", D_TOKEN, RELAY, token_material(asked), NOW).is_err(), "{answer}");
+            assert!(record(&api, D_TOKEN).is_none_or(|r| r.state != "armed"), "{answer}");
+        }
+        assert!(lines.lock().iter().any(|l| l.contains("api.failover.answer-unusable")));
+        assert!(lines.lock().iter().all(|l| !l.contains("abcd1234") && !l.contains(hint.as_str())), "no answered value is quoted");
+        // a clamped expires is taken as answered
+        let fits: Arc<dyn FleetLink> = Arc::new(InstallAnswer(link.clone(), json!({"ok": true, "type": "token", "public_id": hint, "not_before": NOW, "expires": asked - 5})));
+        api.failover_install(&*fits, "acme", D_TOKEN, RELAY, token_material(asked), NOW).unwrap();
+        let r = record(&api, D_TOKEN).unwrap();
+        assert_eq!((r.state, r.public_id.as_str(), r.not_before, r.expires), ("armed", hint.as_str(), NOW, asked - 5));
+    }
+
+    #[test]
+    fn the_console_computes_the_public_id_of_each_material() {
+        let m = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(failover_public_id("token", &m(json!({"token": "abc"}))), Some(format!("sha256:{}", &crate::codec::sha256_hex(b"abc")[..8])));
+        let key = json!({"client_email": "lucid@acme-prod.iam.gserviceaccount.com", "private_key_id": "kid1", "private_key": "x"}).to_string();
+        assert_eq!(failover_public_id("key_json", &m(json!({"key_json": key}))).as_deref(), Some("lucid@acme-prod.iam.gserviceaccount.com:kid1"));
+        assert_eq!(failover_public_id("key_json", &m(json!({"key_json": "not json"}))), None);
+        assert_eq!(failover_public_id("cert_pem", &m(json!({"cert_pem": "-----BEGIN CERTIFICATE-----\nAA\n-----END CERTIFICATE-----\n"}))), None);
+        // a certificate (structure only) around a key's SubjectPublicKeyInfo: the SHA-256 of that SPKI
+        use crate::fleet_x509 as x509;
+        let spki = x509::Key::generate(x509::Curve::P256).unwrap().spki();
+        let seq = |parts: &[Vec<u8>]| x509::der(0x30, &parts.concat());
+        let alg = seq(&[x509::der(0x06, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02])]);
+        let name = x509::name(&[(x509::OID_CN, "acme-tool")]);
+        let tbs = seq(&[x509::der(0xa0, &x509::der(0x02, &[2])), x509::integer(&[0x41, 1, 2, 3]), alg.clone(), name.clone(), seq(&[x509::time((NOW - 60) * 1000), x509::time((NOW + 86_400) * 1000)]), name, spki.clone()]);
+        let pem = crate::meet_x509::der_to_pem(&seq(&[tbs, alg, x509::der(0x03, &[0, 1, 2, 3])]));
+        assert_eq!(failover_public_id("cert_pem", &m(json!({"cert_pem": pem}))), Some(crate::codec::sha256_hex(&spki)));
+    }
+
+    #[test]
+    fn the_relay_stays_behind_after_a_failed_retire_until_a_retried_sync_ends_with_api_synced() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-synced", true);
+        assert!(relay.caught_up(), "a catch-up that fully succeeded ends with an accepted api-synced");
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).unwrap();
+        // offline while failover is disabled; on reconnect the retirement fails
+        *relay.up.lock() = false;
+        api.append(Some(link.clone()), "acme", "destination_disable_failover", json!(D_TOKEN), None, NOW).unwrap();
+        *relay.up.lock() = true;
+        *relay.fail_retire.lock() = true;
+        api.on_welcomed(RELAY);
+        assert!(!api.sync(&*link, RELAY, NOW));
+        assert!(!relay.caught_up(), "not caught up: no api-synced after a failed catch-up");
+        assert!(!relay.sent.lock().iter().rev().take_while(|(op, _)| op != "api-heads").any(|(op, _)| op == "api-synced"));
+        assert_eq!(record(&api, D_TOKEN).unwrap().state, "armed");
+        // the relay refuses an api-synced while it is behind the console
+        let heads = json!({"acme": {"seq": 1, "tseq": 0}});
+        assert_eq!(crate::fleet_agent::api_synced_answer(&heads, &json!({"orgs": {"acme": {"seq": 1, "tseq": 1}}})).unwrap_err().code, "not-synced");
+        // the fleet's minute tries again without a new contact
+        *relay.fail_retire.lock() = false;
+        api.sync_tick(link.clone(), NOW + 60);
+        assert!(wait_for(|| relay.caught_up()));
+        assert!(wait_for(|| record(&api, D_TOKEN).is_some_and(|r| r.state == "deleted")));
+        assert!(!relay_holds(&relay, D_TOKEN));
+        // nothing left to retry
+        assert!(wait_for(|| api.inner.lock().sync_busy.is_empty()));
+        assert!(api.inner.lock().unsynced.is_empty());
+    }
+
+    #[test]
+    fn an_out_of_order_disable_failover_is_refused_and_deletes_nothing() {
+        let (_d, _lines, relay, link, api) = failover_setup("failover-order", true);
+        api.failover_install(&*link, "acme", D_TOKEN, RELAY, token_material(NOW + 30 * 86_400), NOW).unwrap();
+        let entry = |tseq: u64, org: &str| json!({"id": format!("t_{org}_{tseq:06}"), "tseq": tseq, "ts": NOW, "action": "destination_disable_failover", "target": D_TOKEN});
+        // a gap (the relay applied 0, so only tseq 1 is next)
+        let gap = relay.answer("api-tighten", &json!({"org": "acme", "entry": entry(3, "acme")})).unwrap_err();
+        assert_eq!(gap.code, "tseq-gap");
+        // an entry for another org, and a malformed target
+        assert!(relay.answer("api-tighten", &json!({"org": "acme", "entry": entry(1, "beta")})).is_err());
+        let mut bad = entry(1, "acme");
+        bad["target"] = json!("not-a-destination");
+        assert!(relay.answer("api-tighten", &json!({"org": "acme", "entry": bad})).is_err());
+        assert!(relay_holds(&relay, D_TOKEN), "nothing refused deleted the credential");
+        assert_eq!(relay.store.lock().head("acme").1, 0);
+        // the next entry in order retires it, then applies
+        relay.answer("api-tighten", &json!({"org": "acme", "entry": entry(1, "acme")})).unwrap();
+        assert!(!relay_holds(&relay, D_TOKEN));
+        assert_eq!(relay.store.lock().head("acme").1, 1);
+    }
+
+    #[test]
+    fn a_tightening_applied_with_its_answer_lost_is_recovered_by_the_next_sync_tick() {
+        let (_d, _lines, relay, link, api) = failover_setup("lost-answer", true);
+        assert!(relay.caught_up());
+        *relay.lose_answer.lock() = true;
+        api.append(None, "acme", "client_suspend", json!(CLIENT), None, NOW).unwrap();
+        assert!(!api.sync(&*link, RELAY, NOW), "the answer was lost");
+        assert_eq!(relay.store.lock().head("acme").1, 1, "but the relay applied it");
+        assert!(!relay.caught_up());
+        // the retry asks api-heads first, sends nothing already applied, and ends with api-synced
+        relay.sent.lock().clear();
+        api.sync_tick(link.clone(), NOW + 60);
+        assert!(wait_for(|| relay.caught_up()));
+        let ops: Vec<String> = relay.sent.lock().iter().map(|(op, _)| op.clone()).collect();
+        assert_eq!(ops.first().map(String::as_str), Some("api-heads"), "{ops:?}");
+        assert!(!ops.iter().any(|o| o == "api-tighten"), "{ops:?}");
+        assert_eq!(ops.last().map(String::as_str), Some("api-synced"), "{ops:?}");
+        assert!(wait_for(|| api.inner.lock().unsynced.is_empty()));
+        assert_eq!(api.acked(RELAY, "acme"), 1);
+    }
+
     #[test]
     fn a_relay_offline_during_two_tightenings_gets_both_in_order_first_on_reconnect() {
         let d = temp("offline");
@@ -1428,7 +2148,8 @@ mod tests {
         assert!(api.needs_sync(RELAY));
         assert!(api.sync(&*link, RELAY, NOW));
         let sent = relay.sent.lock().clone();
-        assert_eq!(sent.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(), ["api-heads", "api-tighten", "api-tighten"], "the key and map are not sent again");
+        assert_eq!(sent.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(), ["api-heads", "api-tighten", "api-tighten", "api-synced"], "the key and map are not sent again");
+        assert_eq!(sent[3].1["orgs"]["acme"], json!({"seq": 1, "tseq": 2}));
         assert_eq!((sent[1].1["entry"]["tseq"].as_u64(), sent[2].1["entry"]["tseq"].as_u64()), (Some(1), Some(2)));
         assert_eq!(relay.store.lock().head("acme"), (1, 2));
         assert_eq!(api.acked(RELAY, "acme"), 2);

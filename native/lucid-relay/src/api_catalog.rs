@@ -764,9 +764,8 @@ pub mod counters {
         s.success.remove(&(org.to_owned(), destination.to_owned()));
     }
 
-    /// This relay's mode (`normal` or `failover`), for every org. Set by the failover switch of slice 1a5; until then
-    /// the exposition reports `normal`.
-    #[allow(dead_code)]
+    /// This relay's mode (`normal` or `failover`), for every org: set by the failover exporter (`api_failover`,
+    /// 12.2); `normal` until then.
     pub fn set_relay_mode(mode: &str) {
         STATE.lock().mode = Some(mode.to_owned());
     }

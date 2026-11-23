@@ -609,7 +609,9 @@ mod tests {
         assert!(!text.contains("export-test-check"), "another org's series");
         assert!(!text.contains("lucid_relay_mode"), "the console has no relay mode");
         let relay = api_families(Some(org), 1_800_000_000, true);
-        assert!(relay.contains("lucid_relay_mode{mode=\"normal\"} 1\nlucid_relay_mode{mode=\"failover\"} 0\n"), "{relay}");
+        // the mode is process-wide and the api_failover tests switch it, so only its shape is fixed here
+        let mode = |m: &str| relay.lines().find_map(|l| l.strip_prefix(&format!("lucid_relay_mode{{mode=\"{m}\"}} ")).map(str::to_owned));
+        assert!(matches!((mode("normal").as_deref(), mode("failover").as_deref()), (Some("1"), Some("0")) | (Some("0"), Some("1"))), "{relay}");
         assert!(api_families(None, 1_800_000_000, false).contains("lucid_api_refusals_total{check=\"export-test-check\"} 1\n"));
     }
 }

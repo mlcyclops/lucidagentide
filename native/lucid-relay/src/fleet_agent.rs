@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3000,6 +3000,73 @@ pub fn api_checkpoint_cert_answer(dir: &Path, vault: &dyn VaultLock, body: &Valu
     Ok(json!({ "ok": true }))
 }
 
+/// `api-failover` (12.3): `csr` (`params` `{type, subject_cn}`) answers `{csr}` (PEM) for a key made here that never
+/// leaves; `install` (`params` the material) answers `{ok: true, type, public_id, not_before, expires}` and `delete`
+/// `{ok: true}`, only after the sealed credential is on disk or gone. The material is never logged. `now` is unix
+/// seconds.
+pub fn api_failover_answer(dir: &Path, vault: &dyn VaultLock, body: &Value, now: i64) -> Result<Value, Refusal> {
+    let org = api_org(body)?;
+    let bad = |why: &str| Refusal::new(400, "bad-failover", why);
+    let destination = body.get("destination").and_then(Value::as_str).filter(|d| (3..=64).contains(&d.len()) && d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')).ok_or_else(|| bad("destination is not a destination id"))?;
+    let params = body.get("params").filter(|p| p.is_object()).ok_or_else(|| bad("params must be an object"))?;
+    let io = |why: String| Refusal::new(500, "io", &why);
+    match body.get("action").and_then(Value::as_str) {
+        Some("csr") => {
+            let kind = params.get("type").and_then(Value::as_str).and_then(crate::api_failover::FailoverKind::of).filter(|k| k.uses_csr()).ok_or_else(|| bad("type must be a certificate credential type"))?;
+            let cn = params.get("subject_cn").and_then(Value::as_str).filter(|c| (1..=64).contains(&c.len())).ok_or_else(|| bad("subject_cn must be 1 to 64 characters"))?;
+            let csr = crate::api_failover::failover_csr(dir, vault, org, destination, kind, cn).map_err(io)?;
+            Ok(json!({ "csr": csr }))
+        }
+        Some("install") => {
+            let mut answer = crate::api_failover::failover_install(dir, vault, org, destination, params.clone(), now).map_err(|why| bad(&why))?;
+            crate::api_failover::changed();
+            // the installed credential's non-secret record: type, public_id, not_before, expires
+            match answer.as_object_mut() {
+                Some(o) => {
+                    o.insert("ok".into(), json!(true));
+                }
+                None => answer = json!({ "ok": true }),
+            }
+            Ok(answer)
+        }
+        Some("delete") => {
+            crate::api_failover::retire(dir, vault, org, destination).map_err(io)?;
+            Ok(json!({ "ok": true }))
+        }
+        _ => Err(bad("action must be csr, install or delete")),
+    }
+}
+
+/// Every `api-tighten` and `api-map` on this relay holds this lock across its check, failover retirement and apply
+/// (`api_tighten_retire_failover`), so no other entry lands between them.
+pub static API_JOURNAL_LOCK: Mutex<()> = Mutex::new(());
+
+/// `api-tighten` (2.5), check only: the entry is well formed, for the body's org, and its tseq is exactly
+/// `applied + 1` (the store's own check, as `apply_tighten` makes it). Nothing is applied.
+pub fn api_tighten_check(applied: u64, body: &Value) -> Result<crate::api_map::TightenEntry, Refusal> {
+    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+    let e = crate::api_map::check_tighten(body.get("entry").unwrap_or(&Value::Null), applied).map_err(api_refusal)?;
+    if e.org != org {
+        return Err(api_refusal(crate::api_map::ApiMapError::new("not-tightening", "that entry is for another organization")));
+    }
+    Ok(e)
+}
+
+/// `api-tighten` (2.5, 12.3): a `destination_delete` or `destination_disable_failover` entry that passes
+/// `api_tighten_check` against the org's applied tseq deletes this relay's failover credential of that destination
+/// (and its failover queue) before it is applied and acknowledged; an entry that does not pass deletes nothing and
+/// is refused. The caller holds what serializes the org's journal (`API_JOURNAL_LOCK`, or the store's lock) from
+/// reading `applied` until the entry is applied.
+pub fn api_tighten_retire_failover(dir: &Path, vault: &dyn VaultLock, applied: u64, body: &Value) -> Result<(), Refusal> {
+    let action = body.get("entry").and_then(|e| e.get("action")).and_then(Value::as_str);
+    if !matches!(action, Some("destination_delete" | "destination_disable_failover")) {
+        return Ok(());
+    }
+    let e = api_tighten_check(applied, body)?;
+    let target = e.target.as_str().unwrap_or_default();
+    crate::api_failover::retire(dir, vault, &e.org, target).map_err(|why| Refusal::new(500, "io", &why))
+}
+
 /// Shipping state of one channel (12.2).
 #[derive(Default)]
 struct Ship {
@@ -3204,6 +3271,52 @@ pub struct Agent {
     req_id: AtomicU32,
     /// The channel is welcomed and open now.
     up: AtomicBool,
+    /// API-1 2.5, 12.2: whether the console's catch-up on this channel ended with an accepted `api-synced`.
+    api_sync: Arc<ApiSync>,
+}
+
+/// API-1 2.5, 12.2: `chan` moves on at every connect, disconnect and `api-heads`; `synced` holds the `chan` an
+/// accepted `api-synced` was asked on, so an answer from an earlier channel or catch-up never counts.
+#[derive(Default)]
+struct ApiSync {
+    chan: AtomicU64,
+    synced: parking_lot::Mutex<Option<u64>>,
+}
+
+impl ApiSync {
+    fn reset(&self) {
+        let _g = self.synced.lock();
+        self.chan.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Mark the channel `chan` caught up, unless it moved on since the request arrived.
+    fn set(&self, chan: u64) {
+        let mut s = self.synced.lock();
+        if self.chan.load(Ordering::SeqCst) == chan {
+            *s = Some(chan);
+        }
+    }
+
+    fn caught_up(&self) -> bool {
+        let s = self.synced.lock();
+        *s == Some(self.chan.load(Ordering::SeqCst))
+    }
+}
+
+/// `api-synced` (2.5, 12.2): `{ok: true}` only when, for every org listed, this relay's pinned seq and applied tseq
+/// (`heads`, as `api-heads` answers them) are at least the console's; else `not-synced`.
+pub fn api_synced_answer(heads: &Value, body: &Value) -> Result<Value, Refusal> {
+    let bad = || Refusal::new(400, "bad-synced", "orgs must map each organization to {seq, tseq}.");
+    let orgs = body.get("orgs").and_then(Value::as_object).ok_or_else(bad)?;
+    for (org, want) in orgs {
+        let (Some(seq), Some(tseq)) = (want.get("seq").and_then(Value::as_i64), want.get("tseq").and_then(Value::as_u64)) else { return Err(bad()) };
+        let have = heads.get(org.as_str());
+        let ok = have.and_then(|h| h.get("seq")).and_then(Value::as_i64).is_some_and(|s| s >= seq) && have.and_then(|h| h.get("tseq")).and_then(Value::as_u64).is_some_and(|t| t >= tseq);
+        if !ok {
+            return Err(Refusal::new(409, "not-synced", "This relay has not applied everything the console holds for that organization yet."));
+        }
+    }
+    Ok(json!({ "ok": true }))
 }
 
 static AGENTS: LazyLock<Mutex<HashMap<PathBuf, Weak<Agent>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -3215,6 +3328,12 @@ fn agent_for(dir: &Path) -> Option<Arc<Agent>> {
 /// API-1 7.2 `v1/health`: the agent of this state folder holds a welcomed channel to its console now.
 pub fn channel_up(dir: &Path) -> bool {
     agent_for(dir).is_some_and(|a| a.up.load(Ordering::SeqCst))
+}
+
+/// API-1 12.2: the channel of this state folder is up and the console's catch-up on it ended with an `api-synced`
+/// this relay accepted (it holds every map and journal entry the console holds for its orgs).
+pub fn api_caught_up(dir: &Path) -> bool {
+    agent_for(dir).is_some_and(|a| a.up.load(Ordering::SeqCst) && a.api_sync.caught_up())
 }
 
 /// Wake the agent of a state folder (a local Join, trust-ca, a reset).
@@ -3261,6 +3380,7 @@ pub fn start(cfg: AgentConfig) -> Result<Arc<Agent>, String> {
         last_meet_renew: Mutex::new(i64::MIN / 2),
         req_id: AtomicU32::new(1),
         up: AtomicBool::new(false),
+        api_sync: Arc::default(),
     });
     AGENTS.lock().insert(cfg.state_dir, Arc::downgrade(&agent));
     let run = agent.clone();
@@ -3824,6 +3944,7 @@ impl Agent {
         let mut ship = Ship::default();
         let (built_tx, mut built_rx) = mpsc::unbounded_channel::<Option<ApiBatch>>();
         let mut ship_tick = tokio::time::interval(API_SHIP_EVERY);
+        self.api_sync.reset();
         self.up.store(true, Ordering::SeqCst);
         let mut end = End::Closed(Duration::ZERO);
         let _ = leaf;
@@ -3976,7 +4097,10 @@ impl Agent {
                                 ship.last_api = Some(Instant::now());
                                 if op == "api-heads" {
                                     ship.asked = true;
+                                    // a new catch-up: not caught up until its `api-synced`
+                                    self.api_sync.reset();
                                 }
+                                let (sync, chan) = (self.api_sync.clone(), self.api_sync.chan.load(Ordering::SeqCst));
                                 let (hooks, console, dir, ans) = (self.meet(), self.console.clone(), self.dir.clone(), ans_tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     let body = Value::Object(body);
@@ -3989,11 +4113,35 @@ impl Agent {
                                     };
                                     let answer = match (op, hooks) {
                                         ("api-heads", Some(h)) => Ok(h.api_heads()),
+                                        // API-1 2.5, 12.2: the console's catch-up fully succeeded; checked against what is on disk
+                                        ("api-synced", Some(h)) => api_synced_answer(&h.api_heads(), &body).inspect(|_| sync.set(chan)),
                                         ("api-pseudonym-key", Some(h)) => served(&h).and_then(|_| api_pseudonym_key_store(&dir, &*console, &body)),
                                         // API-1 9.3, 12.2: the relay's chains and its checkpoint certificates
                                         ("api-chains", Some(h)) => served(&h).and_then(|_| h.api_audit().ok_or_else(audit_unavailable)).and_then(|a| api_chains_answer(&a, &body)),
                                         ("api-checkpoint-csr", Some(h)) => served(&h).and_then(|_| api_checkpoint_csr_answer(&dir, &*console, &body, now_ms() / 1000)),
                                         ("api-checkpoint-cert", Some(h)) => served(&h).and_then(|_| api_checkpoint_cert_answer(&dir, &*console, &body)),
+                                        // API-1 12.3: failover credentials, and their retirement before a tightening is acknowledged
+                                        ("api-failover", Some(h)) => served(&h).and_then(|_| api_failover_answer(&dir, &*console, &body, now_ms() / 1000)),
+                                        ("api-tighten" | "api-map", Some(h)) => {
+                                            // check, retire and apply with no other journal entry or map between them
+                                            let _one = API_JOURNAL_LOCK.lock();
+                                            let retired = match op {
+                                                "api-tighten" => served(&h).and_then(|_| {
+                                                    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+                                                    let applied = h.api_heads().get(org).and_then(|o| o.get("tseq")).and_then(Value::as_u64).unwrap_or(0);
+                                                    api_tighten_retire_failover(&dir, &*console, applied, &body)
+                                                }),
+                                                _ => Ok(()),
+                                            };
+                                            let r = retired.and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op"))));
+                                            match &r {
+                                                // 12.3: the relay exporter re-reads its config at once
+                                                Ok(_) => crate::api_failover::changed(),
+                                                // 12.2: behind the console again until its next `api-synced`
+                                                Err(_) => sync.reset(),
+                                            }
+                                            r
+                                        }
                                         (_, Some(h)) => h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op"))),
                                         (_, None) => Err(Refusal::of("fleet-op")),
                                     };
@@ -4125,6 +4273,7 @@ impl Agent {
             }
         }
         self.up.store(false, Ordering::SeqCst);
+        self.api_sync.reset();
         *self.events_rx.lock() = Some(events_rx);
         self.persist_clock(link.relay_id());
         match end {
