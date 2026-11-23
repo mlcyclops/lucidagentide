@@ -30,8 +30,8 @@ import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
-  BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PLUGIN_PRICE_LABEL, PREMIUM_PLUGINS,
-  addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip,
+  BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PREMIUM_PLUGINS, WORLDS_GROUP,
+  addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, isWorldPlugin, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip,
   sortFree, storeInstalledVersion,
   type AddonAction, type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
@@ -42,6 +42,7 @@ import type {
   InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginInstallView, PluginLicenseView, PluginStartView, PluginsListView,
 } from "./bridge.ts";
 import type { ToastOpts } from "./ui.ts";
+import type { InstalledWorld } from "./viz_world_api.ts";
 
 export const TIER_PREF_KEY = "lucid.plugins-tier";
 const MEDIA_DIR = "assets/plugins";
@@ -80,26 +81,28 @@ function shotHtml(id: string, name: string, m: PluginMedia): string {
 export interface CardNote { tone: "info" | "ok" | "danger"; text: string }
 
 /** The footer of a premium card: meta line, the one state button, and the status note. Re-rendered alone on
- *  every state change so the card's loop keeps playing. */
-export function premiumFootHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null): string {
+ *  every state change so the card's loop keeps playing. An installed world also offers Export (ADR-0648) when
+ *  `canExport`: its original signed package, to install offline on another machine. */
+export function premiumFootHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
   const meta = p.sale === "link"
     ? (p.partner ? `<span class="plg-meta">Partner: ${esc(p.partner)}</span>` : `<span class="plg-meta">Own subscription</span>`)
-    : `<span class="plg-meta">One-time ${PLUGIN_PRICE_LABEL}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`;
+    : `<span class="plg-meta">One-time ${esc(p.price)}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`;
+  const exportBtn = installed && canExport && isWorldPlugin(p) ? `<button type="button" class="plg-lic" data-plg-wexport="${esc(p.id)}">Export</button>` : "";
   const disabled = a.kind === "installing" || a.kind === "access-pending" || a.kind === "coming-soon" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
   const ext = a.kind === "visit" ? icon("arrowRight", 13) : "";
-  return `<div class="plg-foot">${meta}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-act="${esc(p.id)}"${disabled}${busy}>${esc(cardActionLabel(a))}${ext}</button></div>`
+  return `<div class="plg-foot">${meta}${exportBtn}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-act="${esc(p.id)}"${disabled}${busy}>${esc(cardActionLabel(a))}${ext}</button></div>`
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
 }
 
-export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null): string {
+export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
   return `<article class="plg-card" data-plg-card="${esc(p.id)}">${shotHtml(p.id, p.name, p.media)}
     <div class="plg-cbody">
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(p.kicker)}</span>
       <p class="plg-pitch">${esc(p.pitch)}</p>
       <p class="plg-lucid"><span>With LUCID Agent</span>${esc(p.lucid)}</p>
-      <div class="plg-foot-slot" data-plg-foot="${esc(p.id)}">${premiumFootHtml(p, a, installed, note)}</div>
+      <div class="plg-foot-slot" data-plg-foot="${esc(p.id)}">${premiumFootHtml(p, a, installed, note, canExport)}</div>
     </div>
   </article>`;
 }
@@ -182,7 +185,7 @@ export function govPanelHtml(signedIn: boolean, status: GovAccessStatus, formOpe
 export function buySheetHtml(p: SoldPlugin): string {
   return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
     <div class="plg-sheet-h"><b id="plgSheetTitle">Buy ${esc(p.name)}</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
-    <p class="plg-sheet-price">One-time ${PLUGIN_PRICE_LABEL}. Yours for good, with free updates. It runs on this machine and never needs to call home.</p>
+    <p class="plg-sheet-price">One-time ${esc(p.price)}. Yours for good, with free updates. It runs on this machine and never needs to call home.</p>
     <p class="plg-sheet-sub">${esc(PLUGIN_LICENSE_NAME)}, in short:</p>
     <ul class="plg-sheet-list">
       <li>A perpetual license for one user, not transferable, to run the plugin inside LUCID Agent.</li>
@@ -206,9 +209,10 @@ export function licenseTextSheetHtml(name: string, version: string, text: string
 
 // ── the INSTALLED tab (ADR-0505) ───────────────────────────────────────────────────────────────────
 
-const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program" };
+const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program", world: "Lucid Agent World" };
 
 function installedDesc(p: InstalledPluginView): string {
+  if (p.kind === "world") return "A Lucid Agent World for the Visualize view. Pick it in Visualize's style picker; it never runs as a program.";
   if (p.source === "catalog") return "From the LUCID store. Updates come from its card on the Premium tab.";
   return p.signed
     ? "Installed from a file you chose, signed by TECHLEAD 187 LLC. Never updated automatically: install a newer file to update it."
@@ -217,14 +221,19 @@ function installedDesc(p: InstalledPluginView): string {
 
 /** The footer of an Installed row: Open for every plugin, Remove for a private one (a store plugin is managed
  *  from its card). Re-rendered alone on every state change. */
-export function installedFootHtml(p: InstalledPluginView, note: CardNote | null): string {
+export function installedFootHtml(p: InstalledPluginView, note: CardNote | null, canExport = false): string {
+  const noteHtml = note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "";
+  // ADR-0648: a world opens in Visualize and can be exported; it has no running state.
+  if (p.kind === "world") {
+    const exportBtn = canExport ? `<button type="button" class="plg-lic" data-plg-wexport="${esc(p.id)}">Export</button>` : "";
+    return `<div class="plg-foot"><span class="plg-meta">Version ${esc(p.version)}</span>${exportBtn}<button type="button" class="plg-act" data-kind="open-world" data-plg-iopen="${esc(p.id)}">Open in Visualize</button></div>` + noteHtml;
+  }
   const state = p.state === "running" ? "Running" : p.state === "starting" ? "Starting" : p.state === "error" ? "Stopped with an error" : "Not running";
   const remove = p.source === "private" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
-  return `<div class="plg-foot"><span class="plg-meta">${esc(state)}</span>${remove}<button type="button" class="plg-act" data-kind="open" data-plg-iopen="${esc(p.id)}">Open</button></div>`
-    + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
+  return `<div class="plg-foot"><span class="plg-meta">${esc(state)}</span>${remove}<button type="button" class="plg-act" data-kind="open" data-plg-iopen="${esc(p.id)}">Open</button></div>` + noteHtml;
 }
 
-export function installedCardHtml(p: InstalledPluginView, note: CardNote | null): string {
+export function installedCardHtml(p: InstalledPluginView, note: CardNote | null, canExport = false): string {
   const chip = provenanceChip(p);
   const tone: PosterTone = p.source === "catalog" ? "green" : p.signed ? "cyan" : "amber";
   return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, { loop: false, poster: "generated", glyph: "plugins", tone })}
@@ -232,13 +241,13 @@ export function installedCardHtml(p: InstalledPluginView, note: CardNote | null)
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(KIND_LABEL[p.kind])} ${esc(p.version)}<span class="plg-chip" data-status="${chip.tone === "warn" ? "unsigned" : "verified"}">${esc(chip.label)}</span></span>
       <p class="plg-pitch">${esc(installedDesc(p))}</p>
-      <div class="plg-foot-slot" data-plg-ifoot="${esc(p.id)}">${installedFootHtml(p, note)}</div>
+      <div class="plg-foot-slot" data-plg-ifoot="${esc(p.id)}">${installedFootHtml(p, note, canExport)}</div>
     </div>
   </article>`;
 }
 
 /** The whole INSTALLED tab: the explicit install-from-file entry, then every installed plugin. */
-export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean): string {
+export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean, canExport = false): string {
   const pick = canPick
     ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>`
     : `<span class="plg-meta">Installing from a file needs the LUCID desktop app.</span>`;
@@ -246,7 +255,7 @@ export function installedBodyHtml(list: readonly InstalledPluginView[], query: s
   const shown = list.filter((p) => matchesQuery([p.name, p.id, KIND_LABEL[p.kind], provenanceChip(p).label], query));
   if (!list.length) return lede + `<p class="plg-empty">No plugins are installed yet.</p>`;
   if (!shown.length) return lede + `<p class="plg-empty">No plugins match "${esc(query.trim())}".</p>`;
-  return lede + `<div class="plg-grid">${shown.map((p) => installedCardHtml(p, notes.get(p.id) ?? null)).join("")}</div>`;
+  return lede + `<div class="plg-grid">${shown.map((p) => installedCardHtml(p, notes.get(p.id) ?? null, canExport)).join("")}</div>`;
 }
 
 type InspectedFile = Extract<PluginFileInspectView, { ok: true }>;
@@ -327,6 +336,12 @@ export interface PluginsFlyoutDeps {
   openExternal: (url: string) => void;
   /** Show a running plugin in its own Preview tab. */
   openPluginTab: (id: string, name: string, url: string) => void;
+  /** ADR-0648: open the Visualize view on this installed world (app.ts wires it; absent: the card says how). */
+  openWorld?: (id: string) => void;
+  /** ADR-0648: install a signed world package file (bridge.worldImport); absent hides Import world file. */
+  worldImport?: (bytes: ArrayBuffer, filename: string) => Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
+  /** ADR-0648: the download link of an installed world's package (bridge.worldExportUrl); absent hides Export. */
+  worldExportUrl?: (id: string) => string;
   toast: (t: ToastOpts) => void;
   /** The Preview panel: the drawer's right edge sits on its left edge. */
   anchor: () => HTMLElement | null;
@@ -415,13 +430,13 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   function paintFoot(id: string): void {
     const p = premium(id);
     const slot = root?.querySelector(`[data-plg-foot="${CSS.escape(id)}"]`);
-    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null);
+    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null, !!deps.worldExportUrl);
     const a = addon(id);
     const aslot = root?.querySelector(`[data-plg-afoot="${CSS.escape(id)}"]`);
     if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null, !!deps.pickFile);
     const row = installed.get(id);
     const islot = root?.querySelector(`[data-plg-ifoot="${CSS.escape(id)}"]`);
-    if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null);
+    if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null, !!deps.worldExportUrl);
   }
 
   function paintGov(): void {
@@ -444,14 +459,19 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, optional add-ons that install only when you press Install, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }
-    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile);
-    const section = (s: "civilian" | "government") => PREMIUM_PLUGINS
-      .filter((p) => p.section === s && matchesQuery([p.name, p.kicker, p.pitch, p.lucid, p.sale === "link" ? (p.partner ?? "") : ""], query))
-      .map((p) => premiumCardHtml(p, actionFor(p), storeInstalledVersion(installed.get(p.id)) !== null, notes.get(p.id) ?? null));
-    const civ = section("civilian"), govCards = section("government");
-    if (!civ.length && !govCards.length) return empty;
-    return `<p class="plg-lede">Full LUCID apps that install in one click and open in a Preview tab. ${PLUGIN_PRICE_LABEL} each, one time, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
+    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile, !!deps.worldExportUrl);
+    // A card with a `group` (the Lucid Agent Worlds, ADR-0648) is listed under that heading, not its section's.
+    const cards = (keep: (p: PremiumPlugin) => boolean) => PREMIUM_PLUGINS
+      .filter((p) => keep(p) && matchesQuery([p.name, p.kicker, p.pitch, p.lucid, p.sale === "link" ? (p.partner ?? "") : "", p.group ?? ""], query))
+      .map((p) => premiumCardHtml(p, actionFor(p), storeInstalledVersion(installed.get(p.id)) !== null, notes.get(p.id) ?? null, !!deps.worldExportUrl));
+    const civ = cards((p) => p.section === "civilian" && !p.group);
+    const worldCards = cards((p) => p.group === WORLDS_GROUP);
+    const govCards = cards((p) => p.section === "government" && !p.group);
+    if (!civ.length && !worldCards.length && !govCards.length) return empty;
+    const importBtn = deps.worldImport ? `<button type="button" class="plg-act" data-kind="install" data-plg-wimport>${icon("folder", 13)}Import world file</button>` : "";
+    return `<p class="plg-lede">Full LUCID apps that install in one click and open in a Preview tab, and Lucid Agent Worlds for the Visualize view. Each is a one-time purchase, priced on its card, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
       + (civ.length ? `<section class="plg-sec" aria-labelledby="plgSecCiv"><h3 class="plg-h" id="plgSecCiv">Civilian</h3><div class="plg-grid">${civ.join("")}</div></section>` : "")
+      + (worldCards.length ? `<section class="plg-sec" aria-labelledby="plgSecWorlds"><div class="plg-inst-head"><h3 class="plg-h" id="plgSecWorlds">${esc(WORLDS_GROUP)}</h3>${importBtn}</div><p class="plg-sec-sub">Themed casts, stages, skies, throwables and storms for the Visualize view. An installed world exports as its signed package file, which imports on another machine with no internet.</p><div class="plg-grid">${worldCards.join("")}</div></section>` : "")
       + (govCards.length ? `<section class="plg-sec" aria-labelledby="plgSecGov"><h3 class="plg-h" id="plgSecGov">Government</h3><p class="plg-sec-sub">Sold only after government access is verified. ${esc(BLACK_ARROW)} partner apps open on the partner's site.</p><div data-plg-gov>${govPanelHtml(deps.user().signedIn, gov, govFormOpen, govError)}</div><div class="plg-grid">${govCards.join("")}</div></section>` : "");
   }
 
@@ -657,10 +677,13 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (hit("[data-plg-govcancel]")) { govFormOpen = false; govError = ""; paintGov(); return; }
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
+    if (hit("[data-plg-wimport]")) { pickWorldFile(); return; }
+    if ((el = hit("[data-plg-wexport]"))) { exportWorld(el.dataset.plgWexport!); return; }
     if ((el = hit("[data-plg-iopen]"))) {
       // An add-on (ADR-0541) opens through openAddon: its page when it serves one, and its terminal commands.
+      // A world (ADR-0648) opens in Visualize; it has no process to start.
       const id = el.dataset.plgIopen!, a = addon(id), p = installed.get(id);
-      if (a && p) void openAddon(a); else if (p) void openPlugin(p);
+      if (p?.kind === "world") openWorld(p); else if (a && p) void openAddon(a); else if (p) void openPlugin(p);
       return;
     }
     if ((el = hit("[data-plg-iremove]"))) { const p = installed.get(el.dataset.plgIremove!); if (p?.source === "private") showSheet(removeSheetHtml(p)); return; }
@@ -785,6 +808,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       case "buy": if (p.sale === "buy") showSheet(buySheetHtml(p)); return;
       case "install": case "update": await install(p); return;
       case "open": await openPlugin(p); return;
+      case "open-world": openWorld(p); return;
       case "access-pending": case "installing": case "coming-soon": return;
     }
   }
@@ -845,7 +869,8 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       const list = await deps.pluginsList().catch(() => null);
       for (const x of list?.plugins ?? []) installed.set(x.id, x);
       setNote(p.id, { tone: "ok", text: `Installed version ${r.version}.` });
-      deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(p) }] });
+      if (isWorldPlugin(p)) deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "Pick it in the Visualize view's style picker.", timeout: 6000, actions: [{ label: "Open in Visualize", kind: "ok", run: () => openWorld(p) }] });
+      else deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(p) }] });
     } finally {
       busy.delete(p.id);
       paintFoot(p.id);
@@ -864,6 +889,56 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       return;
     }
     setNote(p.id, { tone: "danger", text: `${p.name} did not start${r && !r.ok && r.error ? `: ${r.error}` : "."}` });
+  }
+
+  /** ADR-0648: a world opens in the Visualize view (app.ts owns that view); the drawer gets out of the way. */
+  function openWorld(p: { id: string; name: string }): void {
+    if (!deps.openWorld) {
+      deps.toast({ title: `${p.name} is installed`, desc: "Open the Visualize view and pick it in the style picker.", timeout: 6000 });
+      return;
+    }
+    deps.openWorld(p.id);
+    close();
+  }
+
+  /** ADR-0648: install a world package file (an export from another machine). The engine requires a world signed
+   *  by TECHLEAD 187 LLC and runs every store gate; using it is still checked against the account in Visualize. */
+  function pickWorldFile(): void {
+    const importWorld = deps.worldImport;
+    if (!importWorld) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".zip,application/zip";
+    input.addEventListener("change", () => {
+      const f = input.files?.[0];
+      if (f) void importWorldFile(f, importWorld);
+    }, { once: true });
+    input.click();
+  }
+
+  async function importWorldFile(f: File, importWorld: NonNullable<PluginsFlyoutDeps["worldImport"]>): Promise<void> {
+    deps.toast({ title: `Checking ${f.name}`, desc: "Checking the signature, checksums, and security scan.", timeout: 4000 });
+    const r = await f.arrayBuffer().then((bytes) => importWorld(bytes, f.name)).catch(() => null);
+    const w = r?.ok ? r.world : undefined;
+    if (!w) {
+      deps.toast({ tone: "danger", title: "The world was not installed", desc: r?.error ?? "The install service did not answer. Is the LUCID engine running?", timeout: 0, actions: [{ label: "OK" }] });
+      return;
+    }
+    await refresh();
+    deps.toast({ tone: "ok", title: `${w.name} is installed`, desc: "Pick it in the Visualize view's style picker.", timeout: 6000, actions: [{ label: "Open in Visualize", kind: "ok", run: () => openWorld(w) }] });
+  }
+
+  /** ADR-0648: download an installed world's original signed package, to import it on another machine. */
+  function exportWorld(id: string): void {
+    const url = deps.worldExportUrl?.(id);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    a.rel = "noopener";
+    document.body.append(a);
+    a.click();
+    a.remove();
   }
 
   async function showLicense(id: string): Promise<void> {

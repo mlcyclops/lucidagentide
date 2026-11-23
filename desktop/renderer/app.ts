@@ -33,7 +33,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
-import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
+import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, previewLayout, PreviewWheelSteps, stepPreviewZoom, type PreviewContentSize } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { ASK_LUCID_TAB_ID, PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertAskLucidTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { imageForAction } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): the image an Edit image card names
 import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): data-tip values for new controls
@@ -83,9 +83,9 @@ import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBI
 import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
-import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay
+import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -139,8 +139,9 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -190,6 +191,7 @@ import { mountSeasonBackdrop, type BackdropHandle, type BackdropMotion } from ".
 import { SCENES, SCENE_ORDER } from "./season_scenes.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
+import { humanModelId, LOGIN_TIP, loginChoices, providerShortName, reloginCopy, reloginTargets } from "./relogin.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
@@ -749,11 +751,12 @@ function buildShell(): void {
             <button class="btn-mini prev-ask-act" id="prevCopyPath" hidden data-tip="Copy path|Copy the edited image's full path.">${icon("copy", 13)}</button>
           </div>
           <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" data-tip="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
+            <button type="button" class="btn-mini" id="prevZoomFit" aria-pressed="true" aria-label="Fit the page in the Preview" data-tip="Fit|Show the whole page in the panel (on by default). Picking a zoom turns it off; Fit turns it back on.">Fit</button>
             <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
             <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
             <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
           </div>
-          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the preview to pan a zoomed or oversized page. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -1025,11 +1028,11 @@ async function renderSessions(): Promise<void> {
 // and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
 let warmedTranscripts = false;
 async function warmTranscripts(data: SessionList): Promise<void> {
-  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  if (warmedTranscripts || baseTier(perfWatch.tier()) !== "full") return;
   warmedTranscripts = true;
   const run = async (): Promise<void> => {
     for (const s of data.sessions.slice(0, 5)) {
-      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (baseTier(perfWatch.tier()) !== "full") break; // unplugged mid-warm -> stop spending
       if (cachedTranscript(s.id)) continue;
       const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
       if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
@@ -1839,7 +1842,20 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
+/** P-VIZ.APPROVE1 (ADR-0655): Main's open permission cards by engine id (each card's `pick`), so the Visualize pop-out
+ *  answers through the card itself: the same option reading, the card's result line or toast, the voice approval
+ *  disarmed. Left when the card is answered by any path. */
+const chatAsks = new Map<string, (oid: string | null) => void>();
+/** A chat bubble's readable text for a summary surface (the Visualize hub panel): buttons, hidden parts and the
+ *  stream cursor left out, one line per block so paragraphs and tool rows never glue into each other. */
+function chatProse(el: Element | null): string {
+  if (!el) return "";
+  const c = el.cloneNode(true) as HTMLElement;
+  for (const x of c.querySelectorAll("button, [hidden], .cursor")) x.remove();
+  const lines = [...c.children].map((x) => (x.textContent ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return (lines.length ? lines.join("\n") : (c.textContent ?? "")).trim();
+}
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void; pick: (oid: string | null) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1951,14 +1967,20 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     actions.hidden = true;
     if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
+  // One option, read the way this card's own buttons are (P-VIZ.APPROVE1: Visualize's pop-out answers through it).
+  // No option (null) is a deny at the engine, fail-closed.
+  const pick = (oid: string | null): void => {
+    if (oid === null) { choose(null, "Denied", false); return; }
+    const opt = e.options.find((o) => o.optionId === oid);
+    if (!opt) return;
+    const isDeny = (e.egress || e.exec) ? opt.kind === "reject" : !isAllowOpt(opt.kind, opt.optionId);
+    choose(oid, isDeny ? "Denied" : "Allowed", !isDeny);
+  };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
-    if (!b) return;
-    const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
+    if (b?.dataset.oid) pick(b.dataset.oid);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose, pick };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -3155,10 +3177,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
     }
     else if (e.type === "permission") {
-      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
+      // P-VIZ.APPROVE1 (ADR-0655): Visualize took the tapped ask; a replay of one already answered leaves it again.
+      const resolved: { type: string; id: string } = { type: "permission-resolved", id: e.id };
+      if (answeredPermissions.has(e.id)) { vizBus.emit("main", "chat", resolved); return; }
+      if (permCards.has(e.id)) return;
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      const card = createPermissionCard(e, () => {
+        answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null;
+        chatAsks.delete(e.id);
+        vizBus.emit("main", "chat", resolved); // answered anywhere (chat, voice, Visualize, turn end)
+      });
       permCards.set(e.id, card);
+      chatAsks.set(e.id, card.pick);
       armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
@@ -6503,7 +6533,7 @@ function sceneFor(season: SeasonDef | undefined): SceneId | null {
 }
 function backdropMotion(): BackdropMotion {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
-  const tier = perfWatch.tier();
+  const tier = baseTier(perfWatch.tier());
   return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
 }
 /** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
@@ -10715,6 +10745,12 @@ const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 const prevZoomByLane = new Map<PrevLane, number>();
 const prevWheelZoomByLane = new Set<PrevLane>();
+// P-PREVIEW.FIT1: each tab fits an oversized document by default (a 1920 px video card in a 780 px panel was cut off
+// at 100% with no way to pan). The document reports its own size (preview_bridge PREVIEW_ZOOM_JS); a tab leaves fit
+// mode once the user picks a zoom, and Fit puts it back. `grows` bounds a page sized in vw that widens with its frame.
+const prevContentByLane = new Map<PrevLane, PreviewContentSize & { grows: number }>();
+const prevManualZoomLanes = new Set<PrevLane>();
+let prevEffectiveZoom = 1;
 let previewPanEnabled = false;
 let previewPanPointer: number | null = null;
 let previewPanX = 0, previewPanY = 0;
@@ -10728,7 +10764,7 @@ function endPreviewPan(): void {
 }
 function setPreviewPan(enabled: boolean): void {
   endPreviewPan();
-  previewPanEnabled = enabled && prevLane === "yours" && !!prevPathByLane.yours;
+  previewPanEnabled = enabled && !!prevPathByLane[prevLane]; // P-PREVIEW.FIT1: every tab pans, not only Yours
   if (previewPanEnabled) setDrawTool("off");
   const surface = $("#prevPanSurface");
   if (surface) surface.hidden = !previewPanEnabled;
@@ -10787,11 +10823,15 @@ function wirePreviewPan(): void {
 }
 const previewWheelSteps = new PreviewWheelSteps();
 const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
+/** P-PREVIEW.FIT1: the zoom on screen (fit or picked) in the desktop mode; the picked zoom in a device frame. */
+const shownPreviewZoom = (): number => (prevDevice === "desktop" ? prevEffectiveZoom : previewZoom());
 function syncPreviewZoomControls(): void {
   const pan = $("#prevPan") as HTMLButtonElement | null;
-  if (pan) { pan.hidden = prevLane !== "yours"; pan.disabled = !prevPathByLane.yours; }
-  const zoom = previewZoom();
+  if (pan) { pan.hidden = false; pan.disabled = !prevPathByLane[prevLane]; }
+  // P-PREVIEW.FIT1: the readout and the step buttons follow the zoom on screen (a fitted page reads, say, 41%).
+  const zoom = shownPreviewZoom();
   const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  const fit = $("#prevZoomFit"); if (fit) fit.setAttribute("aria-pressed", String(!prevManualZoomLanes.has(prevLane)));
   const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
   const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
   const wheelOn = prevWheelZoomByLane.has(prevLane);
@@ -10803,12 +10843,13 @@ function sendPreviewZoomMode(): void {
 }
 function setPreviewZoom(value: number): void {
   if (!Number.isFinite(value)) return;
-  const old = previewZoom();
+  const old = shownPreviewZoom();
   const zoom = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, value));
   const viewport = $("#prevViewport");
   const x = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / old : 0;
   const y = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / old : 0;
   prevZoomByLane.set(prevLane, zoom);
+  prevManualZoomLanes.add(prevLane); // a picked zoom leaves fit mode until Fit is pressed
   applyDeviceScale();
   if (viewport) { viewport.scrollLeft = x * zoom - viewport.clientWidth / 2; viewport.scrollTop = y * zoom - viewport.clientHeight / 2; }
   syncPreviewZoomControls();
@@ -10817,15 +10858,43 @@ function wheelPreviewZoom(delta: unknown, mode: unknown): void {
   if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
   const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
   // Whole 10% steps: wheel travel accumulates, and each notch's worth moves one step on the grid.
-  let zoom = previewZoom();
+  let zoom = shownPreviewZoom();
   for (let n = previewWheelSteps.feed(pixels); n !== 0; n -= Math.sign(n)) zoom = stepPreviewZoom(zoom, n > 0 ? 1 : -1);
-  if (zoom !== previewZoom()) setPreviewZoom(zoom);
+  if (zoom !== shownPreviewZoom()) setPreviewZoom(zoom);
 }
+/** P-PREVIEW.FIT1: which preview tab's frame posted a message (null: not one of ours). */
+function previewLaneOf(source: MessageEventSource | null): PrevLane | null {
+  if (!source) return null;
+  for (const l of ["yours", "agent"]) if (laneFrame(l)?.contentWindow === source) return l;
+  for (const [id, f] of laneTabFrames) if (f.contentWindow === source) return id;
+  return null;
+}
+
+/** P-PREVIEW.FIT1: a document said how big it is. Only content that overflows its frame counts (a responsive page
+ *  that fills whatever frame it gets has no size of its own). The largest overflow seen for this document is kept,
+ *  since once the frame is widened to it the page no longer overflows; a fresh document (zoom-ready) starts over. */
+function notePreviewContent(lane: PrevLane, d: { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown }): void {
+  if (d.__lucid === "preview-zoom-ready") { prevContentByLane.delete(lane); if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); } return; }
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  if (num(d.vw) < 40 || num(d.vh) < 40) return; // a hidden tab's frame has no layout yet; it reports again on show
+  const fixed = d.fixed === true;
+  const w = num(d.w) > num(d.vw) + 1 ? num(d.w) : 0;
+  const h = fixed && num(d.h) > num(d.vh) + 1 ? num(d.h) : 0;
+  const prev = prevContentByLane.get(lane);
+  if (!w && !h && !prev) return;
+  const next = { w: Math.max(prev?.w ?? 0, w), h: Math.max(prev?.h ?? 0, h), fixed: fixed || !!prev?.fixed, grows: prev?.grows ?? 0 };
+  if (prev && next.w === prev.w && next.h === prev.h) return;
+  if (prev && ++next.grows > 3) return; // a page sized in vw/vh grows with its frame: stop chasing it
+  prevContentByLane.set(lane, next);
+  if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); }
+}
+
 function wirePreviewZoom(): void {
   wirePreviewPan();
-  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), -1)));
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), -1)));
   $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
-  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), 1)));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), 1)));
+  $("#prevZoomFit")?.addEventListener("click", () => { prevManualZoomLanes.delete(prevLane); applyDeviceScale(); syncPreviewZoomControls(); }); // P-PREVIEW.FIT1
   $("#prevWheelZoom")?.addEventListener("click", () => {
     if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
     syncPreviewZoomControls(); sendPreviewZoomMode();
@@ -10838,6 +10907,12 @@ function wirePreviewZoom(): void {
   $("#prevZoomControls")?.addEventListener("wheel", onWheel, { passive: false });
   $("#prevViewport")?.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("message", (event) => {
+    // P-PREVIEW.FIT1: a document reports its size from any tab (hidden ones too), so switching to it lands fitted.
+    const sized = event.data as { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown } | null;
+    if (sized && typeof sized === "object" && (sized.__lucid === "preview-size" || sized.__lucid === "preview-zoom-ready")) {
+      const lane = previewLaneOf(event.source);
+      if (lane !== null) notePreviewContent(lane, sized);
+    }
     const frame = laneFrame();
     if (!frame || frame.hidden || event.source !== frame.contentWindow) return;
     const data = event.data;
@@ -10900,11 +10975,20 @@ function applyDeviceScale(): void {
   const viewport = $("#prevViewport"), stage = $("#prevStage") as HTMLElement | null;
   if (!viewport || !stage || !viewport.clientWidth || !viewport.clientHeight) return;
   const device = prevDevice !== "desktop", d = PREV_DEVICES[prevDevice];
-  const w = Math.max(1, viewport.clientWidth - (device ? 28 : 0));
-  const h = Math.max(1, viewport.clientHeight - (device ? 28 : 0));
-  const fit = device ? Math.max(0.2, Math.min(1, w / d.w, h / d.h)) : 1;
-  stage.style.width = `${device ? d.w : w}px`;
-  stage.style.height = `${device ? d.h : h}px`;
+  if (!device) {
+    // P-PREVIEW.FIT1: the desktop frame is as large as the content needs, and fits the panel unless a zoom was picked.
+    const L = previewLayout({ viewportW: viewport.clientWidth, viewportH: viewport.clientHeight, content: prevContentByLane.get(prevLane) ?? null, fit: !prevManualZoomLanes.has(prevLane), manualZoom: previewZoom() });
+    stage.style.width = `${L.stageW}px`;
+    stage.style.height = `${L.stageH}px`;
+    stage.style.zoom = String(L.zoom);
+    prevEffectiveZoom = L.zoom;
+    return;
+  }
+  const w = Math.max(1, viewport.clientWidth - 28);
+  const h = Math.max(1, viewport.clientHeight - 28);
+  const fit = Math.max(0.2, Math.min(1, w / d.w, h / d.h));
+  stage.style.width = `${d.w}px`;
+  stage.style.height = `${d.h}px`;
   stage.style.zoom = String(fit * previewZoom());
 }
 function applyDevice(device: PrevDevice): void {
@@ -18160,6 +18244,10 @@ const pluginsFlyout = createPluginsFlyout({
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
+  // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
+  worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
+  worldExportUrl: (id) => bridge.worldExportUrl(id),
+  openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
@@ -18525,24 +18613,26 @@ function wire(): void {
     hideKgResults();
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
-  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal (-> ultra -> cinematic, P-VIZ.GPU1:
+  // the graph treats both as full); auto follows battery, CPU and GPU.
   $("#kgPerf")?.addEventListener("click", () => {
     const m = perfWatch.cycleMode();
     paintPerfChip();
     kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
     showToast({
       title: `Performance mode: ${m}`,
-      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+      desc: m === "auto" ? `Following battery, CPU and GPU (now: ${perfWatch.tier()}).`
         : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
         : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
-        : "Full fidelity.",
+        : m === "full" ? "Full fidelity."
+        : `Full fidelity here; Visualize renders its ${m} tier.`,
       timeout: 2600,
     });
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || baseTier(perfWatch.tier()) !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
@@ -18609,6 +18699,11 @@ function wire(): void {
   $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
+  // P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp disables while LUCID sits in the background shows up on return.
+  window.addEventListener("focus", () => void refreshRelogin());
+  window.addEventListener("resize", () => placeReloginNotice());
+  void refreshRelogin(true); // at boot, not only once omp's model list lands: a cold omp can take a while
+
   void showReleaseCleanupNotice(); // ADR-0542
   void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0574)
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
@@ -19036,7 +19131,8 @@ function wire(): void {
     fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
-    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving (P-FLEET.DOCK1: or any turn it did not start)
+    fleetTranscript: bridge.fleetTranscript, // P-FLEET.DOCK1: a card seeds from the lane's recorded turns
     fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
     fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
@@ -19182,7 +19278,17 @@ function wire(): void {
   // header links to the other, so neither choice ever strands you. One fleet view at a time: the orbit
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
-  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
+  // P-FLEET.DOCK1: the pin alone used to route the press, so with the orbit pinned a MINIMIZED grid was destroyed
+  // (opening the orbit closes the grid) and never came back. What is on screen decides first: a minimized grid is
+  // restored, a shown view closes, and only with nothing up does the pin pick what opens. The grid is brought up
+  // with the orbit closed, so it is never left underneath it.
+  $("#ctFleet")?.addEventListener("click", () => {
+    const act = fleetButtonAction({ home: fleetHome(), grid: fleetGridState(), orbit: fleetOrbitShown() });
+    if (act === "restore-grid" || act === "open-grid") { closeFleetOrbit(); openFleetGrid(); }
+    else if (act === "close-grid") closeFleetGrid();
+    else if (act === "close-orbit") closeFleetOrbit();
+    else openFleetOrbit();
+  });
   // P-STUCK-SHOW.1 (ADR-0519): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.
@@ -19218,7 +19324,10 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
     fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
     mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
-      role: m.classList.contains("user") ? "user" as const : "assistant" as const, text: (m.querySelector(".text")?.textContent ?? "").trim(),
+      // an assistant's prose is .text > .stream; its siblings are the turn HUD and hidden restart banners, whose
+      // button labels would glue into the panel's text ("Restart agentStop command")
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const,
+      text: chatProse(m.querySelector(".text > .stream") ?? m.querySelector(".text")),
     })),
     sendMain: (text) => {
       if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
@@ -19230,6 +19339,11 @@ function wire(): void {
     },
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
+    openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
+    // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
+    fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
+    respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 
@@ -20602,6 +20716,7 @@ async function loadConfig(newCycle = true): Promise<void> {
     if (step.action === "adopt") {
       if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
       else void maybeApplyDefaultModel(model);
+      void refreshRelogin(); // P-AUTH.RELOGIN1: boot, respawn and refresh all re-check for a lost sign-in
     } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
@@ -20698,10 +20813,20 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       // built at spawn, and a broker that lingers instead of exiting never triggers the server-side
       // respawn. A plain loadConfig() would then show a stale picker underneath a toast claiming the
       // models updated. refreshConfig() respawns first; loadConfig() then applies the fresh state.
+      // P-AUTH.RELOGIN1 (ADR-0640): the respawned session lands on the sticky pick (startup_model.ts), so the
+      // model this sign-in's loss displaced goes there BEFORE the respawn; the pick made during the outage is kept
+      // for the toast's "Keep" and put back if the displaced model is not offered.
+      const restoring = prov.restoreModel && state.userRole !== "lucid-agent" ? prov.restoreModel : "";
+      const kept = restoring ? await bridge.chosenModel().catch(() => "") : "";
+      if (restoring) await bridge.setChosenModel(restoring).catch(() => null);
       try { await bridge.refreshConfig(); } catch { /* fall through: loadConfig still refreshes what it can */ }
+      // P-AUTH.RELOGIN1 (ADR-0640): adopt THIS snapshot. Before, the success path left state.auth stale, so
+      // claudeAuthed() kept the API-only Claude rows greyed and the re-login notice stayed up after a good login.
+      if (a) state.auth = a;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      renderReloginNotice();
+      if (!(restoring && (await restoreDisplacedModel(prov.oauthId, providerShortName(prov.name), restoring, kept)))) showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
       return true;
     }
     return false;
@@ -20716,6 +20841,99 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       if (await check()) return;
     }
   } finally { document.removeEventListener("visibilitychange", onVisible); }
+}
+
+// ── P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone. The engine flags it on /api/auth
+// (`relogin`); the titlebar shows a callout under the model pill with a Login button, the pill's dot turns
+// amber, and the picker leads with the same Login. "Not now" hides it for this launch only.
+const reloginDismissed = new Set<string>();
+let reloginNode: HTMLElement | null = null;
+let reloginCheckedAt = 0;
+
+/** Re-read the auth snapshot and repaint the notice. Throttled: boot, every config adopt and window focus call it. */
+async function refreshRelogin(force = false): Promise<void> {
+  if (!force && Date.now() - reloginCheckedAt < 15_000) return;
+  reloginCheckedAt = Date.now();
+  const a = await bridge.auth().catch(() => null);
+  if (!a) return;
+  state.auth = a;
+  renderReloginNotice();
+}
+
+function placeReloginNotice(): void {
+  const badge = $("#modelBadge");
+  if (!reloginNode || !badge) return;
+  const r = badge.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - reloginNode.offsetWidth - 8));
+  reloginNode.style.top = `${Math.round(r.bottom + 10)}px`;
+  reloginNode.style.left = `${Math.round(left)}px`;
+  reloginNode.style.setProperty("--arrow-x", `${Math.round(Math.max(14, r.left + r.width / 2 - left - 5))}px`);
+}
+
+function renderReloginNotice(): void {
+  const targets = reloginTargets(state.auth, reloginDismissed);
+  $("#modelBadge")?.classList.toggle("needs-login", reloginTargets(state.auth, new Set()).length > 0);
+  // An open picker already leads with the same Login; the callout would sit on top of it.
+  if (!targets.length || cfgClose) { reloginNode?.remove(); reloginNode = null; return; }
+  // The lost provider's models are not in the picker, so a catalog name is usually missing: read the id instead.
+  const restoreName = (v: string) => (state.config.find((c) => c.id === "model")?.options.some((o) => o.value === v) ? modelLabel(v) : humanModelId(v));
+  const { title, body } = reloginCopy(targets, state.auth?.upgradedFrom, (p) => (p.restoreModel ? restoreName(p.restoreModel) : undefined));
+  const html = `<div class="relogin-h">${icon("alertBadge", 15)}<span id="reloginTitle">${esc(title)}</span><button class="relogin-x" type="button" data-relogin-later aria-label="Not now">${icon("close", 13)}</button></div>
+    <p class="relogin-b">${esc(body)}</p>
+    <div class="relogin-acts">${targets.map((p) => `<button class="btn-mini ok" type="button" data-relogin="${esc(p.oauthId)}" data-tip="${esc(LOGIN_TIP)}" data-tip-side="bottom">${icon("user", 12)} ${esc(targets.length > 1 ? `Log in to ${providerShortName(p.name)}` : "Log in")}</button>`).join("")}<button class="btn-mini" type="button" data-relogin-later>Not now</button></div>`;
+  if (!reloginNode) {
+    // Non-modal: it never takes focus from the composer, so it is a labelled live region, not a dialog.
+    reloginNode = el(`<div class="relogin-notice" role="region" aria-live="polite" aria-labelledby="reloginTitle"></div>`);
+    const later = () => {
+      for (const p of reloginTargets(state.auth, reloginDismissed)) reloginDismissed.add(p.oauthId);
+      renderReloginNotice();
+      $("#modelBadge")?.focus(); // focus returns to the control the callout belongs to
+    };
+    reloginNode.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      const go = t.closest("[data-relogin]") as HTMLElement | null;
+      if (go) { loginWithProvider(go.dataset.relogin!); return; }
+      if (t.closest("[data-relogin-later]")) later();
+    });
+    reloginNode.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); later(); } });
+    document.body.appendChild(reloginNode);
+  }
+  if (reloginNode.dataset.html !== html) { reloginNode.innerHTML = html; reloginNode.dataset.html = html; }
+  placeReloginNotice();
+}
+
+/** One Login click, from the notice or the picker. Flows that need the card's code box (device codes, the
+ *  Copilot enterprise prompt) open the provider's card in the Provider Hub; the rest go straight to the browser. */
+function loginWithProvider(oauthId: string): void {
+  reloginDismissed.add(oauthId); // the sign-in is under way; the amber pill dot and the picker row stay until it lands
+  cfgClose?.();
+  renderReloginNotice();
+  const prov = [...(state.auth?.majors ?? []), ...(state.auth?.others ?? []), ...(state.auth?.gateway ?? [])].find((p) => p.oauthId === oauthId);
+  if (oauthId === "github-copilot" || DEVICE_FLOW_IDS[oauthId] || SHOW_CODE_FLOW_IDS[oauthId]) { openProviderHub(undefined, prov?.id); return; }
+  void startProviderOauth(oauthId, null, () => renderReloginNotice());
+}
+
+/** After a sign-in lands: put the user back on `target`, the model that sign-in's loss displaced (the "stuck
+ *  on Terra after I logged back into Claude" fix). Logging back in IS the deliberate choice, so it stays the
+ *  sticky pick (the caller wrote it before the respawn); `kept`, the pick made during the outage, is one click
+ *  away in the toast. True when it announced a switch (the caller skips its own toast). */
+async function restoreDisplacedModel(oauthId: string, provName: string, target: string, kept: string): Promise<boolean> {
+  const offered = !!state.config.find((c) => c.id === "model")?.options.some((o) => o.value === target);
+  if (!offered || unavailableReason(target)) {
+    // Not offered (retired, or omp still warming): give the outage pick back, keep the memory for next time.
+    if (kept) void bridge.setChosenModel(kept).catch(() => {});
+    return false;
+  }
+  void bridge.reloginRestored(oauthId).catch(() => {});
+  if (state.model !== target) await applyConfig("model", target, { system: true });
+  if (!kept || kept === target) return false; // never left it: nothing to announce
+  showToast({
+    title: `Back on ${modelLabel(target)}`,
+    desc: `You logged in to ${provName} again, so new turns use the model you had before.`,
+    actions: [{ label: "OK", kind: "ok" }, { label: `Keep ${modelLabel(kept)}`, run: () => void applyConfig("model", kept) }],
+    timeout: 10_000,
+  });
+  return true;
 }
 
 async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
@@ -21376,7 +21594,7 @@ function hubLocalSectionHtml(): string {
   return `<div class="provhub-sec"><div class="provhub-sec-h"><b>Local &amp; self-hosted</b><span>your hardware \u00b7 unified NGINX endpoint</span></div>
     <div class="provhub-grid">${configured}${presets}${addTile}</div></div>`;
 }
-function openProviderHub(onClose?: () => void): void {
+function openProviderHub(onClose?: () => void, focusId?: string): void {
   hubClose?.();
   const ov = el(`<div id="provHub" class="modal-ov">
     <div class="modal provhub" role="dialog" aria-modal="true" aria-labelledby="provHubTitle">
@@ -21395,7 +21613,12 @@ function openProviderHub(onClose?: () => void): void {
   // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
   const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
     <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
-  const redraw = () => { body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  // P-AUTH.RELOGIN1 (ADR-0640): `focusId` opens one provider's card (a Login click for a flow that needs the
+  // card's code box). The background redraws below would collapse it, so it re-opens until the user clicks a tile.
+  const redraw = () => {
+    body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml();
+    if (focusId) (body.querySelector(`[data-hub-tile="${CSS.escape(focusId)}"]`) as HTMLElement | null)?.click();
+  };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
   hubClose = close;
@@ -21483,6 +21706,7 @@ function openProviderHub(onClose?: () => void): void {
     // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
     const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
     if (tile && !t.closest(".provhub-config")) {
+      if (e.isTrusted) focusId = undefined; // the user took over: later redraws leave the accordion alone
       const wrap = tile.closest(".provhub-item") as HTMLElement;
       const opening = !wrap.classList.contains("open");
       for (const other of $$(".provhub-item.open", body)) other.classList.remove("open"); // accordion
@@ -21495,6 +21719,24 @@ function openProviderHub(onClose?: () => void): void {
       }
     }
   });
+  if (focusId) redraw(); // the first redraw ran before the click handler existed
+}
+
+/** P-AUTH.RELOGIN1 (ADR-0640): the Login row under the picker's model name. A lost sign-in leads as an amber
+ *  "Log in to X again"; "Login" opens every subscription sign-in with its state. Open by default for a new
+ *  user with nothing connected, so the first thing the picker offers is a way to get models. */
+function loginRowHtml(): string {
+  const choices = loginChoices(state.auth);
+  if (!choices.length) return "";
+  const open = configuredProviderCount(state.auth) === 0;
+  const tip = `data-tip="${esc(LOGIN_TIP)}" data-tip-side="right"`;
+  const lost = choices.filter((c) => c.state === "relogin").map(({ provider: p }) =>
+    `<button class="cfg-login-btn warn" type="button" data-login="${esc(p.oauthId)}" ${tip}>${icon("alertBadge", 13)}<span>Log in to ${esc(providerShortName(p.name))} again</span></button>`).join("");
+  const rows = choices.map(({ provider: p, state: st }) => `<div class="cfg-login-row"><span class="nm">${esc(providerShortName(p.name))}</span>${st === "signed-in"
+    ? `<span class="cfg-login-st">${icon("check", 11)}<span>Signed in</span></span>`
+    : `<button class="btn-mini ${st === "relogin" ? "warn" : "ok"}" type="button" data-login="${esc(p.oauthId)}" ${tip}>${st === "relogin" ? "Log in again" : "Login"}</button>`}</div>`).join("");
+  return `<div class="cfg-login">${lost}<button class="cfg-login-btn" type="button" data-login-toggle aria-expanded="${open}" ${tip}>${icon("user", 13)}<span>Login</span>${icon("chevronDown", 12)}</button>
+    <div class="cfg-login-list"${open ? "" : " hidden"}>${rows}</div></div>`;
 }
 
 function openConfigPopover(anchor: HTMLElement): void {
@@ -21514,6 +21756,7 @@ function openConfigPopover(anchor: HTMLElement): void {
   const modelPh = models.length ? `Search ${models.length} models…` : "Search models…";
   const modelSec = showModel ? `<div class="cfg-sec">
       <div class="cfg-lbl">Model <span class="cur">${esc(modelCur)}</span><span class="cfg-loading" id="cfgLoading"${modelsPending ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
+      ${loginRowHtml()}
       <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="${esc(modelPh)}" /></div>
       <div class="cfg-list" id="cfgModelList"></div>
       <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
@@ -21528,8 +21771,20 @@ function openConfigPopover(anchor: HTMLElement): void {
           `<div class="cfg-dd-item ${o.value === think.currentValue ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(prettyLevel(o.name))} thinking|${esc(THINK_DESC[o.value] ?? "")}" data-tip-side="right"><span class="tick">${icon("check", 13)}</span><span>${esc(prettyLevel(o.name))}</span></div>`).join("")}</div>
       </div></div>` : "";
 
-  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); });
+  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); renderReloginNotice(); });
   cfgClose = close;
+  renderReloginNotice(); // the picker leads with the same Login, so the titlebar callout steps aside
+  // P-AUTH.RELOGIN1: the Login row under the model name (a lost sign-in leads; "Login" opens the provider list).
+  node.querySelector(".cfg-login")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const go = t.closest("[data-login]") as HTMLElement | null;
+    if (go) { loginWithProvider(go.dataset.login!); return; }
+    const tg = t.closest("[data-login-toggle]") as HTMLElement | null;
+    if (tg) {
+      const list = node.querySelector(".cfg-login-list") as HTMLElement | null;
+      if (list) { list.hidden = !list.hidden; tg.setAttribute("aria-expanded", String(!list.hidden)); }
+    }
+  });
 
   // searchable model list
   if (showModel) {

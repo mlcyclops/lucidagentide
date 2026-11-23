@@ -1036,6 +1036,31 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   } catch { return null; }
 });
 
+// P-VIZ.GPU1 (ADR-0651): read-only GPU facts for the renderer's quality tier (renderer/gpu_probe.ts classifies
+// them with the page's WebGL string). Only the fields the classifier reads leave main: the feature status strings,
+// each device's PCI vendor/device id and whether Chromium uses it, and the GL strings when the basic info has them.
+// Null on any failure (the WebGL string alone then decides).
+ipcMain.handle("lucid:gpuInfo", async () => {
+  try {
+    const featureStatus: Record<string, string> = {};
+    for (const [k, v] of Object.entries(app.getGPUFeatureStatus() as unknown as Record<string, unknown>)) if (typeof v === "string") featureStatus[k] = v;
+    const info = (await app.getGPUInfo("basic")) as { gpuDevice?: unknown; auxAttributes?: { glRenderer?: unknown; glVendor?: unknown } } | null;
+    const devices: { vendorId: number; deviceId: number; active: boolean }[] = [];
+    const gpuDevice = info?.gpuDevice;
+    if (Array.isArray(gpuDevice)) {
+      for (const d of gpuDevice as ({ vendorId?: unknown; deviceId?: unknown; active?: unknown } | null)[]) {
+        if (typeof d?.vendorId === "number" && typeof d.deviceId === "number") devices.push({ vendorId: d.vendorId, deviceId: d.deviceId, active: d.active === true });
+      }
+    }
+    const aux = info?.auxAttributes;
+    return {
+      featureStatus, devices,
+      glRenderer: typeof aux?.glRenderer === "string" ? aux.glRenderer.slice(0, 200) : null,
+      glVendor: typeof aux?.glVendor === "string" ? aux.glVendor.slice(0, 200) : null,
+    };
+  } catch { return null; }
+});
+
 // ── P-BROWSER.1 (wave 2): the agent-controlled VISIBLE browser window ────────────────────────────────
 // A real Chromium BrowserWindow the AGENT drives through the dev server's command mailbox
 // (desktop/browser_control.ts): agent tools enqueue on /api/browser/*, this loop drains

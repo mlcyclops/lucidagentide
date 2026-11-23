@@ -66,8 +66,9 @@ Every overlay a PR adds names its tier here. Settings currently has no tier: it 
 |---|---|---|
 | Content | auto, 26 | Skills/Knowledge/Meetings asides, inspector; `#prevCurtain` preview chip at 26 inside `main.center` (ADR-0621) |
 | Dock | 55 | `.share-dock` / `#fleetDock.fleet-dock` (5471) |
-| Side panel | 90 | `.ide-panel` (5052) |
+| Side panel | 90 | `.ide-panel` (5052); `#preview` Preview fly-out (3801), above a floating Fleet dock (ADR-0645) |
 | Full-screen view | 92, 93 | `.orbit-view` Fleet Orbit (7005); `#vizView` Visualize (93, ADR-0622) |
+| Titlebar callout | 94 | `.relogin-notice` re-login callout under the model pill (ADR-0640); one below Popover so an opened picker covers it |
 | Popover | 95, 96 | `.popover` (2918), `.vdock` voice panel (3202) |
 | Settings | 97, 98 | `#setScrim`, `#settings` window or panel (ADR-0615); popovers opened from Settings lift to 99 |
 | Palette | 100, 101 | `#scrim` (2885), `.palette` (2889) |
