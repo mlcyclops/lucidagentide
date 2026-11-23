@@ -18,6 +18,7 @@ import { $, el } from "./dom.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P-FLEET.L18: the on-orbit form clones too
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
+import { webglRenderer } from "./gpu_probe.ts"; // P-VIZ.GPU1 (ADR-0651): one shared GPU probe
 import { popover, setTip, showToast } from "./ui.ts";
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): repo + push target per spoke
@@ -153,25 +154,13 @@ function writeModeStore(patch: { user?: OrbitMode | null; measured?: number }): 
   try { localStorage.setItem(MODE_KEY, JSON.stringify(next)); } catch { /* degrade to per-session memory */ }
 }
 
-/** The unmasked WebGL renderer, or null when WebGL itself is unavailable (a software signal too).
- *  Probed once: context creation is not free and the answer does not change mid-session. */
-let webglRenderer: string | null | undefined;
-function probeWebgl(): string | null {
-  if (webglRenderer !== undefined) return webglRenderer;
-  try {
-    const gl = document.createElement("canvas").getContext("webgl") as WebGLRenderingContext | null;
-    const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
-    webglRenderer = gl ? String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : null;
-  } catch { webglRenderer = null; }
-  return webglRenderer;
-}
-
 function resolveMode(): OrbitMode {
   const stored = readModeStore();
+  const gl = webglRenderer(); // P-VIZ.GPU1 (ADR-0651): the shared, once-per-session probe (gpu_probe.ts)
   return orbitMode({
     override: stored.user ?? null,
     reducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-    webglRenderer: probeWebgl(),
+    webglRenderer: gl.missing ? null : (gl.renderer ?? ""), // no WebGL at all is itself a software signal
     deviceMemoryGB: "deviceMemory" in navigator && typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : undefined,
     measuredFps: stored.measured,
   });
@@ -720,6 +709,11 @@ const folderTail = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/
 
 let deps: FleetOrbitDeps | null = null;
 let view: HTMLElement | null = null;
+/** P-FLEET.DOCK1: open as far as the user is concerned. `view.hidden` lags a close by its 220 ms fade, so it cannot
+ *  answer "is the orbit up": a press during the fade closed the closing view again and opened nothing. */
+let shown = false;
+/** The fade's pending hide, cancelled by a reopen: left running, it hid the orbit that had just opened. */
+let hideTimer = 0;
 let pollTimer: number | null = null;
 let lastStatus: FleetStatusView | null = null;
 /** This hub's lanes from the last poll (the ring's local half; remote spokes take the slots after them). */
@@ -765,7 +759,12 @@ function onSpokeHotkey(e: KeyboardEvent): void {
 }
 
 export function toggleFleetOrbit(): void {
-  if (view && !view.hidden) closeFleetOrbit(); else openFleetOrbit();
+  if (shown) closeFleetOrbit(); else openFleetOrbit();
+}
+
+/** P-FLEET.DOCK1: whether the orbit is up (or opening), for the Fleet button's decision in app.ts. */
+export function fleetOrbitShown(): boolean {
+  return shown;
 }
 
 export function openFleetOrbit(): void {
@@ -774,6 +773,8 @@ export function openFleetOrbit(): void {
   deps.closeRemoteView();
   if (!view) view = buildView();
   if (!view.isConnected) document.body.appendChild(view);
+  window.clearTimeout(hideTimer); hideTimer = 0;
+  shown = true;
   view.hidden = false;
   canvas?.setVisible(true);
   applyMode(resolveMode());
@@ -792,12 +793,13 @@ export function openFleetOrbit(): void {
 }
 
 export function closeFleetOrbit(): void {
-  if (!view || view.hidden) return;
+  if (!view || !shown) return;
+  shown = false;
   if (openedPanel) togglePanel(openedPanel); // a hidden map keeps no half-filled form (or typed token) behind
   if (fpsGuard === "measuring") { fpsGuard = "armed"; fpsGen++; } // abandon a straddling measurement; the next open re-measures
   view.classList.remove("open");
   const v = view;
-  window.setTimeout(() => { v.hidden = true; canvas?.setVisible(false); }, 220);
+  hideTimer = window.setTimeout(() => { hideTimer = 0; v.hidden = true; canvas?.setVisible(false); }, 220);
   if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null; }
   if (beatTimer != null) { window.clearInterval(beatTimer); beatTimer = null; }
   window.removeEventListener("resize", onResize);

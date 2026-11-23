@@ -9,10 +9,24 @@
 //
 // Intensity is the edge's 0..1 value from viz_model.nodeIntensity (est. tok/s on a log scale), so every curve
 // here is continuous in it: no thresholds that make a conduit jump when a stream speeds up.
+//
+// P-WORLDS.FX1 (ADR-0652): a third style for worlds, "plasma-light" (a plasma stream that reads on light skies),
+// the packet tokens (orb, coin, petal, snowflake, spark, custom) and their per-tier budgets: the coin cap, the
+// coin's reeded edge, spark trails from ultra, and the token sprite size.
 
-/** The edge styles: an anime plasma conduit with token particles, or a professional thin line with streaming
- *  red light particles. */
-export type EdgeStyle = "plasma" | "fiber";
+/** The edge styles: an anime plasma conduit with token particles, a professional thin line with streaming red
+ *  light particles, or (worlds, ADR-0652) a plasma stream for light skies: a saturated core tube in an outer
+ *  sheath with normal-blended packets. */
+export type EdgeStyle = "plasma" | "fiber" | "plasma-light";
+
+/** True for the two plasma styles (a conduit with packets); false for the fiber line. */
+export function isPlasmaStyle(style: EdgeStyle): boolean {
+  return style !== "fiber";
+}
+
+/** ADR-0652: the packet shape on a world's plasma edges (viz_world_api.WorldToken). */
+export type EdgeToken = "orb" | "coin" | "petal" | "snowflake" | "spark" | "custom";
+export const EDGE_TOKENS: readonly EdgeToken[] = ["orb", "coin", "petal", "snowflake", "spark", "custom"];
 
 /** The scene style (viz_model.VizStyle) picks the edge style. */
 export function edgeStyleFor(style: "anime" | "professional"): EdgeStyle {
@@ -21,7 +35,8 @@ export function edgeStyleFor(style: "anime" | "professional"): EdgeStyle {
 
 // ------------------------------------------------------------------------------------ budgets
 
-export type EdgeDetail = "full" | "reduced" | "minimal";
+/** The quality tier (perf_tier.PerfTier): ultra and cinematic (ADR-0651) sit above full. */
+export type EdgeDetail = "full" | "reduced" | "minimal" | "ultra" | "cinematic";
 
 export interface EdgeBudget {
   /** Rings along an open edge (samples of its curve). */
@@ -40,18 +55,94 @@ export interface EdgeBudget {
   pulses: number;
   /** Stream particles alive at once across every edge: the plasma's token particles, the fiber's red streaks. */
   tokens: number;
+  /** ADR-0652: the plasma-light stream's outer sheath (one extra draw per edge). */
+  sheath: boolean;
+  /** ADR-0652: spark trails alive at once (plasma-light, ultra and cinematic only), on top of the pool. */
+  sparks: number;
+  /** ADR-0652: coin tokens alive at once (instanced meshes, so far fewer than sprite tokens). */
+  coins: number;
+  /** ADR-0652: the ridges around a coin's reeded edge (0: a plain rim). */
+  coinRidges: number;
+  /** ADR-0652: the token sprite and coin face canvas, in pixels (square). */
+  tokenTex: number;
 }
 
 /** The tier's edge budget. `particles` is the tier's flow budget (viz_model.VizTierOpts.particles): the orbs
  *  take one fortieth of it, the stream particles one fifth (full 150 + 1200, reduced 63 + 500, minimal
- *  15 + 120), all in one instanced draw; reduced motion (no motion) has no particles at all. */
+ *  15 + 120), all in one instanced draw; reduced motion (no motion) has no particles at all. Ultra and
+ *  cinematic (ADR-0651) keep full's conduit look on smoother curves and add spark trails (a quarter, and
+ *  cinematic two fifths, of the stream budget). */
 export function edgeBudget(detail: EdgeDetail, particles: number, motion: boolean): EdgeBudget {
   const pulses = motion ? Math.max(0, Math.round(particles / 40)) : 0;
   const tokens = motion ? Math.max(0, Math.round(particles / 5)) : 0;
-  if (detail === "full") return { rings: 64, loopRings: 72, radial: 12, octaves: 4, warp: true, halo: true, pulses, tokens };
-  if (detail === "reduced") return { rings: 40, loopRings: 48, radial: 8, octaves: 2, warp: true, halo: false, pulses, tokens };
-  return { rings: 24, loopRings: 32, radial: 6, octaves: 1, warp: false, halo: false, pulses, tokens };
+  const coins = Math.min(tokens, COIN_CAP[detail]);
+  const fx = { coins, coinRidges: COIN_RIDGES[detail], tokenTex: TOKEN_TEX[detail] };
+  if (detail === "cinematic") return { rings: 96, loopRings: 104, radial: 12, octaves: 4, warp: true, halo: true, pulses, tokens, sheath: true, sparks: Math.round(tokens * 0.4), ...fx };
+  if (detail === "ultra") return { rings: 80, loopRings: 88, radial: 12, octaves: 4, warp: true, halo: true, pulses, tokens, sheath: true, sparks: Math.round(tokens / 4), ...fx };
+  if (detail === "full") return { rings: 64, loopRings: 72, radial: 12, octaves: 4, warp: true, halo: true, pulses, tokens, sheath: true, sparks: 0, ...fx };
+  if (detail === "reduced") return { rings: 40, loopRings: 48, radial: 8, octaves: 2, warp: true, halo: false, pulses, tokens, sheath: true, sparks: 0, ...fx };
+  return { rings: 24, loopRings: 32, radial: 6, octaves: 1, warp: false, halo: false, pulses, tokens, sheath: false, sparks: 0, ...fx };
 }
+
+/** Coins alive at once per tier (each is a small lit mesh, not a quad). */
+const COIN_CAP: Readonly<Record<EdgeDetail, number>> = { minimal: 40, reduced: 120, full: 240, ultra: 480, cinematic: 720 };
+/** Ridges around a coin's reeded edge per tier (minimal: a plain rim). */
+const COIN_RIDGES: Readonly<Record<EdgeDetail, number>> = { minimal: 0, reduced: 16, full: 24, ultra: 36, cinematic: 48 };
+/** The token sprite and coin face canvas size per tier. */
+const TOKEN_TEX: Readonly<Record<EdgeDetail, number>> = { minimal: 64, reduced: 64, full: 128, ultra: 128, cinematic: 256 };
+
+/** The stream particles a token may keep alive at once: coins are capped to the tier's coin budget. */
+export function tokenCap(b: EdgeBudget, token: EdgeToken): number {
+  return token === "coin" ? Math.min(b.tokens, b.coins) : b.tokens;
+}
+
+/** Radial segments around a coin: two per ridge (in, out), or a plain 20-sided rim. */
+export function coinSegments(ridges: number): number {
+  return ridges > 0 ? ridges * 2 : 20;
+}
+
+/** A coin's radius (world units) at intensity `i`: larger at the low tiers, where there are fewer of them and
+ *  they must still read, a little smaller and crisper at ultra and cinematic. */
+export function coinRadius(i: number, detail: EdgeDetail): number {
+  const k = detail === "minimal" ? 1.9 : detail === "reduced" ? 1.7 : detail === "full" ? 1.5 : 1.4;
+  return tokenSize(i) * k;
+}
+
+/** A coin's thickness over its radius. */
+export const COIN_THICK = 0.16;
+/** How far the reeded edge's ridges stand out (a fraction of the radius). */
+export const COIN_RIDGE_DEPTH = 0.035;
+
+/** The radius of a coin's reeded edge at angle `theta` around it, for `ridges` ridges (1 with none). */
+export function coinRim(theta: number, ridges: number): number {
+  if (ridges <= 0) return 1;
+  return 1 + COIN_RIDGE_DEPTH * (Math.cos(theta * ridges) >= 0 ? 0.5 : -0.5);
+}
+
+/** How bright a coin's glint is (0..1) at its spin angle: a short flash each time its face turns to the light. */
+export function coinGlint(angle: number): number {
+  const c = Math.cos(angle);
+  return c <= 0 ? 0 : Math.pow(c, 24);
+}
+
+/** Spark trails per second shed by one plasma-light packet at intensity `i`: none below ultra. */
+export function sparkRate(i: number, detail: EdgeDetail): number {
+  if (detail !== "ultra" && detail !== "cinematic") return 0;
+  const k = clamp01(i);
+  return (detail === "cinematic" ? 1.5 : 1) * (0.6 + 3.4 * k);
+}
+
+/** A spark's fade rate (per second, exponential): it lives about half a second. */
+export const SPARK_FADE = 6;
+
+/** The plasma-light conduit's radius at intensity `i`: thicker than the dark-sky plasma's hairline, because a
+ *  normal-blended tube has no glow to carry its volume. */
+export function liteRadius(i: number): number {
+  return 0.03 + 0.045 * clamp01(i);
+}
+
+/** The plasma-light sheath's radius over the core's. */
+export const LITE_SHEATH = 2.1;
 
 // ------------------------------------------------------------------------------------ arcs
 
@@ -111,7 +202,7 @@ export const IDLE_I = 0.02;
  *  at a burst. */
 export function pulseRate(style: EdgeStyle, i: number): number {
   const k = clamp01(i);
-  if (style === "plasma") return k < IDLE_I ? 0 : 0.3 + 4.2 * k * k;
+  if (isPlasmaStyle(style)) return k < IDLE_I ? 0 : 0.3 + 4.2 * k * k;
   return k < IDLE_I ? FIBER_IDLE_RATE : 2 + 46 * k * k;
 }
 
@@ -120,14 +211,14 @@ export function pulseRate(style: EdgeStyle, i: number): number {
 export function pulseSpeed(style: EdgeStyle, i: number, len: number): number {
   const k = clamp01(i);
   const L = Math.max(0.1, len);
-  if (style === "plasma") return 1 / ((2.4 - 1.6 * k) * Math.min(1.6, Math.max(0.6, L / 6)));
+  if (isPlasmaStyle(style)) return 1 / ((2.4 - 1.6 * k) * Math.min(1.6, Math.max(0.6, L / 6)));
   return Math.min(1 / 0.18, (8 + 18 * k) / L);
 }
 
 /** A pulse's billboard half-size (world units): small plasma orbs, tight fiber streaks. */
 export function pulseSize(style: EdgeStyle, i: number): number {
   const k = clamp01(i);
-  return style === "plasma" ? 0.075 + 0.1 * k : 0.035 + 0.025 * k;
+  return isPlasmaStyle(style) ? 0.075 + 0.1 * k : 0.035 + 0.025 * k;
 }
 
 /** Token particles per second leaving one plasma edge's source: a sparse trickle at idle (the stream is never

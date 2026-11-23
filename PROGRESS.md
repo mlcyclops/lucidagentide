@@ -6381,6 +6381,70 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-20):** version 2.5.4-beta.8 over beta.7 plus #647 (Settings window and official MCP Quick connect with email and calendar, UX gate, titlebar magnifier, preview curtain, Visualize P-VIZ.1-6 with the session ledger and throwables, Ask Lucid "+" fix, spacing standard, Fleet header Minimize only, full auto; ADR-0615..0639).
 - **stubbed:** no code change in this cut; the Tahiti overlay stays locked to v2.5.3.
 - **next:** dispatch build-desktop.yml with beta_release on, then try Visualize, the ledger, throwables and full auto with sudo and ssh in the installed app.
+## P-VIZ.7 (ADR-0641): sponsors per model, size classes and variants, Milton's stapler, git commit animation
+- **shipped (2026-11-21):** viz_brand.ts (original sponsor emblems per provider, TL187 for private models, size classes, variants); commit/push detection in viz_model; anime patches, four variant weapons and a Raiden-style bolt into a storm cloud on commit; office sponsor coin and lanyard, outfits and desk sets, elbows-at-palm typing and mug-at-mouth sip, Milton's stapler on the TPS stack, and a copier with TPS Reports on commit; demo_p_viz_7.mjs passes narrow and wide.
+- **stubbed:** nothing; the idle sip is proven by the geometry test and the copier frames, not caught in an idle camera close-up.
+- **next:** try both styles with a real fleet commit and push in the installed app, and tune the cloud and bubble sizes at the user's usual zoom.
+## P-VIZ.REC1 (ADR-0643): Visualize header buttons work again (Record, Recordings, View, Auto camera)
+- **shipped (2026-11-21):** the header's width density moved from data-viz-fit to data-viz-density, so the click router no longer runs Fit for every header button; demo_p_viz_rec_1.mjs records, lists, saves and opens View, and fails on master.
+- **stubbed:** nothing.
+- **next:** record and export a live fleet session in Visualize with the fix in.
+## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds, purchasable world packs for Visualize
+- **shipped (2026-11-21):** package kind "world", the frozen world contract (viz_world_api.ts), engine routes to list, serve, import, export and uninstall worlds, the Visualize world picker with options, entitlement receipts, world throwables and storms, per-item prices and twenty-nine $9.99 catalog items (Christmas, Valentine's Day, Football, St. Patrick's Day, Soccer, Baseball, Basketball, Hockey, Winter Games, Summer Games, Golf, Tennis, Horse Racing, Esports, Dog Show, Farm, Talent Show, Circus, Magic Show, Chef Showdown, Hospital, University, Construction, Grand Prix, Bowling, Figure Skating, Extreme Sports, Wave Riders, Swim and Dive), tools/build_world.ts, docs/WORLDS.md.
+- **stubbed:** nothing in the platform; each world ships as its own pack from the private store repo.
+- **next:** build, sign, upload and film each world in order: Christmas, Valentine's Day, Football, St. Patrick's Day.
+## P-WORLDS.AUDIT1 (ADR-0649 to ADR-0654): Lucid Agent Worlds platform audit
+- **shipped (2026-11-22):** docs/WORLDS-PLATFORM-AUDIT.md from 406 stills of the 29 world shorts plus a Sonnet critic per world: the weak node-seed hash gives every demo agent one skin and hair, worlds have no body or gender model, short sleeves show a skin dome, light worlds use thin gold fiber streams, quality tiers ignore the GPU; six Proposed ADRs (casting, cast customization, GPU tiers, plasma-light streams and coin tokens, build sites with a sandboxed artifact popup, a shared character kit).
+- **stubbed:** nothing implemented yet; every ADR is Proposed and each lands as its own increment.
+- **next:** P-WORLDS.CAST1 (ADR-0649): mixed seeds and balanced fleet casting, which fixes every installed world without a pack update.
+## P-WORLDS.CAST1 (ADR-0649): balanced casting for world figures
+- **shipped (2026-11-22):** desktop/renderer/viz_cast.ts (mix32 moved from viz_anime_pose unchanged, nodeSeed, worldSeed, a 10-tone skin ramp, 8 hair colors, the 16-style hair vocabulary, CastBook: any 6 consecutive slots hold 2 feminine, 2 masculine and light, medium and dark skin, stable per node); world API v2 (WorldAppearance, WorldFigureOptions.appearance, WorldDefinition.castRoles, validated in viz_worlds; v1 modules still load); the scene passes every world figure and stage a mixed seed and every human figure its appearance from one cast book per scene; the demo probe reports each figure's cast; docs/WORLDS.md casting section; demo_p_worlds_cast_1.mjs and make demo-P-WORLDS.CAST1.
+- **stubbed:** nothing in the host; worlds draw `appearance` only once their packs move to apiVersion 2 (until then they vary through the mixed seed alone).
+- **next:** P-WORLDS.CAST2 (ADR-0650): skin and hair shade selectors and per-agent pins that feed the cast book, then the shared character kit (ADR-0654) so packs draw every hair style and build.
+## P-WORLDS.CAST2 (ADR-0650): cast customization with remembered skin and hair shades
+- **shipped (2026-11-22):** a Cast section in the Visualize View menu (10 skin shades with warm, neutral and cool undertones, 14 hair colors, 16 hair styles, Balanced fleet or Same for all), Customize look on the node panel pinning presentation, skin, hair style and color per node, persisted in lucid.viz.cast.v1 and applied by the cast book; the `swatch` world option type; demo_p_worlds_cast_2.mjs passes (pick, pin, reload, auditBoxes).
+- **stubbed:** the built-in Anime and Office figures still cast themselves and ignore the Cast section; subagents cannot be pinned (their ids do not last).
+- **next:** wire the Cast section into the Anime and Office figures.
+## P-VIZ.GPU1 (ADR-0651): GPU-aware quality tiers with ultra and cinematic
+- **shipped (2026-11-22):** gpu_probe.ts (Electron GPU info over read-only IPC plus the WebGL renderer string; software, integrated or discrete), ultra and cinematic tiers (dpr 2, MSAA, contact shadows, 12000 particles, bloom on light themes; cinematic adds SSAO and depth of field), Auto by GPU class with a 3 s step-down governor, the Quality label shows the GPU, worlds get `tier`; demo_p_viz_gpu_1.mjs passes on a Radeon RX 580 (Auto picks ultra).
+- **stubbed:** no volumetric light shafts (too costly beside the agents).
+- **next:** tune SSAO, depth of field and contact shadows by eye on more GPUs.
+## P-WORLDS.FX1 (ADR-0652): plasma-light streams, tokens and option-driven environments
+- **shipped (2026-11-22):** the plasma-light edge style, orb, coin (instanced, reeded, stamped, glinting), petal, snowflake, spark and custom tokens with tier budgets, `environmentFor(options)` re-applying edges, fog, charge color and the sky on every option change; Anime and Office edges unchanged.
+- **stubbed:** nothing; packs adopt it through their v2 migration (store ADRs A123 to A151).
+- **next:** retune plasma-light on every light world once the v2 packs land.
+## P-WORLDS.BUILD1 (ADR-0653): build sites, scaffolding and the sandboxed mini-game popup
+- **shipped (2026-11-22):** viz_build.ts scaffolding (wireframe build-up, beams, panels, progress ring, lock-in flash, tier budgets) driven by subagent, tool and done/commit events; the artifact chip and popup (sandboxed iframe in an engine-served frame with its own CSP, gated by the in-process scanner, fail closed); a Mini game row on real lanes that sends a template brief; demo builds ending in a labeled sample game; demo_p_worlds_build_1.mjs passes.
+- **stubbed:** world-specific mini-game templates arrive with each pack's Deluxe update (the host ships two generic ones).
+- **next:** world templates per pack (store ADRs A123 to A151).
+## P-WORLDS.KIT2 (ADR-0654): the shared character kit
+- **shipped (2026-11-22):** kit.character (12 body presets, 16 hair styles at every tier with cards from ultra and cap-safe variants, sleeve-safe short and long sleeves with a shoulder cap, a reshaped torso lathe, a face painter for lashes, brows, lip tint, freckles and glasses, beards only on request); viz_world_character tests; demo_p_worlds_kit_2.mjs passes (zero skin above the kit's sleeves, the old soccer sleeve shows it).
+- **stubbed:** nothing in the host.
+- **next:** every pack moves to the kit (store ADRs A123 to A151).
+## P-WORLDS.BUILD2 (ADR-0653 amendment): template samples and the premium game popup
+- **shipped (2026-11-22):** WorldMiniGame.sample validation (validSample: a whole HTML document, at most 64 KB, malformed dropped); demo builds rotate through the current world's samples (demoSampleAt, else the host's two); two canvas sample games (viz_sample_games.ts: target tap and memory cards, under 12 KB each); per-template Build and Play sample in the node panel; the popup as a framed card (Untrusted, Sample, Demo chips; Play or Restart, Keep, Discard, Close; 16:10 game area resizable within the viewport); tests and demo_p_worlds_build_2.mjs (real-UI run by the integrator).
+- **stubbed:** a world's second and third templates may still ship without a sample (all 29 store packs sample their first); those rows offer Build only.
+- **next:** a sample for every template.
+## P-VIZ.APPROVE1 (ADR-0655): tool-call approvals inside Visualize
+- **shipped (2026-11-22):** per-node asks in viz_model (Main by engine id, lanes by event or poll, subagents on their parent; cleared on answer, status, auto-approved, turn end, removal or timeout; triage counts); viz_approvals (pulsing amber or red badge per node in 3D and 2D, the pop-out with Approve, Auto, Deny and Enter, A, D, Esc, the triage strip that folds after 4 s); scene.flyTo and View > Fly to approvals (persisted); answers through fleetAnswer, the grid's exported autoRiskModal and the chat card's pick; three local DEMO asks a cycle; tests and demo_p_viz_approve_1.mjs (real-UI run by the integrator).
+- **stubbed:** the demo parks lane asks only, so Main's pop-out (its options and Auto as "always allow") is covered by unit tests, not the real-UI run.
+- **next:** the Session scope (allow every same-kind ask for the lane's session) in the pop-out, and the same badges on the Fleet orbit.
+## P-VIZ.UI1 (ADR-0656): Visualize pop-out readability
+- **shipped (2026-11-22):** pop-outs scroll inside their own padding; AA labels and headers that never shrink; balanced swatch rows; Esc closes the Worlds menu; contrast-safe name-pill chips drawn over the stage; the hub panel shows chat prose only; demo_p_viz_ui_1.mjs passes on Hospital and Magic Show.
+- **stubbed:** the node-panel clipping check measures a panel tilted in 3D and may flag false positives there.
+- **next:** the same audit on the Fleet orbit's pop-outs.
+## P-FLEET.DEMO1 (ADR-0657): a scripted fake fleet for QA and video
+- **shipped (2026-11-22):** FAKE_ACP_MODE=script with eight security-first scripts, start_qa_fleet.mjs (isolated engine and omp shim) and seed_fleet.mjs (six lanes, --every, --no-main); fake_acp_script.test.ts passes.
+- **stubbed:** one permission ask per session, so later rounds of a lane run as already approved.
+- **next:** a script per world mini game, so a real Build on any world produces its own game.
+## P-SANDBOX.WIN1 (ADR-0658): Windows sandbox says exactly what is missing, and host prep survives reboots
+- **shipped (2026-11-22):** ranked SandboxFallback reasons (not staged at <dirs>, refused by the pin, no --probe answer, host prep pending, loopback, round trip with its exit code, helper missing or failing, runtime probe) from mxcHost/mxcOffer/resolveBackend into the state, logged once per engine run; the panel's one plain headline with Prepare host under it; prep pending skips the round trip; the same UAC prompt copies wxc-host-prep.exe to %ProgramFiles%\LucidAgentIDE-HostPrep (pin re-checked) and registers the AtStartup SYSTEM task "LUCID MXC null device"; the panel shows whether it is installed.
+- **stubbed:** no un-prep button for host prep; removal is the manual `schtasks /Delete` in the ADR. The scheduled task and the non-elevated `schtasks /Query` were not run on a real host in this increment.
+- **next:** a reboot test on the DACL host (task runs, NUL step no longer pending) and an un-prep action beside "Remove from Windows".
+## P-FLEET.DOCK1 (ADR-0659): the Fleet button always brings the fleet back, and cards show turns they did not start
+- **shipped (2026-11-22):** #ctFleet decides from what is on screen (fleetButtonAction: a minimized grid is restored whichever view is pinned, a shown view closes, the orbit's close fade can no longer swallow a press); lane cards seed from fleetTranscript and follow turns they did not start (another client's prompt, the composer, a turn running at page load), settled from the recorded turn and deduped by seedTail; automatic follows capped at 2 (pickFollows) with over-cap lanes read when their turn ends; fleet_dock_model.test.ts and demo_p_fleet_dock_1.mjs.
+- **stubbed:** no prepend path, so a transcript read that raced a card's own first prompt drops the older history until the dock is reopened; over-cap lanes show output only when the turn ends.
+- **next:** a lane live-turn route (fleet_lanes.laneLiveTurn) so a card joining mid-turn shows the turn so far, and one shared watch per lane for the card and Visualize.
 ## P-AUTH.RELOGIN1 (ADR-0640): lost sign-in notice, Login in the model picker, model restore after re-login
 - **shipped (2026-11-21):** oauth_relogin.ts flags a sign-in omp disabled after a failed refresh (or one LUCID saw that vanished) on /api/auth, with the update it followed and the model it displaced; a callout under the model pill with Log in / Not now and an OAuth tooltip; a Login row under the picker's model name; signing back in restores the displaced model as the sticky pick (the "stuck on Terra 6.1" fix); demo_p_auth_relogin_1.mjs passes narrow and wide and fails on the old bundle.
 - **stubbed:** nothing; `missing` (vanished row) detection starts after first run because the seen-memory starts empty, `expired` works immediately.

@@ -83,9 +83,9 @@ import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBI
 import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
-import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay
+import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -139,8 +139,9 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -1026,11 +1027,11 @@ async function renderSessions(): Promise<void> {
 // and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
 let warmedTranscripts = false;
 async function warmTranscripts(data: SessionList): Promise<void> {
-  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  if (warmedTranscripts || baseTier(perfWatch.tier()) !== "full") return;
   warmedTranscripts = true;
   const run = async (): Promise<void> => {
     for (const s of data.sessions.slice(0, 5)) {
-      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (baseTier(perfWatch.tier()) !== "full") break; // unplugged mid-warm -> stop spending
       if (cachedTranscript(s.id)) continue;
       const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
       if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
@@ -1840,7 +1841,20 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
+/** P-VIZ.APPROVE1 (ADR-0655): Main's open permission cards by engine id (each card's `pick`), so the Visualize pop-out
+ *  answers through the card itself: the same option reading, the card's result line or toast, the voice approval
+ *  disarmed. Left when the card is answered by any path. */
+const chatAsks = new Map<string, (oid: string | null) => void>();
+/** A chat bubble's readable text for a summary surface (the Visualize hub panel): buttons, hidden parts and the
+ *  stream cursor left out, one line per block so paragraphs and tool rows never glue into each other. */
+function chatProse(el: Element | null): string {
+  if (!el) return "";
+  const c = el.cloneNode(true) as HTMLElement;
+  for (const x of c.querySelectorAll("button, [hidden], .cursor")) x.remove();
+  const lines = [...c.children].map((x) => (x.textContent ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return (lines.length ? lines.join("\n") : (c.textContent ?? "")).trim();
+}
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void; pick: (oid: string | null) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1952,14 +1966,20 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     actions.hidden = true;
     if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
+  // One option, read the way this card's own buttons are (P-VIZ.APPROVE1: Visualize's pop-out answers through it).
+  // No option (null) is a deny at the engine, fail-closed.
+  const pick = (oid: string | null): void => {
+    if (oid === null) { choose(null, "Denied", false); return; }
+    const opt = e.options.find((o) => o.optionId === oid);
+    if (!opt) return;
+    const isDeny = (e.egress || e.exec) ? opt.kind === "reject" : !isAllowOpt(opt.kind, opt.optionId);
+    choose(oid, isDeny ? "Denied" : "Allowed", !isDeny);
+  };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
-    if (!b) return;
-    const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
+    if (b?.dataset.oid) pick(b.dataset.oid);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose, pick };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -3156,10 +3176,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
     }
     else if (e.type === "permission") {
-      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
+      // P-VIZ.APPROVE1 (ADR-0655): Visualize took the tapped ask; a replay of one already answered leaves it again.
+      const resolved: { type: string; id: string } = { type: "permission-resolved", id: e.id };
+      if (answeredPermissions.has(e.id)) { vizBus.emit("main", "chat", resolved); return; }
+      if (permCards.has(e.id)) return;
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      const card = createPermissionCard(e, () => {
+        answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null;
+        chatAsks.delete(e.id);
+        vizBus.emit("main", "chat", resolved); // answered anywhere (chat, voice, Visualize, turn end)
+      });
       permCards.set(e.id, card);
+      chatAsks.set(e.id, card.pick);
       armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
@@ -6504,7 +6532,7 @@ function sceneFor(season: SeasonDef | undefined): SceneId | null {
 }
 function backdropMotion(): BackdropMotion {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
-  const tier = perfWatch.tier();
+  const tier = baseTier(perfWatch.tier());
   return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
 }
 /** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
@@ -18161,6 +18189,10 @@ const pluginsFlyout = createPluginsFlyout({
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
+  // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
+  worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
+  worldExportUrl: (id) => bridge.worldExportUrl(id),
+  openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
@@ -18526,24 +18558,26 @@ function wire(): void {
     hideKgResults();
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
-  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal (-> ultra -> cinematic, P-VIZ.GPU1:
+  // the graph treats both as full); auto follows battery, CPU and GPU.
   $("#kgPerf")?.addEventListener("click", () => {
     const m = perfWatch.cycleMode();
     paintPerfChip();
     kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
     showToast({
       title: `Performance mode: ${m}`,
-      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+      desc: m === "auto" ? `Following battery, CPU and GPU (now: ${perfWatch.tier()}).`
         : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
         : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
-        : "Full fidelity.",
+        : m === "full" ? "Full fidelity."
+        : `Full fidelity here; Visualize renders its ${m} tier.`,
       timeout: 2600,
     });
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || baseTier(perfWatch.tier()) !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
@@ -19042,7 +19076,8 @@ function wire(): void {
     fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
-    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving (P-FLEET.DOCK1: or any turn it did not start)
+    fleetTranscript: bridge.fleetTranscript, // P-FLEET.DOCK1: a card seeds from the lane's recorded turns
     fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
     fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
@@ -19188,7 +19223,17 @@ function wire(): void {
   // header links to the other, so neither choice ever strands you. One fleet view at a time: the orbit
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
-  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
+  // P-FLEET.DOCK1: the pin alone used to route the press, so with the orbit pinned a MINIMIZED grid was destroyed
+  // (opening the orbit closes the grid) and never came back. What is on screen decides first: a minimized grid is
+  // restored, a shown view closes, and only with nothing up does the pin pick what opens. The grid is brought up
+  // with the orbit closed, so it is never left underneath it.
+  $("#ctFleet")?.addEventListener("click", () => {
+    const act = fleetButtonAction({ home: fleetHome(), grid: fleetGridState(), orbit: fleetOrbitShown() });
+    if (act === "restore-grid" || act === "open-grid") { closeFleetOrbit(); openFleetGrid(); }
+    else if (act === "close-grid") closeFleetGrid();
+    else if (act === "close-orbit") closeFleetOrbit();
+    else openFleetOrbit();
+  });
   // P-STUCK-SHOW.1 (ADR-0519): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.
@@ -19224,7 +19269,10 @@ function wire(): void {
     fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
     fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
     mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
-      role: m.classList.contains("user") ? "user" as const : "assistant" as const, text: (m.querySelector(".text")?.textContent ?? "").trim(),
+      // an assistant's prose is .text > .stream; its siblings are the turn HUD and hidden restart banners, whose
+      // button labels would glue into the panel's text ("Restart agentStop command")
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const,
+      text: chatProse(m.querySelector(".text > .stream") ?? m.querySelector(".text")),
     })),
     sendMain: (text) => {
       if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
@@ -19236,6 +19284,11 @@ function wire(): void {
     },
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
+    openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
+    // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
+    fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
+    respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 

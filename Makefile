@@ -1747,6 +1747,81 @@ demo-P-AUTO.FULL1: ## P-AUTO.FULL1 (ADR-0639): full auto runs the catastrophic s
 	$(BUN) run desktop/scripts/demo_p_goal_13.ts
 	node --check desktop/scripts/demo_p_auto_full_1.mjs
 
+.PHONY: demo-P-VIZ.7
+demo-P-VIZ.7: ## P-VIZ.7 (ADR-0641): sponsors per model (TL187 for private models), size classes and variants, extra weapons and desk sets, Milton's stapler on the TPS stack, and the git commit animation (anime lightning into a storm cloud; office copier and TPS reports). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_7.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_brand.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_7.mjs
+.PHONY: demo-P-VIZ.REC1
+demo-P-VIZ.REC1: ## P-VIZ.REC1 (ADR-0643): the Visualize header's Record, Recordings, View and Auto camera work (the header no longer shares the Fit button's data-viz-fit hook). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_rec_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_rec_1.mjs
+
+.PHONY: demo-P-VIZ.APPROVE1
+demo-P-VIZ.APPROVE1: ## P-VIZ.APPROVE1 (ADR-0655): tool-call approvals inside Visualize: per-node asks in the model (Main's and each lane's, a subagent's on its parent; cleared on answer, timeout, auto-approve or turn end), a pulsing badge per node in 3D and 2D, its pop-out (Approve, Auto, Deny through the grid card's and chat card's own paths), the triage strip and View > Fly to approvals. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_approve_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts desktop/renderer/viz_panel_place.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_approve_1.mjs
+
+.PHONY: demo-P-FLEET.DOCK1
+demo-P-FLEET.DOCK1: ## P-FLEET.DOCK1 (ADR-0659): the Fleet button brings a minimized grid dock back on top whichever view is pinned (a shown view still toggles closed), and a lane card seeds from the lane transcript and follows any turn it did not start (another client's prompt, the main composer, a turn running before the page loaded) without painting a turn twice. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_fleet_dock_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/fleet_dock_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_fleet_dock_1.mjs
+
+.PHONY: demo-P-WORLDS.1
+demo-P-WORLDS.1: ## P-WORLDS.1 (ADR-0648): Lucid Agent Worlds: signed world packs (kind "world") import, load and render in Visualize with their stage, sky, throwables, storm and options; export the package. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 LUCID_DEMO_WORLD=<path to .lplugin.zip> node desktop/scripts/demo_p_worlds_1.mjs
+	$(BUN) test $(TEST_IGNORES) harness/plugins desktop/plugins desktop/renderer/viz_worlds.test.ts desktop/renderer/plugin_catalog.test.ts tools/build_world.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_1.mjs
+
+.PHONY: demo-P-WORLDS.CAST1
+demo-P-WORLDS.CAST1: ## P-WORLDS.CAST1 (ADR-0649): balanced casting for world figures: world API v2 (appearance, castRoles), mixed world seeds so v1 packs vary too, one cast book per scene. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_cast_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_cast_1.mjs
+
+.PHONY: demo-P-WORLDS.KIT2
+demo-P-WORLDS.KIT2: ## P-WORLDS.KIT2 (ADR-0654): the shared character kit (WorldKit.character): body shapes for feminine, masculine and neutral in 4 builds, 16 hair styles at every tier with strand cards from ultra and capSafe variants, sleeve-safe shoulders (a shirt-material cap over the arm capsule's round top at every angle), the torso lathe and face features (no role-locked beards). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] [LUCID_DEMO_OUT=<dir>] node desktop/scripts/demo_p_worlds_kit_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_world_character.test.ts desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_kit_2.mjs
+
+.PHONY: demo-P-WORLDS.BUILD1
+demo-P-WORLDS.BUILD1: ## P-WORLDS.BUILD1 (ADR-0653): world build sites: scaffolding (wireframe build-up, holo beams, panels, a progress ring, a lock-in flash; per-tier budgets) driven by subagent, tool and done or commit events, an artifact chip over the node, and the artifact popup (the engine's fail-closed security gate first, then a sandboxed allow-scripts frame with no network); world buildSites, miniGames and kit.scaffold. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_build_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_build_model.test.ts desktop/renderer/viz_build.test.ts desktop/viz_artifact_gate.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_build_1.mjs
+
+.PHONY: demo-P-WORLDS.BUILD2
+demo-P-WORLDS.BUILD2: ## P-WORLDS.BUILD2 (ADR-0653): template samples: WorldMiniGame.sample validated (a whole HTML document, at most 64 KB; a malformed one is dropped), the ?vizDemo=1 builds rotate through the current world's samples (else the host's two canvas games), the node panel's Mini game row offers Build and Play sample per template, and the artifact popup is a framed card (Untrusted, Sample, Demo chips; Play or Restart, Keep, Discard, Close) with a 16:10 game area resizable within the viewport. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_build_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_build_model.test.ts desktop/viz_artifact_gate.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_build_2.mjs
+	node --check desktop/scripts/demo_p_worlds_build_1.mjs
+
+.PHONY: demo-P-VIZ.GPU1
+demo-P-VIZ.GPU1: ## P-VIZ.GPU1 (ADR-0651): GPU-aware quality tiers: a GPU probe (WebGL renderer string plus Electron's feature status and GPU info over a read-only preload IPC) classifies software, integrated or discrete; Auto picks minimal, reduced/full or ultra and steps down one tier after a missed 3 s frame-time check; ultra (dpr 2, MSAA, contact shadows, 12000 particles, bloom on light themes) and cinematic (plus SSAO and depth of field on the auto camera); Quality reads "Auto · ultra (GPU name)". Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 node desktop/scripts/demo_p_viz_gpu_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/gpu_probe.test.ts desktop/renderer/perf_tier.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/orbit_mode.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_gpu_1.mjs
+
+.PHONY: demo-P-WORLDS.CAST2
+demo-P-WORLDS.CAST2: ## P-WORLDS.CAST2 (ADR-0650): cast customization: the View menu's Cast section (Balanced fleet / Same for all, a 10-shade skin ramp with warm, neutral and cool undertones, natural and fashion hair colors, hair style chips), "Customize look" pins in the node panel, persisted in lucid.viz.cast.v1, and the world `swatch` option type. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_cast_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_cast_prefs.test.ts desktop/renderer/viz_cast.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_cast_2.mjs
+
+.PHONY: demo-P-VIZ.UI1
+demo-P-VIZ.UI1: ## P-VIZ.UI1: Visualize pop-out polish: the View menu, Customize look, Worlds and Recordings scroll inside their own padding (first header and last note never clipped), AA contrast labels and section headers, comfortable selects with a chevron, round ringed swatches; the node panel's padding and contrast; name pills with a contrast-safe role chip drawn over the scene. Real-UI proof on a light and a dark world (clipped text, contrast, auditBoxes, screenshots to LUCID_DEMO_OUT): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_LIGHT_WORLD=world:hospital] [LUCID_DEMO_DARK_WORLD=world:magic-show] [LUCID_DEMO_OUT=<dir>] node desktop/scripts/demo_p_viz_ui_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_cast.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_ui_1.mjs
+
+.PHONY: demo-P-WORLDS.FX1
+demo-P-WORLDS.FX1: ## P-WORLDS.FX1 (ADR-0652): plasma-light world streams (a saturated core tube in a sheath, normal-blended packets with a bright rim, spark trails from ultra), packet tokens (orb, coin, petal, snowflake, spark, custom; instanced spinning coins with an embossed face, a reeded edge and a glint), per-tier token budgets, and environmentFor(options) re-applied with the sky on every option change. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_fx_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_fx_1.mjs
+
+.PHONY: demo-P-FLEET.DEMO1
+demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA and video: FAKE_ACP_MODE=script replays the security-first scripts (prose, tools, one permission ask, a delegation, cancel). Live: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --every 60
+	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/fleet_demo/start_qa_fleet.mjs
+	node --check desktop/scripts/fleet_demo/seed_fleet.mjs
+
+.PHONY: demo-P-SANDBOX.WIN1
+demo-P-SANDBOX.WIN1: ## P-SANDBOX.WIN1 (ADR-0658): the Windows sandbox names the one concrete reason it is not isolated (headline + Prepare host under it), host prep pending skips the round trip, and the same UAC prompt registers the "LUCID MXC null device" boot task at a pinned copy under Program Files
+	$(BUN) test $(TEST_IGNORES) desktop/mxc_runtime.test.ts harness/runs/sandbox_mxc.test.ts harness/runs/sandbox_exec.test.ts desktop/renderer/sandbox_panel.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-AUTH.RELOGIN1
 demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or that vanished) gets a callout under the model pill and a Login row under the picker's model name; logging back in restores the displaced model. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_auth_relogin_1.mjs against a seeded QA engine (ADR-0640)
 	$(BUN) test $(TEST_IGNORES) desktop/oauth_relogin.test.ts desktop/renderer/relogin.test.ts desktop/release_cleanup.test.ts desktop/auth_vault.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts

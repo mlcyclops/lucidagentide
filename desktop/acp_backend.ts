@@ -55,9 +55,9 @@ import { judgeChain, resolveJudgmentProvider, writeJudgmentOverlay, type Resolve
 import { bannedJudges, judgeBanEnv } from "../harness/judgment/judge_bans.ts"; // P-JEV.5 (ADR-0416): local judges that failed more than once
 import type { JudgmentReport } from "../harness/judgment/trace.ts"; // P-JEV.2 (ADR-0377): the per-turn judgment trace
 import { managedAsksageOnly, managedConfig, managedRequireIsolation, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed } from "./managed_config.ts";
-import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
+import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resolveBackend, runtimeProbeVerdict, sandboxDisclosure, wrapForProfile, type SandboxDecision, type SandboxFallback, type SandboxProxy } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.1 (ADR-0157)
 import type { MxcHost } from "../harness/runs/sandbox_mxc.ts"; // P-MXC.1 (ADR-0441)
-import { mxcHost } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the staged, verified MXC executor
+import { mxcHost, mxcOffer } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the staged, verified MXC executor
 import { ensureEgressProxy } from "../harness/runs/egress_proxy.ts"; // P-SANDBOX.2 (ADR-0166)
 import { egressAuditSink } from "./egress_audit.ts"; // P-SANDBOX.3 (ADR-0167)
 import { setSandboxState } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
@@ -350,6 +350,15 @@ function readDesignInvariants(workspace: string): string {
 // only because the OAuth broker picked a different omp than this file did), and the v2.0.0 EPERM
 // regression came from accepting a path on existence alone. See omp_bin.ts for the full reasoning.
 let ompBinCache: string | null = null;
+/** P-SANDBOX.WIN1 (ADR-0658): the headline reason Windows exec is not isolated, logged once per engine run
+ *  (respawns resolve again; the line repeats only when the reason itself changes). */
+let loggedSandboxFallback = "";
+function logSandboxFallbackOnce(f: SandboxFallback): void {
+  const line = `[sandbox] not isolated (${f.kind}): ${f.detail}`;
+  if (line === loggedSandboxFallback) return;
+  loggedSandboxFallback = line;
+  console.error(line);
+}
 /** P-SANDBOX.10 (ADR-0387): run the wrapped `<omp> --version` once per distinct plan and judge it with
  *  runtimeProbeVerdict. Cached per engine process: a runtime that could not boot is not re-probed on
  *  every respawn, and one that did is not paid for twice. Never throws. */
@@ -963,38 +972,37 @@ class Backend {
     const userOff = acBundled && offSwitch;
     if (offSwitch) console.error("[sandbox] the Windows sandbox is turned OFF in the Security panel - this session runs as the disclosed passthrough (ADR-0390).");
     const acUsable = acBundled && !userOff && (!profileCaps.canNetwork || loopbackExempted());
-    if (acBundled && !userOff && !acUsable) {
-      console.error(
-        `[sandbox] the AppContainer helper is bundled but the loopback exemption is NOT registered - this network-on session runs as the disclosed passthrough. ` +
-          `Enable full Windows isolation once, from an elevated shell: "${acHelper}" --register-loopback  (then restart LUCID).`,
-      );
-    }
+    // P-SANDBOX.WIN1 (ADR-0658): each runtime passed over carries its concrete reason into the resolution;
+    // the headline one is logged once per engine run (logSandboxFallbackOnce) and shown in the panel.
+    const helperFallback: SandboxFallback | undefined = acBundled && !userOff && !acUsable
+      ? { kind: "helper-loopback", detail: `lucid-appcontainer helper bundled but its loopback exemption is not registered; enable it once from an elevated shell: "${acHelper}" --register-loopback` }
+      : undefined;
     // P-MXC.1 (ADR-0441): the Microsoft eXecution Container executor is tried BEFORE the first-party
     // helper when it is staged, verified against the pin and answered --probe. Same Off switch; the same
     // loopback precondition for a network-on profile on the AppContainer (DACL) tier, because MXC runs under
     // the helper's moniker and reaches the egress proxy only through that one-time exemption; the kernel
     // tier (BaseContainer) takes an explicit host-loopback allow and needs no exemption.
+    // The executor's own --probe names the elevated steps the host still needs (system-drive metadata, the
+    // NUL device). Until they are done, cmd.exe / node / bun subprocesses die with EPERM inside the
+    // container, so mxcOffer answers "host prep pending" at once, without running the round trip.
     let mxc: MxcHost | undefined;
-    if (process.platform === "win32" && !offSwitch) {
-      const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
-      if (m.host) {
-        const loopbackOk = !profileCaps.canNetwork || m.host.tier === "base-container" || loopbackExempted();
-        // The executor's own --probe names the elevated steps the host still needs (system-drive metadata,
-        // the NUL device). Until they are done, cmd.exe / node / bun subprocesses die with EPERM inside the
-        // container, so a committed MXC would light the pill and break every exec: not offered, and said so.
-        const prepOk = m.probe.prepNeeded.length === 0;
-        if (loopbackOk && prepOk) mxc = m.host;
-        else if (!prepOk) console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but this host still needs: ${m.probe.prepNeeded.join(", ")} - not offered until "Prepare host" has run (Security panel, administrator).`);
-        else console.error(`[sandbox] the MXC executor is staged (${m.host.tier}) but the loopback exemption is NOT registered - this network-on session cannot use it. Use "Prepare host" in the Security panel once (administrator).`);
-      } else if (loadSettings().developerMode) {
-        console.error(`[sandbox] MXC not offered: ${m.reason}`);
+    let mxcFallback: SandboxFallback | undefined;
+    if (process.platform === "win32") {
+      if (offSwitch) mxcFallback = { kind: "user-off", detail: "you turned the Windows sandbox off in the Security panel" };
+      else {
+        const o = mxcOffer(mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined }), { needsNetwork: profileCaps.canNetwork, loopbackExempted });
+        if ("mxc" in o) mxc = o.mxc;
+        else mxcFallback = o.fallback;
       }
     }
     const res = resolveBackend({
       requireIsolation: managedRequireIsolation(managedConfig().config),
       appContainerHelper: acUsable ? acHelper! : undefined,
       mxc,
+      mxcFallback,
+      helperFallback,
     });
+    if (res.ok && res.fallback?.[0]) logSandboxFallbackOnce(res.fallback[0]);
     if (!res.ok) {
       this.sandboxExecBlock = res.reason;
       setSandboxState({ backend: null, isolated: false, disclosed: false, platform: process.platform, execBlocked: res.reason, proxied: false, at });
@@ -1038,13 +1046,15 @@ class Backend {
         const requireIso = managedRequireIsolation(managedConfig().config);
         console.error(`[sandbox] the AppContainer is available but ${verdict.reason} - ${requireIso ? "exec is BLOCKED (managed policy requires isolation)" : "this session runs as the disclosed passthrough"} (ADR-0387).`);
         this.sandboxExecBlock = requireIso ? `managed policy requires runtime isolation, but ${verdict.reason}` : null;
-        setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at });
+        const runtimeFallback: SandboxFallback = { kind: "runtime-probe", detail: `the agent could not start inside the ${res.backend.name === "mxc" ? "MXC container" : "AppContainer"}: ${verdict.reason}` };
+        if (!requireIso) logSandboxFallbackOnce(runtimeFallback);
+        setSandboxState({ backend: requireIso ? null : "noop", isolated: false, disclosed: !requireIso, platform: process.platform, execBlocked: this.sandboxExecBlock, proxied: false, at, ...(requireIso ? {} : { fallback: [runtimeFallback] }) });
         if (!requireIso) console.error(sandboxDisclosure());
         return { cmd: argv[0]!, args: argv.slice(1), env: {}, contained: false };
       }
     }
     this.sandboxExecBlock = null;
-    setSandboxState({ backend: res.backend.name, ...(mxc && res.backend.name === "mxc" ? { tier: mxc.tier } : {}), isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at });
+    setSandboxState({ backend: res.backend.name, ...(mxc && res.backend.name === "mxc" ? { tier: mxc.tier } : {}), isolated: d.isolated, disclosed: d.disclosed, platform: process.platform, execBlocked: null, proxied: !!proxy, at, ...(res.fallback ? { fallback: res.fallback } : {}) });
     if (d.disclosed) console.error(sandboxDisclosure());
     // P-SANDBOX.17 (ADR-0399): Git for Windows cannot start inside the AppContainer, so the contained agent's
     // `git` is the broker shim (tools/git-broker/git.cmd), which asks the engine to run the real git.

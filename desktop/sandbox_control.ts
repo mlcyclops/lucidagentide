@@ -26,8 +26,11 @@ export interface SandboxControlView {
   foldersLocked: boolean;
   /** P-MXC.1 (ADR-0441): the Microsoft eXecution Container executor on this host. `prepNeeded` lists the
    *  elevated one-time steps the executor still recommends; `loopbackNeeded` is the moniker exemption a
-   *  network-on session needs on the AppContainer tier (never on the kernel tier). */
-  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+   *  network-on session needs on the AppContainer tier (never on the kernel tier).
+   *  P-SANDBOX.WIN1 (ADR-0658): `reason` is why the executor is not usable when `staged` is false (not
+   *  staged at <dirs>, refused by the pin, no --probe answer); `bootTask` is whether the startup task that
+   *  re-prepares the NUL device at every boot is registered (DACL tier only; absent elsewhere). */
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string; reason?: string; bootTask?: boolean };
 }
 
 /** `policyRequiresIsolation` is "policy keeps the switch on" (managedSandboxLocksOn: exec.requireIsolation
@@ -41,11 +44,15 @@ export function sandboxControlView(i: { platform: string; helperBundled: boolean
   };
 }
 
-/** PURE: which elevated steps "Prepare host" runs, from the live view. Empty means nothing to do. */
-export function mxcHostPrepSteps(v: SandboxControlView): { systemDrive: boolean; nullDevice: boolean; loopback: boolean } | null {
+/** PURE: which elevated steps "Prepare host" runs, from the live view. Empty means nothing to do.
+ *  P-SANDBOX.WIN1: the boot task rides every prompt that prepares the NUL device (registered with -Force,
+ *  so a stale copy or task is replaced). It never triggers a prompt alone: a host whose task is missing
+ *  shows the NUL step pending after its next boot, and that prompt installs it. */
+export function mxcHostPrepSteps(v: SandboxControlView): { systemDrive: boolean; nullDevice: boolean; loopback: boolean; bootTask: boolean } | null {
   const m = v.mxc;
   if (!m?.staged) return null;
-  const steps = { systemDrive: m.prepNeeded.includes("prepare-system-drive"), nullDevice: m.prepNeeded.includes("prepare-null-device"), loopback: m.loopbackNeeded };
+  const nullDevice = m.prepNeeded.includes("prepare-null-device");
+  const steps = { systemDrive: m.prepNeeded.includes("prepare-system-drive"), nullDevice, loopback: m.loopbackNeeded, bootTask: nullDevice };
   return steps.systemDrive || steps.nullDevice || steps.loopback ? steps : null;
 }
 

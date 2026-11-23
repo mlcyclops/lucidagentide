@@ -120,7 +120,7 @@ import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } 
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
 import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
-import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
+import { mxcBootTaskInstalled, mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
 import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
@@ -198,6 +198,7 @@ import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKL
 import { ATTACH_DISABLED, attachmentsPromptBlock, describeStaged, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
 import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
 import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
+import { ARTIFACT_GONE_DOC, artifactFrameDoc, artifactFrameHeaders, gateVizArtifact, VizArtifactStore } from "./viz_artifact_gate.ts"; // P-WORLDS.BUILD1 (ADR-0653)
 import { IMAGE_EDIT_LIMITS, availableImageModels, editImage, saveEditedImage } from "./image_edit.ts"; // P-ASKLUCID.9 (ADR-0600)
 import { askLucidDataRoot, askLucidImagesDir, imageEgressVerdict, imageModelOptions, insideDir, saveAsSource, type SaveAsSource } from "./ask_lucid_images.ts"; // P-ASKLUCID.9
 import { mkdir as mkdirAsync, rm as rmAsync, writeFile as writeFileAsync } from "node:fs/promises"; // P-ASKLUCID.9: saveEditedImage's fs
@@ -586,7 +587,8 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons
+import { MAX_DOWNLOAD_BYTES as MAX_PLUGIN_PACKAGE_BYTES, addonsDir, exportWorld, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, installWorldBytes, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons, ADR-0648 worlds
+import { listInstalledWorlds, readInstalled, resolveWorldAsset } from "./plugins/installed.ts" // ADR-0648 Lucid Agent Worlds
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
@@ -1777,10 +1779,13 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
+  "/api/worlds/export",      // ADR-0648: the drawer's Export is a plain download link, which cannot set a header
+  "/api/viz/artifact/frame", // ADR-0653: the artifact popup's iframe src (an iframe GET cannot set a header)
 ]);
-// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
-// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
-const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. /api/preview/serve,
+// /api/worlds/export and /api/viz/artifact/frame are left out: the renderer loads them with the UI token, and no
+// child calls them.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve" && r !== "/api/worlds/export" && r !== "/api/viz/artifact/frame"));
 // LH-03 (ADR-0544 as amended): the routes a held lane's channel opens. lane_channel.ts CHANNEL_ROUTES lists them with
 // the speaker each one names; only agent routes count, so the channel never reaches a route the agent token cannot.
 const CHANNEL_AUTH_ROUTES: ReadonlySet<string> = new Set(Object.keys(CHANNEL_ROUTES).filter((r) => AGENT_ROUTES.has(r)));
@@ -2375,6 +2380,9 @@ function kgListView(error?: string) {
   };
 }
 
+// P-WORLDS.BUILD1 (ADR-0653): world-build artifacts that passed the gate, served only as the sandboxed popup frame.
+const vizArtifacts = new VizArtifactStore();
+
 // P-AGENT.9: lazy scanner sidecar for imported agent files. Shared across imports; FAIL-CLOSED by design —
 // if the sidecar is dead or slow, importSpec quarantines the spec (ScanUnavailableError becomes a blocking
 // decision), it never passes unscanned.
@@ -2841,13 +2849,15 @@ return Bun.serve({
         if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
         const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
         if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
-        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps, m.executors.prepSha256);
         resetMxcProbeCache(); resetLoopbackExemptCache();
         const after = sandboxControlNow();
         const remaining = mxcHostPrepSteps(after);
-        const changed = launched && !remaining;
+        // P-SANDBOX.WIN1: the re-read state decides; a failed boot-task registration (script exit 5) leaves the
+        // host prepared for this boot, so it still counts as changed, and the detail says the task is missing.
+        const changed = !remaining && (launched || !!steps.bootTask);
         const detail = changed
-          ? "the host is prepared - the agent restarts inside the MXC container"
+          ? `the host is prepared${steps.bootTask ? (after.mxc?.bootTask ? " and the NUL step re-runs at every boot" : " but the boot task could not be confirmed, so the NUL step may be needed again after a restart") : ""} - the agent restarts inside the MXC container`
           : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
           : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
         emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
@@ -6234,6 +6244,57 @@ return Bun.serve({
         const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
         return json({ ok: true, data: await plugins.uninstall(String(b.id ?? ""), b.keepData !== false) });
       }
+      // ADR-0648 (Lucid Agent Worlds): installed `.lplugin` packages of kind "world". The list names each world's
+      // same-origin module URL; import installs a SIGNED world file (kind world + signature mandatory, then every
+      // store gate) from the raw package bytes, sent with a JSON content type because the origin guard admits only
+      // that on a POST (the CAD inspect convention); export hands back the kept original signed bytes.
+      if (p === "/api/worlds" && req.method === "GET") return json({ ok: true, data: { worlds: listInstalledWorlds() } });
+      if (p === "/api/worlds/import" && req.method === "POST") {
+        srv.timeout(req, 0); // the per-file scan of a large world can outlast the 60 s idle limit
+        if (Number(req.headers.get("content-length") ?? "0") > MAX_PLUGIN_PACKAGE_BYTES) return json({ ok: false, error: "that world package is over the size limit" });
+        let filename = "";
+        try { filename = decodeURIComponent(req.headers.get("x-lucid-filename") ?? ""); } catch { /* refused as not a .zip */ }
+        const r = await installWorldBytes(Buffer.from(await req.arrayBuffer()), filename);
+        return json(r.ok ? { ok: true, data: { world: r.world } } : { ok: false, error: r.reason });
+      }
+      if (p === "/api/worlds/export" && req.method === "GET") {
+        const r = exportWorld(url.searchParams.get("id") ?? "");
+        if (!r.ok) return json({ ok: false, error: r.error });
+        return new Response(r.bytes, { headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="${r.name}"`, "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+      }
+      if (p === "/api/worlds/uninstall" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = String(b.id ?? "");
+        if (readInstalled(id)?.manifest.kind !== "world") return json({ ok: true, data: { ok: false, error: "that world is not installed" } });
+        return json({ ok: true, data: await plugins.uninstall(id, false) });
+      }
+      // ADR-0653 (P-WORLDS.BUILD1): a world build's HTML artifact passes the in-process gate (shape, then the scanner,
+      // FAIL-CLOSED) before the Visualize popup may show it; a pass is held under a random id and served only as the
+      // sandboxed frame below (its own CSP, the artifact in a srcdoc child). A block is audited and never stored.
+      if (p === "/api/viz/artifact" && req.method === "POST") {
+        const b = await readBody<{ html?: unknown }>(req);
+        const v = await gateVizArtifact(b.html, async (text) => { const d = await scanAndDecideLarge(agentScanner(), text); return { block: d.block, reason: d.reason }; });
+        if (!v.ok) {
+          emitSecurityEvent({ category: "scanner", type: "scanner_block", decision: "block", severity: "high", tool: "viz_artifact", reason: v.reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+          return json({ ok: true, data: { ok: false, reason: v.reason, trust: "quarantined" } });
+        }
+        return json({ ok: true, data: { ok: true, id: vizArtifacts.put(b.html as string), trust: "untrusted" } });
+      }
+      if (p === "/api/viz/artifact/discard" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: { dropped: vizArtifacts.drop(String(b.id ?? "")) } });
+      }
+      if (p === "/api/viz/artifact/frame" && req.method === "GET") {
+        const html = vizArtifacts.get(url.searchParams.get("id") ?? "");
+        return new Response(html === null ? ARTIFACT_GONE_DOC : artifactFrameDoc(html), { status: html === null ? 404 : 200, headers: artifactFrameHeaders() });
+      }
+      // A world's files, served like /app.js: no token (a dynamic import() cannot send a header), behind the loopback
+      // bind and the Host gate. Only the current version of an installed world, only files its signed manifest lists.
+      if (p.startsWith("/worlds/") && (req.method === "GET" || req.method === "HEAD")) {
+        const asset = resolveWorldAsset(p);
+        if (!asset) return new Response("not found", { status: 404, headers: { "cache-control": "no-cache" } });
+        return new Response(Bun.file(asset.file), { headers: { "content-type": asset.contentType, "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
+      }
       // ADR-0542: the notice for the last dev-to-release cleanup, shown once; ack marks it seen.
       if (p === "/api/release-cleanup" && req.method === "GET") return json({ ok: true, data: pendingReleaseCleanup() });
       if (p === "/api/release-cleanup/ack" && req.method === "POST") return json({ ok: true, data: acknowledgeReleaseCleanup() });
@@ -7608,9 +7669,11 @@ function sandboxControlNow(): SandboxControlView {
   let mxc: SandboxControlView["mxc"];
   if (process.platform === "win32") {
     const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    // P-SANDBOX.WIN1 (ADR-0658): the concrete reason when it is not usable, and whether the boot task that
+    // re-prepares the NUL device at every startup is registered (the NUL step exists only on the DACL tier).
     mxc = m.host
-      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
-      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source, ...(m.host.tier === "appcontainer-dacl" ? { bootTask: mxcBootTaskInstalled(m.executors.prepSha256) } : {}) }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false, reason: m.reason };
   }
   return sandboxControlView({
     platform: process.platform,
