@@ -817,4 +817,7 @@
 //            they did not start (ADR-0659); lost sign-in notice (ADR-0640); P-VIZ.7 sponsors and the stapler
 //            (ADR-0641); Preview fit (ADR-0642); Visualize header clicks (ADR-0643); Fleet drain, Preview over Fleet,
 //            readable Fleet tables and card header clicks (ADR-0644..0647). STABLE: marked Latest; moves the cask.
-export const APP_VERSION = "2.6.0";
+// v2.6.1 = 2.6.0 plus documentation: the README and lucid-agents.com showcase Lucid Agent Worlds and name 2.6.1 as
+//            current; ADR-0660 plans docs.lucid-agents.com (screenshots, captioned videos, search, in-app Help links)
+//            for developers and non-developers alike. No app behavior change. STABLE: marked Latest; moves the cask.
+export const APP_VERSION = "2.6.1";
