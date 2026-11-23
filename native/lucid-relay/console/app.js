@@ -618,6 +618,209 @@
     "exports.siem": "Send audit and security events to a SIEM",
     "exports.siem-reasons": "Include the reasons people typed",
     "exports.siem-test": "Send a test message",
+    // API-1 7.3 (API-1a6): Settings > API access, and the API destinations and failover credentials of Exports.
+    "api.title": "API access",
+    "api.org": "Organization",
+    "api.no-orgs": "This console holds no organization yet.",
+    "api.state-none": "No API map is signed for this organization yet, so nothing can use the API.",
+    "api.state-on": "The API is on.",
+    "api.state-off": "The API is turned off: every API client and scrape token of this organization is refused. Exports continue.",
+    "api.state-expired": "The API map has ended: every API client and scrape token is refused and exports have stopped. Save to sign a new map.",
+    "api.state-set-aside": "The API map was set aside: clients, scrape tokens and exports of this organization are stopped until a new map is signed.",
+    "api.map": "Map <seq>, signed <issued>, ends <expires>.",
+    "api.edition": "The API needs the Enterprise edition.",
+    "api.limits": "Up to <clients> clients, <destinations> destinations and <tokens> scrape tokens.",
+    "api.clients": "API clients",
+    "api.client-add": "Add a client",
+    "api.col-owner": "Owner",
+    "api.col-scopes": "Scopes",
+    "api.col-ceiling": "Highest data class",
+    "api.col-credentials": "Credentials",
+    "api.shown-active": "Active",
+    "api.shown-suspended": "Suspended",
+    "api.shown-expired": "Expired",
+    "api.shown-owner-gone": "Owner left",
+    "api.edit": "Edit",
+    "api.suspend": "Suspend",
+    "api.resume": "Resume",
+    "api.delete": "Delete",
+    "api.new-secret": "New secret",
+    "api.revoke-tokens": "Revoke tokens",
+    "api.denied": "<n> tokens are refused now.",
+    "api.kind-monitoring": "Monitoring",
+    "api.kind-integration": "Integration",
+    "api.ceiling-public": "Public",
+    "api.ceiling-internal": "Internal",
+    "api.ceiling-confidential": "Confidential",
+    "api.ceiling-cui": "CUI",
+    "api.f-name": "Name (lowercase letters, digits and dashes)",
+    "api.f-kind": "Kind",
+    "api.f-owner": "Owner (a person's email)",
+    "api.f-scopes": "Scopes, separated by commas (monitor.read, fleet.read, audit.read, events.subscribe)",
+    "api.f-relays": "Relays, separated by commas, or * for all",
+    "api.f-networks": "Source networks (CIDR), separated by commas; empty means any",
+    "api.f-hours-tz": "Hours: time zone, like America/Chicago; empty means any time",
+    "api.f-hours-from": "Hours: from (HH:MM)",
+    "api.f-hours-to": "Hours: to (HH:MM)",
+    "api.f-hours-days": "Hours: days, 1 (Monday) to 7, separated by commas",
+    "api.f-mtls": "Require mTLS",
+    "api.f-rate-minute": "Requests a minute on each relay (1 to 6000)",
+    "api.f-rate-day": "Requests a day on each relay (1 to 10000000)",
+    "api.f-credentials": "Credentials (a JSON list)",
+    "api.f-credentials-keep": "Leave empty to keep the credentials. A list here replaces them all.",
+    "api.f-days": "Days until the client ends (1 to 366)",
+    "api.f-days-keep": "Leave empty to keep the end date.",
+    "api.f-secret-days": "Days the secret works (1 to 90)",
+    "api.check-name": "Write a name of 1 to 32 lowercase letters, digits or dashes.",
+    "api.check-owner": "Write the owner's email.",
+    "api.check-scopes": "Name at least one scope.",
+    "api.check-relays": "Name at least one relay, or * for all.",
+    "api.check-json": "The credentials are not a JSON list.",
+    "api.check-number": "Write a whole number in the range shown.",
+    "api.check-hours": "Fill in all of the hours, with days from 1 to 7, or none of them.",
+    "api.reveal-secret": "New secret for <name>",
+    "api.reveal-token": "New scrape token <label>",
+    "api.secret-once": "Copy this secret now. It is shown only once.",
+    "api.close": "Close",
+    "api.scrape": "Relay scrape tokens",
+    "api.scrape-new": "Create a relay scrape token",
+    "api.f-scrape-days": "Days (30 to 90)",
+    "api.grace": "Grace after expiry",
+    "api.grace-help": "Hours a credential still works after it ends, from 0 to 168. Raising a value needs a second admin.",
+    "api.grace-person": "People's devices",
+    "api.grace-app": "Apps and API clients",
+    "api.grace-connector": "Connectors",
+    "api.grace-relay": "Relays",
+    "api.stage": "Stage",
+    "api.check-grace": "Each grace is a whole number of hours from 0 to 168.",
+    "api.origins": "Relay API origins",
+    "api.col-origin": "Origin",
+    "api.col-applied": "Changes applied",
+    "api.col-synced": "In sync",
+    "api.set-origin": "Set origin",
+    "api.f-origin": "Origin with its port; empty removes it; it must start with https://",
+    "api.check-origin": "The origin must start with https:// and name a port.",
+    "api.kill": "Kill switch",
+    "api.off": "Turn off the API",
+    "api.on": "Turn the API back on",
+    "api.journal": "Changes applied at once",
+    "api.col-target": "Target",
+    "api.col-when": "When",
+    "api.undo": "Undo",
+    "api.explain": "Explain a request",
+    "api.explain-help": "See which check would refuse a request from a client now, and why.",
+    "api.f-client": "Client",
+    "api.f-method": "Method",
+    "api.f-path": "Path, like /v1/health",
+    "api.f-ip": "Source IP (optional)",
+    "api.explain-run": "Explain",
+    "api.check-passes": "Passes",
+    "api.check-refuses": "Refused (<code>): <words>",
+    "api.explain-first": "Check <n> refuses this request.",
+    "api.explain-ok": "Every check passes.",
+    "api.staged": "Staged changes",
+    "api.staged-none": "Nothing is staged.",
+    "api.staged-by": "Staged by <email>. Kept until <time> unless changed again.",
+    "api.two-person": "A second admin must approve this save because it:",
+    "api.tests-needed": "These destinations need a passing test before saving:",
+    "api.discard": "Discard",
+    "api.f-sign-relay": "Relay your Hub device uses",
+    "api.signing-waiting": "Waiting for your Hub device on <relay> to sign the map.",
+    "api.signing-waiting-other": "Waiting for the Hub device of <email> on <relay> to sign the map.",
+    "api.signing-done": "The map was signed and sent to the relays.",
+    "api.signing-failed": "The map was not signed: <why>",
+    "api.signing-sending": "Asking the relay to send the signing request to your device.",
+    "api.signing-cancel": "Cancel signing",
+    "api.action-client-limit": "Client limits lowered",
+    "exports.destinations": "API destinations",
+    "exports.dest-org": "Destinations of <org>",
+    "exports.dest-preset": "Kind and preset",
+    "exports.dest-add": "Add a destination",
+    "exports.dest-from-siem": "Copy from SIEM settings",
+    "exports.dest-test": "Test",
+    "exports.dest-credential": "Set credential",
+    "exports.test-ok": "The test record arrived.",
+    "exports.test-failed": "The test record did not arrive: <why>",
+    "exports.col-signals": "Signals",
+    "exports.col-source": "Source",
+    "exports.col-backlog": "Backlog",
+    "exports.col-oldest": "Oldest waiting",
+    "exports.col-last-success": "Last success",
+    "exports.col-credential": "Credential",
+    "exports.col-tested": "Tested",
+    "exports.source-staged": "Staged",
+    "exports.source-pinned": "Signed",
+    "exports.state-ok": "Delivering",
+    "exports.state-retrying": "Retrying",
+    "exports.state-paused": "Paused: audit is waiting",
+    "exports.state-failed": "Failed",
+    "exports.state-suspended": "Suspended",
+    "exports.state-none": "No status yet",
+    "exports.cred-held": "Held",
+    "exports.cred-missing": "Not set",
+    "exports.rotate-by": "Rotate by <date>",
+    "exports.cred-sealed": "The credential is sealed. It is never shown again.",
+    "exports.untested": "Needs a passing test",
+    "exports.f-signals": "Signals, separated by commas (metrics, logs, traces, audit)",
+    "exports.f-identities": "People and devices in records",
+    "exports.identities-as-is": "As they are",
+    "exports.identities-pseudonymized": "Pseudonymized",
+    "exports.identities-removed": "Removed",
+    "exports.f-failover": "Relays send directly when they cannot reach the console (failover)",
+    "exports.f-private": "Allow a private network address",
+    "exports.f-endpoint": "Endpoint address",
+    "exports.f-queue-mib": "Queue size in MiB (64 to 65536)",
+    "exports.f-queue-hours": "Oldest record kept, in hours (1 to 720)",
+    "exports.f-credential-type": "Credential type",
+    "exports.cred-entra": "Microsoft Entra certificate",
+    "exports.cred-aws": "AWS IAM Roles Anywhere",
+    "exports.cred-gcp": "Google Cloud service account key",
+    "exports.cred-mtls": "Client certificate (mTLS)",
+    "exports.cred-token": "Vendor token",
+    "exports.s-traces": "Traces endpoint",
+    "exports.s-metrics": "Metrics endpoint",
+    "exports.s-logs": "Logs endpoint",
+    "exports.s-temporality": "Temporality",
+    "exports.s-delta": "Delta",
+    "exports.s-cumulative": "Cumulative",
+    "exports.s-headers": "Header names, separated by commas",
+    "exports.s-sampling": "Trace sampling, from 0 to 1",
+    "exports.s-index": "Index",
+    "exports.s-sourcetypes": "Source types, separated by commas",
+    "exports.s-dce": "Logs ingestion endpoint",
+    "exports.s-dcr": "DCR immutable ID",
+    "exports.s-stream": "Stream",
+    "exports.s-events": "Events, separated by commas (audit, security, relays)",
+    "exports.m-token": "Token",
+    "exports.m-cert": "Certificate (PEM)",
+    "exports.m-key": "Private key (PEM)",
+    "exports.m-ca": "CA certificate (PEM, optional)",
+    "exports.m-chain": "Chain (PEM, optional)",
+    "exports.m-key-json": "Service account key (JSON)",
+    "exports.m-tenant": "Tenant ID",
+    "exports.m-client-id": "Application (client) ID",
+    "exports.m-cloud": "Cloud",
+    "exports.m-cloud-public": "Public",
+    "exports.m-cloud-usgov": "US Government",
+    "exports.m-trust-anchor": "Trust anchor ARN",
+    "exports.m-profile": "Profile ARN",
+    "exports.m-role": "Role ARN",
+    "exports.m-region": "Region",
+    "exports.check-name": "Write a name.",
+    "exports.check-endpoint": "The endpoint address must start with https://.",
+    "exports.check-material": "Fill in every field the credential needs.",
+    "exports.failover": "Failover credentials",
+    "exports.failover-help": "Relays use these only when they cannot reach the console.",
+    "exports.col-public-id": "Public ID",
+    "exports.col-valid-from": "Valid from",
+    "exports.fo-pending": "Pending",
+    "exports.fo-armed": "Armed",
+    "exports.fo-deleted": "Deleted",
+    "exports.fo-csr": "Request CSR",
+    "exports.fo-install": "Install",
+    "exports.fo-csr-shown": "Register this certificate request with the tool, then install the certificate it issues.",
+    "exports.fo-download": "Download the PEM",
+    "exports.fo-days": "Days until it ends (1 to 90)",
     "local.title": "Lucid Admin Console",
     "local.join": "Join a console",
     "local.read-only": "Read only from the console",
@@ -840,6 +1043,32 @@
     "meet-ca-revoke": { title: "Revoke certificate <serial>?", body: "Relays refuse it once they get the new revocation list.", button: "Revoke" },
     "meet-ca-remove": { title: "Remove the CA from this console?", body: "The sealed key is wiped. The last revocation list is valid until <date>; after that, relays that trust this CA refuse everyone unless another signer renews it.", button: "Remove CA" },
     "spokes-root": { title: "Use root <id> for new Remote Spokes relays?", body: "Relays this console installs trust it only when it matches their license.", button: "Save" },
+    // API-1 7.3 (API-1a6)
+    "api-client": { title: "Stage the client <name>?", body: "It joins the next API map. Nothing changes on relays until the map is saved and signed.", button: "Stage" },
+    "api-client-update": { title: "Stage changes to <name>?", body: "Removals apply on relays at once. The rest waits for the next signed map.", button: "Stage" },
+    "api-client-suspend": { title: "Suspend <name>?", body: "Relays refuse it at once. Resuming it needs a signed map.", button: "Suspend" },
+    "api-client-resume": { title: "Resume <name>?", body: "It works again once the next map is signed.", button: "Resume" },
+    "api-client-delete": { title: "Delete <name>?", body: "Relays refuse it at once, and the next map leaves it out.", button: "Delete" },
+    "api-secret": { title: "Make a new secret for <name>?", body: "The secret is shown once. It works for <days> days once the next map is signed. Saving needs a second admin.", button: "Make secret" },
+    "api-revoke-tokens": { title: "Revoke the tokens of <name>?", body: "Relays refuse every access token it holds now. It can ask for new ones.", button: "Revoke" },
+    "api-scrape-token": { title: "Create a relay scrape token for <label>?", body: "The token is shown once. It reads health metrics of <relays> for <days> days once the next map is signed.", button: "Create" },
+    "api-scrape-delete": { title: "Delete the scrape token <hint>?", body: "Relays refuse it at once.", button: "Delete" },
+    "api-grace": { title: "Stage grace hours for <org>?", body: "Lowering a value applies on relays at once. Raising one waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-off": { title: "Turn off the API for <org>?", body: "Every API client and scrape token of this organization is refused at once. Exports continue.", button: "Turn off" },
+    "api-on": { title: "Turn the API back on for <org>?", body: "It works again once the next map is signed. Saving needs a second admin.", button: "Stage" },
+    "api-undo": { title: "Undo <change>?", body: "It is undone once the next map is signed.", button: "Stage" },
+    "api-origin": { title: "Set the API origin of <relay>?", body: "API clients reach this relay at this origin once the next map is signed.", button: "Stage" },
+    "api-discard": { title: "Discard the staged changes for <org>?", body: "Changes already applied on relays stay as they are.", button: "Discard" },
+    "api-save": { title: "Save the API settings of <org>?", body: "Your Hub device signs the new map, then the console sends it to the organization's relays.", button: "Save" },
+    "api-signing-cancel": { title: "Cancel the signing for <org>?", body: "The Hub device is no longer asked to sign this map, and nothing is sent to the relays.", button: "Cancel signing" },
+    "dest-add": { title: "Stage the destination <name>?", body: "It joins the next API map. Test it before you save.", button: "Stage" },
+    "dest-update": { title: "Stage changes to the destination <name>?", body: "Removals apply on relays at once. Test it again before you save.", button: "Stage" },
+    "dest-delete": { title: "Delete the destination <name>?", body: "Relays stop sending to it at once and delete its queues and failover credentials.", button: "Delete" },
+    "dest-credential": { title: "Set the credential of <name>?", body: "It is sealed on this console and never shown again.", button: "Set" },
+    "dest-siem": { title: "Copy the SIEM settings into a destination for <org>?", body: "The SIEM export keeps running until you turn it off.", button: "Copy" },
+    "failover-csr": { title: "Ask <relay> for a certificate request?", body: "The relay makes the key and keeps it. Register the request with the tool, then install the certificate.", button: "Ask" },
+    "failover-install": { title: "Install the failover credential of <name> on <relay>?", body: "The relay seals it and uses it only when it cannot reach the console.", button: "Install" },
+    "failover-delete": { title: "Delete the failover credential of <name> on <relay>?", body: "The relay deletes it and stops failover delivery for this destination.", button: "Delete" },
   };
   // An AC-1-shaped dialog spec (title, body lines, buttons) from a fleet dialog.
   const fspec = (k) => ({ title: FD[k].title, body: [FD[k].body], button: [FD[k].button] });
@@ -854,7 +1083,7 @@
     { id: "nav.license", route: "license", pages: [] },
     { id: "nav.sign-in", route: "sign-in", pages: [] },
     { id: "nav.email", route: "email", pages: [] },
-    { id: "nav.security", route: "security", pages: [["approvals", "Approvals"], ["requests", "Requests"], ["audit", "Audit log"], ["settings", "Security settings"], ["exports", "Exports"]] },
+    { id: "nav.security", route: "security", pages: [["approvals", "Approvals"], ["requests", "Requests"], ["audit", "Audit log"], ["settings", "Security settings"], ["exports", "Exports"], ["api", "API access"]] },
     { id: "nav.settings", route: "settings", pages: [["console", "Console"], ["setup", "Setup"], ["consoles", "Other consoles"], ["account", "Your account"]] },
   ];
   // Role views (12.4): viewers see health and lists without people and no controls; user managers add People and the
@@ -2075,6 +2304,8 @@
     const s = S.dlg;
     if (!s) return;
     S.dlg = null;
+    // Typed values (credential material among them) leave the page with the dialog.
+    $("confirm-fields").replaceChildren();
     if (s.opener && document.contains(s.opener)) s.opener.focus();
     else {
       const h = $("page-title");
@@ -4766,7 +4997,7 @@
     if (a === "email") return pages.fleetEmail;
     if (a === "security") {
       if (b === "requests") return fleetProduct("security", "requests", r);
-      return { approvals: pages.approvals, audit: pages.admins_audit, settings: pages.fleetSecurity, exports: pages.fleetExports }[b] || pages.approvals;
+      return { approvals: pages.approvals, audit: pages.admins_audit, settings: pages.fleetSecurity, exports: pages.fleetExports, api: pages.fleetApi }[b] || pages.approvals;
     }
     if (a === "settings") {
       return { console: pages.fleetConsole, setup: pages.fleetSetup, consoles: pages.fleetConsoles, account: pages.admins_account }[b] || pages.admins_account;
@@ -6527,8 +6758,643 @@
           siem ? btn(FMSG.turnOff, () => confirmDialog({
             spec: fspec("siem-off"), name: siem.host, id: siem.host + ":" + siem.port, danger: true, two: true, fields: [{ kind: "reason" }],
             run: (v) => post("settings/exports/siem", { off: true, reason: v.reason }, { action: "exports.siem", target: "-" }),
-          }), "danger") : null))];
+          }), "danger") : null)),
+      exportsApi(d)];
   };
+
+  // ---- Settings > API access and the API destinations of Exports (API-1 4, 6.2, 6.6, 7.3, 11, 12.3; API-1a6) ----
+  // Every change is staged per organization: removals apply on relays at once (the journal) and the rest waits for the
+  // staged save, which a second admin approves where 6.6 says so and the admin's own Hub device signs (meet.api.sign).
+  // A secret or token is shown once, in its own dialog, and kept nowhere else.
+  const CEILINGS = ["public", "internal", "confidential", "cui"];
+  const ceilingWord = (c) => FW["api.ceiling-" + c] || stateWord(c);
+  const yesNoOptions = () => [["no", MSG.no], ["yes", MSG.yes]];
+  const commaList = (t) => [...new Set(String(t || "").split(",").map((x) => x.trim()).filter(Boolean))];
+  const wholeIn = (v, lo, hi) => /^[0-9]{1,9}$/.test(String(v == null ? "" : v).trim()) && Number(v) >= lo && Number(v) <= hi;
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  function jsonList(t) {
+    try {
+      const v = JSON.parse(t);
+      return Array.isArray(v) ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Rows without a step-up post as they are; step-up rows bind the action to the organization (target "org").
+  const apiPost = (path, body) => api("POST", path, body, { direct: true });
+  const apiStep = (path, body, action) => post(path, body, { action, target: body.org });
+  const relaysText = (list) => ((list || []).includes("*") || !(list || []).length ? FMSG.relaysAll : list.map(relayName).join(", "));
+  // The organization's relays as {id, synced}: the API view lists objects, the exports view ids.
+  const orgRelays = (list) => (list || []).map((x) => (typeof x === "string" ? { id: x, synced: true } : x)).filter((x) => x && x.id);
+
+  // The one-time reveal: the value lives in this dialog only, and the dialog leaves the page when it closes.
+  function revealOnce(title, id, sentence, value) {
+    const d = el("dialog", { class: "confirm reveal", "aria-labelledby": "reveal-title" });
+    let held = String(value || "");
+    const copy = el("button", { type: "button" }, MSG.copy);
+    const close = el("button", { type: "button", class: "primary" }, FW["api.close"]);
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(held);
+        say(MSG.copied);
+      } catch (e) {
+        fail(e);
+      }
+    });
+    close.addEventListener("click", () => d.close());
+    d.addEventListener("close", () => {
+      held = "";
+      d.remove();
+      const h = $("page-title");
+      if (h) h.focus();
+    });
+    d.append(el("h2", { id: "reveal-title", tabindex: "-1" }, title),
+      el("div", { class: "target" }, el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), " ", code(id))),
+      el("p", null, sentence), el("p", null, el("code", { class: "code-once" }, clean(held))), el("div", { class: "dlg-actions" }, copy, close));
+    document.body.append(d);
+    d.showModal();
+    $("reveal-title").focus();
+  }
+
+  // The staged changes of one organization, shared by API access and Exports, with the signing state and Save.
+  function apiStaged(o) {
+    const s = o.staged;
+    const sg = o.signing;
+    const kids = [];
+    if (sg && sg.state === "waiting") {
+      const relay = relayName(sg.relay || "");
+      kids.push(banner("info", MSG.sev.info, sg.by && sg.by !== myEmail() ? fill(FW["api.signing-waiting-other"], { email: sg.by, relay }) : fill(FW["api.signing-waiting"], { relay }),
+        " ", code(sg.request || "")));
+    } else if (sg && sg.state === "sending") kids.push(banner("info", MSG.sev.info, FW["api.signing-sending"]));
+    else if (sg && sg.state === "done") kids.push(banner("info", MSG.sev.info, FW["api.signing-done"]));
+    else if (sg && sg.state === "failed") kids.push(banner("bad", MSG.sev.bad, fill(FW["api.signing-failed"], { why: sg.error || "" })));
+    // One signing at a time per organization: while one is in flight, Cancel signing takes the place of Save.
+    const inFlight = !!sg && (sg.state === "waiting" || sg.state === "sending");
+    if (inFlight && isAdmin()) {
+      kids.push(el("div", { class: "wizard-actions" }, btn(FW["api.signing-cancel"], () => confirmDialog({
+        spec: fspec("api-signing-cancel"), vals: { org: o.org }, name: o.org, id: sg.request || o.org, danger: true,
+        run: () => apiPost("settings/api/signing/cancel", { org: o.org }),
+      }), "danger")));
+    }
+    if (!s) return section(uid("api-h"), FW["api.staged"], ...kids, emptyLine(FW["api.staged-none"]));
+    const names = o.names || {};
+    kids.push(el("p", null, fill(FW["api.staged-by"], { email: s.by || "", time: when(s.expires_at) })), el("ul", null, (s.changes || []).map((c) => el("li", null, u(c)))));
+    if (s.two_person) kids.push(el("p", null, FW["api.two-person"]), el("ul", null, (s.two_person_reasons || []).map((c) => el("li", null, u(c)))));
+    if ((s.tests_needed || []).length) kids.push(el("p", null, FW["api.tests-needed"]), el("ul", null, s.tests_needed.map((id) => el("li", null, u(names[id] || id), " ", code(id)))));
+    if (isAdmin()) {
+      kids.push(el("div", { class: "wizard-actions" }, inFlight ? null : btn(MSG.save, () => apiSave(o), "primary"), btn(FW["api.discard"], () => confirmDialog({
+        spec: fspec("api-discard"), vals: { org: o.org }, name: o.org, id: s.id, danger: true,
+        run: () => apiPost("settings/api/discard", { org: o.org }),
+      }))));
+    }
+    return section(uid("api-h"), FW["api.staged"], ...kids);
+  }
+  // Save: two-person when the stage says so (6.6); the Hub devices of the chosen relay see the signing request.
+  function apiSave(o) {
+    const s = o.staged;
+    const relays = orgRelays(o.relays);
+    const first = (relays.find((x) => x.synced) || relays[0] || {}).id;
+    const pick = relays.length > 1 ? [{ kind: "select", key: "relay", label: FW["api.f-sign-relay"], options: relays.map((x) => [x.id, relayName(x.id)]), value: first }] : [];
+    confirmDialog({
+      spec: fspec("api-save"), vals: { org: o.org }, name: o.org, id: s.id, two: !!s.two_person, fields: pick.concat([{ kind: "reason" }]),
+      params: [[FW["api.staged"], (s.changes || []).join("; ")]],
+      run: (v) => apiPost("settings/api/save", Object.assign({ org: o.org, stage: s.id, reason: v.reason }, v.relay ? { relay: v.relay } : {})),
+    });
+  }
+
+  pages.fleetApi = async (c) => {
+    const [d] = await Promise.all([api("GET", "settings/api", null, { direct: true }), fleetRelays().catch(() => [])]);
+    const orgs = d.orgs || [];
+    if (!orgs.length) return [head(FW["api.title"]), panel(null, emptyLine(FW["api.no-orgs"]))];
+    const want = c && c.q ? c.q.get("org") : null;
+    const o = orgs.find((x) => x.org === want) || orgs[0];
+    const pick = orgs.length > 1 ? el("nav", { class: "chips", "aria-label": FW["api.org"] },
+      orgs.map((x) => el("a", { href: "#/security/api?org=" + encodeURIComponent(x.org), "aria-current": x.org === o.org ? "page" : null }, u(x.org)))) : null;
+    const map = o.map;
+    const view = o.draft || map || {};
+    const admin = isAdmin();
+    const state = o.state || "none";
+    const stopped = ["off", "expired", "set-aside"].includes(state);
+    const lim = o.limits || {};
+    const kids = [head(FW["api.title"], pick), banner(stopped ? "bad" : "info", stopped ? MSG.sev.bad : MSG.sev.info, FW["api.state-" + state] || stateWord(state))];
+    if (o.edition && o.edition !== "enterprise") kids.push(banner("warn", MSG.sev.warn, FW["api.edition"]));
+    kids.push(panel(null, el("p", { class: "id-line" }, el("span", { class: "id-label" }, FW["api.org"]), " ", code(o.org)),
+      map ? el("p", null, fill(FW["api.map"], { seq: map.seq, issued: whenSec(map.issued), expires: whenSec(map.expires) })) : null,
+      el("p", { class: "note" }, fill(FW["api.limits"], { clients: lim.clients, destinations: lim.destinations, tokens: lim.scrape_tokens }))));
+    kids.push(apiStaged({ org: o.org, staged: o.staged, signing: o.signing, relays: o.relays }), apiClients(o, view, admin), apiScrape(o, view, admin), apiGrace(o, view, admin),
+      apiOrigins(o, view, admin));
+    if (admin) kids.push(apiKill(o, state));
+    kids.push(apiJournal(o, admin), apiExplain(o, view));
+    return kids;
+  };
+
+  // API clients (4.1 to 4.3): the hints of their credentials only; a new secret is shown once.
+  const SHOWN_TONE = { active: "ok", suspended: "warn", expired: "bad", "owner-gone": "bad" };
+  const credHints = (list) => (list || []).map((x) => x.type + " " + (x.hint || "") + (x.expires ? " (" + daySec(x.expires) + ")" : "")).join("; ");
+  function apiClients(o, view, admin) {
+    const org = o.org;
+    const add = admin ? btn(FW["api.client-add"], () => confirmDialog({
+      spec: fspec("api-client"), vals: { name: "" }, vals2: (v) => ({ name: v.name }), fields: clientFields(null),
+      check: (v) => clientCheck(v, null),
+      run: (v) => apiStep("settings/api/clients", { org, client: clientBody(v, null) }, "api.client.stage"),
+    }), "primary") : null;
+    return section(uid("api-h"), FW["api.clients"], add ? el("div", { class: "page-head" }, add) : null, dataTable({
+      caption: FW["api.clients"], rows: view.clients || [], empty: MSG.noneYet, name: (x) => x.name, text: (x) => [x.name, x.owner, x.id].join(" "),
+      cols: [{ key: "name", label: FMSG.cols.name, cell: (x) => u(x.name) }, { key: "kind", label: FMSG.cols.kind, cell: (x) => FW["api.kind-" + x.kind] || stateWord(x.kind) },
+        { key: "owner", label: FW["api.col-owner"], cell: (x) => u(x.owner) }, { key: "scopes", label: FW["api.col-scopes"], cell: (x) => (x.scopes || []).join(", "), sortable: false },
+        { key: "ceiling", label: FW["api.col-ceiling"], cell: (x) => ceilingWord(x.ceiling) }, { key: "relays", label: FMSG.cols.count, cell: (x) => relaysText(x.relays), sortable: false },
+        { key: "shown_state", label: FMSG.cols.state, cell: (x) => toneChip(FW["api.shown-" + x.shown_state] || stateWord(x.shown_state || x.state), SHOWN_TONE[x.shown_state]) },
+        { key: "credentials", label: FW["api.col-credentials"], cell: (x) => credHints(x.credentials), sortable: false },
+        { key: "expires", label: FMSG.cols.ends, cell: (x) => whenSec(x.expires) }],
+      actions: (x) => (admin ? clientActions(org, x) : []),
+    }));
+  }
+  function clientActions(org, x) {
+    const named = { name: x.name };
+    const out = [{
+      label: FW["api.edit"], run: () => confirmDialog({
+        spec: fspec("api-client-update"), vals: named, name: x.name, id: x.id, fields: clientFields(x),
+        check: (v) => clientCheck(v, x),
+        run: (v) => apiStep("settings/api/clients/update", { org, id: x.id, client: clientBody(v, x) }, "api.client.update"),
+      }),
+    }];
+    if (x.state === "suspended") {
+      out.push({ label: FW["api.resume"], run: () => confirmDialog({
+        spec: fspec("api-client-resume"), vals: named, name: x.name, id: x.id,
+        run: () => apiPost("settings/api/clients/resume", { org, id: x.id }),
+      }) });
+    } else {
+      out.push({ label: FW["api.suspend"], run: () => confirmDialog({
+        spec: fspec("api-client-suspend"), vals: named, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => apiPost("settings/api/clients/suspend", { org, id: x.id, reason: v.reason }),
+      }) });
+    }
+    out.push({ label: FW["api.new-secret"], run: () => confirmDialog({
+      spec: fspec("api-secret"), vals: { name: x.name, days: 90 }, vals2: (v) => ({ days: v.days }), name: x.name, id: x.id,
+      fields: [{ key: "days", label: FW["api.f-secret-days"], value: 90, inputmode: "numeric" }],
+      check: (v) => (wholeIn(v.days, 1, 90) ? "" : FW["api.check-number"]),
+      run: (v) => apiStep("settings/api/clients/secret", { org, id: x.id, days: Number(v.days) }, "api.client.secret"),
+      plain: true,
+      done: (r) => render({ keepMessages: true }).then(() => {
+        if (r && r.secret) revealOnce(fill(FW["api.reveal-secret"], named), r.hint || x.id, FW["api.secret-once"], r.secret);
+      }),
+    }) }, { label: FW["api.revoke-tokens"], run: () => confirmDialog({
+      spec: fspec("api-revoke-tokens"), vals: named, name: x.name, id: x.id, danger: true,
+      run: () => apiPost("settings/api/clients/revoke-tokens", { org, id: x.id }),
+      done: (r) => render({ keepMessages: true }).then(() => say(fillText(FW["api.denied"], { n: r && r.denied != null ? r.denied : 0 }))),
+    }) }, { label: FW["api.delete"], run: () => confirmDialog({
+      spec: fspec("api-client-delete"), vals: named, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiPost("settings/api/clients/delete", { org, id: x.id, reason: v.reason }),
+    }) });
+    return out;
+  }
+  // The client fields of 2.2 (client_secret credentials come only from New secret).
+  function clientFields(x) {
+    const h = (x && x.hours) || {};
+    const rate = (x && x.rate) || {};
+    return [
+      { key: "name", label: FW["api.f-name"], value: x ? x.name : "", maxlength: "32", required: true },
+      { kind: "select", key: "kind", label: FW["api.f-kind"], options: [["monitoring", FW["api.kind-monitoring"]], ["integration", FW["api.kind-integration"]]], value: x ? x.kind : "monitoring" },
+      { key: "owner", label: FW["api.f-owner"], value: x ? x.owner : "", maxlength: "254" },
+      { key: "scopes", label: FW["api.f-scopes"], value: x ? (x.scopes || []).join(", ") : "monitor.read" },
+      { kind: "select", key: "ceiling", label: FW["api.col-ceiling"], options: CEILINGS.map((c) => [c, ceilingWord(c)]), value: x ? x.ceiling : "internal" },
+      { key: "relays", label: FW["api.f-relays"], value: x ? (x.relays || []).join(", ") : "*" },
+      { key: "networks", label: FW["api.f-networks"], value: x ? (x.networks || []).join(", ") : "" },
+      { key: "tz", label: FW["api.f-hours-tz"], value: h.tz || "", maxlength: "64" },
+      { key: "from", label: FW["api.f-hours-from"], value: h.from || "", maxlength: "5" },
+      { key: "to", label: FW["api.f-hours-to"], value: h.to || "", maxlength: "5" },
+      { key: "weekdays", label: FW["api.f-hours-days"], value: (h.days || []).join(", ") },
+      { kind: "select", key: "mtls", label: FW["api.f-mtls"], options: yesNoOptions(), value: x && x.mtls_required ? "yes" : "no" },
+      { key: "perMinute", label: FW["api.f-rate-minute"], value: rate.per_minute_each || 120, inputmode: "numeric" },
+      { key: "perDay", label: FW["api.f-rate-day"], value: rate.per_day_each || 100000, inputmode: "numeric" },
+      { kind: "textarea", key: "credentials", label: FW["api.f-credentials"], value: x ? "" : "[]", note: x ? FW["api.f-credentials-keep"] : null },
+      { key: "lifetime", label: FW["api.f-days"], value: x ? "" : 366, inputmode: "numeric", note: x ? FW["api.f-days-keep"] : null },
+    ];
+  }
+  function clientCheck(v, x) {
+    const hours = [v.tz, v.from, v.to, v.weekdays];
+    if (!/^[a-z0-9-]{1,32}$/.test(v.name)) return FW["api.check-name"];
+    if (!/^[^@\s]+@[^@\s]+$/.test(v.owner)) return FW["api.check-owner"];
+    if (!commaList(v.scopes).length) return FW["api.check-scopes"];
+    if (!commaList(v.relays).length) return FW["api.check-relays"];
+    if (hours.some(Boolean) && !(hours.every(Boolean) && commaList(v.weekdays).every((n) => wholeIn(n, 1, 7)))) return FW["api.check-hours"];
+    if (!wholeIn(v.perMinute, 1, 6000) || !wholeIn(v.perDay, 1, 10000000)) return FW["api.check-number"];
+    if ((v.credentials || !x) && !jsonList(v.credentials)) return FW["api.check-json"];
+    if ((v.lifetime || !x) && !wholeIn(v.lifetime, 1, 366)) return FW["api.check-number"];
+    return "";
+  }
+  // An edit sends every field shown; cleared hours go as null (any time), empty credentials and days keep the old ones.
+  function clientBody(v, x) {
+    const c = { name: v.name, kind: v.kind, owner: v.owner, scopes: commaList(v.scopes), ceiling: v.ceiling, relays: commaList(v.relays), networks: commaList(v.networks),
+      mtls_required: v.mtls === "yes", rate: { per_minute_each: Number(v.perMinute), per_day_each: Number(v.perDay) } };
+    if (v.tz) c.hours = { tz: v.tz, from: v.from, to: v.to, days: commaList(v.weekdays).map(Number) };
+    else if (x && x.hours) c.hours = null;
+    if (v.credentials || !x) c.credentials = jsonList(v.credentials);
+    if (v.lifetime || !x) c.days = Number(v.lifetime);
+    return c;
+  }
+
+  // Relay scrape tokens (4.4): a new token is shown once; deleting one journals scrape_deny.
+  function apiScrape(o, view, admin) {
+    const org = o.org;
+    let label = "";
+    const add = admin ? btn(FW["api.scrape-new"], () => confirmDialog({
+      spec: fspec("api-scrape-token"), vals: { label: "", relays: FMSG.relaysAll, days: 90 },
+      fields: [{ key: "label", label: FMSG.label, maxlength: "64", required: true },
+        { kind: "select", key: "relays", label: FMSG.cols.count, options: [["*", FMSG.relaysAll]].concat(orgRelays(o.relays).map((x) => [x.id, relayName(x.id)])), value: "*" },
+        { key: "days", label: FW["api.f-scrape-days"], value: 90, inputmode: "numeric" }],
+      vals2: (v) => ({ label: v.label, relays: relaysText([v.relays]), days: v.days }),
+      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !wholeIn(v.days, 30, 90) ? FW["api.check-number"] : ""),
+      run: (v) => {
+        label = v.label;
+        return apiStep("settings/api/scrape-tokens", { org, action: "create", label: v.label, relays: [v.relays], days: Number(v.days) }, "api.scrape-token");
+      },
+      plain: true,
+      done: (r) => render({ keepMessages: true }).then(() => {
+        if (r && r.token) revealOnce(fill(FW["api.reveal-token"], { label }), r.hint || "", FW["exports.token-once"], r.token);
+      }),
+    }), "primary") : null;
+    return section(uid("api-h"), FW["api.scrape"], add ? el("div", { class: "page-head" }, add) : null, dataTable({
+      caption: FW["api.scrape"], rows: view.scrape_tokens || [], empty: MSG.noneYet, name: (t) => t.label,
+      cols: [{ key: "label", label: FMSG.label, cell: (t) => u(t.label) }, { key: "hint", label: W["dialog.id"], cell: (t) => code(t.hint) },
+        { key: "relays", label: FMSG.cols.count, cell: (t) => relaysText(t.relays), sortable: false }, { key: "expires", label: FMSG.cols.ends, cell: (t) => whenSec(t.expires) }],
+      actions: (t) => (admin ? [{ label: FW["api.delete"], run: () => confirmDialog({
+        spec: fspec("api-scrape-delete"), vals: { hint: t.hint }, name: t.label, id: t.hint, danger: true,
+        run: () => apiStep("settings/api/scrape-tokens", { org, action: "delete", hint: t.hint }, "api.scrape-token"),
+      }) }] : []),
+    }));
+  }
+
+  // Grace hours (3.1): 0 to 168 per kind; raising is two-person at save, lowering journals grace_lower.
+  const GRACE = ["person", "app", "connector", "relay"];
+  function apiGrace(o, view, admin) {
+    const g = view.grace || {};
+    const inputs = GRACE.map((k) => {
+      const f = textField(FW["api.grace-" + k], { inputmode: "numeric", maxlength: "3", disabled: admin ? null : true });
+      f.input.value = String(g[k] == null ? 0 : g[k]);
+      return [k, f];
+    });
+    const stage = admin ? btn(FW["api.stage"], () => {
+      const typed = Object.fromEntries(inputs.map(([k, f]) => [k, f.input.value.trim()]));
+      if (!GRACE.every((k) => wholeIn(typed[k], 0, 168))) {
+        fail(FW["api.check-grace"]);
+        return;
+      }
+      const grace = Object.fromEntries(GRACE.map((k) => [k, Number(typed[k])]));
+      confirmDialog({
+        spec: fspec("api-grace"), vals: { org: o.org }, name: o.org, id: o.org, params: GRACE.map((k) => [FW["api.grace-" + k], String(grace[k])]),
+        run: () => apiStep("settings/api/grace", { org: o.org, grace }, "api.grace"),
+      });
+    }, "primary") : null;
+    return section(uid("api-h"), FW["api.grace"], el("p", { class: "note" }, FW["api.grace-help"]), inputs.map(([, f]) => f.box), stage ? el("div", { class: "wizard-actions" }, stage) : null);
+  }
+
+  // Relay API origins (2.2 relay_origins), with each relay's journal acknowledgment and sync.
+  function apiOrigins(o, view, admin) {
+    const origins = view.relay_origins || {};
+    return section(uid("api-h"), FW["api.origins"], dataTable({
+      caption: FW["api.origins"], rows: orgRelays(o.relays), empty: MSG.noneYet, name: (x) => relayName(x.id),
+      cols: [{ key: "id", label: FMSG.cols.relay, cell: (x) => u(relayName(x.id)) }, { key: "origin", label: FW["api.col-origin"], cell: (x) => (origins[x.id] ? code(origins[x.id]) : ""), sortable: false },
+        { key: "acked", label: FW["api.col-applied"], cell: (x) => (typeof x.acked === "boolean" ? yesNo(x.acked) : String(x.acked == null ? "" : x.acked)) },
+        { key: "synced", label: FW["api.col-synced"], cell: (x) => yesNo(x.synced) }],
+      actions: (x) => (admin ? [{ label: FW["api.set-origin"], run: () => confirmDialog({
+        spec: fspec("api-origin"), vals: { relay: relayName(x.id) }, name: relayName(x.id), id: x.id,
+        fields: [{ key: "origin", label: FW["api.f-origin"], value: origins[x.id] || "", maxlength: "300" }],
+        check: (v) => (!v.origin || /^https:\/\/[^\s/?#@]+:[0-9]{1,5}$/.test(v.origin) ? "" : FW["api.check-origin"]),
+        run: (v) => apiStep("settings/api/relay-origins", { org: o.org, relay: x.id, origin: v.origin }, "api.relay-origin"),
+      }) }] : []),
+    }));
+  }
+
+  // The kill switch (2.5 api_off): off journals at once with a reason; on stages its clearing (two-person at save).
+  function apiKill(o, state) {
+    const org = o.org;
+    const on = state === "off"
+      ? btn(FW["api.on"], () => confirmDialog({ spec: fspec("api-on"), vals: { org }, name: org, id: org, run: () => apiPost("settings/api/on", { org }) }), "primary")
+      : btn(FW["api.off"], () => confirmDialog({
+        spec: fspec("api-off"), vals: { org }, name: org, id: org, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => apiPost("settings/api/off", { org, reason: v.reason }),
+      }), "danger");
+    return section(uid("api-h"), FW["api.kill"], el("div", { class: "wizard-actions" }, on));
+  }
+
+  // The tightening journal (2.5, newest 50); a client or destination tightening can be undone by a signed clearing.
+  const UNDO = /^(client_(suspend|drop_scope|drop_relay|lower_ceiling|drop_credential|limit)|destination_(suspend|disable_failover|drop_signal|lower_ceiling|identities))$/;
+  // Journal actions with words of their own; the rest show the action as it is written.
+  const ACTION_WORD = { client_limit: "api.action-client-limit" };
+  const actionWord = (a) => (ACTION_WORD[a] ? FW[ACTION_WORD[a]] : a);
+  // A target such as client_limit's {client, relays, networks, rate}: lists joined, objects as JSON.
+  const journalTarget = (t) => (t && typeof t === "object"
+    ? Object.entries(t).map(([k, v]) => k + " " + (Array.isArray(v) ? v.join(" ") : v && typeof v === "object" ? JSON.stringify(v) : String(v))).join(", ")
+    : String(t == null ? "" : t));
+  function apiJournal(o, admin) {
+    const j = o.journal || {};
+    return section(uid("api-h"), FW["api.journal"], dataTable({
+      caption: FW["api.journal"], rows: j.entries || [], empty: MSG.noneYet, name: (e) => actionWord(e.action), text: (e) => [e.id, e.action, journalTarget(e.target)].join(" "),
+      cols: [{ key: "id", label: W["dialog.id"], cell: (e) => code(e.id), sort: (e) => e.tseq }, { key: "action", label: FMSG.change, cell: (e) => (ACTION_WORD[e.action] ? actionWord(e.action) : code(e.action)) },
+        { key: "target", label: FW["api.col-target"], cell: (e) => journalTarget(e.target), sortable: false }, { key: "ts", label: FW["api.col-when"], cell: (e) => whenSec(e.ts) },
+        { key: "until", label: FMSG.cols.ends, cell: (e) => (e.until ? whenSec(e.until) : "") }],
+      actions: (e) => (admin && UNDO.test(e.action) ? [{ label: FW["api.undo"], run: () => confirmDialog({
+        spec: fspec("api-undo"), vals: { change: actionWord(e.action) }, name: actionWord(e.action), id: e.id,
+        run: () => apiStep("settings/api/resume", { org: o.org, tightening: e.id }, "api.resume"),
+      }) }] : []),
+    }));
+  }
+
+  // Explain (6.2): each check in order with ok or the code and words that would refuse the request.
+  function apiExplain(o, view) {
+    const id = uid("ex");
+    const clients = view.clients || [];
+    const client = el("select", { id: id + "-c" }, clients.map((x) => el("option", { value: x.id }, clean(x.name))));
+    const method = el("select", { id: id + "-m" }, ["GET", "POST"].map((m) => el("option", { value: m }, m)));
+    if (clients.length) client.value = clients[0].id;
+    method.value = "GET";
+    const path = textField(FW["api.f-path"], { maxlength: "512" });
+    path.input.value = "/v1/health";
+    const ip = textField(FW["api.f-ip"], { maxlength: "64" });
+    const out = el("div", { "aria-live": "polite" });
+    const run = btn(FW["api.explain-run"], async () => {
+      const body = { org: o.org, client: client.value, method: method.value, path: path.input.value.trim() };
+      if (ip.input.value.trim()) body.ip = ip.input.value.trim();
+      try {
+        const r = await apiPost("settings/api/explain", body);
+        out.replaceChildren(el("ul", { class: "checks" }, (r.checks || []).map((ch) => el("li", null, String(ch.n) + ". ", u(ch.name), ": ",
+          ch.ok ? FW["api.check-passes"] : fill(FW["api.check-refuses"], { code: ch.code || "", words: ch.words || "" })))),
+        el("p", null, r.first_fail == null ? FW["api.explain-ok"] : fill(FW["api.explain-first"], { n: r.first_fail })));
+      } catch (e) {
+        fail(e);
+      }
+    }, "primary");
+    return section(uid("api-h"), FW["api.explain"], el("p", { class: "note" }, FW["api.explain-help"]),
+      el("div", { class: "field" }, el("label", { for: id + "-c" }, FW["api.f-client"]), client),
+      el("div", { class: "field" }, el("label", { for: id + "-m" }, FW["api.f-method"]), method), path.box, ip.box, el("div", { class: "wizard-actions" }, run), out);
+  }
+
+  // ---- Exports: API destinations (11.1 to 11.7) and their failover credentials (12.3) ----
+  const DEST_TONE = { ok: "ok", retrying: "warn", paused: "bad", failed: "bad", suspended: "warn" };
+  const CRED_WORD = { entra_certificate: "exports.cred-entra", aws_roles_anywhere: "exports.cred-aws", gcp_service_account_key: "exports.cred-gcp", mtls: "exports.cred-mtls", token: "exports.cred-token" };
+  const credWord = (t) => FW[CRED_WORD[t]] || stateWord(t);
+  // Failover types whose key the relay makes (a CSR first).
+  const CSR_TYPES = ["entra_certificate", "aws_roles_anywhere", "mtls"];
+  const IDENTITIES = [["pseudonymized", "exports.identities-pseudonymized"], ["removed", "exports.identities-removed"], ["as_is", "exports.identities-as-is"]];
+  const presetWord = (p) => p.id + " (" + p.kind + ")";
+  function credCell(c) {
+    if (!c || !c.type) return FW["exports.cred-missing"];
+    return credWord(c.type) + ": " + (c.held ? FW["exports.cred-held"] : FW["exports.cred-missing"]) + (c.rotate_by ? "; " + fillText(FW["exports.rotate-by"], { date: dayAny(c.rotate_by) }) : "");
+  }
+  function exportsApi(d) {
+    const presets = d.presets || [];
+    const entries = d.api || [];
+    if (!entries.length) return null;
+    return section("dest-h", FW["exports.destinations"], el("div", { id: "fo-csr" }), entries.map((e) => exportsOrg(e, presets, !!d.siem)));
+  }
+  function exportsOrg(e, presets, siem) {
+    const org = e.org;
+    const admin = isAdmin();
+    const dests = e.destinations || [];
+    const names = Object.fromEntries(dests.map((x) => [x.id, x.name]));
+    const kids = [];
+    if (admin && presets.length) {
+      const sid = uid("pre");
+      const pick = el("select", { id: sid }, presets.map((p) => el("option", { value: p.id }, clean(presetWord(p)))));
+      pick.value = presets[0].id;
+      kids.push(el("div", { class: "page-head" }, el("label", { for: sid }, FW["exports.dest-preset"], pick),
+        btn(FW["exports.dest-add"], () => destDialog(org, presets.find((p) => p.id === pick.value) || presets[0], null), "primary"),
+        siem ? btn(FW["exports.dest-from-siem"], () => confirmDialog({
+          spec: fspec("dest-siem"), vals: { org }, name: org, id: org,
+          run: () => apiStep("settings/exports/destinations", { org, from_siem: true }, "exports.destination.stage"),
+        })) : null));
+    }
+    kids.push(dataTable({
+      caption: fillText(FW["exports.dest-org"], { org }), rows: dests, empty: MSG.noneYet, name: (x) => x.name, text: (x) => [x.name, x.id, x.preset].join(" "),
+      cols: [{ key: "name", label: FMSG.cols.name, cell: (x) => u(x.name) }, { key: "preset", label: FW["exports.dest-preset"], cell: (x) => (x.preset || "") + " (" + (x.kind || "") + ")" },
+        { key: "signals", label: FW["exports.col-signals"], cell: (x) => (x.signals || []).join(", "), sortable: false },
+        { key: "source", label: FW["exports.col-source"], cell: (x) => FW["exports.source-" + x.source] || stateWord(x.source) },
+        { key: "state", label: FMSG.cols.state, sort: (x) => (x.status ? x.status.state : null),
+          cell: (x) => (x.status ? toneChip(FW["exports.state-" + x.status.state] || stateWord(x.status.state), DEST_TONE[x.status.state]) : FW["exports.state-none"]) },
+        { key: "backlog", label: FW["exports.col-backlog"], cell: (x) => (x.status ? fmtBytes(Number(x.status.backlog_bytes || 0)) : ""), sort: (x) => (x.status ? x.status.backlog_bytes : null) },
+        { key: "oldest", label: FW["exports.col-oldest"], cell: (x) => (x.status && x.status.oldest_s ? span(x.status.oldest_s) : ""), sortable: false },
+        { key: "success", label: FW["exports.col-last-success"], cell: (x) => (x.status ? whenAny(x.status.last_success) : ""), sortable: false },
+        { key: "error", label: FMSG.lastError, cell: (x) => u((x.status && x.status.last_error) || ""), sortable: false },
+        { key: "credential", label: FW["exports.col-credential"], cell: (x) => credCell(x.credential), sortable: false },
+        { key: "tested", label: FW["exports.col-tested"], cell: (x) => (x.tested ? MSG.yes : FW["exports.untested"]) }],
+      actions: (x) => (admin ? destActions(org, x, presets) : []),
+    }));
+    for (const x of dests.filter((y) => y.failover)) kids.push(failoverPart(org, x, e));
+    kids.push(apiStaged({ org, staged: e.staged, signing: null, relays: e.relays, names }));
+    return sub(fill(FW["exports.dest-org"], { org }), ...kids);
+  }
+  function destActions(org, x, presets) {
+    const p = presets.find((y) => y.id === x.preset) || { id: x.preset, kind: x.kind, credential_types: [(x.credential || {}).type].filter(Boolean), signals: x.signals || [] };
+    const type = (x.credential || {}).type;
+    return [{ label: FW["api.edit"], run: () => destDialog(org, p, x) }, {
+      label: FW["exports.dest-test"], run: async () => {
+        try {
+          await apiPost("settings/exports/destinations/test", { org, id: x.id });
+          say(FW["exports.test-ok"]);
+        } catch (err) {
+          // {ok: false, error} arrives inside a 200 answer: the record did not arrive.
+          fail(err && err.status === 200 ? fillText(FW["exports.test-failed"], { why: err.message }) : err);
+        }
+        render({ keepMessages: true });
+      },
+    }, { label: FW["exports.dest-credential"], run: () => confirmDialog({
+      spec: fspec("dest-credential"), vals: { name: x.name }, name: x.name, id: x.id, fields: materialFields(type, false),
+      params: [[FW["exports.f-credential-type"], credWord(type)]],
+      check: (v) => materialCheck(type, v, false),
+      run: (v) => apiStep("settings/exports/destinations/credential", { org, id: x.id, credential: Object.assign({ type }, materialOf(type, v, false)) }, "exports.destination.credential"),
+      plain: true,
+      done: () => render({ keepMessages: true }).then(() => say(FW["exports.cred-sealed"])),
+    }) }, { label: FW["api.delete"], run: () => confirmDialog({
+      spec: fspec("dest-delete"), vals: { name: x.name }, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiStep("settings/exports/destinations/delete", { org, id: x.id, reason: v.reason }, "exports.destination.delete"),
+    }) }];
+  }
+  // Add or edit a destination of one preset: the 11.1 settings of its kind and a credential type the preset allows.
+  function destDialog(org, p, x) {
+    const q = (x && x.queue) || {};
+    const types = (p.credential_types || []).length ? p.credential_types : [(x && x.credential && x.credential.type) || "token"];
+    const fields = [
+      { key: "name", label: FMSG.cols.name, value: x ? x.name : "", maxlength: "64", required: true },
+      { key: "signals", label: FW["exports.f-signals"], value: ((x ? x.signals : p.signals) || []).join(", ") },
+      { kind: "select", key: "ceiling", label: FW["api.col-ceiling"], options: CEILINGS.map((c) => [c, ceilingWord(c)]), value: x ? x.ceiling : "internal" },
+      { kind: "select", key: "identities", label: FW["exports.f-identities"], options: IDENTITIES.map(([v, k]) => [v, FW[k]]), value: x ? x.identities : "pseudonymized" },
+      { kind: "select", key: "failover", label: FW["exports.f-failover"], options: yesNoOptions(), value: x && x.failover ? "yes" : "no" },
+      { kind: "select", key: "private", label: FW["exports.f-private"], options: yesNoOptions(), value: x && x.private_ok ? "yes" : "no" },
+      { key: "endpoint", label: FW["exports.f-endpoint"], value: x ? x.endpoint || "" : "", maxlength: "2048" },
+    ].concat(settingsFields(p.kind, (x && x.settings) || {}), [
+      { kind: "select", key: "credType", label: FW["exports.f-credential-type"], options: types.map((t) => [t, credWord(t)]), value: x && x.credential && types.includes(x.credential.type) ? x.credential.type : types[0] },
+    ], credPublicFields(types, (x && x.credential) || {}), [
+      { key: "queueMib", label: FW["exports.f-queue-mib"], value: q.max_bytes ? Math.round(q.max_bytes / 1048576) : 1024, inputmode: "numeric" },
+      { key: "queueHours", label: FW["exports.f-queue-hours"], value: q.max_age_s ? Math.round(q.max_age_s / 3600) : 72, inputmode: "numeric" },
+    ]);
+    confirmDialog({
+      spec: fspec(x ? "dest-update" : "dest-add"), vals: { name: x ? x.name : "" }, vals2: (v) => ({ name: v.name }), name: x ? x.name : p.id, id: x ? x.id : p.id, fields,
+      params: [[FW["exports.dest-preset"], presetWord(p)]],
+      check: (v) => destCheck(p.kind, v),
+      run: (v) => (x ? apiStep("settings/exports/destinations/update", { org, id: x.id, destination: destBody(p, v) }, "exports.destination.update")
+        : apiStep("settings/exports/destinations", { org, destination: destBody(p, v) }, "exports.destination.stage")),
+    });
+  }
+  function settingsFields(kind, s) {
+    const e = s.endpoints || {};
+    if (kind === "otlp") {
+      return [{ key: "traces", label: FW["exports.s-traces"], value: e.traces || "", maxlength: "2048" }, { key: "metrics", label: FW["exports.s-metrics"], value: e.metrics || "", maxlength: "2048" },
+        { key: "logs", label: FW["exports.s-logs"], value: e.logs || "", maxlength: "2048" },
+        { kind: "select", key: "temporality", label: FW["exports.s-temporality"], options: [["delta", FW["exports.s-delta"]], ["cumulative", FW["exports.s-cumulative"]]], value: s.temporality || "delta" },
+        { key: "headers", label: FW["exports.s-headers"], value: (s.headers || []).join(", ") },
+        { key: "sampling", label: FW["exports.s-sampling"], value: s.sampling == null ? 1 : s.sampling, inputmode: "decimal" }];
+    }
+    if (kind === "splunk_hec") {
+      return [{ key: "index", label: FW["exports.s-index"], value: s.index || "", maxlength: "128" },
+        { key: "sourcetypes", label: FW["exports.s-sourcetypes"], value: (s.sourcetypes || ["lucid:audit", "lucid:relay", "lucid:api", "lucid:events"]).join(", ") }];
+    }
+    if (kind === "azure_logs") {
+      return [{ key: "dce", label: FW["exports.s-dce"], value: s.dce || "", maxlength: "2048" }, { key: "dcr", label: FW["exports.s-dcr"], value: s.dcr_immutable_id || "", maxlength: "128" },
+        { key: "stream", label: FW["exports.s-stream"], value: s.stream || "Custom-LucidAudit_CL", maxlength: "128" }];
+    }
+    if (kind === "syslog_cef") {
+      return [{ key: "host", label: FMSG.siemHost, value: s.host || "", maxlength: "253" }, { key: "port", label: FMSG.siemPort, value: s.port || 6514, inputmode: "numeric" },
+        { kind: "textarea", key: "caPem", label: FMSG.siemCa, value: s.caPem || "" }, { kind: "textarea", key: "clientCertPem", label: FMSG.siemCert, value: s.clientCertPem || "" },
+        { key: "events", label: FW["exports.s-events"], value: (s.events || ["audit", "security"]).join(", ") },
+        { kind: "select", key: "includeReasons", label: FW["exports.siem-reasons"], options: yesNoOptions(), value: s.includeReasons ? "yes" : "no" }];
+    }
+    return [];
+  }
+  function destCheck(kind, v) {
+    if (!v.name) return FW["exports.check-name"];
+    const urls = kind === "otlp" ? [v.endpoint, v.traces, v.metrics, v.logs] : kind === "azure_logs" ? [v.endpoint, v.dce] : [v.endpoint];
+    if (!urls.every((t) => !t || /^https:\/\/\S+$/.test(t)) || (kind !== "syslog_cef" && !urls.some(Boolean))) return FW["exports.check-endpoint"];
+    if (kind === "otlp" && !(v.sampling !== "" && Number(v.sampling) >= 0 && Number(v.sampling) <= 1)) return FW["api.check-number"];
+    if (kind === "syslog_cef" && !wholeIn(v.port, 1, 65535)) return FW["api.check-number"];
+    if (!wholeIn(v.queueMib, 64, 65536) || !wholeIn(v.queueHours, 1, 720)) return FW["api.check-number"];
+    if ((CRED_PUBLIC[v.credType] || []).some((k) => !v[k])) return FW["exports.check-material"];
+    return "";
+  }
+  // The public fields the map entry's credential names (11.3): Entra and AWS Roles Anywhere carry them in the map.
+  const CRED_PUBLIC = { entra_certificate: ["tenant", "client_id", "cloud"], aws_roles_anywhere: ["trust_anchor_arn", "profile_arn", "role_arn", "region"] };
+  function credPublicFields(types, c) {
+    const out = [];
+    if (types.includes("entra_certificate")) {
+      out.push({ key: "tenant", label: FW["exports.m-tenant"], value: c.tenant || "", maxlength: "512" }, { key: "client_id", label: FW["exports.m-client-id"], value: c.client_id || "", maxlength: "512" },
+        { kind: "select", key: "cloud", label: FW["exports.m-cloud"], options: [["public", FW["exports.m-cloud-public"]], ["usgov", FW["exports.m-cloud-usgov"]]], value: c.cloud || "public" });
+    }
+    if (types.includes("aws_roles_anywhere")) {
+      out.push({ key: "trust_anchor_arn", label: FW["exports.m-trust-anchor"], value: c.trust_anchor_arn || "", maxlength: "512" },
+        { key: "profile_arn", label: FW["exports.m-profile"], value: c.profile_arn || "", maxlength: "512" },
+        { key: "role_arn", label: FW["exports.m-role"], value: c.role_arn || "", maxlength: "512" }, { key: "region", label: FW["exports.m-region"], value: c.region || "", maxlength: "64" });
+    }
+    return out;
+  }
+  // The destination body: credential {type} plus the public fields Entra and AWS name in the map; the material goes
+  // through Set credential and is never echoed back.
+  function destBody(p, v) {
+    const credential = { type: v.credType };
+    for (const k of CRED_PUBLIC[v.credType] || []) credential[k] = v[k];
+    let settings = {};
+    if (p.kind === "otlp") {
+      const endpoints = {};
+      for (const n of ["traces", "metrics", "logs"]) if (v[n]) endpoints[n] = v[n];
+      settings = { endpoints, temporality: v.temporality, headers: commaList(v.headers), sampling: Number(v.sampling) };
+    } else if (p.kind === "splunk_hec") settings = { index: v.index, sourcetypes: commaList(v.sourcetypes), ack: true };
+    else if (p.kind === "azure_logs") settings = { dce: v.dce, dcr_immutable_id: v.dcr, stream: v.stream };
+    else if (p.kind === "syslog_cef") {
+      settings = { host: v.host, port: Number(v.port), events: commaList(v.events), includeReasons: v.includeReasons === "yes" };
+      if (v.caPem) settings.caPem = v.caPem;
+      if (v.clientCertPem) settings.clientCertPem = v.clientCertPem;
+    }
+    return { name: v.name, kind: p.kind, preset: p.id, signals: commaList(v.signals), ceiling: v.ceiling, identities: v.identities, failover: v.failover === "yes",
+      private_ok: v.private === "yes", endpoint: v.endpoint, settings, credential,
+      queue: { max_bytes: Number(v.queueMib) * 1048576, max_age_s: Number(v.queueHours) * 3600 } };
+  }
+  // The 11.3 material per credential type (Set credential), or the 12.3 install material of a failover credential.
+  const OPTIONAL_MATERIAL = ["ca_pem", "chain_pem"];
+  function materialFields(type, failover) {
+    const ta = (key, label) => ({ kind: "textarea", key, label });
+    const tx = (key, label) => ({ key, label, maxlength: "512" });
+    const cert = failover ? [ta("cert_pem", FW["exports.m-cert"]), ta("chain_pem", FW["exports.m-chain"])] : [ta("cert_pem", FW["exports.m-cert"]), ta("key_pem", FW["exports.m-key"])];
+    let f = [];
+    if (type === "token") f = [ta("token", FW["exports.m-token"])];
+    else if (type === "gcp_service_account_key") f = [ta(failover ? "key_json" : "key", FW["exports.m-key-json"])];
+    else if (type === "mtls") f = cert.concat([ta("ca_pem", FW["exports.m-ca"])]);
+    else if (type === "entra_certificate") {
+      f = [tx("tenant", FW["exports.m-tenant"]), tx("client_id", FW["exports.m-client-id"]),
+        { kind: "select", key: "cloud", label: FW["exports.m-cloud"], options: [["public", FW["exports.m-cloud-public"]], ["usgov", FW["exports.m-cloud-usgov"]]], value: "public" }].concat(cert);
+    } else if (type === "aws_roles_anywhere") {
+      f = [tx("trust_anchor_arn", FW["exports.m-trust-anchor"]), tx("profile_arn", FW["exports.m-profile"]), tx("role_arn", FW["exports.m-role"]), tx("region", FW["exports.m-region"])].concat(cert);
+    }
+    return failover && f.length ? f.concat([{ key: "days", label: FW["exports.fo-days"], value: 90, inputmode: "numeric" }]) : f;
+  }
+  function materialCheck(type, v, failover) {
+    const fields = materialFields(type, failover);
+    if (!fields.length || fields.some((f) => f.key !== "days" && !OPTIONAL_MATERIAL.includes(f.key) && !v[f.key])) return FW["exports.check-material"];
+    return failover && !wholeIn(v.days, 1, 90) ? FW["api.check-number"] : "";
+  }
+  function materialOf(type, v, failover) {
+    const out = {};
+    for (const f of materialFields(type, failover)) if (f.key !== "days" && v[f.key]) out[f.key] = v[f.key];
+    if (failover) out.expires = nowSec() + Number(v.days) * 86400;
+    return out;
+  }
+  // Failover credentials per relay (12.3): one row per relay of the organization, with its record when there is one.
+  function failoverPart(org, x, e) {
+    const recs = x.failover_records || [];
+    const ids = orgRelays(e.relays).map((r) => r.id);
+    for (const r of recs) if (!ids.includes(r.relay)) ids.push(r.relay);
+    const rows = ids.map((relay) => Object.assign({ relay }, recs.find((r) => r.relay === relay) || {}));
+    const type = (x.credential || {}).type;
+    const admin = isAdmin();
+    return sub([FW["exports.failover"], ": ", u(x.name)], el("p", { class: "note" }, FW["exports.failover-help"]), dataTable({
+      caption: FW["exports.failover"], rows, empty: MSG.noneYet, name: (r) => relayName(r.relay),
+      cols: [{ key: "relay", label: FMSG.cols.relay, cell: (r) => u(relayName(r.relay)) }, { key: "type", label: FMSG.cols.kind, cell: (r) => (r.type ? credWord(r.type) : "") },
+        { key: "public_id", label: FW["exports.col-public-id"], cell: (r) => (r.public_id ? code(r.public_id) : ""), sortable: false },
+        { key: "not_before", label: FW["exports.col-valid-from"], cell: (r) => (r.not_before ? whenAny(r.not_before) : "") },
+        { key: "expires", label: FMSG.cols.ends, cell: (r) => (r.expires ? whenAny(r.expires) : "") },
+        { key: "state", label: FMSG.cols.state, cell: (r) => (r.state ? (FW["exports.fo-" + r.state] || stateWord(r.state)) + (r.note ? " (" + r.note + ")" : "") : "") }],
+      actions: (r) => (admin ? failoverActions(org, x, r, type) : []),
+    }));
+  }
+  function failoverActions(org, x, r, type) {
+    const vals = { name: x.name, relay: relayName(r.relay) };
+    const out = [];
+    if (CSR_TYPES.includes(type)) {
+      out.push({ label: FW["exports.fo-csr"], run: () => confirmDialog({
+        spec: fspec("failover-csr"), vals, name: vals.relay, id: r.relay,
+        run: () => apiPost("settings/exports/destinations/failover/csr", { org, id: x.id, relay: r.relay }),
+        plain: true,
+        done: (a) => render({ keepMessages: true }).then(() => showCsr(x, r.relay, a && a.csr)),
+      }) });
+    }
+    out.push({ label: FW["exports.fo-install"], run: () => confirmDialog({
+      spec: fspec("failover-install"), vals, name: x.name, id: r.relay, fields: materialFields(type, true),
+      check: (v) => materialCheck(type, v, true),
+      run: (v) => apiStep("settings/exports/destinations/failover/install", { org, id: x.id, relay: r.relay, material: materialOf(type, v, true) }, "exports.failover.install"),
+    }) });
+    if (r.state && r.state !== "deleted") {
+      out.push({ label: FW["api.delete"], run: () => confirmDialog({
+        spec: fspec("failover-delete"), vals, name: x.name, id: r.relay, danger: true,
+        run: () => apiPost("settings/exports/destinations/failover/delete", { org, id: x.id, relay: r.relay }),
+      }) });
+    }
+    return out;
+  }
+  // The CSR the relay made (no secret): shown with copy and download until the page is left.
+  function showCsr(x, relay, csr) {
+    const box = $("fo-csr");
+    if (!box || !csr) return;
+    const file = (x.name + "-" + relayName(relay) + ".csr.pem").replace(/[^A-Za-z0-9._-]/g, "_");
+    box.replaceChildren(panel(FW["exports.fo-csr"], el("p", null, FW["exports.fo-csr-shown"]),
+      el("p", { class: "id-line" }, el("span", { class: "id-label" }, FMSG.cols.relay), " ", u(relayName(relay))),
+      el("pre", null, el("code", null, cleanLines(csr))), copyButton(csr), " ", btn(FW["exports.fo-download"], () => saveText(file, csr))));
+  }
+  function saveText(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: "application/x-pem-file" }));
+    const a = el("a", { href: url, download: name, hidden: true });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
 
   // ---- Sign-in, Email and Settings on a fleet console (12.4) ----
   pages.fleetSignIn = async () => {

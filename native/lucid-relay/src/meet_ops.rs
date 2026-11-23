@@ -1228,6 +1228,30 @@ impl Relay {
         Ok(out)
     }
 
+    /// `POST /v1/org/api/sign {session, map, proof, ts}` (API-1 2.3, slice 1a6): an org admin's device asks the
+    /// signer (`sign_org_api` with the caller's certificate) and is answered `{org, seq, hash, signed}`. Nothing is
+    /// pinned here: the device reports the signed map to the console's `meet.api.sign` request, and the console
+    /// publishes it to the org's relays.
+    pub fn pc_sign_api(&self, session: &str, who: &Identity, map: Option<&Value>, proof: Option<&Value>, ts: Option<&Value>) -> R<Obj> {
+        self.hub.check_session(session, who)?;
+        if who.cert_pem.is_empty() {
+            return m::forbidden("sign from one of your devices");
+        }
+        let body = obj([
+            ("map", map.cloned().unwrap_or(Value::Null)),
+            ("proof", Value::from(pj::str_or(proof))),
+            ("ts", proof_ts(ts)),
+            ("cert_pem", Value::from(who.cert_pem.clone())),
+        ]);
+        let answer = self.pc_call("sign_org_api", &body)?;
+        let signed = answer.get("signed").filter(|s| s.get("map").is_some_and(Value::is_object)).ok_or_else(|| E::Internal("the signer answered no signed api map".into()))?;
+        let map = &signed["map"];
+        let org = map.get("org").and_then(Value::as_str).unwrap_or_default().to_string();
+        let (seq, hash) = (pj::as_int(map.get("seq")).unwrap_or(0), crate::api_map::api_map_hash(map));
+        log_info(&format!("org_api_signed org={org} seq={seq} hash={hash} by={}", who.principal));
+        Ok(obj([("org", Value::from(org)), ("seq", Value::from(seq)), ("hash", Value::from(hash)), ("signed", signed.clone())]))
+    }
+
     /// `POST /v1/org/storage/sign {session, map, proof, ts}` (SD-1 13.5): an org admin's device asks the signer
     /// (`sign_org_storage` with the caller's certificate); the signed map is kept and answered `{org, seq, hash,
     /// signed}`.

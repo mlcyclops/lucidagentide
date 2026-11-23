@@ -2643,6 +2643,21 @@ impl Hub {
         Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
     }
 
+    /// API-1 2.3, slice 1a6: check a signed api map a device reports for a `meet.api.sign` request as `POST
+    /// /v1/org/api` would (signature and chain to this relay's org CA, the org's newest policy, the license edition,
+    /// the issuers held for other orgs), without pinning it. Ok is the verified map and the root-signed signer
+    /// policy it was checked under (the console checks both again against its own CA); Err is the refusal sentence.
+    pub fn api_verify_signed(&self, signed: &Value) -> Result<(crate::api_map::VerifiedApiMap, Obj), String> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref()).ok_or("The license edition is not known, so no api map is accepted.")?;
+        let mut st = self.st.lock();
+        let (root, signer_policy, crl, previous) = st.pc_verify_args().map_err(|e| e.message())?;
+        let org = signed.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let policy = st.pc_store().and_then(|s| s.newest.get(&org)).map(|v| v.policy.clone());
+        let held = st.api_maps().issuers();
+        let vm = crate::api_map::verify_api_map(signed, &root, &signer_policy, crl.as_ref(), &previous, pj::now() as i64, policy.as_ref(), edition, &held).map_err(|e| e.message)?;
+        Ok((vm, signer_policy))
+    }
+
     /// API-1 3.3: the Meet verifier's view of the live api map store (`State::api_cert_end`), holding the hub weakly.
     pub fn api_grace_source(self: &std::sync::Arc<Self>) -> crate::meet_tls::GraceSource {
         let weak = std::sync::Arc::downgrade(self);

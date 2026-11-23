@@ -2068,6 +2068,101 @@ pub fn ai_request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig:
     Ok(out)
 }
 
+// ── API-1 2.3 (slice 1a6): the `meet.api.sign` request in this relay's book ───────────────────────────────────
+
+/// The request kind the Lucid Admin Console asks an admin's device to sign an org api map with.
+pub const API_SIGN_KIND: &str = "meet.api.sign";
+/// Why a `meet.api.sign` request failed or is refused (relay words).
+pub const API_SIGN_OTHER_MAP: &str = "The signed API map is not the one this request asked for.";
+pub const API_SIGN_DECLINED: &str = "The signing request was declined on the device.";
+pub const API_SIGN_NOT_ADMIN: &str = "That person is not an admin of this relay.";
+pub const API_SIGN_HASH: &str = "map_sha256 is not the hash of that map.";
+const API_SIGN_SHAPE: &str = "signed is the signed api map {map, sig, chain}";
+
+/// `POST /v1/admin/console/requests/sign {session, id, sig?, signed?}`: a `meet.api.sign` request (`signed`), else
+/// a `meet.ai.*` one (`ai_request_signed`).
+pub fn request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig: Option<&Value>, signed: Option<&Value>) -> R<Obj> {
+    let wanted = id.and_then(Value::as_str).filter(|i| request_id_ok(i)).ok_or_else(|| E::Bad(DECLINE_ID.into()))?;
+    let t = (pj::now() * 1000.0) as i64;
+    let book = request_book(relay).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+    match book.requests_waiting("meet.api.", t).into_iter().find(|r| r.get("id").and_then(Value::as_str) == Some(wanted)) {
+        Some(request) => api_request_signed(relay, &book, who, &request, signed, t),
+        None => ai_request_signed(relay, who, id, sig),
+    }
+}
+
+/// A `meet.api.sign` request answered by its principal's device: `signed` must be the map the request names (its
+/// hash `map_sha256`) and verify against this relay's org CA as `POST /v1/org/api` checks it (nothing is pinned
+/// here). Done keeps `signed` and the signer policy it verified under for the console (`api-sign-status`); a
+/// failure closes the request with its sentence and refuses the device.
+fn api_request_signed(relay: &Relay, book: &Console, who: &Identity, request: &Value, signed: Option<&Value>, t: i64) -> R<Obj> {
+    let id = request.get("id").and_then(Value::as_str).unwrap_or_default();
+    let target = request.get("target").cloned().unwrap_or(Value::Null);
+    if target.get("principal").and_then(Value::as_str) != Some(who.principal.as_str()) {
+        return Err(E::NotFound(NO_REQUEST.into()));
+    }
+    let signed = signed.filter(|s| s.get("map").is_some_and(Value::is_object)).ok_or_else(|| E::Bad(API_SIGN_SHAPE.into()))?;
+    let want = target.get("map_sha256").and_then(Value::as_str).unwrap_or_default();
+    let verdict = if crate::api_map::api_map_hash(&signed["map"]) != want {
+        Err(API_SIGN_OTHER_MAP.to_string())
+    } else {
+        relay.hub.api_verify_signed(signed).and_then(|(vm, sp)| if vm.org == target.get("org").and_then(Value::as_str).unwrap_or_default() { Ok(sp) } else { Err(API_SIGN_OTHER_MAP.to_string()) })
+    };
+    match verdict {
+        Ok(signer_policy) => {
+            let extra = obj([("signed", signed.clone()), ("signer_policy", Value::Object(signer_policy))]);
+            book.request_close(id, API_SIGN_KIND, "done", &who.principal, extra, t).map_err(api_e)?;
+            Ok(obj([("ok", Value::Bool(true))]))
+        }
+        Err(why) => {
+            book.request_close(id, API_SIGN_KIND, "failed", &who.principal, obj([("error", Value::from(why.clone()))]), t).map_err(api_e)?;
+            Err(E::Conflict(why))
+        }
+    }
+}
+
+/// The fleet request `api-sign-request {org, principal, map, map_sha256, reason, requested_by}` on this relay (the
+/// agent checked the org is served): the hash must be the map's and the principal an admin of this relay; a waiting
+/// `meet.api.sign` request for the same org is cancelled, then the new one is made in this relay's book (target
+/// `{principal, org, op: "sign_org_api", map, map_sha256}`). Ok is `{request}`.
+pub fn api_sign_request(book: &Console, body: &Value, t: i64) -> Result<Value, ApiError> {
+    let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let (org, principal, sha, by) = (s("org"), s("principal").to_lowercase(), s("map_sha256"), s("requested_by"));
+    let map = body.get("map").filter(|m| m.is_object()).ok_or_else(|| invalid(API_SIGN_HASH))?;
+    if crate::api_map::api_map_hash(map) != sha || map.get("org").and_then(Value::as_str) != Some(org.as_str()) {
+        return Err(invalid(API_SIGN_HASH));
+    }
+    if book.admin_rule(&principal, "") == AdminRule::NotRelayAdmin {
+        return Err(ApiError::with("not-relay-admin", API_SIGN_NOT_ADMIN));
+    }
+    let reason = reason_of(body.get("reason")).map_err(invalid)?;
+    for r in book.requests_waiting("meet.api.", t) {
+        if r.get("target").and_then(|x| x.get("org")).and_then(Value::as_str) == Some(org.as_str()) {
+            let _ = book.requests_cancel(&json!({ "id": r.get("id") }), t);
+        }
+    }
+    let target = json!({ "principal": principal, "org": org, "op": "sign_org_api", "map": map, "map_sha256": sha });
+    let r = book.new_request(&by, API_SIGN_KIND, target, &reason, t)?;
+    Ok(json!({ "request": r.get("id") }))
+}
+
+/// The fleet request `api-sign-status {org, request}`: `{state: waiting | done | failed | gone}` with `signed` and
+/// `signer_policy` when done and `error` when failed. A declined request is failed; a cancelled, expired or unknown
+/// one (or another org's) is gone.
+pub fn api_sign_status(book: &Console, body: &Value, t: i64) -> Value {
+    let id = body.get("request").and_then(Value::as_str).unwrap_or_default();
+    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+    let found = book.request_by_id(id, t).filter(|r| r.get("kind").and_then(Value::as_str) == Some(API_SIGN_KIND) && r.get("target").and_then(|x| x.get("org")).and_then(Value::as_str) == Some(org));
+    let Some(r) = found else { return json!({ "state": "gone" }) };
+    match r.get("state").and_then(Value::as_str).unwrap_or_default() {
+        "waiting" => json!({ "state": "waiting" }),
+        "done" => json!({ "state": "done", "signed": r.get("signed"), "signer_policy": r.get("signer_policy") }),
+        "failed" => json!({ "state": "failed", "error": r.get("error").and_then(Value::as_str).unwrap_or(API_SIGN_OTHER_MAP) }),
+        "declined" => json!({ "state": "failed", "error": API_SIGN_DECLINED }),
+        _ => json!({ "state": "gone" }),
+    }
+}
+
 // ── the hub's hooks ──────────────────────────────────────────────────────────────────────────────────────────
 
 /// Anchor latching and request observation, from the hub to the core console.
@@ -2336,9 +2431,11 @@ pub fn requests_for(relay: &Relay, principal: &str) -> Obj {
             .requests_waiting("meet.", t)
             .into_iter()
             .filter(|r| {
-                // a console invite and the AI signing asks (AI-1 9) go only to the device of their principal
+                // a console invite and the AI and API signing asks (AI-1 9, API-1 2.3) go only to the device of
+                // their principal
                 let kind = r.get("kind").and_then(Value::as_str).unwrap_or_default();
-                (kind != "meet.console-invite" && !kind.starts_with("meet.ai.")) || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal)
+                let own = kind == "meet.console-invite" || kind.starts_with("meet.ai.") || kind.starts_with("meet.api.");
+                !own || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal)
             })
             .collect(),
     };
@@ -2920,6 +3017,50 @@ mod tests {
         }
         let listed = requests_for(&relay, "ann@x.org");
         assert_eq!(listed["requests"][0]["id"], request["id"]);
+    }
+
+    /// API-1 2.3 (slice 1a6): the console's `meet.api.sign` request in the relay's book: only its principal's device
+    /// sees and answers it; a signed map with another hash fails it with the sentence, which `api-sign-status`
+    /// reports; a second ask for the org replaces the waiting one.
+    #[test]
+    fn api_sign_requests_are_refused_for_another_map_and_reported_to_the_console() {
+        let (relay, _) = fixture(&["ann@x.org"]);
+        let book = headless(&temp_dir());
+        let _ = relay.admin_console.set(book.clone());
+        let now = (pj::now() * 1000.0) as i64;
+        let map = json!({"v": 1, "org": "acme", "seq": 2});
+        let sha = crate::api_map::api_map_hash(&map);
+        let ask = |m: &Value, sha: &str| json!({"org": "acme", "principal": "Ann@x.org", "map": m, "map_sha256": sha, "reason": "Rotate the key", "requested_by": "ann@x.org"});
+        assert_eq!(api_sign_request(&book, &ask(&map, &"0".repeat(64)), now).unwrap_err().message, API_SIGN_HASH);
+        let first = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        let second = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        assert_ne!(first, second);
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": first}), now)["state"], "gone", "replaced");
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": second}), now)["state"], "waiting");
+        assert_eq!(api_sign_status(&book, &json!({"org": "other", "request": second}), now)["state"], "gone");
+        // only the principal's device lists and answers it
+        let listed = |p: &str| requests_for(&relay, p)["requests"].as_array().unwrap().iter().any(|r| r["id"] == second.as_str());
+        assert!(listed("ann@x.org") && !listed("bob@x.org"));
+        let bob = Identity { principal: "bob@x.org".into(), device: "bbbbbbbbbbbbbbbb".into(), ..Default::default() };
+        let ann = Identity { principal: "ann@x.org".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let id = json!(second);
+        let mut other = map.clone();
+        other["seq"] = json!(3);
+        let wrong = json!({"map": other, "sig": "", "chain": []});
+        assert!(matches!(request_signed(&relay, &bob, Some(&id), None, Some(&wrong)), Err(E::NotFound(_))));
+        assert!(matches!(request_signed(&relay, &ann, Some(&id), None, Some(&json!({"sig": ""}))), Err(E::Bad(_))));
+        match request_signed(&relay, &ann, Some(&id), None, Some(&wrong)) {
+            Err(E::Conflict(w)) => assert_eq!(w, API_SIGN_OTHER_MAP),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": second}), now), json!({"state": "failed", "error": API_SIGN_OTHER_MAP}));
+        // closed: a second answer finds no request
+        assert!(matches!(request_signed(&relay, &ann, Some(&id), None, Some(&wrong)), Err(E::NotFound(_))));
+        // the right map that does not verify against this relay's org CA fails too, with the verifier's words
+        let third = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        let right = json!({"map": map, "sig": "", "chain": []});
+        assert!(matches!(request_signed(&relay, &ann, Some(&json!(third)), None, Some(&right)), Err(E::Conflict(_))));
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": third}), now)["state"], "failed");
     }
 
     /// AC-2a 16.1 f-relay: a relay with its own console on answers `local: true`.

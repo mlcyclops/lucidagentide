@@ -3109,7 +3109,7 @@ pub fn api_audit_of(dir: &Path) -> Option<Arc<crate::api_audit::ApiAudit>> {
 /// Requests a High relay that holds a console's CA still answers (8.7): `nonce`, `meet-crl-get` and reading calls.
 fn write_frame(op: &str, body: &Map<String, Value>) -> bool {
     match op {
-        "nonce" | "meet-crl-get" | "api-heads" | "api-chains" => false,
+        "nonce" | "meet-crl-get" | "api-heads" | "api-chains" | "api-sign-status" => false,
         "call" => body.get("method").and_then(Value::as_str) != Some("GET"),
         _ => true,
     }
@@ -4122,6 +4122,9 @@ impl Agent {
                                         ("api-checkpoint-cert", Some(h)) => served(&h).and_then(|_| api_checkpoint_cert_answer(&dir, &*console, &body)),
                                         // API-1 12.3: failover credentials, and their retirement before a tightening is acknowledged
                                         ("api-failover", Some(h)) => served(&h).and_then(|_| api_failover_answer(&dir, &*console, &body, now_ms() / 1000)),
+                                        // API-1 2.3 (slice 1a6): the console's `meet.api.sign` request in this relay's book
+                                        ("api-sign-request", Some(h)) => served(&h).and_then(|_| crate::console_meet::api_sign_request(&console, &body, now_ms()).map_err(Refusal::from)),
+                                        ("api-sign-status", Some(h)) => served(&h).map(|_| crate::console_meet::api_sign_status(&console, &body, now_ms())),
                                         ("api-tighten" | "api-map", Some(h)) => {
                                             // check, retire and apply with no other journal entry or map between them
                                             let _one = API_JOURNAL_LOCK.lock();

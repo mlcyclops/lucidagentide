@@ -485,11 +485,11 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
             crate::console_meet::decline(c.relay, &who.principal, b.get("id"), b.get("reason"))
         },
-        // AI-1 9: an admin's device answers a console AI signing request
+        // AI-1 9 and API-1 2.3: an admin's device answers a console AI or API signing request
         "/v1/admin/console/requests/sign" => |c: &mut Ctx| {
-            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
-            crate::console_meet::ai_request_signed(c.relay, &who, b.get("id"), b.get("sig"))
+            crate::console_meet::request_signed(c.relay, &who, b.get("id"), b.get("sig"), b.get("signed"))
         },
         "/v1/admin/signer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -679,6 +679,11 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/org/api" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
             c.relay.hub.pc_api_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        // API-1 2.3 (slice 1a6): an org admin's device signs the api map of a console `meet.api.sign` request
+        "/v1/org/api/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.pc_sign_api(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
         },
         "/v1/org/ai/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);

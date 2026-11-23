@@ -955,6 +955,7 @@ impl TightenEntry {
             "client_suspend" => prefixed_id(t, "c_"),
             "client_drop_scope" => pair("client", "scope").is_some_and(|o| client(o) && s(o, "scope", &SCOPES)),
             "client_drop_relay" => pair("client", "relay").is_some_and(|o| client(o) && o["relay"].as_str().is_some_and(|r| token(r, 64) && r != "*")),
+            "client_limit" => t.as_object().is_some_and(|o| o.get("client").is_some_and(|c| prefixed_id(c, "c_")) && limit_ok(o)),
             // cui is the top: never a lowering target
             "client_lower_ceiling" => pair("client", "ceiling").is_some_and(|o| client(o) && s(o, "ceiling", &CEILINGS[..3])),
             "client_drop_credential" => {
@@ -1016,6 +1017,69 @@ pub fn check_tighten(entry: &Value, applied_tseq: u64) -> Result<TightenEntry, A
     TightenEntry::parse(entry)
 }
 
+/// 2.5 `client_limit` (slice 1a6): `{client, relays?, networks?, rate?}` with at least one of the three: `relays` 1
+/// to 64 distinct relay ids (never `*`; `console` for the console), `networks` 1 to 32 distinct CIDRs, `rate` 1 or 2
+/// of `per_minute_each` (1 to 6000) and `per_day_each` (1 to 10000000). Every part only narrows the client's grant
+/// (the intersection with the map and every other limit), so an entry is never widening.
+fn limit_ok(o: &Obj) -> bool {
+    const KEYS: [&str; 4] = ["client", "relays", "networks", "rate"];
+    if o.len() < 2 || o.keys().any(|k| !KEYS.contains(&k.as_str())) {
+        return false;
+    }
+    let relays = o.get("relays").is_none_or(|v| strings(Some(v), "relays", 1, 64, |r| token(r, 64) && r != "*").is_ok());
+    let networks = o.get("networks").is_none_or(|v| strings(Some(v), "networks", 1, 32, cidr_ok).is_ok());
+    let rate = o.get("rate").is_none_or(|v| {
+        v.as_object().is_some_and(|r| {
+            !r.is_empty()
+                && r.iter().all(|(k, n)| match k.as_str() {
+                    "per_minute_each" => int_of(n).is_some_and(|x| (1..=6000).contains(&x)),
+                    "per_day_each" => int_of(n).is_some_and(|x| (1..=10_000_000).contains(&x)),
+                    _ => false,
+                })
+        })
+    });
+    relays && networks && rate
+}
+
+/// `inner` (a CIDR of a map) lies inside `outer`: the same family, a prefix at least as long, and its network
+/// address inside `outer`.
+pub(crate) fn cidr_within(inner: &str, outer: &str) -> bool {
+    use crate::console_source::{parse_cidr, Cidr};
+    let (Ok(i), Ok(o)) = (parse_cidr(inner), parse_cidr(outer)) else { return false };
+    // `net/prefix` as the range prints itself
+    let parts = |c: &Cidr| {
+        let text = c.to_string();
+        let (a, p) = text.split_once('/')?;
+        Some((a.parse::<std::net::IpAddr>().ok()?, p.parse::<u8>().ok()?))
+    };
+    match (parts(&i), parts(&o)) {
+        (Some((net, ip)), Some((_, op))) => ip >= op && o.contains(net),
+        _ => false,
+    }
+}
+
+/// Whether a client entry of a map is within a `client_limit` (2.5 folding): its relays all listed (never `*`), its
+/// networks non-empty and each inside one of the limit's, and each limited rate at or below the limit.
+fn within_limit(c: &Obj, limit: &Value) -> bool {
+    fn list(v: Option<&Value>) -> Vec<&str> {
+        v.and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect()
+    }
+    let relays = limit.get("relays").is_none_or(|l| {
+        let allowed = list(Some(l));
+        let mine = list(c.get("relays"));
+        !mine.contains(&"*") && mine.iter().all(|r| allowed.contains(r))
+    });
+    let networks = limit.get("networks").is_none_or(|l| {
+        let allowed = list(Some(l));
+        let mine = list(c.get("networks"));
+        !mine.is_empty() && mine.iter().all(|n| allowed.iter().any(|a| cidr_within(n, a)))
+    });
+    let rate = limit.get("rate").and_then(Value::as_object).is_none_or(|r| {
+        r.iter().all(|(k, cap)| c.get("rate").and_then(|x| x.get(k)).and_then(int_of).zip(int_of(cap)).is_some_and(|(have, cap)| have <= cap))
+    });
+    relays && networks && rate
+}
+
 fn find_by_id<'a>(map: &'a Obj, list: &str, id: &str) -> Option<&'a Obj> {
     map.get(list).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).find(|o| o.get("id").and_then(Value::as_str) == Some(id))
 }
@@ -1033,6 +1097,8 @@ fn contains(map: &Obj, e: &TightenEntry) -> bool {
         "client_suspend" => client(e.target.as_str().unwrap_or_default()).is_none_or(|c| c.get("state").and_then(Value::as_str) == Some("suspended")),
         "client_drop_scope" => client(e.field("client")).is_none_or(|c| !lists(c, "scopes", e.field("scope"))),
         "client_drop_relay" => client(e.field("client")).is_none_or(|c| !lists(c, "relays", e.field("relay")) && !lists(c, "relays", "*")),
+        // a suspended client reaches nothing, so it is within any limit
+        "client_limit" => client(e.field("client")).is_none_or(|c| c.get("state").and_then(Value::as_str) == Some("suspended") || within_limit(c, &e.target)),
         "client_lower_ceiling" => client(e.field("client")).is_none_or(|c| at_or_below(&CEILINGS, c.get("ceiling").and_then(Value::as_str), e.field("ceiling"))),
         "client_drop_credential" => client(e.field("client")).is_none_or(|c| {
             let (k, want) = if e.target.get("kid").is_some() { ("kid", e.field("kid")) } else { ("type", e.field("type")) };

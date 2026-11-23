@@ -724,6 +724,33 @@ pub(crate) fn client_entries<'a>(active: &'a [TightenEntry], action: &'a str, cl
     active.iter().filter(move |e| e.action == action && e.target.get("client").and_then(Value::as_str) == Some(client))
 }
 
+/// The `relays` or `networks` list a `client_limit` names (None when it does not limit that part).
+fn limit_list<'a>(e: &'a TightenEntry, k: &str) -> Option<Vec<&'a str>> {
+    Some(e.target.get(k)?.as_array()?.iter().filter_map(Value::as_str).collect())
+}
+
+/// 2.5 `client_limit` (slice 1a6): whether the client may reach `relay` (`console` for the console) now: in its map
+/// `relays` (or `*`), not dropped by `client_drop_relay`, and listed by every limit that names relays.
+pub(crate) fn relay_reachable(client: &Obj, active: &[TightenEntry], id: &str, relay: &str) -> bool {
+    !client_entries(active, "client_drop_relay", id).any(|e| target_field(e, "relay") == relay)
+        && names(client, "relays").any(|r| r == "*" || r == relay)
+        && client_entries(active, "client_limit", id).all(|e| limit_list(e, "relays").is_none_or(|l| l.contains(&relay)))
+}
+
+/// 2.5 `client_limit`: whether `source` may call for the client now: inside its map `networks` (any source when
+/// they are empty) and inside every limit that names networks.
+pub(crate) fn source_allowed(client: &Obj, active: &[TightenEntry], id: &str, source: std::net::IpAddr) -> bool {
+    let inside = |list: &[&str]| list.iter().filter_map(|n| crate::console_source::parse_cidr(n).ok()).any(|c| c.contains(source));
+    let own: Vec<&str> = names(client, "networks").collect();
+    (own.is_empty() || inside(&own)) && client_entries(active, "client_limit", id).all(|e| limit_list(e, "networks").is_none_or(|l| inside(&l)))
+}
+
+/// 2.5 `client_limit`: the client's `rate.<k>` lowered to every limit's.
+pub(crate) fn rate_of(client: &Obj, active: &[TightenEntry], id: &str, k: &str) -> u64 {
+    let own = client.get("rate").and_then(|r| r.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    client_entries(active, "client_limit", id).filter_map(|e| e.target.get("rate")?.get(k)?.as_u64()).fold(own, u64::min)
+}
+
 /// A string member of a journal entry's target (empty when absent).
 pub(crate) fn target_field<'a>(e: &'a TightenEntry, k: &str) -> &'a str {
     e.target.get(k).and_then(Value::as_str).unwrap_or_default()
@@ -878,6 +905,14 @@ pub fn validate_access_token(
         } else if !dropped_relays.contains(&r) {
             relays.push(r.to_string());
         }
+    }
+    // 2.5 `client_limit`: only the relays every limit lists (a limit never names `*`)
+    let limits: Vec<Vec<&str>> = client_entries(active, "client_limit", client_id).filter_map(|e| limit_list(e, "relays")).collect();
+    if let Some(first) = limits.first() {
+        if relays.iter().any(|r| r == "*") {
+            relays = first.iter().filter(|r| !dropped_relays.contains(r)).map(|r| r.to_string()).collect();
+        }
+        relays.retain(|r| limits.iter().all(|l| l.contains(&r.as_str())));
     }
     relays.sort();
     relays.dedup();

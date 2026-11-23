@@ -604,6 +604,21 @@
     "jti": "2FNLt6FVMJ-pAPFC3yncrA"
    },
    "until": 1795007740
+  },
+  {
+   "id": "t_acme_000007",
+   "tseq": 7,
+   "ts": 1795000607,
+   "action": "client_limit",
+   "target": {
+    "client": "c_00000000000000a4",
+    "relays": [
+     "r_01"
+    ],
+    "networks": [
+     "10.40.0.0/24"
+    ]
+   }
   }
  ],
  "owners": {
@@ -680,7 +695,7 @@
     "reach": "R0",
     "ceiling": "internal",
     "relays": [
-     "*"
+     "r_01"
     ]
    }
   },
@@ -1962,7 +1977,7 @@
   },
   {
    "name": "ok-ps256",
-   "assertion": "eyJhbGciOiJQUzI1NiIsImtpZCI6ImstcnNhIiwidHlwIjoiSldUIn0.eyJpc3MiOiJjXzAwMDAwMDAwMDAwMDAwYTIiLCJzdWIiOiJjXzAwMDAwMDAwMDAwMDAwYTIiLCJhdWQiOiJodHRwczovL2NvbnNvbGUuYWNtZS5leGFtcGxlOjc0NDMvYXBpL29yZ3MvYWNtZS9vYXV0aC90b2tlbiIsImp0aSI6IlBaQmNTRG02OHdGcUE0dHkzTUM2bkEiLCJpYXQiOjE3OTUwMDcxOTAsImV4cCI6MTc5NTAwNzMxMH0.LUmnNhvkib3cXKZ5oozQe9t4rj_4Qv91Jh6vtu_Wzb8Uv-MLBWYy7-qWzyewjtsdquO7tcCNpFEcRyjj5GP6_FNx1gkL2j8Sx1HLodKaVov-aGP2VdgJXkLDPqqccyPTewpZ4MkopYXjqbRYYQ4V_C9H7bFB8Xo5JyhWiUG-a3_JAEdvOcaYVa0fpuXCe_9rr7g2sP27v2bHhCgq5URSnxIV33clNWURdRigWM6RmfMGD2hMMbi_MS6O3IYs1HZzxs0Z2vl2nt1oFthUTJ4LTh2LGnhqOvxqP05BOfSvlWtgQg_JqXoddVy1tiIbrBXXModTu0ctxsIGj1Sia1C2th4oFpIfDATwVKOar0RIBS2JZn3wFFRFBxwdLtCaDNQnvGwGGXTWTQRysnUb4WeNBgA3fBvgfETg20hIzFDynUuaHRAYRb8NwsEZGLorFEJ36pGnmowksZW6gAAebm_wUkwORkFoCZQqj5rvD37QiwLXbpprzKkSq2tfMe6PI5rU",
+   "assertion": "eyJhbGciOiJQUzI1NiIsImtpZCI6ImstcnNhIiwidHlwIjoiSldUIn0.eyJpc3MiOiJjXzAwMDAwMDAwMDAwMDAwYTIiLCJzdWIiOiJjXzAwMDAwMDAwMDAwMDAwYTIiLCJhdWQiOiJodHRwczovL2NvbnNvbGUuYWNtZS5leGFtcGxlOjc0NDMvYXBpL29yZ3MvYWNtZS9vYXV0aC90b2tlbiIsImp0aSI6IlBaQmNTRG02OHdGcUE0dHkzTUM2bkEiLCJpYXQiOjE3OTUwMDcxOTAsImV4cCI6MTc5NTAwNzMxMH0.kIb94XoyC3iEfiNW7uVB4b-5OVKon6Ct78pt-clEC-st7a_l6ptsVFpvfUwbzzY0QpQv2qxiZNTTk7bBizZtpMkMt5CChVE77gdD4tuWfxZVOs7TjX6BLUuDF3VcO1eAyBDE3EX2JW9-n4Eq8Yy1cZ2KX07kZncjkLVum97zRt-Ecn-7JfuoyxnDO2PJS5OWziXz27oLrndHTKBh5HoNCFGFRxg2Emu2T0G2hB3gdjk7OdwVQ3b7a-nx1iP6swmNWW5KyPlboPHvRYWYOvfRYiFPiQtUT7lALM3T1IIpSrJTaYWPT4F4zwAOXj4jK01SyYP3gDwVwF_uR0DNAYS8M7lZLwsbYVCn2XSAOWxQsR31xmLFg48RcAyJpWZFmlqnQ_NB6UL3bumm1nlLioOzidAPoDMiORac9Qmx_-aypKyEMGRvumeWlDYE2Z2UPu4WcixI668x3-Bfta4Sw40roMIqjcl_e4drxJMzDI47SQ6VlRvM5hRDHRsQ7ay_jAT9",
    "client_id": "c_00000000000000a2",
    "expect": "ok"
   },
@@ -2202,7 +2217,7 @@
   },
   {
    "name": "ok-ps256",
-   "token": "eyJhbGciOiJQUzI1NiIsImtpZCI6ImZlZC1yc2EiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZXhhbXBsZSIsInN1YiI6InJlcG86YWNtZS9vcHM6cmVmOnJlZnMvaGVhZHMvbWFpbiIsImF1ZCI6Imx1Y2lkLWFjbWUiLCJpYXQiOjE3OTUwMDcxNzAsIm5iZiI6MTc5NTAwNzE3MCwiZXhwIjoxNzk1MDA3NzcwLCJqdGkiOiIyYmVCMXZvZTNaNENfSmU5S29jVU5BIn0.bLw3uC9xRR5mHD-sf0s48fWq0Z6ViMETtauozGsV6TIxFBKpBfhEQ3Di2-O_4_mVJ_cAS6V3635GXB6YVxFbcRsro7OU2DfooUe2nrukDU5FVWLvDKEdoKtQBINiko8VLJhtM6JkQBXLIVd7MwbTdBejlAVSynMH0xvby1hJu8MSi3aS1M9-s0Xqr4y5FLXjpq2XWjN2S6R9NQWY4n6IexeT7UwZQ4F9XcDPFByOAxl9WOVbP6_U3xv7chSm7Ky9Ab3oKFOSVTJnNCoPSUh4thfQ0ZvBvOs20M1TvcUiTm8NoOuV3_RTCEXhrsTeGmwRpsIODXDhgo61WRWknA3Q3MxoYYKnvpg_ThlD7k3p2k9M_S__A-8_Gu8fuU1Jw1z5AmnLjGJKjJtPYDLNYOpvIC8G8nARRloXpJoMy2JmhoTgeDM57DDQhq7oOipjs7Zc8B8bFuG4PsKLtQwTzkV-Qfa2g_QLicBQmg0tQ5ght2iHFdKZf5I_wHg9Ytq66ZrW",
+   "token": "eyJhbGciOiJQUzI1NiIsImtpZCI6ImZlZC1yc2EiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3Rva2VuLmFjdGlvbnMuZXhhbXBsZSIsInN1YiI6InJlcG86YWNtZS9vcHM6cmVmOnJlZnMvaGVhZHMvbWFpbiIsImF1ZCI6Imx1Y2lkLWFjbWUiLCJpYXQiOjE3OTUwMDcxNzAsIm5iZiI6MTc5NTAwNzE3MCwiZXhwIjoxNzk1MDA3NzcwLCJqdGkiOiIyYmVCMXZvZTNaNENfSmU5S29jVU5BIn0.X9N8hXzmfOJhTWrCznAl8R3g-FOcfwe_9FSB3k5DqKTv5xFqnk_STwmf9qpOzsRPmzkxraEa7-zv1qGrfUKw4mho3W2E3aov7_E3hx0nwczHz5JfBFhzuAgPKZgHZbChDVulgfknHTOvU7ULSdZPbVSkqe-yz4fC3_GBOVXXGzGglcyvz045jUo-xwkD_q-G4arxEIzPtXJCHXVIVf5y0v7Ox438lzCLrzQJG0b9BHDhwmyrkIorGPVrX5u8cCakRIC4XSU35JWm7Oj1Ein69PSsPobS8sd1H3MxUhV1-LyROH-znI0hnWuGjGlSU6BfG0cw92mMLwwNg8WxGpFPB66u2wigfU3SbgDBgDchFTrlNp07RCGdLclBcRuOwWESn1Zk0pIH5D69kC-QkbF5zsLCeTJ0SXe4oYF_NIwca3TsjQZLTjnWLM7_IMS9bA1LjVrMwW9xVa4oQUu8-0WR8Qxux1D9630OeDhBzn4yPGAHHeyGW6RRvxEaKnRTPX6q",
    "credential": {
     "type": "federated",
     "issuer": "https://token.actions.example",

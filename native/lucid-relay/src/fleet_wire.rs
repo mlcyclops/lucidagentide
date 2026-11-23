@@ -553,6 +553,10 @@ pub const OPS: &[OpSpec] = &[
     // API-1 2.5, 12.2: the end of a catch-up that fully succeeded, `orgs` `{org: {seq, tseq}}` as the console holds
     // them; the relay answers ok only when it holds at least that much (else `not-synced`).
     OpSpec { op: "api-synced", kind: Kind::Req, to: Some(Side::Relay), keys: &["orgs"], opt: &[] },
+    // API-1 2.3 (slice 1a6): a console save asks an admin's device on this relay to sign the org api map
+    // (`meet.api.sign` in the relay's request book), then polls the request; an older relay answers fleet-op.
+    OpSpec { op: "api-sign-request", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "principal", "map", "map_sha256", "reason", "requested_by"], opt: &[] },
+    OpSpec { op: "api-sign-status", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "request"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
@@ -566,6 +570,10 @@ pub const API_CHECKPOINT_CERT_MAX: usize = 32 * 1024;
 /// API-1 12.3: an `api-failover` request frame (a certificate with its chain, or a token).
 pub const API_FAILOVER_MAX: usize = 64 * 1024;
 
+/// API-1 2.3 (slice 1a6): an `api-sign-request` frame (an unsigned map of at most 256 KiB and its hash), the side's
+/// whole frame limit.
+pub const API_SIGN_REQUEST_MAX: usize = TO_RELAY_MAX;
+
 /// API-1 2.6: the size limit of an op's whole request frame, below the side's frame limit (3.8).
 pub fn op_frame_max(op: &str) -> Option<usize> {
     match op {
@@ -578,6 +586,8 @@ pub fn op_frame_max(op: &str) -> Option<usize> {
         "api-checkpoint-cert" => Some(API_CHECKPOINT_CERT_MAX),
         "api-failover" => Some(API_FAILOVER_MAX),
         "api-synced" => Some(4 * 1024),
+        "api-sign-request" => Some(API_SIGN_REQUEST_MAX),
+        "api-sign-status" => Some(256),
         _ => None,
     }
 }

@@ -776,8 +776,8 @@ fn authorize(site: &Site, call: &Call, target: Option<&str>) -> Result<Allowed, 
     let Some(c) = tok::find_client(site.store, org, &client) else {
         return Err(refuse(site, call, who, no(403, "suspended", "That client is not registered.")));
     };
-    let networks: Vec<&str> = tok::names(c, "networks").collect();
-    if !networks.is_empty() && !networks.iter().filter_map(|n| crate::console_source::parse_cidr(n).ok()).any(|n| n.contains(call.source)) {
+    // the map's networks and every `client_limit`'s (2.5)
+    if !tok::source_allowed(c, site.store.active(org), &client, call.source) {
         return Err(refuse(site, call, who, no(403, "network", "This client may not call from that address.")));
     }
     if c.get("hours").is_some_and(|h| !api_issue::inside_hours(h, now)) {
@@ -790,7 +790,8 @@ fn authorize(site: &Site, call: &Call, target: Option<&str>) -> Result<Allowed, 
         }
     }
     // 11
-    let per = |k: &str| c.get("rate").and_then(|r| r.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    // lowered by every `client_limit` (2.5)
+    let per = |k: &str| tok::rate_of(c, site.store.active(org), &client, k);
     let (per_minute, per_day) = (per("per_minute_each"), per("per_day_each"));
     let key = format!("{org} {client}");
     let rate = match api_issue::take(&site.state.rate, &key, usize::try_from(per_minute).unwrap_or(usize::MAX), now) {
@@ -1493,6 +1494,21 @@ mod tests {
         assert_eq!(r.ctype, "application/problem+json");
         assert_eq!(r.body["type"], "https://lucid.emertins.com/problems/rate");
         assert!(header(&r, "X-Lucid-Request-Id").is_some());
+    }
+
+    /// 2.5 `client_limit` (slice 1a6): a journaled limit narrows a live grant at once: its networks refuse a source
+    /// the map still allows, its relays hide another relay, its rate is the lower one.
+    #[test]
+    fn a_client_limit_narrows_networks_relays_and_rate() {
+        let mut env = Env::new(client());
+        let t = env.token(&["monitor.read", "fleet.read"]);
+        let limit = json!({"client": CLIENT, "relays": [R2], "networks": ["10.99.0.0/16"], "rate": {"per_minute_each": 1}});
+        env.store.apply_tighten(ORG, &json!({"id": "t_acme_000001", "tseq": 1, "ts": NOW - 5, "action": "client_limit", "target": limit})).unwrap();
+        assert_eq!(code(&env.get(HEALTH, Some(&t))), (403, "network".into()), "10.40.0.7 is outside the limit's networks");
+        let inside = IpAddr::from([10, 99, 0, 7]);
+        assert_eq!(code(&env.at(Side::FrontDoor, &format!("{RELAYS}/{R1}"), "", Some(&t), inside, NOW)), (404, "not-found".into()));
+        assert_eq!(code(&env.at(Side::FrontDoor, &format!("{RELAYS}/{R2}"), "", Some(&t), inside, NOW)).0, 200);
+        assert_eq!(code(&env.at(Side::FrontDoor, HEALTH, "", Some(&t), inside, NOW)), (429, "rate".into()), "one a minute, already used");
     }
 
     #[test]

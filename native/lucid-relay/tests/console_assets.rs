@@ -779,6 +779,18 @@ fn settings_ai_renders_the_contract_words_and_approve_only_after_a_pass() {
     run_harness("ai", "");
 }
 
+#[test]
+fn settings_api_and_exports_render_and_a_secret_is_shown_once() {
+    // API-1 7.3 (API-1a6) in the DOM double, from the spec's answer shapes of GET settings/api and GET settings/exports:
+    // the API access page (org chips, state, staged changes with the signing state, clients, scrape tokens, grace,
+    // origins, kill switch, journal, Explain), the save with its relay choice, a new secret shown once in its own dialog
+    // and gone from the page once it closes, and the Exports destinations with status, failover and Set credential,
+    // whose material leaves the page with its dialog.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("admin_console_fleet_words_v1.json");
+    assert!(path.exists(), "{}: copy it from Meeting Hub tests/vectors after running its generator", path.display());
+    run_harness("api", path.to_str().unwrap());
+}
+
 /// The script harness: qr.js against the vector, and app.js in a small DOM double built from index.html.
 const HARNESS_JS: &str = r##""use strict";
 const fs = require("fs");
@@ -1640,7 +1652,172 @@ async function aiMain() {
   console.log("ai: Settings > AI ok");
 }
 
+// ---- API-1 7.3 (API-1a6): Settings > API access and the API destinations of Exports on a fleet console ----
+async function apiMain(v) {
+  const W = v.page;
+  const D = v.dialogs;
+  const r1 = "r_0000000000000001", r2 = "r_0000000000000002";
+  const t0 = 1763300000000;
+  // The spec's answer shapes (api1a6 spec section 2).
+  const staged = { id: "st_0123456789abcdef", org: "acme", by: "ann@acme.example", at: t0, expires_at: t0 + 7200000, base_seq: 7,
+    changes: ["Add client splunk-scrape", "Raise app grace to 24 hours"], two_person: true, two_person_reasons: ["Raises a grace value"], tests_needed: ["d_9a8b7c6d5e4f3a2b"] };
+  const client = { id: "c_5f1a2b3c4d5e6f70", name: "splunk-scrape", principal: "splunk-scrape@apps.acme.example", kind: "monitoring", owner: "bob@acme.example",
+    scopes: ["monitor.read", "audit.read"], ceiling: "internal", relays: ["*"], networks: ["10.40.0.0/23"], mtls_required: false,
+    rate: { per_minute_each: 120, per_day_each: 100000 }, created: 1763000000, expires: 1790000000, state: "active", shown_state: "owner-gone",
+    credentials: [{ type: "private_key_jwt", hint: "k1", expires: 1790000000 }, { type: "client_secret", hint: "lcs_ab12", expires: 1770000000 }] };
+  const map = { seq: 7, issued: 1763000000, expires: 1770000000, issuer_url: "https:" + "//console.acme.example:7443/api/orgs/acme", failover_after_s: 300,
+    grace: { person: 0, app: 0, connector: 0, relay: 0 }, relay_origins: { [r1]: "https:" + "//relay1.acme.example:9443" },
+    clients: [client], scrape_tokens: [{ hint: "lme_ab12", label: "prometheus-dc1", relays: ["*"], expires: 1770000000 }] };
+  const apiView = { ok: true, orgs: [
+    { org: "acme", edition: "enterprise", state: "on", map, draft: Object.assign({}, map, { grace: { person: 0, app: 24, connector: 0, relay: 0 } }),
+      journal: { head: 13, entries: [{ id: "t_acme_000013", tseq: 13, action: "client_limit", target: { client: "c_5f1a2b3c4d5e6f70", networks: ["10.40.0.0/24"], rate: { per_minute_each: 60 } }, ts: 1763250000 },
+        { id: "t_acme_000012", tseq: 12, action: "client_suspend", target: "c_0000000000000009", ts: 1763200000 },
+        { id: "t_acme_000011", tseq: 11, action: "token_deny", target: { client: "c_5f1a2b3c4d5e6f70", jti: "j1" }, ts: 1763100000, until: 1763400000 }] },
+      relays: [{ id: r1, acked: 12, synced: false }, { id: r2, acked: 12, synced: true }], staged,
+      signing: { request: "rq_0000000000000001", by: "ann@acme.example", at: t0, state: "waiting", relay: r1 },
+      limits: { clients: 500, destinations: 32, scrape_tokens: 10 } },
+    { org: "globex", edition: "enterprise", state: "none", map: null, journal: { head: 0, entries: [] }, relays: [], staged: null, draft: null, signing: null,
+      limits: { clients: 500, destinations: 32, scrape_tokens: 10 } }] };
+  const dest = { id: "d_9a8b7c6d5e4f3a2b", name: "Splunk HEC", kind: "splunk_hec", preset: "splunk_hec", signals: ["audit", "logs"], ceiling: "internal", identities: "pseudonymized",
+    failover: true, private_ok: false, endpoint: "https:" + "//hec.acme.example:8088/services/collector/event", settings: { index: "lucid", sourcetypes: ["lucid:audit"], ack: true },
+    queue: { max_bytes: 1073741824, max_age_s: 259200 }, source: "staged", credential: { type: "token", held: true, rotate_by: 1770000000 },
+    status: { state: "retrying", backlog_bytes: 2048, oldest_s: 3700, last_success: 1763200000, last_error: "connection refused" }, tested: false,
+    failover_records: [{ relay: r1, type: "token", public_id: "sha256:0a1b2c3d", not_before: 1763000000, expires: 1770000000, state: "armed", note: "" }] };
+  const exportsView = { ok: true, tokens: [], siem: { host: "siem.acme.example", port: 6514, events: ["audit"], includeReasons: false, state: "ok", caSet: true, clientCertSet: false },
+    api: [{ org: "acme", staged, destinations: [dest], relays: [r1, r2] }],
+    presets: [{ id: "splunk_hec", kind: "splunk_hec", credential_types: ["token"], signals: ["logs", "audit"] },
+      { id: "sentinel", kind: "azure_logs", credential_types: ["entra_certificate"], signals: ["logs", "audit"] }] };
+  const secret = "lcs_SECRETSECRETSECRETSECRETSECRET0123456789";
+  const answers = {
+    "GET me": {
+      ok: true, product: "fleet", profile: "standard", origin: "https://console.acme.example", relay: { host: "console.acme.example" }, sections: [],
+      idle: { minutes: 15, maxHours: 12 },
+      user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+        methods: { webauthn: [], password: false, totp: true }, mustSetPassword: false, sessions: 1, mail: [] },
+    },
+    "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [] },
+    "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 }, attention: [],
+      fleet: { relays: { total: 2, ok: 2, warn: 0, bad: 0, silent: 0, unconfirmed: 0 }, people: { online: 0 }, calls: { active: 0 }, kpis: {} } },
+    "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "done", license: "done", relay: "done" } },
+    "GET fleet/relays": { ok: true, total: 2, relays: [
+      { id: r1, name: "Dallas east", site: "us-east", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.6.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] },
+      { id: r2, name: "Hub west", site: "us-west", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.6.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] }] },
+    "GET settings/api": apiView,
+    "GET settings/exports": exportsView,
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+    "POST settings/api/explain": { ok: true, first_fail: 6, checks: [{ n: 0, name: "source limiter", ok: true, words: "" }, { n: 5, name: "client limiter", ok: true, words: "" },
+      { n: 6, name: "scope", ok: false, code: "scope", words: "This client may not use this route." }] },
+    "POST settings/api/clients/secret": { ok: true, secret, hint: "lcs_cd34", staged },
+    "POST settings/exports/destinations/credential": { ok: true, held: true, rotate_by: 1770000000 },
+  };
+  const field = (label) => {
+    const l = doc.querySelectorAll("label").find((x) => x.textContent === label);
+    return l ? doc.getElementById(l.getAttribute("for")) : null;
+  };
+  const confirmCode = async () => {
+    for (let i = 0; i < 4; i++) await settle();
+    if (!doc.getElementById("code-dlg").open) fail("no step-up code asked");
+    doc.getElementById("code-input").value = "123456";
+    doc.getElementById("code-go").click();
+    for (let i = 0; i < 6; i++) await settle();
+  };
+  boot(answers, { hash: "#/security/api" });
+  for (let i = 0; i < 4; i++) await settle();
+  const page = view();
+  inOrder(page, [W["api.title"], "globex", W["api.state-on"], W["api.org"], "Map 7, signed ", "Up to 500 clients, 32 destinations and 10 scrape tokens.", W["api.staged"],
+    "Waiting for your Hub device on Dallas east to sign the map.", "Add client splunk-scrape", W["api.two-person"], "Raises a grace value", W["api.tests-needed"],
+    W["api.clients"], "splunk-scrape", W["api.shown-owner-gone"], "private_key_jwt k1", W["api.scrape"], "prometheus-dc1", W["api.grace"], W["api.grace-help"],
+    W["api.origins"], "Dallas east", W["api.kill"], W["api.off"], W["api.journal"], "t_acme_000012", W["api.explain"]], "API access");
+  if (field(W["api.grace-app"]).value !== "24") fail("the grace shows the pinned map, not the staged draft");
+  if (!find("button", W["api.client-add"]) || !find("button", W["api.scrape-new"])) fail("an admin has no Add a client or Create a relay scrape token");
+  const undo = doc.querySelectorAll("button").filter((b) => b.textContent === W["api.undo"]);
+  if (undo.length !== 4) fail("Undo is offered " + undo.length + " times; only the client_limit and client_suspend entries (table and card) may offer it");
+  inOrder(page, [W["api.journal"], W["api.action-client-limit"], "client c_5f1a2b3c4d5e6f70, networks 10.40.0.0/24, rate {\"per_minute_each\":60}"], "client_limit entry");
+  if (page.includes("\u2014") || page.includes("\u2013")) fail("a long dash on API access");
+
+  // Explain: each check with ok or the refusing code and words.
+  field(W["api.f-path"]).value = "/v1/audit";
+  find("button", W["api.explain-run"]).click();
+  for (let i = 0; i < 4; i++) await settle();
+  const ex = calls.find((c) => c.route === "POST settings/api/explain");
+  if (!ex || ex.body.client !== client.id || ex.body.method !== "GET" || ex.body.path !== "/v1/audit" || "ip" in ex.body) fail("the explain body: " + JSON.stringify(ex && ex.body));
+  inOrder(view(), ["0. source limiter: " + W["api.check-passes"], "6. scope: Refused (scope): This client may not use this route.", "Check 6 refuses this request."], "explain");
+
+  // One signing in flight: Save is not offered, Cancel signing posts {org}; after it the signing shows failed.
+  const saveButton = () => doc.getElementById("view").querySelectorAll("button").find((b) => b.textContent === "Save");
+  if (saveButton()) fail("Save is offered while a signing is waiting");
+  find("button", W["api.signing-cancel"]).click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== D["api-signing-cancel"].title.replace("<org>", "acme")) fail("the cancel dialog title");
+  apiView.orgs[0].signing = { request: "rq_0000000000000001", by: "ann@acme.example", at: t0, state: "failed", error: "Canceled", relay: r1 };
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 6; i++) await settle();
+  const cancel = calls.find((c) => c.route === "POST settings/api/signing/cancel");
+  if (!cancel || JSON.stringify(cancel.body) !== JSON.stringify({ org: "acme" })) fail("the cancel body: " + JSON.stringify(cancel && cancel.body));
+  if (!view().includes("The map was not signed: Canceled")) fail("the canceled signing is not shown as failed");
+  if (doc.getElementById("view").querySelectorAll("button").some((b) => b.textContent === W["api.signing-cancel"])) fail("Cancel signing stays after the signing failed");
+
+  // Save: two-person, the relay choice defaults to the first synced relay, no step-up.
+  saveButton().click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== D["api-save"].title.replace("<org>", "acme")) fail("the save dialog title: " + doc.getElementById("confirm-title").textContent);
+  const relayPick = doc.getElementById("confirm-fields").querySelector("select");
+  if (!relayPick || relayPick.value !== r2) fail("the save does not default to the first synced relay");
+  doc.getElementById("confirm-fields").querySelector("textarea").value = "Weekly review";
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 6; i++) await settle();
+  const save = calls.find((c) => c.route === "POST settings/api/save");
+  if (!save || JSON.stringify(save.body) !== JSON.stringify({ org: "acme", stage: staged.id, reason: "Weekly review", relay: r2 })) fail("the save body: " + JSON.stringify(save && save.body));
+
+  // New secret: shown once, in its own dialog, and gone from the page when the dialog closes.
+  find("button", W["api.new-secret"]).click();
+  await settle();
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const made = calls.find((c) => c.route === "POST settings/api/clients/secret");
+  if (!made || made.body.org !== "acme" || made.body.id !== client.id || made.body.days !== 90 || !made.body.stepup) fail("the secret body: " + JSON.stringify(made && made.body));
+  const reveal = doc.querySelectorAll("dialog.reveal");
+  if (reveal.length !== 1 || !reveal[0].open) fail("the secret is not shown in its own dialog");
+  inOrder(reveal[0].textContent, ["New secret for splunk-scrape", "lcs_cd34", W["api.secret-once"], secret, "Copy", W["api.close"]], "secret dialog");
+  if (snapshot().split(secret).length !== 2) fail("the secret is shown more than once");
+  if (doc.getElementById("view").textContent.includes(secret)) fail("the secret is on the page itself");
+  if (doc.getElementById("confirm-fields").childNodes.length) fail("the closed confirmation keeps its fields");
+  reveal[0].querySelectorAll("button").find((b) => b.textContent === W["api.close"]).click();
+  await settle();
+  if (doc.querySelectorAll("dialog.reveal").length) fail("the secret dialog stays after Close");
+  if (snapshot().includes(secret)) fail("the secret stays in the page after its dialog closed");
+  await go("#/security/exports");
+  await go("#/security/api");
+  if (snapshot().includes(secret)) fail("the secret came back with the page");
+
+  // Exports: API destinations with status, the staged panel and failover per relay.
+  await go("#/security/exports");
+  const ev = view();
+  inOrder(ev, [W["exports.title"], W["exports.siem"], W["exports.destinations"], "Destinations of acme", W["exports.dest-preset"], W["exports.dest-add"], W["exports.dest-from-siem"],
+    "Splunk HEC", "splunk_hec (splunk_hec)", "audit, logs", W["exports.source-staged"], W["exports.state-retrying"], "2 KiB", "connection refused",
+    W["exports.cred-token"] + ": " + W["exports.cred-held"], W["exports.untested"], W["exports.failover"], W["exports.failover-help"], "Dallas east", "sha256:0a1b2c3d",
+    W["exports.fo-armed"], "Hub west", W["api.staged"], W["api.tests-needed"], "Splunk HEC"], "exports");
+  const presetPick = doc.getElementById("view").querySelectorAll("select").find((s) => s.querySelectorAll("option").some((o) => o.textContent === "sentinel (azure_logs)"));
+  if (!presetPick) fail("the kind and preset choice lacks the presets of the answer");
+  // Set credential: the material is posted once and leaves the page with its dialog.
+  find("button", W["exports.dest-credential"]).click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== "Set the credential of Splunk HEC?") fail("the credential dialog title");
+  doc.getElementById("confirm-fields").querySelector("textarea").value = "hec-token-0123456789";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const cred = calls.find((c) => c.route === "POST settings/exports/destinations/credential");
+  if (!cred || cred.body.org !== "acme" || cred.body.id !== dest.id || JSON.stringify(cred.body.credential) !== JSON.stringify({ type: "token", token: "hec-token-0123456789" })) {
+    fail("the credential body: " + JSON.stringify(cred && cred.body));
+  }
+  if (snapshot().includes("hec-token-0123456789")) fail("the credential material stays in the page");
+  if (!doc.getElementById("status").textContent.includes(W["exports.cred-sealed"])) fail("no word that the credential is sealed");
+  console.log("api: API access, Explain, save, secret once and API destinations ok");
+}
+
 if (mode === "dom") main().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "api") apiMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "ai") aiMain().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "fleet") fleetMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else fail("unknown mode " + mode);

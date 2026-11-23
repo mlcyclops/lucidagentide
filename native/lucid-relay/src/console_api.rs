@@ -370,7 +370,6 @@ impl ConsoleApi {
     /// Verify and pin a signed map in the console's store, then send it (`api-map`) to every connected relay of its
     /// org. A conflict raises `api.map.conflict`. Called by the API access screen's save (slice 1a6).
     #[allow(clippy::too_many_arguments)]
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn publish_map(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Map<String, Value>>, edition: Option<Edition>) -> Result<AcceptOutcome, ApiMapError> {
         let r = self.inner.lock().store.accept(signed, trust, now, policy, edition);
         self.published(link, r, now)
@@ -412,7 +411,6 @@ impl ConsoleApi {
         self.published(link, r, now)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     fn published(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, r: Result<AcceptOutcome, ApiMapError>, now: i64) -> Result<AcceptOutcome, ApiMapError> {
         match &r {
             Ok(AcceptOutcome::Pinned(vm)) => {
@@ -484,9 +482,54 @@ impl ConsoleApi {
     }
 
     /// The journal head (last tseq) of an org.
-    #[cfg(test)]
     pub fn journal_head(&self, org: &str) -> u64 {
         self.inner.lock().orgs.get(org).map_or(0, OrgJournal::head)
+    }
+
+    /// The newest `n` journal entries still kept for an org, newest first (the API access screen, slice 1a6).
+    pub fn journal_newest(&self, org: &str, n: usize) -> Vec<Value> {
+        self.inner.lock().orgs.get(org).map(|j| j.entries.iter().rev().take(n).cloned().collect()).unwrap_or_default()
+    }
+
+    /// The active (not folded or cleared) journal entries of an org, as the console's store applies them.
+    pub fn journal_active(&self, org: &str) -> Vec<crate::api_map::TightenEntry> {
+        self.inner.lock().store.active(org).to_vec()
+    }
+
+    /// Per relay that serves the org (`relays_of`): `{id, acked, synced}`, `synced` when it acknowledged the journal
+    /// head and its last catch-up fully succeeded (the API access screen, slice 1a6).
+    pub fn relays_view(&self, org: &str) -> Vec<Value> {
+        let relays = self.relays_of(org);
+        let inner = self.inner.lock();
+        let j = inner.orgs.get(org);
+        let head = j.map_or(0, OrgJournal::head);
+        relays
+            .into_iter()
+            .map(|r| {
+                let acked = j.and_then(|j| j.acks.get(&r).copied()).unwrap_or(0);
+                json!({ "id": r, "acked": acked, "synced": acked >= head && !inner.unsynced.contains(&r) })
+            })
+            .collect()
+    }
+
+    /// Every org the console holds a pinned map or a journal for, or a connected relay reported, sorted.
+    pub fn known_orgs(&self) -> Vec<String> {
+        let inner = self.inner.lock();
+        let mut out: std::collections::BTreeSet<String> = inner.store.issuers().into_keys().collect();
+        out.extend(inner.orgs.keys().cloned());
+        for s in inner.relays.values() {
+            if let RelayApi::Heads(h) = s {
+                out.extend(h.keys().cloned());
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// The org's serving pinned map (the `map` object), its seq even while set aside, and whether it is set aside.
+    pub fn pinned(&self, org: &str) -> (Option<Value>, i64, bool) {
+        let inner = self.inner.lock();
+        let map = inner.store.get(org, "").map(|m| Value::Object(m.map().clone()));
+        (map, inner.store.head(org).0, inner.store.is_set_aside(org))
     }
 
     /// The entries still kept for an org (after pruning).
@@ -1129,15 +1172,17 @@ impl ConsoleApi {
 
     /// 11.3: seal a destination's credential as `secret:<org>:<id>` (destination ids are unique only within one
     /// org's map) with its entry date and, for a vendor token or a service account key, its "rotate by" date (90
-    /// days). The destination must be in the org's pinned map with a `credential` the value fits. The value never
-    /// enters a log, the map or the audit. The export engine makes the destination's sink again at once. Called by
-    /// the Exports screen (slice 1a6).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn put_destination_credential(&self, org: &str, id: &str, credential: crate::api_export_wire::Credential, now: i64) -> Result<(), String> {
+    /// days). The destination must be in the org's pinned map, or be `staged` (the entry of an unsigned staged save,
+    /// so it can be tested before the save), with a `credential` the value fits. The value never enters a log, the
+    /// map or the audit. The export engine makes the destination's sink again at once. Called by the Exports screen
+    /// (slice 1a6).
+    pub fn put_destination_credential(&self, org: &str, id: &str, staged: Option<&Value>, credential: crate::api_export_wire::Credential, now: i64) -> Result<(), String> {
         let entry = {
             let inner = self.inner.lock();
             inner.store.get(org, "").and_then(|m| m.map().get("destinations")?.as_array()?.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(id)).cloned())
         };
+        // the staged entry is what the next save signs
+        let entry = staged.filter(|d| d.get("id").and_then(Value::as_str) == Some(id)).cloned().or(entry);
         let Some(entry) = entry else { return Err("That destination is not in the organization's api map.".into()) };
         if entry.get("credential").is_none() || !crate::api_export::credential_fits(&entry, &credential) {
             return Err("That credential does not fit the destination's credential type.".into());
@@ -1220,7 +1265,6 @@ impl ConsoleApi {
     /// 12.3: ask the relay for a certificate request for the destination's failover key (made on the relay, never
     /// leaving it); the admin registers the CSR with the tool. The record is `pending` (an armed one stays armed
     /// until the renewed certificate is installed). Called by the admin screen (slice 1a6).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn failover_request_csr(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str) -> Result<String, String> {
         let (kind, _) = self.failover_destination(org, destination)?;
         if !crate::api_failover::FailoverKind::of(&kind).is_some_and(|k| k.uses_csr()) {
@@ -1246,7 +1290,6 @@ impl ConsoleApi {
     /// The record is `armed` only after the relay acknowledged, with the type, `public_id` (SPKI hash, token hint or
     /// `client_email:private_key_id`), `not_before` and `expires` the relay answered (its `expires` no later than the
     /// one asked, and after now). The material never enters a log or the record.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn failover_install(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str, material: Value, now: i64) -> Result<(), String> {
         const KEYS: &[&str] = &["cert_pem", "chain_pem", "ca_pem", "token", "key_json", "expires", "tenant", "client_id", "cloud", "trust_anchor_arn", "profile_arn", "role_arn", "region"];
         let (kind, _) = self.failover_destination(org, destination)?;
@@ -1300,7 +1343,6 @@ impl ConsoleApi {
 
     /// 12.3: delete the destination's failover credential (and its failover queue) on the relay; the record is
     /// `deleted` after the relay acknowledged. Allowed whatever the map says now (it only ever removes).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn failover_delete(&self, link: &dyn FleetLink, org: &str, destination: &str, relay: &str) -> Result<(), String> {
         if !org_ok(org) {
             return Err("That is not an organization id.".into());
@@ -1327,7 +1369,6 @@ impl ConsoleApi {
     }
 
     /// 12.3: the failover credential records of an org (for the admin screen).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn failover_records(&self, org: &str) -> Vec<FailoverRecord> {
         self.failover.lock().values().filter(|r| r.org == org).cloned().collect()
     }
@@ -1356,7 +1397,6 @@ impl ConsoleApi {
     }
 
     /// 11.3: whether a destination's credential is sealed (and reads).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn has_destination_credential(&self, org: &str, id: &str) -> bool {
         self.destination_credential(org, id).is_some()
     }
@@ -1367,7 +1407,6 @@ impl ConsoleApi {
     }
 
     /// 11.3: the "rotate by" date (unix seconds) of a destination's vendor token or service account key.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn destination_credential_rotate_by(&self, org: &str, id: &str) -> Option<i64> {
         self.sealed_destination(org, id)?.get("rotate_by")?.as_i64()
     }
@@ -1406,8 +1445,6 @@ impl ConsoleApi {
     /// The org's issuer signing key, drawn once (P-256 on AWS-LC) and sealed as `api-issuer-<org>-<kid>`; Ok is its
     /// public JWK, for an admin to list in the map's `issuer.jwks` with its `nbf` and `exp`. A held key whose sealed
     /// value no longer opens is replaced by a new one. The private key never leaves the sealed store or this process.
-    // The API settings page (slice 1a6) calls this; until then only tests do.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn issuer_public_jwk(&self, org: &str) -> Result<Value, String> {
         if !org_ok(org) {
             return Err("that is not an organization id".into());
@@ -1631,11 +1668,16 @@ mod tests {
         let heard: Arc<Mutex<Vec<Option<(String, String)>>>> = Arc::default();
         let h = heard.clone();
         api.set_export_hook(Box::new(move |k: Option<(&str, &str)>| h.lock().push(k.map(|(o, i)| (o.to_string(), i.to_string())))));
-        assert!(api.put_destination_credential("acme", d, Credential::Mtls { cert_pem: "C".into(), key_pem: "K".into(), ca_pem: None }, NOW).is_err());
-        assert!(api.put_destination_credential("acme", "d_0000000000000000", Credential::Token("x".into()), NOW).is_err());
-        assert!(api.put_destination_credential("beta", d, Credential::Token("x".into()), NOW).is_err(), "another org has no such destination");
+        assert!(api.put_destination_credential("acme", d, None, Credential::Mtls { cert_pem: "C".into(), key_pem: "K".into(), ca_pem: None }, NOW).is_err());
+        assert!(api.put_destination_credential("acme", "d_0000000000000000", None, Credential::Token("x".into()), NOW).is_err());
+        assert!(api.put_destination_credential("beta", d, None, Credential::Token("x".into()), NOW).is_err(), "another org has no such destination");
+        // a staged destination (not pinned yet) holds its credential so it can be tested before the save
+        let staged = json!({"id": "d_1111111111111111", "kind": "splunk_hec", "preset": "splunk_hec", "credential": {"type": "token", "ref": "secret:d_1111111111111111"}});
+        api.put_destination_credential("beta", "d_1111111111111111", Some(&staged), Credential::Token("staged-secret".into()), NOW).unwrap();
+        assert!(api.has_destination_credential("beta", "d_1111111111111111"));
+        heard.lock().clear();
         assert!(!api.has_destination_credential("acme", d));
-        api.put_destination_credential("acme", d, Credential::Token("hec-secret-value".into()), NOW).unwrap();
+        api.put_destination_credential("acme", d, None, Credential::Token("hec-secret-value".into()), NOW).unwrap();
         assert!(api.has_destination_credential("acme", d));
         assert!(!api.has_destination_credential("beta", d), "the same id in another org is another secret");
         assert_eq!(api.destination_credential_rotate_by("acme", d), Some(NOW + 90 * 86_400));

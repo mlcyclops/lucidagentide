@@ -1937,8 +1937,7 @@ impl ExportEngine {
 
     /// 11.7 per destination (all orgs with None): state (`ok`, `retrying`, `paused`, `failed`, `suspended`), backlog
     /// bytes, oldest age (s), last success (unix s), last error sentence, and its counters. Failover is slice 1a5.
-    // The Exports screen (slice 1a6) reads this; until then only tests do.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The Exports screen (slice 1a6) reads it.
     pub fn status(&self, org: Option<&str>, now: i64) -> Vec<Value> {
         let mut out = Vec::new();
         for rt in self.snapshot() {

@@ -8,8 +8,9 @@
 
 use crate::codec::{b64u, hex, sha256_hex, str_of, stringify, unb64u};
 use crate::console::{ApiError, Console, Done, LicenseState, LicenseView, Need, Out, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
+use crate::console_api_ui as api_ui;
 use crate::console_audit::Record;
-use crate::console_auth::{clean, hint_of, random_bytes, FleetCeremony, FleetKind, PersonRole, Who};
+use crate::console_auth::{clean, hint_of, random_bytes, reason_of, FleetCeremony, FleetKind, PersonRole, Who};
 use crate::license::Product;
 use crate::log::{Fields, Level};
 use indexmap::IndexMap;
@@ -775,6 +776,12 @@ pub struct Fleet {
     /// API-1 11: the export destinations of every org's pinned map, their queues under `<state>/exports/` and their
     /// delivery; the API audit chains' retention hold.
     pub export: Arc<crate::api_export::ExportEngine>,
+    /// API-1 7.3 (slice 1a6): the staged api map drafts, one per org (memory only).
+    api_drafts: Mutex<crate::console_api_ui::Drafts>,
+    /// API-1 2.3 (slice 1a6): each org's save signed on a relay (`meet.api.sign`), kept in `api-signing.json`.
+    api_signings: Mutex<BTreeMap<String, crate::console_api_ui::Signing>>,
+    /// A thread polls the waiting signings now.
+    api_signing_busy: std::sync::atomic::AtomicBool,
 }
 
 /// A request as the fleet section sees it (console.rs builds it after the role, origin and size checks).
@@ -911,7 +918,7 @@ const fn g(path: &'static str, role: Role) -> RouteSpec {
 /// The fleet routes of 5.3. Rows with a fleet step-up (4.6) list `stepup` among their keys and verify it in their
 /// handler; rows with an AC-1 step-up have `stepup: true`. `fleet/relays/<id>` and its proxy `.../p/<path>` are
 /// matched by prefix (PROXY_GET, PROXY_POST, RELAY_DETAIL).
-pub static FLEET_ROUTES: [RouteSpec; 47] = [
+pub static FLEET_ROUTES: [RouteSpec; 73] = [
     g("fleet/relays", Role::Viewer),
     r("POST", "fleet/enroll", Role::Admin, "fleet.enroll.code", "name", true, &["product", "name", "site", "scopes", "replaces", "env", "deploy"]),
     // AC-2b-D 9.1
@@ -960,6 +967,34 @@ pub static FLEET_ROUTES: [RouteSpec; 47] = [
     r("POST", "settings/exports/token/revoke", Role::Admin, "exports.token.revoke", "hint", false, &["hint"]),
     r("POST", "settings/exports/siem", Role::Admin, "exports.siem", "-", true, &["host", "port", "caPem", "clientCertPem", "clientKeyPem", "events", "includeReasons", "off", "reason"]),
     r("POST", "settings/exports/siem/test", Role::Admin, "exports.siem-test", "-", false, &[]),
+    // API-1 7.3 (slice 1a6): Settings > API access, the staged save signed by the admin's device (`meet.api.sign`)
+    g("settings/api", Role::Viewer),
+    r("POST", "settings/api/clients", Role::Admin, "api.client.stage", "org", true, &["org", "client"]),
+    r("POST", "settings/api/clients/update", Role::Admin, "api.client.update", "org", true, &["org", "id", "client"]),
+    r("POST", "settings/api/clients/suspend", Role::Admin, "api.client.suspend", "org", false, &["org", "id", "reason"]),
+    r("POST", "settings/api/clients/resume", Role::Admin, "api.client.resume", "org", false, &["org", "id"]),
+    r("POST", "settings/api/clients/delete", Role::Admin, "api.client.delete", "org", false, &["org", "id", "reason"]),
+    r("POST", "settings/api/clients/secret", Role::Admin, "api.client.secret", "org", true, &["org", "id", "days"]),
+    r("POST", "settings/api/clients/revoke-tokens", Role::Admin, "api.client.revoke-tokens", "org", false, &["org", "id"]),
+    r("POST", "settings/api/scrape-tokens", Role::Admin, "api.scrape-token", "org", true, &["org", "action", "label", "relays", "days", "hint"]),
+    r("POST", "settings/api/explain", Role::Viewer, "api.explain", "org", false, &["org", "client", "method", "path", "ip"]),
+    r("POST", "settings/api/grace", Role::Admin, "api.grace", "org", true, &["org", "grace"]),
+    r("POST", "settings/api/off", Role::Admin, "api.off", "org", false, &["org", "reason"]),
+    r("POST", "settings/api/on", Role::Admin, "api.on", "org", false, &["org"]),
+    r("POST", "settings/api/resume", Role::Admin, "api.resume", "org", true, &["org", "tightening"]),
+    r("POST", "settings/api/relay-origins", Role::Admin, "api.relay-origin", "org", true, &["org", "relay", "origin"]),
+    r("POST", "settings/api/discard", Role::Admin, "api.discard", "org", false, &["org"]),
+    r("POST", "settings/api/save", Role::Admin, "meet.api.save", "org", false, &["org", "stage", "reason", "relay"]),
+    r("POST", "settings/api/signing/cancel", Role::Admin, "api.signing.cancel", "org", false, &["org"]),
+    // API-1 7.3, 11, 12.3: export destinations, their credentials and failover credentials
+    r("POST", "settings/exports/destinations", Role::Admin, "exports.destination.stage", "org", true, &["org", "destination", "from_siem"]),
+    r("POST", "settings/exports/destinations/update", Role::Admin, "exports.destination.update", "org", true, &["org", "id", "destination"]),
+    r("POST", "settings/exports/destinations/delete", Role::Admin, "exports.destination.delete", "org", true, &["org", "id", "reason"]),
+    r("POST", "settings/exports/destinations/test", Role::Admin, "exports.destination.test", "org", false, &["org", "id"]),
+    r("POST", "settings/exports/destinations/credential", Role::Admin, "exports.destination.credential", "org", true, &["org", "id", "credential"]),
+    r("POST", "settings/exports/destinations/failover/csr", Role::Admin, "exports.failover.csr", "org", false, &["org", "id", "relay"]),
+    r("POST", "settings/exports/destinations/failover/install", Role::Admin, "exports.failover.install", "org", true, &["org", "id", "relay", "material"]),
+    r("POST", "settings/exports/destinations/failover/delete", Role::Admin, "exports.failover.delete", "org", false, &["org", "id", "relay"]),
 ];
 
 /// `GET fleet/relays/<id>` (matched by prefix).
@@ -1081,6 +1116,8 @@ impl Fleet {
         let meet = with_vault(console, |v| crate::meet_ca::MeetCa::open(&state_dir, &*v));
         let api = Arc::new(crate::console_api::ConsoleApi::open(Some(&state_dir), logger.clone(), Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console)))));
         let mut issue: Option<crate::api_checkpoint::IssueFn> = None;
+        // API-1 2.3: saves whose signing the console still polls
+        let signings = crate::console_api_ui::signings_load(&state_dir);
         let fleet = Arc::new_cyclic(|weak: &Weak<Fleet>| {
             let bridge: Arc<dyn crate::fleet_people::PeopleHost> = Arc::new(PeopleBridge { fleet: weak.clone() });
             let people = Arc::new(crate::fleet_people::People::new(bridge));
@@ -1125,6 +1162,9 @@ impl Fleet {
                 api_audit,
                 api_state: crate::api_resource::ResourceState::new(),
                 export,
+                api_drafts: Mutex::new(crate::console_api_ui::Drafts::default()),
+                api_signings: Mutex::new(signings),
+                api_signing_busy: std::sync::atomic::AtomicBool::new(false),
             }
         });
         // API-1 2.6, 9.3: relay chains received through `api-audit`, relay checkpoint certificates issued in catch-up
@@ -1583,6 +1623,7 @@ impl Fleet {
             ("POST", "settings/exports/token/revoke") => c.exports_token_revoke(r.params),
             ("POST", "settings/exports/siem") => c.exports_siem(r.who()?, r.params, t),
             ("POST", "settings/exports/siem/test") => c.exports_siem_test(r.who()?, t),
+            (_, p) if p == "settings/api" || p.starts_with("settings/api/") || p.starts_with("settings/exports/destinations") => self.api_route(c, spec, r),
             ("GET", "setup") => Ok(Done::plain(c.setup_view(r.who))),
             ("POST", "setup/start") => c.setup_start(r.source, r.params, t),
             ("POST", "setup/step") => c.setup_step(r.params),
@@ -3355,6 +3396,8 @@ impl Fleet {
             self.api.sync_tick(link.clone(), t.div_euclid(1000));
             self.api.audit_tick(link, t.div_euclid(1000));
         }
+        // API-1 2.3 (slice 1a6): saves waiting for their device's signature, on their own thread
+        self.api_signing_tick(t);
         // API-1 11: maps that expired this minute stop their org's exports; metrics snapshots, queue ages, refusal
         // summaries
         self.export.refresh(t.div_euclid(1000));
@@ -5043,6 +5086,8 @@ impl ProductSection for Fleet {
             "fleet.meet-ca.remove" => self.meet_remove_run(&c, run.params.get("elsewhere").and_then(Value::as_bool) == Some(true), run.t),
             "fleet.meet-ca.prune" => self.meet_prune_run(&c, run.requested_by, run.params, run.t),
             "fleet.meet-ca.max-lifetime" => self.meet_max_lifetime_run(run.params),
+            // API-1 6.6: a two-person api save a second admin approved, sent as its requester's
+            "meet.api.save" => self.api_save_run(&c, run.requested_by, run.params, run.t),
             _ => Err(ApiError::with("not-found", "There is no such action.")),
         }
     }
@@ -5731,6 +5776,730 @@ impl Console {
     }
 }
 
+// ── API-1 7.3 (slice 1a6): Settings > API access and Settings > Exports ────────────────────────────────────────
+
+/// The org a Settings > API access or Exports body names.
+fn api_org(params: &Value) -> Result<String, ApiError> {
+    str_of(params.get("org")).filter(|o| crate::api_audit::org_ok(o)).map(str::to_owned).ok_or_else(|| ApiError::with("invalid", "org is an organization id."))
+}
+
+fn random8() -> Result<[u8; 8], ApiError> {
+    random_bytes(8)?.try_into().map_err(|_| ApiError::of("write-failed"))
+}
+
+fn random32() -> Result<[u8; 32], ApiError> {
+    random_bytes(32)?.try_into().map_err(|_| ApiError::of("write-failed"))
+}
+
+/// A checker's or verifier's phrase as a console sentence: capitalized, ending with a period.
+fn api_sentence(s: &str) -> String {
+    let s = clean(s);
+    let mut c = s.chars();
+    let mut out: String = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+    if !out.ends_with('.') {
+        out.push('.');
+    }
+    out
+}
+
+/// API-1 2.5: how long back the org's chains are read for live access tokens (tokens last minutes; seconds).
+const LIVE_TOKEN_WINDOW_S: i64 = 3600;
+/// Pages of 1000 entries read back per chain for live access tokens at most.
+const LIVE_TOKEN_PAGES: u64 = 20;
+/// A signing still `sending` this long after it was recorded (ms) lost its relay's answer (or the console
+/// restarted meanwhile): the minute tick settles it.
+const SENDING_STALE_MS: i64 = 2 * 60_000;
+
+impl Fleet {
+    /// The owner rule of 4.3 for one org: active unless the console's people data marks them inactive.
+    fn api_owner(&self, org: &str) -> impl Fn(&str) -> bool {
+        let people = self.people();
+        let org = org.to_owned();
+        move |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(&org, p))
+    }
+
+    /// I of 5.1 for an org without a map yet: the front door's first name (else the console's host) and port.
+    fn api_issuer_url(&self, c: &Console, org: &str) -> String {
+        let host = self.cfg.fleet_names.first().filter(|h| !h.is_empty()).cloned().unwrap_or_else(|| c.cfg.host.clone());
+        let port = if self.cfg.fleet_port == 0 { 7443 } else { self.cfg.fleet_port };
+        format!("https://{host}:{port}/api/orgs/{org}")
+    }
+
+    /// The map a save of `d` asks a device to sign, checked as relays check it (2.2, 13).
+    fn api_final(&self, c: &Console, d: &api_ui::Draft, active: &[crate::api_map::TightenEntry], t: i64) -> Result<Value, ApiError> {
+        let now = t.div_euclid(1000);
+        let jwk = self.api.issuer_public_jwk(&d.org).map_err(|e| ApiError::with("invalid", api_sentence(&e)))?;
+        let kept: Vec<String> = self.api.journal_newest(&d.org, usize::MAX).iter().filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_owned)).collect();
+        let map = api_ui::final_map(d, &self.api_issuer_url(c, &d.org), &jwk, active, &kept, now);
+        let edition = self.api_edition(t).unwrap_or(crate::api_map::Edition::Enterprise);
+        crate::api_map::check_api_map(&map, now, None, edition, &BTreeMap::new()).map_err(|e| ApiError::with("invalid", api_sentence(&e.message)))?;
+        Ok(map)
+    }
+
+    /// Journal tightenings at once (2.5), each flushed and sent before the route answers; one already in force is
+    /// not journaled again.
+    fn api_journal(&self, org: &str, entries: &[api_ui::Tighten], t: i64) -> Result<usize, ApiError> {
+        let now = t.div_euclid(1000);
+        let mut n = 0;
+        for e in entries {
+            let held = self.api.journal_active(org).iter().any(|a| a.action == e.action && a.target == e.target);
+            if held {
+                continue;
+            }
+            self.api.append(self.link.get().cloned(), org, e.action, e.target.clone(), e.until, now).map_err(|x| ApiError::with("invalid", api_sentence(&x.message)))?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Every route of Settings > API access and the destinations of Settings > Exports.
+    fn api_route(&self, c: &Console, spec: &'static RouteSpec, r: &FleetReq) -> Result<Done, ApiError> {
+        let t = r.t;
+        if spec.method == "GET" {
+            return plain(self.api_view(t));
+        }
+        let who = r.who()?;
+        let p = r.params;
+        let org = api_org(p)?;
+        match spec.path {
+            "settings/api/explain" => self.api_explain(c, &org, p, t),
+            "settings/api/off" => {
+                let reason = reason_of(p.get("reason"))?;
+                if self.api.journal_active(&org).iter().any(|e| e.action == "api_off") {
+                    return Err(ApiError::with("stale", api_ui::API_OFF_ALREADY));
+                }
+                self.api_journal(&org, &[api_ui::Tighten { action: "api_off", target: json!(org), until: None }], t)?;
+                Ok(Done::ok(Out::ok(json!({ "ok": true, "state": "off" })), Some(org), json!({ "reason": reason })))
+            }
+            "settings/api/discard" => {
+                if !self.api_drafts.lock().discard(&org) {
+                    return Err(ApiError::with("stale", api_ui::NOTHING_STAGED));
+                }
+                Ok(Done::ok(Out::ok(json!({ "ok": true, "staged": null })), Some(org), Value::Null))
+            }
+            "settings/api/save" => self.api_save(c, who, &org, p, t),
+            "settings/api/signing/cancel" => self.api_signing_cancel(&org, t),
+            "settings/api/clients/revoke-tokens" => self.api_revoke_tokens(&org, p, t),
+            "settings/exports/destinations/test" => self.api_dest_test(c, who, &org, p, t),
+            "settings/exports/destinations/credential" => self.api_dest_credential(&org, p, t),
+            "settings/exports/destinations/failover/csr" | "settings/exports/destinations/failover/install" | "settings/exports/destinations/failover/delete" => self.api_failover(spec.path, &org, p, t),
+            path => self.api_stage(c, who, path, &org, p, t),
+        }
+    }
+
+    /// A staging route: the org's draft (a new one on the pinned map), the route's change, the map checked as relays
+    /// check it (a route that only tightens is never refused for the draft), its tightenings journaled at once, then
+    /// the draft kept. A secret or token is in this answer only.
+    fn api_stage(&self, c: &Console, who: &Who, path: &str, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let now = t.div_euclid(1000);
+        let (pinned, seq, _) = self.api.pinned(org);
+        let active = self.api.journal_active(org);
+        let held = self.api_drafts.lock().get(org, t).cloned();
+        let mut d = match held {
+            Some(d) => d,
+            None => api_ui::Draft::new(&api_ui::Ctx { org, by: &who.email, pinned: pinned.as_ref(), pinned_seq: seq }, api_ui::new_id("st_", &random8()?), t),
+        };
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let none = Value::Null;
+        let mut shown = Map::new();
+        let mut detail = json!({});
+        let journal: Vec<api_ui::Tighten> = match path {
+            "settings/api/clients" => {
+                let cid = api_ui::new_id("c_", &random8()?);
+                api_ui::add_client(&mut d, p.get("client").unwrap_or(&none), cid.clone(), now)?;
+                detail["client"] = json!(cid);
+                Vec::new()
+            }
+            "settings/api/clients/update" => api_ui::update_client(&mut d, &id, p.get("client").unwrap_or(&none), pinned.as_ref(), now)?,
+            "settings/api/clients/suspend" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_ui::suspend_client(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/clients/resume" => {
+                api_ui::resume_client(&mut d, &id, &active)?;
+                Vec::new()
+            }
+            "settings/api/clients/delete" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_ui::delete_client(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/clients/secret" => {
+                let minted = api_ui::mint(api_ui::SECRET_PREFIX, &random32()?);
+                api_ui::client_secret(&mut d, &id, p.get("days").and_then(Value::as_i64).unwrap_or(0), &minted, now)?;
+                shown.insert("secret".into(), json!(minted.secret));
+                shown.insert("hint".into(), json!(minted.hint));
+                detail["hint"] = json!(minted.hint);
+                Vec::new()
+            }
+            "settings/api/scrape-tokens" => match str_of(p.get("action")) {
+                Some("create") => {
+                    let minted = api_ui::mint(api_ui::SCRAPE_PREFIX, &random32()?);
+                    let relays = p.get("relays").cloned().unwrap_or_else(|| json!(["*"]));
+                    api_ui::add_scrape_token(&mut d, str_of(p.get("label")).unwrap_or(""), &relays, p.get("days").and_then(Value::as_i64).unwrap_or(0), &minted, now)?;
+                    shown.insert("token".into(), json!(minted.secret));
+                    shown.insert("hint".into(), json!(minted.hint));
+                    detail["hint"] = json!(minted.hint);
+                    Vec::new()
+                }
+                Some("delete") => {
+                    detail["hint"] = json!(str_of(p.get("hint")));
+                    api_ui::delete_scrape_token(&mut d, str_of(p.get("hint")).unwrap_or(""), pinned.as_ref())?
+                }
+                _ => return Err(ApiError::with("invalid", "action is create or delete.")),
+            },
+            "settings/api/grace" => api_ui::set_grace(&mut d, p.get("grace").unwrap_or(&none), pinned.as_ref())?,
+            "settings/api/on" => {
+                api_ui::turn_on(&mut d, &active)?;
+                Vec::new()
+            }
+            "settings/api/resume" => {
+                api_ui::undo(&mut d, str_of(p.get("tightening")).unwrap_or(""), &active)?;
+                Vec::new()
+            }
+            "settings/api/relay-origins" => {
+                api_ui::set_relay_origin(&mut d, str_of(p.get("relay")).unwrap_or(""), str_of(p.get("origin")).unwrap_or("").trim())?;
+                Vec::new()
+            }
+            "settings/exports/destinations" if p.get("from_siem") == Some(&Value::Bool(true)) => {
+                let did = api_ui::new_id("d_", &random8()?);
+                self.api_from_siem(c, &mut d, org, &did, t)?;
+                detail["destination"] = json!(did);
+                Vec::new()
+            }
+            "settings/exports/destinations" => {
+                let did = api_ui::new_id("d_", &random8()?);
+                api_ui::add_destination(&mut d, p.get("destination").unwrap_or(&none), did.clone())?;
+                detail["destination"] = json!(did);
+                Vec::new()
+            }
+            "settings/exports/destinations/update" => api_ui::update_destination(&mut d, &id, p.get("destination").unwrap_or(&none), pinned.as_ref())?,
+            "settings/exports/destinations/delete" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_ui::delete_destination(&mut d, &id, pinned.as_ref())?
+            }
+            _ => return Err(ApiError::of("not-found")),
+        };
+        if journal.is_empty() {
+            // a widening (or a staged change) must make a map relays accept
+            self.api_final(c, &d, &active, t)?;
+        }
+        let journaled = self.api_journal(org, &journal, t)?;
+        let view = d.view(&self.api.journal_active(org));
+        detail["stage"] = json!(d.id);
+        detail["change"] = json!(d.changes.last());
+        detail["journaled"] = json!(journaled);
+        if !id.is_empty() {
+            detail["id"] = json!(id);
+        }
+        self.api_drafts.lock().put(d, t);
+        let mut answer = json!({ "ok": true, "staged": view });
+        if let Some(o) = answer.as_object_mut() {
+            o.extend(shown);
+        }
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), detail))
+    }
+
+    /// `{org, from_siem: true}`: a `syslog_cef` destination from the console's SIEM settings, its client certificate
+    /// and sealed key copied into the destination's sealed credential (the SIEM export keeps running).
+    fn api_from_siem(&self, c: &Console, d: &mut api_ui::Draft, org: &str, id: &str, t: i64) -> Result<(), ApiError> {
+        let siem = c.inner.lock().book.settings.siem.clone();
+        let cert = str_of(siem.get("clientCertPem")).filter(|x| !x.is_empty()).map(str::to_owned);
+        let key = c.seal_get(crate::console_settings::SIEM_KEY_SECRET).and_then(|b| String::from_utf8(b).ok());
+        let (Some(cert_pem), Some(key_pem)) = (cert, key) else { return Err(ApiError::with("invalid", api_ui::SIEM_NO_CERT)) };
+        api_ui::siem_destination(d, &siem, id.to_owned())?;
+        let entry = api_ui::destination_of(Some(d), None, id).map(|x| x.0);
+        let ca_pem = str_of(siem.get("caPem")).map(str::to_owned);
+        let credential = crate::api_export_wire::Credential::Mtls { cert_pem, key_pem, ca_pem };
+        self.api.put_destination_credential(org, id, entry.as_ref(), credential, t.div_euclid(1000)).map_err(|e| ApiError::with("invalid", e))
+    }
+
+    /// Whether a save of the org waits for its signature (one at a time per org).
+    fn api_signing_waits(&self, org: &str) -> bool {
+        self.api_signings.lock().get(org).is_some_and(api_ui::Signing::in_flight)
+    }
+
+    /// `POST settings/api/save {org, stage, reason, relay?}`: the exact final map is built now and its hash bound to
+    /// the draft (any later change voids the save); the map and its hash are the save's parameters, so a second
+    /// admin (6.6) approves exactly that map; else it is sent at once. Refused while another save of the org waits
+    /// for its signature.
+    fn api_save(&self, c: &Console, who: &Who, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let stage = str_of(p.get("stage")).unwrap_or("").to_owned();
+        let reason = reason_of(p.get("reason"))?;
+        if self.api_signing_waits(org) {
+            return Err(ApiError::with("stale", api_ui::SIGNING_BUSY));
+        }
+        let active = self.api.journal_active(org);
+        let d = self.api_drafts.lock().get(org, t).filter(|d| d.id == stage).cloned().ok_or_else(|| ApiError::with("gone", api_ui::STAGE_GONE))?;
+        if !d.tests_needed().is_empty() {
+            return Err(ApiError::with("invalid", api_ui::TESTS_NEEDED));
+        }
+        let two = !api_ui::two_person(&d.base, &d.map, &active).is_empty();
+        let map = self.api_final(c, &d, &active, t)?;
+        let sha = crate::api_map::api_map_hash(&map);
+        self.api_drafts.lock().ask(org, &stage, &sha)?;
+        let mut params = json!({ "org": org, "stage": stage, "reason": reason, "map_sha256": sha, "map": map });
+        if let Some(relay) = str_of(p.get("relay")) {
+            params["relay"] = json!(relay);
+        }
+        if two {
+            return c.second_or_run(who, "meet.api.save", org, &params, t, || self.api_save_run(c, &who.email, &params, t));
+        }
+        let answer = self.api_save_run(c, &who.email, &params, t)?;
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), crate::console_approvals::params_detail(&params)))
+    }
+
+    /// The save as its requester, with the map it asked for (`map`, `map_sha256`): the draft must still be the one
+    /// that map was built from (unchanged since, else `stale`) and sit on the pinned map's seq (else it is dropped,
+    /// `stale`); then the relay (the one named, else the first connected relay of the org) is asked to make the
+    /// `meet.api.sign` request for the requester's device (`api-sign-request`) for exactly that map; the signing is
+    /// recorded and polled (`api_signing_tick`). A failure before the request keeps the draft (to be saved again).
+    fn api_save_run(&self, c: &Console, requester: &str, params: &Value, t: i64) -> Result<Value, ApiError> {
+        let org = str_of(params.get("org")).unwrap_or("").to_owned();
+        let sha = str_of(params.get("map_sha256")).unwrap_or("").to_owned();
+        let map = params.get("map").filter(|m| m.is_object()).ok_or_else(|| ApiError::with("stale", api_ui::STAGE_CHANGED))?;
+        if crate::api_map::api_map_hash(map) != sha {
+            return Err(ApiError::with("stale", api_ui::STAGE_CHANGED));
+        }
+        if self.api_signing_waits(&org) {
+            return Err(ApiError::with("stale", api_ui::SIGNING_BUSY));
+        }
+        let (_, seq, _) = self.api.pinned(&org);
+        let d = self.api_drafts.lock().take(&org, str_of(params.get("stage")).unwrap_or(""), &sha, seq, t)?;
+        match self.api_sign_ask(c, &d, map, &sha, requester, params, t) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // kept for another save, unless the org was staged again meanwhile (the newer draft wins)
+                let mut drafts = self.api_drafts.lock();
+                if drafts.get(&org, t).is_none() {
+                    drafts.put(d, t);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Record the signing (`sending`) before the relay is asked; a record that cannot be written sends nothing.
+    /// Then `api-sign-request`, and the record becomes `waiting` with the relay's request id, or `failed`.
+    #[allow(clippy::too_many_arguments)]
+    fn api_sign_ask(&self, c: &Console, d: &api_ui::Draft, map: &Value, sha: &str, requester: &str, params: &Value, t: i64) -> Result<Value, ApiError> {
+        let relay = match str_of(params.get("relay")) {
+            Some(r) => r.to_owned(),
+            None => self.api.relays_of(&d.org).into_iter().find(|r| self.connected(r)).ok_or_else(|| ApiError::with("relay-offline", api_ui::NO_RELAY))?,
+        };
+        let link = self.link.get().cloned().ok_or_else(|| relay_words("relay-offline", &self.name_of(&relay)))?;
+        let sending = api_ui::Signing { org: d.org.clone(), relay: relay.clone(), request: String::new(), by: requester.to_owned(), at: t, state: "sending", error: None, map_sha256: sha.to_owned(), seq: d.base_seq + 1 };
+        {
+            let mut all = self.api_signings.lock();
+            if all.get(&d.org).is_some_and(api_ui::Signing::in_flight) {
+                return Err(ApiError::with("stale", api_ui::SIGNING_BUSY));
+            }
+            let before = all.insert(d.org.clone(), sending);
+            if let Err(why) = api_ui::signings_save(&self.state_dir, &all) {
+                match before {
+                    Some(b) => all.insert(d.org.clone(), b),
+                    None => all.remove(&d.org),
+                };
+                c.logger.ops("api.signing.unsaved", &Fields::new().with("org", d.org.as_str()).with("why", why), Level::Error);
+                return Err(ApiError::with("write-failed", api_ui::SIGNING_UNSAVED));
+            }
+        }
+        let body = json!({ "org": d.org, "principal": requester, "map": map, "map_sha256": sha, "reason": str_of(params.get("reason")).unwrap_or(""), "requested_by": requester });
+        let asked = link.request(&relay, "api-sign-request", body, CALL_MS).map_err(|e| match e {
+            LinkError::Refused { code, .. } if code == "fleet-op" => ApiError::with("fleet-op", api_ui::RELAY_TOO_OLD),
+            LinkError::Refused { status, code, error } => {
+                let code = crate::console::code_words_static(&code).unwrap_or("invalid");
+                ApiError { status, code, message: clean(&error).chars().take(500).collect(), retry_after: None }
+            }
+            LinkError::Offline => relay_words("relay-offline", &self.name_of(&relay)),
+            LinkError::Timeout => relay_words("relay-timeout", &self.name_of(&relay)),
+            LinkError::Busy => relay_words("relay-busy", &self.name_of(&relay)),
+        });
+        let request = asked.and_then(|a| str_of(a.get("request")).filter(|r| r.starts_with("rq_")).map(str::to_owned).ok_or_else(|| ApiError::with("fleet-op", api_ui::RELAY_TOO_OLD)));
+        // the record follows the answer: `waiting` with the request id, or `failed` with the refusal's words
+        let view = {
+            let mut all = self.api_signings.lock();
+            let Some(x) = all.get_mut(&d.org).filter(|x| x.state == "sending" && x.at == t) else { return Err(ApiError::with("stale", api_ui::SIGN_GONE)) };
+            match &request {
+                Ok(id) => (x.state, x.request) = ("waiting", id.clone()),
+                Err(e) => (x.state, x.error) = ("failed", Some(e.message.clone())),
+            }
+            let view = x.view();
+            if let Err(why) = api_ui::signings_save(&self.state_dir, &all) {
+                c.logger.ops("api.signing.unsaved", &Fields::new().with("org", d.org.as_str()).with("why", why), Level::Error);
+            }
+            view
+        };
+        let request = request?;
+        c.logger.ops("api.save.asked", &Fields::new().with("org", d.org.as_str()).with("relay", relay.as_str()).with("request", request.as_str()).with("map", sha), Level::Info);
+        Ok(json!({ "ok": true, "request": request, "relay": relay, "signing": view }))
+    }
+
+    /// `POST settings/api/signing/cancel {org}`: the save waiting for its signature is failed (`Canceled`) and no
+    /// longer polled; its request on the relay is replaced by the next save of the org (or expires there).
+    fn api_signing_cancel(&self, org: &str, t: i64) -> Result<Done, ApiError> {
+        let s = self.api_signings.lock().get(org).filter(|s| s.in_flight()).cloned().ok_or_else(|| ApiError::with("stale", api_ui::NO_SIGNING))?;
+        if s.state == "publishing" {
+            return Err(ApiError::with("stale", api_ui::SIGN_PUBLISHING));
+        }
+        match self.api_signing_end(&s, Err(api_ui::SIGN_CANCELED.into()), t) {
+            Ok(true) => {}
+            // claimed for publication meanwhile
+            Ok(false) => return Err(ApiError::with("stale", api_ui::SIGN_PUBLISHING)),
+            Err(_) => return Err(ApiError::with("write-failed", api_ui::SIGNING_UNSAVED)),
+        }
+        let view = self.api_signings.lock().get(org).map(api_ui::Signing::view);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "signing": view })), Some(org.to_owned()), json!({ "request": s.request, "relay": s.relay })))
+    }
+
+    /// The minute tick: every waiting signing (and one left `sending` by a lost answer or a restart, after 2
+    /// minutes, or left `publishing` by a restart or an unwritten end) is polled on one thread (`api-sign-status`).
+    /// Only this thread publishes, so a `publishing` record the tick sees is always a leftover.
+    fn api_signing_tick(&self, t: i64) {
+        use std::sync::atomic::Ordering;
+        let waiting: Vec<api_ui::Signing> =
+            self.api_signings.lock().values().filter(|s| matches!(s.state, "waiting" | "publishing") || (s.state == "sending" && t - s.at >= SENDING_STALE_MS)).cloned().collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let (Some(link), Some(me)) = (self.link.get().cloned(), self.console().ok().and_then(|c| c.fleet())) else { return };
+        if self.api_signing_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let spawned = std::thread::Builder::new().name("api-signing".into()).spawn(move || {
+            for s in waiting {
+                me.api_signing_poll(&*link, &s, t);
+            }
+            me.api_signing_busy.store(false, Ordering::SeqCst);
+        });
+        if spawned.is_err() {
+            self.api_signing_busy.store(false, Ordering::SeqCst);
+        }
+    }
+
+    /// One waiting signing: the relay's state of the request; done publishes the signed map (`api_publish_signed`);
+    /// failed, gone, an older relay or 24 hours without an answer fail it with the sentence.
+    pub fn api_signing_poll(&self, link: &dyn FleetLink, s: &api_ui::Signing, t: i64) {
+        // a leftover `publishing` whose map is pinned already: published before the end was written
+        if s.state == "publishing" {
+            let (pinned, seq, _) = self.api.pinned(&s.org);
+            if pinned.is_some_and(|m| crate::api_map::api_map_hash(&m) == s.map_sha256) {
+                let _ = self.api_signing_end(s, Ok(seq), t);
+                return;
+            }
+        }
+        // recorded, but the relay's answer (its request id) never arrived: nothing can be polled
+        if s.request.is_empty() {
+            let _ = self.api_signing_end(s, Err(api_ui::SIGN_LOST.into()), t);
+            return;
+        }
+        let answer = match link.request(&s.relay, "api-sign-status", json!({ "org": s.org, "request": s.request }), CALL_MS) {
+            Ok(a) => a,
+            Err(LinkError::Refused { code, .. }) if code == "fleet-op" => {
+                let _ = self.api_signing_end(s, Err(api_ui::RELAY_TOO_OLD.into()), t);
+                return;
+            }
+            // offline or no answer: asked again next minute, until 24 hours
+            Err(_) => json!({ "state": "waiting" }),
+        };
+        let Some(verdict) = s.judge(&answer, t) else { return };
+        let outcome = match verdict {
+            Ok((signed, signer_policy)) => {
+                // claimed first, so a cancel and a publication can never both succeed
+                if !self.api_signing_claim(s) {
+                    return;
+                }
+                self.api_publish_signed(&s.org, &s.map_sha256, &signed, &signer_policy, t)
+            }
+            Err(why) => Err(why),
+        };
+        let _ = self.api_signing_end(s, outcome, t);
+    }
+
+    /// Claim this signing for publication (`publishing`, written to disk): false when it was canceled or replaced
+    /// meanwhile, or the record could not be written (then it stays as it was and is polled again).
+    fn api_signing_claim(&self, s: &api_ui::Signing) -> bool {
+        let mut all = self.api_signings.lock();
+        let Some(x) = all.get_mut(&s.org).filter(|x| x.request == s.request && x.at == s.at && x.in_flight()) else { return false };
+        let before = x.state;
+        x.state = "publishing";
+        if let Err(why) = api_ui::signings_save(&self.state_dir, &all) {
+            if let Some(x) = all.get_mut(&s.org) {
+                x.state = before;
+            }
+            if let Ok(c) = self.console() {
+                c.logger.ops("api.signing.unsaved", &Fields::new().with("org", s.org.as_str()).with("why", why), Level::Error);
+            }
+            return false;
+        }
+        true
+    }
+
+    /// API-1 2.3, 2.4: publish a map a device signed for a save: it must be the map the save asked for
+    /// (`map_sha256`), and it is verified against this console's own Meet CA (root) with the signer policy the relay
+    /// sent (which must itself be signed by that root; the relay's verdict is never trusted), then pinned and sent to
+    /// the org's relays (`ConsoleApi::publish_map`). Ok is the pinned seq.
+    pub fn api_publish_signed(&self, org: &str, map_sha256: &str, signed: &Value, signer_policy: &Map<String, Value>, t: i64) -> Result<i64, String> {
+        let (root_der, crl_pem) = {
+            let g = self.meet.lock();
+            let ca = g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok).ok_or(api_ui::NO_CA)?;
+            (ca.ca_der().to_vec(), ca.crl().map(|x| x.0))
+        };
+        let root = crate::meet_x509::Cert::from_der(&root_der).ok_or(api_ui::NO_CA)?;
+        let crl = crl_pem.and_then(|p| crate::der::pem_blocks(&p, "X509 CRL").into_iter().next()).and_then(|der| crate::meet_x509::Crl::from_der(&der));
+        let trust = crate::api_map::ApiTrust { root: &root, signer_policy, root_crl: crl.as_ref(), previous_serial: "" };
+        self.api_publish_trusted(org, map_sha256, signed, &trust, self.api_edition(t), t)
+    }
+
+    /// `api_publish_signed` under a given trust and license edition: the map the save asked for, verified, pinned
+    /// and sent.
+    fn api_publish_trusted(&self, org: &str, map_sha256: &str, signed: &Value, trust: &crate::api_map::ApiTrust, edition: Option<crate::api_map::Edition>, t: i64) -> Result<i64, String> {
+        let map = signed.get("map").filter(|m| m.is_object()).ok_or(api_ui::SIGN_OTHER_MAP)?;
+        if crate::api_map::api_map_hash(map) != map_sha256 || str_of(map.get("org")) != Some(org) {
+            return Err(api_ui::SIGN_OTHER_MAP.into());
+        }
+        self.api.set_edition(edition);
+        match self.api.publish_map(self.link.get().cloned(), signed, trust, t.div_euclid(1000), None, edition) {
+            Ok(crate::api_map::AcceptOutcome::Pinned(vm) | crate::api_map::AcceptOutcome::Unchanged(vm)) => Ok(vm.seq),
+            Ok(crate::api_map::AcceptOutcome::Conflict { .. }) => Err("Another api map with this seq is pinned already. Stage the change again.".into()),
+            Err(e) => Err(api_sentence(&e.message)),
+        }
+    }
+
+    /// A signing ended (done with the pinned seq, or failed with its sentence): recorded on disk, then in the audit.
+    /// A cancel (`SIGN_CANCELED`) ends only a signing not yet claimed for publication. Ok(false) when the record is no
+    /// longer this signing's (or is claimed, for a cancel); Err when the end could not be written (the record stays
+    /// as it was, so it is polled again).
+    fn api_signing_end(&self, s: &api_ui::Signing, outcome: Result<i64, String>, t: i64) -> Result<bool, String> {
+        let c = self.console().map_err(|_| "The console is shutting down.".to_string())?;
+        let cancel = matches!(&outcome, Err(why) if why == api_ui::SIGN_CANCELED);
+        let ended = {
+            let mut all = self.api_signings.lock();
+            let Some(x) = all.get_mut(&s.org).filter(|x| x.request == s.request && x.at == s.at && x.in_flight() && !(cancel && x.state == "publishing")) else { return Ok(false) };
+            let before = x.clone();
+            match &outcome {
+                Ok(seq) => (x.state, x.seq, x.error) = ("done", *seq, None),
+                Err(why) => (x.state, x.error) = ("failed", Some(why.clone())),
+            }
+            if let Err(why) = api_ui::signings_save(&self.state_dir, &all) {
+                all.insert(s.org.clone(), before);
+                c.logger.ops("api.signing.unsaved", &Fields::new().with("org", s.org.as_str()).with("why", why.as_str()), Level::Error);
+                return Err(why);
+            }
+            all.get(&s.org).cloned()
+        };
+        let Some(x) = ended else { return Ok(false) };
+        let result = if x.state == "done" { "ok" } else { "failed" };
+        self.record(&c, &x.by, "meet.api.sign", Some(x.org.clone()), json!({ "request": x.request, "relay": x.relay, "seq": x.seq, "map_sha256": x.map_sha256, "result": result, "error": x.error }), t);
+        Ok(true)
+    }
+
+    /// `GET settings/api` (7.3): per org the console holds a map, journal, draft or signing for (or a relay
+    /// serves): its state, the pinned map (credentials as hints), the newest 50 journal entries, its relays, the
+    /// staged draft and its map, the signing of its last save and the edition's limits.
+    fn api_view(&self, t: i64) -> Value {
+        let now = t.div_euclid(1000);
+        let edition = self.api_edition(t);
+        self.api.set_edition(edition);
+        let mut orgs: std::collections::BTreeSet<String> = self.api.known_orgs().into_iter().collect();
+        orgs.extend(self.api_drafts.lock().orgs(t));
+        let signings = self.api_signings.lock().clone();
+        orgs.extend(signings.keys().cloned());
+        let list: Vec<Value> = orgs
+            .into_iter()
+            .map(|org| {
+                let (pinned, seq, aside) = self.api.pinned(&org);
+                let active = self.api.journal_active(&org);
+                let owner = self.api_owner(&org);
+                let draft = self.api_drafts.lock().get(&org, t).cloned();
+                let entries: Vec<Value> = self.api.journal_newest(&org, api_ui::JOURNAL_SHOWN);
+                json!({
+                    "org": org, "edition": edition.map(crate::api_map::Edition::as_str),
+                    "state": api_ui::org_state(pinned.as_ref(), aside, &active, now),
+                    "map": pinned.as_ref().map(|m| api_ui::map_view(m, seq, &active, &owner, now)),
+                    "journal": { "head": self.api.journal_head(&org), "entries": entries },
+                    "relays": self.api.relays_view(&org),
+                    "staged": draft.as_ref().map(|d| d.view(&active)),
+                    "draft": draft.as_ref().map(|d| api_ui::map_view(&d.map, d.base_seq + 1, &active, &owner, now)),
+                    "signing": signings.get(&org).map(api_ui::Signing::view),
+                    "limits": api_ui::limits(edition),
+                })
+            })
+            .collect();
+        json!({ "ok": true, "orgs": list })
+    }
+
+    /// The `api` and `presets` keys of `GET settings/exports` (7.3, 11.7, 12.3): per org its destinations (the
+    /// draft's when one is staged, else the pinned map's) with credential, live status, test state and failover
+    /// records, and the org's relays.
+    pub fn exports_api_view(&self, t: i64) -> (Value, Value) {
+        let status = self.export.status(None, t);
+        let mut orgs: std::collections::BTreeSet<String> = self.api.known_orgs().into_iter().collect();
+        orgs.extend(self.api_drafts.lock().orgs(t));
+        let active_of = |org: &str| self.api.journal_active(org);
+        let list: Vec<Value> = orgs
+            .into_iter()
+            .map(|org| {
+                let (pinned, _, _) = self.api.pinned(&org);
+                let draft = self.api_drafts.lock().get(&org, t).cloned();
+                let pinned_dests: Vec<Value> = pinned.as_ref().and_then(|m| m.get("destinations")).and_then(Value::as_array).cloned().unwrap_or_default();
+                let shown: Vec<Value> = match &draft {
+                    Some(d) => d.map.get("destinations").and_then(Value::as_array).cloned().unwrap_or_default(),
+                    None => pinned_dests.clone(),
+                };
+                let needed = draft.as_ref().map(api_ui::Draft::tests_needed).unwrap_or_default();
+                let records = self.api.failover_records(&org);
+                let destinations: Vec<Value> = shown
+                    .iter()
+                    .map(|x| {
+                        let id = str_of(x.get("id")).unwrap_or("");
+                        let source = if pinned_dests.contains(x) { "pinned" } else { "staged" };
+                        let st = status.iter().find(|s| str_of(s.get("org")) == Some(org.as_str()) && str_of(s.get("id")) == Some(id));
+                        let failover: Vec<Value> = records
+                            .iter()
+                            .filter(|r| r.destination == id)
+                            .map(|r| json!({ "relay": r.relay, "type": r.kind, "public_id": r.public_id, "not_before": r.not_before, "expires": r.expires, "state": r.state, "note": r.note }))
+                            .collect();
+                        api_ui::destination_view(x, source, self.api.has_destination_credential(&org, id), self.api.destination_credential_rotate_by(&org, id), st, !needed.iter().any(|n| n == id), failover)
+                    })
+                    .collect();
+                json!({ "org": org, "staged": draft.as_ref().map(|d| d.view(&active_of(&org))), "destinations": destinations, "relays": self.api.relays_of(&org) })
+            })
+            .collect();
+        (Value::Array(list), api_ui::presets_view())
+    }
+
+    /// `POST settings/api/explain {client, method, path, ip?}` (6.2).
+    fn api_explain(&self, c: &Console, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        self.api.set_edition(self.api_edition(t));
+        let store = self.api.org_snapshot(org);
+        let owner = self.api_owner(org);
+        let licensed = c.license_view(t).service.state != crate::console::ServiceState::Stopped;
+        let site = api_ui::ExplainSite { store: store.as_ref(), licensed, owner_active: &owner, now: t.div_euclid(1000) };
+        let (client, method, path) = (str_of(p.get("client")).unwrap_or(""), str_of(p.get("method")).unwrap_or("GET"), str_of(p.get("path")).unwrap_or(""));
+        let v = api_ui::explain(&site, org, client, method, path, str_of(p.get("ip")))?;
+        let detail = json!({ "client": client, "method": method, "path": path, "first_fail": v.get("first_fail") });
+        let mut answer = v;
+        answer["ok"] = json!(true);
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), detail))
+    }
+
+    /// `POST settings/api/clients/revoke-tokens {id}`: `token_deny` for every access token of the client still live
+    /// (issued within the last hour and not expired), found in the org's audit chains (the console's and every
+    /// relay's), each until its `exp`.
+    fn api_revoke_tokens(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let now = t.div_euclid(1000);
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let (pinned, _, _) = self.api.pinned(org);
+        if !pinned.as_ref().and_then(|m| m.get("clients")).and_then(Value::as_array).is_some_and(|l| l.iter().any(|c| str_of(c.get("id")) == Some(id.as_str()))) {
+            return Err(ApiError::with("not-found", api_ui::NO_CLIENT));
+        }
+        let live = self.api_live_tokens(org, &id, now);
+        let entries: Vec<api_ui::Tighten> = live.iter().map(|(jti, exp)| api_ui::Tighten { action: "token_deny", target: json!({ "client": id, "jti": jti }), until: Some(*exp) }).collect();
+        let denied = self.api_journal(org, &entries, t)?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "denied": denied })), Some(org.to_owned()), json!({ "id": id, "denied": denied })))
+    }
+
+    /// (jti, exp) of the client's access tokens issued in the last hour and not expired, from the `api.token`
+    /// entries of the org's chains (read back at most 20 pages of 1000 per chain).
+    fn api_live_tokens(&self, org: &str, client: &str, now: i64) -> Vec<(String, i64)> {
+        let audit = self.api_audit();
+        let mut sources = vec!["console".to_owned()];
+        sources.extend(self.api.relays_of(org));
+        let mut out: Vec<(String, i64)> = Vec::new();
+        for source in sources {
+            let (head, _) = audit.head(org, &source, crate::api_audit::Repr::AsIs);
+            let mut after = head;
+            for _ in 0..LIVE_TOKEN_PAGES {
+                if after == 0 {
+                    break;
+                }
+                after = after.saturating_sub(1000);
+                let entries = audit.read(org, &source, crate::api_audit::Repr::AsIs, after, 1000).ok().and_then(|v| v.get("entries").and_then(Value::as_array).cloned()).unwrap_or_default();
+                for e in &entries {
+                    let exp = e.get("exp").and_then(Value::as_i64).unwrap_or(0);
+                    if str_of(e.get("action")) == Some("api.token") && str_of(e.get("client")) == Some(client) && exp > now {
+                        if let Some(jti) = str_of(e.get("jti")).filter(|j| !out.iter().any(|(x, _)| x == j)) {
+                            out.push((jti.to_owned(), exp));
+                        }
+                    }
+                }
+                if entries.first().and_then(|e| e.get("ts")).and_then(Value::as_i64).is_some_and(|ts| ts < now - LIVE_TOKEN_WINDOW_S) {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    /// `POST settings/exports/destinations/test {id}`: one `exports.test` record through the destination as staged
+    /// (or pinned) with its held credential; a pass clears the draft's test need for it.
+    fn api_dest_test(&self, c: &Console, who: &Who, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        c.limit(crate::console_limits::Limit::EmailTest, &format!("exports-test|{}", who.email), t)?;
+        let (pinned, _, _) = self.api.pinned(org);
+        let draft = self.api_drafts.lock().get(org, t).cloned();
+        let (x, _) = api_ui::destination_of(draft.as_ref(), pinned.as_ref(), &id).ok_or_else(|| ApiError::with("not-found", api_ui::NO_DESTINATION))?;
+        let rid = hex(&random8()?);
+        let sent = match self.api.destination_credential(org, &id) {
+            None => Err("This destination holds no credential yet. Enter it first.".to_owned()),
+            Some(credential) => export_sink(&x, credential, &c.cfg.host).and_then(|s| s.deliver(&api_ui::test_batch(&x, org, &rid, t))).map_err(|e| api_sentence(&e.message)),
+        };
+        let answer = match &sent {
+            Ok(()) => {
+                self.api_drafts.lock().tested(org, &id);
+                json!({ "ok": true })
+            }
+            Err(why) => json!({ "ok": false, "error": why }),
+        };
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "passed": sent.is_ok() })))
+    }
+
+    /// `POST settings/exports/destinations/credential {id, credential}` (11.3): sealed for the destination as staged
+    /// (or pinned); a staged entry takes the credential's public fields and needs a passing test again.
+    fn api_dest_credential(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let material = p.get("credential").cloned().unwrap_or(Value::Null);
+        let credential = crate::api_export::credential_of(&material).ok_or_else(|| ApiError::with("invalid", "The credential does not read: give its type and every field of it."))?;
+        let ty = crate::api_export::credential_type(&credential).unwrap_or("none");
+        let mut draft = self.api_drafts.lock().get(org, t).cloned();
+        let entered = draft.as_mut().is_some_and(|d| api_ui::credential_entered(d, &id, &material));
+        let staged = draft.as_ref().and_then(|d| api_ui::destination_of(Some(d), None, &id)).map(|x| x.0);
+        self.api.put_destination_credential(org, &id, staged.as_ref(), credential, t.div_euclid(1000)).map_err(|e| ApiError::with("invalid", e))?;
+        if let (true, Some(d)) = (entered, draft) {
+            self.api_drafts.lock().put(d, t);
+        }
+        let mut answer = json!({ "ok": true, "held": true });
+        if let Some(r) = self.api.destination_credential_rotate_by(org, &id) {
+            answer["rotate_by"] = json!(r);
+        }
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "type": ty })))
+    }
+
+    /// `POST settings/exports/destinations/failover/{csr, install, delete} {id, relay, material?}` (12.3) on the
+    /// relay over the fleet channel; the material never enters the audit.
+    fn api_failover(&self, path: &str, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let relay = str_of(p.get("relay")).filter(|r| crate::fleet_metrics::relay_id_ok(r)).ok_or_else(|| ApiError::with("invalid", "relay is a relay id."))?.to_owned();
+        let link = self.link.get().cloned().ok_or_else(|| relay_words("relay-offline", &self.name_of(&relay)))?;
+        let failed = |e: String| ApiError::with("invalid", e);
+        let record = |api: &crate::console_api::ConsoleApi| {
+            api.failover_records(org).into_iter().find(|r| r.destination == id && r.relay == relay).map(|r| json!({ "relay": r.relay, "type": r.kind, "public_id": r.public_id, "not_before": r.not_before, "expires": r.expires, "state": r.state, "note": r.note }))
+        };
+        let answer = match path.rsplit('/').next() {
+            Some("csr") => json!({ "ok": true, "csr": self.api.failover_request_csr(&*link, org, &id, &relay).map_err(failed)? }),
+            Some("install") => {
+                self.api.failover_install(&*link, org, &id, &relay, p.get("material").cloned().unwrap_or(Value::Null), t.div_euclid(1000)).map_err(failed)?;
+                json!({ "ok": true, "record": record(&self.api) })
+            }
+            _ => {
+                self.api.failover_delete(&*link, org, &id, &relay).map_err(failed)?;
+                json!({ "ok": true, "record": record(&self.api) })
+            }
+        };
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "relay": relay })))
+    }
+}
+
 // ── API-1 7.1: the front door's view of an org's relays ────────────────────────────────────────────────────────
 
 /// The org's relays as the front door's resource routes report them: the relays that serve the org
@@ -5840,11 +6609,16 @@ impl crate::api_export::Host for ExportHost {
     }
 
     fn make_sink(&self, destination: &Value, credential: crate::api_export_wire::Credential) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
-        if destination.get("kind").and_then(Value::as_str) == Some("syslog_cef") {
-            crate::fleet_syslog::cef_sink(destination, credential, &self.host, env!("CARGO_PKG_VERSION"))
-        } else {
-            crate::api_export_wire::sink_for(destination, credential)
-        }
+        export_sink(destination, credential, &self.host)
+    }
+}
+
+/// API-1 11: the console's sink for a destination (`syslog_cef` as its SIEM messages, with `host` as the sender).
+fn export_sink(destination: &Value, credential: crate::api_export_wire::Credential, host: &str) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
+    if destination.get("kind").and_then(Value::as_str) == Some("syslog_cef") {
+        crate::fleet_syslog::cef_sink(destination, credential, host, env!("CARGO_PKG_VERSION"))
+    } else {
+        crate::api_export_wire::sink_for(destination, credential)
     }
 }
 
@@ -6046,6 +6820,8 @@ mod tests {
         up: Mutex<HashSet<String>>,
         sent: Mutex<Vec<(String, String, Value)>>,
         call_answer: Mutex<Option<Value>>,
+        /// API-1 slice 1a6: what `api-sign-status` answers (`gone` when None).
+        sign_status: Mutex<Option<Value>>,
     }
 
     impl FleetLink for FakeLink {
@@ -6059,6 +6835,8 @@ mod tests {
                 "call" => self.call_answer.lock().clone().unwrap_or(json!({ "status": 200, "body": { "ok": true } })),
                 "roster" | "policy" => json!({ "seq": body["seq"], "held": [], "unattested": [] }),
                 "api-heads" => json!({ "acme": { "seq": 0, "tseq": 0 } }),
+                "api-sign-request" => json!({ "request": "rq_0123456789abcdef" }),
+                "api-sign-status" => self.sign_status.lock().clone().unwrap_or(json!({ "state": "gone" })),
                 _ => json!({}),
             })
         }
@@ -7307,5 +8085,237 @@ mod tests {
         assert_eq!(s, 200, "{v}");
         assert_eq!(v["root"]["id"], id.as_str());
         assert_eq!(h.get("/console/api/fleet/spokes-root").1["root"]["id"], id.as_str());
+    }
+
+    // ── API-1 7.3 (slice 1a6): Settings > API access ──────────────────────────────────────────────────────────
+
+    const CLIENT: &str = "c_1111111111111111";
+
+    /// Pin an `acme` map at `seq` with one client (`CLIENT`), as the console holds a map a device signed.
+    fn pin_api_map(h: &H, seq: i64) -> Value {
+        let now = crate::codec::now_ms() / 1000;
+        let ctx = api_ui::Ctx { org: "acme", by: ADMIN, pinned: None, pinned_seq: seq - 1 };
+        let mut d = api_ui::Draft::new(&ctx, "st_seed".into(), now * 1000);
+        let client = json!({"name": "splunk-scrape", "kind": "monitoring", "owner": "ann@acme.example", "scopes": ["monitor.read"], "ceiling": "internal",
+                            "relays": ["*"], "networks": ["10.40.0.0/23"], "mtls_required": false, "rate": {"per_minute_each": 120, "per_day_each": 100000},
+                            "credentials": [{"type": "private_key_jwt", "kid": "k1", "jwk": {"kty": "EC", "crv": "P-256", "x": "C".repeat(43), "y": "D".repeat(43)}, "expires": now + 86_400 * 300}],
+                            "days": 300});
+        api_ui::add_client(&mut d, &client, CLIENT.into(), now).unwrap();
+        let jwk = json!({"kty": "EC", "crv": "P-256", "kid": "i-seed", "x": "A".repeat(43), "y": "B".repeat(43), "use": "sig", "alg": "ES256"});
+        let m = api_ui::final_map(&d, "https://console.example.org:7443/api/orgs/acme", &jwk, &[], &[], now);
+        let wire = json!({"map": m.clone(), "sig": "", "chain": []});
+        let vm = crate::api_map::VerifiedApiMap { org: "acme".into(), seq, expires: m["expires"].as_i64().unwrap(), hash: crate::api_map::api_map_hash(&m), signer: "root".into(), wire: wire.as_object().unwrap().clone() };
+        h.f.api.publish_verified(None, vm, now).unwrap();
+        m
+    }
+
+    #[test]
+    fn api_a_journaled_suspend_is_in_the_journal_before_the_answer() {
+        let h = boot("api-suspend");
+        pin_api_map(&h, 1);
+        assert_eq!(h.f.api.journal_head("acme"), 0);
+        let body = json!({"org": "acme", "id": CLIENT, "reason": "Leaked key"});
+        let (s, v) = h.post("/console/api/settings/api/clients/suspend", body.clone());
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(h.f.api.journal_head("acme"), 1, "journaled before the answer");
+        let e = h.f.api.journal_newest("acme", 1)[0].clone();
+        assert_eq!((e["action"].as_str(), e["target"].as_str()), (Some("client_suspend"), Some(CLIENT)));
+        assert_eq!(v["staged"]["changes"], json!(["Suspend client splunk-scrape"]));
+        assert_eq!(v["staged"]["two_person"], json!(false));
+        // the suspension in force is not journaled again
+        assert_eq!(h.post("/console/api/settings/api/clients/suspend", body).0, 200);
+        assert_eq!(h.f.api.journal_head("acme"), 1);
+        // resuming is a staged widening that clears it (two-person, 6.6), never journaled
+        let (s, v) = h.post("/console/api/settings/api/clients/resume", json!({"org": "acme", "id": CLIENT}));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["staged"]["two_person_reasons"], json!([api_ui::TWO_CLEARED]));
+        assert_eq!(h.f.api.journal_head("acme"), 1);
+        // turning the API off is journaled at once too
+        let (s, v) = h.post("/console/api/settings/api/off", json!({"org": "acme", "reason": "Incident"}));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(h.f.api.journal_newest("acme", 1)[0]["action"], "api_off");
+        assert_eq!(h.post("/console/api/settings/api/off", json!({"org": "acme", "reason": "Again"})).1["code"], "stale");
+    }
+
+    #[test]
+    fn api_a_stale_stage_is_refused_at_save_and_dropped() {
+        let h = boot("api-stale");
+        pin_api_map(&h, 1);
+        let (_, v) = h.post("/console/api/settings/api/clients/suspend", json!({"org": "acme", "id": CLIENT, "reason": "Leaked key"}));
+        let stage = v["staged"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(h.post("/console/api/settings/api/save", json!({"org": "acme", "stage": "st_0000000000000000", "reason": "Rotate"})).1["code"], "gone");
+        pin_api_map(&h, 2);
+        let (s, v) = h.post("/console/api/settings/api/save", json!({"org": "acme", "stage": stage, "reason": "Rotate"}));
+        assert_eq!(v["code"], "stale", "{v}");
+        assert!(s >= 400 && stringify(&v).contains(api_ui::STAGE_MOVED), "{v}");
+        assert!(h.f.api_drafts.lock().get("acme", crate::codec::now_ms()).is_none(), "the stale draft is dropped");
+        assert!(h.sent("api-sign-request").is_empty(), "no device was asked");
+    }
+
+    #[test]
+    fn api_a_signing_claimed_for_publication_cannot_be_canceled() {
+        let h = boot("api-claim");
+        let s = api_ui::Signing { org: "acme".into(), relay: "r_01".into(), request: "rq_1".into(), by: ADMIN.into(), at: crate::codec::now_ms(), state: "waiting", error: None, map_sha256: "0".repeat(64), seq: 2 };
+        h.f.api_signings.lock().insert("acme".into(), s.clone());
+        assert!(h.f.api_signing_claim(&s));
+        assert_eq!(api_ui::signings_load(&h.d)["acme"].state, "publishing", "the claim is on disk before publishing");
+        let (_, v) = h.post("/console/api/settings/api/signing/cancel", json!({"org": "acme"}));
+        assert!(stringify(&v).contains(api_ui::SIGN_PUBLISHING), "{v}");
+        assert_eq!(h.f.api_signings.lock()["acme"].state, "publishing");
+    }
+
+    #[test]
+    fn api_a_save_asks_the_org_relay_for_the_device_signature_and_records_it() {
+        let h = boot("api-save");
+        // an Enterprise license, so a read of the screens keeps the map serving (D8)
+        let far = crate::codec::now_ms() / 1000 + 365 * 86_400;
+        h.f.book.lock().library.push(json!({ "id": "lic_1", "product": "meet", "edition": "enterprise", "exp": far }));
+        pin_api_map(&h, 1);
+        let relay = "r_0123456789abcdef";
+        h.link.up.lock().insert(relay.into());
+        h.f.api.on_welcomed(relay);
+        // the relay reports the org (`api-heads`), so it is one of the org's relays
+        h.f.api.sync(&*h.link, relay, crate::codec::now_ms() / 1000);
+        assert_eq!(h.f.api.relays_of("acme"), vec![relay.to_owned()]);
+        let (_, v) = h.post("/console/api/settings/api/clients/suspend", json!({"org": "acme", "id": CLIENT, "reason": "Leaked key"}));
+        let stage = v["staged"]["id"].as_str().unwrap().to_owned();
+        let (s, v) = h.post("/console/api/settings/api/save", json!({"org": "acme", "stage": stage, "reason": "Rotate"}));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!((v["request"].as_str(), v["relay"].as_str(), v["signing"]["state"].as_str()), (Some("rq_0123456789abcdef"), Some(relay), Some("waiting")));
+        let asked = h.sent("api-sign-request").pop().unwrap();
+        assert_eq!((asked["principal"].as_str(), asked["requested_by"].as_str()), (Some(ADMIN), Some(ADMIN)));
+        assert_eq!(asked["map_sha256"].as_str().unwrap(), crate::api_map::api_map_hash(&asked["map"]));
+        assert_eq!((asked["map"]["seq"].as_i64(), asked["map"]["folded"].clone()), (Some(2), json!(["t_acme_000001"])));
+        assert_eq!(api_ui::signings_load(&h.d)["acme"].request, "rq_0123456789abcdef", "kept for a restart");
+        let (_, view) = h.get("/console/api/settings/api");
+        let acme = view["orgs"].as_array().unwrap().iter().find(|o| o["org"] == "acme").unwrap().clone();
+        assert_eq!((acme["signing"]["relay"].as_str(), acme["staged"].clone()), (Some(relay), Value::Null));
+        // one save in flight per org: another is refused until the waiting one is canceled
+        let (_, v) = h.post("/console/api/settings/api/clients/resume", json!({"org": "acme", "id": CLIENT}));
+        let stage = v["staged"]["id"].as_str().unwrap_or_else(|| panic!("{v}")).to_owned();
+        let (_, v) = h.post("/console/api/settings/api/save", json!({"org": "acme", "stage": stage, "reason": "Back"}));
+        assert!(stringify(&v).contains(api_ui::SIGNING_BUSY), "{v}");
+        let (s, v) = h.post("/console/api/settings/api/signing/cancel", json!({"org": "acme"}));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!((v["signing"]["state"].as_str(), v["signing"]["error"].as_str()), (Some("failed"), Some(api_ui::SIGN_CANCELED)));
+        assert_eq!(h.post("/console/api/settings/api/signing/cancel", json!({"org": "acme"})).1["code"], "stale", "nothing waits now");
+        // a save signs exactly the map it asked for: a change after the ask (as a second admin approves) voids it
+        let t = crate::codec::now_ms();
+        let d = h.f.api_drafts.lock().get("acme", t).cloned().unwrap();
+        let map = h.f.api_final(&h.c, &d, &h.f.api.journal_active("acme"), t).unwrap();
+        let sha = crate::api_map::api_map_hash(&map);
+        h.f.api_drafts.lock().ask("acme", &d.id, &sha).unwrap();
+        let params = json!({"org": "acme", "stage": d.id, "reason": "Back", "map_sha256": sha, "map": map});
+        let mut forged = params.clone();
+        forged["map"]["grace"]["app"] = json!(48);
+        assert_eq!(h.f.api_save_run(&h.c, ADMIN, &forged, t).unwrap_err().message, api_ui::STAGE_CHANGED, "the map must be the hashed one");
+        let mut changed = h.f.api_drafts.lock().get("acme", t).cloned().unwrap();
+        changed.changes.push("Another change".into());
+        h.f.api_drafts.lock().put(changed, t);
+        let asked = h.sent("api-sign-request").len();
+        assert_eq!(h.f.api_save_run(&h.c, ADMIN, &params, t).unwrap_err().message, api_ui::STAGE_CHANGED);
+        assert_eq!(h.sent("api-sign-request").len(), asked, "nothing was sent");
+        // the unchanged draft is sent, recorded first as `sending`, then `waiting`
+        h.f.api_drafts.lock().ask("acme", &d.id, &sha).unwrap();
+        let v = h.f.api_save_run(&h.c, ADMIN, &params, t).unwrap();
+        assert_eq!(v["signing"]["state"], "waiting");
+        assert_eq!(api_ui::signings_load(&h.d)["acme"].state, "waiting");
+    }
+
+    #[test]
+    fn api_a_signing_whose_answer_was_lost_is_settled_by_the_tick() {
+        let h = boot("api-lost");
+        let t = crate::codec::now_ms();
+        let s = api_ui::Signing { org: "acme".into(), relay: "r_0123456789abcdef".into(), request: String::new(), by: ADMIN.into(), at: t - 3 * 60_000, state: "sending", error: None, map_sha256: "0".repeat(64), seq: 2 };
+        h.f.api_signings.lock().insert("acme".into(), s.clone());
+        api_ui::signings_save(&h.d, &h.f.api_signings.lock()).unwrap();
+        assert_eq!(api_ui::signings_load(&h.d)["acme"], s, "a sending record reads back after a restart");
+        assert!(h.f.api_signing_waits("acme"));
+        h.f.api_signing_poll(&*h.link, &s, t);
+        let ended = h.f.api_signings.lock()["acme"].clone();
+        assert_eq!((ended.state, ended.error.as_deref()), ("failed", Some(api_ui::SIGN_LOST)));
+        assert!(!h.f.api_signing_waits("acme"));
+    }
+
+    #[test]
+    fn api_a_secret_is_only_in_the_answer_that_made_it() {
+        let mut h = boot("api-secret");
+        pin_api_map(&h, 1);
+        let params = json!({"org": "acme", "id": CLIENT, "days": 30});
+        let mut body = params.clone();
+        body["stepup"] = h.stepup("api.client.secret", "acme", &params);
+        let (s, v) = h.post("/console/api/settings/api/clients/secret", body);
+        assert_eq!(s, 200, "{v}");
+        let secret = v["secret"].as_str().unwrap().to_owned();
+        let hint = v["hint"].as_str().unwrap().to_owned();
+        assert!(secret.starts_with("lcs_"));
+        assert_eq!(v["staged"]["two_person_reasons"], json!([api_ui::TWO_SECRET]));
+        let (_, view) = h.get("/console/api/settings/api");
+        assert!(!stringify(&view).contains(&secret) && stringify(&view).contains(&hint), "{view}");
+        let draft = h.f.api_drafts.lock().get("acme", crate::codec::now_ms()).cloned().unwrap();
+        assert!(!stringify(&draft.map).contains(&secret));
+        // nothing the console wrote (book, audit, journal, logs, keys) holds it
+        fn files(d: &Path, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    files(&e.path(), out);
+                } else {
+                    out.push(e.path());
+                }
+            }
+        }
+        let mut all = Vec::new();
+        files(&h.d, &mut all);
+        assert!(!all.is_empty());
+        for f in all {
+            assert!(!String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()).contains(&secret), "{}", f.display());
+        }
+        // a scrape token for relays likewise, and a step-up is needed
+        assert_eq!(h.post("/console/api/settings/api/scrape-tokens", json!({"org": "acme", "action": "create", "label": "prom", "relays": ["*"], "days": 60})).1["code"], "stepup-needed");
+    }
+
+    #[test]
+    fn api_explain_names_the_first_failing_check_of_the_pinned_map() {
+        let h = boot("api-explain");
+        pin_api_map(&h, 1);
+        let (s, v) = h.post("/console/api/settings/api/explain", json!({"org": "acme", "client": CLIENT, "method": "GET", "path": "v1/audit", "ip": "10.40.0.7"}));
+        assert_eq!(s, 200, "{v}");
+        // no license edition on this console: the map is set aside (13), so the map check fails first
+        assert_eq!(v["checks"].as_array().unwrap().len(), 12);
+        assert!(v["first_fail"].as_u64().is_some_and(|n| n <= 6), "{v}");
+    }
+
+    #[test]
+    fn api_a_signed_map_with_another_hash_fails_the_save_and_the_asked_one_publishes() {
+        let h = boot("api-sign");
+        let doc: Value = serde_json::from_str(include_str!("../tests/api_map_v1.json")).unwrap();
+        let root = crate::meet_x509::Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let sp = doc["signer_policy"].as_object().unwrap().clone();
+        let now = doc["now"].as_i64().unwrap();
+        let case = doc["signed"].as_array().unwrap().iter().find(|c| c["expect"] == "ok").unwrap().clone();
+        let signed = case["signed"].clone();
+        let org = signed["map"]["org"].as_str().unwrap().to_owned();
+        let sha = crate::api_map::api_map_hash(&signed["map"]);
+        let seq = signed["map"]["seq"].as_i64().unwrap();
+        let relay = "r_0123456789abcdef";
+        let s = api_ui::Signing { org: org.clone(), relay: relay.into(), request: "rq_0123456789abcdef".into(), by: ADMIN.into(), at: now * 1000, state: "waiting", error: None, map_sha256: sha.clone(), seq };
+        h.f.api_signings.lock().insert(org.clone(), s.clone());
+        h.link.up.lock().insert(relay.into());
+        let mut other = signed.clone();
+        other["map"]["seq"] = json!(seq + 1);
+        *h.link.sign_status.lock() = Some(json!({"state": "done", "signed": other.clone(), "signer_policy": sp.clone()}));
+        h.f.api_signing_poll(&*h.link, &s, now * 1000);
+        let ended = h.f.api_signings.lock()[&org].clone();
+        assert_eq!((ended.state, ended.error.as_deref()), ("failed", Some(api_ui::SIGN_OTHER_MAP)));
+        assert_eq!(api_ui::signings_load(&h.d)[&org].state, "failed", "kept on disk");
+        assert_eq!(h.f.api.pinned(&org).1, 0, "nothing was pinned");
+        // the asked map, verified against the CA root and the signer policy it signed, is pinned and published
+        let trust = crate::api_map::ApiTrust { root: &root, signer_policy: &sp, root_crl: None, previous_serial: "" };
+        let edition = Some(crate::api_map::Edition::Enterprise);
+        assert_eq!(h.f.api_publish_trusted(&org, &sha, &other, &trust, edition, now * 1000).unwrap_err(), api_ui::SIGN_OTHER_MAP);
+        assert_eq!(h.f.api_publish_trusted(&org, &sha, &signed, &trust, edition, now * 1000), Ok(seq));
+        assert_eq!(h.f.api.pinned(&org).1, seq);
+        // the console trusts only its own Meet CA: without one nothing is published
+        assert_eq!(h.f.api_publish_signed(&org, &sha, &signed, &sp, now * 1000).unwrap_err(), api_ui::NO_CA);
     }
 }

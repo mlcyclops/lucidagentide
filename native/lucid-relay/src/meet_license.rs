@@ -240,6 +240,7 @@ pub static GATE: &[(&str, &str, Class)] = &[
     ("POST", "/v1/org/ai", S),
     ("POST", "/v1/org/ai/sign", S),
     ("POST", "/v1/org/api", S),
+    ("POST", "/v1/org/api/sign", S),
     ("POST", "/v1/sso/c/ai-groups", S),
     ("POST", "/v1/ai/audit", S),
     ("POST", "/v1/ai/history", S),

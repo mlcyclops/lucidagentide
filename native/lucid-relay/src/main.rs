@@ -62,6 +62,7 @@ mod collab_presence;
 mod console;
 mod console_ai;
 mod console_api;
+mod console_api_ui;
 mod console_approvals;
 mod console_audit;
 mod console_auth;

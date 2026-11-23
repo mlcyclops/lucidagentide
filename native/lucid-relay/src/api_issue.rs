@@ -513,9 +513,9 @@ fn relay_of(store: &ApiMapStore, org: &str, resource: &str) -> Option<String> {
     store.relay_origins(org)?.iter().find(|(_, o)| o.as_str().is_some_and(|o| format!("{}/api/orgs/{org}", o.trim_end_matches('/')) == resource)).map(|(id, _)| id.clone())
 }
 
-/// The client's `relays` (less journaled drops) include `relay`.
+/// The client's `relays` (less journaled drops, within every `client_limit`) include `relay`.
 fn relay_allowed(client: &Obj, active: &[TightenEntry], id: &str, relay: &str) -> bool {
-    !tok::client_entries(active, "client_drop_relay", id).any(|e| tok::target_field(e, "relay") == relay) && tok::names(client, "relays").any(|r| r == "*" || r == relay)
+    tok::relay_reachable(client, active, id, relay)
 }
 
 // ---- client authentication (5.2) ----------------------------------------------------------------------------------
@@ -753,8 +753,8 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
     let (client, id) = (auth.client, auth.id.as_str());
     let active = ctx.store.active(ctx.org);
     standing(ctx, client, id)?;
-    let networks: Vec<&str> = tok::names(client, "networks").collect();
-    if !networks.is_empty() && !networks.iter().filter_map(|n| crate::console_source::parse_cidr(n).ok()).any(|c| c.contains(http.source)) {
+    // the map's networks and every `client_limit`'s (2.5)
+    if !tok::source_allowed(client, active, id, http.source) {
         return Err(no("network", "This client may not ask from that address."));
     }
     if client.get("hours").is_some_and(|h| !inside_hours(h, now)) {
@@ -763,7 +763,7 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
     if client.get("mtls_required").and_then(Value::as_bool) == Some(true) && auth.method != Method::Mtls {
         return Err(no("mtls", "This client must authenticate with its certificate."));
     }
-    let rate = |k: &str| client.get("rate").and_then(|r| r.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    let rate = |k: &str| tok::rate_of(client, active, id, k);
     ctx.state.issue_ok(ctx.org, id, usize::try_from(rate("per_minute_each")).unwrap_or(usize::MAX), rate("per_day_each"), now)?;
     // scopes: the client's less journaled drops, within the local issuer's
     let dropped: Vec<&str> = tok::client_entries(active, "client_drop_scope", id).map(|e| tok::target_field(e, "scope")).collect();
@@ -800,7 +800,7 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
         Cnf::X5t(x5t.clone())
     } else if let Some(proof) = http.dpop {
         Cnf::Jkt(tok::verify_dpop(proof, "POST", ctx.token_endpoint, None, now, &mut ctx.state.dpop.lock(), id)?)
-    } else if auth.method == Method::Secret && !networks.is_empty() {
+    } else if auth.method == Method::Secret && tok::names(client, "networks").next().is_some() {
         Cnf::None
     } else {
         return Err(no("dpop-required", "This token request needs a DPoP proof."));
@@ -1290,6 +1290,8 @@ mod tests {
         assert_eq!(code(&try_with(&ok, &|_: &str| false)), "owner");
         // network, hours, mTLS
         assert_eq!(code(&try_on(&changed(&|m| m["clients"][0]["networks"] = json!(["192.0.2.0/24"])))), "network");
+        // 2.5 `client_limit`: a journaled limit's networks refuse a source the map allows
+        assert_eq!(code(&try_on(&store_of(&base, &[entry("client_limit", json!({"client": CLIENT, "networks": ["192.0.2.0/24"]}))]))), "network");
         let hours = |tz: &str, from: &str, to: &str| json!({"tz": tz, "from": from, "to": to, "days": [1, 2, 3, 4, 5, 6, 7]});
         assert_eq!(code(&try_on(&changed(&|m| m["clients"][0]["hours"] = hours("UTC", "00:00", "01:00")))), "hours");
         assert_eq!(code(&try_on(&changed(&|m| m["clients"][0]["hours"] = hours("Europe/Paris", "09:00", "17:00")))), "ok");
@@ -1325,6 +1327,22 @@ mod tests {
         }
         let a = ask(&fx, &s, &http(b"x=1", None));
         assert_eq!((a.status, code(&a).as_str()), (429, "abuse"));
+    }
+
+    /// 2.5 `client_limit` (slice 1a6): a journaled limit lowers the issuance rate below the map's at once.
+    #[test]
+    fn a_client_limit_lowers_the_issuance_rate() {
+        let fx = fx();
+        let m = map_with(&fx, client_with(jwt_credential(&fx)));
+        let s = store_of(&m, &[entry("client_limit", json!({"client": CLIENT, "rate": {"per_minute_each": 1}}))]);
+        let run = |jti: &str| {
+            let body = jwt_form(&fx, jti, &[]);
+            let p = proof(&fx, &format!("p{jti}"));
+            ask(&fx, &s, &http(&body, Some(&p)))
+        };
+        assert_eq!(code(&run("l1")), "ok");
+        let a = run("l2");
+        assert_eq!((a.status, code(&a).as_str()), (429, "rate"));
     }
 
     #[test]
