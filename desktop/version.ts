@@ -809,4 +809,12 @@
 //            every dock mode (ADR-0632); one Settings spacing standard (ADR-0633); the Fleet header keeps Minimize
 //            only (ADR-0634); full auto means full auto, only managed policy stops it (ADR-0639). PRERELEASE: never
 //            marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.8";
+// v2.6.0 = 2.5.4-beta.8 plus (#650-#654, #656-#660): Lucid Agent Worlds, purchasable world packs for
+//            Visualize with balanced casting, the character kit, GPU quality tiers, plasma streams, build sites and
+//            sandboxed sample mini games (ADR-0648..0654); tool-call approvals inside Visualize (ADR-0655); pop-out
+//            readability (ADR-0656); the scripted QA fleet (ADR-0657); the Windows sandbox names its blocker and host
+//            prep survives reboots (ADR-0658); the Fleet button always brings the fleet back and cards show turns
+//            they did not start (ADR-0659); lost sign-in notice (ADR-0640); P-VIZ.7 sponsors and the stapler
+//            (ADR-0641); Preview fit (ADR-0642); Visualize header clicks (ADR-0643); Fleet drain, Preview over Fleet,
+//            readable Fleet tables and card header clicks (ADR-0644..0647). STABLE: marked Latest; moves the cask.
+export const APP_VERSION = "2.6.0";
