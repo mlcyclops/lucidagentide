@@ -87,7 +87,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, isOpen as vizIsOpen, openVizWorld, paintVizPreview, setPendingWorldRestores, setVizPreviewCover, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1; P-PREVIEW.CHIP1
+import { initViz, isOpen as vizIsOpen, openVizAgent, openVizWorld, paintVizPreview, setPendingWorldRestores, setVizPreviewCover, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1; P-PREVIEW.CHIP1
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -141,11 +141,14 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, revealFleetLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
 import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
+import { folderName, handoffFailure, handoffToast, pendingCopy, planTakeover, sameFolder, startFailure, STOP_FAILED, switchFailure, takeoverQueue, takeoverSheetCopy, worldMissing, type BusyChoice, type MainView, type TakeoverStep } from "./agent_activate.ts"; // P-RAIL.AGENTS1: the Agents rail's Activate choices
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
+import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
+import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -611,8 +614,13 @@ function buildShell(): void {
         </div>
         <div class="insp-body" id="inspBody"></div>
         <div class="metrics-rail" id="metricsRail">
-          <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+          <div class="rail-head">
+            <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+            <!-- P-RAIL.AGENTS1: flips the rail between the live metrics and your Agents (agents_rail.ts) -->
+            <button class="agr-toggle" id="railAgents" type="button" aria-pressed="false" aria-label="Show Agents" data-tip="Agents|Show your Agents: one Lucid per folder you work in" data-tip-side="bottom">${agentsToggleArt()}</button>
+          </div>
           <div class="rail-tiles" id="railTiles"></div>
+          <div id="railAgentsView" hidden></div>
         </div>
       </aside>
 
@@ -3237,6 +3245,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // (mode + key + lockdown), never a stale client copy.
       // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
       if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
+      // P-RAIL.AGENTS1: Main's folder Agent plays the turn-end ring (a lane turn is caught by the rail's fleet poll).
+      if (!opts.laneId && state.workspace?.current) agentsRail?.noteTurnEnd(state.workspace.current);
     }
   };
   const settle = () => {
@@ -3251,6 +3261,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     scheduleKnowledgeRefresh(); maybeListen();
     // P-TURN-RECOVERY-DRAIN: only a turn that finished releases a held prompt. A deliberate Stop never does
     // (stopHoldsQueue); an interrupted connection waits for reconnect.
+    if (!opts.laneId) void runQueuedTakeover(); // P-RAIL.AGENTS1: "After this turn" runs once Main is idle
     if (terminal) releaseHeldPrompt();
     renderQueued(); // a pill still staged now offers "Send now" instead of pushing into a turn that ended
   };
@@ -3761,6 +3772,206 @@ function snapshotThread(): { role: string; text: string }[] {
   }));
 }
 
+// ── P-RAIL.AGENTS1: the Agents rail's Activate choices ─────────────────────────────────────────────────────────
+// The rail's hover module calls activateAgentFolder and shows `message` when ok is false; nothing here touches the
+// rail. What a takeover does is agent_activate.planTakeover's decision; this runs it against the engine and the
+// composer. Main's work is never dropped: its session goes to a Fleet lane, and a busy Main asks first.
+
+type ActivateResult = { ok: boolean; message?: string };
+/** "After this turn": the folder Main opens once its turn ends, the quiet status that says so, and the backstop check
+ *  (a /goal loop or an adopted turn settles outside renderChatTurn's done). */
+interface QueuedTakeover { folder: string; name: string; dismiss: () => void; timer: number }
+const takeovers = takeoverQueue<QueuedTakeover>();
+let takeoverRunning = false;
+
+/** Take over main composer / Start new Fleet session / Agent World session, for the Agent `name` on `folder`. */
+async function activateAgentFolder(kind: "takeover" | "fleet" | "world", folder: string, name: string): Promise<ActivateResult> {
+  const label = name.trim() || folderName(folder);
+  if (kind === "takeover") return takeOver(folder, label, null);
+  // Fleet and world both start a lane in the background (never promoted); a refusal carries the engine's reason.
+  const r = await bridge.fleetSpawn({ cwd: folder, name: label }).catch(() => null);
+  if (!r?.ok || !r.lane) return { ok: false, message: startFailure(r?.reason) };
+  if (kind === "fleet") { await revealFleetLane(r.lane.id); return { ok: true }; }
+  return (await openVizAgent(r.lane.id)) ? { ok: true } : { ok: false, message: worldMissing(r.lane.name) };
+}
+
+/** What Main is doing, from the engine when it answers (busy + session id), else from this composer. */
+async function readMainView(): Promise<MainView> {
+  const st = await bridge.sessionBusy().catch(() => null);
+  return {
+    folder: state.workspace?.current ?? null,
+    busy: st ? !!st.busy : state.streaming && !isLaneTarget(state.composerTarget),
+    // The engine's id; when Main's child has not loaded one yet, the conversation on screen (the active sidebar row).
+    sessionId: st?.sessionId || (($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null),
+    hasWork: $$("#thread .msg").length > 0,
+    prompt: state.lastPrompt,
+  };
+}
+
+async function takeOver(folder: string, name: string, choice: BusyChoice | null): Promise<ActivateResult> {
+  if (takeoverRunning) return { ok: false, message: "A takeover is already moving Main. Try again in a moment." };
+  if (isLaneTarget(state.composerTarget)) demoteLane(); // "main composer" is Main's: leave an attached lane first
+  const main = await readMainView();
+  const plan = planTakeover(main, folder, choice);
+  if (plan.kind === "none") return { ok: true };
+  // Planned again with the answer and a fresh view: a turn that ended while the sheet was open just hands off.
+  if (plan.kind === "ask") return takeOver(folder, name, await askTakeover(main.folder ? folderName(main.folder) : "this folder", name));
+  if (plan.kind === "queue") { queueTakeover(folder, name); return { ok: true }; }
+  dropQueuedTakeover(); // this takeover supersedes one waiting for the turn
+  takeoverRunning = true;
+  try { return await runTakeover(plan.steps, main, folder, name); }
+  finally { takeoverRunning = false; }
+}
+
+async function runTakeover(steps: readonly TakeoverStep[], main: MainView, folder: string, toName: string): Promise<ActivateResult> {
+  const from = main.folder ?? "";
+  const fromName = from ? folderName(from) : "the previous folder";
+  const prompt = main.prompt.trim();
+  const info = cachedSessionInfo(main.sessionId);
+  const model = info?.model || state.model || state.config.find((c) => c.id === "model")?.currentValue || "";
+  let lane: LaneView | null = null;
+  let staged: boolean | null = null, stageReason: string | undefined;
+  let stopped = false;
+  for (const step of steps) {
+    if (step === "stop-main") {
+      if (!(await stopMainTurn())) return { ok: false, message: STOP_FAILED };
+      stopped = true;
+    } else if (step === "switch-main") {
+      // FIRST, so Main lets go of its session before a lane loads it: one session, one omp process (P-SWITCH.1).
+      await applyWorkspace(folder);
+      const ws = sameFolder(state.workspace?.current, folder) ? state.workspace : await bridge.workspace().catch(() => null);
+      if (!sameFolder(ws?.current, folder)) {
+        const back = stopped && !!prompt && !composerHasDraft();
+        if (back) { const ta = $("#input") as HTMLTextAreaElement; ta.value = prompt; autosize(ta); setSendEnabled(); }
+        return { ok: false, message: switchFailure(toName, back) };
+      }
+    } else if (step === "spawn-lane") {
+      if (!from) continue;
+      const r = await bridge.fleetSpawn({
+        cwd: from,
+        name: spokeNameFor(info?.title ?? fromName),
+        ...(model ? { model } : {}),
+        ...(main.sessionId ? { sessionId: main.sessionId } : {}),
+      }).catch(() => null);
+      if (!r?.ok || !r.lane) return { ok: false, message: handoffFailure(fromName, toName, r?.reason) };
+      lane = r.lane;
+    } else if (step === "stage-prompt") {
+      if (!lane) continue;
+      // Staged, not sent: the lane manager runs no turn where nobody can see it, so the Fleet dock opens and drains it.
+      const q = await bridge.fleetQueueAdd(lane.id, prompt).catch(() => null);
+      staged = !!q?.ok; stageReason = q?.reason;
+      void revealFleetLane(lane.id, false);
+    } else {
+      const input = $("#input") as HTMLTextAreaElement | null;
+      // "Take over main composer" lands the user in Main's composer: a floating Fleet dock lying over it is put away
+      // (its pill brings it back), so the focused composer is also the visible one.
+      const dock = $("#fleetDock") as HTMLElement | null;
+      if (input && dock && fleetGridState() === "shown") {
+        const a = input.getBoundingClientRect(), b = dock.getBoundingClientRect();
+        if (Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)) closeFleetGrid();
+      }
+      input?.focus();
+    }
+  }
+  if (lane) {
+    const shown = lane;
+    const t = handoffToast(fromName, toName, shown.name, staged, stageReason);
+    showToast({ tone: staged === false ? "warn" : "ok", title: t.title, desc: t.desc, actions: [{ label: "Show lane", run: () => void revealFleetLane(shown.id) }, { label: "OK" }], timeout: 9000 });
+  }
+  return { ok: true };
+}
+
+/** Move it now: end Main's turn through the Stop path, then wait (about 10 s at most) until the engine says idle. */
+async function stopMainTurn(): Promise<boolean> {
+  if (state.streaming && !isLaneTarget(state.composerTarget)) await stopTurn();
+  else await bridge.cancelChat().catch(() => null); // a turn this composer is not showing (a goal loop, a re-adopt)
+  for (let i = 0; i < 40; i++) {
+    const st = await bridge.sessionBusy().catch(() => null);
+    if (st && !st.busy) return true;
+    const tick = Promise.withResolvers<void>();
+    window.setTimeout(tick.resolve, 250);
+    await tick.promise;
+  }
+  return false;
+}
+
+/** The busy confirm, docked above the composer in the session-switch sheet's place and markup (it can stop work, so
+ *  it never times out and an outside click never answers it). Esc, Stay here, or another sheet replacing it = stay. */
+function askTakeover(fromName: string, toName: string): Promise<BusyChoice> {
+  const { promise, resolve } = Promise.withResolvers<BusyChoice>();
+  closeSwitchSheet();
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) { resolve("stay"); return promise; }
+  const copy = takeoverSheetCopy(fromName, toName);
+  const node = el(`<div id="switchSheet" role="alertdialog" aria-label="Main is still working">
+    <div class="perm perm-egress">
+      <div class="perm-eg-head">${icon("clock", 13)}<span class="switch-title"></span></div>
+      <div class="switch-body"></div>
+      <div class="perm-actions perm-actions-col">
+        <button class="perm-btn eg-allow" data-takeover="after"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn eg-block" data-takeover="now"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn" data-takeover="stay"></button>
+      </div>
+    </div>
+  </div>`);
+  ($(".switch-title", node) as HTMLElement).textContent = copy.title;
+  ($(".switch-body", node) as HTMLElement).textContent = copy.body;
+  ($('[data-takeover="after"] .switch-label', node) as HTMLElement).textContent = copy.after;
+  ($('[data-takeover="after"] .switch-hint', node) as HTMLElement).textContent = copy.afterHint;
+  ($('[data-takeover="now"] .switch-label', node) as HTMLElement).textContent = copy.now;
+  ($('[data-takeover="now"] .switch-hint', node) as HTMLElement).textContent = copy.nowHint;
+  ($('[data-takeover="stay"]', node) as HTMLElement).textContent = copy.stay;
+  let answered = false;
+  const gone = new MutationObserver(() => { if (!node.isConnected) finish("stay"); });
+  function finish(choice: BusyChoice): void {
+    if (answered) return;
+    answered = true;
+    gone.disconnect();
+    if (switchSheet === node) closeSwitchSheet();
+    resolve(choice);
+  }
+  node.addEventListener("click", (ev) => {
+    const c = ((ev.target as HTMLElement).closest("[data-takeover]") as HTMLElement | null)?.dataset.takeover;
+    if (c === "after" || c === "now" || c === "stay") finish(c);
+  });
+  (wrap.querySelector(".composer-row") ?? wrap.firstElementChild)?.before(node);
+  gone.observe(wrap, { childList: true, subtree: true });
+  switchSheet = node;
+  document.addEventListener("keydown", onSwitchSheetKey, true); // Esc closes it like the switch sheet
+  ($('[data-takeover="after"]', node) as HTMLButtonElement).focus(); // Enter takes the choice that stops nothing
+  return promise;
+}
+
+function queueTakeover(folder: string, name: string): void {
+  const copy = pendingCopy(name);
+  const job: QueuedTakeover = { folder, name, dismiss: () => undefined, timer: 0 };
+  job.dismiss = showToast({ tone: "info", title: copy.title, desc: copy.desc, actions: [{ label: "Cancel handoff", run: () => { if (takeovers.pending() === job) dropQueuedTakeover(); } }] });
+  job.timer = window.setInterval(() => void runQueuedTakeover(), 3000);
+  const was = takeovers.queue(job);
+  if (was) endQueuedTakeover(was);
+}
+
+function endQueuedTakeover(job: QueuedTakeover): void {
+  window.clearInterval(job.timer);
+  job.dismiss();
+}
+
+function dropQueuedTakeover(): void {
+  const was = takeovers.cancel();
+  if (was) endQueuedTakeover(was);
+}
+
+/** Main's turn ended (renderChatTurn's settle, or the backstop): run the queued handoff once Main is idle. */
+async function runQueuedTakeover(): Promise<void> {
+  if (!takeovers.pending() || takeoverRunning) return;
+  const st = await bridge.sessionBusy().catch(() => null);
+  const job = takeovers.onTurnEnd(st ? !!st.busy : state.streaming);
+  if (!job) return;
+  endQueuedTakeover(job);
+  const r = await takeOver(job.folder, job.name, null);
+  if (!r.ok && r.message) showToast({ tone: "warn", title: "The handoff did not finish", desc: r.message, actions: [{ label: "OK" }], timeout: 9000 });
+}
+
 /** P-FLEET.L8: attach the composer to a running lane. */
 async function promoteLane(laneId: string): Promise<void> {
   // Identity is the laneId alone (a lane may be renamed, cd, or swap models without becoming a different
@@ -3974,6 +4185,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
   if (e.type === "done") {
     settleLaneWatchNode();
     releaseHeldPrompt();
+    if (isLaneTarget(state.composerTarget)) agentsRail?.noteTurnEnd(state.composerTarget.cwd); // P-RAIL.AGENTS1: the lane's Agent rings now, not at the next poll
   }
 }
 
@@ -4436,10 +4648,12 @@ async function openJobsSheet(): Promise<void> {
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
 }
+/** P-RAIL.AGENTS1: the rail's Agents view (agents_rail.ts), mounted at init. */
+let agentsRail: AgentsRail | null = null;
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
-  if (rail) { renderMetricsRail(); return; }
+  if (rail) { renderMetricsRail(); agentsRail?.sync(); return; }
   // ADR-0021: expanding from rail → if active blocks exist, override to Security tab
   if (hasActiveBlocks() && state.inspectorTab !== "security") {
     focusInspector("security");
@@ -4834,7 +5048,9 @@ function runOnboarding(): void {
   const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
   const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
-  void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+  // P-RAIL.AGENTS1: no role yet = this install's first run, so the rail lands on Agents (unless a view was
+  // already chosen). Existing installs keep Metrics until they flip the toggle.
+  void promptForRole().then(() => { agentsRail?.adoptFirstRunDefault(); promptForEmailIfMissing(afterEmail); });
 }
 
 // P-PROV.2: first-run "connect a provider" step.
@@ -19234,6 +19450,19 @@ function wire(): void {
   // inspector collapse ↔ metrics rail
   $("#inspCollapse")!.addEventListener("click", () => setInspectorRail(true));
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
+  // P-RAIL.AGENTS1: the Agents view of the rail. It polls fleet status itself (only while it is on screen) and
+  // reads Main's folder, busy flag and the recents from state on its own clock.
+  agentsRail = mountAgentsRail({
+    inspector: $("#inspector")!, toggle: $<HTMLButtonElement>("#railAgents")!, host: $("#railAgentsView")!,
+    getRecent: () => state.workspace?.recent ?? null,
+    getMainFolder: () => state.workspace?.current ?? null,
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    pickFolder: () => pickFolderDialog({ title: "Choose a folder to add as an Agent", confirm: "Add agent" }),
+    toast: showToast,
+    activate: (kind, folder, name) => activateAgentFolder(kind, folder, name),
+    perfTier: () => perfWatch.tier(),
+  });
 
   // composer agent controls → focused per-control dropdowns
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)

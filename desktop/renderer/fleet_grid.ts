@@ -3493,3 +3493,24 @@ function onInput(ev: Event): void {
     if (form) paintRepoHint(form);
   }
 }
+
+/** P-RAIL.AGENTS1: bring a lane's card up for the user (the Agents rail's Activate choices). Opens the dock when it is
+ *  closed or minimized, puts the agent on the board shown (as the New agent form does with a new one), reads the
+ *  fleet so its card exists, then scrolls the card into view, flashes it as "Next that needs you" does and, unless
+ *  `focusInput` is false, focuses its prompt input. False when no card appeared (the lane is gone, or the fleet did
+ *  not answer). */
+export async function revealFleetLane(laneId: string, focusInput = true): Promise<boolean> {
+  if (!deps) return false;
+  openFleetGrid();
+  addToShownBoard(laneId);
+  await refresh();
+  const card = runs.get(laneId)?.card;
+  if (!card?.isConnected) return false;
+  card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  card.removeAttribute("data-fleet-flash");
+  void card.offsetWidth; // restart the flash when the same card is shown twice in a row
+  card.setAttribute("data-fleet-flash", "");
+  window.setTimeout(() => card.removeAttribute("data-fleet-flash"), 1600);
+  if (focusInput) ($("[data-fleet-input]", card) as HTMLTextAreaElement | null)?.focus({ preventScroll: true });
+  return true;
+}

@@ -1883,3 +1883,15 @@ demo-P-PREVIEW.CHIP1: ## P-PREVIEW.CHIP1: one preview chip (preview_chip.ts, .pc
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/renderer/preview_tabs.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_preview_chip_1.mjs
 	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_preview_chip_1.mjs; else echo "demo-P-PREVIEW.CHIP1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL (with ?vizScript=1) to run the real-UI proof"; fi
+
+.PHONY: demo-P-AGENT.ACTIVATE1
+demo-P-AGENT.ACTIVATE1: ## P-RAIL.AGENTS1 Activate: the Agents rail's hover module starts a Fleet lane in the folder (card up, input focused), an Agent World session (background lane, Visualize on its prompt panel, input focused), or takes over the main composer (Main's session continues in a Fleet lane resuming it; a busy Main asks first: Move it now, or After this turn with a cancellable pending status). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_agent_activate_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_activate.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_agent_activate_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_agent_activate_1.mjs; else echo "demo-P-AGENT.ACTIVATE1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-RAIL.AGENTS1
+demo-P-RAIL.AGENTS1: ## P-RAIL.AGENTS1: the rail's Agents view: a mini Lucid toggle right of the expand button flips Metrics and Agents (lucid.rail.view; new installs land on Agents); one glass-brick Lucid per folder (recents, Main's folder, live lanes' folders, plus added or kept ones; lucid.agents.v1), typing while an agent works there, meditating and glancing when idle, the turn-end ring; thin arrows step 3 Agents or a page; drag or Alt+Arrow reorders (neighbors notice, FLIP); the hover module recolors, renames, activates and removes with confirm and Undo. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_rail_agents_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_rail_agents_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1.mjs; else echo "demo-P-RAIL.AGENTS1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi

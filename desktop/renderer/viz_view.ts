@@ -697,6 +697,28 @@ export async function openVizWorld(packageId: string): Promise<boolean> {
   return selectStyle(worldStyle(key));
 }
 
+/** P-RAIL.AGENTS1: open Visualize (when it is not open) on one agent (`id` = its fleet lane id): wait for its node, as
+ *  a lane spawned a moment ago joins on a fleet poll (asked for about once a second here, never more than the chain
+ *  allows), then open its prompt panel with the input focused. False when the node did not appear within `waitMs`
+ *  or the view closed meanwhile. */
+export async function openVizAgent(id: string, waitMs = 10_000): Promise<boolean> {
+  if (!isOpen()) openViz();
+  if (!isOpen()) return false;
+  const until = Date.now() + waitMs;
+  let askedAt = 0;
+  while (!model?.nodes.has(id)) {
+    if (!isOpen() || Date.now() >= until) return false;
+    if (Date.now() - askedAt >= 1000) { askedAt = Date.now(); void pollFleet(); }
+    const tick = Promise.withResolvers<void>();
+    window.setTimeout(tick.resolve, 120);
+    await tick.promise;
+  }
+  openPanel(id);
+  const input = view ? view.querySelector<HTMLTextAreaElement>("[data-viz-panel-input]") : null;
+  if (input && !input.disabled) input.focus({ preventScroll: true });
+  return panel?.id === id;
+}
+
 /** Open the overlay. `onClose` runs after it closes (the orbit uses it to come back). */
 export function openViz(opts: { onClose?: () => void } = {}): void {
   if (!deps || opened) return;

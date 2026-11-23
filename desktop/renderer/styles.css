@@ -3713,6 +3713,212 @@ body.lucid-capturing #toasts{visibility:hidden}
 @keyframes tileSweep{to{--sweep:360deg}}
 @media (prefers-reduced-motion:reduce){.tile.changed .n,.tile.changed::before,.tile.changed:not(.attn)::after,.tile.attn::after{animation:none}.tile.changed::before{display:none}}
 
+/* ───────── P-RAIL.AGENTS1: rail header toggle + the Agents view (agents_rail.ts, agents_rail_art.ts) ─────────
+   Ported from mockups/agents-rail/a-glass-brick.html (Direction A). The header holds the expand button and, to
+   its right, the mini Lucid toggle. The Agents view keeps the width the metrics view measured (--agr-w, set by
+   agents_rail.ts) and shows at full opacity; the metrics rail keeps its .55 rest opacity. Each Agent box IS the
+   metric .tile (same shape and size); the art takes the number's slot and the name the label's. */
+.rail-head{display:flex;align-items:center;justify-content:center;gap:6px;flex:none}
+.inspector.rail.agents-view{opacity:1;width:max(96px,var(--agr-w,0px))}
+.inspector.rail.agents-view .metrics-rail{overflow:hidden}
+.inspector.agents-view .rail-tiles{display:none}
+.agr-view{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
+.agr-view[hidden]{display:none}
+/* contain:inline-size: names never widen the rail; they ellipsize inside the box instead (invariant 11). */
+.agr-list{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;gap:7px;padding:3px 0 2px;
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;contain:inline-size}
+.agr-list::-webkit-scrollbar{width:0}
+.agr-arrow{-webkit-app-region:no-drag;flex:none;width:100%;height:14px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--txt-3);
+  display:grid;place-items:center;cursor:pointer;visibility:hidden;opacity:0;transition:opacity var(--t),background var(--t),color var(--t)}
+.agr-arrow.agr-on{visibility:visible;opacity:1}
+.agr-arrow:hover{background:var(--bg-3);color:var(--accent-2)}
+.agr-arrow:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* the toggle: a mini Lucid bust; muted in the metrics view, lit in the Agents view; hover lifts it, races a
+   green ring around it, tilts the head, flutters the scarf, swaps to happy eyes and pops a spark */
+.agr-toggle{position:relative;isolation:isolate;-webkit-app-region:no-drag;flex:none;width:32px;height:30px;padding:0;border-radius:8px;
+  border:1px solid var(--line);background:var(--bg-2);display:grid;place-items:center;cursor:pointer;
+  transition:background var(--t),border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.agr-toggle .agr-tb-fig{display:block;width:24px;height:24px;overflow:visible;filter:saturate(.3) brightness(.9);opacity:.8;transition:filter var(--t),opacity var(--t)}
+.agr-toggle[aria-pressed="true"]{border-color:color-mix(in srgb,var(--hero) 42%,var(--line));
+  background:linear-gradient(162deg,color-mix(in srgb,var(--hero) 14%,var(--bg-3)),var(--bg-2));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 0 14px -6px rgb(var(--hero-rgb) / .8)}
+.agr-toggle[aria-pressed="true"] .agr-tb-fig,.agr-toggle:hover .agr-tb-fig{filter:none;opacity:1}
+.agr-toggle:hover{transform:translateY(-1px);background:var(--bg-3);border-color:transparent;
+  box-shadow:0 8px 18px -10px rgb(var(--hero-rgb) / .9),0 0 0 1px rgb(var(--hero-rgb) / .16)}
+.agr-toggle::after{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1.4px;z-index:3;pointer-events:none;opacity:0;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 50%,rgb(var(--hero-rgb) / .5) 72%,var(--hero) 86%,var(--tint) 90%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;  /* P-THEME.1 theme-exempt: #000 is MASK ALPHA (opaque=keep), never a rendered color. */
+  transition:opacity var(--t)}
+.agr-toggle:hover::after{opacity:1;animation:tileSweep 1.8s linear infinite}
+.agr-toggle::before{content:"";position:absolute;left:50%;bottom:1px;width:20px;height:7px;margin-left:-10px;border-radius:50%;z-index:-1;
+  background:radial-gradient(closest-side,rgb(var(--hero-rgb) / .5),transparent);opacity:0;transition:opacity var(--t)}
+.agr-toggle:hover::before,.agr-toggle[aria-pressed="true"]::before{opacity:1}
+.agr-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agr-toggle:active{transform:scale(.95)}
+.agr-tb-head{transform-box:fill-box;transform-origin:50% 100%;transition:transform .5s var(--spring)}
+.agr-toggle:hover .agr-tb-head{transform:translateY(-1.2px) rotate(-7deg)}
+.agr-tb-tail{transform-box:fill-box;transform-origin:0 50%;animation:agrTbTail 3.6s ease-in-out infinite}
+.agr-toggle:hover .agr-tb-tail{animation-duration:.8s}
+@keyframes agrTbTail{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(13deg)}}
+.agr-tb-eyes{transform-box:fill-box;transform-origin:50% 50%;animation:agrTbBlink 5.2s infinite}
+@keyframes agrTbBlink{0%,94%,100%{transform:none}96.5%{transform:scaleY(.12)}}
+.agr-tb-happy{opacity:0}
+.agr-toggle:hover .agr-tb-eyes{opacity:0;animation:none}
+.agr-toggle:hover .agr-tb-happy{opacity:1}
+.agr-tb-spark{opacity:0;transform-box:fill-box;transform-origin:50% 50%}
+.agr-toggle:hover .agr-tb-spark{animation:agrTbSpark 1.5s ease-in-out infinite}
+@keyframes agrTbSpark{0%,100%{opacity:0;transform:scale(.4) rotate(0)}40%{opacity:1;transform:scale(1) rotate(45deg)}75%{opacity:0;transform:scale(.6) rotate(90deg)}}
+
+/* the Agent box: the metric .tile; --tc drives the .tile.changed ring (turn end) in the Agent's color */
+.agr-tile{--tc:var(--G);flex:none;padding:4px 6px;gap:2px;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+.agr-tile .agr-art{display:block;flex:none;height:28px;width:auto}
+.agr-tile .l{max-width:100%;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
+.agr-tile.work .l{color:var(--txt-2)}
+.agr-tile:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.agr-tile.hot{border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,var(--shade)),0 2px 6px -4px rgb(var(--sh-rgb) / .6)}
+.agr-led{position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:var(--G);box-shadow:0 0 6px var(--G);opacity:0;z-index:2}
+.agr-tile.work .agr-led{opacity:1;animation:agrLed 2.4s ease-in-out infinite}
+@keyframes agrLed{0%,100%{opacity:1}50%{opacity:.35}}
+.agr-tile.work .agr-art{filter:drop-shadow(0 0 4px color-mix(in srgb,var(--G) 40%,transparent))}
+.agr-add{--tc:var(--accent-2);border-style:dashed;background:transparent;box-shadow:none}
+.agr-add .l{color:var(--txt-3)}
+.agr-add-art rect{fill:none;stroke:var(--txt-4);stroke-dasharray:3 2.4}
+.agr-add-art path{fill:none;stroke:var(--txt-3);stroke-width:1.8;stroke-linecap:round}
+.agr-add:hover .agr-add-art path{stroke:var(--accent-2)}
+/* drag: the lifted box follows the pointer, the others slide (FLIP) */
+.agr-sorting .agr-tile{pointer-events:none;transition:transform 180ms var(--ease-out),border-color var(--t),box-shadow var(--t)}
+.agr-tile.agr-dragging{z-index:5;transition:none;cursor:grabbing;border-color:color-mix(in srgb,var(--tc) 50%,var(--line));
+  box-shadow:0 14px 28px -12px color-mix(in srgb,var(--tc) 60%,var(--shade)),0 4px 10px -4px rgb(var(--sh-rgb) / .6)}
+
+/* the mini Lucid (vector rig; palette from --K --D --L --G --g). P-THEME.1 theme-exempt: the skin, eye, pupil
+   and outline inks are the CHARACTER's own colors (MASCOT_PALETTE), identical in every theme like the mascot. */
+.agr-lu .agr-fK{fill:var(--K)} .agr-lu .agr-fD{fill:var(--D)} .agr-lu .agr-fL{fill:var(--L)} .agr-lu .agr-fG{fill:var(--G)} .agr-lu .agr-fg{fill:var(--g)}
+.agr-lu .agr-fS{fill:#eec39a} .agr-lu .agr-fs{fill:#d8a377} .agr-lu .agr-fW{fill:#f4f7f5} .agr-lu .agr-fB{fill:#0a0e12}
+.agr-lu .agr-sk{stroke:#10161d;stroke-width:.9;stroke-linejoin:round} .agr-lu .agr-sk2{stroke:#10161d;stroke-width:.6} .agr-lu .agr-sk3{stroke:#10161d;stroke-width:.5}
+.agr-lu .agr-sD{fill:none;stroke:var(--D);stroke-width:.9;stroke-linecap:round} .agr-lu .agr-sL{fill:none;stroke:var(--L);stroke-width:.9;stroke-linecap:round}
+.agr-lu .agr-sheen{stroke-width:1.6} .agr-lu .agr-sB{fill:none;stroke:#0a0e12;stroke-width:.85;stroke-linecap:round}
+.agr-lu .agr-kb-b{fill:color-mix(in srgb,var(--G) 22%,#0a0e12);stroke:var(--G);stroke-width:.45} .agr-lu .agr-kb-k,.agr-lu .agr-bit{fill:var(--G)}
+.agr-lu .agr-bkHi{stop-color:color-mix(in srgb,var(--G) 62%,#fff);stop-opacity:.72}
+.agr-lu .agr-bkMid{stop-color:color-mix(in srgb,var(--G) 58%,var(--K));stop-opacity:.5}
+.agr-lu .agr-bkSh{stop-color:color-mix(in srgb,var(--g) 70%,#000);stop-opacity:.8}
+.agr-lu .agr-bk-trim{fill:none;stroke:color-mix(in srgb,var(--G) 55%,#fff);stroke-opacity:.75;stroke-width:.8}
+.agr-lu .agr-glow0{stop-color:var(--G);stop-opacity:.42} .agr-lu .agr-glow1{stop-color:var(--G);stop-opacity:0}
+.agr-lu .agr-eyes,.agr-lu .agr-ec{transition:opacity .14s}
+.agr-lu .agr-ec{opacity:0}
+.agr-lu.agr-idle .agr-eyes{opacity:0} .agr-lu.agr-idle .agr-ec{opacity:1}
+.agr-lu .agr-eyes,.agr-lu .agr-head,.agr-lu .agr-tail{transform-box:fill-box}
+.agr-lu .agr-eyes{transform-origin:50% 50%} .agr-lu .agr-head{transform-origin:50% 100%} .agr-lu .agr-tail{transform-origin:0 50%}
+.agr-lu.agr-work .agr-pup{transform:translateY(.6px)}
+/* idle = meditating breath + aura; work = typing bursts with a rest, keys flash, two code bits rise */
+.agr-lu .agr-upper{animation:agrBreathe 4.8s ease-in-out var(--dl,0s) infinite}
+.agr-lu .agr-tail{animation:agrTail 4.2s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-tail{animation-duration:2.4s}
+.agr-lu.agr-idle .agr-aura{animation:agrAura 4.8s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-eyes{animation:agrBlink 4.6s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-hl{animation:agrTapL 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-hr{animation:agrTapR 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-k1{animation:agrKey1 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-k2{animation:agrKey2 2.4s var(--dl,0s) infinite}
+.agr-lu .agr-bit{opacity:0}
+.agr-lu.agr-work .agr-b1{animation:agrBit 2.4s ease-out calc(var(--dl,0s) - .5s) infinite}
+.agr-lu.agr-work .agr-b2{animation:agrBit 2.4s ease-out calc(var(--dl,0s) - 1.4s) infinite}
+/* glance, about every 60 s (agents_rail.ts adds .agr-glance for 3.2 s): left, up, down, then back to the center
+   toward the user with one blink and a slight gaze */
+.agr-lu.agr-glance .agr-eyes{opacity:1;animation:agrBlinkG 3.2s 1 both}
+.agr-lu.agr-glance .agr-ec{opacity:0}
+.agr-lu.agr-glance .agr-pup{animation:agrGaze 3.2s var(--ease) 1 both}
+.agr-lu.agr-glance .agr-head{animation:agrHeadG 3.2s var(--ease) 1 both}
+/* drag: neighbors notice the moved box (eyes up or down at it); the moved one looks around its new place */
+.agr-tile[data-eyes] .agr-eyes{opacity:1;animation:none}
+.agr-tile[data-eyes] .agr-ec{opacity:0}
+.agr-tile[data-eyes] .agr-pup{transition:transform .22s var(--ease-out)}
+.agr-tile[data-eyes="up"] .agr-pup{transform:translateY(-.8px)}
+.agr-tile[data-eyes="down"] .agr-pup{transform:translateY(.8px)}
+.agr-tile[data-eyes="around"] .agr-pup{animation:agrAround 2s var(--ease) 1 both}
+@keyframes agrBreathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-.6px)}}
+@keyframes agrTail{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(8deg)}}
+@keyframes agrAura{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes agrBlink{0%,93%,100%{transform:none}95.5%{transform:scaleY(.12)}}
+@keyframes agrBlinkG{0%,84%,100%{transform:none}87%{transform:scaleY(.12)}}
+@keyframes agrGaze{0%,5%{transform:translate(0,0)}12%,27%{transform:translate(-1px,0)}34%,47%{transform:translate(0,-.7px)}54%,67%{transform:translate(0,.7px)}75%,100%{transform:translate(0,.25px)}}
+@keyframes agrHeadG{0%,5%{transform:none}12%,27%{transform:rotate(-5deg)}34%,47%{transform:translateY(-.5px)}54%,67%{transform:translateY(.35px) rotate(1deg)}75%,100%{transform:none}}
+@keyframes agrAround{0%{transform:none}16%,30%{transform:translate(-1px,0)}44%,58%{transform:translate(1px,0)}72%,84%{transform:translate(0,-.6px)}100%{transform:none}}
+@keyframes agrTapL{0%,12%,24%,36%,48%,100%{transform:none}6%,30%{transform:translateY(-1.3px)}}
+@keyframes agrTapR{0%,12%,24%,36%,48%,100%{transform:none}18%,42%{transform:translateY(-1.3px)}}
+@keyframes agrKey1{0%,10%,15%,34%,39%,100%{opacity:.35}12%,36%{opacity:1}}
+@keyframes agrKey2{0%,22%,27%,46%,51%,100%{opacity:.35}24%,48%{opacity:1}}
+@keyframes agrBit{0%{opacity:0;transform:translateY(0)}12%{opacity:.9}60%,100%{opacity:0;transform:translateY(-8px)}}
+/* perf tier "minimal" (agents_rail.ts sets .agr-calm) and reduced motion: every loop stops; pose and LED still show the state */
+.agr-calm .agr-lu,.agr-calm .agr-lu *,.agr-calm .agr-led{animation:none!important}
+@media (prefers-reduced-motion:reduce){
+  .agr-lu,.agr-lu *,.agr-toggle,.agr-toggle *,.agr-toggle::after,.agr-led,.agr-tile,.agr-arrow,.agr-pop .agr-sub{animation:none!important;transition:none!important}
+}
+
+/* the hover module (reuses .popover, .cfg-sec, .cfg-lbl and .ctx-it) */
+.popover.agr-pop{width:272px;transform-origin:100% 50%;overflow-x:hidden;overflow-y:auto}
+.popover.agr-pop:not(.show){pointer-events:none}
+.agr-ph{display:flex;align-items:center;gap:11px;padding:12px 12px 10px;border-bottom:1px solid var(--line-soft)}
+.agr-ph-art{flex:none;width:80px;height:62px;display:grid;place-items:center;border-radius:11px;border:1px solid var(--line);
+  background:linear-gradient(162deg,var(--bg-3),var(--bg-2));box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .045)}
+.agr-ph-art .agr-art{display:block;height:46px;width:auto}
+.agr-ph-id{flex:1;min-width:0}
+.agr-ph-name{font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-ph-name-in{display:block;width:100%;font:inherit;font-size:13px;font-weight:700;color:var(--txt);background:var(--bg-2);
+  border:1px solid color-mix(in srgb,var(--G) 50%,var(--line));border-radius:6px;padding:1px 6px;outline:none}
+.agr-ph-path{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-ph-state{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--txt-2);min-width:0}
+.agr-ph-state i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--txt-4)}
+.agr-ph-state.work i{background:var(--G);box-shadow:0 0 6px var(--G)}
+.agr-ph-state span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-pop .cfg-sec{padding:10px 12px}
+.agr-pop .cfg-lbl{margin-bottom:8px}
+.agr-pop .cfg-lbl .cur{white-space:nowrap}
+.agr-hue{-webkit-appearance:none;appearance:none;display:block;width:100%;height:16px;margin:0 0 9px;background:transparent;cursor:pointer}
+.agr-hue::-webkit-slider-runnable-track{height:6px;border-radius:99px;box-shadow:inset 0 0 0 1px rgb(var(--sh-rgb) / .35);
+  background:linear-gradient(90deg,hsl(0 100% 63%),hsl(40 100% 63%),hsl(80 100% 63%),hsl(120 100% 63%),hsl(160 100% 63%),hsl(200 100% 63%),hsl(240 100% 63%),hsl(280 100% 63%),hsl(320 100% 63%),hsl(360 100% 63%))}
+.agr-hue::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:50%;background:var(--G);border:2px solid var(--tint);box-shadow:0 1px 4px rgb(var(--sh-rgb) / .6)}
+.agr-hue:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:99px}
+.agr-sw{display:flex;gap:7px}
+.agr-sw button{flex:none;width:20px;height:20px;border-radius:50%;padding:0;cursor:pointer;border:1px solid rgb(var(--sh-rgb) / .5);
+  background:linear-gradient(135deg,var(--sg) 0 50%,var(--sk) 50% 100%);transition:transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.agr-sw button:hover{transform:scale(1.12)}
+.agr-sw button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--bg-1),0 0 0 3.5px var(--sg)}
+.agr-sw button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.agr-pop .agr-acts{padding:6px}
+.agr-acts .ctx-it>svg{flex:none;color:var(--txt-3)}
+.agr-acts .ctx-it:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.agr-nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-acts .agr-chev{transition:transform var(--t)}
+.agr-acts .ctx-it[aria-expanded="true"]{background:var(--bg-3)}
+.agr-acts .ctx-it[aria-expanded="true"] .agr-chev{transform:rotate(90deg)}
+.agr-sub{display:none;margin:3px 0 2px 12px;padding-left:8px;border-left:1px solid color-mix(in srgb,var(--G) 40%,var(--line))}
+.agr-sub.open{display:block;animation:rise var(--t) var(--ease-out)}
+.agr-sub .ctx-it:disabled{opacity:.5;cursor:progress}
+.agr-ic{flex:none;width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:color-mix(in srgb,var(--G) 70%,var(--txt));
+  background:color-mix(in srgb,var(--G) 12%,var(--bg-3));border:1px solid color-mix(in srgb,var(--G) 25%,var(--line))}
+.agr-tx{display:block;flex:1;min-width:0}
+.agr-tx b{display:block;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-tx i{display:block;font-style:normal;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-rm{margin-top:2px;padding-top:4px;border-top:1px solid var(--line-soft)}
+.agr-rm .ctx-it:hover{color:var(--red-txt)}
+.agr-rm .ctx-it:hover>svg{color:var(--red-txt)}
+.agr-confirm{display:flex;align-items:center;gap:8px;padding:3px 4px 3px 10px}
+.agr-confirm-q{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--red-txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-yes,.agr-no{flex:none;font:inherit;font-size:12px;font-weight:600;white-space:nowrap;padding:4px 11px;border-radius:7px;cursor:pointer;border:1px solid var(--line)}
+.agr-yes{color:var(--on-fill);background:var(--red-deep);border-color:color-mix(in srgb,var(--red) 55%,var(--line))}
+.agr-yes:hover{background:var(--red-mid)}
+.agr-no{color:var(--txt-2);background:var(--bg-2)}
+.agr-no:hover{background:var(--bg-3);color:var(--txt)}
+.agr-yes:focus-visible,.agr-no:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agr-msg{margin:6px 4px 2px;padding:7px 9px;border-radius:7px;font-size:11.5px;line-height:1.45;color:var(--amber-txt);background:var(--amber-dim)}
+.agr-msg[hidden]{display:none}
+.agr-nub{position:fixed;z-index:96;width:12px;height:12px;background:var(--bg-1);border:1px solid var(--line-strong);transform:rotate(45deg);pointer-events:none;opacity:0;transition:opacity var(--t-fast)}
+.agr-nub.show{opacity:1}
+.agr-nub.l{border-left-color:transparent;border-bottom-color:transparent}
+.agr-nub.r{border-right-color:transparent;border-top-color:transparent}
+
 /* Mis-click safety: New session (destructive to the visible thread) used to sit 4px from Collapse
    panel (harmless), on 24px targets. 12px of dead header separates them; New session also confirms
    once the thread has turns (app.ts confirmNewSession). */
