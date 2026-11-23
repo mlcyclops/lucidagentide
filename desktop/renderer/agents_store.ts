@@ -37,7 +37,19 @@ export interface AgentRecord {
   hue: number;
   /** Added, renamed, recolored or dragged: stays on the rail when it leaves the recents. */
   saved: boolean;
+  /** What the user said this Agent is for when they added it (the workspace setup purposes); absent = not asked. */
+  purpose?: AgentPurpose;
 }
+
+/** The kinds of work an Agent is for: the same set as the workspace setup offer (WorkspacePurpose). */
+export type AgentPurpose = "app" | "docs" | "analysis" | "other";
+export const AGENT_PURPOSES: readonly { purpose: AgentPurpose; label: string; line: string }[] = [
+  { purpose: "app", label: "Build or develop an application", line: "Builds an application" },
+  { purpose: "docs", label: "Analyze documents", line: "Analyzes documents" },
+  { purpose: "analysis", label: "Research or data analysis", line: "Researches and analyzes data" },
+  { purpose: "other", label: "Something else", line: "General work" },
+];
+const isPurpose = (v: unknown): v is AgentPurpose => AGENT_PURPOSES.some((p) => p.purpose === v);
 
 export interface AgentsDoc {
   v: 1;
@@ -105,7 +117,7 @@ export function loadDoc(raw: string | null | undefined): AgentsDoc {
     seen.add(id);
     const name = typeof a.name === "string" && a.name.trim() ? a.name.trim().slice(0, NAME_MAX) : null;
     const theme = THEME_KEYS.includes(a.theme as ThemeKey) ? (a.theme as ThemeKey) : null;
-    agents.push({ id, path: a.path, name, theme, hue: clampHue(a.hue), saved: !!a.saved });
+    agents.push({ id, path: a.path, name, theme, hue: clampHue(a.hue), saved: !!a.saved, ...(isPurpose(a.purpose) ? { purpose: a.purpose } : {}) });
   }
   const hidden = [...new Set((Array.isArray(o.hidden) ? o.hidden : []).filter((h): h is string => typeof h === "string").map(normFolder))];
   return { v: 1, agents, hidden, manual: !!o.manual, main: typeof o.main === "string" ? o.main : null };
@@ -148,14 +160,25 @@ export function mergeSources(doc: AgentsDoc, s: Sources): AgentsDoc {
   return { ...doc, agents, main: mainId ?? doc.main };
 }
 
-/** "+ Add agent": a saved Agent at the top; re-adding a removed folder un-hides it. */
-export function addAgent(doc: AgentsDoc, path: string): AgentsDoc {
+/** "+ Add agent": add (or bring back and move to the top) the Agent for `path`. The add flow passes the name the user typed (an
+ *  empty or auto-equal name stays automatic) and what the Agent is for. */
+export function addAgent(doc: AgentsDoc, path: string, opts: { name?: string | null; purpose?: AgentPurpose | null } = {}): AgentsDoc {
   const id = normFolder(path);
   if (!id) return doc;
   const hidden = doc.hidden.filter((h) => h !== id);
   const cur = doc.agents.find((a) => a.id === id);
-  const rec: AgentRecord = cur ? { ...cur, saved: true } : { ...autoRecord(path), saved: true };
+  let rec: AgentRecord = cur ? { ...cur, saved: true } : { ...autoRecord(path), saved: true };
+  const name = opts.name?.trim().slice(0, NAME_MAX);
+  if (name) rec = { ...rec, name };
+  if (opts.purpose && isPurpose(opts.purpose)) rec = { ...rec, purpose: opts.purpose };
   return { ...doc, hidden, agents: [rec, ...doc.agents.filter((a) => a.id !== id)] };
+}
+
+/** The purpose recorded for the Agent living in `path`, if the user gave one when adding it. */
+export function purposeOf(doc: AgentsDoc, path: string | null | undefined): AgentPurpose | null {
+  if (!path) return null;
+  const id = normFolder(path);
+  return doc.agents.find((a) => a.id === id)?.purpose ?? null;
 }
 
 export interface RemovedAgent { record: AgentRecord; index: number; wasHidden: boolean }

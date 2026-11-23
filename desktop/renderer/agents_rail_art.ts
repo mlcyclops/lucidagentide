@@ -145,6 +145,12 @@ const ICON_PATHS = {
   trash: '<path d="M5 7h14"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6.6 7l.8 11.1A1.6 1.6 0 0 0 9 19.6h6a1.6 1.6 0 0 0 1.6-1.5L17.4 7"/>',
   up: '<path d="M7 14l5-5 5 5"/>',
   down: '<path d="M7 10l5 5 5-5"/>',
+  folder: '<path d="M3.5 7.5A1.5 1.5 0 0 1 5 6h4l2 2h8a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5z"/>',
+  code: '<path d="M9 8l-4 4 4 4"/><path d="M15 8l4 4-4 4"/>',
+  doc: '<path d="M7 3.5h7l4 4v13H7z"/><path d="M14 3.5v4h4"/><path d="M9.5 12.5h6"/><path d="M9.5 16h6"/>',
+  search: '<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>',
+  spark: '<path d="M12 4v4"/><path d="M12 16v4"/><path d="M4 12h4"/><path d="M16 12h4"/><path d="M7 7l2 2"/><path d="M15 15l2 2"/><path d="M17 7l-2 2"/><path d="M9 15l-2 2"/>',
+  back: '<path d="M15 6l-6 6 6 6"/>',
 } as const;
 
 export function agrIcon(name: keyof typeof ICON_PATHS, size: number, cls = ""): string {

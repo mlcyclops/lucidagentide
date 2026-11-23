@@ -16,7 +16,7 @@
 // mountAgentsRail owns the DOM. Folder names and paths come from disk and are always escaped.
 
 import {
-  AGENTS_KEY, VIEW_KEY, addAgent, displayNames, laneFolderIds, laneSourceFolders, laneTurnEnds, loadDoc, mergeSources,
+  AGENTS_KEY, AGENT_PURPOSES, VIEW_KEY, addAgent, displayNames, type AgentPurpose, laneFolderIds, laneSourceFolders, laneTurnEnds, loadDoc, mergeSources,
   moveAgent, normFolder, recolorAgent, removeAgent, renameAgent, restoreAgent, saveDoc, workingFolders, isLaneBusy,
   NAME_MAX, type AgentRecord, type AgentsDoc, type LaneLike, type LaneMemo, type RailView, type ThemeKey,
 } from "./agents_store.ts";
@@ -535,14 +535,150 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   }
 
   // ── add ──
-  async function addFolder(): Promise<void> {
+  // "+ Add agent" opens a small popout beside its box (the same module shell as an Agent's): step 1 says what an
+  // Agent is and that it lives in one folder, then picks that folder (a recent one in a click, or the folder
+  // dialog); step 2 names it and asks what it is for (the workspace setup purposes). Nothing is added until Add.
+  const addPop = document.createElement("div");
+  addPop.className = "popover agr-pop agr-add-pop";
+  addPop.setAttribute("role", "dialog");
+  addPop.setAttribute("aria-label", "Add an Agent");
+  addPop.tabIndex = -1;
+  addPop.setAttribute("style", paletteStyle(paletteOf({ theme: "lucid", hue: 145 })));
+  document.body.append(addPop);
+  let adding: { tile: HTMLElement; path: string | null; purpose: AgentPurpose | null } | null = null;
+  const PURPOSE_ICON: Record<AgentPurpose, "code" | "doc" | "search" | "spark"> = { app: "code", docs: "doc", analysis: "search", other: "spark" };
+
+  function placeAdd(): void {
+    if (!adding) return;
+    addPop.style.maxHeight = `${Math.max(120, innerHeight - 16)}px`;
+    const p = placeModule(adding.tile.getBoundingClientRect(), { w: addPop.offsetWidth, h: addPop.offsetHeight }, { w: innerWidth, h: innerHeight });
+    addPop.style.left = `${Math.round(p.x)}px`;
+    addPop.style.top = `${Math.round(p.y)}px`;
+    addPop.dataset.side = p.side;
+    nub.className = `agr-nub show ${p.side}`;
+    nub.style.left = `${Math.round(p.nubX)}px`;
+    nub.style.top = `${Math.round(p.nubY)}px`;
+  }
+  /** Recent folders that are not on the rail yet: one click makes them the new Agent's home. */
+  function freshRecents(): { path: string; name: string }[] {
+    const have = new Set(doc.agents.filter((a) => !doc.hidden.includes(a.id)).map((a) => a.id));
+    const out: { path: string; name: string }[] = [];
+    for (const r of d.getRecent() ?? []) {
+      const id = normFolder(r.path);
+      if (!id || have.has(id) || out.some((o) => normFolder(o.path) === id)) continue;
+      out.push({ path: r.path, name: displayNames([{ id, path: r.path, name: null }]).get(id) ?? r.path });
+      if (out.length === 3) break;
+    }
+    return out;
+  }
+  function introHtml(): string {
+    const recents = freshRecents();
+    return `<div class="agr-ph"><div class="agr-ph-art">${agentArt("idle", 0)}</div><div class="agr-ph-id">`
+      + `<div class="agr-ph-name">Add an Agent</div><div class="agr-ph-state"><i></i><span>A mini Lucid for one folder</span></div></div></div>`
+      + `<div class="cfg-sec agr-add-tx">`
+      + `<p>An Agent is a mini Lucid that lives in one folder on this computer: an application's repo, a project, or a set of documents.</p>`
+      + `<p>Everything it starts (taking over the main composer, a Fleet session, an Agent World session) works inside that folder, and its box here shows when any agent is working there.</p>`
+      + `</div><div class="cfg-sec agr-acts">`
+      + (recents.length ? `<div class="cfg-lbl"><span>Recent folders</span></div>` + recents.map((r) =>
+        `<button class="ctx-it" type="button" data-add-path="${esc(r.path)}" title="${esc(r.path)}">${agrIcon("folder", 15)}<span class="agr-nm">${esc(r.name)}</span></button>`).join("") : "")
+      + `<button class="ctx-it agr-add-pick" type="button" data-add-act="pick">${agrIcon("folder", 15)}<span class="agr-nm">Choose a folder…</span></button>`
+      + `<div class="agr-add-row"><button class="btn-mini" type="button" data-add-act="cancel">Cancel</button></div>`
+      + `<div class="agr-msg" data-add-msg role="status" hidden></div></div>`;
+  }
+  function kindHtml(path: string): string {
+    const id = normFolder(path);
+    const auto = displayNames([...doc.agents.filter((a) => a.id !== id), { id, path, name: null }]).get(id) ?? "";
+    const kinds = AGENT_PURPOSES.map((k) =>
+      `<button class="ctx-it agr-kind" type="button" data-add-kind="${k.purpose}" aria-pressed="${adding?.purpose === k.purpose}">`
+      + `<span class="agr-ic">${agrIcon(PURPOSE_ICON[k.purpose], 15)}</span><span class="agr-nm">${esc(k.label)}</span></button>`).join("");
+    return `<div class="agr-ph"><div class="agr-ph-art">${agentArt("idle", 0)}</div><div class="agr-ph-id">`
+      + `<input class="agr-ph-name-in" data-add-name maxlength="${NAME_MAX}" value="${esc(auto)}" aria-label="Agent name" spellcheck="false">`
+      + `<div class="agr-ph-path" title="${esc(path)}">${esc(path)}</div></div></div>`
+      + `<div class="cfg-sec agr-acts"><div class="cfg-lbl"><span>What will this Agent do?</span></div>${kinds}`
+      + `<div class="agr-add-row"><button class="btn-mini" type="button" data-add-act="back">${agrIcon("back", 13)}Back</button>`
+      + `<button class="btn-mini ok" type="button" data-add-act="add"${adding?.purpose ? "" : " disabled"}>Add agent</button></div>`
+      + `<div class="agr-msg" data-add-msg role="status" hidden></div></div>`;
+  }
+  function paintAdd(): void {
+    if (!adding) return;
+    addPop.innerHTML = adding.path ? kindHtml(adding.path) : introHtml();
+    placeAdd();
+  }
+  function openAdd(tile: HTMLElement): void {
+    closeModule(false);
+    adding = { tile, path: null, purpose: null };
+    tile.classList.add("hot");
+    paintAdd();
+    addPop.classList.add("show");
+    placeAdd();
+    window.setTimeout(() => addPop.querySelector<HTMLElement>("[data-add-path], [data-add-act='pick']")?.focus({ preventScroll: true }), 0);
+  }
+  function closeAdd(refocus: boolean): void {
+    if (!adding) return;
+    const t = adding.tile;
+    t.classList.remove("hot");
+    adding = null;
+    addPop.classList.remove("show");
+    nub.classList.remove("show");
+    if (refocus && t.isConnected) t.focus({ preventScroll: true });
+  }
+  function choosePath(path: string): void {
+    if (!adding) return;
+    adding.path = path;
+    paintAdd();
+    window.setTimeout(() => addPop.querySelector<HTMLElement>("[data-add-kind]")?.focus({ preventScroll: true }), 0);
+  }
+  async function pickInto(): Promise<void> {
     const p = await d.pickFolder().catch(() => null);
-    if (!p) return;
-    commit(addAgent(doc, p));
+    if (p && adding) choosePath(p);
+  }
+  function finishAdd(): void {
+    if (!adding?.path || !adding.purpose) return;
+    const path = adding.path;
+    const typed = addPop.querySelector<HTMLInputElement>("[data-add-name]")?.value ?? "";
+    const id = normFolder(path);
+    const auto = displayNames([...doc.agents.filter((a) => a.id !== id), { id, path, name: null }]).get(id) ?? "";
+    commit(addAgent(doc, path, { name: typed.trim() && typed.trim() !== auto ? typed : null, purpose: adding.purpose }));
+    const label = AGENT_PURPOSES.find((k) => k.purpose === adding?.purpose)?.label ?? "";
+    closeAdd(false);
     render();
     scrollListTo(0);
-    const id = normFolder(p);
+    const name = names().get(id) ?? path;
+    d.toast({ tone: "ok", title: `${name} is on your rail`, desc: `${label}. Hover it to color it, or Activate it to start working in its folder.`, timeout: 6000 });
     window.setTimeout(() => tileOf(id)?.focus({ preventScroll: true }), 0);
+  }
+  addPop.addEventListener("click", (e) => {
+    const b = (e.target as Element).closest<HTMLButtonElement>("button");
+    if (!b || !adding) return;
+    if (b.dataset.addPath) { choosePath(b.dataset.addPath); return; }
+    if (b.dataset.addKind) {
+      adding.purpose = b.dataset.addKind as AgentPurpose; // only AGENT_PURPOSES keys are rendered
+      addPop.querySelectorAll<HTMLElement>("[data-add-kind]").forEach((k) => k.setAttribute("aria-pressed", String(k.dataset.addKind === adding?.purpose)));
+      const go = addPop.querySelector<HTMLButtonElement>("[data-add-act='add']");
+      if (go) go.disabled = false;
+      return;
+    }
+    switch (b.dataset.addAct) {
+      case "pick": void pickInto(); return;
+      case "cancel": closeAdd(true); return;
+      case "back": adding.path = null; adding.purpose = null; paintAdd(); return;
+      case "add": finishAdd(); return;
+    }
+  });
+  // The name field starts on the folder's auto name: focusing it selects it, so typing replaces it.
+  addPop.addEventListener("focusin", (e) => { if ((e.target as HTMLElement).matches("[data-add-name]")) (e.target as HTMLInputElement).select(); });
+  addPop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeAdd(true); return; }
+    if (e.key === "Enter" && (e.target as HTMLElement).matches("[data-add-name]")) { e.preventDefault(); finishAdd(); }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (adding && !(e.target instanceof Element && e.target.closest(".agr-add-pop, [data-agr-add]"))) closeAdd(false);
+  }, true);
+  function addFolder(tile?: HTMLElement): void {
+    const t = tile ?? list.querySelector<HTMLElement>("[data-agr-add]");
+    if (!t) return;
+    if (adding) { closeAdd(true); return; }
+    openAdd(t);
   }
 
   // ── hover module ──
@@ -566,6 +702,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     return `<div class="agr-ph"><div class="agr-ph-art">${agentArt(st, loopDelay(a.id))}</div><div class="agr-ph-id">`
       + `<div class="agr-ph-name" title="${esc(name)}">${esc(name)}</div>`
       + `<div class="agr-ph-path" title="${esc(a.path)}">${esc(a.path)}</div>`
+      + (a.purpose ? `<div class="agr-ph-kind">${esc(AGENT_PURPOSES.find((k) => k.purpose === a.purpose)?.line ?? "")}</div>` : "")
       + `<div class="agr-ph-state${st === "work" ? " work" : ""}" data-agr-state><i></i><span>${esc(whereLine(a.id))}</span></div></div></div>`
       + `<div class="cfg-sec"><div class="cfg-lbl"><span>Color</span><span class="cur" data-cur>${esc(p.name)}</span></div>`
       + `<input class="agr-hue" type="range" min="0" max="359" step="1" value="${p.hue}" aria-label="Agent color hue" data-agr-hue>`
@@ -600,6 +737,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     const id = tile.dataset.agent ?? "";
     const a = agentById(id);
     if (!a || dragging) return;
+    if (adding) closeAdd(false);
     if (cur && cur.id === id) {
       if (expanded) setActivateOpen(true);
       return;
@@ -827,7 +965,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     if (suppressClick) return;
     const t = (e.target as Element).closest<HTMLElement>(".agr-tile");
     if (!t) return;
-    if (t.matches("[data-agr-add]")) { closeModule(false); void addFolder(); return; }
+    if (t.matches("[data-agr-add]")) { addFolder(t); return; }
     openModule(t, true);
   });
   list.addEventListener("keydown", (e) => {
@@ -835,7 +973,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     if (!t || e.target !== t) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      if (t.matches("[data-agr-add]")) { void addFolder(); return; }
+      if (t.matches("[data-agr-add]")) { addFolder(t); return; }
       openModule(t, true);
       window.setTimeout(() => pop.querySelector<HTMLElement>(".agr-sub [data-go]")?.focus(), 0);
       return;

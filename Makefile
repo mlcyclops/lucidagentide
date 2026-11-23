@@ -1895,3 +1895,9 @@ demo-P-RAIL.AGENTS1: ## P-RAIL.AGENTS1: the rail's Agents view: a mini Lucid tog
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_rail_agents_1.mjs
 	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1.mjs; else echo "demo-P-RAIL.AGENTS1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-RAIL.AGENTS1c
+demo-P-RAIL.AGENTS1c: ## P-RAIL.AGENTS1c: + Add agent on the rail opens a two-step popover, not the OS folder dialog: step 1 explains what an Agent is and that it lives in one folder (recent folders in a click, or Choose a folder), step 2 names it and asks what it will do (the workspace setup purposes, persisted as AgentRecord.purpose, shown in its module, and answering the setup's purpose question for that folder). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_rail_agents_1c.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_rail_agents_1c.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1c.mjs; else echo "demo-P-RAIL.AGENTS1c: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi

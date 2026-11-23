@@ -148,6 +148,7 @@ import { folderName, handoffFailure, handoffToast, pendingCopy, planTakeover, sa
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
+import { AGENTS_KEY, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
 import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
@@ -13855,6 +13856,7 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept(purpose, false));
   };
 
+  const agentPurpose = (() => { try { return purposeOf(loadAgentsDoc(localStorage.getItem(AGENTS_KEY)), state.workspace?.current); } catch { return null; } })();
   if (!prof.isEmpty && prof.hasCode) {
     // Existing code repo: a single step - offer the scan + scaffold directly.
     const detected = prof.stack.length ? ` (detected: ${esc(prof.stack.join(", "))})` : "";
@@ -13870,6 +13872,9 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
       </div>`;
     $("#wsSetupNo", box)!.addEventListener("click", dismiss);
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept("app", true));
+  } else if (agentPurpose) {
+    // P-RAIL.AGENTS1c: the user already said what this folder is for when they added it as an Agent: skip the question.
+    frameworkStep(agentPurpose);
   } else {
     // Empty folder (or non-empty without code): ask what the folder is FOR first. Documents
     // leads the list when the folder already holds non-code content.

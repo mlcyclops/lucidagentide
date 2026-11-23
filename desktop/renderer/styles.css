@@ -3868,6 +3868,16 @@ body.lucid-capturing #toasts{visibility:hidden}
 .agr-ph-name-in{display:block;width:100%;font:inherit;font-size:13px;font-weight:700;color:var(--txt);background:var(--bg-2);
   border:1px solid color-mix(in srgb,var(--G) 50%,var(--line));border-radius:6px;padding:1px 6px;outline:none}
 .agr-ph-path{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-ph-kind{margin-top:2px;font-size:11px;color:color-mix(in srgb,var(--G) 70%,var(--txt));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the "+ Add agent" popout: what an Agent is, where it lives, then what it is for */
+.popover.agr-add-pop{width:300px}
+.agr-add-tx p{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.agr-add-tx p:last-child{margin-bottom:0}
+.agr-add-pick .agr-nm{font-weight:600;color:var(--txt)}
+.agr-kind[aria-pressed="true"]{background:color-mix(in srgb,var(--G) 14%,var(--bg-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--G) 45%,var(--line))}
+.agr-add-row{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;padding:0 4px 2px}
+.agr-add-row .btn-mini{flex:none;white-space:nowrap}
+.agr-add-row .btn-mini:disabled{opacity:.5;cursor:not-allowed}
 .agr-ph-state{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--txt-2);min-width:0}
 .agr-ph-state i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--txt-4)}
 .agr-ph-state.work i{background:var(--G);box-shadow:0 0 6px var(--G)}

@@ -9,7 +9,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   addAgent, baseName, defaultTheme, displayNames, emptyDoc, laneFolderIds, laneSourceFolders, laneTurnEnds, loadDoc,
-  mergeSources, moveAgent, normFolder, recolorAgent, removeAgent, renameAgent, restoreAgent, saveDoc, sourceFolders,
+  mergeSources, moveAgent, normFolder, purposeOf, recolorAgent, removeAgent, renameAgent, restoreAgent, saveDoc, sourceFolders,
   workingFolders, THEME_KEYS, NAME_MAX, type AgentsDoc, type LaneLike, type Sources,
 } from "./agents_store.ts";
 
