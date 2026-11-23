@@ -32,7 +32,8 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { miniChipHtml, miniChipTip, type LaneMini } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
+import { laneChipHostHtml, paintPreviewChip } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip
+import type { ChipState } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
 import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0539)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
 import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the header's Visualize swaps to the 3D view
@@ -906,7 +907,7 @@ function onViewClick(ev: Event): void {
   if (deny) { void answer(deny.dataset.orbitDeny!, false); return; }
   const respawn = t.closest("[data-orbit-respawn]") as HTMLElement | null;
   if (respawn) { void deps?.fleetRespawn(respawn.dataset.orbitRespawn!); window.setTimeout(() => void refresh(false), 400); return; }
-  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready mini chip opens the lane's preview, never a takeover. The orbit
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready preview chip opens the lane's preview, never a takeover. The orbit
   // covers the panel, so it closes once the swing has its origin.
   const preview = t.closest("[data-orbit-preview]") as HTMLElement | null;
   if (preview) {
@@ -1153,7 +1154,8 @@ function buildNode(lane: LaneView): HTMLElement {
   const card = el(`<div class="orbit-node" data-lane-id="${esc(lane.id)}" role="button" tabindex="0" style="--fd:${(Math.abs(hash(lane.id)) % 40) / 10}s;--fdur:${5 + (Math.abs(hash(lane.id)) % 3)}s">
     <div class="orbit-node-float">
       <div class="orbit-node-card">
-        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="pcur-mini" data-orbit-preview="${esc(lane.id)}" type="button" hidden></button><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
+        <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
+        ${laneChipHostHtml("spoke", `data-orbit-preview="${esc(lane.id)}"`)}
         <div class="orbit-glance"></div>
         <div class="repo-chip orbit-repo" hidden></div>
         <div class="orbit-meta"><span class="spoke-repo-tag orbit-repo-tag"></span><span class="orbit-model"></span></div>
@@ -1217,25 +1219,18 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   paintSpokeMini(card, lane.id); // P-PREVIEW-CURTAIN.1
 }
 
-// P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's mini "Preview" chip, the same one the fleet card carries.
-// app.ts owns the verdict; a blank or failed page leaves no entry, so the spoke shows nothing.
-const spokePreviews = new Map<string, LaneMini>();
-export function paintSpokePreview(laneId: string, v: LaneMini | null): void {
+// P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's preview chip, the same one the fleet card carries. app.ts owns the
+// verdict; a blank or failed page leaves no entry, so the spoke shows nothing. P-PREVIEW.CHIP1: the composer's own
+// chip (preview_chip.ts), floating over the card's upper-right corner instead of crowding its header row.
+const spokePreviews = new Map<string, ChipState>();
+export function paintSpokePreview(laneId: string, v: ChipState | null): void {
   if (v) spokePreviews.set(laneId, v); else spokePreviews.delete(laneId);
   const card = nodes.get(laneId)?.card;
   if (card) paintSpokeMini(card, laneId);
 }
 function paintSpokeMini(card: HTMLElement, laneId: string): void {
   const btn = card.querySelector("[data-orbit-preview]") as HTMLElement | null; if (!btn) return;
-  const v = spokePreviews.get(laneId);
-  btn.hidden = !v || !deps?.openLanePreview;
-  if (!v || (btn.dataset.phase === v.phase && btn.dataset.label === v.label)) return;
-  btn.dataset.phase = v.phase; btn.dataset.label = v.label;
-  btn.innerHTML = miniChipHtml(v.phase);
-  const t = miniChipTip(v);
-  btn.setAttribute("aria-label", t.aria);
-  btn.setAttribute("aria-disabled", String(v.phase !== "ready"));
-  setTip(btn, t.title, t.desc);
+  paintPreviewChip(btn, deps?.openLanePreview ? spokePreviews.get(laneId) ?? null : null);
 }
 
 function setText(root: HTMLElement, sel: string, text: string): void {

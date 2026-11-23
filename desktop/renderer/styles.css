@@ -1189,6 +1189,8 @@ button{font-family:inherit}
 .resizer-l:active{background:linear-gradient(270deg,transparent,
   color-mix(in srgb,var(--accent) 30%,transparent))}
 body.resizing{cursor:col-resize;user-select:none}
+/* A drag that crosses a frame (the Preview's page) would hand its mousemoves to that frame and stall the resize. */
+body.resizing iframe,body.resizing webview{pointer-events:none}
 body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sidebar.collapsed{width:0;opacity:0;border-right:0;box-shadow:none}
 .side-head{display:flex;align-items:center;justify-content:space-between;
@@ -3818,6 +3820,10 @@ body.set-open .popover{z-index:99}
 /* P-PREVIEW.OVERFLEET1 (ADR-0645): the side-panel tier, above the floating Fleet dock (55), so a lane's Preview
    opens on top of Fleet with its resize edge reachable instead of painting under the dock. */
 #preview{z-index:90;width:var(--preview-w,min(760px,50vw));max-width:50vw}
+/* P-PREVIEW.CHIP1: opened while Visualize is up (an Agent Worlds chip), the panel flies out OVER it: 94, one above
+   .viz-view (93), below the popover tier (95). Same column, so its resize edge and lucid.preview-w width hold, and
+   the world keeps running behind it. */
+#preview.over-viz{z-index:94}
 /* When the preview is open the chat column is narrower, so shrink its text a notch to keep it readable. */
 body.preview-open .thread{font-size:.9em}
 /* ============================================================================================
@@ -4154,6 +4160,18 @@ body.preview-open .thread{font-size:.9em}
 .preview-empty-msg b{color:var(--txt);font-weight:600}
 .preview-shot{flex-direction:column;align-items:flex-start;gap:6px}
 .preview-shot-img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:4px}
+/* P-LANESHOTS.1: an agent's preview snapshots (lane_shots.ts laneShotsStripHtml). Thumbs frame like
+   .preview-shot-img; the "From the agent" tag wears the untrusted look of .viz-art-tag.untrusted, because
+   every picture is of a page an agent wrote. Invariant 11: the head is a flex:none tag plus ONE nowrap
+   ellipsis label; the thumbs scroll sideways rather than wrap. */
+.lane-shots{display:flex;flex-direction:column;gap:6px;min-width:0}
+.lane-shots-head{display:flex;align-items:center;gap:8px;min-width:0}
+.lane-shots-tag{flex:none;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;white-space:nowrap;color:var(--txt);border:1px solid rgb(var(--red-rgb) / .6);background:rgb(var(--red-rgb) / .12)}
+.lane-shots-lbl{flex:1;min-width:0;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane-shots-row{display:flex;gap:6px;min-width:0;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.lane-shot{flex:none;display:block;width:96px;height:60px;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg-0);cursor:pointer;transition:border-color var(--t)}
+.lane-shot:hover,.lane-shot:focus-visible{border-color:var(--accent);outline:none}
+.lane-shot-img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
 /* P-KGMARKET.5 (ADR-0333): WRAPS. Same mistake ADR-0325 found in .fleet-card-head: a no-wrap flex row of
    controls inside an `overflow:hidden` panel (.kg is exactly that) does not reflow when the user drags the
    panel narrow. A flex item never shrinks below its min-content width, so .kg-tools kept its width and
@@ -5981,7 +5999,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-jump.show{opacity:1;transform:none;pointer-events:auto}
 .fleet-jump:hover{background:var(--accent);color:var(--on-fill);border-color:var(--accent)}
 .fleet-jump:active{transform:scale(.94)}
-.fleet-jump-page{bottom:38px}
+.fleet-jump-page{bottom:40px} /* 24px button + 6px gap above .fleet-jump-end (ADR-0633 spacing) */
 .fleet-jump-end{bottom:10px}
 /* A card the user has sized by its TOP edge sets an inline height; the transcript then owns the slack
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
@@ -8374,80 +8392,121 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .prev-ask-act{flex:none}
 
 /* ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain in front of auto previews ──────────────────────
+   P-PREVIEW.CHIP1: ONE preview chip (.pchip, preview_chip.ts) wherever a preview loads or waits, in two sizes:
+   "full" (the composer) and "compact" (a fleet lane, an orbit spoke, an Agent Worlds node). Same look, same
+   states, same effects; only the size steps down.
    Layers (docs/UX-REVIEW.md "Overlay stack"):
-   - .pcur-dock is Content tier: positioned inside main.center at z-index 26, one above the chat's .jump-down
-     helpers (25). It covers only the chat column's top-right corner; the Fleet dock (55), Orbit (92),
+   - .pchip-dock (the composer chip) is Content tier: inside main.center at z-index 26, one above the chat's
+     .jump-down helpers (25). It covers only the chat column's top-right corner; the Fleet dock (55), Orbit (92),
      popovers, palette, sheets, toasts, modals, Ask Lucid, menus and tooltips all cover it.
+   - .pchip-host[data-where=lane] floats in a fleet lane's transcript corner, z-index 4 inside .fleet-out-wrap: over
+     the transcript, under the lane's jump pair (5); it never reaches the lane's composer below the transcript.
+   - .pchip-host[data-where=spoke] floats just above an orbit spoke card's upper-right corner, inside the card.
+   - In Visualize the chips sit at z-index 3 in .viz-stage beside the artifact chips, their hover card at 6.
    - .pcur-probe-host is BEHIND the app (z-index -1), transparent and inert: the hidden probe frame must be
      laid out and rendered (so a canvas app draws) without ever being seen or reached.
-   - The swing animates #preview itself (a layout column), so it adds no layer.
-   Motion: data-motion on the dock (full / calm / still from the perf tier) and prefers-reduced-motion. */
+   - The swing animates #preview itself (a layout column), so it adds no layer. Opened from Visualize the panel
+     lifts to 94 (#preview.over-viz, beside the #preview rule).
+   Motion: html[data-pchip-motion] (full / calm / still from the perf tier, app.ts) and prefers-reduced-motion. */
 /* Not display:none, visibility:hidden or opacity:0: Chromium may throttle a cross-origin frame hidden that way
    (no requestAnimationFrame, so a canvas app never draws). Behind the app and nearly transparent instead. */
 .pcur-probe-host{position:fixed;left:0;top:0;width:min(760px,50vw);height:calc(100vh - 60px);z-index:-1;opacity:.001;pointer-events:none;overflow:hidden}
 .pcur-probe{position:absolute;inset:0;width:100%;height:100%;border:0}
-.pcur-dock{position:absolute;top:12px;right:14px;z-index:26;display:flex;align-items:center;gap:5px;max-width:min(340px,calc(100% - 28px));animation:pcurIn .32s var(--ease-out) both}
-.pcur-dock[hidden]{display:none}
-.pcur-chip{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 12px 6px 6px;border-radius:12px;border:1px solid var(--line);
-  background:color-mix(in srgb,var(--bg-1) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--txt);font:inherit;text-align:left;cursor:default;
-  box-shadow:0 8px 24px -12px rgb(var(--sh-rgb) / .55);transition:border-color .2s,box-shadow .2s,transform .2s}
-.pcur-chip[data-phase="ready"]{cursor:pointer;border-color:rgb(var(--accent-rgb) / .55);box-shadow:0 10px 28px -12px rgb(var(--accent-rgb) / .55)}
-.pcur-chip[data-phase="ready"]:hover{transform:translateY(-1px);border-color:var(--accent)}
-.pcur-chip:focus-visible,.pcur-x:focus-visible,.pcur-mini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* The miniature page: four skeleton lines, a scanning shimmer and three dots orbiting on an ellipse. */
-.pcur-art{position:relative;flex:none;width:46px;height:34px;border-radius:7px;overflow:hidden;background:var(--bg-0);border:1px solid var(--line-soft)}
-.pcur-page{position:absolute;inset:5px 6px;display:flex;flex-direction:column;gap:3px}
-.pcur-page i{display:block;height:3px;border-radius:2px;background:var(--line)}
-.pcur-page i:first-child{width:60%;height:4px;background:rgb(var(--accent-rgb) / .45)}
-.pcur-page i:nth-child(2){width:90%}
-.pcur-page i:nth-child(3){width:74%}
-.pcur-page i:nth-child(4){width:48%}
-.pcur-scan{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(var(--accent-rgb) / .38) 50%,transparent 70%);transform:translateX(-100%);animation:pcurScan 1.4s ease-in-out infinite}
-.pcur-orbit{position:absolute;inset:0;transform:scaleY(.55)}
-.pcur-orbit b{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pcurOrbit 1.8s linear infinite}
-.pcur-orbit b:nth-child(2){animation-delay:-.6s;opacity:.7}
-.pcur-orbit b:nth-child(3){animation-delay:-1.2s;opacity:.45}
-.pcur-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.pcur-thumb[hidden]{display:none}
-.pcur-chip[data-phase="ready"] .pcur-scan,.pcur-chip[data-phase="ready"] .pcur-orbit{display:none}
-.pcur-chip[data-phase="ready"] .pcur-art{border-color:rgb(var(--accent-rgb) / .5);animation:pcurReady .6s var(--ease-out)}
-/* Invariant 11: the two text lines are ONE block, each line nowrap with an ellipsis. */
-.pcur-txt{display:block;min-width:0;flex:1 1 auto}
-.pcur-k,.pcur-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcur-k{font-size:10.5px;font-weight:700;letter-spacing:.03em;color:var(--txt-2)}
-.pcur-chip[data-phase="ready"] .pcur-k{color:var(--accent-2)}
-.pcur-name{font-size:12.5px;font-weight:600;color:var(--txt);max-width:210px}
-.pcur-more{flex:none;padding:1px 7px;border-radius:999px;background:var(--accent-dim);color:var(--txt);font-size:11px;font-weight:700;white-space:nowrap}
-.pcur-more[hidden]{display:none}
-.pcur-x{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);cursor:pointer;opacity:.8}
-.pcur-x:hover{opacity:1;color:var(--txt);border-color:var(--line-strong)}
-.pcur-dock[data-motion="calm"] .pcur-orbit{display:none}
-.pcur-dock[data-motion="still"] .pcur-scan,.pcur-dock[data-motion="still"] .pcur-orbit{display:none}
-.pcur-dock[data-motion="still"],.pcur-dock[data-motion="still"] .pcur-art{animation:none}
-/* The swing: #preview unfolds out of the chip, hinged at the panel point nearest it (--pcur-ox/oy). */
-#preview.pcur-swing{transform-origin:var(--pcur-ox,0) var(--pcur-oy,0);animation:pcurSwing var(--pcur-ms,.38s) cubic-bezier(.2,.9,.25,1.04) both}
-#preview.pcur-swing.pcur-calm{animation-name:pcurSwingCalm}
-/* The mini chip on a fleet lane card and an orbit spoke. */
-.pcur-mini{flex:none;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);
-  background:var(--bg-0);color:var(--txt-2);font:inherit;font-size:10.5px;font-weight:700;white-space:nowrap;cursor:default}
-.pcur-mini[hidden]{display:none}
-.pcur-mini[data-phase="ready"]{cursor:pointer;color:var(--txt);border-color:rgb(var(--accent-rgb) / .6);background:var(--accent-dim);animation:pcurReady .6s var(--ease-out)}
-.pcur-mini[data-phase="ready"]:hover{border-color:var(--accent)}
-.pcur-mini .ic{width:11px;height:11px}
-.pcur-mini-l{white-space:nowrap}
-.pcur-mini-art{position:relative;flex:none;width:10px;height:12px;border-radius:2px;border:1px solid var(--line-strong);overflow:hidden}
-.pcur-mini-art i{position:absolute;inset:0;background:linear-gradient(180deg,transparent 25%,rgb(var(--accent-rgb) / .65) 50%,transparent 75%);transform:translateY(-100%);animation:pcurScanY 1.2s ease-in-out infinite}
-.orbit-view.static .pcur-mini-art i,.orbit-view.static .pcur-mini{animation:none}
-@keyframes pcurIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes pcurScan{to{transform:translateX(100%)}}
-@keyframes pcurScanY{to{transform:translateY(100%)}}
-@keyframes pcurOrbit{from{transform:rotate(0deg) translateX(16px)}to{transform:rotate(360deg) translateX(16px)}}
-@keyframes pcurReady{0%{box-shadow:0 0 0 0 rgb(var(--accent-rgb) / .55)}100%{box-shadow:0 0 0 8px rgb(var(--accent-rgb) / 0)}}
-@keyframes pcurSwing{from{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}55%{opacity:1}to{opacity:1;transform:none}}
-@keyframes pcurSwingCalm{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+.pchip-dock{position:absolute;top:12px;right:14px;z-index:26;display:flex;align-items:center;gap:6px;max-width:min(340px,calc(100% - 28px))}
+.pchip-dock[hidden]{display:none}
+/* `backwards`, not `both`: a held end state would pin `transform` and eat the ready chip's hover lift. */
+.pchip{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 12px 6px 6px;border-radius:12px;border:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg-1) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--txt);font:inherit;font-family:var(--font);text-align:left;cursor:default;
+  box-shadow:0 8px 24px -12px rgb(var(--sh-rgb) / .55);transition:border-color .2s,box-shadow .2s,transform .2s;animation:pchipIn .32s var(--ease-out) backwards}
+.pchip[hidden]{display:none}
+.pchip[data-phase="ready"]{cursor:pointer;border-color:rgb(var(--accent-rgb) / .55);box-shadow:0 10px 28px -12px rgb(var(--accent-rgb) / .55)}
+.pchip[data-phase="ready"]:hover{transform:translateY(-1px);border-color:var(--accent)}
+.pchip:focus-visible,.pchip-x:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* The miniature page: four skeleton lines, a scanning shimmer and three dots orbiting on an ellipse (radius --pchip-r). */
+.pchip-art{--pchip-r:16px;position:relative;flex:none;width:46px;height:34px;border-radius:7px;overflow:hidden;background:var(--bg-0);border:1px solid var(--line-soft)}
+.pchip-page{position:absolute;inset:5px 6px;display:flex;flex-direction:column;gap:3px}
+.pchip-page i{display:block;height:3px;border-radius:2px;background:var(--line)}
+.pchip-page i:first-child{width:60%;height:4px;background:rgb(var(--accent-rgb) / .45)}
+.pchip-page i:nth-child(2){width:90%}
+.pchip-page i:nth-child(3){width:74%}
+.pchip-page i:nth-child(4){width:48%}
+.pchip-scan{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(var(--accent-rgb) / .38) 50%,transparent 70%);transform:translateX(-100%);animation:pchipScan 1.4s ease-in-out infinite}
+.pchip-orbit{position:absolute;inset:0;transform:scaleY(.55)}
+.pchip-orbit b{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pchipOrbit 1.8s linear infinite}
+.pchip-orbit b:nth-child(2){animation-delay:-.6s;opacity:.7}
+.pchip-orbit b:nth-child(3){animation-delay:-1.2s;opacity:.45}
+.pchip-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pchip-thumb[hidden]{display:none}
+.pchip[data-phase="ready"] .pchip-scan,.pchip[data-phase="ready"] .pchip-orbit{display:none}
+.pchip[data-phase="ready"] .pchip-art{border-color:rgb(var(--accent-rgb) / .5);animation:pchipReady .6s var(--ease-out)}
+/* Invariant 11: the two text lines are ONE block, each line nowrap with an ellipsis. The line heights are set,
+   not inherited, so the chip reads the same in the chat, a lane card and the Visualize stage. */
+.pchip-txt{display:block;min-width:0;flex:1 1 auto}
+.pchip-k,.pchip-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pchip-k{font-size:10.5px;line-height:1.5;font-weight:700;letter-spacing:.03em;color:var(--txt-2)}
+.pchip[data-phase="ready"] .pchip-k{color:var(--accent-2)}
+.pchip-name{font-size:12.5px;line-height:1.5;font-weight:600;color:var(--txt);max-width:210px}
+.pchip-more{flex:none;padding:1px 7px;border-radius:999px;background:var(--accent-dim);color:var(--txt);font-size:11px;font-weight:700;white-space:nowrap}
+.pchip-more[hidden]{display:none}
+.pchip-x{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);cursor:pointer;opacity:.8}
+.pchip-x:hover{opacity:1;color:var(--txt);border-color:var(--line-strong)}
+/* compact: the same parts, a size down (a lane, a spoke, an Agent Worlds node). */
+.pchip[data-size="compact"]{gap:8px;padding:3px 10px 3px 3px}
+.pchip[data-size="compact"] .pchip-art{--pchip-r:12px;width:34px;height:25px;border-radius:6px}
+.pchip[data-size="compact"] .pchip-page{inset:4px 5px;gap:2px}
+.pchip[data-size="compact"] .pchip-page i{height:2px}
+.pchip[data-size="compact"] .pchip-page i:first-child{height:3px}
+.pchip[data-size="compact"] .pchip-k{font-size:9.5px;line-height:1.25}
+.pchip[data-size="compact"] .pchip-name{font-size:11.5px;line-height:1.3;max-width:120px}
+/* A lane's or a spoke's chip floats: the host spans its corner and lets every press through but the chip's. */
+.pchip-host{position:absolute;z-index:4;display:flex;justify-content:flex-end;pointer-events:none;container-type:inline-size}
+.pchip-host>.pchip{pointer-events:auto;max-width:100%}
+/* In the lane's transcript: its upper-right corner, inset like the jump pair so the widened scrollbar stays free. */
+.pchip-host[data-where="lane"]{top:4px;left:8px;right:20px}
+/* On an orbit spoke: just above the card's upper-right corner, so it covers nothing on the card. */
+.pchip-host[data-where="spoke"]{left:0;right:0;bottom:calc(100% + 6px)}
+/* A narrow corner shows the miniature page alone; its tooltip and accessible name still say everything. */
+@container (max-width:299px){
+  .pchip-host>.pchip .pchip-txt,.pchip-host>.pchip .pchip-more{display:none}
+  .pchip-host>.pchip{padding-right:3px}
+}
+/* Agent Worlds: beside its node (preview_chip.ts moves it with `translate` every frame, so `transform` stays free
+   for the hover lift and the entrance), and its hover card. */
+.viz-stage .pchip{position:absolute;left:0;top:0;z-index:3}
+.pchip-pop{position:absolute;left:0;top:0;z-index:6;display:flex;flex-direction:column;gap:8px;width:min(300px,calc(100% - 16px));padding:10px 12px;
+  border-radius:12px;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-1) 96%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  color:var(--txt);box-shadow:0 14px 34px -14px rgb(var(--sh-rgb) / .6);animation:pchipIn .2s var(--ease-out) backwards}
+.pchip-pop[hidden]{display:none}
+.pchip-pop-id{display:block;min-width:0}
+.pchip-pop-title,.pchip-pop-path{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pchip-pop-title{font-size:12.5px;line-height:1.4;font-weight:600}
+.pchip-pop-path{font-family:var(--mono);font-size:10.5px;line-height:1.4;color:var(--txt-3)}
+.pchip-pop-note{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
+.pchip-pop-acts{display:flex;justify-content:flex-end}
+.pchip-pop-acts .btn-mini{flex:none;white-space:nowrap}
+/* Motion, one switch for every chip: calm keeps the shimmer and drops the orbiting dots; still animates nothing. */
+html[data-pchip-motion="calm"] .pchip-orbit{display:none}
+html[data-pchip-motion="still"] .pchip-scan,html[data-pchip-motion="still"] .pchip-orbit{display:none}
+html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .pchip-art,html[data-pchip-motion="still"] .pchip-pop{animation:none}
+.orbit-view.static .pchip-scan,.orbit-view.static .pchip-orbit{display:none}
+.orbit-view.static .pchip,.orbit-view.static .pchip .pchip-art{animation:none}
+/* The swing: #preview unfolds out of the chip, hinged at the panel point nearest it (--pchip-ox/oy). */
+#preview.pchip-swing{transform-origin:var(--pchip-ox,0) var(--pchip-oy,0);animation:pchipSwing var(--pchip-ms,.38s) cubic-bezier(.2,.9,.25,1.04) both}
+#preview.pchip-swing.pchip-calm{animation-name:pchipSwingCalm}
+/* P-PREVIEW.CHIP1: leaving from over Visualize, the panel folds back into the chip it came from, deaf to the pointer. */
+#preview.pchip-leave{transform-origin:var(--pchip-ox,0) var(--pchip-oy,0);animation:pchipLeave var(--pchip-ms,.38s) cubic-bezier(.5,0,.75,0) both;pointer-events:none}
+#preview.pchip-leave.pchip-calm{animation-name:pchipLeaveCalm}
+@keyframes pchipIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes pchipScan{to{transform:translateX(100%)}}
+@keyframes pchipOrbit{from{transform:rotate(0deg) translateX(var(--pchip-r,16px))}to{transform:rotate(360deg) translateX(var(--pchip-r,16px))}}
+@keyframes pchipReady{0%{box-shadow:0 0 0 0 rgb(var(--accent-rgb) / .55)}100%{box-shadow:0 0 0 8px rgb(var(--accent-rgb) / 0)}}
+@keyframes pchipSwing{from{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}55%{opacity:1}to{opacity:1;transform:none}}
+@keyframes pchipSwingCalm{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+@keyframes pchipLeave{from{opacity:1;transform:none}to{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}}
+@keyframes pchipLeaveCalm{from{opacity:1;transform:none}to{opacity:0;transform:scale(.92)}}
 @media (prefers-reduced-motion: reduce){
-  .pcur-dock,.pcur-art,.pcur-scan,.pcur-orbit b,.pcur-mini,.pcur-mini-art i,#preview.pcur-swing{animation:none !important}
-  .pcur-scan,.pcur-orbit{display:none}
+  .pchip,.pchip-art,.pchip-scan,.pchip-orbit b,.pchip-pop,#preview.pchip-swing,#preview.pchip-leave{animation:none !important}
+  .pchip-scan,.pchip-orbit{display:none}
 }
 
 /* ============================== P-VIZ.1 (ADR-0622): Visualize (#vizView, viz_view.ts) ==============================

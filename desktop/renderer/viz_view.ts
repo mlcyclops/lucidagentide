@@ -78,6 +78,12 @@
 // every node with an open ask, its pop-out (Approve, Auto, Deny through the grid card's and the chat card's own paths),
 // the triage strip at the top of the stage, and View > Fly to approvals (persisted, on by default) that flies the
 // camera to a new ask without moving focus. The node panel and the pop-out never show at once.
+//
+// P-PREVIEW.CHIP1: every agent whose preview loads or is ready (and the hub, for the composer's) gets the one preview
+// chip (preview_chip.ts) beside its node, stacked over its artifact chip, with a hover card (title, path, Open
+// preview, the agent's snapshots). A click flies the Preview panel out OVER this view (#preview.over-viz, z 94),
+// resizable as in the composer, while the world keeps running. Its X, Esc or a press back on the world slides it away
+// and focus returns to the chip; while it is up this dialog is not modal and Esc closes the panel before anything here.
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -90,6 +96,8 @@ import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTie
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
 import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifactPopup, type ArtifactChips } from "./viz_artifact_popup.ts"; // P-WORLDS.BUILD1 (ADR-0653)
+import { mountWorldPreviewChips, type WorldChips } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the agents' preview chips
+import type { ChipState } from "./preview_curtain.ts";
 import { createScaffold } from "./viz_build.ts";
 import { adoptArtifact, armSample, armTemplate, artifactOf, buildEvent, buildSiteFor, createBuildBook, demoSampleAt, discardArtifact, dropBuild, keepArtifact, miniGamesFor, sampleArtifact, type BuildStep } from "./viz_build_model.ts";
 import type { WorldDefinition, WorldScaffold } from "./viz_world_api.ts";
@@ -147,6 +155,10 @@ export interface VizDeps {
   fleetAuto: LucidBridge["fleetAuto"];
   autoRiskModal: (onAccept: (allLanes: boolean) => void) => void;
   respondMain: (id: string, optionId: string | null) => void;
+  /** P-PREVIEW.CHIP1: the Preview panel, from a node's preview chip. `open` swings it out OVER this view on that
+   *  agent's tab ("main": the composer's Agent tab), `close` slides it back, `isOver` says it is up over this view,
+   *  and `viewClosed` tells the app this view closed under it (the panel drops back to its side-panel tier). */
+  preview: { open: (target: string, chip: HTMLElement) => void; close: () => void; isOver: () => boolean; viewClosed: () => void };
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
@@ -656,6 +668,23 @@ export function initViz(d: VizDeps): void {
 let opened = false;
 export const isOpen = (): boolean => opened;
 
+/** P-PREVIEW.CHIP1: each agent's preview chip ("main" is the hub, for the composer's preview), painted by app.ts
+ *  exactly as it paints the fleet card's. Kept across a close, so a reopen shows the chips at once. */
+const previewStates = new Map<string, ChipState>();
+let previewChips: WorldChips | null = null;
+
+/** P-PREVIEW.CHIP1: show, update or (null) clear a target's chip ("main" or a lane id). */
+export function paintVizPreview(target: string, v: ChipState | null): void {
+  if (v) previewStates.set(target, v); else previewStates.delete(target);
+  previewChips?.set(target, v);
+}
+
+/** P-PREVIEW.CHIP1: the Preview panel is up over this view, or gone again. While it is, this dialog is not modal:
+ *  the panel beside it takes focus and Esc, and a press back on the world slides it away (buildView). */
+export function setVizPreviewCover(on: boolean): void {
+  view?.setAttribute("aria-modal", String(!on));
+}
+
 export function toggleViz(): void { if (isOpen()) closeViz(); else openViz(); }
 
 /** P-WORLDS.1 (ADR-0648): open Visualize on an installed world (the store's "Open in Visualize"). Loads the
@@ -737,6 +766,8 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
       };
     }),
     artifact: () => artifactPopupState(),
+    // P-PREVIEW.CHIP1: each agent's preview chip (phase, box on screen, its hover card) for demo_p_preview_chip_1.mjs.
+    previewChips: () => previewChips?.probe() ?? [],
     // P-VIZ.APPROVE1 (ADR-0655): the open asks with their badges, the strip and the pop-out, the Fly to approvals
     // setting, the flights it started and the node a flight is framing now. Read-only.
     approvals: () => (asks ? { ...asks.probe(), flyToApprovals: flyAsks, flights, flying: scene?.flying() ?? null } : null),
@@ -753,6 +784,14 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   builds = createBuildBook(); // P-WORLDS.BUILD1 (ADR-0653): builds live as long as the model
   chips = mountArtifactChips($("[data-viz-stage]", view) as HTMLElement, (id) => scene?.screenBoxOf(id) ?? null, openChip);
   const d = deps;
+  // P-PREVIEW.CHIP1: each agent's preview chip, stacked over its artifact chip; a click flies the Preview out over us.
+  previewChips = mountWorldPreviewChips($("[data-viz-stage]", view) as HTMLElement, {
+    boxOf: (id) => scene?.screenBoxOf(id) ?? null,
+    below: (id) => { const h = chips?.heightOf(id) ?? 0; return h ? h + 6 : 0; },
+    nameOf: (id) => model?.nodes.get(id)?.name ?? (id === HUB_ID ? "Main" : "this agent"),
+    open: (id, chip) => d.preview.open(id, chip),
+  });
+  for (const [id, v] of previewStates) previewChips.set(id, v);
   flights = 0;
   asks = mountApprovals({ // P-VIZ.APPROVE1 (ADR-0655)
     stage: $("[data-viz-stage]", view) as HTMLElement, model: () => model, demo: () => demo, boxOf: (id) => scene?.screenBoxOf(id) ?? null,
@@ -784,6 +823,7 @@ export function closeViz(): void {
   offBus?.(); offBus = null;
   ledgerView?.destroy(); ledgerView = null;
   closeArtifactPopup(); chips?.destroy(); chips = null; // P-WORLDS.BUILD1 (ADR-0653); the scene disposes the scaffolds
+  previewChips?.destroy(); previewChips = null; // P-PREVIEW.CHIP1 (their states stay in previewStates)
   asks?.destroy(); asks = null; // P-VIZ.APPROVE1 (ADR-0655)
   headRo?.disconnect(); headRo = null;
   stopTimers();
@@ -799,6 +839,8 @@ export function closeViz(): void {
   document.removeEventListener("visibilitychange", onVisibility);
   motionMq?.removeEventListener("change", remount);
   opened = false;
+  // P-PREVIEW.CHIP1: a Preview panel opened over this view stays open, back on its side-panel tier.
+  if (deps?.preview.isOver()) deps.preview.viewClosed();
   view.classList.remove("open");
   const v = view;
   window.setTimeout(() => { if (!opened) v.hidden = true; }, 200);
@@ -867,6 +909,16 @@ function buildView(): HTMLElement {
     </div>
   </div>`);
   v.addEventListener("click", onViewClick);
+  // P-PREVIEW.CHIP1: with the Preview panel up over this view, a press back on the world slides it away. On the scene
+  // the press is spent on that (no pick, no drag); a control still gets its click. A preview chip and its card keep
+  // theirs: another agent's chip switches the panel to that agent's tab instead.
+  v.addEventListener("pointerdown", (ev) => {
+    if (!deps?.preview.isOver()) return;
+    const t = ev.target as HTMLElement;
+    if (t.closest("[data-viz-preview-chip], .pchip-pop")) return;
+    deps.preview.close();
+    if (!t.closest("button, input, select, textarea, label, a, video")) { ev.preventDefault(); ev.stopPropagation(); }
+  }, true);
   v.addEventListener("change", (ev) => {
     const t = ev.target as HTMLInputElement;
     if (t.matches("[data-viz-auto]")) setAutoCamera(t.checked, false);
@@ -1830,6 +1882,10 @@ function onKey(e: KeyboardEvent): void {
   const active = document.activeElement;
   if (active && active !== document.body && !view.contains(active)) return; // a layer above us owns this Esc
   e.preventDefault(); e.stopPropagation();
+  // P-PREVIEW.CHIP1: the Preview panel over this view goes first (with focus inside it, its own Esc closes it, since
+  // the panel is the layer above us), then a preview chip's hover card; the next Esc is ours again.
+  if (deps?.preview.isOver()) { deps.preview.close(); return; }
+  if (previewChips?.escape()) return;
   if (ledgerView?.ownsFocus()) { ledgerView.collapse(); return; } // P-VIZ.6: Esc inside the ledger folds it back
   if (asks?.escape()) return; // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out, then a strip holding focus
   if (lookPop) { closeLook(); return; } // P-WORLDS.CAST2 (ADR-0650)

@@ -70,7 +70,9 @@ import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
 // P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
-import { CURTAIN, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type CurtainDecision, type CurtainEntry, type CurtainProbe, type LaneMini, type PaintStats } from "./preview_curtain.ts";
+import { CURTAIN, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
+import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
+import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -85,7 +87,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, openVizWorld, setPendingWorldRestores, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1
+import { initViz, isOpen as vizIsOpen, openVizWorld, paintVizPreview, setPendingWorldRestores, setVizPreviewCover, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1; P-PREVIEW.CHIP1
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -10174,8 +10176,32 @@ let previewOpen = false;
 let agentPreviewRevision = 0;
 let pendingAgentPreviewPath = "";
 const dismissedAgentPreviews = new Set<string>();
+// P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies OVER it (#preview.over-viz, z 94, one above
+// .viz-view) with its resize edge and saved width; Visualize keeps running behind it and stops being modal. The
+// Agent Worlds chip that opened it gets focus back when it slides away.
+let previewOverViz = false;
+let previewReturn: HTMLElement | null = null;
+/** The slide-back in flight (closePreview over Visualize); a reopen cuts it short. */
+let previewLeaveTimer = 0;
+/** Raise the open panel over Visualize, or let it down. The class stays through a slide-back (endPreviewLeave). */
+function syncPreviewCover(): void {
+  const over = previewOpen && vizIsOpen();
+  if (over !== previewOverViz) { previewOverViz = over; setVizPreviewCover(over); }
+  if (!previewLeaveTimer) $("#preview")?.classList.toggle("over-viz", over);
+}
+/** End a slide-back now: the panel hides unless it is open again, and its leave and layer classes go. */
+function endPreviewLeave(): void {
+  if (!previewLeaveTimer) return;
+  window.clearTimeout(previewLeaveTimer);
+  previewLeaveTimer = 0;
+  const panel = $("#preview");
+  if (!panel) return;
+  panel.classList.remove("pchip-leave", "pchip-calm", "over-viz");
+  if (!previewOpen) panel.hidden = true;
+}
 function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
+  endPreviewLeave(); // P-PREVIEW.CHIP1: a slide-back still running is cut short; the panel is wanted again
   closeSettings();
   closeIde();
   closeKnowledge();
@@ -10199,6 +10225,7 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   // P-PREVIEW-CURTAIN.1: the panel is open, so every ready invitation is now a tab in front of the user.
   curtainEntries = curtainEntries.filter((e) => e.phase !== "ready");
   paintCurtainChip();
+  syncPreviewCover(); // P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies out over it
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
@@ -10328,8 +10355,24 @@ function closePreview(): void {
   // P-PREVIEW.6b. P-PREVIEW-CURTAIN.1: the agent's page now lives behind the curtain with the panel closed,
   // so its preview_inspect keeps working while the Agent tab holds one.
   if (!prevPathByLane.agent) stopPreviewInspectRelay();
-  $("#preview")!.hidden = true;
-  $("#preview")!.classList.remove("pcur-swing", "pcur-calm");
+  const panel = $("#preview")!;
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  // P-PREVIEW.CHIP1: over Visualize the panel slides back into the chip that opened it (still over the world until
+  // it is gone, and deaf to the pointer meanwhile), then focus goes back to that chip.
+  const back = previewOverViz ? previewReturn : null;
+  previewReturn = null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (previewOverViz && motion !== "still") {
+    const o = swingOrigin(back?.isConnected ? back.getBoundingClientRect() : null, panel.getBoundingClientRect());
+    panel.style.setProperty("--pchip-ox", `${o.x}px`);
+    panel.style.setProperty("--pchip-oy", `${o.y}px`);
+    panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
+    panel.classList.add("pchip-leave");
+    if (motion === "calm") panel.classList.add("pchip-calm");
+    previewLeaveTimer = window.setTimeout(endPreviewLeave, CURTAIN.swingMs);
+  } else panel.hidden = true;
+  syncPreviewCover();
+  if (back) window.setTimeout(() => { if (!previewOpen && back.isConnected && !back.hidden) back.focus({ preventScroll: true }); }, 0);
   paintCurtainChip(); // a page still loading behind the curtain shows its chip again
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
@@ -10391,6 +10434,7 @@ function onPreviewAvailable(path: string, opts: { open?: boolean } = {}): void {
     state.lastPreviewablePath = path;
     schedulePhoneAutoSend(path);
     kickPreviewShotSoon();
+    recordCurtainLaneShot("agent", path, r); // P-LANESHOTS.1: the main composer's picture while its tab is hidden
     startPreviewInspectRelay(); // the agent can still preview_inspect its page before the user opens it
     curtainReady("agent", path, r, opts.open === true);
   });
@@ -10503,24 +10547,29 @@ function curtainProbeFrame(path: string, p: CurtainProbe, timers: number[], isLi
   return f;
 }
 
-/** A gate started: the chip (and the lane's mini chip) shows the loading curtain. */
+/** A gate started: the composer chip (and the target's own chip: a lane's card, spoke and Worlds node, or Main's
+ *  Worlds hub) shows the loading curtain. */
 function curtainBegin(key: string, path: string): void {
   curtainEntries = upsertCurtain(curtainEntries, { key, path, label: curtainLabel(path), seq: ++curtainSeq });
-  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "loading", label: curtainLabel(path) });
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "loading", label: curtainLabel(path), path });
   paintCurtainChip();
 }
 /** A blank or failed page (or a superseded one): retire quietly. One dev-log line, no toast, no panel. */
 function curtainRetire(key: string, path: string, r: CurtainResult | null): void {
   const had = curtainEntries.some((e) => e.key === key && e.path === path);
   curtainEntries = settleCurtain(curtainEntries, key, path, "error");
-  if (had && key.startsWith("lane:")) setLaneMini(key.slice(5), null);
+  const target = chipTarget(key);
+  if (had && target) setTargetChip(target, null);
   if (r) console.info(`[preview-curtain] ${key} ${curtainLabel(path)}: ${r.verdict} (${r.reason}); not shown`);
   paintCurtainChip();
 }
 /** A page that renders: with the panel closed the chip turns into the invitation; with it open the tab is
- *  already there (badged), so the chip has nothing to add. `open` swings straight out. */
+ *  already there (badged), so the chip has nothing to add. `open` swings straight out. The target's own chip
+ *  stays ready either way: it is how that agent's page is reached again. */
 function curtainReady(key: string, path: string, r: CurtainResult, open: boolean): void {
-  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "ready", label: r.title || curtainLabel(path) });
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "ready", label: curtainLabel(path), path, ...(r.title ? { title: r.title } : {}), ...(r.thumb ? { thumb: r.thumb } : {}) });
   if (open || previewOpen) {
     const chip = $("#prevCurtainChip") as HTMLElement | null;
     const from = chip && !chip.closest("[hidden]") ? chip : null;
@@ -10532,26 +10581,29 @@ function curtainReady(key: string, path: string, r: CurtainResult, open: boolean
   curtainEntries = settleCurtain(curtainEntries, key, path, "ready", { title: r.title, thumb: r.thumb });
   paintCurtainChip();
 }
-function setLaneMini(laneId: string, v: LaneMini | null): void {
-  paintLanePreview(laneId, v);
-  paintSpokePreview(laneId, v);
+/** P-PREVIEW.CHIP1: one target's own chip: a lane's (its fleet card, orbit spoke and Agent Worlds node) or Main's
+ *  ("main", the Agent Worlds hub; the composer has its own chip, paintCurtainChip). */
+function setTargetChip(target: string, v: ChipState | null): void {
+  if (target !== "main") {
+    paintLanePreview(target, v);
+    paintSpokePreview(target, v);
+  }
+  paintVizPreview(target, v);
 }
 
-/** The chip: one card at the chat column's top-right edge, nearest the panel it opens. Mounted on first use. */
+/** The composer chip: the one preview chip (preview_chip.ts, size "full") at the chat column's top-right edge,
+ *  nearest the panel it opens, with its "Not now" X. Mounted on first use. It also sets the motion every chip
+ *  follows (html[data-pchip-motion]): the perf tier and reduced motion, live. */
 function paintCurtainChip(): void {
   let dock = $("#prevCurtain") as HTMLElement | null;
-  const { head, more } = chipView(curtainEntries);
+  const head = headChip(curtainEntries);
   if (!dock) {
     if (!head) return;
     const center = document.querySelector("main.center");
     if (!center) return;
-    dock = el(`<div class="pcur-dock" id="prevCurtain" hidden aria-live="polite">
-      <button type="button" class="pcur-chip" id="prevCurtainChip">
-        <span class="pcur-art" aria-hidden="true"><span class="pcur-page"><i></i><i></i><i></i><i></i></span><span class="pcur-scan"></span><span class="pcur-orbit"><b></b><b></b><b></b></span><img class="pcur-thumb" alt="" hidden></span>
-        <span class="pcur-txt"><span class="pcur-k"></span><span class="pcur-name"></span></span>
-        <span class="pcur-more" hidden></span>
-      </button>
-      <button type="button" class="pcur-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
+    dock = el(`<div class="pchip-dock" id="prevCurtain" hidden aria-live="polite">
+      ${previewChipHtml("full", `id="prevCurtainChip"`)}
+      <button type="button" class="pchip-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
     </div>`) as HTMLElement;
     center.appendChild(dock);
     $("#prevCurtainChip", dock)?.addEventListener("click", (ev) => {
@@ -10561,40 +10613,27 @@ function paintCurtainChip(): void {
     });
     $("#prevCurtainX", dock)?.addEventListener("click", () => {
       for (const e of curtainEntries) if (e.key === "agent") dismissedAgentPreviews.add(e.path); // no chip for this file again until you open it
+      if (curtainEntries.some((e) => e.key === "agent")) setTargetChip("main", null); // Main's Worlds chip goes with it
       curtainEntries = [];
       paintCurtainChip();
     });
   }
-  dock.dataset.motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  // Every chip (composer, lanes, spokes, Agent Worlds) moves the same way: set with the first chip ever shown
+  // (curtainBegin lands here) and on every perf tier change; prefers-reduced-motion is also honored in CSS.
+  document.documentElement.dataset.pchipMotion = curtainMotion(perfWatch.tier(), reducedMotionNow());
   // The panel being open is the invitation accepted: nothing to show over it.
   dock.hidden = !head || previewOpen;
-  if (!head) return;
-  const chip = $("#prevCurtainChip", dock) as HTMLButtonElement;
-  const ready = head.phase === "ready";
-  chip.dataset.phase = head.phase;
-  chip.setAttribute("aria-disabled", String(!ready));
-  const name = head.title || head.label;
-  ($(".pcur-k", chip) as HTMLElement).textContent = ready ? "Preview ready" : "Preparing preview";
-  ($(".pcur-name", chip) as HTMLElement).textContent = name;
-  const thumb = $(".pcur-thumb", chip) as HTMLImageElement;
-  if (ready && head.thumb) { if (thumb.getAttribute("src") !== head.thumb) thumb.src = head.thumb; thumb.hidden = false; }
-  else { thumb.hidden = true; thumb.removeAttribute("src"); }
-  const badge = $(".pcur-more", chip) as HTMLElement;
-  badge.hidden = more === 0;
-  badge.textContent = `+${more}`;
-  chip.setAttribute("aria-label", ready ? `Open the preview of ${name}${more ? `, ${more} more waiting` : ""}` : `Preparing a preview of ${name}`);
-  setTip(chip, ready ? "Open the preview" : "Preparing a preview",
-    ready ? `${name} rendered. Click to swing the Preview panel out on its own tab.${more ? ` ${more} more waiting.` : ""}`
-      : `${name} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.`);
+  paintPreviewChip($("#prevCurtainChip", dock) as HTMLElement, head);
 }
 
 /** Open the Preview panel on tab `key` with the swing: a 3D unfold hinged at the point of the panel nearest
  *  the chip the user clicked (reduced motion or the minimal tier: instant). */
 function swingOutPreview(key: string, from: HTMLElement | null): void {
   const fromRect = from?.getBoundingClientRect() ?? null;
-  const wasOpen = previewOpen;
-  if (!wasOpen) openPreview({ reveal: key });
-  else switchPrevLane(key);
+  // P-PREVIEW.CHIP1: a panel left open under Visualize is not in front of the user: it swings out over it too.
+  const wasShown = previewOpen && (previewOverViz || !vizIsOpen());
+  if (!previewOpen) openPreview({ reveal: key });
+  else { switchPrevLane(key); syncPreviewCover(); }
   curtainEntries = dropCurtain(curtainEntries, key);
   paintCurtainChip();
   // The phone mirror photographs on-screen pixels, so the agent's page reaches connected phones once it is
@@ -10603,28 +10642,43 @@ function swingOutPreview(key: string, from: HTMLElement | null): void {
   for (const b of document.querySelectorAll<HTMLElement>(".prev-tab")) if (b.dataset.lane === key) { b.focus({ preventScroll: true }); break; }
   const panel = $("#preview") as HTMLElement | null;
   const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
-  if (wasOpen || !panel || motion === "still") return;
+  if (wasShown || !panel || motion === "still") return;
   const o = swingOrigin(fromRect, panel.getBoundingClientRect());
-  panel.style.setProperty("--pcur-ox", `${o.x}px`);
-  panel.style.setProperty("--pcur-oy", `${o.y}px`);
-  panel.style.setProperty("--pcur-ms", `${CURTAIN.swingMs}ms`);
+  panel.style.setProperty("--pchip-ox", `${o.x}px`);
+  panel.style.setProperty("--pchip-oy", `${o.y}px`);
+  panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
   // The class stays until closePreview: removing it would hand animation-name back to .kg's slideInR, which
-  // restarts that animation (a second entrance right after the swing).
-  panel.classList.add("pcur-swing");
-  if (motion === "calm") panel.classList.add("pcur-calm");
+  // restarts that animation (a second entrance right after the swing). A panel raised from under Visualize may
+  // still carry it from its first swing, so the animation is restarted on purpose.
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  void panel.offsetWidth;
+  panel.classList.add("pchip-swing");
+  if (motion === "calm") panel.classList.add("pchip-calm");
 }
-/** The fleet card's / orbit spoke's mini chip (FleetGridDeps / FleetOrbitDeps.openLanePreview). */
+/** The fleet card's / orbit spoke's chip (FleetGridDeps / FleetOrbitDeps.openLanePreview), and an Agent Worlds
+ *  lane node's (openTargetPreviewFrom). */
 function openLanePreviewFrom(laneId: string, from: HTMLElement | null): void {
   const id = laneTabId(laneId);
-  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setLaneMini(laneId, null); return; } // the tab was closed or evicted
+  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setTargetChip(laneId, null); return; } // the tab was closed or evicted
   swingOutPreview(id, from);
+}
+/** P-PREVIEW.CHIP1: an Agent Worlds chip (VizDeps.preview.open): a lane's tab, or for "main" the composer's Agent
+ *  tab. Visualize is up, so the panel flies out over it; the chip gets focus back when it slides away. */
+function openTargetPreviewFrom(target: string, from: HTMLElement): void {
+  if (target !== "main") openLanePreviewFrom(target, from);
+  else if (prevPathByLane.agent) swingOutPreview("agent", from);
+  else { setTargetChip("main", null); return; } // the agent's page went with its conversation
+  if (previewOverViz) previewReturn = from;
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
 // waiting up to a full 1.5s freshness tick. cacheRenderedPreviewShot no-ops when the agent lane isn't the
 // visible one, so this is a cheap no-op when the user is on their own tab.
+// P-LANESHOTS.1: the 700ms pass also takes the agent's strip snapshot (the panel's 380ms swing-out is over by
+// then); fleet lane tabs kick it too when shown.
 function kickPreviewShotSoon(): void {
-  for (const ms of [250, 700]) setTimeout(() => void cacheRenderedPreviewShot(), ms);
+  setTimeout(() => void cacheRenderedPreviewShot(), 250);
+  setTimeout(() => void cacheRenderedPreviewShot("now"), 700);
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
@@ -10741,6 +10795,10 @@ type PrevLane = string;
 let prevLane: PrevLane = "yours";
 /** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
 const laneTabFrames = new Map<string, HTMLIFrameElement>();
+/** P-LANESHOTS.1: preview frames between `src` and `load`; no strip snapshot is taken of them. */
+const laneShotLoading = new WeakSet<HTMLIFrameElement>();
+/** P-LANESHOTS.1: how long after `load` the strip snapshot is taken (the page paints asynchronously). */
+const LANE_SHOT_PAINT_MS = 900;
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
   l.startsWith("lane:") || l.startsWith("plugin:") || l === ASK_LUCID_TAB_ID ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null; // P-ASKLUCID.9: the Ask Lucid tab has its own frame too
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
@@ -10935,7 +10993,7 @@ function switchPrevLane(l: PrevLane): void {
   for (const [id, f] of laneTabFrames) f.hidden = l !== id || !prevPathByLane[id]; // P-PREVIEW.10: lane tab frames follow the same rule
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
   if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
-  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
+  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing a lane tab clears the rail badge + takes its strip snapshot (P-LANESHOTS.1)
   syncPrevPathField(prevPathByLane[l] ?? "");
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
@@ -11070,7 +11128,15 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
     if (active) { empty.hidden = true; clearPreviewCanvas(); } // P-PREVIEW.5: a fresh file starts with a clean markup layer
     // P-PREVIEW.3a-shot: once it paints, cache a PNG so the agent's preview_screenshot sees what it built
     // (cacheRenderedPreviewShot targets the AGENT lane and no-ops when that lane isn't the visible one).
-    frame.onload = () => { if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); } window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+    // P-LANESHOTS.1: the strip snapshot waits until the page has had time to paint, and none is taken while
+    // the frame is still loading (it would be the old page or a white flash).
+    laneShotLoading.add(frame);
+    frame.onload = () => {
+      laneShotLoading.delete(frame);
+      if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); }
+      window.setTimeout(() => void cacheRenderedPreviewShot(), 150);
+      window.setTimeout(() => void cacheRenderedPreviewShot("now"), LANE_SHOT_PAINT_MS);
+    };
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL only loads if the egress allow-list already approves the site
     // (honoring the managed ceiling); else it stays gated. The iframe is opaque-origin (no allow-same-origin),
@@ -11168,7 +11234,7 @@ function dropLaneTabFrame(tabId: string): void {
   curtainHiddenLoads.delete(tabId);
   if (!curtainRuns.has(tabId)) {
     curtainEntries = dropCurtain(curtainEntries, tabId);
-    if (tabId.startsWith("lane:")) setLaneMini(tabId.slice(5), null);
+    if (tabId.startsWith("lane:")) setTargetChip(tabId.slice(5), null);
     paintCurtainChip();
   }
 }
@@ -11204,6 +11270,7 @@ export function previewShowLaneFile(laneId: string, laneName: string, path: stri
     loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
     if (previewOpen) curtainHiddenLoads.delete(id); else curtainHiddenLoads.add(id);
     const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+    recordCurtainLaneShot(id, path, r); // P-LANESHOTS.1: a hidden tab's picture (canvas pages only)
     curtainReady(id, path, r, false);
   });
 }
@@ -11258,17 +11325,80 @@ window.addEventListener("message", (ev) => {
 });
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
- *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
-async function cacheRenderedPreviewShot(): Promise<void> {
-  // The agent's preview_screenshot reads THIS cache, so always capture the AGENT lane. Screen capture only sees
-  // on-screen pixels, so it no-ops unless the agent lane is the one currently shown (its DOM stays inspectable
+ *  plain browser or when the frame has no size. Never throws: a failed cache just means no shot this turn.
+ *
+ *  P-LANESHOTS.1: the same capture also feeds the per-agent snapshot strip (lane_shots.ts) that Agent Worlds
+ *  shows: the agent tab records under lane "main", a fleet lane's tab under its lane id. `strip` says whether
+ *  this pass may record one: "skip" (engine cache only, the default), "tick" (the freshness loop: at most one
+ *  per LANE_SHOT_TICK_MS per lane, so an animated page cannot churn the ring) or "now" (a load or a reveal).
+ *  Capture reads on-screen pixels, so a strip snapshot needs the panel open on that tab, the window visible,
+ *  the frame done loading and nothing of LUCID's drawn over it (see previewFrameUnobstructed). */
+async function cacheRenderedPreviewShot(strip: "skip" | "tick" | "now" = "skip"): Promise<void> {
+  // The agent's preview_screenshot reads THIS cache, so the engine copy is only ever the AGENT lane. Screen capture
+  // only sees on-screen pixels, so it no-ops unless that lane is the one currently shown (its DOM stays inspectable
   // while hidden via preview_inspect, which is the agent's primary review path when you're on your own tab).
-  const frame = laneFrame("agent");
-  if (!frame || prevLane !== "agent" || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const tab = prevLane;
+  const laneId = shotLaneOf(tab);
+  const frame = laneFrame(tab);
+  if (!laneId || !frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const forEngine = tab === "agent";
+  const now = Date.now();
+  const stripDue = strip === "now" || (strip === "tick" && now - (laneShotTakenAt.get(laneId) ?? 0) >= LANE_SHOT_TICK_MS);
+  const wantStrip = stripDue && previewOpen && document.visibilityState === "visible" && !laneShotLoading.has(frame);
+  if (!forEngine && !wantStrip) return;
   const rect = frame.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2) return;
+  const forStrip = wantStrip && previewFrameUnobstructed(frame, rect);
+  if (!forEngine && !forStrip) return;
+  const path = prevPathByLane[tab] ?? "";
+  if (forStrip) laneShotTakenAt.set(laneId, now);
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
-  if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+  if (!png) return;
+  if (forStrip && prevLane === tab && prevPathByLane[tab] === path) void recordCapturedLaneShot(laneId, path, png);
+  if (forEngine) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+}
+// ── P-LANESHOTS.1: per-agent preview snapshots for Agent Worlds ──────────────────────────────────
+// HOW CAPTURE WORKS. capturePage photographs the window's on-screen pixels, so a preview tab can only be
+// photographed while it is the tab showing in the open panel. A hidden tab's frame is `display:none` (or the
+// whole panel is closed), and making it visible for a capture would flash it at the user, so there is no
+// off-screen capture of a DOM page. What a hidden tab DOES get is the loading curtain's thumbnail: the curtain
+// already renders every auto preview in an invisible probe frame and reads back its largest canvas as a small
+// PNG (thumbFor), so a canvas or WebGL page records a picture the moment it is judged ready, tab shown or not.
+// Everything else is photographed when its tab is shown (switchPrevLane kicks it), after each load, and on
+// the panel's 1.5s freshness loop at most once per LANE_SHOT_TICK_MS. All of it stays in renderer memory.
+/** The lane a preview tab's snapshots belong to: the agent tab is the main composer ("main"), a fleet lane's
+ *  tab is that lane. Yours, plugin and Ask Lucid tabs are not an agent's preview and take none. */
+const shotLaneOf = (tab: PrevLane): string | null => (tab === "agent" ? "main" : tab.startsWith("lane:") ? tab.slice(5) || null : null);
+const LANE_SHOT_TICK_MS = 5000;
+/** When each lane's last strip snapshot was taken (throttles the freshness loop). */
+const laneShotTakenAt = new Map<string, number>();
+/** True when every sampled point of the frame's box hits the frame itself (or the preview's own markup
+ *  canvas / pan surface, which are part of what the user sees there). A toast, popover, the Agent Worlds
+ *  dialog, the reviewing pill or any other LUCID chrome over the frame would be photographed into the agent's
+ *  snapshot, so that pass records nothing. Nine elementFromPoint calls; no layout is forced beyond the rect. */
+function previewFrameUnobstructed(frame: HTMLIFrameElement, r: DOMRect): boolean {
+  const own: Element[] = [frame];
+  for (const sel of ["#prevCanvas", "#prevPanSurface"]) { const e = $(sel); if (e) own.push(e); }
+  const inset = Math.min(12, r.width / 4, r.height / 4);
+  for (const x of [r.left + inset, r.left + r.width / 2, r.right - inset]) {
+    for (const y of [r.top + inset, r.top + r.height / 2, r.bottom - inset]) {
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !own.includes(hit)) return false;
+    }
+  }
+  return true;
+}
+/** Scale a capture to a thumbnail and record it for `laneId` (title = the file name or host, like the chip). */
+async function recordCapturedLaneShot(laneId: string, path: string, png: string): Promise<void> {
+  const dataUrl = await makeLaneThumb(document, png);
+  if (dataUrl) recordLaneShot({ laneId, at: Date.now(), dataUrl, title: curtainLabel(path), path });
+}
+/** A hidden tab's only picture: the curtain's canvas thumbnail (already validated by thumbFor). Skipped when
+ *  the tab is the one showing, since the real capture after its load is the better picture. */
+function recordCurtainLaneShot(tab: PrevLane, path: string, r: CurtainResult): void {
+  const laneId = shotLaneOf(tab);
+  if (!laneId || !r.thumb || (previewOpen && prevLane === tab)) return;
+  recordLaneShot({ laneId, at: Date.now(), dataUrl: r.thumb, title: r.title || curtainLabel(path), path });
 }
 // P-PREVIEW.3a-shot freshness: the single on-load capture froze the shot at load+150ms, so the agent's
 // preview_screenshot saw an empty/early/stale frame the moment the previewed app animated or the file was
@@ -11280,7 +11410,7 @@ function startPreviewShotLoop(): void {
   if (previewShotTimer !== null) return;
   void cacheRenderedPreviewShot(); // refresh immediately on open, then keep it current
   previewShotTimer = window.setInterval(() => {
-    if (document.visibilityState === "visible") void cacheRenderedPreviewShot();
+    if (document.visibilityState === "visible") void cacheRenderedPreviewShot("tick"); // P-LANESHOTS.1: also a throttled strip snapshot
   }, 1500);
 }
 function stopPreviewShotLoop(): void {
@@ -18488,6 +18618,13 @@ function wire(): void {
   $("#skillsBody")?.addEventListener("click", (e) => void onSkillAction(e));
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
+  // P-PREVIEW.CHIP1: over Visualize the panel is the layer above the world, so Esc with focus in it slides it back
+  // (Visualize's own Esc then waits for the next press). An Esc a menu inside it already took is left alone.
+  $("#preview")?.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !previewOverViz || (e.target as HTMLElement).closest("#prevMore")) return;
+    e.preventDefault();
+    closePreview();
+  });
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
@@ -19356,6 +19493,14 @@ function wire(): void {
     // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
     fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
     respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
+    // P-PREVIEW.CHIP1: a node's preview chip flies the Preview panel out over Visualize; Visualize closing under it
+    // leaves the panel open on its side-panel tier.
+    preview: {
+      open: (target, chip) => openTargetPreviewFrom(target, chip),
+      close: () => closePreview(),
+      isOver: () => previewOverViz,
+      viewClosed: () => { previewReturn = null; syncPreviewCover(); },
+    },
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 
@@ -20518,6 +20663,7 @@ function resetAgentPreviewLane(): void {
   curtainRuns.get("agent")?.();
   curtainHiddenLoads.delete("agent");
   curtainEntries = dropCurtain(curtainEntries, "agent");
+  setTargetChip("main", null); // P-PREVIEW.CHIP1: Main's Agent Worlds chip belonged to that conversation too
   paintCurtainChip();
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",

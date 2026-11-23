@@ -16,10 +16,10 @@
 // Now 1 and 2 pass this gate first: probe -> hidden probe frame -> paint looks -> ready | blank | error.
 // Only `ready` earns an invitation (a chip); nothing auto-opens and blank or error pages are never shown.
 //
-// Pure: no DOM, no I/O. app.ts owns the probe frame, the chip DOM and the swing; this module owns the
-// classification, its thresholds, the pending-chip registry and the small geometry/motion decisions.
+// Pure: no DOM, no I/O. app.ts owns the probe frame and the swing, preview_chip.ts the ONE chip's DOM on every
+// surface (P-PREVIEW.CHIP1); this module owns the classification, its thresholds, the pending-chip registry, what
+// a chip says, and the small geometry/motion decisions.
 
-import { icon } from "./icons.ts"; // pure string markup, no DOM
 import { baseTier, type PerfTier } from "./perf_tier.ts";
 
 export type CurtainVerdict = "ready" | "blank" | "error" | "loading";
@@ -307,26 +307,75 @@ export function curtainMotion(tier: PerfTier, reducedMotion: boolean): "full" | 
 
 export interface Rect { left: number; top: number; width: number; height: number }
 
-// ── the mini chip (fleet lane card, orbit spoke card) ──────────────────────────────────────────────
+// ── the chip: state, words, placement (P-PREVIEW.CHIP1; preview_chip.ts paints it on every surface) ──────
 
-/** A lane's own curtain state, painted on its fleet card and its orbit spoke. Blank and error lanes have
- *  none (the chip is simply absent). */
-export interface LaneMini { phase: "loading" | "ready"; label: string }
+/** One preview chip's state: the composer's head invitation, a fleet lane's own (its card and its orbit spoke),
+ *  or an Agent Worlds node's (a lane, or Main for the composer's Agent tab). Blank and error pages have none: the
+ *  chip is simply absent. `more` counts the other invitations waiting behind the composer's head. */
+export interface ChipState { phase: "loading" | "ready"; label: string; path: string; title?: string; thumb?: string; more?: number }
 
-/** The mini chip's inner markup: a tiny page silhouette with a scanning shimmer while loading, the eye glyph
- *  once ready. ONE text element (invariant 11). Markup only; the label goes in the tooltip, set by the
- *  caller through setTip. */
-export function miniChipHtml(phase: LaneMini["phase"]): string {
-  return phase === "ready"
-    ? `${icon("eye", 11)}<span class="pcur-mini-l">Preview</span>`
-    : `<span class="pcur-mini-art" aria-hidden="true"><i></i></span><span class="pcur-mini-l">Preview</span>`;
+/** Whose chip a curtain tab key feeds: "agent" is Main (the composer, Agent Worlds' hub "main"), "lane:<id>" that
+ *  lane. Any other tab (yours, a plugin, Ask Lucid) has no chip of its own. */
+export function chipTarget(key: string): string | null {
+  if (key === "agent") return "main";
+  return key.startsWith("lane:") && key.length > 5 ? key.slice(5) : null;
 }
 
-/** The mini chip's accessible name and tooltip. */
-export function miniChipTip(v: LaneMini): { aria: string; title: string; desc: string } {
+/** The composer chip's state: chipView's head, with the count of the invitations behind it. */
+export function headChip(list: readonly CurtainEntry[]): ChipState | null {
+  const { head, more } = chipView(list);
+  if (!head) return null;
+  return {
+    phase: head.phase, label: head.label, path: head.path,
+    ...(head.title ? { title: head.title } : {}), ...(head.thumb ? { thumb: head.thumb } : {}), ...(more ? { more } : {}),
+  };
+}
+
+/** What a chip says: its two lines, its accessible name and its tooltip. One wording on every surface. */
+export function chipText(v: ChipState): { k: string; name: string; aria: string; tipTitle: string; tipDesc: string } {
+  const name = v.title || v.label;
+  const more = v.more ?? 0;
   return v.phase === "ready"
-    ? { aria: `Open the preview of ${v.label}`, title: "Open the preview", desc: `${v.label} rendered. Click to swing the Preview panel out on this agent's own tab.` }
-    : { aria: `Preparing a preview of ${v.label}`, title: "Preparing a preview", desc: `${v.label} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.` };
+    ? {
+      k: "Preview ready", name, aria: `Open the preview of ${name}${more ? `, ${more} more waiting` : ""}`,
+      tipTitle: "Open the preview", tipDesc: `${name} rendered. Click to swing the Preview panel out on its own tab.${more ? ` ${more} more waiting.` : ""}`,
+    }
+    : {
+      k: "Preparing preview", name, aria: `Preparing a preview of ${name}`,
+      tipTitle: "Preparing a preview", tipDesc: `${name} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.`,
+    };
+}
+
+/** Agent Worlds: where a chip over a node goes (its top-left corner, stage px). Centered above the node's frame,
+ *  `gap` px clear of it and above the `below` px already standing there (the node's artifact chip with its own
+ *  gap), so the chips stack instead of overlapping. `box` is the node in client px (scene.screenBoxOf), `stage`
+ *  the stage's client origin. With the stage's size, the chip is kept `edge` px inside it: a node near the top or a
+ *  side edge keeps its chip on the stage instead of under the Visualize header or the title bar. */
+export function chipStackAt(box: { x: number; y: number; r: number }, stage: { left: number; top: number; width?: number; height?: number }, chip: { w: number; h: number }, below = 0, gap = 6, edge = 4): { x: number; y: number } {
+  let x = box.x - stage.left - chip.w / 2;
+  const base = box.y - stage.top - box.r - gap; // the bottom of the stack over the node
+  const under = Math.max(0, below);
+  let y = base - under - chip.h;
+  if (stage.width !== undefined) x = Math.max(edge, Math.min(x, stage.width - edge - chip.w));
+  if (stage.height !== undefined) {
+    if (under > 0) {
+      // `under` is the artifact chip's height plus `gap`; that chip clamps to `edge` by this same rule. When there is
+      // no room above it, this chip goes just below it instead of onto it.
+      const artTop = Math.max(edge, base - (under - gap));
+      y = artTop - gap - chip.h >= edge ? artTop - gap - chip.h : artTop + under;
+    } else y = Math.max(edge, y);
+    y = Math.min(y, stage.height - edge - chip.h);
+  }
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+/** Agent Worlds: the chip's hover card (top-left, stage px). Above the chip when it fits (the node below stays in
+ *  view), else below it; centered on the chip and kept `edge` px inside the stage. `chip` is in stage px. */
+export function chipCardAt(chip: Rect, card: { w: number; h: number }, stage: { width: number; height: number }, edge = 8, gap = 8): { left: number; top: number } {
+  const above = chip.top - gap - card.h;
+  const top = above >= edge ? above : Math.max(edge, Math.min(chip.top + chip.height + gap, stage.height - edge - card.h));
+  const left = Math.max(edge, Math.min(chip.left + chip.width / 2 - card.w / 2, stage.width - edge - card.w));
+  return { left: Math.round(left), top: Math.round(top) };
 }
 
 /** Where the swing hinges, as a transform-origin inside the panel: the point of the panel nearest the chip

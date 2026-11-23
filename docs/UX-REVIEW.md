@@ -64,10 +64,11 @@ Every overlay a PR adds names its tier here. Settings currently has no tier: it 
 
 | Tier | z-index | Selectors (styles.css line) |
 |---|---|---|
-| Content | auto, 26 | Skills/Knowledge/Meetings asides, inspector; `#prevCurtain` preview chip at 26 inside `main.center` (ADR-0621) |
+| Content | auto, 26 | Skills/Knowledge/Meetings asides, inspector; `#prevCurtain` composer preview chip at 26 inside `main.center` (ADR-0621). P-PREVIEW.CHIP1: the same chip (`.pchip`) floats in a fleet lane's transcript corner (`.pchip-host`, 4 inside `.fleet-out-wrap`, under the lane's jump pair at 5), just above an orbit spoke card (inside the card), and beside agent nodes in Visualize (3 inside `.viz-stage`, hover card `.pchip-pop` at 6) |
 | Dock | 55 | `.share-dock` / `#fleetDock.fleet-dock` (5471) |
 | Side panel | 90 | `.ide-panel` (5052); `#preview` Preview fly-out (3801), above a floating Fleet dock (ADR-0645) |
 | Full-screen view | 92, 93 | `.orbit-view` Fleet Orbit (7005); `#vizView` Visualize (93, ADR-0622) |
+| Panel over Visualize | 94 | `#preview.over-viz`: the Preview fly-out opened while Visualize is up (an Agent Worlds preview chip, P-PREVIEW.CHIP1). Same column, resize edge and `lucid.preview-w` width; Visualize keeps running behind it and is not modal meanwhile. Its X, Esc (focus in the panel, or a first Esc anywhere in Visualize) or a press on the world slide it back to the chip. Shares 94 with the titlebar callout, which comes later in the DOM and stays on top |
 | Titlebar callout | 94 | `.relogin-notice` re-login callout under the model pill (ADR-0640); one below Popover so an opened picker covers it |
 | Popover | 95, 96 | `.popover` (2918), `.vdock` voice panel (3202) |
 | Settings | 97, 98 | `#setScrim`, `#settings` window or panel (ADR-0615); popovers opened from Settings lift to 99 |

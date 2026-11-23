@@ -75,7 +75,8 @@ import { autofitPlan, CARD_DEF_W, CARD_GAP, CARD_MIN_H, CARD_MIN_W, clampSize, d
 import { fmtTokens, fmtUsd, meterBadge, newMeter, onUsage, type MeterState } from "./token_meter.ts";
 import type { ChipKind } from "./answer_chips.ts";
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
-import { miniChipHtml, miniChipTip, type LaneMini } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
+import { laneChipHostHtml, paintPreviewChip } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip
+import type { ChipState } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the lane sink's Visualize tap
 import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the More menu's Visualize
 
@@ -1626,7 +1627,6 @@ function buildCard(run: LaneRun): HTMLElement {
       <span class="fleet-health" data-fleet-health data-health-action="quiet" hidden></span>
       <span class="fleet-quiet" data-fleet-quiet hidden></span>
       <span class="hud-ring lane-ring" data-lane-ring hidden data-tip="Progress|Working."><svg viewBox="0 0 22 22" width="15" height="15" aria-hidden="true"><circle class="hud-ring-track" cx="11" cy="11" r="8"/><circle class="hud-ring-arc" pathLength="100" cx="11" cy="11" r="8"/></svg></span>
-      <button class="pcur-mini" data-lane-preview type="button" hidden></button>
       <select class="fleet-model" data-fleet-model aria-label="Agent model"></select>
       <button class="fleet-card-btn fleet-promote" data-fleet-promote aria-label="Drive this agent from the main composer" data-tip="Promote|Point the main composer at this agent" hidden>${icon("arrowRight", 12)}</button>
       ${CARD_BOARDS_BTN}
@@ -1654,6 +1654,10 @@ function buildCard(run: LaneRun): HTMLElement {
              reader is within the lane's own at-the-bottom threshold. -->
         <button class="fleet-jump fleet-jump-page" data-lane-jump="page" type="button" aria-label="Scroll down one page" data-tip="Down one page">${icon("chevronDown", 13)}</button>
         <button class="fleet-jump fleet-jump-end" data-lane-jump="end" type="button" aria-label="Scroll to the newest line" data-tip="Jump to the end">${icon("chevronsDown", 13)}</button>
+        <!-- P-PREVIEW.CHIP1: the lane's preview chip, the composer's own chip floating in this view's upper-right
+             corner. A sibling of the scroller for the same reason as the jump pair; no layout space, and it can
+             never reach the composer below. -->
+        ${laneChipHostHtml("lane", "data-lane-preview")}
       </div>
       <div class="fleet-approve" data-fleet-approve hidden>
         <span class="fleet-approve-txt" data-fleet-approve-txt></span>
@@ -1764,26 +1768,19 @@ function paintProgress(run: LaneRun): void {
   }
 }
 
-// P-PREVIEW-CURTAIN.1 (ADR-0621): the lane's mini "Preview" chip. app.ts owns the curtain (probe, verdict);
-// this module only remembers the lane's state so a card rebuilt on reopen shows the same chip. A lane whose
-// page came out blank or failed has no entry, so its card shows nothing.
-const lanePreviews = new Map<string, LaneMini>();
-export function paintLanePreview(laneId: string, v: LaneMini | null): void {
+// P-PREVIEW-CURTAIN.1 (ADR-0621): the lane's preview chip. app.ts owns the curtain (probe, verdict); this module
+// only remembers the lane's state so a card rebuilt on reopen shows the same chip. A lane whose page came out
+// blank or failed has no entry, so its card shows nothing. P-PREVIEW.CHIP1: the chip is the composer's own
+// (preview_chip.ts), floating in the transcript's upper-right corner instead of crowding the header.
+const lanePreviews = new Map<string, ChipState>();
+export function paintLanePreview(laneId: string, v: ChipState | null): void {
   if (v) lanePreviews.set(laneId, v); else lanePreviews.delete(laneId);
   const card = runs.get(laneId)?.card;
   if (card) paintPreviewMini(card, laneId);
 }
 function paintPreviewMini(card: HTMLElement, laneId: string): void {
   const btn = $("[data-lane-preview]", card) as HTMLElement | null; if (!btn) return;
-  const v = lanePreviews.get(laneId);
-  btn.hidden = !v || !deps?.openLanePreview;
-  if (!v || (btn.dataset.phase === v.phase && btn.dataset.label === v.label)) return;
-  btn.dataset.phase = v.phase; btn.dataset.label = v.label;
-  btn.innerHTML = miniChipHtml(v.phase);
-  const t = miniChipTip(v);
-  btn.setAttribute("aria-label", t.aria);
-  btn.setAttribute("aria-disabled", String(v.phase !== "ready"));
-  setTip(btn, t.title, t.desc);
+  paintPreviewChip(btn, deps?.openLanePreview ? lanePreviews.get(laneId) ?? null : null);
 }
 
 /** Repaint everything on the card EXCEPT the output stream: the status frame (class + LED + border), the
@@ -3315,8 +3312,8 @@ function onClick(ev: Event): void {
     if (turn) void copyOut(copyTurn, turnReplyText(turn));
     return;
   }
-  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready mini chip swings the Preview panel out on this lane's tab; a
-  // loading one only explains itself (tooltip).
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready chip swings the Preview panel out on this lane's tab (above the
+  // Fleet dock, ADR-0645); a loading one only explains itself (tooltip). P-PREVIEW.CHIP1: it floats in the transcript.
   const mini = t.closest("[data-lane-preview]") as HTMLElement | null;
   if (mini) { if (mini.dataset.phase === "ready") deps.openLanePreview?.(run.view.id, mini); return; }
   // P-FLEET.L8: attach or release the main composer. The LOOK is not touched here - `LaneView.promoted` on
