@@ -191,6 +191,7 @@ import { mountSeasonBackdrop, type BackdropHandle, type BackdropMotion } from ".
 import { SCENES, SCENE_ORDER } from "./season_scenes.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
+import { humanModelId, LOGIN_TIP, loginChoices, providerShortName, reloginCopy, reloginTargets } from "./relogin.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
@@ -18643,6 +18644,11 @@ function wire(): void {
   $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
+  // P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp disables while LUCID sits in the background shows up on return.
+  window.addEventListener("focus", () => void refreshRelogin());
+  window.addEventListener("resize", () => placeReloginNotice());
+  void refreshRelogin(true); // at boot, not only once omp's model list lands: a cold omp can take a while
+
   void showReleaseCleanupNotice(); // ADR-0542
   void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0574)
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
@@ -20655,6 +20661,7 @@ async function loadConfig(newCycle = true): Promise<void> {
     if (step.action === "adopt") {
       if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
       else void maybeApplyDefaultModel(model);
+      void refreshRelogin(); // P-AUTH.RELOGIN1: boot, respawn and refresh all re-check for a lost sign-in
     } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
@@ -20751,10 +20758,20 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       // built at spawn, and a broker that lingers instead of exiting never triggers the server-side
       // respawn. A plain loadConfig() would then show a stale picker underneath a toast claiming the
       // models updated. refreshConfig() respawns first; loadConfig() then applies the fresh state.
+      // P-AUTH.RELOGIN1 (ADR-0640): the respawned session lands on the sticky pick (startup_model.ts), so the
+      // model this sign-in's loss displaced goes there BEFORE the respawn; the pick made during the outage is kept
+      // for the toast's "Keep" and put back if the displaced model is not offered.
+      const restoring = prov.restoreModel && state.userRole !== "lucid-agent" ? prov.restoreModel : "";
+      const kept = restoring ? await bridge.chosenModel().catch(() => "") : "";
+      if (restoring) await bridge.setChosenModel(restoring).catch(() => null);
       try { await bridge.refreshConfig(); } catch { /* fall through: loadConfig still refreshes what it can */ }
+      // P-AUTH.RELOGIN1 (ADR-0640): adopt THIS snapshot. Before, the success path left state.auth stale, so
+      // claudeAuthed() kept the API-only Claude rows greyed and the re-login notice stayed up after a good login.
+      if (a) state.auth = a;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      renderReloginNotice();
+      if (!(restoring && (await restoreDisplacedModel(prov.oauthId, providerShortName(prov.name), restoring, kept)))) showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
       return true;
     }
     return false;
@@ -20769,6 +20786,99 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       if (await check()) return;
     }
   } finally { document.removeEventListener("visibilitychange", onVisible); }
+}
+
+// ── P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone. The engine flags it on /api/auth
+// (`relogin`); the titlebar shows a callout under the model pill with a Login button, the pill's dot turns
+// amber, and the picker leads with the same Login. "Not now" hides it for this launch only.
+const reloginDismissed = new Set<string>();
+let reloginNode: HTMLElement | null = null;
+let reloginCheckedAt = 0;
+
+/** Re-read the auth snapshot and repaint the notice. Throttled: boot, every config adopt and window focus call it. */
+async function refreshRelogin(force = false): Promise<void> {
+  if (!force && Date.now() - reloginCheckedAt < 15_000) return;
+  reloginCheckedAt = Date.now();
+  const a = await bridge.auth().catch(() => null);
+  if (!a) return;
+  state.auth = a;
+  renderReloginNotice();
+}
+
+function placeReloginNotice(): void {
+  const badge = $("#modelBadge");
+  if (!reloginNode || !badge) return;
+  const r = badge.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - reloginNode.offsetWidth - 8));
+  reloginNode.style.top = `${Math.round(r.bottom + 10)}px`;
+  reloginNode.style.left = `${Math.round(left)}px`;
+  reloginNode.style.setProperty("--arrow-x", `${Math.round(Math.max(14, r.left + r.width / 2 - left - 5))}px`);
+}
+
+function renderReloginNotice(): void {
+  const targets = reloginTargets(state.auth, reloginDismissed);
+  $("#modelBadge")?.classList.toggle("needs-login", reloginTargets(state.auth, new Set()).length > 0);
+  // An open picker already leads with the same Login; the callout would sit on top of it.
+  if (!targets.length || cfgClose) { reloginNode?.remove(); reloginNode = null; return; }
+  // The lost provider's models are not in the picker, so a catalog name is usually missing: read the id instead.
+  const restoreName = (v: string) => (state.config.find((c) => c.id === "model")?.options.some((o) => o.value === v) ? modelLabel(v) : humanModelId(v));
+  const { title, body } = reloginCopy(targets, state.auth?.upgradedFrom, (p) => (p.restoreModel ? restoreName(p.restoreModel) : undefined));
+  const html = `<div class="relogin-h">${icon("alertBadge", 15)}<span id="reloginTitle">${esc(title)}</span><button class="relogin-x" type="button" data-relogin-later aria-label="Not now">${icon("close", 13)}</button></div>
+    <p class="relogin-b">${esc(body)}</p>
+    <div class="relogin-acts">${targets.map((p) => `<button class="btn-mini ok" type="button" data-relogin="${esc(p.oauthId)}" data-tip="${esc(LOGIN_TIP)}" data-tip-side="bottom">${icon("user", 12)} ${esc(targets.length > 1 ? `Log in to ${providerShortName(p.name)}` : "Log in")}</button>`).join("")}<button class="btn-mini" type="button" data-relogin-later>Not now</button></div>`;
+  if (!reloginNode) {
+    // Non-modal: it never takes focus from the composer, so it is a labelled live region, not a dialog.
+    reloginNode = el(`<div class="relogin-notice" role="region" aria-live="polite" aria-labelledby="reloginTitle"></div>`);
+    const later = () => {
+      for (const p of reloginTargets(state.auth, reloginDismissed)) reloginDismissed.add(p.oauthId);
+      renderReloginNotice();
+      $("#modelBadge")?.focus(); // focus returns to the control the callout belongs to
+    };
+    reloginNode.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      const go = t.closest("[data-relogin]") as HTMLElement | null;
+      if (go) { loginWithProvider(go.dataset.relogin!); return; }
+      if (t.closest("[data-relogin-later]")) later();
+    });
+    reloginNode.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); later(); } });
+    document.body.appendChild(reloginNode);
+  }
+  if (reloginNode.dataset.html !== html) { reloginNode.innerHTML = html; reloginNode.dataset.html = html; }
+  placeReloginNotice();
+}
+
+/** One Login click, from the notice or the picker. Flows that need the card's code box (device codes, the
+ *  Copilot enterprise prompt) open the provider's card in the Provider Hub; the rest go straight to the browser. */
+function loginWithProvider(oauthId: string): void {
+  reloginDismissed.add(oauthId); // the sign-in is under way; the amber pill dot and the picker row stay until it lands
+  cfgClose?.();
+  renderReloginNotice();
+  const prov = [...(state.auth?.majors ?? []), ...(state.auth?.others ?? []), ...(state.auth?.gateway ?? [])].find((p) => p.oauthId === oauthId);
+  if (oauthId === "github-copilot" || DEVICE_FLOW_IDS[oauthId] || SHOW_CODE_FLOW_IDS[oauthId]) { openProviderHub(undefined, prov?.id); return; }
+  void startProviderOauth(oauthId, null, () => renderReloginNotice());
+}
+
+/** After a sign-in lands: put the user back on `target`, the model that sign-in's loss displaced (the "stuck
+ *  on Terra after I logged back into Claude" fix). Logging back in IS the deliberate choice, so it stays the
+ *  sticky pick (the caller wrote it before the respawn); `kept`, the pick made during the outage, is one click
+ *  away in the toast. True when it announced a switch (the caller skips its own toast). */
+async function restoreDisplacedModel(oauthId: string, provName: string, target: string, kept: string): Promise<boolean> {
+  const offered = !!state.config.find((c) => c.id === "model")?.options.some((o) => o.value === target);
+  if (!offered || unavailableReason(target)) {
+    // Not offered (retired, or omp still warming): give the outage pick back, keep the memory for next time.
+    if (kept) void bridge.setChosenModel(kept).catch(() => {});
+    return false;
+  }
+  void bridge.reloginRestored(oauthId).catch(() => {});
+  if (state.model !== target) await applyConfig("model", target, { system: true });
+  if (!kept || kept === target) return false; // never left it: nothing to announce
+  showToast({
+    title: `Back on ${modelLabel(target)}`,
+    desc: `You logged in to ${provName} again, so new turns use the model you had before.`,
+    actions: [{ label: "OK", kind: "ok" }, { label: `Keep ${modelLabel(kept)}`, run: () => void applyConfig("model", kept) }],
+    timeout: 10_000,
+  });
+  return true;
 }
 
 async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
@@ -21429,7 +21539,7 @@ function hubLocalSectionHtml(): string {
   return `<div class="provhub-sec"><div class="provhub-sec-h"><b>Local &amp; self-hosted</b><span>your hardware \u00b7 unified NGINX endpoint</span></div>
     <div class="provhub-grid">${configured}${presets}${addTile}</div></div>`;
 }
-function openProviderHub(onClose?: () => void): void {
+function openProviderHub(onClose?: () => void, focusId?: string): void {
   hubClose?.();
   const ov = el(`<div id="provHub" class="modal-ov">
     <div class="modal provhub" role="dialog" aria-modal="true" aria-labelledby="provHubTitle">
@@ -21448,7 +21558,12 @@ function openProviderHub(onClose?: () => void): void {
   // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
   const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
     <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
-  const redraw = () => { body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  // P-AUTH.RELOGIN1 (ADR-0640): `focusId` opens one provider's card (a Login click for a flow that needs the
+  // card's code box). The background redraws below would collapse it, so it re-opens until the user clicks a tile.
+  const redraw = () => {
+    body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml();
+    if (focusId) (body.querySelector(`[data-hub-tile="${CSS.escape(focusId)}"]`) as HTMLElement | null)?.click();
+  };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
   hubClose = close;
@@ -21536,6 +21651,7 @@ function openProviderHub(onClose?: () => void): void {
     // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
     const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
     if (tile && !t.closest(".provhub-config")) {
+      if (e.isTrusted) focusId = undefined; // the user took over: later redraws leave the accordion alone
       const wrap = tile.closest(".provhub-item") as HTMLElement;
       const opening = !wrap.classList.contains("open");
       for (const other of $$(".provhub-item.open", body)) other.classList.remove("open"); // accordion
@@ -21548,6 +21664,24 @@ function openProviderHub(onClose?: () => void): void {
       }
     }
   });
+  if (focusId) redraw(); // the first redraw ran before the click handler existed
+}
+
+/** P-AUTH.RELOGIN1 (ADR-0640): the Login row under the picker's model name. A lost sign-in leads as an amber
+ *  "Log in to X again"; "Login" opens every subscription sign-in with its state. Open by default for a new
+ *  user with nothing connected, so the first thing the picker offers is a way to get models. */
+function loginRowHtml(): string {
+  const choices = loginChoices(state.auth);
+  if (!choices.length) return "";
+  const open = configuredProviderCount(state.auth) === 0;
+  const tip = `data-tip="${esc(LOGIN_TIP)}" data-tip-side="right"`;
+  const lost = choices.filter((c) => c.state === "relogin").map(({ provider: p }) =>
+    `<button class="cfg-login-btn warn" type="button" data-login="${esc(p.oauthId)}" ${tip}>${icon("alertBadge", 13)}<span>Log in to ${esc(providerShortName(p.name))} again</span></button>`).join("");
+  const rows = choices.map(({ provider: p, state: st }) => `<div class="cfg-login-row"><span class="nm">${esc(providerShortName(p.name))}</span>${st === "signed-in"
+    ? `<span class="cfg-login-st">${icon("check", 11)}<span>Signed in</span></span>`
+    : `<button class="btn-mini ${st === "relogin" ? "warn" : "ok"}" type="button" data-login="${esc(p.oauthId)}" ${tip}>${st === "relogin" ? "Log in again" : "Login"}</button>`}</div>`).join("");
+  return `<div class="cfg-login">${lost}<button class="cfg-login-btn" type="button" data-login-toggle aria-expanded="${open}" ${tip}>${icon("user", 13)}<span>Login</span>${icon("chevronDown", 12)}</button>
+    <div class="cfg-login-list"${open ? "" : " hidden"}>${rows}</div></div>`;
 }
 
 function openConfigPopover(anchor: HTMLElement): void {
@@ -21567,6 +21701,7 @@ function openConfigPopover(anchor: HTMLElement): void {
   const modelPh = models.length ? `Search ${models.length} models…` : "Search models…";
   const modelSec = showModel ? `<div class="cfg-sec">
       <div class="cfg-lbl">Model <span class="cur">${esc(modelCur)}</span><span class="cfg-loading" id="cfgLoading"${modelsPending ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
+      ${loginRowHtml()}
       <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="${esc(modelPh)}" /></div>
       <div class="cfg-list" id="cfgModelList"></div>
       <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
@@ -21581,8 +21716,20 @@ function openConfigPopover(anchor: HTMLElement): void {
           `<div class="cfg-dd-item ${o.value === think.currentValue ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(prettyLevel(o.name))} thinking|${esc(THINK_DESC[o.value] ?? "")}" data-tip-side="right"><span class="tick">${icon("check", 13)}</span><span>${esc(prettyLevel(o.name))}</span></div>`).join("")}</div>
       </div></div>` : "";
 
-  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); });
+  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); renderReloginNotice(); });
   cfgClose = close;
+  renderReloginNotice(); // the picker leads with the same Login, so the titlebar callout steps aside
+  // P-AUTH.RELOGIN1: the Login row under the model name (a lost sign-in leads; "Login" opens the provider list).
+  node.querySelector(".cfg-login")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const go = t.closest("[data-login]") as HTMLElement | null;
+    if (go) { loginWithProvider(go.dataset.login!); return; }
+    const tg = t.closest("[data-login-toggle]") as HTMLElement | null;
+    if (tg) {
+      const list = node.querySelector(".cfg-login-list") as HTMLElement | null;
+      if (list) { list.hidden = !list.hidden; tg.setAttribute("aria-expanded", String(!list.hidden)); }
+    }
+  });
 
   // searchable model list
   if (showModel) {

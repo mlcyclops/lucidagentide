@@ -41,7 +41,8 @@ import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModeP
 import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
 import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
-import { acknowledgeReleaseCleanup, pendingReleaseCleanup, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0542
+import { acknowledgeReleaseCleanup, pendingReleaseCleanup, readMarker as readReleaseMarker, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0542
+import { annotateRelogin, clearDisplaced, forgetOauth, observeOauth } from "./oauth_relogin.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
@@ -151,7 +152,7 @@ import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobS
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { LIVE_HEARTBEAT_MS, otherEnginesSessions, publishLiveSessions, withdrawLiveSessions } from "./live_sessions.ts"; // P-SESS-ARCHIVE.1: sessions other engines hold
 import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearAskLucidSessions, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
-import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
+import { providerAuth, typesafeKeySet, vaultRows, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
 import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
@@ -189,6 +190,7 @@ import { setDefaultWindowsHide } from "./acp.ts";
 import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
+import { oauthMemory, setOauthMemory } from "./settings_store.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
@@ -2169,7 +2171,12 @@ const plugins = new PluginRuntime({
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
 // ADR-0542: the first start of a release after a dev build removes the development modules (data kept), before
 // any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
+// P-AUTH.RELOGIN1 (ADR-0640): read the previous version FIRST (the cleanup rewrites the marker), so a re-login
+// notice can say "after the update from X". A provider-side app update is the common reason a sign-in dies.
+const PREVIOUS_RUN_VERSION = ((): string | null => { try { return readReleaseMarker(); } catch { return null; } })();
 try { runReleaseCleanup(APP_VERSION); } catch (e) { console.error(`[release-cleanup] ${e instanceof Error ? e.message : String(e)}`); }
+// Record the model each lost sign-in displaced NOW, before omp reports a fallback model and lastModel follows it.
+try { authWithOauthErrors(); } catch (e) { console.error(`[relogin] ${e instanceof Error ? e.message : String(e)}`); }
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -2494,6 +2501,14 @@ function authWithOauthErrors(): ProviderAuthSnapshot {
     const f = getOauthFailure(row.oauthId);
     if (f) row.oauthError = f;
   }
+  // P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone gets `relogin`; one that came back
+  // with a model to return to gets `restoreModel`. Memory is written only when it changed.
+  const rows = vaultRows();
+  const before = oauthMemory();
+  const memory = observeOauth(a, rows, before, [chosenModel(), lastChatModel()]);
+  if (memory !== before) setOauthMemory(memory);
+  annotateRelogin(a, rows, memory);
+  if (PREVIOUS_RUN_VERSION && PREVIOUS_RUN_VERSION !== APP_VERSION) a.upgradedFrom = PREVIOUS_RUN_VERSION;
   return a;
 }
 
@@ -5704,13 +5719,23 @@ return Bun.serve({
         // Settings status reflects it regardless of whether the omp spawn succeeded.
         Bun.spawnSync([ompBin(), "auth-broker", "logout", id], { timeout: 4000 });
         disconnectCredential(id);
+        setOauthMemory(forgetOauth(oauthMemory(), [id])); // P-AUTH.RELOGIN1: a deliberate sign-out never prompts a re-login
         return json({ ok: true, data: providerAuth() });
+      }
+      // P-AUTH.RELOGIN1 (ADR-0640): the renderer put the user back on (or declined) the model a lost sign-in displaced.
+      if (p === "/api/auth/relogin-restored" && req.method === "POST") {
+        const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
+        const before = oauthMemory();
+        const after = clearDisplaced(before, String(oauthId ?? ""));
+        if (after !== before) setOauthMemory(after);
+        return json({ ok: true, data: true });
       }
       // "Sign out of all providers" — clears EVERY OAuth login, including orphans the per-provider Disconnect
       // can't reach (a broker id with no Settings descriptor, or a key-only provider that still has an oauth
       // row). The reliable post-reinstall reset. API keys are untouched.
       if (p === "/api/auth/logout-all" && req.method === "POST") {
         const r = clearAllOauthCredentials();
+        setOauthMemory({ seen: [], displaced: {} }); // P-AUTH.RELOGIN1: signed out of everything on purpose
         return json({ ok: true, data: providerAuth(), removed: r.removed });
       }
       // ── P-ACCT.1 (ADR-0375): named provider accounts. GET = the full snapshot; the mutations answer
@@ -5740,6 +5765,8 @@ return Bun.serve({
           // Disconnect ONE identity: rows (token blob included) gone; other accounts untouched.
           const idk = accountId.slice("oauth:".length);
           disconnectOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+          // P-AUTH.RELOGIN1: removing the last signed-in account is a deliberate sign-out, not a lost login.
+          if (!vaultRows().some((r) => r.provider === prov.oauthId && r.credential_type === "oauth" && !r.disabled_cause)) setOauthMemory(forgetOauth(oauthMemory(), [prov.oauthId]));
         } else if (accountId === LEGACY_KEY_ACCOUNT_ID) {
           setKey(prov.env, ""); // the legacy slot IS the env slot
         } else {

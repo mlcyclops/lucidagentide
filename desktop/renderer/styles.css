@@ -4879,6 +4879,39 @@ body.preview-open .thread{font-size:.9em}
 /* the always-visible model-picker footer button */
 .cfg-provhub{-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:8px 10px;background:none;border:1px dashed var(--line-strong);border-radius:9px;color:var(--txt-2);font:inherit;font-size:12px;cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t)}
 .cfg-provhub:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+/* P-AUTH.RELOGIN1 (ADR-0640): the Login row under the picker's model name. Each button holds ONE text span
+   (icons are flex:none), and every label stays on one line (invariant 11). */
+.cfg-login{display:flex;flex-wrap:wrap;gap:6px;margin:-2px 0 10px}
+.cfg-login-btn{-webkit-app-region:no-drag;display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;
+  padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt-2);
+  font:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:border-color var(--t),color var(--t),background var(--t)}
+.cfg-login-btn>.ic{flex:none}
+.cfg-login-btn>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-login-btn:hover{border-color:var(--accent);color:var(--txt);background:var(--accent-dim)}
+.cfg-login-btn[aria-expanded="true"]>.ic:last-child{transform:rotate(180deg)}
+.cfg-login-btn.warn,.btn-mini.warn{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));color:var(--amber-txt);background:var(--amber-dim)}
+.cfg-login-btn.warn:hover,.btn-mini.warn:hover{border-color:var(--amber);color:var(--amber-txt)}
+.cfg-login-list{flex:1 1 100%;display:flex;flex-direction:column;gap:2px;padding:4px;border:1px solid var(--line-soft);border-radius:9px;background:var(--bg-2)}
+.cfg-login-list[hidden]{display:none}
+.cfg-login-row{display:flex;align-items:center;gap:10px;padding:4px 6px;min-width:0}
+.cfg-login-row>.nm{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--txt)}
+.cfg-login-row>.btn-mini,.cfg-login-st{flex:none;white-space:nowrap}
+.cfg-login-st{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--green-txt)}
+/* The titlebar callout under the model pill when a sign-in that used to work is gone. Under the picker's
+   z (95) so an opened picker always wins; the picker carries the same Login anyway. */
+.relogin-notice{position:fixed;z-index:94;width:340px;max-width:calc(100vw - 16px);padding:12px 14px;
+  background:var(--bg-1);background-image:var(--emboss);border:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));
+  border-radius:12px;box-shadow:var(--shadow-lg);animation:reloginIn var(--t) var(--ease-out)}
+.relogin-notice::before{content:"";position:absolute;top:-6px;left:var(--arrow-x,24px);width:10px;height:10px;background:var(--bg-1);
+  border-left:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));border-top:1px solid color-mix(in srgb,var(--amber) 50%,var(--line-strong));transform:rotate(45deg)}
+@keyframes reloginIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.relogin-h{position:relative;padding:0 26px 0 23px;font-size:13px;font-weight:650;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relogin-h>.ic{position:absolute;left:0;top:1px;color:var(--amber-txt)}
+.relogin-x{position:absolute;right:-4px;top:-3px;border:0;background:transparent;color:var(--txt-3);cursor:pointer;padding:3px;border-radius:6px;display:inline-flex}
+.relogin-x:hover{color:var(--txt);background:var(--bg-3)}
+.relogin-b{margin:6px 0 10px;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.relogin-acts{display:flex;flex-wrap:wrap;gap:8px}
+.model-badge.needs-login .dot{background:var(--amber);box-shadow:0 0 8px var(--amber)}
 /* P-LOCAL.4: one-click model-preset chips in the Local Providers add form (each chip nowraps; the row wraps). */
 .lp-presets{margin-bottom:9px}
 .lp-presets-lbl{font-size:11px;color:var(--txt-3);display:flex;align-items:center;gap:5px;margin-bottom:6px}

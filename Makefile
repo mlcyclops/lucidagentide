@@ -1821,3 +1821,8 @@ demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA 
 .PHONY: demo-P-SANDBOX.WIN1
 demo-P-SANDBOX.WIN1: ## P-SANDBOX.WIN1 (ADR-0658): the Windows sandbox names the one concrete reason it is not isolated (headline + Prepare host under it), host prep pending skips the round trip, and the same UAC prompt registers the "LUCID MXC null device" boot task at a pinned copy under Program Files
 	$(BUN) test $(TEST_IGNORES) desktop/mxc_runtime.test.ts harness/runs/sandbox_mxc.test.ts harness/runs/sandbox_exec.test.ts desktop/renderer/sandbox_panel.test.ts harness/adr_numbering.test.ts
+
+.PHONY: demo-P-AUTH.RELOGIN1
+demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or that vanished) gets a callout under the model pill and a Login row under the picker's model name; logging back in restores the displaced model. Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ node desktop/scripts/demo_p_auth_relogin_1.mjs against a seeded QA engine (ADR-0640)
+	$(BUN) test $(TEST_IGNORES) desktop/oauth_relogin.test.ts desktop/renderer/relogin.test.ts desktop/release_cleanup.test.ts desktop/auth_vault.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_auth_relogin_1.mjs
