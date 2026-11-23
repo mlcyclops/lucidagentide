@@ -207,3 +207,20 @@ describe("working and turn-end signals", () => {
     expect(fresh.ended).toEqual([]);
   });
 });
+
+describe("adding an Agent through the add flow", () => {
+  it("keeps the typed name and the purpose, survives a save and load, and answers purposeOf for the folder", () => {
+    const d = addAgent(emptyDoc(), "C:\\Work\\Shop", { name: "Storefront", purpose: "app" });
+    expect(d.agents[0]).toMatchObject({ name: "Storefront", purpose: "app", saved: true });
+    const back = loadDoc(saveDoc(d));
+    expect(back.agents[0]?.purpose).toBe("app");
+    expect(purposeOf(back, "c:/work/shop/")).toBe("app");
+    expect(purposeOf(back, "c:/work/other")).toBeNull();
+  });
+  it("leaves the name automatic when none is typed, and drops an unknown purpose from storage", () => {
+    const d = addAgent(emptyDoc(), "/w/docs", { name: "  ", purpose: "docs" });
+    expect(d.agents[0]?.name).toBeNull();
+    const tampered = saveDoc(d).replace('"docs"', '"rm -rf"');
+    expect(loadDoc(tampered).agents[0]?.purpose).toBeUndefined();
+  });
+});
