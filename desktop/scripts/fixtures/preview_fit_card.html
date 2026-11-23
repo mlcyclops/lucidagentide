@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- P-PREVIEW.FIT1 fixture: a fixed 1920x1080 video card that cannot scroll itself (overflow hidden), like the
+     title cards an agent renders for a demo video. Markers sit at the four corners so a check can see them all. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Preview fit card</title>
+<style>
+  html, body { margin: 0; overflow: hidden; background: #0b1220; }
+  .card { position: relative; width: 1920px; height: 1080px; color: #e2e8f0; font: 700 120px system-ui, sans-serif; }
+  .card h1 { position: absolute; left: 160px; top: 380px; margin: 0; letter-spacing: 8px; }
+  .m { position: absolute; width: 120px; height: 120px; background: #22d3ee; }
+  #tl { left: 0; top: 0; } #tr { right: 0; top: 0; background: #f472b6; } #bl { left: 0; bottom: 0; background: #a3e635; } #br { right: 0; bottom: 0; background: #facc15; }
+</style>
+</head>
+<body>
+  <div class="card"><div class="m" id="tl"></div><div class="m" id="tr"></div><div class="m" id="bl"></div><div class="m" id="br"></div><h1>Learn the fleet</h1></div>
+</body>
+</html>

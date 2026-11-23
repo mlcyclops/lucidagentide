@@ -33,7 +33,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
-import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
+import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, previewLayout, PreviewWheelSteps, stepPreviewZoom, type PreviewContentSize } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { ASK_LUCID_TAB_ID, PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertAskLucidTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { imageForAction } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): the image an Edit image card names
 import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): data-tip values for new controls
@@ -751,11 +751,12 @@ function buildShell(): void {
             <button class="btn-mini prev-ask-act" id="prevCopyPath" hidden data-tip="Copy path|Copy the edited image's full path.">${icon("copy", 13)}</button>
           </div>
           <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" data-tip="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
+            <button type="button" class="btn-mini" id="prevZoomFit" aria-pressed="true" aria-label="Fit the page in the Preview" data-tip="Fit|Show the whole page in the panel (on by default). Picking a zoom turns it off; Fit turns it back on.">Fit</button>
             <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
             <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
             <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
           </div>
-          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the preview to pan a zoomed or oversized page. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -10744,6 +10745,12 @@ const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 const prevZoomByLane = new Map<PrevLane, number>();
 const prevWheelZoomByLane = new Set<PrevLane>();
+// P-PREVIEW.FIT1: each tab fits an oversized document by default (a 1920 px video card in a 780 px panel was cut off
+// at 100% with no way to pan). The document reports its own size (preview_bridge PREVIEW_ZOOM_JS); a tab leaves fit
+// mode once the user picks a zoom, and Fit puts it back. `grows` bounds a page sized in vw that widens with its frame.
+const prevContentByLane = new Map<PrevLane, PreviewContentSize & { grows: number }>();
+const prevManualZoomLanes = new Set<PrevLane>();
+let prevEffectiveZoom = 1;
 let previewPanEnabled = false;
 let previewPanPointer: number | null = null;
 let previewPanX = 0, previewPanY = 0;
@@ -10757,7 +10764,7 @@ function endPreviewPan(): void {
 }
 function setPreviewPan(enabled: boolean): void {
   endPreviewPan();
-  previewPanEnabled = enabled && prevLane === "yours" && !!prevPathByLane.yours;
+  previewPanEnabled = enabled && !!prevPathByLane[prevLane]; // P-PREVIEW.FIT1: every tab pans, not only Yours
   if (previewPanEnabled) setDrawTool("off");
   const surface = $("#prevPanSurface");
   if (surface) surface.hidden = !previewPanEnabled;
@@ -10816,11 +10823,15 @@ function wirePreviewPan(): void {
 }
 const previewWheelSteps = new PreviewWheelSteps();
 const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
+/** P-PREVIEW.FIT1: the zoom on screen (fit or picked) in the desktop mode; the picked zoom in a device frame. */
+const shownPreviewZoom = (): number => (prevDevice === "desktop" ? prevEffectiveZoom : previewZoom());
 function syncPreviewZoomControls(): void {
   const pan = $("#prevPan") as HTMLButtonElement | null;
-  if (pan) { pan.hidden = prevLane !== "yours"; pan.disabled = !prevPathByLane.yours; }
-  const zoom = previewZoom();
+  if (pan) { pan.hidden = false; pan.disabled = !prevPathByLane[prevLane]; }
+  // P-PREVIEW.FIT1: the readout and the step buttons follow the zoom on screen (a fitted page reads, say, 41%).
+  const zoom = shownPreviewZoom();
   const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  const fit = $("#prevZoomFit"); if (fit) fit.setAttribute("aria-pressed", String(!prevManualZoomLanes.has(prevLane)));
   const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
   const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
   const wheelOn = prevWheelZoomByLane.has(prevLane);
@@ -10832,12 +10843,13 @@ function sendPreviewZoomMode(): void {
 }
 function setPreviewZoom(value: number): void {
   if (!Number.isFinite(value)) return;
-  const old = previewZoom();
+  const old = shownPreviewZoom();
   const zoom = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, value));
   const viewport = $("#prevViewport");
   const x = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / old : 0;
   const y = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / old : 0;
   prevZoomByLane.set(prevLane, zoom);
+  prevManualZoomLanes.add(prevLane); // a picked zoom leaves fit mode until Fit is pressed
   applyDeviceScale();
   if (viewport) { viewport.scrollLeft = x * zoom - viewport.clientWidth / 2; viewport.scrollTop = y * zoom - viewport.clientHeight / 2; }
   syncPreviewZoomControls();
@@ -10846,15 +10858,43 @@ function wheelPreviewZoom(delta: unknown, mode: unknown): void {
   if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
   const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
   // Whole 10% steps: wheel travel accumulates, and each notch's worth moves one step on the grid.
-  let zoom = previewZoom();
+  let zoom = shownPreviewZoom();
   for (let n = previewWheelSteps.feed(pixels); n !== 0; n -= Math.sign(n)) zoom = stepPreviewZoom(zoom, n > 0 ? 1 : -1);
-  if (zoom !== previewZoom()) setPreviewZoom(zoom);
+  if (zoom !== shownPreviewZoom()) setPreviewZoom(zoom);
 }
+/** P-PREVIEW.FIT1: which preview tab's frame posted a message (null: not one of ours). */
+function previewLaneOf(source: MessageEventSource | null): PrevLane | null {
+  if (!source) return null;
+  for (const l of ["yours", "agent"]) if (laneFrame(l)?.contentWindow === source) return l;
+  for (const [id, f] of laneTabFrames) if (f.contentWindow === source) return id;
+  return null;
+}
+
+/** P-PREVIEW.FIT1: a document said how big it is. Only content that overflows its frame counts (a responsive page
+ *  that fills whatever frame it gets has no size of its own). The largest overflow seen for this document is kept,
+ *  since once the frame is widened to it the page no longer overflows; a fresh document (zoom-ready) starts over. */
+function notePreviewContent(lane: PrevLane, d: { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown }): void {
+  if (d.__lucid === "preview-zoom-ready") { prevContentByLane.delete(lane); if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); } return; }
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  if (num(d.vw) < 40 || num(d.vh) < 40) return; // a hidden tab's frame has no layout yet; it reports again on show
+  const fixed = d.fixed === true;
+  const w = num(d.w) > num(d.vw) + 1 ? num(d.w) : 0;
+  const h = fixed && num(d.h) > num(d.vh) + 1 ? num(d.h) : 0;
+  const prev = prevContentByLane.get(lane);
+  if (!w && !h && !prev) return;
+  const next = { w: Math.max(prev?.w ?? 0, w), h: Math.max(prev?.h ?? 0, h), fixed: fixed || !!prev?.fixed, grows: prev?.grows ?? 0 };
+  if (prev && next.w === prev.w && next.h === prev.h) return;
+  if (prev && ++next.grows > 3) return; // a page sized in vw/vh grows with its frame: stop chasing it
+  prevContentByLane.set(lane, next);
+  if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); }
+}
+
 function wirePreviewZoom(): void {
   wirePreviewPan();
-  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), -1)));
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), -1)));
   $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
-  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), 1)));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), 1)));
+  $("#prevZoomFit")?.addEventListener("click", () => { prevManualZoomLanes.delete(prevLane); applyDeviceScale(); syncPreviewZoomControls(); }); // P-PREVIEW.FIT1
   $("#prevWheelZoom")?.addEventListener("click", () => {
     if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
     syncPreviewZoomControls(); sendPreviewZoomMode();
@@ -10867,6 +10907,12 @@ function wirePreviewZoom(): void {
   $("#prevZoomControls")?.addEventListener("wheel", onWheel, { passive: false });
   $("#prevViewport")?.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("message", (event) => {
+    // P-PREVIEW.FIT1: a document reports its size from any tab (hidden ones too), so switching to it lands fitted.
+    const sized = event.data as { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown } | null;
+    if (sized && typeof sized === "object" && (sized.__lucid === "preview-size" || sized.__lucid === "preview-zoom-ready")) {
+      const lane = previewLaneOf(event.source);
+      if (lane !== null) notePreviewContent(lane, sized);
+    }
     const frame = laneFrame();
     if (!frame || frame.hidden || event.source !== frame.contentWindow) return;
     const data = event.data;
@@ -10929,11 +10975,20 @@ function applyDeviceScale(): void {
   const viewport = $("#prevViewport"), stage = $("#prevStage") as HTMLElement | null;
   if (!viewport || !stage || !viewport.clientWidth || !viewport.clientHeight) return;
   const device = prevDevice !== "desktop", d = PREV_DEVICES[prevDevice];
-  const w = Math.max(1, viewport.clientWidth - (device ? 28 : 0));
-  const h = Math.max(1, viewport.clientHeight - (device ? 28 : 0));
-  const fit = device ? Math.max(0.2, Math.min(1, w / d.w, h / d.h)) : 1;
-  stage.style.width = `${device ? d.w : w}px`;
-  stage.style.height = `${device ? d.h : h}px`;
+  if (!device) {
+    // P-PREVIEW.FIT1: the desktop frame is as large as the content needs, and fits the panel unless a zoom was picked.
+    const L = previewLayout({ viewportW: viewport.clientWidth, viewportH: viewport.clientHeight, content: prevContentByLane.get(prevLane) ?? null, fit: !prevManualZoomLanes.has(prevLane), manualZoom: previewZoom() });
+    stage.style.width = `${L.stageW}px`;
+    stage.style.height = `${L.stageH}px`;
+    stage.style.zoom = String(L.zoom);
+    prevEffectiveZoom = L.zoom;
+    return;
+  }
+  const w = Math.max(1, viewport.clientWidth - 28);
+  const h = Math.max(1, viewport.clientHeight - 28);
+  const fit = Math.max(0.2, Math.min(1, w / d.w, h / d.h));
+  stage.style.width = `${d.w}px`;
+  stage.style.height = `${d.h}px`;
   stage.style.zoom = String(fit * previewZoom());
 }
 function applyDevice(device: PrevDevice): void {
