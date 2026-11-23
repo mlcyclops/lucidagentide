@@ -1175,7 +1175,8 @@
     turnOff: "Turn off",
     label: "Label",
     relaysAll: "All relays",
-    daysField: "Days (30 to 365)",
+    daysField: "Days (30 to 90)",
+    olderToken: "Made for more than 90 days, before the limit. Replace it before it ends.",
     codeCopy: "Copy the code",
     commandsCopy: "Copy the command",
     consoleUrl: "Console address",
@@ -6681,12 +6682,12 @@
     const relaysWord = (v) => (v === "all" || !v ? FMSG.relaysAll : [].concat(v).map(relayName).join(", "));
     const tokenBox = el("div");
     const newToken = btn(FW["exports.token-new"], () => confirmDialog({
-      spec: fspec("token"), vals: { label: "", relays: FMSG.relaysAll, days: 365 },
+      spec: fspec("token"), vals: { label: "", relays: FMSG.relaysAll, days: 90 },
       fields: [{ kind: "text", key: "label", label: FMSG.label, maxlength: "64", required: true },
         { kind: "select", key: "relays", label: FMSG.cols.count, options: [["all", FMSG.relaysAll]].concat(relays.map((x) => [x.id, x.name])), value: "all" },
-        { kind: "text", type: "number", key: "days", label: FMSG.daysField, value: 365, min: "30", max: "365", inputmode: "numeric" }],
+        { kind: "text", type: "number", key: "days", label: FMSG.daysField, value: 90, min: "30", max: "90", inputmode: "numeric" }],
       vals2: (v) => ({ label: v.label, relays: relaysWord(v.relays), days: v.days }),
-      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 365) ? FMSG.daysField : ""),
+      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 90) ? FMSG.daysField : ""),
       run: (v) => post("settings/exports/token", { label: v.label, relays: v.relays === "all" ? "all" : [v.relays], days: v.days }, { action: "exports.token.create", target: v.label }),
       plain: true,
       // The token is shown once, here, and never again (10.1).
@@ -6699,7 +6700,8 @@
       caption: FMSG.tokens, rows: tokens, empty: MSG.noneYet, name: (t) => t.label,
       cols: [{ key: "label", label: FMSG.label }, { key: "hint", label: W["dialog.id"], cell: (t) => code(t.hint) }, { key: "relays", label: FMSG.cols.count, cell: (t) => relaysWord(t.relays), sortable: false },
         { key: "createdBy", label: FMSG.enrolledBy }, { key: "createdAt", label: FMSG.created, cell: (t) => when(t.createdAt) },
-        { key: "expires", label: FMSG.cols.ends, cell: (t) => when(t.expires) }, { key: "lastUsedAt", label: "Last used", cell: (t) => when(t.lastUsedAt) }],
+        { key: "expires", label: FMSG.cols.ends, cell: (t) => (t.olderThan90 ? el("span", { title: FMSG.olderToken }, when(t.expires), " ", el("small", null, FMSG.olderToken)) : when(t.expires)) },
+        { key: "lastUsedAt", label: "Last used", cell: (t) => when(t.lastUsedAt) }],
       actions: (t) => [{ label: FMSG.revoke, run: async () => {
         try {
           await api("POST", "settings/exports/token/revoke", { hint: t.hint }, { direct: true });
