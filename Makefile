@@ -1934,3 +1934,9 @@ demo-P-BUDDY.HIDE1: ## P-BUDDY.HIDE1: hovering a floating Agent on the main comp
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_buddy_hide_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_hide_1.mjs; else echo "demo-P-BUDDY.HIDE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-SCHED.AGENT1
+demo-P-SCHED.AGENT1: ## P-SCHED.AGENT1: an Agent's module on the right rail gets "Schedule this Agent" under Activate: once on a date (within a year), daily, weekdays, chosen days or a day of the month, at a time of day, with instructions or a goal (and an opt-in to approve its tool calls during the run). Saving writes an engine scheduled job targeting the Agent's folder (one-time jobs carry once:true and are disarmed after their fire); the module lists the Agent's schedules with pause, resume and delete. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811), including a real fire that starts a lane in the folder: LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_sched_agent_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/scheduled_jobs.test.ts desktop/renderer/agent_schedule.test.ts desktop/renderer/jobs_view.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_sched_agent_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sched_agent_1.mjs; else echo "demo-P-SCHED.AGENT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi

@@ -19622,6 +19622,8 @@ function wire(): void {
     pickFolder: () => pickFolderDialog({ title: "Choose a folder to add as an Agent", confirm: "Add agent" }),
     toast: showToast,
     activate: (kind, folder, name) => activateAgentFolder(kind, folder, name),
+    // P-SCHED.AGENT1: Schedule this Agent writes the engine's scheduled jobs; the Jobs tile repaints after.
+    jobs: { list: () => bridge.jobsList(), create: (spec) => bridge.jobsCreate(spec), update: (id, patch) => bridge.jobsUpdate(id, patch), remove: (id) => bridge.jobsDelete(id), changed: () => { void refreshJobs(); } },
     perfTier: () => perfWatch.tier(),
   });
   // P-BUDDY.1 (ADR-0667): floating Agent buddies over the main composer and each Fleet card (Agent Worlds attaches its

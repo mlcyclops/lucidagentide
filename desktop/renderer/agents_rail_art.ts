@@ -192,6 +192,8 @@ const ICON_PATHS = {
   search: '<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>',
   spark: '<path d="M12 4v4"/><path d="M12 16v4"/><path d="M4 12h4"/><path d="M16 12h4"/><path d="M7 7l2 2"/><path d="M15 15l2 2"/><path d="M17 7l-2 2"/><path d="M9 15l-2 2"/>',
   back: '<path d="M15 6l-6 6 6 6"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>', // P-SCHED.AGENT1: Schedule this Agent
+  pause: '<path d="M9 6v12"/><path d="M15 6v12"/>',
 } as const;
 
 export function agrIcon(name: keyof typeof ICON_PATHS, size: number, cls = ""): string {

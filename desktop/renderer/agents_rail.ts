@@ -25,6 +25,8 @@ import { esc } from "./format.ts";
 import { baseTier, pollDelay, type PerfTier } from "./perf_tier.ts";
 import type { FleetStatusView } from "./bridge.ts";
 import type { ToastOpts } from "./ui.ts";
+import type { JobsData, JobView } from "./jobs_view.ts";
+import { agentJobs, DAY_NAMES, defaultTime, describeSchedule, fmtWhen, isoDay, jobName, nextRun, ONCE_MAX_DAYS, PROMPT_MAX, REPEATS, scheduleCron, scheduleSummary, type Repeat } from "./agent_schedule.ts";
 
 export const DRAG_SLOP = 4;
 export const HOVER_INTENT_MS = 140;
@@ -151,6 +153,14 @@ export interface AgentsRailDeps {
   pickFolder(): Promise<string | null>;
   toast(o: ToastOpts): () => void;
   activate(kind: ActivateKind, folder: string, name: string): Promise<{ ok: boolean; message?: string }>;
+  /** P-SCHED.AGENT1: the engine's scheduled jobs (desktop/scheduled_jobs.ts); `changed` repaints the Jobs tile. */
+  jobs: {
+    list(): Promise<JobsData | null>;
+    create(spec: Record<string, unknown>): Promise<JobView | null>;
+    update(id: string, patch: Record<string, unknown>): Promise<JobView | null>;
+    remove(id: string): Promise<unknown>;
+    changed(): void;
+  };
   perfTier(): PerfTier;
   storage?: KV;
 }
@@ -716,6 +726,8 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   // ── hover module ──
   interface Cur { id: string; tile: HTMLElement; locked: boolean }
   let cur: Cur | null = null;
+  /** P-SCHED.AGENT1: the engine's jobs as last read (refreshed when a module opens). */
+  let jobsCache: JobView[] = [];
   let tOpen = 0, tClose = 0;
 
   function whereLine(id: string): string {
@@ -746,6 +758,9 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
       + go("takeover", "chat", "Take over main composer", "Main moves to this folder")
       + go("fleet", "fleet", "Start new Fleet session", "A fresh lane in this folder")
       + go("world", "world", "Agent World session", "A lane plus its Agent Worlds prompt")
+      // P-SCHED.AGENT1: run this Agent later, or on a repeat, with instructions (the engine's scheduled jobs).
+      + `<button class="ctx-it" type="button" data-act="schedule"><span class="agr-ic">${agrIcon("clock", 15)}</span>`
+      + `<span class="agr-tx"><b>Schedule this Agent</b><i data-sched-sum>${esc(scheduleSummary(agentJobs(jobsCache, a.path), Date.now()))}</i></span></button>`
       + `</div><div class="agr-rm" data-agr-rm>${removeButton()}</div>`
       + `<div class="agr-msg" data-ap-msg role="status" hidden></div></div>`;
   }
@@ -780,9 +795,11 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     const name = names().get(id) ?? a.path;
     pop.setAttribute("style", paletteStyle(paletteOf(a)));
     pop.setAttribute("aria-label", `Agent ${name}`);
+    sched = null;
     pop.innerHTML = moduleHtml(a, name, expanded);
     pop.classList.add("show");
     place();
+    void loadJobs(); // P-SCHED.AGENT1: the Schedule item's line says what is scheduled
   }
   function closeModule(refocus: boolean): void {
     clearTimeout(tOpen); clearTimeout(tClose);
@@ -790,6 +807,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     const t = cur.tile;
     t.classList.remove("hot");
     cur = null;
+    sched = null;
     pop.classList.remove("show");
     nub.classList.remove("show");
     if (refocus && t.isConnected) t.focus({ preventScroll: true });
@@ -827,11 +845,12 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
       pop.querySelectorAll<HTMLElement>("[data-sw]").forEach((b) => b.setAttribute("aria-pressed", String(a.theme === b.dataset.sw)));
     }
   }
-  function showMsg(text: string): void {
+  function showMsg(text: string, ok = false): void {
     const m = pop.querySelector<HTMLElement>("[data-ap-msg]");
     if (!m) return;
     m.textContent = text;
     m.hidden = !text;
+    m.classList.toggle("ok", ok);
     place();
   }
 
@@ -893,6 +912,125 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     showMsg(r.message || fallback);
   }
 
+  // ── P-SCHED.AGENT1: Schedule this Agent ──
+  // The module turns into a short form: when (once on a date, daily, weekdays, chosen days, or a day of the month), the
+  // time of day, and the instructions or goal. Saving writes one engine scheduled job that targets this Agent's folder
+  // (the engine wakes or starts a lane there at that time); the Agent's existing schedules are listed above the form,
+  // each with pause / resume and delete. The Jobs tile on the metrics rail shows them all.
+  interface SchedDraft { repeat: Repeat; time: string; date: string; days: number[]; dom: number; prompt: string; auto: boolean }
+  let sched: SchedDraft | null = null;
+  async function loadJobs(): Promise<void> {
+    const data = await d.jobs.list().catch(() => null);
+    if (!data) return;
+    jobsCache = data.jobs;
+    const a = cur ? agentById(cur.id) : undefined;
+    if (!a) return;
+    const sum = pop.querySelector<HTMLElement>("[data-sched-sum]");
+    if (sum) sum.textContent = scheduleSummary(agentJobs(jobsCache, a.path), Date.now());
+    if (sched) paintSchedList(a);
+  }
+  const schedFields = (s: SchedDraft): string => {
+    const now = Date.now();
+    if (s.repeat === "once") return `<label class="agr-field"><span>Date</span><input type="date" data-sched-date value="${esc(s.date)}" min="${isoDay(now)}" max="${isoDay(now, ONCE_MAX_DAYS)}"></label>`;
+    if (s.repeat === "weekly") {
+      return `<div class="agr-field"><span>Days</span><div class="agr-days" role="group" aria-label="Days of the week">`
+        + DAY_NAMES.map((n, i) => `<button type="button" class="agr-day" data-sched-day="${i}" aria-pressed="${s.days.includes(i)}">${n}</button>`).join("") + `</div></div>`;
+    }
+    if (s.repeat === "monthly") {
+      return `<label class="agr-field"><span>Day of the month</span><select data-sched-dom>`
+        + Array.from({ length: 28 }, (_, i) => `<option value="${i + 1}"${s.dom === i + 1 ? " selected" : ""}>${i + 1}</option>`).join("") + `</select></label>`;
+    }
+    return "";
+  };
+  function schedHtml(a: AgentRecord, name: string): string {
+    const s = sched!;
+    return `<div class="agr-ph"><div class="agr-ph-art">${agentArt(stateOf(a.id), loopDelay(a.id))}</div><div class="agr-ph-id">`
+      + `<div class="agr-ph-name" title="${esc(name)}">${esc(name)}</div><div class="agr-ph-path" title="${esc(a.path)}">${esc(a.path)}</div></div></div>`
+      + `<div class="cfg-sec agr-sched"><div class="cfg-lbl"><span>Schedule this Agent</span></div>`
+      + `<div class="agr-sj-list" data-sched-list></div>`
+      + `<div class="agr-seg" role="radiogroup" aria-label="Repeat">`
+      + REPEATS.map((r) => `<button type="button" role="radio" class="agr-seg-b" data-sched-repeat="${r.key}" aria-checked="${s.repeat === r.key}">${r.label}</button>`).join("") + `</div>`
+      + `<div data-sched-fields>${schedFields(s)}</div>`
+      + `<label class="agr-field"><span>Time of day</span><input type="time" data-sched-time value="${esc(s.time)}"></label>`
+      + `<label class="agr-field"><span>Instructions or goal</span><textarea data-sched-prompt rows="4" maxlength="${PROMPT_MAX}" placeholder="What should it do, and what counts as done?">${esc(s.prompt)}</textarea></label>`
+      + `<label class="agr-check"><input type="checkbox" data-sched-auto${s.auto ? " checked" : ""}><span>Approve its tool calls on its own during the run</span></label>`
+      + `<p class="agr-sched-note" data-sched-note></p>`
+      + `<div class="agr-add-row"><button class="btn-mini" type="button" data-act="sched-back">${agrIcon("back", 13)}Back</button>`
+      + `<button class="btn-mini ok" type="button" data-act="sched-save">Save schedule</button></div>`
+      + `<div class="agr-msg" data-ap-msg role="status" hidden></div></div>`;
+  }
+  function paintSchedList(a: AgentRecord): void {
+    const box = pop.querySelector<HTMLElement>("[data-sched-list]");
+    if (!box) return;
+    const now = Date.now();
+    const mine = agentJobs(jobsCache, a.path);
+    box.innerHTML = mine.map((j) => {
+      const live = j.armed && !j.suspended;
+      const when = j.suspended ? j.suspended : live && j.nextFireAt ? `Next ${fmtWhen(j.nextFireAt)}` : j.once && !j.armed && j.lastRunAt ? `${j.lastOutcome === "cancelled" ? "Missed (LUCID was closed)" : "Ran"} ${fmtWhen(j.lastRunAt)}` : "Paused";
+      return `<div class="agr-sj${live ? "" : " off"}" data-sj="${esc(j.id)}"><div class="agr-sj-tx">`
+        + `<b title="${esc(j.prompt)}">${esc(describeSchedule(j.cron, j.once === true, now))}</b><i title="${esc(when)}">${esc(when)}</i></div>`
+        + (j.once && !j.armed && j.lastRunAt ? "" : `<button type="button" class="agr-sj-b" data-sj-toggle="${esc(j.id)}" aria-label="${live ? "Pause" : "Resume"} this schedule" title="${live ? "Pause" : "Resume"}">${agrIcon(live ? "pause" : "play", 13)}</button>`)
+        + `<button type="button" class="agr-sj-b" data-sj-del="${esc(j.id)}" aria-label="Delete this schedule" title="Delete">${agrIcon("trash", 13)}</button></div>`;
+    }).join("");
+    box.hidden = !mine.length;
+    place();
+  }
+  function paintSchedNote(): void {
+    const n = pop.querySelector<HTMLElement>("[data-sched-note]");
+    if (!n || !sched) return;
+    const now = Date.now();
+    const c = scheduleCron(sched, now);
+    if (!c.ok) { n.textContent = c.reason; n.classList.add("warn"); return; }
+    n.classList.remove("warn");
+    const next = nextRun(c.cron, now);
+    n.textContent = `${describeSchedule(c.cron, c.once, now)}.${next && !c.once ? ` Next: ${fmtWhen(next)}.` : ""} LUCID must be open then (minimized is fine).`;
+  }
+  function openSchedule(): void {
+    if (!cur) return;
+    const a = agentById(cur.id);
+    if (!a) return;
+    const now = Date.now();
+    sched ??= { repeat: "daily", time: defaultTime(now), date: isoDay(now, 1), days: [1, 2, 3, 4, 5], dom: Math.min(28, new Date(now).getDate()), prompt: "", auto: false };
+    cur.locked = true; // a form is open: hovering away must not close it
+    pop.innerHTML = schedHtml(a, names().get(a.id) ?? a.path);
+    paintSchedList(a);
+    paintSchedNote();
+    place();
+    pop.querySelector<HTMLElement>("[data-sched-prompt]")?.focus({ preventScroll: true });
+    void loadJobs();
+  }
+  function closeSchedule(): void {
+    if (!cur) return;
+    const a = agentById(cur.id);
+    sched = null;
+    cur.locked = false;
+    if (!a) { closeModule(false); return; }
+    pop.innerHTML = moduleHtml(a, names().get(a.id) ?? a.path, true);
+    place();
+    pop.querySelector<HTMLElement>('[data-act="schedule"]')?.focus({ preventScroll: true });
+  }
+  async function saveSchedule(): Promise<void> {
+    if (!cur || !sched) return;
+    const a = agentById(cur.id);
+    if (!a) return;
+    const prompt = sched.prompt.trim();
+    const c = scheduleCron(sched, Date.now());
+    if (!c.ok) { showMsg(c.reason); return; }
+    if (!prompt) { showMsg("Write what it should do: the instructions or the goal."); pop.querySelector<HTMLElement>("[data-sched-prompt]")?.focus(); return; }
+    const name = names().get(a.id) ?? a.path;
+    const save = pop.querySelector<HTMLButtonElement>('[data-act="sched-save"]');
+    if (save) save.disabled = true;
+    const job = await d.jobs.create({ name: jobName(name, prompt), prompt, target: { name, cwd: a.path }, cron: c.cron, once: c.once, armed: true, autoApprove: sched.auto, missed: "run-once" }).catch(() => null);
+    if (save) save.disabled = false;
+    if (!job) { showMsg("The engine did not accept that schedule. Check the time and try again."); return; }
+    sched.prompt = "";
+    const ta = pop.querySelector<HTMLTextAreaElement>("[data-sched-prompt]");
+    if (ta) ta.value = "";
+    showMsg(`Scheduled: ${describeSchedule(job.cron, job.once === true, Date.now())}.`, true);
+    d.jobs.changed();
+    await loadJobs();
+  }
+
   function confirmRemove(): void {
     const box = pop.querySelector("[data-agr-rm]");
     if (!box) return;
@@ -936,7 +1074,41 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
       if (next) refreshColor(next);
       return;
     }
+    // P-SCHED.AGENT1: the schedule form's own controls.
+    if (sched) {
+      const ds = b.dataset;
+      if (ds.schedRepeat) {
+        sched.repeat = ds.schedRepeat as Repeat; // only REPEATS keys are rendered into data-sched-repeat
+        pop.querySelectorAll<HTMLElement>("[data-sched-repeat]").forEach((x) => x.setAttribute("aria-checked", String(x === b)));
+        const f = pop.querySelector<HTMLElement>("[data-sched-fields]");
+        if (f) f.innerHTML = schedFields(sched);
+        paintSchedNote();
+        place();
+        return;
+      }
+      if (ds.schedDay !== undefined) {
+        const day = Number(ds.schedDay);
+        sched.days = sched.days.includes(day) ? sched.days.filter((x) => x !== day) : [...sched.days, day];
+        b.setAttribute("aria-pressed", String(sched.days.includes(day)));
+        paintSchedNote();
+        return;
+      }
+      if (ds.sjToggle || ds.sjDel) {
+        const id = ds.sjToggle ?? ds.sjDel ?? "";
+        const j = jobsCache.find((x) => x.id === id);
+        void (async () => {
+          if (ds.sjDel) await d.jobs.remove(id).catch(() => null);
+          else if (j) await d.jobs.update(id, { armed: !(j.armed && !j.suspended) }).catch(() => null);
+          d.jobs.changed();
+          await loadJobs();
+        })();
+        return;
+      }
+    }
     switch (b.dataset.act) {
+      case "schedule": openSchedule(); return;
+      case "sched-back": closeSchedule(); return;
+      case "sched-save": void saveSchedule(); return;
       case "rename": startRename(); return;
       case "activate": setActivateOpen(b.getAttribute("aria-expanded") !== "true"); return;
       case "remove": confirmRemove(); return;
@@ -953,6 +1125,16 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   });
   pop.addEventListener("input", (e) => {
     const t = e.target as HTMLElement;
+    if (sched && (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement)) {
+      if (t.matches("[data-sched-time]")) sched.time = t.value;
+      else if (t.matches("[data-sched-date]")) sched.date = t.value;
+      else if (t.matches("[data-sched-dom]")) sched.dom = Number(t.value);
+      else if (t.matches("[data-sched-prompt]")) { sched.prompt = t.value; return; }
+      else if (t instanceof HTMLInputElement && t.matches("[data-sched-auto]")) { sched.auto = t.checked; return; }
+      else return;
+      paintSchedNote();
+      return;
+    }
     if (!cur || !(t instanceof HTMLInputElement) || !t.matches("[data-agr-hue]")) return;
     commit(recolorAgent(doc, cur.id, { hue: Number(t.value) }));
     const a = agentById(cur.id);

@@ -6553,3 +6553,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-24):** hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner; a click hides it for that Main or lane session (Undo in the toast; a new session brings it back). ADR-0676.
 - **stubbed:** none.
 - **next:** offer the same x on Agent Worlds buddies if the owner wants it there.
+## P-SCHED.AGENT1: schedule an Agent from its rail module
+- **shipped (2026-11-24):** Activate > Schedule this Agent: once on a date, daily, weekdays, chosen days or monthly, at a time, with instructions or a goal; saved as an engine scheduled job on the Agent's folder (one-time runs disarm after their fire); the module lists, pauses, resumes and deletes them; proven end to end including a real fire. ADR-0677.
+- **stubbed:** none.
+- **next:** run a schedule while LUCID is closed (ADR-0443's P-SCHED.3 keep-alive).

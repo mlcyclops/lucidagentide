@@ -4064,6 +4064,45 @@ body.lucid-capturing #toasts{visibility:hidden}
 .agr-yes:focus-visible,.agr-no:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .agr-msg{margin:6px 4px 2px;padding:7px 9px;border-radius:7px;font-size:11.5px;line-height:1.45;color:var(--amber-txt);background:var(--amber-dim)}
 .agr-msg[hidden]{display:none}
+.agr-msg.ok{color:var(--green-txt);background:color-mix(in srgb,var(--green) 14%,var(--bg-2))}
+/* P-SCHED.AGENT1: Schedule this Agent. Every label is one ellipsised line (invariant 11); each field stacks its label
+   over its control at the full width, so the controls share one width (ADR-0633). */
+.popover.agr-pop:has(.agr-sched){width:304px}
+.agr-sched{display:flex;flex-direction:column;gap:8px}
+.agr-sched .cfg-lbl{margin-bottom:0}
+.agr-sj-list{display:flex;flex-direction:column;gap:4px}
+.agr-sj-list[hidden]{display:none}
+.agr-sj{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;border-radius:8px;border:1px solid color-mix(in srgb,var(--G) 30%,var(--line));
+  background:color-mix(in srgb,var(--G) 7%,var(--bg-2))}
+.agr-sj.off{border-color:var(--line);background:var(--bg-2);opacity:.75}
+.agr-sj-tx{flex:1;min-width:0}
+.agr-sj-tx b{display:block;font-size:12px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-sj-tx i{display:block;font-style:normal;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-sj-b{flex:none;width:24px;height:24px;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--bg-1);color:var(--txt-3);cursor:pointer}
+.agr-sj-b:hover{color:var(--txt);background:var(--bg-3)}
+.agr-sj-b[data-sj-del]:hover{color:var(--red-txt)}
+.agr-sj-b:focus-visible,.agr-seg-b:focus-visible,.agr-day:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.agr-seg{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;padding:2px;border-radius:8px;background:var(--bg-2);border:1px solid var(--line)}
+.agr-seg-b{min-width:0;padding:5px 0;border:0;border-radius:6px;background:transparent;color:var(--txt-2);font:inherit;font-size:11px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.agr-seg-b:hover{color:var(--txt);background:var(--bg-3)}
+.agr-seg-b[aria-checked="true"]{color:var(--txt);background:color-mix(in srgb,var(--G) 18%,var(--bg-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--G) 50%,var(--line))}
+.agr-field{display:block}
+.agr-field>span{display:block;margin:0 0 3px 2px;font-size:11px;font-weight:600;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-field input,.agr-field select,.agr-field textarea{display:block;box-sizing:border-box;width:100%;font:inherit;font-size:12.5px;color:var(--txt);background:var(--bg-2);
+  border:1px solid var(--line);border-radius:7px;padding:5px 8px;outline:none;color-scheme:inherit}
+.agr-field textarea{resize:vertical;min-height:72px;line-height:1.45}
+.agr-field input:focus,.agr-field select:focus,.agr-field textarea:focus{border-color:color-mix(in srgb,var(--G) 60%,var(--line))}
+.agr-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.agr-day{min-width:0;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);color:var(--txt-2);font:inherit;font-size:10.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.agr-day[aria-pressed="true"]{color:var(--txt);background:color-mix(in srgb,var(--G) 18%,var(--bg-3));border-color:color-mix(in srgb,var(--G) 50%,var(--line))}
+.agr-check{position:relative;display:block;padding:2px 0 2px 24px;font-size:11.5px;line-height:1.4;color:var(--txt-2);cursor:pointer}
+.agr-check input{position:absolute;left:2px;top:3px;margin:0;accent-color:var(--G)}
+.agr-check span{display:block}
+.agr-sched-note{margin:0 2px;font-size:11px;line-height:1.45;color:var(--txt-3)}
+.agr-sched-note.warn{color:var(--amber-txt)}
+.agr-sched .agr-add-row{margin-top:0;padding:0}
 .agr-nub{position:fixed;z-index:96;width:12px;height:12px;background:var(--bg-1);border:1px solid var(--line-strong);transform:rotate(45deg);pointer-events:none;opacity:0;transition:opacity var(--t-fast)}
 .agr-nub.show{opacity:1}
 .agr-nub.l{border-left-color:transparent;border-bottom-color:transparent}

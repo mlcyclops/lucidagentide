@@ -6549,7 +6549,7 @@ return Bun.serve({
         const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
         const current = loadJobs().find((j) => j.id === id);
         if (!current) return json({ ok: false, error: "no such job" });
-        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, once: current.once === true, ...patch });
         if (!merged.ok) return json({ ok: false, error: merged.reason });
         // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
         // restarts from now, so the fires missed while suspended are not owed.

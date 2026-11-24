@@ -18,6 +18,8 @@ export interface JobView {
   id: string; name: string; prompt: string; cron: string; armed: boolean; autoApprove: boolean; maxMinutes: number;
   missed: "run-once" | "skip"; createdAt: number; lastRunAt?: number; lastOutcome?: JobOutcome; suspended?: string;
   nextFireAt: number | null; history: JobRunView[];
+  /** P-SCHED.AGENT1: a one-time run (disarmed by the engine after its date). */
+  once?: boolean;
   target: { laneId?: string; name: string; cwd: string; model?: string; repo?: string };
 }
 export interface UpcomingFire { at: number; jobId: string; name: string; lane: string; repo: string }
