@@ -535,15 +535,26 @@ jobs:
             gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
           done
 
+      # /releases/latest resolves to THIS release, so its title and body must name the version a visitor
+      # downloads. The build's own updater feed (latest.yml) carries it; a missing feed fails the publish
+      # rather than shipping a page that names no version.
+      - name: Read the published version
+        id: ver
+        run: |
+          V="$(sed -n 's/^version: *//p' dist/latest.yml | head -1 | tr -d "'\"\r")"
+          if [ -z "$V" ]; then echo "::error::dist/latest.yml names no version"; exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
       - name: Publish / update the "latest" release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
-          name: Latest build
+          name: LUCID ${{ steps.ver.outputs.version }} (latest build)
           prerelease: false
           make_latest: "true"
           body: |
-            Rolling build — auto-updated on every successful CI build (commit ${{ github.sha }}).
+            **LUCID ${{ steps.ver.outputs.version }}** is the current release. [Release notes for v${{ steps.ver.outputs.version }}](https://github.com/${{ github.repository }}/releases/tag/v${{ steps.ver.outputs.version }}).
+            Rolling build, refreshed by each publishing CI run (commit ${{ github.sha }}).
             Always the newest Windows, macOS, and Linux installers. For a pinned version, see the tagged releases.
           files: |
             dist/*.dmg
