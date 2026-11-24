@@ -5406,6 +5406,7 @@ function askLucid(): AskLucidHandle {
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
     zoomOf: "#app",
+    rightOf: "#inspector", // P-ASKLUCID.SPEED1b: fly out left of the right rail, over the page and its popups
     runAction: runAskAction,
     // P-ASKLUCID.9 (ADR-0600): the Edit image card's models (remembered choice in localStorage), the Providers
     // jump, and where an edited image opens.

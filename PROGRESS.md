@@ -6529,3 +6529,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** Ask Lucid already runs the newest small-tier model of the picker's provider (Claude Haiku here). The panel now shows a live waiting line (reading, scanning, asking <model>, starting, writing, with a timer) streamed from the engine, and the answer says which model answered and how long it took. Faster: budgets on what goes with a question, the engine's three slow reads in parallel, no MCP servers for text-only side completions, and a warm spare session opened when the panel opens and after each answer. Measured: 6.7 to 8.8 s with the panel open (was 15 to 28 s); a first question right after start 54 s (was 80 to 109 s). ADR-0670.
 - **stubbed:** the first question right after start still waits about 25 s for the engine to finish booting before it starts reading.
 - **next:** stream Ask Lucid's answer text as it is written.
+## P-ASKLUCID.MODEL1: Ask Lucid never drops to an older small model, and flies out left of the right rail
+- **shipped (2026-11-23):** Ask Lucid's model is the newest small-tier model omp has ever offered on this machine for the picker's provider (Haiku 5.5, not the Haiku 4.5 a just-started omp lists), with the live pick as fallback and the answer naming the model that really ran; docked right, the panel now flies out to the left of the Agents rail, over the page and its popups, and pushes nothing aside. ADR-0671.
+- **stubbed:** none.
+- **next:** stream Ask Lucid's answer text as it is written.

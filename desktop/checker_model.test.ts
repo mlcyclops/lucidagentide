@@ -9,7 +9,7 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { recommendBuddyModel, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { recommendBuddyModel, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, withSeenModels, type ModelOption } from "./checker_model.ts";
 import { isAsksageRouted } from "./lockdown_route.ts";
 
 const opt = (value: string): ModelOption => ({ value });
@@ -244,5 +244,21 @@ describe("recommendBuddyModel", () => {
   test("unusable routes are never picked", () => {
     const list = ["openai-codex/codex-auto-review", "asksage-query/rag", "openai-codex/gpt-5.5-mini"].map(opt);
     expect(recommendBuddyModel(list, "openai-codex/gpt-5.5")!.value).toBe("openai-codex/gpt-5.5-mini");
+  });
+});
+
+// P-ASKLUCID.MODEL1: right after a start omp lists only its built-in models; Ask Lucid must still get the newest
+// small model this machine has offered (Haiku 5.5), never the older generation the partial list holds (4.5).
+describe("withSeenModels", () => {
+  const live = ["anthropic/claude-opus-5-5", "anthropic/claude-haiku-4-5", "anthropic/claude-sonnet-4-5"].map((value) => ({ value }));
+  test("an id offered here before joins the list, so the newest small model wins", () => {
+    expect(recommendCheckerModel(live, "anthropic/claude-opus-5-5")!.value).toBe("anthropic/claude-haiku-4-5");
+    const all = withSeenModels(live, ["anthropic/claude-haiku-5-5", "anthropic/claude-haiku-4-5"]);
+    expect(recommendCheckerModel(all, "anthropic/claude-opus-5-5")!.value).toBe("anthropic/claude-haiku-5-5");
+  });
+  test("a provider that is not live now contributes nothing, and nothing is listed twice", () => {
+    const all = withSeenModels(live, ["google/gemini-3-flash", "anthropic/claude-haiku-4-5", "anthropic/claude-haiku-5-5", "anthropic/claude-haiku-5-5"]);
+    expect(all.map((m) => m.value)).toEqual([...live.map((m) => m.value), "anthropic/claude-haiku-5-5"]);
+    expect(withSeenModels([], ["anthropic/claude-haiku-5-5"])).toEqual([]);
   });
 });

@@ -114,6 +114,17 @@ function isUsable(value: string): boolean {
 
 export interface CheckerRecommendation { value: string; why: string }
 
+/** P-ASKLUCID.MODEL1: the live model list plus every id omp offered on this machine before, but only for
+ *  providers in the live list (a provider that is gone now contributes nothing). Right after a start omp lists
+ *  only its built-in models, so without this a recommendation drops a generation (Haiku 4.5 for 5.5). */
+export function withSeenModels(live: readonly ModelOption[], seen: Iterable<string>): ModelOption[] {
+  const providers = new Set(live.map((m) => provider(m.value)));
+  const have = new Set(live.map((m) => m.value));
+  const out = [...live];
+  for (const v of seen) if (v && !have.has(v) && providers.has(provider(v))) { out.push({ value: v }); have.add(v); }
+  return out;
+}
+
 /** Recommend a checker model from the user's accessible `models`, biased toward the `current` (chat)
  *  model's provider. Returns null only when the list is empty. */
 export function recommendCheckerModel(models: ModelOption[], current: string): CheckerRecommendation | null {

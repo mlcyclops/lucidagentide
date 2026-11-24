@@ -50,6 +50,9 @@ export interface AskDeps {
   /** P-ASKLUCID.SPEED1: where the answer is, as it happens, for the panel's waiting line: reading the views,
    *  scanning them, asking the model (with its id). The route adds the completion's own phases. */
   onPhase?(phase: "reading" | "scanning" | "asking", model?: string): void;
+  /** P-ASKLUCID.MODEL1: the model the completion really ran on, when it differs from the pin (omp refused the
+   *  pin and the fallback was used). Absent or undefined = the pinned model. */
+  modelUsed?(): string | undefined;
   /** `images` (P-ASKLUCID.7) ride after the text as picture blocks; an empty list is a text-only call. */
   complete(system: string, user: string, model: string | undefined, images?: readonly { data: string; mimeType: string }[]): Promise<string>;
   /** P-ASKLUCID.7 (ADR-0588): did this model already answer a picture with an error in this run? */
@@ -364,5 +367,6 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   const text = parsed.text || (actions.length ? "Here is what I can set up. Nothing runs until you confirm it." : "");
   if (!text) return { ok: false, error: UNAVAILABLE, ...base, actions: [], actionsDropped };
   const timing = { readMs: tScan - t0, scanMs: tModel - tScan, modelMs: tDone - tModel, totalMs: deps.now() - t0 };
-  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), timing, ...base, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
+  const ran = deps.modelUsed?.() ?? pin.model;
+  return { ok: true, reply: text, ...(ran ? { model: ran.replace(/^[^/]*\//, "") } : {}), timing, ...base, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
 }

@@ -172,6 +172,10 @@ export interface DockOptions {
    *  1 and sizes itself in viewport pixels; the space the page gives up is a margin INSIDE that zoomed element,
    *  so it is published a second time divided by the zoom (`--ask-r-app`, `--ask-b-app`). */
   zoomOf?: string;
+  /** P-ASKLUCID.SPEED1b: selector of a panel that hugs the window's right edge (the inspector rail). A right dock
+   *  then flies out to its LEFT, over the page and its popups, instead of taking the window's edge and pushing
+   *  that panel inward; it reserves no page space. Absent: the right dock takes the edge and reserves space. */
+  rightOf?: string;
   headerStart?: Node;
   body?: Node;
   pillContent?: Node;
@@ -262,6 +266,9 @@ export function createDock(opts: DockOptions): DockHandle {
     mounted = true;
     document.body.append(snap, root, pill);
     window.addEventListener("resize", onResize);
+    // The right panel collapses to a rail, expands, or hides: a right dock follows its left edge at once.
+    const host = opts.rightOf ? document.querySelector<HTMLElement>(opts.rightOf) : null;
+    if (host && typeof ResizeObserver !== "undefined") new ResizeObserver(() => { if (state.mode === "right") apply(); }).observe(host);
     reload();
   };
 
@@ -275,9 +282,21 @@ export function createDock(opts: DockOptions): DockHandle {
     try { localStorage.setItem(opts.storageKey, serializeDockState(state)); } catch { /* storage blocked */ }
   };
 
+  /** Px a right dock keeps clear at the window's right edge: the width of the `rightOf` panel when it is shown
+   *  against that edge, else 0. */
+  const rightInset = (): number => {
+    const host = opts.rightOf ? document.querySelector<HTMLElement>(opts.rightOf) : null;
+    if (!host || host.offsetParent === null) return 0;
+    const r = host.getBoundingClientRect();
+    return r.width > 0 && r.right >= window.innerWidth - 2 ? Math.max(0, Math.round(window.innerWidth - r.left)) : 0;
+  };
+  /** The viewport a right dock sizes itself in: the window minus the inset. */
+  const rightViewport = (vp: Viewport): Viewport => ({ w: Math.max(0, vp.w - rightInset()), h: vp.h });
+
   const reserve = (): void => {
     const de = document.documentElement;
     const r = reservesSpace(state.mode, open && !state.minimized, viewport());
+    if (opts.rightOf) r.right = false; // a fly-out over the page, beside the right panel: nothing moves under it
     de.classList.toggle("ask-r", r.right);
     de.classList.toggle("ask-b", r.bottom);
     const zoomEl = opts.zoomOf ? document.querySelector(opts.zoomOf) : null;
@@ -297,9 +316,9 @@ export function createDock(opts: DockOptions): DockHandle {
     st.left = st.top = st.right = st.bottom = st.width = st.height = "";
     if (state.mode === "right") {
       st.top = `${topOffset()}px`;
-      st.right = "0px";
+      st.right = `${rightInset()}px`;
       st.bottom = "0px";
-      st.width = `${state.w}px`;
+      st.width = `${clampRight(state.w, rightViewport(vp))}px`;
       edge.setAttribute("aria-orientation", "vertical");
       edge.setAttribute("aria-valuemin", String(DOCK_LIMITS.rightMin));
       edge.setAttribute("aria-valuemax", String(DOCK_LIMITS.rightMax));
@@ -334,7 +353,8 @@ export function createDock(opts: DockOptions): DockHandle {
 
   const slideFrames = (inbound: boolean): Keyframe[] => {
     const r = root.getBoundingClientRect();
-    const off = state.mode === "bottom" ? `translateY(${Math.round(r.height + 24)}px)` : state.mode === "right" ? `translateX(${Math.round(r.width + 24)}px)` : "translateX(56px)";
+    // Beside a right panel (rightOf) it flies out from that panel's edge: a short slide, not across the panel.
+    const off = state.mode === "bottom" ? `translateY(${Math.round(r.height + 24)}px)` : state.mode === "right" ? `translateX(${opts.rightOf ? 40 : Math.round(r.width + 24)}px)` : "translateX(56px)";
     const from: Keyframe = { transform: off, opacity: 0 };
     const to: Keyframe = { transform: "translate(0, 0)", opacity: 1 };
     return inbound ? [from, to] : [to, from];
@@ -436,9 +456,9 @@ export function createDock(opts: DockOptions): DockHandle {
     s.left = s.top = s.right = s.bottom = s.width = s.height = "";
     if (zone === "right") {
       s.top = `${topOffset()}px`;
-      s.right = "0px";
+      s.right = `${rightInset()}px`;
       s.bottom = "0px";
-      s.width = `${clampRight(state.w, vp)}px`;
+      s.width = `${clampRight(state.w, rightViewport(vp))}px`;
     } else {
       s.left = "0px";
       s.right = "0px";

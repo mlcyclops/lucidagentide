@@ -228,6 +228,8 @@ export interface AskLucidDeps {
   topBar?: string;
   /** Selector of the zoomed app root (see DockOptions.zoomOf). */
   zoomOf?: string;
+  /** Selector of the panel at the window's right edge; docked right, the panel flies out to its left (DockOptions.rightOf). */
+  rightOf?: string;
   /** P-ASKLUCID.2 (ADR-0582): carry out one action the user just confirmed. Absent = cards are not offered. */
   runAction?(action: AskAction, ctx?: AskActionContext): Promise<AskActionResult>;
   /** P-ASKLUCID.9 (ADR-0600): the image models, the Settings jump and where an edited image opens. */
@@ -476,6 +478,7 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     storageKey: ASK_DOCK_KEY,
     topBar: deps.topBar,
     zoomOf: deps.zoomOf,
+    rightOf: deps.rightOf, // P-ASKLUCID.SPEED1b: docked right, he flies out left of the inspector rail
     headerStart: head,
     body: panel,
     pillContent: pillIn,

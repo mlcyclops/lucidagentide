@@ -46,7 +46,17 @@ export async function verifyAskLucidWait(page) {
       }
       await page.waitForSelector(".ald.al-dock textarea", { visible: true, timeout: 8000 });
       await page.evaluate(() => document.querySelector('.ald.al-dock [data-mode="right"], .ald.al-dock [data-dock="right"]')?.click());
-      await pause(300);
+      await pause(500);
+      // P-ASKLUCID.SPEED1b: docked right, he flies out to the LEFT of the right rail, over the page, and nothing is
+      // pushed aside for him.
+      const place = await page.evaluate(() => {
+        const d = document.querySelector(".ald.al-dock").getBoundingClientRect();
+        const ins = document.querySelector("#inspector")?.getBoundingClientRect();
+        const at = document.elementFromPoint(d.left + d.width / 2, d.top + d.height / 2);
+        return { dockRight: d.right, dockLeft: d.left, insLeft: ins?.left ?? null, insRight: ins?.right ?? null, vw: innerWidth, onTop: !!at?.closest(".ald.al-dock"), reserved: document.documentElement.classList.contains("ask-r") };
+      });
+      assert(place.insLeft !== null && Math.abs(place.dockRight - place.insLeft) <= 2 && place.insRight >= place.vw - 2, `${label}: Ask Lucid is not flying out left of the right rail (${JSON.stringify(place)})`);
+      assert(place.onTop && !place.reserved, `${label}: Ask Lucid is under something or pushes the page aside (${JSON.stringify(place)})`);
       const ta = await page.$(".ald.al-dock textarea");
       await ta.click();
       await page.keyboard.type(QUESTION);

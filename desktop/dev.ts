@@ -6693,15 +6693,25 @@ return Bun.serve({
         // P-ASKLUCID.SPEED1: with `stream: true` the answer arrives as NDJSON: `phase` lines while Lucid works (reading,
         // scanning, asking + model, queued, starting, writing), then one `reply` line. The panel shows the phase and
         // a timer instead of sitting silent for the whole answer.
+        const modelInfo = backend.checkerModelInfo();
+        let ranOn: string | undefined;
         const answer = (phase?: (e: { type: "phase"; phase: string; model?: string }) => void) => answerAskLucid(q.text, sanitizeHistory(b.history), {
           onPhase: (p, model) => phase?.({ type: "phase", phase: p, ...(model ? { model } : {}) }),
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
           knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
           scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
-          pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
+          // P-ASKLUCID.MODEL1: the newest small-tier model omp has offered here for the picker's provider (Haiku 5.5,
+          // not the Haiku 4.5 of a list omp has not finished loading); the live list's pick is the fallback.
+          pinModel: () => backend.completionModel(modelInfo.newest || undefined),
+          modelUsed: () => ranOn,
           // P-ASKLUCID.SPEED1: no MCP servers for this text-only call, and its own phases go to the panel too.
-          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, noMcp: true, onPhase: (p) => phase?.({ type: "phase", phase: p }), ...(images?.length ? { images } : {}) }),
+          complete: (system, user, model, images) => backend.complete(system, user, {
+            model, fallbackModel: modelInfo.recommended || undefined, idleMs: 45_000, noMcp: true,
+            onPhase: (p) => phase?.({ type: "phase", phase: p }),
+            onModel: (m) => { if (m && m !== model) { ranOn = m; phase?.({ type: "phase", phase: "asking", model: m }); } },
+            ...(images?.length ? { images } : {}),
+          }),
           // P-ASKLUCID.7 (ADR-0588): a model that answered a picture with an error is not sent another this run.
           visionRefused: (model) => askLucidNoPictures.has(model ?? ""),
           noteVisionRefused: (model) => { askLucidNoPictures.add(model ?? ""); },
@@ -6714,7 +6724,7 @@ return Bun.serve({
           now: () => Date.now(),
         }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
         // P-ASKLUCID.SPEED1: the next question finds a warm session (opened while the user reads this answer).
-        const rewarm = () => { void backend.warmSpare(backend.checkerModelInfo().recommended || undefined); };
+        const rewarm = () => { void backend.warmSpare(backend.checkerModelInfo().newest || undefined); };
         if (b.stream === true) return ndjsonStream("ask-lucid", async (emit) => { emit({ type: "reply", data: await answer(emit) }); rewarm(); }, req.signal);
         const reply = await answer();
         rewarm();
@@ -6723,7 +6733,7 @@ return Bun.serve({
       // P-ASKLUCID.SPEED1: the panel opened: open a warm side-completion session for the first question now. UI
       // token only, no body, nothing returned but ok; a failure just means the question opens its own session.
       if (p === "/api/ask-lucid/warm" && req.method === "POST") {
-        void backend.warmSpare(backend.checkerModelInfo().recommended || undefined);
+        void backend.warmSpare(backend.checkerModelInfo().newest || undefined);
         return json({ ok: true });
       }
       // P-BUDDY.1 (ADR-0667): a floating Agent buddy's read of one agent plus up to 3 next-step ideas, from a mid-tier

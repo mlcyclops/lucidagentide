@@ -179,6 +179,10 @@ export interface GuiSettings {
   // P-GOAL.6 (ADR-0048): the model the /goal loop's CHECKER runs on, overriding the maker's model.
   // "" / unset = auto (the harness recommends a cheap, capable, recent model from the user's picker).
   checkerModel?: string;
+  // P-ASKLUCID.MODEL1: every model id omp's model list has offered on this machine. Right after a start omp lists
+  // only its built-in models (Haiku 4.5, not the Haiku 5.5 the picker shows from its last full list), so the
+  // small-tier recommendation also considers these, for providers that are live now.
+  modelsSeen?: string[];
   // ADR-0088 (P-ROLE.1): the user's chosen role. Cosmetic preset; unset = "developer". Captured at
   // first-run onboarding (before the email step) and switchable in Settings → Profile.
   userRole?: UserRole;
@@ -1291,6 +1295,19 @@ export function checkerModel(): string { return load().checkerModel ?? ""; }
 export function setCheckerModel(model: string): void {
   const m = (model ?? "").trim();
   const s = load(); if ((s.checkerModel ?? "") === m) return; s.checkerModel = m || undefined; save(s);
+}
+/** P-ASKLUCID.MODEL1: the model ids omp has offered here (newest additions last, at most MODELS_SEEN_MAX). */
+export function modelsSeen(): string[] { return load().modelsSeen ?? []; }
+const MODELS_SEEN_MAX = 600;
+/** Remember `values`; writes only when something new was offered. Returns the full list. */
+export function addModelsSeen(values: readonly string[]): string[] {
+  const s = load();
+  const have = new Set(s.modelsSeen ?? []);
+  const fresh = values.filter((v) => v && !have.has(v));
+  if (!fresh.length) return s.modelsSeen ?? [];
+  s.modelsSeen = [...(s.modelsSeen ?? []), ...fresh].slice(-MODELS_SEEN_MAX);
+  save(s);
+  return s.modelsSeen;
 }
 /** User skipped the email prompt: attribute by workstation hostname instead (recorded, not forced).
  *  No-op when managed policy disallows skipping (the caller should check `skipAllowed()` first). */
