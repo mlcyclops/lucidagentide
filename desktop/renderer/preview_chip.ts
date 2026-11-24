@@ -36,9 +36,12 @@ export function previewChipHtml(size: ChipSize, attrs = ""): string {
 }
 
 /** A fleet lane's or an orbit spoke's chip in its floating host. The host spans the corner it floats in and lets
- *  every press through except on the chip itself. */
+ *  every press through except on the chip and its x. P-PREVIEW.CHIPX1: hovering the chip (or tabbing to it)
+ *  shows a tiny red x on its upper-right corner, the floating Agent's own (P-BUDDY.HIDE1); a click hides this
+ *  lane's chip until the lane makes a different page (the caller handles [data-pchip-close]). A sibling of the
+ *  chip, not inside it: a button may not hold a button. */
 export function laneChipHostHtml(where: "lane" | "spoke", attrs: string): string {
-  return `<div class="pchip-host" data-where="${where}">${previewChipHtml("compact", attrs)}</div>`;
+  return `<div class="pchip-host" data-where="${where}"><span class="pchip-wrap">${previewChipHtml("compact", attrs)}<button type="button" class="pchip-close" data-pchip-close aria-label="Hide this preview chip" data-tip="Hide|Hides this chip until the agent makes a different page. A page that rendered stays on its tab in the Preview panel.">${icon("close", 9)}</button></span></div>`;
 }
 
 /** Paint a chip from its state; null hides it. Unchanged state touches nothing (polls repaint every card).
