@@ -268,6 +268,33 @@ async function discoverWorkspaces(root?: string, cap = 500): Promise<string[]> {
   return out;
 }
 
+/** P-PERF.GIT1: what makes a workspace's month total stale: the month, and its HEAD reflog (`.git/logs/HEAD`, which
+ *  git rewrites on every commit, checkout, merge, reset and pull; a linked worktree's `.git` file points at its own).
+ *  A `git log --since=<month> --numstat` only changes when one of those does. Null when the reflog cannot be read
+ *  (codeActivity then re-counts on a 10 minute clock instead). */
+export async function activityKey(ws: string, monthStart: Date): Promise<string | null> {
+  let gitDir = join(ws, ".git");
+  try {
+    const s = await stat(gitDir);
+    if (s.isFile()) {
+      const m = /^gitdir:\s*(.+)\s*$/m.exec(await readFile(gitDir, "utf8"));
+      if (!m) return null;
+      gitDir = m[1]!.trim();
+      if (!/^([A-Za-z]:[\\/]|[\\/])/.test(gitDir)) gitDir = join(ws, gitDir);
+    }
+    const log = await stat(join(gitDir, "logs", "HEAD"));
+    return `${monthStart.toISOString()}|${log.mtimeMs}|${log.size}`;
+  } catch { return null; }
+}
+
+/** P-PERF.GIT1: each workspace's last month total and the key it was computed under. The dashboard polls every few
+ *  seconds and the route recomputes every 30 s; asking git for a month of numstat in every session repo each time
+ *  kept a `git log` running more than half of every minute (18 repos, seconds each), pinning a core and the
+ *  Program Compatibility Assistant service that watches each spawn. */
+const activityMemo = new Map<string, { key: string; stat: { added: number; deleted: number; files: number } | null; retryAt?: number }>();
+/** How long a repo with no reflog, or one whose count failed or timed out, waits before git is asked again. */
+const NO_KEY_TTL_MS = 10 * 60_000;
+
 /** Per-workspace git diffstat for the current calendar month.
  *  Workspaces: `opts.workspaces` if given, else discovered from omp session cwds.
  *  Fail-closed: a workspace outside the home subtree, a non-git dir, or a failed
@@ -277,9 +304,10 @@ export async function codeActivity(opts: { workspaces?: string[]; root?: string;
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const month = monthStart.toLocaleString("en-US", { month: "long", year: "numeric" });
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const timeout = opts.timeoutMs ?? 15_000; // generous — a large repo's `git log --numstat`
-  // can take several seconds; the result is cached 30s, so we'd rather wait than fail-close to
-  // an empty dashboard. A truly hung git still trips the timeout and the workspace is omitted.
+  // P-PERF.GIT1: 60 s. A busy repo's month of numstat takes 18 s here; at 15 s it was killed and re-run every 30 s
+  // forever (and never shown). It now runs once per HEAD move, so letting it finish costs far less. A truly hung git
+  // still trips the timeout, the workspace is omitted, and it is retried after NO_KEY_TTL_MS.
+  const timeout = opts.timeoutMs ?? 60_000;
   const candidates = opts.workspaces ?? await discoverWorkspaces(opts.root);
 
   const workspaces: CodeActivity["workspaces"] = [];
@@ -287,6 +315,15 @@ export async function codeActivity(opts: { workspaces?: string[]; root?: string;
     const safe = pathWithin(homedir(), ws);            // confine to the home subtree (ADR-0022/0023)
     if (!safe) continue;                                // outside home → omit (fail-closed)
     if (!existsSync(join(safe, ".git"))) continue;      // not a git repo → omit
+    // P-PERF.GIT1: HEAD has not moved since the last count this month: the count stands, no git spawned.
+    // A repo with no readable reflog (a fresh clone with logAllRefUpdates off, a scratch dir) is re-counted at most
+    // every NO_KEY_TTL_MS instead of on every 30 s recompute.
+    const key = (await activityKey(safe, monthStart)) ?? `nokey|${monthStart.toISOString()}|${Math.floor(now.getTime() / NO_KEY_TTL_MS)}`;
+    const memo = activityMemo.get(safe);
+    if (memo && memo.key === key && !(memo.retryAt !== undefined && now.getTime() >= memo.retryAt)) {
+      if (memo.stat) workspaces.push({ name: basename(safe), path: safe, ...memo.stat, spend: 0 });
+      continue;
+    }
     // Args ARRAY, never a shell string (no injection via paths/refs). Exclude vendored/
     // generated churn so the metric reflects real source. `--format=` suppresses commit
     // headers, leaving only numstat rows + blank separators.
@@ -300,10 +337,14 @@ export async function codeActivity(opts: { workspaces?: string[]; root?: string;
         { cwd: safe, timeoutMs: timeout },
       );
     } catch { break; }                                  // no git at all → every workspace would fail: omit all
-    if (out === null) continue;                         // git failed/timeout → omit (never fake)
+    // git failed/timeout → omit (never fake). Remembered too, with a retry clock: a month of numstat that outlives
+    // the timeout (this repo: 15 s) used to run again on every 30 s recompute, forever, and still show nothing.
+    if (out === null) { activityMemo.set(safe, { key, stat: null, retryAt: now.getTime() + NO_KEY_TTL_MS }); continue; }
     const { added, deleted, files } = parseNumstat(out);
-    if (files.length === 0) continue;                   // no activity this month → not listed
-    workspaces.push({ name: basename(safe), path: safe, added, deleted, files: files.length, spend: 0 });
+    const counted = files.length ? { added, deleted, files: files.length } : null;
+    activityMemo.set(safe, { key, stat: counted });
+    if (!counted) continue;                             // no activity this month → not listed
+    workspaces.push({ name: basename(safe), path: safe, ...counted, spend: 0 });
   }
 
   workspaces.sort((a, b) => b.added + b.deleted - (a.added + a.deleted));

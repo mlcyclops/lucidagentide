@@ -13,7 +13,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { homedir } from "node:os";
-import { codeActivity, parseNumstat, renamedPath } from "../tools/memory_data.ts";
+import { activityKey, codeActivity, parseNumstat, renamedPath } from "../tools/memory_data.ts";
 
 const cleanup: string[] = [];
 afterAll(() => { for (const d of cleanup) try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } });
@@ -117,6 +117,37 @@ test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with di
   expect(ws.spend).toBe(0);             // spend attribution is P-CODE.2
   expect(ws.name).toBe(repo.split(/[\\/]/).pop() ?? "");
   expect(ca.totals).toEqual({ added: 3, deleted: 0, files: 1 });
+});
+
+// P-PERF.GIT1: the month total is remembered per repo until its HEAD moves, so a poll costs no git spawn, but a new
+// commit (or a checkout) is never missed.
+test.skipIf(!gitAvailable)("codeActivity: a repo whose HEAD did not move is not asked again; a new commit is counted", async () => {
+  const repo = tmpRepoUnderHome();
+  writeFileSync(join(repo, "a.ts"), "one\ntwo\n", "utf8");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "seed");
+  const first = await codeActivity({ workspaces: [repo] });
+  expect(first.totals).toEqual({ added: 2, deleted: 0, files: 1 });
+  const k1 = await activityKey(repo, new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  expect(k1).not.toBeNull();
+
+  // Nothing moved: the same total, and the key it is remembered under is unchanged.
+  const again = await codeActivity({ workspaces: [repo] });
+  expect(again.totals).toEqual(first.totals);
+  expect(await activityKey(repo, new Date(new Date().getFullYear(), new Date().getMonth(), 1))).toBe(k1);
+
+  // The commit appends a reflog line, so the key changes by size even within one mtime tick.
+  writeFileSync(join(repo, "b.ts"), "x\ny\nz\n", "utf8");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "more");
+  const after = await codeActivity({ workspaces: [repo] });
+  expect(after.totals).toEqual({ added: 5, deleted: 0, files: 2 });
+});
+
+test("activityKey: no reflog (not a repo) gives no key (codeActivity falls back to a 10 minute clock)", async () => {
+  const dir = mkdtempSync(join(homedir(), ".lucid-nokey-test-"));
+  cleanup.push(dir);
+  expect(await activityKey(dir, new Date())).toBeNull();
 });
 
 test.skipIf(!gitAvailable)("codeActivity: commits before this month are excluded by the window", async () => {

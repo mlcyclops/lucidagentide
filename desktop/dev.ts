@@ -997,7 +997,7 @@ setInterval(() => {
 }, 5000);
 
 // 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
+let codeActivityCache: { at: number; busy: boolean; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -3069,8 +3069,13 @@ return Bun.serve({
       // every dashboard poll. `?force=1` bypasses the cache (manual refresh).
       if (p === "/api/code-activity") {
         const now = Date.now();
-        if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
-          codeActivityCache = { at: now, data: codeActivity() };
+        // P-PERF.GIT1: never a second count while one is still running (a cold count is ~50 s across 20 repos here,
+        // longer than the 30 s TTL); a repo whose HEAD has not moved costs no git at all (tools/memory_data.ts).
+        if (!codeActivityCache || (!codeActivityCache.busy && (now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1"))) {
+          const entry: NonNullable<typeof codeActivityCache> = { at: now, busy: true, data: codeActivity() };
+          entry.data.finally(() => { entry.busy = false; }).catch(() => { /* the route's await reports it */ });
+          codeActivityCache = entry;
+        }
         return json({ ok: true, data: await codeActivityCache.data });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
