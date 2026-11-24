@@ -36,6 +36,8 @@ export const TURN_DEDUPE_MS = 4000;
 export const SCROLL_STEP = 3;
 const TICK_MS = 1000;
 const LANE_POLL_MS = 2500;
+/** P-PERF.IDLE1: how often a working figure's pose advances (see stepFigures). */
+const STEP_FPS = 8;
 
 export type ActivateKind = "takeover" | "fleet" | "world";
 export type Eyes = "up" | "down" | "around";
@@ -190,7 +192,7 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   let dragging = false;
   let suppressClick = false;
   const lastRing = new Map<string, number>();
-  const glanceTimers = new Map<string, number>();
+  let glanceTimer: number | undefined;
   const eyeTimers = new Map<string, number>();
 
   d.host.classList.add("agr-view");
@@ -266,6 +268,28 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     }
     working = workingFolders({ folder: d.getMainFolder(), busy: d.isMainBusy() }, lanes);
     if (view === "agents") render();
+    syncStepper();
+  }
+
+  // ── working figures, stepped ──
+  // P-PERF.IDLE1: a working figure's CSS loops stay paused (styles.css) and this timer moves their clock (--dl) on at
+  // STEP_FPS. A free-running loop makes Chromium draw 60 frames a second for as long as it runs: five working Agents
+  // cost about 0.8 of a core in the renderer and GPU that way, and about a quarter of that stepped.
+  let stepTimer = 0;
+  let stepT = 0;
+  function syncStepper(): void {
+    const want = active() && working.size > 0 && !calm() && !reducedMotion();
+    if (want && !stepTimer) stepTimer = window.setInterval(stepFigures, 1000 / STEP_FPS);
+    else if (!want && stepTimer) { clearInterval(stepTimer); stepTimer = 0; }
+  }
+  function stepFigures(): void {
+    if (!active()) { syncStepper(); return; }
+    stepT += 1 / STEP_FPS;
+    for (const t of list.querySelectorAll<HTMLElement>(".agr-tile.work")) {
+      const v = `${(loopDelay(t.dataset.agent ?? "") - stepT).toFixed(3)}s`;
+      t.style.setProperty("--dl", v);
+      t.querySelector<SVGElement>(".agr-art")?.style.setProperty("--dl", v);
+    }
   }
   let timer = 0;
   let ticking = false;
@@ -348,18 +372,19 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   }
 
   // ── glances ──
+  // P-PERF.IDLE1: ONE glance about once a minute for the whole rail, by a random idle Agent. A timer per Agent kept
+  // ten Agents glancing for half of every minute, and every glance is a stretch of repainted frames.
   function syncGlances(): void {
-    const ids = new Set(doc.agents.map((a) => a.id));
-    for (const [id, h] of glanceTimers) if (!ids.has(id)) { clearTimeout(h); glanceTimers.delete(id); }
-    for (const id of ids) if (!glanceTimers.has(id)) scheduleGlance(id, true);
+    if (glanceTimer === undefined) scheduleGlance(true);
   }
-  function scheduleGlance(id: string, first: boolean): void {
-    glanceTimers.set(id, window.setTimeout(() => {
-      glanceTimers.delete(id);
-      if (!agentById(id)) return;
-      if (active() && !dragging && !reducedMotion() && baseTier(d.perfTier()) === "full") glance(id);
-      scheduleGlance(id, false);
-    }, glanceDelay(Math.random(), first)));
+  function scheduleGlance(first: boolean): void {
+    glanceTimer = window.setTimeout(() => {
+      glanceTimer = undefined;
+      const idle = doc.agents.filter((a) => stateOf(a.id) === "idle");
+      const pick = idle[Math.floor(Math.random() * idle.length)];
+      if (pick && active() && !dragging && !reducedMotion() && baseTier(d.perfTier()) === "full") glance(pick.id);
+      if (doc.agents.length) scheduleGlance(false);
+    }, glanceDelay(Math.random(), first));
   }
   function glance(id: string): void {
     const t = tileOf(id);

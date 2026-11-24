@@ -7,10 +7,11 @@
 // tested against a fixture with a known cost breakdown.
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { ledgerProvider, usageLedger } from "../tools/memory_data.ts";
+import { __resetUsageLedger, ledgerProvider, setUsageLedgerStore, usageLedger } from "../tools/memory_data.ts";
+import { noteSessionFileChanged } from "../tools/session_files.ts";
 
 const roots: string[] = [];
 afterAll(() => { for (const r of roots) try { rmSync(r, { recursive: true, force: true }); } catch { /* ignore */ } });
@@ -80,4 +81,35 @@ test("ledgerProvider maps known + local model families", () => {
   expect(ledgerProvider("google-gemini-2.5-flash")).toBe("google");
   expect(ledgerProvider("llama-3-70b")).toBe("local");
   expect(ledgerProvider("rag")).toBe("asksage-rag");
+});
+
+// P-PERF.IDLE1: the per-file totals survive a restart, so a boot reads only transcripts that changed. Proof: after a
+// "restart" a file whose bytes changed but whose mtime did not is answered from the store, not re-read; a real
+// change (new mtime) is re-read.
+test("the store answers unchanged files after a restart; a changed file is re-read", async () => {
+  const root = fixtureRoot();
+  const storeDir = mkdtempSync(join(tmpdir(), "lucid-ledger-store-"));
+  roots.push(storeDir);
+  setUsageLedgerStore(join(storeDir, "ledger.json"));
+  try {
+    // A whole-second mtime, so restoring it after the rewrite is exact on every filesystem.
+    const file = join(root, "b", "s.jsonl");
+    const pinned = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+    utimesSync(file, pinned, pinned);
+    __resetUsageLedger();
+    const first = await usageLedger({ root });
+    expect(existsSync(join(storeDir, "ledger.json"))).toBe(true);
+    writeFileSync(file, JSON.stringify({ type: "message", message: { model: "gpt-5.2", usage: { input: 1, output: 1, totalTokens: 2, cost: { total: 9 } } } }) + "\n", "utf8");
+    utimesSync(file, pinned, pinned);
+    __resetUsageLedger(); // a restart: memory empty, the store remains
+    const again = await usageLedger({ root });
+    expect(again.totals.cost).toBeCloseTo(first.totals.cost, 8);
+    utimesSync(file, pinned, new Date(pinned.getTime() + 5000));
+    noteSessionFileChanged(file); // what the watcher reports a moment later, without waiting on it
+    const changed = await usageLedger({ root });
+    expect(changed.models.find((m) => m.model === "gpt-5.2")!.cost.total).toBe(9);
+  } finally {
+    setUsageLedgerStore(null);
+    __resetUsageLedger();
+  }
 });

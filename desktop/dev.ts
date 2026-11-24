@@ -112,7 +112,7 @@ import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhispe
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
-import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { devSnapshot, securitySnapshot, type SecuritySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
@@ -127,7 +127,7 @@ import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./secu
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, obsKey, cachedCodeActivity, codeActivity, setCodeActivityStore, setUsageLedgerStore, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, perCallModelView, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -996,8 +996,11 @@ setInterval(() => {
   })();
 }, 5000);
 
-// 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; busy: boolean; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
+// P-PERF.IDLE1: /api/code-activity answers from the remembered counts (no git); `?count=1` is the user asking for
+// a recount, and only that spawns `git log`. One count at a time; a second ask shares it.
+let codeActivityCount: Promise<CodeActivity> | null = null;
+setCodeActivityStore(join(homedir(), ".omp", "agent", "lucid-code-activity.json"));
+setUsageLedgerStore(join(homedir(), ".omp", "agent", "lucid-usage-ledger.json")); // P-PERF.IDLE1: no cold re-parse per boot
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -1005,10 +1008,17 @@ const netProbe = new NetProbe();
 // (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
 // query, never overlap) + a short TTL so rapid polls are cheap and the loop stays free for the model stream.
 const SNAP_TTL_MS = 8000; // > the ~4s dashboard poll, so the steady poll is served from cache (the DuckDB read runs at most ~every 8s). Live gate blocks are merged FRESH from liveBlocks() at request time, so nothing urgent is delayed by this cache.
-let secSnapMemo: { at: number; p: ReturnType<typeof securitySnapshot> } | null = null;
-function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
-  const t = Date.now();
-  if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
+// P-PERF.IDLE1: also keyed on the obs store's stamp, so an idle dashboard poll reuses the last snapshot instead of
+// re-opening the DuckDB file (about a second of CPU) every SNAP_TTL_MS while nothing has written to it.
+// A null snapshot (the live gate held the file) is retried on the old clock rather than kept until the next write.
+let secSnapMemo: { at: number; key: string; empty: boolean; p: Promise<SecuritySnapshot | null> } | null = null;
+async function securitySnapshotMemo(): Promise<SecuritySnapshot | null> {
+  const t = Date.now(), key = await obsKey();
+  if (!secSnapMemo || ((secSnapMemo.key !== key || secSnapMemo.empty) && t - secSnapMemo.at > SNAP_TTL_MS)) {
+    const entry: NonNullable<typeof secSnapMemo> = { at: t, key, empty: false, p: securitySnapshot() };
+    void entry.p.then((s) => { entry.empty = s === null; });
+    secSnapMemo = entry;
+  }
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
 let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
@@ -3065,18 +3075,17 @@ return Bun.serve({
       if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
-      // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
-      // every dashboard poll. `?force=1` bypasses the cache (manual refresh).
+      // P-PERF.IDLE1: the dashboard poll reads the remembered counts and spawns nothing; `?count=1` (the user clicked
+      // the tile or opened the usage card) recounts. P-PERF.GIT1 still applies to that count: a repo whose HEAD has not
+      // moved costs no git at all (tools/memory_data.ts).
       if (p === "/api/code-activity") {
-        const now = Date.now();
-        // P-PERF.GIT1: never a second count while one is still running (a cold count is ~50 s across 20 repos here,
-        // longer than the 30 s TTL); a repo whose HEAD has not moved costs no git at all (tools/memory_data.ts).
-        if (!codeActivityCache || (!codeActivityCache.busy && (now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1"))) {
-          const entry: NonNullable<typeof codeActivityCache> = { at: now, busy: true, data: codeActivity() };
-          entry.data.finally(() => { entry.busy = false; }).catch(() => { /* the route's await reports it */ });
-          codeActivityCache = entry;
+        if (url.searchParams.get("count") !== "1") return json({ ok: true, data: await cachedCodeActivity() });
+        if (!codeActivityCount) {
+          const run = codeActivity();
+          codeActivityCount = run;
+          run.finally(() => { if (codeActivityCount === run) codeActivityCount = null; }).catch(() => { /* the route's await reports it */ });
         }
-        return json({ ok: true, data: await codeActivityCache.data });
+        return json({ ok: true, data: await codeActivityCount });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The

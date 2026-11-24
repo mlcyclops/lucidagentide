@@ -1027,10 +1027,13 @@ button{font-family:inherit}
   color:var(--accent);font-size:14px;cursor:pointer;
   -webkit-app-region:no-drag;transition:filter var(--t) var(--ease)}
 .brand:hover{filter:brightness(1.08)}
-.brand .lucid-word{animation:lucidGlow 4.5s ease-in-out infinite}
+/* P-PERF.IDLE1: chrome glows play twice after load and again on hover, then rest. Any endless loop on screen keeps the
+   renderer and GPU drawing 60 frames a second while the user is doing nothing. */
+.brand .lucid-word{animation:lucidGlow 4.5s ease-in-out 2}
+.brand:hover .lucid-word,.brand:hover .pi{animation-iteration-count:infinite}
 @keyframes lucidGlow{0%,100%{text-shadow:0 0 10px rgb(var(--accent-rgb) / .35),0 0 20px rgb(var(--accent-rgb) / .12)}
   50%{text-shadow:0 0 16px rgb(var(--accent-rgb) / .75),0 0 34px rgb(var(--accent-rgb) / .42),0 0 54px rgb(var(--accent-rgb) / .22)}}
-.brand .pi{color:var(--cyan);display:flex;animation:piGlow 4.5s ease-in-out infinite}
+.brand .pi{color:var(--cyan);display:flex;animation:piGlow 4.5s ease-in-out 2}
 @keyframes piGlow{0%,100%{filter:drop-shadow(0 0 4px rgb(var(--cyan-rgb) / .4));opacity:.92}
   50%{filter:drop-shadow(0 0 10px rgb(var(--cyan-rgb) / .95)) drop-shadow(0 0 20px rgb(var(--cyan-rgb) / .45));opacity:1}}
 .tb-spacer{flex:1}
@@ -3068,7 +3071,7 @@ body.lucid-capturing #toasts{visibility:hidden}
 
 /* ───────────────────────── sessions empty + active glow ───────────────────────── */
 .side-empty{padding:14px 12px;font-size:12px;color:var(--txt-4);line-height:1.6}
-.rail-btn.active::before{animation:railGlow 3.6s var(--ease) infinite}
+.rail-btn.active::before{animation:railGlow 3.6s var(--ease) 2} /* P-PERF.IDLE1: twice per switch, then rest */
 @keyframes railGlow{0%,100%{box-shadow:0 0 8px var(--accent)}50%{box-shadow:0 0 14px var(--accent),0 0 24px rgb(var(--accent-rgb) / .4)}}
 
 /* ───────────────────────── composer agent controls ───────────────────────── */
@@ -3765,10 +3768,11 @@ body.lucid-capturing #toasts{visibility:hidden}
 .agr-toggle:active{transform:scale(.95)}
 .agr-tb-head{transform-box:fill-box;transform-origin:50% 100%;transition:transform .5s var(--spring)}
 .agr-toggle:hover .agr-tb-head{transform:translateY(-1.2px) rotate(-7deg)}
-.agr-tb-tail{transform-box:fill-box;transform-origin:0 50%;animation:agrTbTail 3.6s ease-in-out infinite}
-.agr-toggle:hover .agr-tb-tail{animation-duration:.8s}
+/* P-PERF.IDLE1: the toolbar Lucid wags twice after load, and while hovered; at rest it holds still. */
+.agr-tb-tail{transform-box:fill-box;transform-origin:0 50%;animation:agrTbTail 3.6s ease-in-out 2}
+.agr-toggle:hover .agr-tb-tail{animation-duration:.8s;animation-iteration-count:infinite}
 @keyframes agrTbTail{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(13deg)}}
-.agr-tb-eyes{transform-box:fill-box;transform-origin:50% 50%;animation:agrTbBlink 5.2s infinite}
+.agr-tb-eyes{transform-box:fill-box;transform-origin:50% 50%;animation:agrTbBlink 5.2s 2}
 @keyframes agrTbBlink{0%,94%,100%{transform:none}96.5%{transform:scaleY(.12)}}
 .agr-tb-happy{opacity:0}
 .agr-toggle:hover .agr-tb-eyes{opacity:0;animation:none}
@@ -3818,11 +3822,12 @@ body.lucid-capturing #toasts{visibility:hidden}
 .agr-lu .agr-eyes,.agr-lu .agr-head,.agr-lu .agr-tail{transform-box:fill-box}
 .agr-lu .agr-eyes{transform-origin:50% 50%} .agr-lu .agr-head{transform-origin:50% 100%} .agr-lu .agr-tail{transform-origin:0 50%}
 .agr-lu.agr-work .agr-pup{transform:translateY(.6px)}
-/* idle = meditating breath + aura; work = typing bursts with a rest, keys flash, two code bits rise */
-.agr-lu .agr-upper{animation:agrBreathe 4.8s ease-in-out var(--dl,0s) infinite}
-.agr-lu .agr-tail{animation:agrTail 4.2s ease-in-out var(--dl,0s) infinite}
-.agr-lu.agr-work .agr-tail{animation-duration:2.4s}
-.agr-lu.agr-idle .agr-aura{animation:agrAura 4.8s ease-in-out var(--dl,0s) infinite}
+/* idle = still, meditating (P-PERF.IDLE1: an idle figure runs no loop; ten breathing SVGs repainted the rail every
+   frame, about 1.4 cores of renderer + GPU with nothing happening); work = breath, typing bursts with a rest, keys
+   flash, two code bits rise */
+.agr-lu.agr-work .agr-upper{animation:agrBreathe 4.8s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-tail{animation:agrTail 2.4s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-idle .agr-aura{opacity:.8}
 .agr-lu.agr-work .agr-eyes{animation:agrBlink 4.6s var(--dl,0s) infinite}
 .agr-lu.agr-work .agr-hl{animation:agrTapL 2.4s var(--dl,0s) infinite}
 .agr-lu.agr-work .agr-hr{animation:agrTapR 2.4s var(--dl,0s) infinite}
@@ -3859,6 +3864,11 @@ body.lucid-capturing #toasts{visibility:hidden}
 @keyframes agrBit{0%{opacity:0;transform:translateY(0)}12%{opacity:.9}60%,100%{opacity:0;transform:translateY(-8px)}}
 /* perf tier "minimal" (agents_rail.ts sets .agr-calm) and reduced motion: every loop stops; pose and LED still show the state */
 .agr-calm .agr-lu,.agr-calm .agr-lu *,.agr-calm .agr-led{animation:none!important}
+/* P-PERF.IDLE1: rail figures never free-run. Their loops stay paused and agents_rail.ts moves each working figure's
+   clock (--dl) on 8 times a second, so between steps Chromium draws nothing (free-running, five working Agents kept
+   the renderer and GPU at about 0.8 of a core). */
+.agr-list .agr-tile .agr-lu.agr-work *,.agr-list .agr-tile.work .agr-led{animation-play-state:paused}
+.agr-list .agr-tile.work .agr-led{animation-delay:var(--dl,0s)}
 @media (prefers-reduced-motion:reduce){
   .agr-lu,.agr-lu *,.agr-toggle,.agr-toggle *,.agr-toggle::after,.agr-led,.agr-tile,.agr-arrow,.agr-pop .agr-sub{animation:none!important;transition:none!important}
 }
@@ -3899,7 +3909,8 @@ body.lucid-capturing #toasts{visibility:hidden}
 .abd{position:relative;display:block;margin:0 auto;padding:0;border:0;border-radius:7px;background:transparent;line-height:0;cursor:grab;
   pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}
 .abd::before{content:"";position:absolute;inset:-7px -6px;border-radius:50%;pointer-events:none;opacity:.5;
-  background:radial-gradient(closest-side,color-mix(in srgb,var(--G) 45%,transparent),transparent);animation:abdGlow 4.8s ease-in-out var(--abd-ph,0s) infinite}
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--G) 45%,transparent),transparent);animation:abdGlow 4.8s ease-in-out var(--abd-ph,0s) 2}
+.abd:hover::before{animation-iteration-count:infinite} /* P-PERF.IDLE1: glows twice after it appears, then rests */
 .abd .agr-art{position:relative;display:block;height:23px;width:auto;
   filter:drop-shadow(0 0 3px color-mix(in srgb,var(--G) 55%,transparent)) drop-shadow(0 1px 1.5px rgb(var(--sh-rgb) / .35))}
 .abd:hover::before,.abd[aria-expanded="true"]::before{opacity:.9}
@@ -4632,11 +4643,13 @@ body.preview-open .thread{font-size:.9em}
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */
 /* The animated rail glyph: book gently breathes, the sparkle twinkles + drifts. */
 .rail-about .about-mark{overflow:visible}
-.rail-about .about-book{transform-box:fill-box;transform-origin:center;animation:aboutBreathe 5.5s var(--ease) infinite}
+/* P-PERF.IDLE1: twice after load, then only while hovered (an endless loop keeps the window drawing every frame). */
+.rail-about .about-book{transform-box:fill-box;transform-origin:center;animation:aboutBreathe 5.5s var(--ease) 2}
 .rail-about .about-spark{fill:var(--accent-2);stroke:none;transform-box:fill-box;transform-origin:60% 40%;
-  animation:aboutTwinkle 3.4s var(--ease) infinite}
+  animation:aboutTwinkle 3.4s var(--ease) 2}
 .rail-about:hover{color:var(--accent-2)}
-.rail-about:hover .about-spark{animation-duration:1.5s}
+.rail-about:hover .about-book{animation-iteration-count:infinite}
+.rail-about:hover .about-spark{animation-duration:1.5s;animation-iteration-count:infinite}
 @keyframes aboutBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
 @keyframes aboutTwinkle{
   0%,100%{opacity:.35;transform:scale(.7) rotate(0deg)}

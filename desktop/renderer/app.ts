@@ -4558,7 +4558,13 @@ function renderMetricsRail(): void {
     { n: fmtNum(avg), label: "avg/turn", cls: "c", tip: "Average tokens per turn" },
     { n: fmtNum(cur), label: "context", cls: "b", tip: "Context tokens in use this turn" },
     { n: String(turns), label: "turns", cls: "b2", tip: "Agent turns in this session" },
-    ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
+    // P-PERF.IDLE1: LUCID runs no git until asked. The tile shows the last count (kept across restarts) and a click
+    // recounts; before any count it offers one.
+    linesCounting
+      ? { n: "...", label: "lines", cls: "g", tip: "Counting this month's workspace lines with git. This runs only because you asked." }
+      : ca && (ca.totals.files > 0 || ca.countedAt)
+        ? { n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.${ca.countedAt ? ` Counted ${relTime(Date.parse(ca.countedAt))}.` : ""} Click to recount with git.` }
+        : { n: "count", label: "lines", cls: "g", tip: "Workspace lines this month. LUCID does not run git until you ask, so nothing is counted yet. Click to count with git." },
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
     // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
@@ -4590,12 +4596,24 @@ function renderMetricsRail(): void {
     return `<div class="${cl}"${tip} data-tile="${esc(t.label)}"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
   }).join("");
   railPrimed = true;
+  const linesEl = tiles.querySelector('[data-tile="lines"]') as HTMLElement | null;
+  if (linesEl) { linesEl.style.cursor = "pointer"; linesEl.addEventListener("click", () => { void countCodeActivity(); }); }
   const jobsEl = tiles.querySelector('[data-tile="jobs"]') as HTMLElement | null;
   if (jobsEl && state.jobs) {
     attachRichTip(jobsEl, jobsHoverHtml(state.jobs, Date.now()));
     jobsEl.style.cursor = "pointer";
     jobsEl.addEventListener("click", () => { void openJobsSheet(); });
   }
+}
+
+// P-PERF.IDLE1: the one place the renderer asks the engine to run git for code activity (the lines tile click).
+let linesCounting = false;
+async function countCodeActivity(): Promise<void> {
+  if (linesCounting) return;
+  linesCounting = true; renderMetricsRail();
+  try { const ca = await bridge.codeActivity(true); if (ca) state.codeActivity = ca; }
+  catch { /* keep the last numbers */ }
+  finally { linesCounting = false; renderMetricsRail(); renderInspector(); }
 }
 
 // ── P-SCHED.1/.2 (ADR-0443): scheduled lane jobs - the rail's data, the sheet ─────────────────────────

@@ -297,6 +297,8 @@ export interface CodeActivity {
   workspaces: { name: string; path: string; added: number; deleted: number; files: number; spend: number }[];
   totals: { added: number; deleted: number; files: number };
   month: string; daysInMonth: number;
+  /** P-PERF.IDLE1: when git last counted (ISO); null before the first count. */
+  countedAt: string | null;
 }
 export interface ConfigOption {
   id: string; name: string; category: string; type: string;
@@ -1102,7 +1104,8 @@ export interface LucidBridge {
   remoteAgentRemove(id: string): Promise<unknown>;
   remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
-  codeActivity(): Promise<CodeActivity | null>;
+  /** P-PERF.IDLE1: the remembered counts (no git); `count` asks the engine to recount with git. */
+  codeActivity(count?: boolean): Promise<CodeActivity | null>;
   // P-COLLAB.3 (ADR-0192): live session sharing (view-only host). `status` is the poll; `start` mints the
   // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
   // configures the authorized relay (self-hosted default, public opt-in).
@@ -2178,7 +2181,7 @@ export const bridge: LucidBridge = {
   remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
   remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
-  codeActivity: () => getData("/api/code-activity"),
+  codeActivity: (count) => getData(count ? "/api/code-activity?count=1" : "/api/code-activity"),
   sendPrompt: streamChat,
   chatStatus: async () => {
     const response = await fetch("/api/chat/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(10_000) });

@@ -6533,3 +6533,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** Ask Lucid's model is the newest small-tier model omp has ever offered on this machine for the picker's provider (Haiku 5.5, not the Haiku 4.5 a just-started omp lists), with the live pick as fallback and the answer naming the model that really ran; docked right, the panel now flies out to the left of the Agents rail, over the page and its popups, and pushes nothing aside. ADR-0671.
 - **stubbed:** none.
 - **next:** stream Ask Lucid's answer text as it is written.
+## P-PERF.IDLE1: opening LUCID runs no git, and an idle LUCID does almost nothing
+- **shipped (2026-11-23):** no git at open (repo chip and lanes read .git files; code activity remembered and counted only on a click of the lines tile); one watched index over the 19k-file session tree instead of three 15 s re-walks, a head-only Ask Lucid sweep, a persisted usage ledger and change-keyed obs/compaction reads; idle rail figures and chrome glows hold still, working figures stepped at 8 fps. Idle app about 25% -> 1.1% of the machine (engine 7.9% -> 0.7%, window 17.3% -> 0.4%). ADR-0672.
+- **stubbed:** none.
+- **next:** measure 4-5 real working lanes with subagents end to end, and cut omp's own boot time per lane.
