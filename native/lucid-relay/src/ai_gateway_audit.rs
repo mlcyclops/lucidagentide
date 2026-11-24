@@ -34,6 +34,9 @@ pub struct Record {
     /// The 6.7 code of a refusal, "" when answered.
     pub code: String,
     pub policy: String,
+    /// API-1 r6 8.8: one `{server, tool, outcome, args_bytes, result_bytes, took_ms}` per MCP tool call of the ask
+    /// (no arguments or results); the line has no `mcp` key when the ask made none.
+    pub mcp: Vec<Value>,
 }
 
 struct Tail {
@@ -76,17 +79,37 @@ impl Audit {
         Ok(Audit { dir: dir.to_path_buf(), keep_days, tail: Mutex::new(tail) })
     }
 
-    /// Append one line (fsynced) and return it.
+    /// Append one request line (fsynced) and return it.
     pub fn append(&self, r: &Record, now_ms: i64) -> Result<Value, String> {
-        let mut t = self.tail.lock();
-        let row = json!({
-            "seq": t.seq + 1, "prev": t.prev, "ts": now_ms.div_euclid(1000),
+        let mut fields = json!({
             "rid": r.rid, "principal": r.principal, "device": r.device, "activity": r.activity, "class": r.class,
             "tier": r.tier, "card_id": r.card_id, "tokens_in": r.tokens_in, "tokens_out": r.tokens_out,
             "usd_micro": r.usd_micro, "expected_ms": r.expected_ms, "took_ms": r.took_ms, "outcome": r.outcome,
             "code": r.code, "policy": r.policy,
         });
+        if !r.mcp.is_empty() {
+            fields["mcp"] = Value::Array(r.mcp.clone());
+        }
+        self.write(fields, now_ms)
+    }
+
+    /// Append one event line (API-1 r6 8.8: `ai.mcp.call` before each tool call is sent, `ai.admin.mcp` for the
+    /// admin MCP routes), fsynced; Err means nothing was written and the side effect must not happen.
+    pub fn event(&self, action: &str, mut fields: Value, now_ms: i64) -> Result<Value, String> {
+        fields["action"] = Value::from(action);
+        self.write(fields, now_ms)
+    }
+
+    fn write(&self, fields: Value, now_ms: i64) -> Result<Value, String> {
+        let mut t = self.tail.lock();
+        let mut row = fields;
+        row["seq"] = Value::from(t.seq + 1);
+        row["prev"] = Value::from(t.prev.clone());
+        row["ts"] = Value::from(now_ms.div_euclid(1000));
         let data = line_bytes(&row);
+        if data.is_empty() {
+            return Err("the audit line is not canonical JSON".into());
+        }
         let (y, m, _) = crate::meet_json::civil(now_ms.div_euclid(86_400_000));
         let path = self.dir.join(format!("{PREFIX}{y:04}-{m:02}{SUFFIX}"));
         {
@@ -216,6 +239,20 @@ mod tests {
         let mut keys: Vec<&str> = row.as_object().unwrap().keys().map(String::as_str).collect();
         keys.sort_unstable();
         assert_eq!(keys, ["activity", "card_id", "class", "code", "device", "expected_ms", "outcome", "policy", "prev", "principal", "rid", "seq", "tier", "tokens_in", "tokens_out", "took_ms", "ts", "usd_micro"]);
+    }
+
+    /// API-1 r6 8.8: an ask with tool calls carries `mcp` sizes and outcomes; `ai.mcp.call` lines chain with the rest.
+    #[test]
+    fn mcp_calls_and_events_chain_with_the_request_lines() {
+        let dir = crate::meet_tls::testpki::dir("ai-audit-mcp");
+        let a = Audit::open(&dir, KEEP_DAYS).unwrap();
+        let call = a.event("ai.mcp.call", json!({"rid": "5".repeat(32), "server": "m_3f2e1d0c9b8a7f6e", "tool": "search_issues", "args_bytes": 12}), 1_795_000_000_000).unwrap();
+        assert_eq!((call["action"].as_str(), call["seq"].as_u64()), (Some("ai.mcp.call"), Some(1)));
+        let mut r = record(&"5".repeat(32));
+        r.mcp = vec![json!({"server": "m_3f2e1d0c9b8a7f6e", "tool": "search_issues", "outcome": "ok", "args_bytes": 12, "result_bytes": 900, "took_ms": 40})];
+        let row = a.append(&r, 1_795_000_001_000).unwrap();
+        assert_eq!(row["mcp"][0]["result_bytes"].as_u64(), Some(900));
+        assert!(a.verify().is_empty());
     }
 
     #[test]

@@ -1,0 +1,161 @@
+{
+ "version": 1,
+ "org": "acme",
+ "destination": "d_4e5f607182930415",
+ "now": 1795700000,
+ "issuer": "https://id.acme.example/lucid/acme",
+ "key": {
+  "kid": "fk-2026-11",
+  "pkcs8": "MIIG_gIBADANBgkqhkiG9w0BAQEFAASCBugwggbkAgEAAoIBgQDnI8ttPhvt8eM8ocmmINWQbRxtIVSeosxD78DLO6oEe0cuPJpu9Y162RURZYB0ZMFeAt4xwi8Ey2k9D2DieV-orK9EBYLqvp7RpjDTPRgkJVMV42hNbNdobYwFMv19cQ_NbhxyiXPJg2GOzzBAOxKGlsDMLwlbtLRuMhOKzkmNG9rUk2lv1888eHngoKsu6sQY-1j-N9HZ_4mRuaLWkc8sdVTdCsUrjFUp9jhoDZKGH1KtIg_e-sn7jZtyOlnGM19h4tsJbIq33c27cQVTSBe9ve97WewckzUuxAslk65zaVdKkhCcw9K5a0p6vfzGJFXteBuNUfGsjriGxsyWoYLR2URxKH-5havN52ZfWCGjsV3NjVovIvpCNScCtypwQ-DDMe4JwGXx7NVU6xG91SpTIJ04K7f6fTLAlx4fzBR3oZ2zBEPh81M0zIDFoUsAz_WwZun2Zp9nn7iRrfBpq8rx9tjpSdO4ldOFcwF82BvvllDsXVgSJgg-igk1V899-ysCAwEAAQKCAYBw6ZSDrjaYm3SFdwd550pMvnCHgyPCRwcAHQwSe_gHLm3MUYCjucK-g3N-RxZkRaAMm9wNdK3harjjQjLzD5XCYXFRClw07p_JDKWHW64CYlVfOPMH96aW9gTTuWAJuoSctzCgZzMv-sVarS4GApV_N__A_y1UJkeKGV5gjXtyumvBMq3sHAG5qaToLbTSO49GIOsNbRlPpDyA-q1oolwRfNPTE2LUbj5gPE67zf2JFZ4ew6f7JoorH7cTKxwV7Zu6HI_epClRdsL82XQXZdPCm-p_Xl-Up4frmYublQ7Vv4pFdysUupo5uD81_qsAbIJSNuE7YYRFkdBBFade4PPN-XqNuOA4_Rr6JepdHtD6zYyzqWKjf8rwMPZZIw7URiA__IArTpOJfmCHoX6tdhoqR6CGTYo9vyPYAqib_dVJlI9rQXorWbsIT6391iGL0f4wtodewwuWh1HGah-47Id3FqGAXwXIMQ4It19R-zSbeZCHGWWKxqQNjt7pUml2wxECgcEA8jIi74g2n_MFXKW9s3_13hPgnkFOft4CTQVknpiuEsW4h2P3uD1JZtgMkTkVDqqlvuWk_UcP22jb1ae5LEuvZQaSDUrBBBhoWl-F3SdITHxOEOlYqGatLaNLHVfUyskhcv68CXzUs7swYzAyCfuybnNEvbUuvL6i-a80nNKjLhG94B4qd-iVSsp1jpdHIVU4P3yZUzhESuu1Qk4MdKD8ZN_ZpFbVVRs0pZXqT_0w5tod3axpkVaqy5hbWgys4ThDAoHBAPRQVyk0WOkAogHj3Fj92ZFueiWnuZpK4k1zVQdIcyhBK4908I1quc8rQlcVs4hNJrBHGEry64w4MuqRM-RS0FbQqVxYpdVceLx9SznrVCqHKbcK5jpgOo-oJ_zOYPdo0Ma02GWFwvaMVm3S2Bk0KCTCwM5X264lB2RGr9A_IriLD4HHFh8DkO9R3jMxI0I2fe3f_bzq7cA0Cdpl8UlcVWEFj4OB9yiEFA-1v6lSEtN2ds_0AdAPNV7FJvlruL2W-QKBwFBXaVdkLBqrFyBAqskcrYbZuS1GJK_ZHZJHM7WYmEYJ6Mig1M_9JJhFGwYhlWakHQ9SRoTuSchS5HnfhYG4KZqtr01Reu3M2vD_tvxBx633nj3l6k8SoGf_Py-gryoFxl7LOb0796MXeVmt5yuAnxQckLUNoU9jPdTt1dof1Zm2sPHjj9rvAHcq6gw_Co14I4yL3KDKjXz868fu9BrMPG2KBDyLwYDV4YT8Uhnut4Yc3MNoKizYPxgClmsswTyE2QKBwQDdjSmtdQoXqfpAaoj8rp8pUh00nogikjvsbmUyKJI9c_PzsOEf7SO46grL_CMFvKkT_DTcarQOQTxzGOAM8sh5odmjo8Qm2yemDp00VeLKei3rDtg_IdqZQa2ZhPHMCuIhAAio8AcgG52ZFDXhjTnGNFIyDNxrbKrqVWvEFiz_WyPh1U-LKmm5jO1KUQofVlkWaSSpuAWIYeh5hC6uDyxhwnAlmqsus6-Zm4DGJGZsGyadaDJoohIM8g5o6zXpv8kCgcEAyWopn4FwhmgDWG_gz75L-oQAiZxsuw0fTJx38q4sHeiuh9oY2I_JZA_kglKbA9Q9hKuouc2v6h0JErbo0v57go-WN2Qsivx4M_1164W4G0HahKPKnNyUmDpis6a9rHAKtEY2on7-k_-7LdEl11HwaHjwNHWlEx6O4Glp0WVHUZFdBnRfVD0m2nx7yWvdTkv5TcJPODwiC_oMIjpJIBMROXPmAVzUMYFjxl8w4efxJQl7s75i7_CuwM4PyOe46_HL",
+  "jwk": {
+   "kty": "RSA",
+   "kid": "fk-2026-11",
+   "n": "5yPLbT4b7fHjPKHJpiDVkG0cbSFUnqLMQ-_AyzuqBHtHLjyabvWNetkVEWWAdGTBXgLeMcIvBMtpPQ9g4nlfqKyvRAWC6r6e0aYw0z0YJCVTFeNoTWzXaG2MBTL9fXEPzW4ccolzyYNhjs8wQDsShpbAzC8JW7S0bjITis5JjRva1JNpb9fPPHh54KCrLurEGPtY_jfR2f-Jkbmi1pHPLHVU3QrFK4xVKfY4aA2Shh9SrSIP3vrJ-42bcjpZxjNfYeLbCWyKt93Nu3EFU0gXvb3ve1nsHJM1LsQLJZOuc2lXSpIQnMPSuWtKer38xiRV7XgbjVHxrI64hsbMlqGC0dlEcSh_uYWrzedmX1gho7FdzY1aLyL6QjUnArcqcEPgwzHuCcBl8ezVVOsRvdUqUyCdOCu3-n0ywJceH8wUd6GdswRD4fNTNMyAxaFLAM_1sGbp9mafZ5-4ka3waavK8fbY6UnTuJXThXMBfNgb75ZQ7F1YEiYIPooJNVfPffsr",
+   "e": "AQAB",
+   "alg": "RS256",
+   "use": "sig"
+  }
+ },
+ "federation": {
+  "issuer": "https://id.acme.example/lucid/acme",
+  "keys": [
+   {
+    "kty": "RSA",
+    "kid": "fk-2026-11",
+    "n": "5yPLbT4b7fHjPKHJpiDVkG0cbSFUnqLMQ-_AyzuqBHtHLjyabvWNetkVEWWAdGTBXgLeMcIvBMtpPQ9g4nlfqKyvRAWC6r6e0aYw0z0YJCVTFeNoTWzXaG2MBTL9fXEPzW4ccolzyYNhjs8wQDsShpbAzC8JW7S0bjITis5JjRva1JNpb9fPPHh54KCrLurEGPtY_jfR2f-Jkbmi1pHPLHVU3QrFK4xVKfY4aA2Shh9SrSIP3vrJ-42bcjpZxjNfYeLbCWyKt93Nu3EFU0gXvb3ve1nsHJM1LsQLJZOuc2lXSpIQnMPSuWtKer38xiRV7XgbjVHxrI64hsbMlqGC0dlEcSh_uYWrzedmX1gho7FdzY1aLyL6QjUnArcqcEPgwzHuCcBl8ezVVOsRvdUqUyCdOCu3-n0ywJceH8wUd6GdswRD4fNTNMyAxaFLAM_1sGbp9mafZ5-4ka3waavK8fbY6UnTuJXThXMBfNgb75ZQ7F1YEiYIPooJNVfPffsr",
+    "e": "AQAB",
+    "alg": "RS256",
+    "use": "sig",
+    "nbf": 1795613600,
+    "exp": 1827149600
+   },
+   {
+    "kty": "RSA",
+    "kid": "fk-2027-11",
+    "n": "nWm0NI6E7laQJVblCzfHwPLvgVoVwtA5W6U-UlkJMjk4dYAFUyToa6xVsbCBMdU8NMVFxpvXHQZI871CJ2XiWdYTicEXUjjv47e3Vh7o5858ggD74RqUZlecUnG_-hrS2bHxh4pLEY8ZxfmQrTZVSSdDBicieUvvBdI0tXGEwQaApcsnHfGlJ7A6-MJKLorAcd8aa78q2EmoOhMXrBREUE73uhPExAQ5HehkspaN8q8D0XLOtVJG13x-RC-lfEXS8Nhh63ocv_z3BoytPyqMC1HdIF8c1i7d9Uge043i8qJfSyWSBr7AW2kBL__Ji0lyOjS9dbNT_7rjisi6U6m--hVMpexUuNSPburJ23fokRoTXNt2f9Rp6W9IK0_1Pibzew34HQyb26pKH5SsiQYzP-iGNH7ZEWK7eU8iQ6DVc5_HN6CJBB5lSbNx6_-9Dbri3_4MKfQOADvZAe3wU-G3UgwAZ7Yi4ZhtYJnHMBktDjEuN2o_UDjRNn_-BcVUeT6x",
+    "e": "AQAB",
+    "alg": "RS256",
+    "use": "sig",
+    "nbf": 1795786400,
+    "exp": 1827236000
+   }
+  ]
+ },
+ "discovery": {
+  "issuer": "https://id.acme.example/lucid/acme",
+  "jwks_uri": "https://id.acme.example/lucid/acme/jwks.json",
+  "response_types_supported": [
+   "id_token"
+  ],
+  "subject_types_supported": [
+   "public"
+  ],
+  "id_token_signing_alg_values_supported": [
+   "RS256"
+  ]
+ },
+ "jwks": {
+  "keys": [
+   {
+    "kty": "RSA",
+    "kid": "fk-2026-11",
+    "n": "5yPLbT4b7fHjPKHJpiDVkG0cbSFUnqLMQ-_AyzuqBHtHLjyabvWNetkVEWWAdGTBXgLeMcIvBMtpPQ9g4nlfqKyvRAWC6r6e0aYw0z0YJCVTFeNoTWzXaG2MBTL9fXEPzW4ccolzyYNhjs8wQDsShpbAzC8JW7S0bjITis5JjRva1JNpb9fPPHh54KCrLurEGPtY_jfR2f-Jkbmi1pHPLHVU3QrFK4xVKfY4aA2Shh9SrSIP3vrJ-42bcjpZxjNfYeLbCWyKt93Nu3EFU0gXvb3ve1nsHJM1LsQLJZOuc2lXSpIQnMPSuWtKer38xiRV7XgbjVHxrI64hsbMlqGC0dlEcSh_uYWrzedmX1gho7FdzY1aLyL6QjUnArcqcEPgwzHuCcBl8ezVVOsRvdUqUyCdOCu3-n0ywJceH8wUd6GdswRD4fNTNMyAxaFLAM_1sGbp9mafZ5-4ka3waavK8fbY6UnTuJXThXMBfNgb75ZQ7F1YEiYIPooJNVfPffsr",
+    "e": "AQAB",
+    "alg": "RS256",
+    "use": "sig"
+   },
+   {
+    "kty": "RSA",
+    "kid": "fk-2027-11",
+    "n": "nWm0NI6E7laQJVblCzfHwPLvgVoVwtA5W6U-UlkJMjk4dYAFUyToa6xVsbCBMdU8NMVFxpvXHQZI871CJ2XiWdYTicEXUjjv47e3Vh7o5858ggD74RqUZlecUnG_-hrS2bHxh4pLEY8ZxfmQrTZVSSdDBicieUvvBdI0tXGEwQaApcsnHfGlJ7A6-MJKLorAcd8aa78q2EmoOhMXrBREUE73uhPExAQ5HehkspaN8q8D0XLOtVJG13x-RC-lfEXS8Nhh63ocv_z3BoytPyqMC1HdIF8c1i7d9Uge043i8qJfSyWSBr7AW2kBL__Ji0lyOjS9dbNT_7rjisi6U6m--hVMpexUuNSPburJ23fokRoTXNt2f9Rp6W9IK0_1Pibzew34HQyb26pKH5SsiQYzP-iGNH7ZEWK7eU8iQ6DVc5_HN6CJBB5lSbNx6_-9Dbri3_4MKfQOADvZAe3wU-G3UgwAZ7Yi4ZhtYJnHMBktDjEuN2o_UDjRNn_-BcVUeT6x",
+    "e": "AQAB",
+    "alg": "RS256",
+    "use": "sig"
+   }
+  ]
+ },
+ "subject_tokens": [
+  {
+   "name": "entra",
+   "aud": "api://AzureADTokenExchange",
+   "jti": "AAECAwQFBgcICQoLDA0ODw",
+   "claims": {
+    "iss": "https://id.acme.example/lucid/acme",
+    "sub": "lucid:acme:console",
+    "aud": "api://AzureADTokenExchange",
+    "iat": 1795700000,
+    "nbf": 1795700000,
+    "exp": 1795700300,
+    "jti": "AAECAwQFBgcICQoLDA0ODw",
+    "lucid_org": "acme",
+    "lucid_destination": "d_4e5f607182930415"
+   },
+   "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZrLTIwMjYtMTEifQ.eyJpc3MiOiJodHRwczovL2lkLmFjbWUuZXhhbXBsZS9sdWNpZC9hY21lIiwic3ViIjoibHVjaWQ6YWNtZTpjb25zb2xlIiwiYXVkIjoiYXBpOi8vQXp1cmVBRFRva2VuRXhjaGFuZ2UiLCJpYXQiOjE3OTU3MDAwMDAsIm5iZiI6MTc5NTcwMDAwMCwiZXhwIjoxNzk1NzAwMzAwLCJqdGkiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R3IiwibHVjaWRfb3JnIjoiYWNtZSIsImx1Y2lkX2Rlc3RpbmF0aW9uIjoiZF80ZTVmNjA3MTgyOTMwNDE1In0.TPx0aY2SMZR3ntsW2HwtCZ_eUe4rk9wYbSpG93mrLNgVHda7wer1yIg7e_hSlSdFK36zA4hGqI93l5gKgEBgIBUtnMoiqRtBWmRkdXMBVKvaYJqxGRd6bv-ZKgKm5ccTChGGSZ59xs4DAikpVPRVTbq7j9FsN3dPKcEcxJ237SQ_BVo2qe7q31oBVba-TlWC4SHEGB3pJYClivkh4RK7vIa9POMh3s0Hmp-uc3NxXZLGAgfxOpX4K60uet37irZ64WdsHj-yWrALvm8oLoPzlyAApTDmy3HwDk5VM3djPCNIH5iGL-2v4CjW0vHtxSjoVhe3oDJ-VNicCE2f1A7RwIGYAfDzUrAh3X7iOrQYw8GPYMy4OVkEmCw4qqN9r68rXj1pC9g5ExQ_QGY05dQ8-GChX86RZBbeGmH4V-nfDs7c3uzhhdhYnaovnFu1TeIqqrUrQSh_rjWNYFulOTWt2ybC1OGJ9tbN9KD0ENoNsO2xuI8VbWKbY9xIatmb48h4"
+  },
+  {
+   "name": "google",
+   "aud": "https://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/lucid/providers/acme",
+   "jti": "EBESExQVFhcYGRobHB0eHw",
+   "claims": {
+    "iss": "https://id.acme.example/lucid/acme",
+    "sub": "lucid:acme:console",
+    "aud": "https://iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/lucid/providers/acme",
+    "iat": 1795700000,
+    "nbf": 1795700000,
+    "exp": 1795700300,
+    "jti": "EBESExQVFhcYGRobHB0eHw",
+    "lucid_org": "acme",
+    "lucid_destination": "d_4e5f607182930415"
+   },
+   "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImZrLTIwMjYtMTEifQ.eyJpc3MiOiJodHRwczovL2lkLmFjbWUuZXhhbXBsZS9sdWNpZC9hY21lIiwic3ViIjoibHVjaWQ6YWNtZTpjb25zb2xlIiwiYXVkIjoiaHR0cHM6Ly9pYW0uZ29vZ2xlYXBpcy5jb20vcHJvamVjdHMvMTIzNDU2Nzg5MDEyL2xvY2F0aW9ucy9nbG9iYWwvd29ya2xvYWRJZGVudGl0eVBvb2xzL2x1Y2lkL3Byb3ZpZGVycy9hY21lIiwiaWF0IjoxNzk1NzAwMDAwLCJuYmYiOjE3OTU3MDAwMDAsImV4cCI6MTc5NTcwMDMwMCwianRpIjoiRUJFU0V4UVZGaGNZR1JvYkhCMGVIdyIsImx1Y2lkX29yZyI6ImFjbWUiLCJsdWNpZF9kZXN0aW5hdGlvbiI6ImRfNGU1ZjYwNzE4MjkzMDQxNSJ9.TmG1wb1MHRAkJPqhXvUibqimc3i7cY7OuxlvVyF8pe6jW6Yy3nst1sRVqbr59wA72BhBxB0hi3uttWlIcF6wt9bZMCHJz_QTxJsfKezzdCdiHXbb7P-CpPMBvlasxEhvgwructZ6U4MWl6BjKaWvUa7lToc89uIxmFEL7wF8hi4e-YmsPnKvVtx9G8TEMZ1En35SbJJwrCuvFAuIUTNoe18vZJR_PPB84XmWpz2Sr4yyfqMpPhrrDxYXu8es7lB7_7rQucLyP8UKAYuHK3uP4ZbhwvKAR3WnRBV4kkoK8wpkunogdyTikNx-rOft0CPFooYcH_leJGV6_73pgfJ8ne_FPsye4vq401HQa9LVKgBVXkP505QnabLrBMpGHoLphMZU7o88FsTbCNNhrB1UszGG5L4tCVyyld8632zCgFCf9LGgjRl9tIoTnPo9QlHPqVvcOvVY4WuxFL9LHEhaVRkYxZ24Q-Xt87OTN9LCOdiVeyRuB9xRnlljFte_-XEL"
+  }
+ ],
+ "front_door": {
+  "map": {
+   "issuer": {
+    "url": "https://console.acme.example:7443/api/orgs/acme",
+    "jwks": []
+   },
+   "federation": {
+    "issuer": "https://console.acme.example:7443/api/orgs/acme/federation",
+    "keys": [
+     {
+      "kty": "RSA",
+      "kid": "fk-2026-11",
+      "n": "5yPLbT4b7fHjPKHJpiDVkG0cbSFUnqLMQ-_AyzuqBHtHLjyabvWNetkVEWWAdGTBXgLeMcIvBMtpPQ9g4nlfqKyvRAWC6r6e0aYw0z0YJCVTFeNoTWzXaG2MBTL9fXEPzW4ccolzyYNhjs8wQDsShpbAzC8JW7S0bjITis5JjRva1JNpb9fPPHh54KCrLurEGPtY_jfR2f-Jkbmi1pHPLHVU3QrFK4xVKfY4aA2Shh9SrSIP3vrJ-42bcjpZxjNfYeLbCWyKt93Nu3EFU0gXvb3ve1nsHJM1LsQLJZOuc2lXSpIQnMPSuWtKer38xiRV7XgbjVHxrI64hsbMlqGC0dlEcSh_uYWrzedmX1gho7FdzY1aLyL6QjUnArcqcEPgwzHuCcBl8ezVVOsRvdUqUyCdOCu3-n0ywJceH8wUd6GdswRD4fNTNMyAxaFLAM_1sGbp9mafZ5-4ka3waavK8fbY6UnTuJXThXMBfNgb75ZQ7F1YEiYIPooJNVfPffsr",
+      "e": "AQAB",
+      "alg": "RS256",
+      "use": "sig",
+      "nbf": 1795613600,
+      "exp": 1827149600
+     }
+    ]
+   }
+  },
+  "discovery": {
+   "issuer": "https://console.acme.example:7443/api/orgs/acme/federation",
+   "jwks_uri": "https://console.acme.example:7443/api/orgs/acme/federation/jwks.json",
+   "response_types_supported": [
+    "id_token"
+   ],
+   "subject_types_supported": [
+    "public"
+   ],
+   "id_token_signing_alg_values_supported": [
+    "RS256"
+   ]
+  },
+  "jwks": {
+   "keys": [
+    {
+     "kty": "RSA",
+     "kid": "fk-2026-11",
+     "n": "5yPLbT4b7fHjPKHJpiDVkG0cbSFUnqLMQ-_AyzuqBHtHLjyabvWNetkVEWWAdGTBXgLeMcIvBMtpPQ9g4nlfqKyvRAWC6r6e0aYw0z0YJCVTFeNoTWzXaG2MBTL9fXEPzW4ccolzyYNhjs8wQDsShpbAzC8JW7S0bjITis5JjRva1JNpb9fPPHh54KCrLurEGPtY_jfR2f-Jkbmi1pHPLHVU3QrFK4xVKfY4aA2Shh9SrSIP3vrJ-42bcjpZxjNfYeLbCWyKt93Nu3EFU0gXvb3ve1nsHJM1LsQLJZOuc2lXSpIQnMPSuWtKer38xiRV7XgbjVHxrI64hsbMlqGC0dlEcSh_uYWrzedmX1gho7FdzY1aLyL6QjUnArcqcEPgwzHuCcBl8ezVVOsRvdUqUyCdOCu3-n0ywJceH8wUd6GdswRD4fNTNMyAxaFLAM_1sGbp9mafZ5-4ka3waavK8fbY6UnTuJXThXMBfNgb75ZQ7F1YEiYIPooJNVfPffsr",
+     "e": "AQAB",
+     "alg": "RS256",
+     "use": "sig"
+    }
+   ]
+  }
+ }
+}

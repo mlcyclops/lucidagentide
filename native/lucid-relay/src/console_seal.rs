@@ -352,6 +352,17 @@ fn gcm_open(key: &[u8; KEY_LEN], aad: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// Sealed console state kept in its own file under a 32-byte key that is itself a sealed value (API-1 revision 5 6.5
+/// `api-consent/<org>.json`): `nonce || ciphertext || tag` under AES-256-GCM with `aad` (the file's name).
+pub fn seal_state(key: &[u8; KEY_LEN], aad: &[u8], plain: &[u8]) -> Result<Vec<u8>, String> {
+    gcm_seal(key, aad, plain)
+}
+
+/// The plaintext of a `seal_state` value, or None when it does not authenticate.
+pub fn open_state(key: &[u8; KEY_LEN], aad: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
+    gcm_open(key, aad, sealed)
+}
+
 /// The additional data (AES-256-GCM) or entropy (DPAPI) of the wrapped data key: the label and the provider.
 fn wrap_aad(p: Provider) -> Vec<u8> {
     crate::meet_org_policy::lp(&[WRAP_LABEL, p.as_str().as_bytes()])

@@ -123,6 +123,7 @@ fn summary(action: &str, target: &str, params: &Value) -> String {
         "meet.release.set" => format!("Publish Lucid Meeting Hub {target}"),
         "meet.ai.save" => format!("Save the AI settings of {target}"),
         "meet.ai.approve" => format!("Approve the AI model card {target}"),
+        "meet.api.save" => format!("Save the API settings of {target}"),
         _ => format!("{action} {target}"),
     }
 }
@@ -1096,11 +1097,43 @@ impl Console {
     pub fn check_console_reader(&self, email: &str) -> bool {
         self.inner.lock().book.people.get(email).is_some_and(|p| p.active() && p.role != PersonRole::Viewer)
     }
+
+    /// API-1 slice 1a6 (`api-sign-status`): the request `id` in any state, while the book keeps it.
+    pub fn request_by_id(&self, id: &str, t: i64) -> Option<Value> {
+        let mut inner = self.inner.lock();
+        if !sweep(&mut inner.book, t).is_empty() {
+            let _ = self.save_book(&mut inner);
+        }
+        inner.book.requests.iter().find(|r| s(r, "id") == id).map(|r| Value::Object(r.clone()))
+    }
+
+    /// API-1 slice 1a6: the device of the request's principal answered the waiting request `id` of `kind`: it becomes
+    /// `done` or `failed` (`state`), keeping `extra` (the signed map and its signer policy, or the error sentence),
+    /// and the outcome enters the audit. `gone` when it is no longer waiting.
+    pub fn request_close(&self, id: &str, kind: &str, state: &'static str, by: &str, extra: Map<String, Value>, t: i64) -> Result<Value, ApiError> {
+        let v = {
+            let mut inner = self.inner.lock();
+            let r = inner.book.requests.iter_mut().find(|r| s(r, "id") == id && waiting(r) && s(r, "kind") == kind).ok_or_else(|| ApiError::of("gone"))?;
+            r.insert("state".into(), Value::from(state));
+            r.insert("done_at".into(), Value::from(t));
+            r.insert("observed".into(), json!({ "at": t, "by": by }));
+            r.extend(extra);
+            let v = Value::Object(r.clone());
+            self.save_book(&mut inner)?;
+            v
+        };
+        let mut r = Record::new(by, "requests.done", if state == "done" { "ok" } else { "failed" });
+        r.target = Some(id.to_owned());
+        r.detail = json!({ "kind": kind, "by": by, "error": v.get("error") });
+        self.record(r, t);
+        Ok(v)
+    }
 }
 
 /// What the audit keeps of an action's parameters: the reason and plain fields, never secrets (6 "Never in an entry").
 pub fn params_detail(params: &Value) -> Value {
-    const NEVER: [&str; 17] = ["stepup", "license", "crl", "crl_pem", "directory", "credential", "token", "files", "password", "current", "code", "totp", "secret", "blob", "smtp", "graph", "keyPem"];
+    // `map`: an api map a save signs (API-1 1a6) is named by its `map_sha256`, never copied whole into the audit
+    const NEVER: [&str; 18] = ["stepup", "license", "crl", "crl_pem", "directory", "credential", "token", "files", "password", "current", "code", "totp", "secret", "blob", "smtp", "graph", "keyPem", "map"];
     match params.as_object() {
         Some(o) => Value::Object(o.iter().filter(|(k, _)| !NEVER.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()),
         None => Value::Null,

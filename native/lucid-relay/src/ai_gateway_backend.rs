@@ -157,8 +157,25 @@ fn chat_body(model: &str, p: &Prompt, max_key: &str) -> Vec<u8> {
     v.to_string().into_bytes()
 }
 
+/// The body a card's provider takes for a plain prompt (no tools).
+fn plain_body(card: &Card, p: &Prompt) -> Vec<u8> {
+    match card.provider.as_str() {
+        "local" => chat_body(&card.model, p, "max_tokens"),
+        "openai" | "azure" => chat_body(&card.model, p, "max_completion_tokens"),
+        "anthropic" => json!({"model": card.model, "max_tokens": p.max_output, "temperature": 0, "system": p.system, "messages": [{"role": "user", "content": p.user}]}).to_string().into_bytes(),
+        "amazon-bedrock" => json!({"messages": [{"role": "user", "content": [{"text": p.user}]}], "system": [{"text": p.system}], "inferenceConfig": {"maxTokens": p.max_output, "temperature": 0}}).to_string().into_bytes(),
+        _ => Vec::new(),
+    }
+}
+
 /// The request a card's backend takes for a prompt (`now` in seconds, for Bedrock's signature).
 pub fn build(card: &Card, cred: &Credential, p: &Prompt, now: i64) -> Result<Outgoing, String> {
+    build_with(card, cred, plain_body(card, p), now)
+}
+
+/// The request a card's backend takes for a body already in its provider's form (tool calling builds its own,
+/// ai_gateway_tools.rs): the URL, the key or the AWS signature over that body.
+pub fn build_with(card: &Card, cred: &Credential, body: Vec<u8>, now: i64) -> Result<Outgoing, String> {
     let json_ct = ("content-type".to_string(), "application/json".to_string());
     let bearer = |key: &str| ("authorization".to_string(), format!("Bearer {key}"));
     match card.provider.as_str() {
@@ -167,13 +184,13 @@ pub fn build(card: &Card, cred: &Credential, p: &Prompt, now: i64) -> Result<Out
             if !cred.api_key.is_empty() {
                 headers.push(bearer(&cred.api_key));
             }
-            Ok(Outgoing { url: format!("{}/chat/completions", trim(&card.endpoint)), headers, body: chat_body(&card.model, p, "max_tokens") })
+            Ok(Outgoing { url: format!("{}/chat/completions", trim(&card.endpoint)), headers, body })
         }
         "openai" => {
             if cred.api_key.is_empty() {
                 return Err("no OpenAI key is set for this card".into());
             }
-            Ok(Outgoing { url: format!("{}/chat/completions", trim(&card.endpoint)), headers: vec![json_ct, bearer(&cred.api_key)], body: chat_body(&card.model, p, "max_completion_tokens") })
+            Ok(Outgoing { url: format!("{}/chat/completions", trim(&card.endpoint)), headers: vec![json_ct, bearer(&cred.api_key)], body })
         }
         "azure" => {
             if cred.api_key.is_empty() {
@@ -184,19 +201,17 @@ pub fn build(card: &Card, cred: &Credential, p: &Prompt, now: i64) -> Result<Out
             Ok(Outgoing {
                 url: format!("{}/openai/deployments/{}/chat/completions?api-version={}", trim(&card.endpoint), uri_encode(deployment), uri_encode(version)),
                 headers: vec![json_ct, ("api-key".into(), cred.api_key.clone())],
-                body: chat_body(&card.model, p, "max_completion_tokens"),
+                body,
             })
         }
         "anthropic" => {
             if cred.api_key.is_empty() {
                 return Err("no Anthropic key is set for this card".into());
             }
-            let body = json!({"model": card.model, "max_tokens": p.max_output, "temperature": 0, "system": p.system, "messages": [{"role": "user", "content": p.user}]});
-            Ok(Outgoing { url: format!("{}/v1/messages", trim(&card.endpoint)), headers: vec![json_ct, ("x-api-key".into(), cred.api_key.clone()), ("anthropic-version".into(), "2023-06-01".into())], body: body.to_string().into_bytes() })
+            Ok(Outgoing { url: format!("{}/v1/messages", trim(&card.endpoint)), headers: vec![json_ct, ("x-api-key".into(), cred.api_key.clone()), ("anthropic-version".into(), "2023-06-01".into())], body })
         }
         "amazon-bedrock" => {
             let path = format!("/model/{}/converse", uri_encode(&card.model));
-            let body = json!({"messages": [{"role": "user", "content": [{"text": p.user}]}], "system": [{"text": p.system}], "inferenceConfig": {"maxTokens": p.max_output, "temperature": 0}}).to_string().into_bytes();
             let url = format!("{}{path}", trim(&card.endpoint));
             if !cred.api_key.is_empty() {
                 // a Bedrock API key (bearer token)

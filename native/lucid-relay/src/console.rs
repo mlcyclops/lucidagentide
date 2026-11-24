@@ -443,6 +443,8 @@ pub trait ProductSection: Send + Sync {
     /// The console changed who is an admin or active (a promotion, an unsuspension, a removal, a role change): the
     /// product applies what follows from it (Meeting Hub: protected people always hold a seat, R3-M6).
     fn people_changed(&self, _t: i64) {}
+    /// The console's minute, after its own work and without its lock (Meeting Hub: the r6 8.2 MCP journal resend).
+    fn tick(&self, _t: i64) {}
 }
 
 // ── Refusals (8.3) ──────────────────────────────────────────────────────────────────────────────────────────
@@ -602,6 +604,8 @@ pub fn code_words(code: &str) -> Option<(u16, &'static str)> {
         "siem-ca-needed" => (409, "The High profile needs the SIEM's certificate authority. Paste its PEM."),
         "fips-needed" => (409, "The High profile needs the FIPS build for this."),
         "rate-limited" => (429, "Too many requests. Try again in 1 minute."),
+        // API-1 revision 4 2.3 item 3
+        "relay-outdated" => (409, "A relay of this organization does not support this yet. Update it, or retire it from the organization."),
         _ => return None,
     })
 }
@@ -1240,6 +1244,10 @@ impl Console {
         }
         // R42-1, R42-3: the service state audited and the renewal reminders, with email off too (audit, banners).
         self.license_check(t);
+        // The product section's minute (Meeting Hub: the MCP journal resent until each gateway acknowledges it).
+        if let Some(s) = self.section() {
+            s.tick(t);
+        }
         if self.mailer.config().mode == Mode::Off {
             return;
         }

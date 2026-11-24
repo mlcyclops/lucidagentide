@@ -930,7 +930,9 @@ impl Console {
             None => Value::Null,
         };
         let sources = sources.unwrap_or_else(|| fleet.metrics_sources_text());
-        Ok(Out::ok(json!({ "ok": true, "tokens": tokens, "siem": siem, "metricsSources": sources })))
+        // API-1 7.3, 11.7, 12.3 (slice 1a6): each org's export destinations and the presets
+        let (api, presets) = fleet.exports_api_view(crate::codec::now_ms());
+        Ok(Out::ok(json!({ "ok": true, "tokens": tokens, "siem": siem, "metricsSources": sources, "api": api, "presets": presets })))
     }
 
     /// POST settings/exports/token {label, relays, days, stepup}: the token only in this answer (10.1).

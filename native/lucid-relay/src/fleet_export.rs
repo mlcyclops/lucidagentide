@@ -1,5 +1,5 @@
 // Prometheus `/metrics` on the console's browser port (contract AC-2a 10.1): scrape tokens (32 random bytes shown once,
-// stored as SHA-256 only, a label, the relays they read, 30 to 365 days, at most 10), the request checks (the metrics
+// stored as SHA-256 only, a label, the relays they read, 30 to 90 days (API-1 4.4), at most 10), the request checks (the metrics
 // source list, the High profile's FIPS build, the bearer token, one scrape per 10 s per token) and the exposition of
 // the latest accepted snapshot per relay. No cookie or session is ever read here; label values are the console's own
 // registry values, escaped.
@@ -18,8 +18,10 @@ pub const TOKEN_PREFIX: &str = "lme_";
 pub const TOKEN_BYTES: usize = 32;
 pub const TOKENS_MAX: usize = 10;
 pub const DAYS_MIN: i64 = 30;
-pub const DAYS_MAX: i64 = 365;
-pub const DAYS_DEFAULT: i64 = 365;
+/// API-1 4.4: new and renewed tokens last 30 to 90 days, default 90; a token made before keeps its expiry and is
+/// marked `olderThan90` on the page.
+pub const DAYS_MAX: i64 = 90;
+pub const DAYS_DEFAULT: i64 = 90;
 pub const LABEL_MAX: usize = 64;
 /// At most one scrape per 10 s per token.
 pub const SCRAPE_GAP_MS: i64 = 10_000;
@@ -171,6 +173,7 @@ impl TokenRecord {
             "createdAt": self.created_at,
             "expires": self.expires,
             "lastUsedAt": self.last_used_at,
+            "olderThan90": self.expires - self.created_at > DAYS_MAX * DAY_MS,
         })
     }
 }
@@ -185,7 +188,7 @@ pub fn mint_token(label: &str, relays: &TokenRelays, days: Option<i64>, created_
     }
     let days = days.unwrap_or(DAYS_DEFAULT);
     if !(DAYS_MIN..=DAYS_MAX).contains(&days) {
-        return Err(ApiError::with("invalid", "A token lasts 30 to 365 days."));
+        return Err(ApiError::with("invalid", "A token lasts 30 to 90 days."));
     }
     if existing.len() >= TOKENS_MAX {
         return Err(ApiError::of("token-limit"));
@@ -290,7 +293,9 @@ impl Exporter {
         let named: Vec<&RelayRow> = rows.iter().filter(|r| rec.relays.names(&r.id)).collect();
         let snaps: Vec<Snap> = named.iter().map(|r| Snap::of(r, metrics)).collect();
         let console = ConsoleInfo { version: ctx.version, profile: if ctx.profile_high { "high" } else { "standard" }, fips: ctx.fips };
-        ScrapeAnswer { status: 200, content_type: CONTENT_TYPE, retry_after: None, body: exposition(&console, &named, &snaps, now).into_bytes(), used_hint: Some(rec.hint.clone()), code: None }
+        let mut text = exposition(&console, &named, &snaps, now);
+        text.push_str(&api_families(None, now.div_euclid(1000), false));
+        ScrapeAnswer { status: 200, content_type: CONTENT_TYPE, retry_after: None, body: text.into_bytes(), used_hint: Some(rec.hint.clone()), code: None }
     }
 }
 
@@ -400,6 +405,30 @@ pub fn exposition(console: &ConsoleInfo, rows: &[&RelayRow], snaps: &[Snap], now
     out
 }
 
+/// API-1 10.1: the families of `api_catalog::counters` after `exposition`, for one org (an org's `v1/metrics`) or
+/// every org summed (None: the console's own `/metrics`) at `now_s`, HELP and TYPE from the catalog, label values
+/// escaped. `lucid_relay_mode` only on a relay (`normal` until a mode is set).
+pub fn api_families(org: Option<&str>, now_s: i64, relay: bool) -> String {
+    use crate::api_catalog::counters::{rows, Row, FAMILIES};
+    let catalog = crate::api_catalog::catalog();
+    let mut series = rows(org, now_s);
+    if relay && !series.iter().any(|r| r.prom == "lucid_relay_mode") {
+        for (mode, v) in [("normal", 1.0), ("failover", 0.0)] {
+            series.push(Row { prom: "lucid_relay_mode", labels: vec![("mode".into(), mode.into())], value: v });
+        }
+    }
+    let mut out = String::new();
+    for prom in FAMILIES.iter().filter(|p| relay || **p != "lucid_relay_mode") {
+        let Some(f) = catalog.family(prom) else { continue };
+        out.push_str(&format!("# HELP {prom} {}\n# TYPE {prom} {}\n", escape_help(&f.help), f.kind.prom_type()));
+        for r in series.iter().filter(|r| r.prom == *prom) {
+            let labels: Vec<String> = r.labels.iter().map(|(k, v)| format!("{k}=\"{}\"", escape_label(v))).collect();
+            out.push_str(&format!("{prom}{{{}}} {}\n", labels.join(","), fmt_num(r.value)));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,13 +479,17 @@ mod tests {
         assert_eq!(rec.hash_hex, sha256_hex(token.as_bytes()));
         assert_eq!(rec.hint, rec.hash_hex[..8]);
         assert_eq!(rec.label, "Grafana prod");
-        assert_eq!(rec.expires, now + 365 * DAY_MS);
+        assert_eq!(rec.expires, now + 90 * DAY_MS);
         // the record never holds the token
         let saved = crate::codec::stringify(&rec.to_json());
         assert!(!saved.contains(&token[4..]));
         assert_eq!(TokenRecord::from_json(&rec.to_json()), Some(rec.clone()));
         assert!(!crate::codec::stringify(&rec.view()).contains(&rec.hash_hex));
-        for days in [29, 366] {
+        assert_eq!(rec.view()["olderThan90"], json!(false));
+        // API-1 4.4: a token made before for longer keeps its expiry and is marked
+        let older = TokenRecord { expires: now + 365 * DAY_MS, ..rec.clone() };
+        assert_eq!(older.view()["olderThan90"], json!(true));
+        for days in [29, 91] {
             assert_eq!(mint_token("x", &TokenRelays::All, Some(days), "a@b.c", now, &[]).unwrap_err().code, "invalid");
         }
         assert!(mint_token("x", &TokenRelays::All, Some(30), "a@b.c", now, &[]).is_ok());
@@ -566,5 +599,26 @@ mod tests {
         let c = &e["console"];
         let console = ConsoleInfo { version: c["version"].as_str().unwrap(), profile: c["profile"].as_str().unwrap(), fips: c["fips"].as_bool().unwrap() };
         assert_eq!(exposition(&console, &refs, &snaps, now), e["text"].as_str().unwrap());
+    }
+
+    #[test]
+    fn the_api_families_follow_the_catalog_per_org() {
+        use crate::api_catalog::counters;
+        let (org, other) = ("export-test-a", "export-test-b");
+        counters::api_request(org, "c_\"x\"", "ok");
+        counters::api_refusal(other, "export-test-check");
+        let text = api_families(Some(org), 1_800_000_000, false);
+        for prom in counters::FAMILIES.iter().filter(|p| **p != "lucid_relay_mode") {
+            let f = crate::api_catalog::catalog().family(prom).unwrap();
+            assert!(text.contains(&format!("# HELP {prom} {}\n# TYPE {prom} {}\n", f.help, f.kind.prom_type())), "{prom}");
+        }
+        assert!(text.contains("lucid_api_requests_total{client=\"c_\\\"x\\\"\",result=\"ok\"} 1\n"), "{text}");
+        assert!(!text.contains("export-test-check"), "another org's series");
+        assert!(!text.contains("lucid_relay_mode"), "the console has no relay mode");
+        let relay = api_families(Some(org), 1_800_000_000, true);
+        // the mode is process-wide and the api_failover tests switch it, so only its shape is fixed here
+        let mode = |m: &str| relay.lines().find_map(|l| l.strip_prefix(&format!("lucid_relay_mode{{mode=\"{m}\"}} ")).map(str::to_owned));
+        assert!(matches!((mode("normal").as_deref(), mode("failover").as_deref()), (Some("1"), Some("0")) | (Some("0"), Some("1"))), "{relay}");
+        assert!(api_families(None, 1_800_000_000, false).contains("lucid_api_refusals_total{check=\"export-test-check\"} 1\n"));
     }
 }

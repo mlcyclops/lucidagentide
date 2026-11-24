@@ -17,7 +17,8 @@ const QUESTION_MAX: usize = 4000;
 const SNIPPETS_MAX: usize = 40;
 const SNIPPET_TEXT_MAX: usize = 2000;
 const SNIPPETS_TOTAL_MAX: usize = 48000;
-const ASK_KEYS: [&str; 7] = ["v", "rid", "activity", "policy", "tiers", "question", "snippets"];
+/// API-1 r6 8.7 adds the optional `tools` (default false).
+const ASK_KEYS: [&str; 8] = ["v", "rid", "activity", "policy", "tiers", "question", "snippets", "tools"];
 const ESTIMATE_KEYS: [&str; 6] = ["v", "activity", "tokens_in", "class", "policy", "tiers"];
 const SNIPPET_KEYS: [&str; 10] = ["id", "cid", "mid", "ts", "from", "class", "text", "meeting", "at_ms", "chat_cid"];
 
@@ -108,6 +109,8 @@ pub struct Ask {
     pub tiers: Vec<String>,
     pub question: String,
     pub snippets: Vec<Snippet>,
+    /// The person turned on "Allow organization tools" for this ask (r6 8.7).
+    pub tools: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -208,7 +211,11 @@ pub fn parse_ask(v: &Value) -> Result<Ask, Refusal> {
     if total > SNIPPETS_TOTAL_MAX {
         return Err(bad("the snippets' text must total at most 48000 characters"));
     }
-    Ok(Ask { rid: rid.to_string(), activity, policy, tiers, question: question.to_string(), snippets })
+    let tools = match o.get("tools") {
+        None => false,
+        Some(t) => t.as_bool().ok_or_else(|| bad("tools must be true or false"))?,
+    };
+    Ok(Ask { rid: rid.to_string(), activity, policy, tiers, question: question.to_string(), snippets, tools })
 }
 
 /// 6.3: the estimate body (no content).

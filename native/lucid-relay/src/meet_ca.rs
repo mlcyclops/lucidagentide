@@ -251,6 +251,9 @@ impl CaState {
 pub enum CertKind {
     Server,
     SignerClient,
+    /// API-1 9.3: an org's audit checkpoint key (`issue_checkpoint`); the row's `relay_id` is its holder, `console`
+    /// or a relay id.
+    Checkpoint,
 }
 
 impl CertKind {
@@ -258,6 +261,7 @@ impl CertKind {
         match self {
             CertKind::Server => "server",
             CertKind::SignerClient => "signer-client",
+            CertKind::Checkpoint => "checkpoint",
         }
     }
 
@@ -265,8 +269,84 @@ impl CertKind {
         match s {
             "server" => Some(CertKind::Server),
             "signer-client" => Some(CertKind::SignerClient),
+            "checkpoint" => Some(CertKind::Checkpoint),
             _ => None,
         }
+    }
+}
+
+/// API-1 9.3: an audit checkpoint certificate lasts a year (never past the CA's end).
+pub const CHECKPOINT_DAYS: i64 = 365;
+/// The common name of an audit checkpoint certificate (its org is the O attribute and the SAN URI).
+pub const CHECKPOINT_CN: &str = "Lucid API audit checkpoint";
+const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
+const OID_KU: &[u8] = &[0x55, 0x1d, 0x0f];
+const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
+const OID_SKI: &[u8] = &[0x55, 0x1d, 0x0e];
+const OID_AKI: &[u8] = &[0x55, 0x1d, 0x23];
+const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+
+/// The SAN URI of an org's audit checkpoint certificate.
+pub fn checkpoint_uri(org: &str) -> String {
+    format!("urn:lucid-meet:org:{org}")
+}
+
+fn seq_of(parts: &[Vec<u8>]) -> Vec<u8> {
+    x509::der(0x30, &parts.concat())
+}
+
+fn ext_of(o: &[u8], critical: bool, value: Vec<u8>) -> Vec<u8> {
+    let mut parts = vec![x509::der(0x06, o)];
+    if critical {
+        parts.push(x509::der(0x01, &[0xff]));
+    }
+    parts.push(x509::der(0x04, &value));
+    seq_of(&parts)
+}
+
+/// The TBSCertificate of an audit checkpoint certificate: `CN=Lucid API audit checkpoint, O=<org>`, CA false and
+/// digitalSignature only (both critical), SAN URI `urn:lucid-meet:org:<org>`, no extendedKeyUsage, key ids.
+fn checkpoint_tbs(ca_der: &[u8], org: &str, serial: &[u8], not_before_ms: i64, not_after_ms: i64, spki: &[u8]) -> Result<Vec<u8>, String> {
+    let ca = Cert::from_der(ca_der).ok_or("the CA certificate does not read")?;
+    let aki = x509::authority_key_id(&ca).ok_or("the CA key is not an EC key")?;
+    let ski = x509::key_id(spki).ok_or("the checkpoint key is not an EC key")?;
+    let exts = [
+        ext_of(OID_BC, true, seq_of(&[])),
+        ext_of(OID_KU, true, x509::der(0x03, &[7, 0x80])),
+        ext_of(OID_SAN, false, seq_of(&[x509::der(0x86, checkpoint_uri(org).as_bytes())])),
+        ext_of(OID_SKI, false, x509::der(0x04, &ski)),
+        ext_of(OID_AKI, false, seq_of(&[x509::der(0x80, &aki)])),
+    ];
+    Ok(seq_of(&[
+        x509::der(0xa0, &x509::der(0x02, &[2])),
+        x509::integer(serial),
+        seq_of(&[x509::der(0x06, OID_ECDSA_SHA256)]),
+        ca.subject.clone(),
+        seq_of(&[x509::time(not_before_ms), x509::time(not_after_ms)]),
+        x509::name(&[(x509::OID_CN, CHECKPOINT_CN), (x509::OID_O, org)]),
+        spki.to_vec(),
+        x509::der(0xa3, &seq_of(&exts)),
+    ]))
+}
+
+/// Check an audit checkpoint certificate (9.3): it reads, the CA signed it directly, it is in date at `at_ms`, CA
+/// false and digitalSignature only (both critical), no extendedKeyUsage, and its only name is the org's SAN URI.
+pub fn checkpoint_check(cert_der: &[u8], org: &str, ca_der: &[u8], at_ms: i64) -> Result<Cert, String> {
+    let bad = |why: &str| Err(format!("the checkpoint certificate is wrong: {why}"));
+    let Some(cert) = Cert::from_der(cert_der) else { return bad("it does not read") };
+    let Some(ca) = Cert::from_der(ca_der) else { return bad("the CA does not read") };
+    let (Some(u), Some(san)) = (x509::usage(cert_der), x509::cert_san(cert_der)) else { return bad("its extensions do not read") };
+    if !cert.issued_directly_by_root(&ca) {
+        return bad("the CA did not sign it");
+    }
+    if !x509::in_date(&cert, at_ms) {
+        return bad("it is not in date");
+    }
+    let ok = !u.ca && u.bc_critical && u.key_usage == Some(0x80) && u.ku_critical && u.eku.is_none() && san.names.is_empty() && san.other == 0 && san.uris == [checkpoint_uri(org)];
+    if ok {
+        Ok(cert)
+    } else {
+        bad("its usages do not match the checkpoint profile")
     }
 }
 
@@ -1086,6 +1166,8 @@ impl MeetCa {
             }
             CertKind::SignerClient if self.s.signer_url.is_none() => return Err(ApiError::of("invalid")),
             CertKind::SignerClient => MeetProfile::SignerClient,
+            // checkpoint certificates have their own path (`issue_checkpoint`)
+            CertKind::Checkpoint => return Err(ApiError::of("invalid")),
         };
         let last = self.s.issued.iter().filter(|r| renewal && r.relay_id == relay_id && r.kind == kind).map(|r| r.not_before + BACKDATE_MS).max();
         if let Some(last) = last {
@@ -1099,6 +1181,7 @@ impl MeetCa {
             CertKind::Server => SERVER_DAYS,
             CertKind::SignerClient if self.s.signer_enforced && signer_confirmed => SIGNER_DAYS_ENFORCED,
             CertKind::SignerClient => SIGNER_DAYS,
+            CertKind::Checkpoint => CHECKPOINT_DAYS,
         };
         let ca = Cert::from_der(&self.ca_der).ok_or_else(|| ApiError::of("state-unreadable"))?;
         let not_before = (t - BACKDATE_MS).div_euclid(1000) * 1000;
@@ -1136,9 +1219,45 @@ impl MeetCa {
         Ok(issued)
     }
 
-    /// Relays that hold a live certificate from this CA (`meet-ca-in-use`).
+    /// API-1 9.3: an org's audit checkpoint certificate for `holder` (`console` or a relay id) from the holder's own
+    /// request (ECDSA P-256 SHA-256; only its key is used, L9): SAN URI `urn:lucid-meet:org:<org>`, digitalSignature,
+    /// no extendedKeyUsage, from 5 minutes ago for a year (never past the CA's end). Read back and checked before
+    /// use; the row (kind `checkpoint`) is in `meet-ca.json` before this returns.
+    pub fn issue_checkpoint(&mut self, vault: &dyn Vault, holder: &str, org: &str, csr_der: &[u8], t: i64) -> Result<Issued, ApiError> {
+        if self.state == CaState::Unreadable {
+            return Err(refuse("deploy-ca-needed", &[]));
+        }
+        let org_ok = (1..=32).contains(&org.len()) && org.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !org_ok || holder.is_empty() {
+            return Err(ApiError::of("invalid"));
+        }
+        let key = self.key(vault)?;
+        let req = x509::read_request(csr_der).ok_or_else(|| ApiError::of("invalid"))?;
+        if !x509::is_p256_spki(&req.spki) {
+            return Err(ApiError::of("invalid"));
+        }
+        let ca = Cert::from_der(&self.ca_der).ok_or_else(|| ApiError::of("state-unreadable"))?;
+        let not_before = (t - BACKDATE_MS).div_euclid(1000) * 1000;
+        let not_after = (t + CHECKPOINT_DAYS * DAY_MS).min(ca.not_after * 1000).div_euclid(1000) * 1000;
+        let serial = x509::new_serial().map_err(|_| ApiError::of("write-failed"))?;
+        let tbs = checkpoint_tbs(&self.ca_der, org, &serial, not_before, not_after, &req.spki).map_err(|_| ApiError::of("invalid"))?;
+        let signature = key.sign(&tbs).map_err(|_| ApiError::of("write-failed"))?;
+        let der = x509::signed_p256(&tbs, &signature);
+        checkpoint_check(&der, org, &self.ca_der, not_before).map_err(|_| ApiError::of("invalid"))?;
+        let serial = x509::serial_of_bytes(&serial);
+        let names = vec![checkpoint_uri(org)];
+        let row = Row { serial: serial.clone(), relay_id: holder.to_owned(), kind: CertKind::Checkpoint, names: names.clone(), not_before, not_after, revoked_at: None };
+        self.change(|ca| {
+            ca.s.issued.push(row);
+            Ok(())
+        })?;
+        Ok(Issued { pem: der_to_pem(&der), der, serial, not_after, names })
+    }
+
+    /// Relays that hold a live certificate from this CA (`meet-ca-in-use`). The console's own checkpoint
+    /// certificates are not a relay's.
     pub fn in_use(&self, t: i64) -> usize {
-        let mut relays: Vec<&str> = self.s.issued.iter().filter(|r| r.revoked_at.is_none() && r.not_after > t).map(|r| r.relay_id.as_str()).collect();
+        let mut relays: Vec<&str> = self.s.issued.iter().filter(|r| r.revoked_at.is_none() && r.not_after > t && !(r.kind == CertKind::Checkpoint && r.relay_id == "console")).map(|r| r.relay_id.as_str()).collect();
         relays.sort_unstable();
         relays.dedup();
         relays.len()
@@ -1326,6 +1445,33 @@ mod tests {
     fn signer_csr() -> Vec<u8> {
         let k = Key::generate(Curve::P256).unwrap();
         x509::csr(&k, x509::MEET_RELAY_CN, &[], &[], &[MEET_RELAY_URI.to_owned()]).unwrap()
+    }
+
+    #[test]
+    fn checkpoint_certificate_profile() {
+        let mut w = world("meet-ca-checkpoint", T);
+        let k = Key::generate(Curve::P256).unwrap();
+        let csr = x509::csr(&k, CHECKPOINT_CN, &[], &[], &[checkpoint_uri("acme")]).unwrap();
+        let issued = w.ca.issue_checkpoint(&w.vault, "console", "acme", &csr, T).unwrap();
+        let cert = checkpoint_check(&issued.der, "acme", &w.ca_der, T).unwrap();
+        assert_eq!(cert.spki, k.spki());
+        let u = x509::usage(&issued.der).unwrap();
+        assert!(u.eku.is_none() && u.key_usage == Some(0x80) && !u.ca);
+        assert_eq!(x509::cert_san(&issued.der).unwrap().uris, vec!["urn:lucid-meet:org:acme".to_owned()]);
+        assert_eq!(issued.not_after, T + CHECKPOINT_DAYS * DAY_MS);
+        // another org's name never verifies it, and the row is recorded with its kind
+        assert!(checkpoint_check(&issued.der, "beta", &w.ca_der, T).is_err());
+        let row = w.ca.rows().iter().find(|r| r.serial == issued.serial).unwrap();
+        assert_eq!((row.kind, row.relay_id.as_str()), (CertKind::Checkpoint, "console"));
+        // the console's own checkpoint certificate is not a relay using the CA
+        assert_eq!(w.ca.in_use(T), 0);
+        let again = MeetCa::open(&w.dir, &w.vault).unwrap();
+        assert!(again.rows().iter().any(|r| r.kind == CertKind::Checkpoint));
+        // a request that does not verify is refused
+        let mut bad = csr.clone();
+        let n = bad.len();
+        bad[n - 1] ^= 1;
+        assert!(w.ca.issue_checkpoint(&w.vault, RELAY, "acme", &bad, T).is_err());
     }
 
     /// A list of `w`'s CA signed with its key, as another signer would.

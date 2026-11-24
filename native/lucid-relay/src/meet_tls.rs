@@ -412,18 +412,106 @@ fn roots_of(path: &str) -> Result<RootCertStore, String> {
     Ok(roots)
 }
 
+/// API-1 3.3: who an expired Meet leaf is, for the applicable grace: its kind and orgs (`cert_kind`), its principal
+/// (the first email, lower case; an SSO service `sso:<serial>`) and its `notAfter`.
+pub struct GraceSubject {
+    pub kind: String,
+    pub principal: String,
+    pub orgs: Vec<String>,
+    pub not_after: i64,
+}
+
+impl GraceSubject {
+    /// None for a relay certificate or one `cert_kind` refuses (no grace).
+    pub fn of(cert: &Cert) -> Option<GraceSubject> {
+        if cert.names.uris.iter().any(|u| u == crate::meet::RELAY_URI) {
+            return None;
+        }
+        let (kind, orgs) = crate::meet_hub::pc::cert_kind(&cert.names.uris).ok()?;
+        let principal = if kind == "sso" { format!("sso:{}", cert.serial) } else { cert.names.emails.first()?.trim().to_lowercase() };
+        Some(GraceSubject { kind, principal, orgs, not_after: cert.not_after })
+    }
+}
+
+/// API-1 3.3: the effective end (seconds) of a subject at `now`, read from the relay's live api map store.
+pub type GraceSource = Arc<dyn Fn(&GraceSubject, i64) -> i64 + Send + Sync>;
+
+static GRACE: std::sync::OnceLock<GraceSource> = std::sync::OnceLock::new();
+
+/// Set once at start, before the first `tls_config`: every Meet TLS config built after it carries the source.
+pub fn set_grace_source(source: GraceSource) {
+    let _ = GRACE.set(source);
+}
+
+/// The source `set_grace_source` set (None before, and in tests that never set it).
+pub fn grace_source() -> Option<&'static GraceSource> {
+    GRACE.get()
+}
+
+/// The effective end of `cert` at `now` from `source` (`notAfter` without one, or for a certificate with no grace).
+pub fn grace_end_with(source: Option<&GraceSource>, cert: &Cert, now: i64) -> i64 {
+    match (source, GraceSubject::of(cert)) {
+        (Some(f), Some(s)) => f(&s, now).max(cert.not_after),
+        _ => cert.not_after,
+    }
+}
+
+#[derive(Clone)]
+struct Grace(Option<GraceSource>);
+
+impl std::fmt::Debug for Grace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Grace(source)" } else { "Grace(none)" })
+    }
+}
+
 /// The client verifier: the chain to the Meet CA by webpki, then revocation as OpenSSL checks it with
 /// VERIFY_CRL_CHECK_LEAF or _CHAIN (meet_pki's CRLs carry no CRL number, which webpki's own CRL parser requires):
 /// each checked certificate needs a current CRL from its issuer, signed by that issuer, that does not list it.
+/// API-1 3.3: an expired leaf may pass on the grace path (`in_grace`).
 #[derive(Debug)]
 struct MeetVerifier {
     inner: Arc<dyn ClientCertVerifier>,
     roots: Vec<Cert>,
     crls: Vec<Crl>,
     chain: bool,
+    /// A CRL file is in force (the revocation checks run).
+    revoke: bool,
+    grace: Grace,
 }
 
 impl MeetVerifier {
+    /// API-1 3.3: the grace path for a leaf webpki refused as expired. Admitted only when the applicable grace covers
+    /// `now`, the whole webpki verification passes at the leaf's `notAfter`, every issuer of the chain is valid at
+    /// `now`, and the CRL checks pass at `now`.
+    fn in_grace(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: i64) -> Option<ClientCertVerified> {
+        let source = self.grace.0.as_ref()?;
+        let leaf = Cert::from_der(end_entity)?;
+        if now <= leaf.not_after || now > grace_end_with(Some(source), &leaf, now) {
+            return None;
+        }
+        let at = UnixTime::since_unix_epoch(Duration::from_secs(u64::try_from(leaf.not_after).ok()?));
+        let verified = self.inner.verify_client_cert(end_entity, intermediates, at).ok()?;
+        let inters: Vec<Cert> = intermediates.iter().filter_map(|c| Cert::from_der(c)).collect();
+        let mut cert = leaf;
+        let mut rooted = false;
+        for _ in 0..8 {
+            let (issuer, is_root) = self.issuer_of(&cert, &inters)?;
+            if issuer.not_before > now || issuer.not_after < now {
+                return None;
+            }
+            if is_root {
+                rooted = true;
+                break;
+            }
+            cert = issuer.clone();
+        }
+        if !rooted || (self.revoke && self.revocation(end_entity, intermediates, now).is_err()) {
+            return None;
+        }
+        Some(verified)
+    }
+
     fn issuer_of<'a>(&'a self, cert: &Cert, intermediates: &'a [Cert]) -> Option<(&'a Cert, bool)> {
         if let Some(c) = intermediates.iter().find(|c| c.subject == cert.issuer && cert.signed.verified_by(&c.spki)) {
             return Some((c, false));
@@ -467,9 +555,21 @@ impl ClientCertVerifier for MeetVerifier {
         self.inner.root_hint_subjects()
     }
 
+    fn client_auth_mandatory(&self) -> bool {
+        self.inner.client_auth_mandatory()
+    }
+
     fn verify_client_cert(&self, end_entity: &CertificateDer<'_>, intermediates: &[CertificateDer<'_>], now: UnixTime) -> Result<ClientCertVerified, rustls::Error> {
-        let verified = self.inner.verify_client_cert(end_entity, intermediates, now)?;
-        self.revocation(end_entity, intermediates, now.as_secs() as i64).map_err(rustls::Error::InvalidCertificate)?;
+        let verified = match self.inner.verify_client_cert(end_entity, intermediates, now) {
+            Ok(v) => v,
+            Err(e @ rustls::Error::InvalidCertificate(CertificateError::Expired | CertificateError::ExpiredContext { .. })) => {
+                return self.in_grace(end_entity, intermediates, now.as_secs() as i64).ok_or(e);
+            }
+            Err(e) => return Err(e),
+        };
+        if self.revoke {
+            self.revocation(end_entity, intermediates, now.as_secs() as i64).map_err(rustls::Error::InvalidCertificate)?;
+        }
         Ok(verified)
     }
 
@@ -489,23 +589,60 @@ impl ClientCertVerifier for MeetVerifier {
 /// tls_context: the server TLS for new connections.
 pub fn tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     let provider = Arc::new(crate::server::provider());
-    let certs = load_certs(&s.cert, "certificate")?;
-    let key = load_key(&s.key)?;
     let roots = Arc::new(roots_of(&s.client_ca)?);
     let inner = WebPkiClientVerifier::builder_with_provider(roots, provider.clone()).build().map_err(|e| format!("the client CA does not load: {e}"))?;
-    let verifier: Arc<dyn ClientCertVerifier> = match active_crl(s) {
-        None => inner,
+    meet_server_config(s, provider, inner, true)
+}
+
+/// API-1 7.2: the API listener's server TLS: the relay's own certificate, TLS 1.3 and 1.2, a client certificate
+/// asked for but OPTIONAL. A presented one is checked in the handshake against the client CA (and the 3.3 grace
+/// path) only; its revocation is checked after the handshake by `api_cert_revocation_checked`, which counts it only
+/// under a current CRL, so a relay without a CRL still serves anonymous clients but authenticates no certificate.
+pub fn api_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
+    let provider = Arc::new(crate::server::provider());
+    let roots = Arc::new(roots_of(&s.client_ca)?);
+    let inner = WebPkiClientVerifier::builder_with_provider(roots, provider.clone()).allow_unauthenticated().build().map_err(|e| format!("the client CA does not load: {e}"))?;
+    meet_server_config(s, provider, inner, false)
+}
+
+/// API-1 4.2: whether a client chain that passed `api_tls_config`'s handshake also passed revocation at `now`: the
+/// CRL file in force (read now, so a refreshed list applies at once) holds a current list, signed by its issuer,
+/// for every certificate checked (the leaf, or the whole chain for a chain bundle), and none lists it. No CRL file,
+/// an unreadable one, or no current list: false (the certificate then counts as not presented).
+pub fn api_cert_revocation_checked(s: &Settings, leaf: &[u8], intermediates: &[CertificateDer<'_>], now: i64) -> bool {
+    let Some(crl) = active_crl(s) else { return false };
+    let crls = std::fs::read(&crl).map(|d| crls_in(&d)).unwrap_or_default();
+    if crls.is_empty() {
+        return false;
+    }
+    let Ok(store) = roots_of(&s.client_ca) else { return false };
+    let Ok(inner) = WebPkiClientVerifier::builder_with_provider(Arc::new(store), Arc::new(crate::server::provider())).build() else { return false };
+    let roots: Vec<Cert> = pem_blocks(&read_bytes(Path::new(&s.client_ca)), "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    let chain = bundle_checks_chain(&crl, Path::new(&s.client_ca));
+    let v = MeetVerifier { inner, roots, crls, chain, revoke: true, grace: Grace(None) };
+    v.revocation(leaf, intermediates, now).is_ok()
+}
+
+/// A server config with the relay's certificate and the Meet client verifier around `inner` (whose
+/// `client_auth_mandatory` the wrapper keeps). `handshake_revocation` false leaves the CRL to the caller.
+fn meet_server_config(s: &Settings, provider: Arc<rustls::crypto::CryptoProvider>, inner: Arc<dyn ClientCertVerifier>, handshake_revocation: bool) -> Result<Arc<ServerConfig>, String> {
+    let certs = load_certs(&s.cert, "certificate")?;
+    let key = load_key(&s.key)?;
+    let (crls, chain, revoke) = match active_crl(s).filter(|_| handshake_revocation) {
+        None => (Vec::new(), false, false),
         Some(crl) => {
             let data = std::fs::read(&crl).map_err(|e| format!("cannot read the CRL {}: {e}", crl.display()))?;
             let crls = crls_in(&data);
             if crls.is_empty() {
                 return Err(format!("the CRL file {} holds no CRL", crl.display()));
             }
-            let ca_data = std::fs::read(&s.client_ca).map_err(|e| format!("cannot read the CA file {}: {e}", s.client_ca))?;
-            let roots: Vec<Cert> = pem_blocks(&ca_data, "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
-            Arc::new(MeetVerifier { inner, roots, crls, chain: bundle_checks_chain(&crl, Path::new(&s.client_ca)) })
+            (crls, bundle_checks_chain(&crl, Path::new(&s.client_ca)), true)
         }
     };
+    let ca_data = std::fs::read(&s.client_ca).map_err(|e| format!("cannot read the CA file {}: {e}", s.client_ca))?;
+    let roots: Vec<Cert> = pem_blocks(&ca_data, "CERTIFICATE").iter().filter_map(|(_, der)| Cert::from_der(der)).collect();
+    // API-1 3.3: without a CRL file and a grace source this is the plain webpki verifier, as before
+    let verifier: Arc<dyn ClientCertVerifier> = Arc::new(MeetVerifier { inner, roots, crls, chain, revoke, grace: Grace(GRACE.get().cloned()) });
     let cfg = ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|e| e.to_string())?
@@ -680,6 +817,15 @@ pub struct Response {
 /// Err is the Python exception class name of the failure, or the message `check` gave.
 #[allow(clippy::too_many_arguments)]
 pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>) -> Result<Response, Result<String, String>> {
+    https_request_capped(cfg, host, port, timeout, method, path, headers, body, check, usize::MAX)
+}
+
+/// `https_request` reading at most `cap` answer bytes: past that, Err(Ok("reply too large")) (contract r6 7.2.3, the
+/// service hub's relays).
+#[allow(clippy::too_many_arguments)]
+pub fn https_request_capped(
+    cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>, cap: usize,
+) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
     let mut tcp = connect(host, port, timeout)?;
     let name = ServerName::try_from(host.to_string()).map_err(|_| Err("SSLError".to_string()))?;
@@ -689,14 +835,23 @@ pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f6
     }
     let peer = conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()).unwrap_or_default();
     check(&peer).map_err(Ok)?;
-    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body)
+    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body, cap)
 }
 
 /// One plain HTTP request on a fresh connection (a service on this machine); Err as https_request's.
 pub fn http_request(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
-    let tcp = connect(host, port, timeout)?;
-    exchange(tcp, host, port, method, path, headers, body)
+    http_request_capped(host, port, timeout, method, path, headers, body, usize::MAX)
 }
+
+/// `http_request` reading at most `cap` answer bytes, as `https_request_capped`.
+#[allow(clippy::too_many_arguments)]
+pub fn http_request_capped(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, cap: usize) -> Result<Response, Result<String, String>> {
+    let tcp = connect(host, port, timeout)?;
+    exchange(tcp, host, port, method, path, headers, body, cap)
+}
+
+/// The answer cap's refusal.
+const TOO_LARGE: &str = "reply too large";
 
 /// A TCP connection to the first address of `host` that answers, read and write bounded by `timeout`.
 fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<String, String>> {
@@ -716,8 +871,10 @@ fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<Stri
     Err(Err(last.map(|e| error_class(&e)).unwrap_or("gaierror").to_string()))
 }
 
-/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close).
-fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
+/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close), at most `cap`
+/// bytes of it: reading stops at `cap + 1` and answers Err(Ok(TOO_LARGE)).
+#[allow(clippy::too_many_arguments)]
+fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, cap: usize) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept-Encoding: identity\r\n");
     for (k, v) in headers {
@@ -767,17 +924,31 @@ fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str,
             if n == 0 {
                 break;
             }
-            let mut chunk = vec![0u8; n];
-            reader.read_exact(&mut chunk).map_err(io)?;
-            body.extend_from_slice(&chunk);
+            // Read through `take` so memory grows with the bytes that arrive, never with the size the server claims.
+            let want = n.min((cap - body.len()).saturating_add(1));
+            let got = (&mut reader).take(want as u64).read_to_end(&mut body).map_err(io)?;
+            if body.len() > cap {
+                return Err(Ok(TOO_LARGE.into()));
+            }
+            if got != n {
+                return Err(Err("IncompleteRead".into()));
+            }
             let mut crlf = String::new();
             reader.read_line(&mut crlf).map_err(io)?;
         }
     } else if let Some(n) = length {
-        body = vec![0u8; n];
-        reader.read_exact(&mut body).map_err(|_| Err("IncompleteRead".to_string()))?;
+        if n > cap {
+            return Err(Ok(TOO_LARGE.into()));
+        }
+        let got = (&mut reader).take(n as u64).read_to_end(&mut body).map_err(|_| Err("IncompleteRead".to_string()))?;
+        if got != n {
+            return Err(Err("IncompleteRead".into()));
+        }
     } else {
-        let _ = reader.read_to_end(&mut body);
+        let _ = (&mut reader).take(cap.saturating_add(1) as u64).read_to_end(&mut body);
+        if body.len() > cap {
+            return Err(Ok(TOO_LARGE.into()));
+        }
     }
     Ok(Response { status, body })
 }
@@ -1146,6 +1317,27 @@ pub(crate) mod testpki {
         /// with `cn` as its DNS name.
         pub fn leaf(&self, serial: &[u8], cn: &str, email: Option<&str>, uris: &[&str], key: &Key, client: bool) -> Vec<u8> {
             let now = crate::meet_json::now() as i64;
+            self.leaf_valid(serial, cn, email, uris, key, client, now - 3600, now + 90 * 86_400)
+        }
+
+        /// An intermediate CA under this one, valid from `not_before` to `not_after` (seconds).
+        pub fn sub(&self, cn: &str, not_before: i64, not_after: i64) -> Ca {
+            let key = Key::new();
+            let exts = [
+                ext(&[0x55, 0x1d, 0x13], true, &tlv(0x30, &tlv(0x01, &[0xff]))),
+                ext(&[0x55, 0x1d, 0x0f], true, &tlv(0x03, &[0x01, 0x06])),
+                ext(&[0x55, 0x1d, 0x0e], false, &tlv(0x04, &key.id())),
+                ext(&[0x55, 0x1d, 0x23], false, &tlv(0x30, &tlv(0x80, &self.key.id()))),
+            ]
+            .concat();
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(&[7]), alg(), name(&self.cn), tlv(0x30, &[time(not_before), time(not_after)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts))].concat());
+            let der = self.key.signed(tbs);
+            Ca { key, cn: cn.to_string(), der }
+        }
+
+        /// `leaf` valid from `not_before` to `not_after` (seconds).
+        #[allow(clippy::too_many_arguments)]
+        pub fn leaf_valid(&self, serial: &[u8], cn: &str, email: Option<&str>, uris: &[&str], key: &Key, client: bool, not_before: i64, not_after: i64) -> Vec<u8> {
             let mut san: Vec<u8> = Vec::new();
             if let Some(e) = email {
                 san.extend(tlv(0x81, e.as_bytes()));
@@ -1166,7 +1358,7 @@ pub(crate) mod testpki {
             if !san.is_empty() {
                 exts.push(ext(&[0x55, 0x1d, 0x11], false, &tlv(0x30, &san)));
             }
-            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(serial), alg(), name(&self.cn), tlv(0x30, &[time(now - 3600), time(now + 90 * 86_400)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts.concat()))].concat());
+            let tbs = tlv(0x30, &[tlv(0xa0, &int(&[2])), int(serial), alg(), name(&self.cn), tlv(0x30, &[time(not_before), time(not_after)].concat()), name(cn), key.spki.clone(), tlv(0xa3, &tlv(0x30, &exts.concat()))].concat());
             self.key.signed(tbs)
         }
 
@@ -1211,6 +1403,57 @@ mod tests {
         pj::now() as i64
     }
 
+    /// A canned answer for `exchange`; what the client writes is dropped.
+    struct Canned(std::io::Cursor<Vec<u8>>);
+    impl Read for Canned {
+        fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+            self.0.read(b)
+        }
+    }
+    impl Write for Canned {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn answer(raw: &str) -> Result<Response, Result<String, String>> {
+        answer_capped(raw, usize::MAX)
+    }
+
+    fn answer_capped(raw: &str, cap: usize) -> Result<Response, Result<String, String>> {
+        exchange(Canned(std::io::Cursor::new(raw.as_bytes().to_vec())), "relay.test", 443, "GET", "/", &[], None, cap)
+    }
+
+    /// Contract r6 7.2.3 (the service hub's relays): with a cap, reading stops at cap + 1 bytes whatever the framing.
+    #[test]
+    fn a_capped_answer_stops_at_the_cap() {
+        let too_large = Some(Ok(TOO_LARGE.to_string()));
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef", 5).err(), too_large);
+        assert_eq!(answer_capped(&format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nab", usize::MAX / 2), 5).err(), too_large, "refused before any read");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n", 5).err(), too_large);
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffff\r\nabcdef", 5).err(), too_large);
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\n\r\nabcdef", 5).err(), too_large, "up to the close");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde", 5).unwrap().body, b"abcde");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n", 5).unwrap().body, b"abcde");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\n\r\nabcde", 5).unwrap().body, b"abcde");
+    }
+
+    /// A server that claims a huge length (plain or chunked) and then closes gets IncompleteRead, without the client
+    /// first allocating the size it claimed; honest answers still read whole.
+    #[test]
+    fn a_claimed_length_is_not_allocated_before_it_arrives() {
+        let huge = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nabc", usize::MAX / 2);
+        assert_eq!(answer(&huge).err(), Some(Err("IncompleteRead".to_string())));
+        let chunk = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffff\r\nabc";
+        assert_eq!(answer(chunk).err(), Some(Err("IncompleteRead".to_string())));
+        assert_eq!(answer("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc").unwrap().body, b"abc");
+        let ok = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
+        assert_eq!(answer(ok).unwrap().body, b"abcde");
+    }
+
     /// AC-2b-D 8.5 (H5) and 16.1 d-relay: the console's list, with a CRL number and an authority key identifier, is
     /// read by meet_tls (its number too), checked by the relay's verifier, and parsed by rustls (webpki) as well.
     #[test]
@@ -1234,12 +1477,106 @@ mod tests {
         assert!(WebPkiClientVerifier::builder_with_provider(roots.clone(), provider.clone()).with_crls(crls).build().is_ok());
         // the relay's verifier: listed is revoked, the clean list passes
         let inner = WebPkiClientVerifier::builder_with_provider(roots, provider).build().unwrap();
-        let verifier = |der: &[u8]| MeetVerifier { inner: inner.clone(), roots: vec![root.clone()], crls: vec![Crl::from_der(der).unwrap()], chain: false };
+        let verifier = |der: &[u8]| MeetVerifier { inner: inner.clone(), roots: vec![root.clone()], crls: vec![Crl::from_der(der).unwrap()], chain: false, revoke: true, grace: Grace(None) };
         assert_eq!(verifier(&listed).revocation(&leaf, &[], t), Err(CertificateError::Revoked));
         assert_eq!(verifier(&clean).revocation(&leaf, &[], t), Ok(()));
         // a list whose thisUpdate has not passed does not count yet (check_one's zero tolerance)
         let ahead = ca.crl(t + 30, t + 120 * DAY, &[], Some(&[0x02]));
         assert_eq!(verifier(&ahead).revocation(&leaf, &[], t), Err(CertificateError::UnknownRevocationStatus));
+    }
+
+    /// API-1 3.3: a verifier over `ca` (its CRL `crl`, if any, in force) whose grace source gives `hours` to everyone.
+    fn grace_verifier(ca: &Ca, crl: Option<Vec<u8>>, hours: Option<i64>) -> MeetVerifier {
+        let mut roots = RootCertStore::empty();
+        roots.add(CertificateDer::from(ca.der.clone())).unwrap();
+        let inner = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::new(crate::server::provider())).build().unwrap();
+        let grace = hours.map(|h| -> GraceSource { Arc::new(move |g: &GraceSubject, _now: i64| g.not_after + h * 3600) });
+        let crls: Vec<Crl> = crl.iter().filter_map(|d| Crl::from_der(d)).collect();
+        MeetVerifier { inner, roots: vec![Cert::from_der(&ca.der).unwrap()], revoke: !crls.is_empty(), crls, chain: false, grace: Grace(grace) }
+    }
+
+    fn verify(v: &MeetVerifier, leaf: &[u8], inters: &[&[u8]]) -> Result<(), rustls::Error> {
+        let inters: Vec<CertificateDer<'static>> = inters.iter().map(|d| CertificateDer::from(d.to_vec())).collect();
+        v.verify_client_cert(&CertificateDer::from(leaf.to_vec()), &inters, UnixTime::now()).map(|_| ())
+    }
+
+    fn expired(r: &Result<(), rustls::Error>) -> bool {
+        matches!(r, Err(rustls::Error::InvalidCertificate(CertificateError::Expired | CertificateError::ExpiredContext { .. })))
+    }
+
+    const HOUR: i64 = 3600;
+
+    #[test]
+    fn api1_an_expired_leaf_passes_inside_the_grace_only() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        let leaf = ca.leaf_valid(&[0x61], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        let late = ca.leaf_valid(&[0x62], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 40 * HOUR, t - 25 * HOUR);
+        let clean = ca.crl(t - 300, t + 120 * DAY, &[], None);
+        // inside a 24 hour grace, the CRL checked at now
+        assert_eq!(verify(&grace_verifier(&ca, Some(clean.clone()), Some(24)), &leaf, &[]), Ok(()));
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(24)), &leaf, &[]), Ok(()));
+        // past it: the original error
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean.clone()), Some(24)), &late, &[])));
+        // grace 0 and no grace source refuse alike, with webpki's own error
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean.clone()), Some(0)), &leaf, &[])));
+        assert!(expired(&verify(&grace_verifier(&ca, Some(clean), None), &leaf, &[])));
+        // a leaf that has not expired is today's path
+        let fresh = ca.leaf(&[0x63], "Ann", Some("ann@x.org"), &[], &Key::new(), true);
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(0)), &fresh, &[]), Ok(()));
+    }
+
+    #[test]
+    fn api1_the_grace_never_covers_a_revoked_leaf_an_expired_issuer_or_a_broken_chain() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        // revoked: the CRL at now lists it
+        let leaf = ca.leaf_valid(&[0x71], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        let listed = ca.crl(t - 300, t + 120 * DAY, &[&[0x71]], None);
+        assert!(expired(&verify(&grace_verifier(&ca, Some(listed), Some(24)), &leaf, &[])));
+        // an expired CRL refuses too
+        let stale = ca.crl(t - 10 * DAY, t - DAY, &[], None);
+        assert!(expired(&verify(&grace_verifier(&ca, Some(stale), Some(24)), &leaf, &[])));
+        // the intermediate was valid at the leaf's notAfter but is expired now
+        let old = ca.sub("Lucid Meet Issuing", t - 20 * HOUR, t - HOUR);
+        let under_old = old.leaf_valid(&[0x72], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &under_old, &[old.der.as_slice()]).is_err());
+        let good = ca.sub("Lucid Meet Issuing", t - 20 * HOUR, t + DAY);
+        let under_good = good.leaf_valid(&[0x73], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert_eq!(verify(&grace_verifier(&ca, None, Some(24)), &under_good, &[good.der.as_slice()]), Ok(()));
+        // the chain does not build: another CA's leaf, or the intermediate missing
+        let other = Ca::new("Another CA");
+        let stranger = other.leaf_valid(&[0x74], "Ann", Some("ann@x.org"), &[], &Key::new(), true, t - 10 * HOUR, t - 2 * HOUR);
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &stranger, &[]).is_err());
+        assert!(verify(&grace_verifier(&ca, None, Some(24)), &under_good, &[]).is_err());
+    }
+
+    /// API-1 4.2: a certificate on the API listener counts only after a current CRL was checked for it.
+    #[test]
+    fn api1_listener_certificate_counts_only_under_a_current_crl() {
+        let ca = Ca::new("Lucid Meet CA");
+        let t = now();
+        let leaf = ca.leaf(&[0x81], "monitor", None, &["urn:lucid-meet:app:acme"], &Key::new(), true);
+        let d = dir("api-crl");
+        let ca_file = d.join("ca.crt");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let crl_file = d.join("crl.pem");
+        let s = Settings { client_ca: ca_file.to_string_lossy().into(), crl: String::new(), state_dir: String::new(), ..Settings::default() };
+        // no CRL file: the handshake config still loads (anonymous clients are served) but the certificate never counts
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        let s = Settings { crl: crl_file.to_string_lossy().into(), ..s };
+        // a current list naming its serial: refused
+        std::fs::write(&crl_file, ca.crl_pem(t - 300, t + DAY, &[&[0x81]], None)).unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        // a current list without it: accepted
+        std::fs::write(&crl_file, ca.crl_pem(t - 300, t + DAY, &[], None)).unwrap();
+        assert!(api_cert_revocation_checked(&s, &leaf, &[], t));
+        // an expired list, or a file with no list: not counted
+        std::fs::write(&crl_file, ca.crl_pem(t - 10 * DAY, t - DAY, &[], None)).unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        std::fs::write(&crl_file, "").unwrap();
+        assert!(!api_cert_revocation_checked(&s, &leaf, &[], t));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

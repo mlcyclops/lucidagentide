@@ -230,7 +230,7 @@ fn get_route(path: &str) -> Option<Route> {
         // AI-1 6.4 and 7.6: who may use org AI, and AI history
         "/v1/ai/allowed" => |c: &mut Ctx| {
             let who = c.who(false)?;
-            c.relay.hub.ai_allowed(&who, &c.q("principal", ""))
+            c.relay.hub.ai_allowed(&who, &c.q("principal", ""), c.q("groups", "") == "1")
         },
         "/v1/ai/history" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -485,11 +485,11 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
             crate::console_meet::decline(c.relay, &who.principal, b.get("id"), b.get("reason"))
         },
-        // AI-1 9: an admin's device answers a console AI signing request
+        // AI-1 9 and API-1 2.3: an admin's device answers a console AI or API signing request
         "/v1/admin/console/requests/sign" => |c: &mut Ctx| {
-            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
             c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
-            crate::console_meet::ai_request_signed(c.relay, &who, b.get("id"), b.get("sig"))
+            crate::console_meet::request_signed(c.relay, &who, b.get("id"), b.get("sig"), b.get("signed"))
         },
         "/v1/admin/signer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -675,6 +675,16 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
             c.relay.hub.pc_ai_upload(&pj::s(&b, "session"), &who, b.get("signed"))
         },
+        // API-1 2.4: org api maps (the uploaders of POST /v1/org/policy: a relay admin)
+        "/v1/org/api" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.hub.pc_api_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        // API-1 2.3 (slice 1a6): an org admin's device signs the api map of a console `meet.api.sign` request
+        "/v1/org/api/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.pc_sign_api(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
+        },
         "/v1/org/ai/sign" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
             c.relay.pc_sign_ai(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
@@ -683,6 +693,16 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/sso/c/ai-groups" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.ai_groups_post(&who, &b)
+        },
+        // API-1 revision 5 4.3: SSO-signed person records
+        "/v1/sso/c/persons" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_subject::BODY_MAX)?);
+            crate::api_subject::persons_post(&c.relay.hub, &who, &b)
+        },
+        // API-1 revision 4 13.1: the SSO service's directory status, for the console's `directory/status`
+        "/v1/sso/c/directory-status" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_sso_status::BODY_MAX)?);
+            crate::api_sso_status::post(c.relay, &who, &b)
         },
         "/v1/ai/audit" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -779,6 +799,11 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/sso/c/unsuspend" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.pc_sso_suspend(&who, &b, true)
+        },
+        // API-1 revision 4 6.3: the relay decides and audits every SCIM request of the org's SSO service
+        "/v1/sso/c/api-check" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_scim::BODY_MAX)?);
+            crate::api_scim::api_check(c.relay, &who, &b)
         },
         "/v1/sso/c/status" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::STATUS_BODY_MAX)?);
@@ -1347,6 +1372,10 @@ fn hello(c: &mut Ctx) -> R<Obj> {
     if let Some(info) = c.relay.outdated(&who, &client) {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
+    }
+    // API-1 3.2: a device whose certificate is in its grace hears when the grace ends
+    if who.in_grace && !who.device.is_empty() {
+        reply.insert("grace".into(), Value::from(pj::iso_utc(who.grace_end)));
     }
     Ok(reply)
 }

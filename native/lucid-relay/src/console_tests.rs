@@ -4445,3 +4445,66 @@ fn a_newer_crl_on_the_relay_signs_out_the_admins_its_hubs_invited() {
     assert_eq!(send(&c, get("/console/api/overview", &sid), T0 + 3).status, 401);
     assert!(c.inner.lock().book.people[ALICE].passkeys[0].revoked_at.is_some());
 }
+
+/// API-1 7.3 (slice 1a6): every route of Settings > API access and of the export destinations with its role, AC-1
+/// step-up, action label and target, as the fleet console dispatches them.
+#[test]
+fn api_access_and_destination_routes_keep_their_roles_step_ups_and_actions() {
+    use Role::{Admin as A, Viewer as V};
+    let table: [(&str, &str, Role, bool, &str); 40] = [
+        ("POST", "settings/api/signing/cancel", A, false, "api.signing.cancel"),
+        // API-1d 5.1, 7.14 (slice 1d5)
+        ("GET", "settings/api/spokes", V, false, ""),
+        ("POST", "settings/api/spokes/bind", A, true, "api.spokes.bind"),
+        ("POST", "settings/api/spokes/unbind", A, true, "api.spokes.unbind"),
+        ("POST", "settings/api/spokes/root", A, true, "api.spokes.root"),
+        ("GET", "settings/api/a2a", V, false, ""),
+        ("POST", "settings/api/a2a/agents", A, true, "api.a2a.agent.stage"),
+        ("POST", "settings/api/a2a/agents/update", A, true, "api.a2a.agent.update"),
+        ("POST", "settings/api/a2a/agents/delete", A, false, "api.a2a.agent.delete"),
+        ("POST", "settings/api/a2a/keys", A, true, "api.a2a.key"),
+        ("POST", "settings/api/a2a/keys/drop", A, false, "api.a2a.key-drop"),
+        ("POST", "settings/api/a2a/well-known", A, true, "api.a2a.well-known"),
+        ("GET", "settings/api/a2a/tasks", V, false, ""),
+        ("POST", "settings/api/clients/push-off", A, false, "api.client.push-off"),
+        ("POST", "settings/api/clients/card-check", A, false, "api.client.card-check"),
+        ("GET", "settings/api", V, false, ""),
+        ("POST", "settings/api/clients", A, true, "api.client.stage"),
+        ("POST", "settings/api/clients/update", A, true, "api.client.update"),
+        ("POST", "settings/api/clients/suspend", A, false, "api.client.suspend"),
+        ("POST", "settings/api/clients/resume", A, false, "api.client.resume"),
+        ("POST", "settings/api/clients/delete", A, false, "api.client.delete"),
+        ("POST", "settings/api/clients/secret", A, true, "api.client.secret"),
+        ("POST", "settings/api/clients/revoke-tokens", A, false, "api.client.revoke-tokens"),
+        ("POST", "settings/api/scrape-tokens", A, true, "api.scrape-token"),
+        ("POST", "settings/api/explain", V, false, "api.explain"),
+        ("POST", "settings/api/grace", A, true, "api.grace"),
+        ("POST", "settings/api/off", A, false, "api.off"),
+        ("POST", "settings/api/on", A, false, "api.on"),
+        ("POST", "settings/api/resume", A, true, "api.resume"),
+        ("POST", "settings/api/relay-origins", A, true, "api.relay-origin"),
+        ("POST", "settings/api/discard", A, false, "api.discard"),
+        ("POST", "settings/api/save", A, false, "meet.api.save"),
+        ("POST", "settings/exports/destinations", A, true, "exports.destination.stage"),
+        ("POST", "settings/exports/destinations/update", A, true, "exports.destination.update"),
+        ("POST", "settings/exports/destinations/delete", A, true, "exports.destination.delete"),
+        ("POST", "settings/exports/destinations/test", A, false, "exports.destination.test"),
+        ("POST", "settings/exports/destinations/credential", A, true, "exports.destination.credential"),
+        ("POST", "settings/exports/destinations/failover/csr", A, false, "exports.failover.csr"),
+        ("POST", "settings/exports/destinations/failover/install", A, true, "exports.failover.install"),
+        ("POST", "settings/exports/destinations/failover/delete", A, false, "exports.failover.delete"),
+    ];
+    for (method, path, role, stepup, action) in table {
+        let (spec, at) = crate::console_fleet::fleet_route(method, path).unwrap_or_else(|| panic!("{method} {path}"));
+        assert!(at.is_none());
+        assert_eq!((spec.role, spec.stepup, spec.action), (role, stepup, action), "{method} {path}");
+        if method == "POST" {
+            assert_eq!(spec.target, "org", "{path}: the step-up and the audit name the organization");
+            assert!(spec.keys.contains(&"org"), "{path}");
+        }
+    }
+    // API-1d 7.14: `spokes/relays` is replaced by `bind` and `unbind`
+    assert!(crate::console_fleet::fleet_route("POST", "settings/api/spokes/relays").is_none());
+    // the existing exports read stays an admin's
+    assert_eq!(crate::console_fleet::fleet_route("GET", "settings/exports").unwrap().0.role, Role::Admin);
+}

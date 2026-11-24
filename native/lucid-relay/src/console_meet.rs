@@ -22,6 +22,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+// Settings > AI > Tools (MCP) (r6 8.11): a child module, so it shares the Settings > AI state and helpers below.
+#[path = "console_ai_mcp.rs"]
+mod console_ai_mcp;
+
 pub const BLOCKS_FILE: &str = "console-blocks.json";
 pub const LICENSE_FILE: &str = "license.lic";
 /// 4.10 words.
@@ -52,7 +56,7 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-pub static ROUTES: [RouteSpec; 40] = [
+pub static ROUTES: [RouteSpec; 47] = [
     RouteSpec { method: "GET", path: "meet/people", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     // 2.4 seats and trusted time (R4-2, R3-M3): allowed in every license state
     RouteSpec { method: "GET", path: "meet/seats", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
@@ -95,6 +99,14 @@ pub static ROUTES: [RouteSpec; 40] = [
     RouteSpec { method: "POST", path: "meet/ai/archive/copy", role: Role::Admin, action: "meet.ai.archive.copy", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "reviewer", "offline_copy", "reason"], body_max: 8192 },
     RouteSpec { method: "POST", path: "meet/ai/archive/code", role: Role::Admin, action: "meet.ai.archive.code", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "reviewer", "reason"], body_max: 4096 },
     RouteSpec { method: "POST", path: "meet/ai/archive/code/confirm", role: Role::Admin, action: "meet.ai.archive.code.confirm", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "first", "second"], body_max: 1024 },
+    // Settings > AI > Tools (MCP) (r6 8.11, console_ai_mcp.rs): turning off journals at once and works in every license state
+    RouteSpec { method: "GET", path: "meet/ai/mcp", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/servers", role: Role::Admin, action: "meet.ai.mcp.server", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "server", "second", "reason"], body_max: 64 * 1024 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/servers/update", role: Role::Admin, action: "meet.ai.mcp.update", target: "org", stepup: true, need: Need::Product, security: false, keys: &["org", "server", "second", "clear", "reason"], body_max: 64 * 1024 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/servers/off", role: Role::Admin, action: "meet.ai.mcp.server.off", target: "server", stepup: false, need: Need::Any, security: true, keys: &["org", "server", "reason"], body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/off", role: Role::Admin, action: "meet.ai.mcp.off", target: "org", stepup: false, need: Need::Any, security: true, keys: &["org", "reason"], body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/credential", role: Role::Admin, action: "meet.ai.mcp.credential", target: "server", stepup: true, need: Need::Product, security: false, keys: &["org", "server", "op", "cert_pem", "chain_pem", "gateway", "reason"], body_max: 64 * 1024 },
+    RouteSpec { method: "POST", path: "meet/ai/mcp/test", role: Role::Admin, action: "meet.ai.mcp.test", target: "server", stepup: false, need: Need::Product, security: false, keys: &["org", "server", "draft"], body_max: 32 * 1024 },
 ];
 /// A staged AI change carries the whole map draft (the signed map is at most 256 KiB, 2).
 const AI_STAGE_BODY_MAX: usize = 300 * 1024;
@@ -113,7 +125,7 @@ pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value 
     json!({ "signer": signer, "files": files, "push": push })
 }
 
-const SECURITY_ACTIONS: [&str; 6] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place", "meet.ai.hold"];
+const SECURITY_ACTIONS: [&str; 8] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place", "meet.ai.hold", "meet.ai.mcp.server.off", "meet.ai.mcp.off"];
 const PAGES: [&str; 16] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai"];
 const LOCKED_PAGES: [&str; 5] = ["security", "seats", "license", "logs", "requests"];
 
@@ -1333,6 +1345,13 @@ impl ProductSection for MeetSection {
             ("POST", "meet/ai/archive/copy") => self.ai_archive_copy(&relay, call),
             ("POST", "meet/ai/archive/code") => self.ai_archive_code(&relay, call),
             ("POST", "meet/ai/archive/code/confirm") => self.ai_archive_code_confirm(&relay, call),
+            ("GET", "meet/ai/mcp") => read(self.ai_mcp_view(&relay, call)),
+            ("POST", "meet/ai/mcp/servers") => self.ai_mcp_add(&relay, call),
+            ("POST", "meet/ai/mcp/servers/update") => self.ai_mcp_update(&relay, call),
+            ("POST", "meet/ai/mcp/servers/off") => self.ai_mcp_server_off(&relay, call),
+            ("POST", "meet/ai/mcp/off") => self.ai_mcp_off(&relay, call),
+            ("POST", "meet/ai/mcp/credential") => self.ai_mcp_credential(&relay, call),
+            ("POST", "meet/ai/mcp/test") => self.ai_mcp_test(&relay, call),
             _ => Err(not_found("page")),
         }
     }
@@ -1340,12 +1359,19 @@ impl ProductSection for MeetSection {
     fn execute(&self, run: &Approved) -> Result<Value, ApiError> {
         // the sole-admin path is still one admin's word (it counts toward the 24 hours of blocks and the holds rule)
         let single = run.approved_by.is_none();
+        // r6 8.1, 13: a save carrying a new MCP attestation runs only as the two admins it names
+        if run.action == "meet.ai.save" {
+            self.ai_mcp_save_check(run)?;
+        }
         self.run(run.action, run.params, run.requested_by, single, run.t)
     }
 
     fn may_approve(&self, action: &str, params: &Value, approver: &str) -> bool {
         let Some(relay) = self.relay.upgrade() else { return false };
         if !relay.hub.is_admin(approver) {
+            return false;
+        }
+        if action == "meet.ai.save" && !Self::ai_mcp_may_approve(&relay, params, approver) {
             return false;
         }
         if action == "meet.holds.place" {
@@ -1423,6 +1449,11 @@ impl ProductSection for MeetSection {
             gate.check(true);
         }
     }
+
+    /// The console's minute: the MCP journal resent to every gateway that has not acknowledged it (r6 8.2).
+    fn tick(&self, _t: i64) {
+        self.ai_mcp_tick();
+    }
 }
 
 // ── Settings > AI (contract AI-1 section 9; the rules are console_ai.rs) ────────────────────────────────────────
@@ -1435,7 +1466,7 @@ const AI_RESULTS_MAX: usize = 50;
 /// Pages of 1000 device audit records the usage panel reads at most (30 days).
 const AI_AUDIT_PAGES: usize = 20;
 const AI_SIGN_KIND: &str = "meet.ai.sign";
-const AI_REVIEWER_KIND: &str = "meet.ai.reviewer-sign";
+pub(crate) const AI_REVIEWER_KIND: &str = "meet.ai.reviewer-sign";
 
 struct AiSave {
     staged: ai::Staged,
@@ -1507,7 +1538,7 @@ impl AiState {
 }
 
 /// The org's current signed policy (unsigned body), or null.
-fn ai_policy(relay: &Relay, org: &str) -> Value {
+pub(crate) fn ai_policy(relay: &Relay, org: &str) -> Value {
     relay.hub.pc_policy_get(org, "").ok().and_then(|p| p.get("signed").map(|s| s.get("policy").cloned().unwrap_or_else(|| s.clone()))).unwrap_or(Value::Null)
 }
 
@@ -1543,6 +1574,17 @@ fn console_spki(relay: &Relay) -> Option<String> {
 /// One HTTPS call from the console to a gateway or an archive: the console's certificate as the client, the server
 /// pinned by the SHA-256 of its public key; `ca` the roots (the Meet CA for a gateway, the public roots otherwise).
 fn ai_https(relay: &Relay, url: &str, spki: &str, ca: Option<&str>, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+    let r = ai_https_raw(relay, url, spki, ca, method, path, body)?;
+    let v: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
+    if r.status >= 400 {
+        let why = v.get("error").and_then(Value::as_str).map(clean).unwrap_or_else(|| format!("{url} answered {}", r.status));
+        return Err(stale(&why));
+    }
+    Ok(v)
+}
+
+/// `ai_https` with the answer as it came: the status and the raw body.
+fn ai_https_raw(relay: &Relay, url: &str, spki: &str, ca: Option<&str>, method: &str, path: &str, body: Option<&Value>) -> Result<crate::meet_tls::Response, ApiError> {
     let (host, port) = ai::endpoint(url).ok_or_else(|| invalid("url is https:// with a host and a port"))?;
     let cfg = crate::meet_tls::client_config(ca, Some((relay.settings.console_cert.as_str(), relay.settings.console_key.as_str()))).map_err(|e| ApiError::with("state-unreadable", format!("The console's certificate cannot be used: {e}.")))?;
     let pin = spki.to_owned();
@@ -1556,14 +1598,8 @@ fn ai_https(relay: &Relay, url: &str, spki: &str, ca: Option<&str>, method: &str
     };
     let bytes = body.map(|b| b.to_string().into_bytes());
     let headers = [("Content-Type", "application/json".to_string())];
-    let r = crate::meet_tls::https_request(&cfg, &host, port, AI_TIMEOUT, method, path, &headers, bytes.as_deref(), &check)
-        .map_err(|e| ApiError::with("relay-offline", format!("{url} did not answer ({}).", e.unwrap_or_else(|x| x))))?;
-    let v: Value = serde_json::from_slice(&r.body).unwrap_or(Value::Null);
-    if r.status >= 400 {
-        let why = v.get("error").and_then(Value::as_str).map(clean).unwrap_or_else(|| format!("{url} answered {}", r.status));
-        return Err(stale(&why));
-    }
-    Ok(v)
+    crate::meet_tls::https_request(&cfg, &host, port, AI_TIMEOUT, method, path, &headers, bytes.as_deref(), &check)
+        .map_err(|e| ApiError::with("relay-offline", format!("{url} did not answer ({}).", e.unwrap_or_else(|x| x))))
 }
 
 fn ai_gateways(entry: &Obj) -> Vec<Value> {
@@ -1578,6 +1614,27 @@ fn ai_gateway_call(relay: &Relay, g: &Value, method: &str, path: &str, body: Opt
 fn ai_archive_call(relay: &Relay, entry: &Obj, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
     let a = entry.get("archive").and_then(Value::as_object).ok_or_else(|| stale("no archive is added for this organization"))?;
     ai_https(relay, &pj::s(a, "url"), &pj::s(a, "spki"), None, method, path, body)
+}
+
+/// API-1 revision 4 2.3 item 1 `archive_orgs` and 5.2.3: whether this relay holds the org's archive address.
+pub(crate) fn archive_known(relay: &Relay, org: &str) -> bool {
+    ai_state(relay).lock().org(relay, org).get("archive").is_some_and(Value::is_object)
+}
+
+/// API-1 revision 4 5.2.3 step 4: one call to the org's archive (`ai_archive_call`) from the API hold flow.
+pub(crate) fn archive_call(relay: &Relay, org: &str, method: &str, path: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+    let entry = ai_state(relay).lock().org(relay, org);
+    ai_archive_call(relay, &entry, method, path, body)
+}
+
+/// API-1 revision 4 5.3.3: one call to the org's archive from the export flow (`api_exports_relay`), as
+/// `archive_call` but with the status and the raw body as they came (a refusal's `{error, code}`, an octet-stream
+/// part). Err only when the archive is not added or did not answer.
+pub(crate) fn archive_raw(relay: &Relay, org: &str, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Vec<u8>), ApiError> {
+    let entry = ai_state(relay).lock().org(relay, org);
+    let a = entry.get("archive").and_then(Value::as_object).ok_or_else(|| stale("no archive is added for this organization"))?;
+    let r = ai_https_raw(relay, &pj::s(a, "url"), &pj::s(a, "spki"), None, method, path, body)?;
+    Ok((r.status, r.body))
 }
 
 fn ai_org_of(b: &Value) -> Result<String, ApiError> {
@@ -1631,6 +1688,8 @@ impl MeetSection {
         Self::who(relay, &call.caller.email)?;
         let policy = ai_policy(relay, &org);
         let map = ai_map(relay, &org, &ai_policy_hash(&policy));
+        // r6 8.1: MCP keys only once every reader reads them, each widened server with a new attestation
+        Self::ai_mcp_gate(relay, &org, map.as_ref(), call.body)?;
         let st = ai_state(relay);
         let mut s = st.lock();
         let entry = s.org(relay, &org);
@@ -1645,9 +1704,12 @@ impl MeetSection {
             crate::meet_org_policy::check_policy(p, &crate::meet_org_policy::SignerTerms::default()).map_err(|e| e.to_string())?;
             crate::meet_org_policy::check_ai_map(mp, p.as_object()).map_err(|e| e.to_string())?;
             crate::meet_org_policy::ai_gate(Some(p), &minimums)?;
+            crate::meet_org_policy::local_mcp_gate(Some(p), &minimums)?; // API-1c 10.6
             crate::meet_org_policy::ai_edition_gate(p.as_object().ok_or("the policy is not an object")?, edition.as_deref())
         };
         let staged = ai::stage(&org, &call.caller.email, &policy, map.as_ref(), &draft, call.t, &check)?;
+        // r6 8.2: each MCP narrowing against the signed map journals at once
+        self.ai_mcp_journal(relay, &org, map.as_ref(), &staged.map, &mut s, call.t)?;
         let id = staged.id.clone();
         let view = s.stages.put(staged, call.t);
         Ok(SectionAnswer::Done { answer: json!({"ok": true, "staged": view, "before": policy.get("ai").cloned().unwrap_or(Value::Null)}), target: org, detail: json!({"stage": id}) })
@@ -1662,7 +1724,12 @@ impl MeetSection {
         if st.lock().stages.get(&org, call.t).map(|s| s.id != stage).unwrap_or(true) {
             return Err(ApiError::with("gone", ai::STAGE_GONE));
         }
-        Ok(SectionAnswer::Second { target: org.clone(), params: json!({"org": org, "stage": stage, "reason": reason}), detail: json!({"stage": stage}) })
+        let mut params = json!({"org": org, "stage": stage, "reason": reason});
+        // r6 8.6: the approval shows each new MCP attestation with its residual risk
+        if let Some(mcp) = Self::ai_mcp_approval(relay, &org, &stage, call.t) {
+            params["mcp"] = mcp;
+        }
+        Ok(SectionAnswer::Second { target: org.clone(), params, detail: json!({"stage": stage}) })
     }
 
     /// The approved save: take the stage (stale when the policy or map moved), then ask the requester's device to
@@ -2024,6 +2091,15 @@ pub fn ai_request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig:
         s.saves[i].request = next_id.clone();
         return Ok(obj([("ok", Value::Bool(true)), ("step", Value::from(next.as_str())), ("request", Value::from(next_id))]));
     }
+    if !s.asks.iter().any(|x| x.request == id) {
+        // API-1 revision 4 5.2.3: an API hold's durable ask (`api-compliance/<org>/asks.json`)
+        drop(s);
+        if target.get("op").and_then(Value::as_str) == Some(crate::api_exports_relay::OP) {
+            // API-1 revision 4 5.3.3 step 4: an API export's release ask (`api-compliance/<org>/exports.json`)
+            return crate::api_exports_relay::ask_signed(relay, &book, who, &request, sig, t);
+        }
+        return crate::api_holds_relay::ask_signed(relay, &book, who, &request, sig, t);
+    }
     let i = s.asks.iter().position(|x| x.request == id).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
     let sig = sig.ok_or_else(|| E::Bad("sig is {ts, sig}".into()))?;
     let ts = sig.get("ts").and_then(Value::as_i64).ok_or_else(|| E::Bad("sig is {ts, sig}".into()))?;
@@ -2066,6 +2142,101 @@ pub fn ai_request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig:
     let mut out = outcome.as_object().cloned().unwrap_or_default();
     out.insert("ok".into(), Value::Bool(true));
     Ok(out)
+}
+
+// ── API-1 2.3 (slice 1a6): the `meet.api.sign` request in this relay's book ───────────────────────────────────
+
+/// The request kind the Lucid Admin Console asks an admin's device to sign an org api map with.
+pub const API_SIGN_KIND: &str = "meet.api.sign";
+/// Why a `meet.api.sign` request failed or is refused (relay words).
+pub const API_SIGN_OTHER_MAP: &str = "The signed API map is not the one this request asked for.";
+pub const API_SIGN_DECLINED: &str = "The signing request was declined on the device.";
+pub const API_SIGN_NOT_ADMIN: &str = "That person is not an admin of this relay.";
+pub const API_SIGN_HASH: &str = "map_sha256 is not the hash of that map.";
+const API_SIGN_SHAPE: &str = "signed is the signed api map {map, sig, chain}";
+
+/// `POST /v1/admin/console/requests/sign {session, id, sig?, signed?}`: a `meet.api.sign` request (`signed`), else
+/// a `meet.ai.*` one (`ai_request_signed`).
+pub fn request_signed(relay: &Relay, who: &Identity, id: Option<&Value>, sig: Option<&Value>, signed: Option<&Value>) -> R<Obj> {
+    let wanted = id.and_then(Value::as_str).filter(|i| request_id_ok(i)).ok_or_else(|| E::Bad(DECLINE_ID.into()))?;
+    let t = (pj::now() * 1000.0) as i64;
+    let book = request_book(relay).ok_or_else(|| E::NotFound(NO_REQUEST.into()))?;
+    match book.requests_waiting("meet.api.", t).into_iter().find(|r| r.get("id").and_then(Value::as_str) == Some(wanted)) {
+        Some(request) => api_request_signed(relay, &book, who, &request, signed, t),
+        None => ai_request_signed(relay, who, id, sig),
+    }
+}
+
+/// A `meet.api.sign` request answered by its principal's device: `signed` must be the map the request names (its
+/// hash `map_sha256`) and verify against this relay's org CA as `POST /v1/org/api` checks it (nothing is pinned
+/// here). Done keeps `signed` and the signer policy it verified under for the console (`api-sign-status`); a
+/// failure closes the request with its sentence and refuses the device.
+fn api_request_signed(relay: &Relay, book: &Console, who: &Identity, request: &Value, signed: Option<&Value>, t: i64) -> R<Obj> {
+    let id = request.get("id").and_then(Value::as_str).unwrap_or_default();
+    let target = request.get("target").cloned().unwrap_or(Value::Null);
+    if target.get("principal").and_then(Value::as_str) != Some(who.principal.as_str()) {
+        return Err(E::NotFound(NO_REQUEST.into()));
+    }
+    let signed = signed.filter(|s| s.get("map").is_some_and(Value::is_object)).ok_or_else(|| E::Bad(API_SIGN_SHAPE.into()))?;
+    let want = target.get("map_sha256").and_then(Value::as_str).unwrap_or_default();
+    let verdict = if crate::api_map::api_map_hash(&signed["map"]) != want {
+        Err(API_SIGN_OTHER_MAP.to_string())
+    } else {
+        relay.hub.api_verify_signed(signed).and_then(|(vm, sp)| if vm.org == target.get("org").and_then(Value::as_str).unwrap_or_default() { Ok(sp) } else { Err(API_SIGN_OTHER_MAP.to_string()) })
+    };
+    match verdict {
+        Ok(signer_policy) => {
+            let extra = obj([("signed", signed.clone()), ("signer_policy", Value::Object(signer_policy))]);
+            book.request_close(id, API_SIGN_KIND, "done", &who.principal, extra, t).map_err(api_e)?;
+            Ok(obj([("ok", Value::Bool(true))]))
+        }
+        Err(why) => {
+            book.request_close(id, API_SIGN_KIND, "failed", &who.principal, obj([("error", Value::from(why.clone()))]), t).map_err(api_e)?;
+            Err(E::Conflict(why))
+        }
+    }
+}
+
+/// The fleet request `api-sign-request {org, principal, map, map_sha256, reason, requested_by}` on this relay (the
+/// agent checked the org is served): the hash must be the map's and the principal an admin of this relay; a waiting
+/// `meet.api.sign` request for the same org is cancelled, then the new one is made in this relay's book (target
+/// `{principal, org, op: "sign_org_api", map, map_sha256}`). Ok is `{request}`.
+pub fn api_sign_request(book: &Console, body: &Value, t: i64) -> Result<Value, ApiError> {
+    let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let (org, principal, sha, by) = (s("org"), s("principal").to_lowercase(), s("map_sha256"), s("requested_by"));
+    let map = body.get("map").filter(|m| m.is_object()).ok_or_else(|| invalid(API_SIGN_HASH))?;
+    if crate::api_map::api_map_hash(map) != sha || map.get("org").and_then(Value::as_str) != Some(org.as_str()) {
+        return Err(invalid(API_SIGN_HASH));
+    }
+    if book.admin_rule(&principal, "") == AdminRule::NotRelayAdmin {
+        return Err(ApiError::with("not-relay-admin", API_SIGN_NOT_ADMIN));
+    }
+    let reason = reason_of(body.get("reason")).map_err(invalid)?;
+    for r in book.requests_waiting("meet.api.", t) {
+        if r.get("target").and_then(|x| x.get("org")).and_then(Value::as_str) == Some(org.as_str()) {
+            let _ = book.requests_cancel(&json!({ "id": r.get("id") }), t);
+        }
+    }
+    let target = json!({ "principal": principal, "org": org, "op": "sign_org_api", "map": map, "map_sha256": sha });
+    let r = book.new_request(&by, API_SIGN_KIND, target, &reason, t)?;
+    Ok(json!({ "request": r.get("id") }))
+}
+
+/// The fleet request `api-sign-status {org, request}`: `{state: waiting | done | failed | gone}` with `signed` and
+/// `signer_policy` when done and `error` when failed. A declined request is failed; a cancelled, expired or unknown
+/// one (or another org's) is gone.
+pub fn api_sign_status(book: &Console, body: &Value, t: i64) -> Value {
+    let id = body.get("request").and_then(Value::as_str).unwrap_or_default();
+    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+    let found = book.request_by_id(id, t).filter(|r| r.get("kind").and_then(Value::as_str) == Some(API_SIGN_KIND) && r.get("target").and_then(|x| x.get("org")).and_then(Value::as_str) == Some(org));
+    let Some(r) = found else { return json!({ "state": "gone" }) };
+    match r.get("state").and_then(Value::as_str).unwrap_or_default() {
+        "waiting" => json!({ "state": "waiting" }),
+        "done" => json!({ "state": "done", "signed": r.get("signed"), "signer_policy": r.get("signer_policy") }),
+        "failed" => json!({ "state": "failed", "error": r.get("error").and_then(Value::as_str).unwrap_or(API_SIGN_OTHER_MAP) }),
+        "declined" => json!({ "state": "failed", "error": API_SIGN_DECLINED }),
+        _ => json!({ "state": "gone" }),
+    }
 }
 
 // ── the hub's hooks ──────────────────────────────────────────────────────────────────────────────────────────
@@ -2226,7 +2397,7 @@ pub fn attach_headless(relay: &Arc<Relay>, console: &Arc<Console>) {
 }
 
 /// AC-2a 5.7: the console whose book holds this relay's requests: its own, else the headless one while enrolled.
-fn request_book(relay: &Relay) -> Option<Arc<Console>> {
+pub(crate) fn request_book(relay: &Relay) -> Option<Arc<Console>> {
     relay.admin_console.get().cloned().or_else(|| relay.fleet.get().map(|f| f.book.clone()))
 }
 
@@ -2336,9 +2507,11 @@ pub fn requests_for(relay: &Relay, principal: &str) -> Obj {
             .requests_waiting("meet.", t)
             .into_iter()
             .filter(|r| {
-                // a console invite and the AI signing asks (AI-1 9) go only to the device of their principal
+                // a console invite and the AI and API signing asks (AI-1 9, API-1 2.3) go only to the device of
+                // their principal
                 let kind = r.get("kind").and_then(Value::as_str).unwrap_or_default();
-                (kind != "meet.console-invite" && !kind.starts_with("meet.ai.")) || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal)
+                let own = kind == "meet.console-invite" || kind.starts_with("meet.ai.") || kind.starts_with("meet.api.");
+                !own || r.get("target").and_then(|x| x.get("principal")).and_then(Value::as_str) == Some(principal)
             })
             .collect(),
     };
@@ -2515,8 +2688,10 @@ mod tests {
     fn routes_declare_roles_and_security_actions() {
         for r in &ROUTES {
             assert!(matches!(r.role, Role::Viewer | Role::Manager | Role::Admin), "{}", r.path);
-            // every write needs a step-up except "Request more seats" (4.9: body `{wanted}`, no stepup)
-            assert_eq!(r.stepup, r.method == "POST" && r.path != "meet/seats/request", "{}", r.path);
+            // every write needs a step-up except "Request more seats" (4.9: body `{wanted}`, no stepup) and the r6 8.11
+            // MCP rows without one (turning off and testing)
+            let no_stepup = matches!(r.path, "meet/seats/request" | "meet/ai/mcp/servers/off" | "meet/ai/mcp/off" | "meet/ai/mcp/test");
+            assert_eq!(r.stepup, r.method == "POST" && !no_stepup, "{}", r.path);
             assert_eq!(r.action.is_empty(), r.method == "GET", "{}", r.path);
             assert!(r.path.starts_with("meet/"), "{}", r.path);
             if r.security {
@@ -2524,9 +2699,9 @@ mod tests {
                 assert!(matches!(r.need, Need::Any), "{}", r.path);
             }
         }
-        // viewers read only calls and the release
+        // viewers read only calls, the release and the Tools (MCP) state (r6 8.11)
         let viewer: Vec<&str> = ROUTES.iter().filter(|r| r.role == Role::Viewer).map(|r| r.path).collect();
-        assert_eq!(viewer, vec!["meet/release", "meet/calls"]);
+        assert_eq!(viewer, vec!["meet/release", "meet/calls", "meet/ai/mcp"]);
         // user managers read people and seats and pick seats, nothing else (4.9, R4-8)
         let manager: Vec<(&str, &str)> = ROUTES.iter().filter(|r| r.role == Role::Manager).map(|r| (r.method, r.path)).collect();
         assert_eq!(manager, vec![("GET", "meet/people"), ("GET", "meet/seats"), ("POST", "meet/seats/pick")]);
@@ -2920,6 +3095,50 @@ mod tests {
         }
         let listed = requests_for(&relay, "ann@x.org");
         assert_eq!(listed["requests"][0]["id"], request["id"]);
+    }
+
+    /// API-1 2.3 (slice 1a6): the console's `meet.api.sign` request in the relay's book: only its principal's device
+    /// sees and answers it; a signed map with another hash fails it with the sentence, which `api-sign-status`
+    /// reports; a second ask for the org replaces the waiting one.
+    #[test]
+    fn api_sign_requests_are_refused_for_another_map_and_reported_to_the_console() {
+        let (relay, _) = fixture(&["ann@x.org"]);
+        let book = headless(&temp_dir());
+        let _ = relay.admin_console.set(book.clone());
+        let now = (pj::now() * 1000.0) as i64;
+        let map = json!({"v": 1, "org": "acme", "seq": 2});
+        let sha = crate::api_map::api_map_hash(&map);
+        let ask = |m: &Value, sha: &str| json!({"org": "acme", "principal": "Ann@x.org", "map": m, "map_sha256": sha, "reason": "Rotate the key", "requested_by": "ann@x.org"});
+        assert_eq!(api_sign_request(&book, &ask(&map, &"0".repeat(64)), now).unwrap_err().message, API_SIGN_HASH);
+        let first = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        let second = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        assert_ne!(first, second);
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": first}), now)["state"], "gone", "replaced");
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": second}), now)["state"], "waiting");
+        assert_eq!(api_sign_status(&book, &json!({"org": "other", "request": second}), now)["state"], "gone");
+        // only the principal's device lists and answers it
+        let listed = |p: &str| requests_for(&relay, p)["requests"].as_array().unwrap().iter().any(|r| r["id"] == second.as_str());
+        assert!(listed("ann@x.org") && !listed("bob@x.org"));
+        let bob = Identity { principal: "bob@x.org".into(), device: "bbbbbbbbbbbbbbbb".into(), ..Default::default() };
+        let ann = Identity { principal: "ann@x.org".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let id = json!(second);
+        let mut other = map.clone();
+        other["seq"] = json!(3);
+        let wrong = json!({"map": other, "sig": "", "chain": []});
+        assert!(matches!(request_signed(&relay, &bob, Some(&id), None, Some(&wrong)), Err(E::NotFound(_))));
+        assert!(matches!(request_signed(&relay, &ann, Some(&id), None, Some(&json!({"sig": ""}))), Err(E::Bad(_))));
+        match request_signed(&relay, &ann, Some(&id), None, Some(&wrong)) {
+            Err(E::Conflict(w)) => assert_eq!(w, API_SIGN_OTHER_MAP),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": second}), now), json!({"state": "failed", "error": API_SIGN_OTHER_MAP}));
+        // closed: a second answer finds no request
+        assert!(matches!(request_signed(&relay, &ann, Some(&id), None, Some(&wrong)), Err(E::NotFound(_))));
+        // the right map that does not verify against this relay's org CA fails too, with the verifier's words
+        let third = api_sign_request(&book, &ask(&map, &sha), now).unwrap()["request"].as_str().unwrap().to_owned();
+        let right = json!({"map": map, "sig": "", "chain": []});
+        assert!(matches!(request_signed(&relay, &ann, Some(&json!(third)), None, Some(&right)), Err(E::Conflict(_))));
+        assert_eq!(api_sign_status(&book, &json!({"org": "acme", "request": third}), now)["state"], "failed");
     }
 
     /// AC-2a 16.1 f-relay: a relay with its own console on answers `local: true`.

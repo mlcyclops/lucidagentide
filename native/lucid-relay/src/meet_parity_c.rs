@@ -43,6 +43,8 @@ const ADD_NAMES: &str = "an add or link_app entry must name an app or a person";
 const NOT_ARCHIVE: &str = "an archive or unarchive entry must name an archive";
 const LINK_MENTIONS: &str = "an app that reads only mentions is linked (link_app), not added";
 const ADD_ALL: &str = "an app that reads every message is added, not linked";
+/// API-1c 2.3: an `api` app is never linked.
+pub(crate) const API_NO_LINK: &str = "an API app reads every message; add it";
 const NO_ROOM_SERVICES: &str = "call chat never includes apps or archives";
 const LEAVE_ROUTE: &str = "people leave with /v1/channels/leave";
 const LEAVE_SELF: &str = "a service leaves only by itself";
@@ -79,6 +81,21 @@ pub(crate) const AI_NOT_FOUND: &str = "not found";
 pub(crate) const MAP_BODY_MAX: usize = 320 * 1024;
 /// Every refused or missing `GET /v1/org/storage`.
 const SD_NOT_FOUND: &str = "not found";
+/// API-1 2.4: a 256 KiB map in a signed envelope and its request (`/v1/org/api`).
+pub(crate) const API_MAP_BODY_MAX: usize = 384 * 1024;
+
+/// An api map refusal with its contract code: 400 for the map's shape, 403 for its signature or expiry, 409 for the
+/// license, the issuer and the pin, 500 when the relay could not flush its store.
+fn api_error(e: crate::api_map::ApiMapError) -> E {
+    let status = match e.code {
+        "signature" | "map-expired" => 403,
+        "license" | "issuer-taken" | "seq-not-higher" | "conflict" => 409,
+        "io" => 500,
+        _ => 400,
+    };
+    E::Coded(status, e.code, e.message)
+}
+
 pub(crate) const ICON_MAX: usize = 64 * 1024;
 const ICON_DIR: &str = "app-icons";
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -130,9 +147,9 @@ const APP_POST: [&str; 15] = [
 ];
 const ARCHIVE_POST: [&str; 5] = ["/v1/chat/devices", "/v1/chat/log", "/v1/apps/c/hello", "/v1/apps/c/ack", "/v1/apps/c/renew"];
 const SSO_GET: [&str; 1] = ["/v1/crl"];
-const SSO_POST: [&str; 10] = [
+const SSO_POST: [&str; 13] = [
     "/v1/sso/c/hello", "/v1/sso/c/sign", "/v1/sso/c/revoke", "/v1/sso/c/org-member", "/v1/sso/c/pending-add", "/v1/sso/c/propose", "/v1/sso/c/suspend", "/v1/sso/c/unsuspend",
-    "/v1/sso/c/status", "/v1/sso/c/ai-groups",
+    "/v1/sso/c/status", "/v1/sso/c/ai-groups", "/v1/sso/c/api-check", "/v1/sso/c/persons", "/v1/sso/c/directory-status",
 ];
 
 // ── ID-1 (docs/identity/contract.md sections 1.5, 2.11, 3.5, 3.6, 3.8 and 8) ────────────────────────────────
@@ -424,11 +441,12 @@ pub(crate) fn covering<'a>(policies: &'a [Obj], principal: &str) -> Option<&'a O
     policies.iter().find(|p| op::covers(p, principal))
 }
 
-/// _ai_app: the policy names `who` (principal and device) as an app of type `ai`.
-pub(crate) fn ai_app_of(policy: &Obj, who: &Identity) -> bool {
+/// _ai_app: the policy names `who` (principal and device) as an app of one of `types` (AI-1 `ai`; API-1c 2.5 also
+/// `api`).
+pub(crate) fn app_of_types(policy: &Obj, who: &Identity, types: &[&str]) -> bool {
     who.kind == "app"
         && policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| {
-            a.get("type").and_then(Value::as_str) == Some("ai")
+            a.get("type").and_then(Value::as_str).is_some_and(|t| types.contains(&t))
                 && a.get("principal").and_then(Value::as_str) == Some(who.principal.as_str())
                 && a.get("device").and_then(Value::as_str) == Some(who.device.as_str())
         })
@@ -613,6 +631,25 @@ pub struct IdAccepted {
     pub wire: Obj,
 }
 
+/// The relay hold of an API hold, checked by `Hub::pc_holds_prepare_api` and not yet acknowledged.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApiHold {
+    /// Kept before: its relay hold id.
+    Kept(String),
+    /// New: the record `Hub::pc_holds_commit_api` keeps.
+    New(Obj),
+}
+
+impl ApiHold {
+    /// The relay hold id.
+    pub fn id(&self) -> String {
+        match self {
+            ApiHold::Kept(id) => id.clone(),
+            ApiHold::New(record) => pj::s(record, "id"),
+        }
+    }
+}
+
 /// An admin's answer waiting for the SSO service's next hello.
 #[derive(Default)]
 struct SsoOut {
@@ -636,6 +673,9 @@ pub struct Pc {
     store: Option<op::Store>,
     /// AI-1 2: the org AI maps (rebuilt from `ext["ai"]["maps"]` like the policy store).
     ai_maps: Option<op::AiMapStore>,
+    /// API-1 2.4: the org api maps and journals (loaded from `state_dir/api-maps` and `state_dir/api-journal` the
+    /// first time; in memory without a state folder).
+    api_maps: Option<crate::api_map::ApiMapStore>,
     /// SD-1 13.5: the org storage maps (rebuilt from `ext["pc"]["maps"]` like the policy store).
     maps: Option<op::MapStore>,
     pub(crate) signer: Option<Arc<SignerClient>>,
@@ -665,6 +705,7 @@ impl Pc {
             minimums: None,
             store: None,
             ai_maps: None,
+            api_maps: None,
             maps: None,
             signer: None,
             sso_out: IndexMap::new(),
@@ -762,6 +803,11 @@ impl State {
 
     fn pc_map(&mut self, key: &str) -> &mut Obj {
         self.pc_part().get_mut(key).and_then(Value::as_object_mut).expect("a pc map")
+    }
+
+    /// relay.json `legal_holds` (API-1 revision 4 5.1 `retention`).
+    pub(crate) fn pc_holds_on(&self) -> bool {
+        self.pc.holds
     }
 
     fn pc_signer_policy(&mut self) -> Option<Obj> {
@@ -868,6 +914,15 @@ impl State {
     /// _pc_terms: the PC-1 terms of the signer policy (empty without one).
     pub(crate) fn pc_terms(&mut self) -> op::SignerTerms {
         self.pc_signer_policy().map(|sp| op::signer_terms(&sp).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// API-1 revision 5 4.3: `ext["sso_persons"]` = {org: {provider: {principal: {record, sig, cert_pem}}}}, the
+    /// newest SSO-signed person records (`api_subject`), made sound.
+    pub(crate) fn sso_persons(&mut self) -> &mut Obj {
+        if !matches!(self.ext.get("sso_persons"), Some(Value::Object(_))) {
+            self.ext.insert("sso_persons".into(), Value::Object(Obj::new()));
+        }
+        self.ext.get_mut("sso_persons").and_then(Value::as_object_mut).expect("ext sso_persons")
     }
 
     /// _pc_current: every org's newest policy that has not expired.
@@ -1038,6 +1093,8 @@ impl State {
         if let Some(p) = policy.and_then(Value::as_object) {
             op::ai_edition_gate(p, edition).map_err(E::Conflict)?;
         }
+        op::api_app_gate(policy, &mins).map_err(E::Conflict)?; // API-1c 2.3
+        op::local_mcp_gate(policy, &mins).map_err(E::Conflict)?; // API-1c 10.6
         Ok(())
     }
 
@@ -1062,6 +1119,63 @@ impl State {
         self.ai_keep_maps();
         log_info(&format!("org_ai org={} seq={} hash={} signer={}", vm.org, vm.seq, vm.hash, vm.signer));
         Ok(vm)
+    }
+
+    // ── API-1: org api maps (docs/api/contract.md 2.4) ──
+
+    /// The api map store, loaded from the state folder the first time.
+    pub(crate) fn api_maps(&mut self) -> &mut crate::api_map::ApiMapStore {
+        let dir = self.pc.state_dir.clone();
+        self.pc.api_maps.get_or_insert_with(|| crate::api_map::ApiMapStore::load(dir.as_deref()))
+    }
+
+    /// _api_accept: verify, check against the org's newest policy and the edition, fold and pin one signed api map.
+    pub(crate) fn api_accept(&mut self, wire: Option<&Value>, edition: Option<crate::api_map::Edition>) -> R<crate::api_map::AcceptOutcome> {
+        let (root, signer_policy, crl, previous) = self.pc_verify_args()?;
+        let wire = wire.cloned().unwrap_or(Value::Null);
+        let org = wire.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let policy = self.pc_store().and_then(|s| s.newest.get(&org)).map(|v| v.policy.clone());
+        let trust = crate::api_map::ApiTrust { root: &root, signer_policy: &signer_policy, root_crl: crl.as_ref(), previous_serial: &previous };
+        self.api_maps().accept(&wire, &trust, pj::now() as i64, policy.as_ref(), edition).map_err(api_error)
+    }
+
+    /// API-1 3.3: the effective end of a Meet certificate of `kind` (from `cert_kind`) for `principal` with SAN org
+    /// URIs `orgs`: `not_after` plus the smallest grace among the orgs that bind it (app, archive and SSO: its org
+    /// URIs; a connector: the org the bridge configuration gives its principal; a person: every org whose newest
+    /// policy's `domains` hold its email domain, plus its `organizations` org). No org, or another kind: `not_after`.
+    pub(crate) fn api_cert_end(&mut self, kind: &str, principal: &str, orgs: &[String], not_after: i64, now: i64) -> i64 {
+        let Some((grace_kind, bound)) = self.api_cert_orgs(kind, principal, orgs) else { return not_after };
+        let maps = self.api_maps();
+        let hours: Vec<Option<u32>> = bound.iter().map(|o| maps.grace_hours(o, grace_kind, now)).collect();
+        crate::api_map::effective_end(not_after, &hours)
+    }
+
+    /// API-1 3.3: the grace kind and the sorted orgs that bind a Meet certificate (see `api_cert_end`); None for a
+    /// kind no grace applies to.
+    pub(crate) fn api_cert_orgs(&mut self, kind: &str, principal: &str, orgs: &[String]) -> Option<(&'static str, Vec<String>)> {
+        let relay_org = || match self.org(principal) {
+            Value::Object(o) => o.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string),
+            _ => None,
+        };
+        let (grace_kind, mut bound): (&'static str, Vec<String>) = match kind {
+            "app" | "archive" | "sso" => ("app", orgs.to_vec()),
+            "connector" => ("connector", relay_org().into_iter().collect()),
+            "person" => {
+                let mut bound: Vec<String> = relay_org().into_iter().collect();
+                let domain = principal.rsplit_once('@').map(|(_, d)| d.to_lowercase()).unwrap_or_default();
+                if !domain.is_empty() {
+                    if let Some(store) = self.pc_store() {
+                        let covers = |p: &Obj| p.get("domains").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).any(|d| d.eq_ignore_ascii_case(&domain));
+                        bound.extend(store.newest.iter().filter(|(_, v)| covers(&v.policy)).map(|(o, _)| o.clone()));
+                    }
+                }
+                ("person", bound)
+            }
+            _ => return None,
+        };
+        bound.sort();
+        bound.dedup();
+        Some((grace_kind, bound))
     }
 
     /// The AI map the org's current policy names (the one devices and the gateway use), if the relay holds it.
@@ -1444,6 +1558,9 @@ impl State {
             let Some(app) = self.pc_policy_app(&target) else { return forbidden(format!("{target} is not an app in a current organization policy")) };
             if pj::text_of(&app, "type") == "ai" {
                 return forbidden(super::ai::AI_APP_NEVER); // AI-1 6.1
+            }
+            if pj::text_of(&app, "type") == op::API_APP_TYPE {
+                return bad(API_NO_LINK); // API-1c 2.3
             }
             if pj::text_of(&app, "scope") != "mentions" {
                 return bad(ADD_ALL);
@@ -2532,17 +2649,200 @@ impl Hub {
     }
 
     /// `GET /v1/org/ai?org=<id>[&sha256=<hex>]`: only to a person the org's current policy covers, or that org's `ai`
-    /// app; anyone else, and a map the relay does not hold, get the same 404 `{"error": "not found"}`.
+    /// or `api` app (API-1c 2.5); anyone else, and a map the relay does not hold, get the same 404
+    /// `{"error": "not found"}`.
     pub fn pc_ai_get_for(&self, who: &Identity, org: &str, sha256: &str) -> R<Obj> {
         let allowed = {
             let mut st = self.st.lock();
             let policy = st.ai_newest(org);
-            policy.as_ref().is_some_and(|p| (super::ai::ai_person(who) && op::covers(p, &who.principal)) || State::ai_app_of(who, Some(p)))
+            policy.as_ref().is_some_and(|p| (super::ai::ai_person(who) && op::covers(p, &who.principal)) || State::app_of(who, Some(p), &["ai", op::API_APP_TYPE]))
         };
         if !allowed {
             return Err(E::NotFound(AI_NOT_FOUND.into()));
         }
         self.pc_ai_get(org, sha256)
+    }
+
+    // ── API-1: org api maps (docs/api/contract.md 2.4) ──
+
+    /// `POST /v1/org/api {session, signed}`: the issuer PC's upload (a relay admin, as `POST /v1/org/policy`) ->
+    /// `{org, seq, hash}`, answered after the map is flushed to disk. The pinned seq with another hash raises
+    /// `api.map.conflict` and answers 409 `conflict`. A map for an org this relay does not serve is refused before
+    /// it is verified (403 `org-not-served`).
+    pub fn pc_api_upload(&self, session: &str, who: &Identity, signed: Body) -> R<Obj> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut st = self.st.lock();
+        let r = (|| -> R<crate::api_map::AcceptOutcome> {
+            st.check_admin(session, who)?;
+            let org = signed.and_then(|s| s.get("map")).and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default();
+            if !Self::api_served(&st).contains(org) {
+                return Err(E::Coded(403, "org-not-served", "This relay does not serve that organization.".into()));
+            }
+            st.api_accept(signed, edition)
+        })();
+        let dir = st.pc.state_dir.clone();
+        drop(st);
+        // API-1 9.2: a new pin and a conflict go into the org's audit chain
+        let vm = match r? {
+            crate::api_map::AcceptOutcome::Pinned(vm) => {
+                let (org, mut e) = crate::fleet_agent::api_note_pinned(&vm);
+                e["principal"] = Value::from(who.principal.clone());
+                self.api_record(dir.as_deref(), vec![(org, e)]);
+                vm
+            }
+            crate::api_map::AcceptOutcome::Unchanged(vm) => vm,
+            crate::api_map::AcceptOutcome::Conflict { org, seq, pinned_hash, offered_hash } => {
+                log_warn(&format!("api.map.conflict org={org} seq={seq} pinned={pinned_hash} offered={offered_hash} by={}", who.principal));
+                let (o, mut e) = crate::fleet_agent::api_note_conflict(&org, seq, None);
+                e["principal"] = Value::from(who.principal.clone());
+                self.api_record(dir.as_deref(), vec![(o, e)]);
+                return Err(E::Coded(409, "conflict", format!("{org}'s api map {seq} was seen with two different hashes")));
+            }
+        };
+        log_info(&format!("org_api_upload org={} seq={} hash={} by={}", vm.org, vm.seq, vm.hash, who.principal));
+        Ok(obj([("org", Value::from(vm.org)), ("seq", Value::from(vm.seq)), ("hash", Value::from(vm.hash))]))
+    }
+
+    /// API-1 2.3, slice 1a6: check a signed api map a device reports for a `meet.api.sign` request as `POST
+    /// /v1/org/api` would (signature and chain to this relay's org CA, the org's newest policy, the license edition,
+    /// the issuers held for other orgs), without pinning it. Ok is the verified map and the root-signed signer
+    /// policy it was checked under (the console checks both again against its own CA); Err is the refusal sentence.
+    pub fn api_verify_signed(&self, signed: &Value) -> Result<(crate::api_map::VerifiedApiMap, Obj), String> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref()).ok_or("The license edition is not known, so no api map is accepted.")?;
+        let mut st = self.st.lock();
+        let (root, signer_policy, crl, previous) = st.pc_verify_args().map_err(|e| e.message())?;
+        let org = signed.get("map").and_then(|m| m.get("org")).and_then(Value::as_str).unwrap_or_default().to_string();
+        let policy = st.pc_store().and_then(|s| s.newest.get(&org)).map(|v| v.policy.clone());
+        let held = st.api_maps().issuers();
+        let vm = crate::api_map::verify_api_map(signed, &root, &signer_policy, crl.as_ref(), &previous, pj::now() as i64, policy.as_ref(), edition, &held).map_err(|e| e.message)?;
+        Ok((vm, signer_policy))
+    }
+
+    /// API-1 3.3: the Meet verifier's view of the live api map store (`State::api_cert_end`), holding the hub weakly.
+    pub fn api_grace_source(self: &std::sync::Arc<Self>) -> crate::meet_tls::GraceSource {
+        let weak = std::sync::Arc::downgrade(self);
+        std::sync::Arc::new(move |g: &crate::meet_tls::GraceSubject, now: i64| match weak.upgrade() {
+            Some(hub) => hub.st.lock().api_cert_end(&g.kind, &g.principal, &g.orgs, g.not_after, now),
+            None => g.not_after,
+        })
+    }
+
+    /// API-1 3.3, 9.2: the orgs whose grace admits a Meet certificate past its `notAfter` (each binding org whose
+    /// pinned map gives a grace for its kind), where its `cert.grace-used` entry goes.
+    pub fn api_grace_orgs(&self, kind: &str, principal: &str, orgs: &[String], now: i64) -> Vec<String> {
+        let mut st = self.st.lock();
+        let Some((grace_kind, bound)) = st.api_cert_orgs(kind, principal, orgs) else { return Vec::new() };
+        let maps = st.api_maps();
+        bound.into_iter().filter(|o| maps.grace_hours(o, grace_kind, now).is_some_and(|h| h > 0)).collect()
+    }
+
+    // ── API-1: the fleet channel's api ops (docs/api/contract.md 2.4 to 2.6) ──
+
+    /// The org ids this relay serves (relay.json `organizations`).
+    fn api_served(st: &State) -> std::collections::BTreeSet<String> {
+        st.organizations.values().filter_map(|v| v.get("id").and_then(Value::as_str)).map(str::to_string).collect()
+    }
+
+    /// The `api-heads` answer (2.5): `{org: {seq, tseq}}` for every org this relay serves, 0 and 0 when it holds nothing.
+    pub fn api_hello_heads(&self) -> Value {
+        let mut st = self.st.lock();
+        let orgs = Self::api_served(&st);
+        let store = st.api_maps();
+        let heads: Obj = orgs.into_iter().map(|o| {
+            let (seq, tseq) = store.head(&o);
+            (o, serde_json::json!({"seq": seq, "tseq": tseq}))
+        }).collect();
+        Value::Object(heads)
+    }
+
+    /// The fleet requests `api-map` and `api-tighten` (2.6), answered only after the store is flushed to disk; a new
+    /// pin, a conflict, a rebase and an applied tightening go into the org's audit chain (9.2) with the lock released.
+    pub fn api_fleet_request(&self, op: &str, body: &Value) -> Result<Value, crate::fleet_wire::Refusal> {
+        let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut notes = Vec::new();
+        let mut st = self.st.lock();
+        if !Self::api_served(&st).contains(org) {
+            return Err(crate::fleet_wire::Refusal::new(403, "org-not-served", "This relay does not serve that organization."));
+        }
+        let answer = match op {
+            "api-map" => {
+                if body.get("map").and_then(|m| m.get("map")).and_then(|m| m.get("org")).and_then(Value::as_str) != Some(org) {
+                    return Err(crate::fleet_wire::Refusal::new(400, "bad-map", "The api map is for another organization."));
+                }
+                let r = st.api_accept(body.get("map"), edition).map_err(|e| match e {
+                    E::Coded(_, code, msg) => crate::api_map::ApiMapError::new(code, msg),
+                    other => crate::api_map::ApiMapError::new("bad-map", format!("{other:?}")),
+                });
+                crate::fleet_agent::api_map_pinned(r, st.api_maps(), body, &crate::console_meet::logger(), &mut notes)
+            }
+            "api-tighten" => crate::fleet_agent::api_tighten_answer(st.api_maps(), body, &mut notes),
+            // API-1 revision 5 4.3: read-only
+            "api-subject" => crate::api_subject::fleet_answer(st.sso_persons(), body),
+            // API-1 revision 5 6.1: read-only, as `GET /v1/org/policy?org=` (the console verifies it under its root)
+            "api-org-policy" => {
+                let wire = st.pc_store().and_then(|s| s.get_org(org)).cloned();
+                let signer_policy = st.pc_part().get("signer_policy").cloned().unwrap_or(Value::Null);
+                Ok(crate::api_delegated::org_policy_answer(wire, signer_policy))
+            }
+            _ => Err(crate::fleet_wire::Refusal::of("fleet-op")),
+        };
+        let dir = st.pc.state_dir.clone();
+        drop(st);
+        self.api_record(dir.as_deref(), notes);
+        answer
+    }
+
+    /// API-1 revision 4 2.3 item 6: the console's reconnect catch-up completed for these orgs; an org held closed by
+    /// an unknown journal action (`journal-unknown`) serves again, logged `api.journal.unknown-cleared`.
+    pub fn api_synced_clear(&self, orgs: &[String]) {
+        let mut st = self.st.lock();
+        match st.api_maps().clear_unknown(orgs.iter().map(String::as_str)) {
+            Ok(cleared) => {
+                for org in cleared {
+                    crate::console_meet::logger().security("api.journal.unknown-cleared", &crate::log::Fields::new().with("org", org.as_str()), crate::log::Level::Info);
+                }
+            }
+            Err(e) => crate::console_meet::logger().security("api.journal.unknown-unsaved", &crate::log::Fields::new().with("why", e.message), crate::log::Level::Error),
+        }
+    }
+
+    /// Record api notes in this relay's own chains (`fleet_agent::api_audit_of` its state folder).
+    fn api_record(&self, dir: Option<&std::path::Path>, notes: Vec<crate::fleet_agent::ApiNote>) {
+        if notes.is_empty() {
+            return;
+        }
+        let audit = dir.and_then(crate::fleet_agent::api_audit_of);
+        crate::fleet_agent::api_record(audit.as_deref(), notes, &crate::console_meet::logger(), pj::now() as i64);
+    }
+
+    /// The API listener's view of one org (5.6): a read-only copy of its api state taken under the lock, None when
+    /// this relay does not serve the org. The caller verifies a token against the copy with the lock released.
+    /// The license edition is read here each time (an installed or replaced license changes it), and the pinned maps
+    /// are checked against it again before the copy is taken.
+    pub fn api_org_snapshot(&self, org: &str) -> Option<crate::api_map::ApiMapStore> {
+        let edition = crate::api_map::Edition::of(self.ai_edition().as_deref());
+        let mut st = self.st.lock();
+        if !Self::api_served(&st).contains(org) {
+            return None;
+        }
+        let maps = st.api_maps();
+        let changed = maps.revalidate(edition);
+        for o in &changed {
+            let state = if maps.is_set_aside(o) { "set-aside" } else { "restored" };
+            let f = crate::log::Fields::new().with("org", o.as_str()).with("state", state).with("edition", edition.map_or_else(|| "none".to_string(), |e| format!("{e:?}").to_lowercase()));
+            crate::console_meet::logger().security("api.map.edition-refused", &f, crate::log::Level::Warn);
+        }
+        Some(maps.org_snapshot(org))
+    }
+
+    /// The 1a2 owner rule on a relay: a principal is inactive only when this relay knows it and holds every device
+    /// certificate it knows for it revoked (the denied set); a principal it does not know counts as active.
+    pub fn api_owner_active(&self, principal: &str) -> bool {
+        let st = self.st.lock();
+        let Some(devices) = st.directory.get(&principal.to_lowercase()).and_then(|e| e.get("devices")).and_then(Value::as_object) else { return true };
+        let serials: Vec<String> = devices.values().map(|d| crate::meet::serial_of(d.get("serial"))).filter(|s| !s.is_empty()).collect();
+        serials.is_empty() || !serials.iter().all(|s| st.denied.contains_key(s))
     }
 
     // ── SD-1: org storage maps (docs/storage/contract.md 13.5) ──
@@ -2897,6 +3197,100 @@ impl Hub {
         st.pc_list("holds").push(Value::Object(hold.clone()));
         st.pc_audit(&who.principal, "hold", obj([("id", Value::from(id.clone())), ("on", hold.get("on").cloned().unwrap_or(Value::Null)), ("items", items), ("reason", Value::from(reason))]));
         Ok(obj([("id", Value::from(id))]))
+    }
+
+    /// API-1 revision 4 5.2.3 step 2, the API entry beside `pc_holds_place`, first half: checks a people hold for API
+    /// hold `hold` of `org`, `by` the API client's principal, and changes nothing. The org of the path must cover every
+    /// principal (its newest current policy; 403 `not-covered`, naming none); 409 `holds-off` while `legal_holds` is
+    /// off. Idempotent by `hold` (the record keeps it as `api`): a hold already kept is `ApiHold::Kept`. The caller
+    /// audits a new hold (its relay hold id is `ApiHold::id`), then commits it with `pc_holds_commit_api`.
+    pub fn pc_holds_prepare_api(&self, org: &str, hold: &str, principals: &[String], reason: &str, by: &str) -> R<ApiHold> {
+        self.pc_holds_check().map_err(|_| E::Coded(409, "holds-off", HOLDS_OFF.into()))?;
+        let reason = reason_of(Some(&Value::from(reason)))?;
+        let record = {
+            let mut st = self.st.lock();
+            let found = st.pc_list("holds").iter().filter_map(Value::as_object).find(|h| h.get("api").and_then(Value::as_str) == Some(hold)).map(|h| pj::s(h, "id"));
+            if let Some(id) = found {
+                return Ok(ApiHold::Kept(id));
+            }
+            let mut people: Vec<String> = principals.iter().map(|p| p.trim().to_lowercase()).collect();
+            people.sort();
+            people.dedup();
+            if people.is_empty() || people.len() > HOLD_ITEMS_MAX {
+                return bad(format!("principals must name 1 to {HOLD_ITEMS_MAX} people"));
+            }
+            let covered = st.pc_current().into_iter().find(|p| p.get("org").and_then(Value::as_str) == Some(org)).is_some_and(|p| people.iter().all(|x| service_kind(x).is_empty() && op::covers(&p, x)));
+            if !covered {
+                return Err(E::Coded(403, "not-covered", "A principal is not covered by the organization's policy.".into()));
+            }
+            obj([
+                ("id", Value::from(pj::token_hex(8))),
+                ("on", Value::from("people")),
+                ("reason", Value::from(reason)),
+                ("by", Value::from(by)),
+                ("placed", Value::from(pj::now() as i64)),
+                ("released", Value::Null),
+                ("principals", string_list(&people)),
+                ("org", Value::from(org)),
+                ("api", Value::from(hold)),
+            ])
+        };
+        Ok(ApiHold::New(record))
+    }
+
+    /// The second half of `pc_holds_prepare_api`: a new hold is kept (or the one a concurrent request kept first is
+    /// found) and state.json is written and synced before Ok, also for a hold kept before, so no hold is acknowledged
+    /// that a restart would lose. Ok is (the relay hold id, whether it was placed now); 503 `unavailable` when the
+    /// state cannot be written (the hold stays in memory and the upkeep writes it again; the console's retry finds it).
+    pub fn pc_holds_commit_api(&self, plan: ApiHold) -> R<(String, bool)> {
+        let placed = match plan {
+            ApiHold::Kept(id) => (id, false),
+            ApiHold::New(record) => {
+                let mut st = self.st.lock();
+                let hold = pj::s(&record, "api");
+                let found = st.pc_list("holds").iter().filter_map(Value::as_object).find(|h| h.get("api").and_then(Value::as_str) == Some(hold.as_str())).map(|h| pj::s(h, "id"));
+                match found {
+                    Some(id) => (id, false),
+                    None => {
+                        let id = pj::s(&record, "id");
+                        let by = pj::s(&record, "by");
+                        let detail = obj([
+                            ("id", Value::from(id.clone())),
+                            ("on", Value::from("people")),
+                            ("items", record.get("principals").cloned().unwrap_or(Value::Null)),
+                            ("reason", record.get("reason").cloned().unwrap_or(Value::Null)),
+                            ("api", Value::from(hold)),
+                        ]);
+                        st.pc_list("holds").push(Value::Object(record));
+                        st.pc_audit(&by, "hold", detail);
+                        st.dirty = true;
+                        (id, true)
+                    }
+                }
+            }
+        };
+        self.save_synced().map_err(|e| {
+            log_warn(&format!("api hold {} not acknowledged: {e}", placed.0));
+            E::Coded(503, "unavailable", "The relay could not keep the hold; try again.".into())
+        })?;
+        Ok(placed)
+    }
+
+    /// Tests: legal holds on, and a current policy of `org` covering `domain`.
+    #[cfg(test)]
+    pub(crate) fn pc_test_holds(&self, org: &str, domain: &str) {
+        let mut st = self.st.lock();
+        st.pc.holds = true;
+        let policy = serde_json::json!({"org": org, "domains": [domain], "expires": pj::now() as i64 + 86_400}).as_object().cloned().unwrap_or_default();
+        let verified = op::Verified { wire: Obj::new(), policy, org: org.into(), label: org.into(), seq: 1, hash: String::new(), signer: "root".into() };
+        st.pc.store.get_or_insert_with(op::Store::default).newest.insert(org.into(), verified);
+    }
+
+    /// API-1 revision 4 2.5 `api-hold-status`: whether the relay hold of API hold `hold` is released, None when this
+    /// relay holds none for it.
+    pub fn pc_api_hold_released(&self, hold: &str) -> Option<bool> {
+        let mut st = self.st.lock();
+        st.pc_list("holds").iter().filter_map(Value::as_object).find(|h| h.get("api").and_then(Value::as_str) == Some(hold)).map(|h| pj::truthy(h.get("released")))
     }
 
     /// AC-1 3.7 (M10): whether `principal` may hold these people (an org admin whose policy covers all of them), the
@@ -3319,5 +3713,125 @@ mod tests {
         assert_eq!(pols(Some(&json!([a, b]))).unwrap().len(), 2);
         assert!(pols(Some(&json!([b, a]))).is_err());
         assert!(pols(Some(&json!(["x"]))).is_err());
+    }
+
+    /// API-1 2.4: `POST /v1/org/api` refuses a map for an org this relay does not serve before verifying it.
+    #[test]
+    fn api1_an_upload_for_an_org_the_relay_does_not_serve_is_refused() {
+        let hub = Hub::new(None, &["ann@x".to_string()], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        hub.st.lock().organizations = json!({"ben@acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        // an edition, so the served org's map reaches verification rather than `map-edition`
+        hub.st.lock().pc.license_edition = "enterprise".into();
+        let ann = Identity { principal: "ann@x".into(), name: "ANN".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        let session = hub.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
+        let signed = |org: &str| json!({"map": {"org": org, "seq": 1}, "sig": "", "chain": []});
+        let other = signed("beta");
+        match hub.pc_api_upload(&session, &ann, Some(&other)) {
+            Err(E::Coded(403, "org-not-served", _)) => {}
+            r => panic!("expected org-not-served, got {r:?}"),
+        }
+        assert!(hub.st.lock().api_maps().get("beta", "").is_none(), "nothing pinned");
+        // the org it serves goes on to verification (refused here for another reason)
+        let mine = signed("acme");
+        assert!(!matches!(hub.pc_api_upload(&session, &ann, Some(&mine)), Err(E::Coded(_, "org-not-served" | "map-edition", _)) | Ok(_)));
+    }
+
+    /// API-1 13: a relay with no license edition sets every pinned map aside (the listener's snapshot holds none);
+    /// an edition restores it.
+    #[test]
+    fn api1_a_relay_with_no_edition_sets_its_maps_aside() {
+        let dir = crate::meet_tls::testpki::dir("api-edition");
+        let maps = dir.join("api-maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        // a map fully valid under check_api_map (restoring checks it again), for org acme
+        let vectors: Value = serde_json::from_str(include_str!("../tests/api_map_v1.json")).unwrap();
+        let map = vectors["maps"].as_array().unwrap().iter().find(|c| c["name"] == "good-full-enterprise").unwrap()["map"].clone();
+        assert_eq!(map["org"], "acme");
+        let held = json!({"pinned": {"signed": {"map": map.clone(), "sig": "", "chain": []}, "signer": "root"}});
+        std::fs::write(maps.join("acme.json"), serde_json::to_vec(&held).unwrap()).unwrap();
+        let hub = Hub::new(None, &[], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        {
+            let mut st = hub.st.lock();
+            st.pc.api_maps = Some(crate::api_map::ApiMapStore::load(Some(&dir)));
+            st.organizations = json!({"ann@acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        }
+        assert_eq!(hub.ai_edition(), None);
+        let aside = hub.api_org_snapshot("acme").unwrap();
+        assert!(aside.is_set_aside("acme"));
+        assert!(aside.get("acme", "").is_none());
+        hub.st.lock().pc.license_edition = "enterprise".into();
+        let back = hub.api_org_snapshot("acme").unwrap();
+        assert!(!back.is_set_aside("acme"));
+        assert_eq!(back.get("acme", "").map(|m| m.seq), map["seq"].as_i64());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// API-1 3.3: the applicable grace is the smallest among the orgs that bind a certificate; an org without a pinned
+    /// map counts 0, no org gives none.
+    #[test]
+    fn api1_a_person_in_two_orgs_gets_the_smallest_grace() {
+        let now = pj::now() as i64;
+        let dir = crate::meet_tls::testpki::dir("api-grace");
+        let maps = dir.join("api-maps");
+        std::fs::create_dir_all(&maps).unwrap();
+        for (org, person, app) in [("acme", 24, 24), ("beta", 0, 6)] {
+            let map = json!({"org": org, "seq": 1, "expires": now + 86_400, "grace": {"person": person, "app": app, "connector": 12, "relay": 0}});
+            let held = json!({"pinned": {"signed": {"map": map, "sig": "", "chain": []}, "signer": "root"}});
+            std::fs::write(maps.join(format!("{org}.json")), serde_json::to_vec(&held).unwrap()).unwrap();
+        }
+        let hub = Hub::new(None, &[], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        let mut st = hub.st.lock();
+        st.pc.api_maps = Some(crate::api_map::ApiMapStore::load(Some(&dir)));
+        st.organizations = json!({"ann@acme.example": {"id": "acme", "label": "Acme"}, "con@apps.acme.example": {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        let na = now - 3600;
+        // the organizations map alone: acme's 24 hours
+        assert_eq!(st.api_cert_end("person", "ann@acme.example", &[], na, now), na + 24 * 3600);
+        // beta's newest policy covers the domain too: beta's 0 wins
+        let policy = json!({"org": "beta", "domains": ["ACME.example"]}).as_object().unwrap().clone();
+        let beta = op::Verified { wire: Obj::new(), policy, org: "beta".into(), label: "Beta".into(), seq: 1, hash: String::new(), signer: "root".into() };
+        let mut store = op::Store::default();
+        store.newest.insert("beta".into(), beta);
+        st.pc.store = Some(store);
+        assert_eq!(st.api_cert_end("person", "ann@acme.example", &[], na, now), na);
+        // services: their org URIs; a connector: its bridge org; nobody bound: no grace
+        assert_eq!(st.api_cert_end("app", "x@apps.acme.example", &["acme".into()], na, now), na + 24 * 3600);
+        assert_eq!(st.api_cert_end("sso", "sso:01", &["acme".into(), "beta".into()], na, now), na + 6 * 3600);
+        assert_eq!(st.api_cert_end("connector", "con@apps.acme.example", &[], na, now), na + 12 * 3600);
+        assert_eq!(st.api_cert_end("connector", "lost@apps.acme.example", &[], na, now), na);
+        assert_eq!(st.api_cert_end("person", "zed@elsewhere.example", &[], na, now), na);
+        // an org whose map is not pinned counts 0
+        assert_eq!(st.api_cert_end("app", "x@apps.acme.example", &["acme".into(), "gamma".into()], na, now), na);
+    }
+
+    /// API-1 revision 4 5.2.3: an API hold, new or repeated, is acknowledged only once state.json is synced.
+    #[test]
+    fn api1_api_holds_are_acknowledged_only_once_the_state_is_synced() {
+        let dir = std::env::temp_dir().join(format!("lucid-pc-api-holds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let hub = Hub::new(Some(dir.clone()), &[], 168.0, 30.0, 365.0, None, std::sync::Arc::new(crate::meet_console::LinkStats::new()));
+        hub.pc_test_holds("acme", "acme.example");
+        let people = ["ann@acme.example".to_string()];
+        let prepare = |hold: &str| hub.pc_holds_prepare_api("acme", hold, &people, "Matter 7", "app@apps.acme.example").unwrap();
+        // the seam: state.json's temporary file is a folder, so the write fails
+        let tmp = dir.join(format!("{STATE_FILE}.tmp"));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let first = prepare("h_9f8e7d6c5b4a3921");
+        assert!(matches!(first, ApiHold::New(_)));
+        match hub.pc_holds_commit_api(first) {
+            Err(E::Coded(503, "unavailable", _)) => {}
+            r => panic!("expected unavailable, got {r:?}"),
+        }
+        // kept in memory, so the retry finds it, and still unacknowledged while the state cannot be written
+        let again = prepare("h_9f8e7d6c5b4a3921");
+        assert!(matches!(again, ApiHold::Kept(_)));
+        assert!(matches!(hub.pc_holds_commit_api(again.clone()), Err(E::Coded(503, "unavailable", _))));
+        std::fs::remove_dir_all(&tmp).unwrap();
+        assert_eq!(hub.pc_holds_commit_api(again.clone()).unwrap(), (again.id(), false));
+        assert!(std::fs::read_to_string(dir.join(STATE_FILE)).unwrap().contains("h_9f8e7d6c5b4a3921"));
+        // a new hold is placed now and on disk before Ok
+        assert!(hub.pc_holds_commit_api(prepare("h_0000000000000001")).unwrap().1);
+        assert!(std::fs::read_to_string(dir.join(STATE_FILE)).unwrap().contains("h_0000000000000001"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

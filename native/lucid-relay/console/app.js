@@ -618,6 +618,723 @@
     "exports.siem": "Send audit and security events to a SIEM",
     "exports.siem-reasons": "Include the reasons people typed",
     "exports.siem-test": "Send a test message",
+    // API-1 7.3 (API-1a6): Settings > API access, and the API destinations and failover credentials of Exports.
+    "api.title": "API access",
+    "api.org": "Organization",
+    "api.no-orgs": "This console holds no organization yet.",
+    "api.state-none": "No API map is signed for this organization yet, so nothing can use the API.",
+    "api.state-on": "The API is on.",
+    "api.state-off": "The API is turned off: every API client and scrape token of this organization is refused. Exports continue.",
+    "api.state-expired": "The API map has ended: every API client and scrape token is refused and exports have stopped. Save to sign a new map.",
+    "api.state-set-aside": "The API map was set aside: clients, scrape tokens and exports of this organization are stopped until a new map is signed.",
+    "api.map": "Map <seq>, signed <issued>, ends <expires>.",
+    "api.edition": "The API needs the Enterprise edition.",
+    "api.limits": "Up to <clients> clients, <destinations> destinations and <tokens> scrape tokens.",
+    "api.clients": "API clients",
+    "api.client-add": "Add a client",
+    "api.col-owner": "Owner",
+    "api.col-scopes": "Scopes",
+    "api.col-ceiling": "Highest data class",
+    "api.col-credentials": "Credentials",
+    "api.shown-active": "Active",
+    "api.shown-suspended": "Suspended",
+    "api.shown-expired": "Expired",
+    "api.shown-owner-gone": "Owner left",
+    "api.edit": "Edit",
+    "api.suspend": "Suspend",
+    "api.resume": "Resume",
+    "api.delete": "Delete",
+    "api.new-secret": "New secret",
+    "api.revoke-tokens": "Revoke tokens",
+    "api.denied": "<n> tokens are refused now.",
+    "api.kind-monitoring": "Monitoring",
+    "api.kind-integration": "Integration",
+    "api.ceiling-public": "Public",
+    "api.ceiling-internal": "Internal",
+    "api.ceiling-confidential": "Confidential",
+    "api.ceiling-cui": "CUI",
+    "api.f-name": "Name (lowercase letters, digits and dashes)",
+    "api.f-kind": "Kind",
+    "api.f-owner": "Owner (a person's email)",
+    "api.f-scopes": "Scopes, separated by commas (monitor.read, fleet.read, audit.read, events.subscribe, compliance.metadata.read, compliance.holds.write, compliance.export.request, directory.read, directory.write, content.read, content.post)",
+    "api.f-relays": "Relays, separated by commas, or * for all",
+    "api.f-networks": "Source networks (CIDR), separated by commas; empty means any",
+    "api.f-hours-tz": "Hours: time zone, like America/Chicago; empty means any time",
+    "api.f-hours-from": "Hours: from (HH:MM)",
+    "api.f-hours-to": "Hours: to (HH:MM)",
+    "api.f-hours-days": "Hours: days, 1 (Monday) to 7, separated by commas",
+    "api.f-mtls": "Require mTLS",
+    "api.f-rate-minute": "Requests a minute on each relay (1 to 6000)",
+    "api.f-rate-day": "Requests a day on each relay (1 to 10000000)",
+    "api.f-credentials": "Credentials (a JSON list)",
+    "api.f-credentials-keep": "Leave empty to keep the credentials. A list here replaces them all.",
+    "api.f-days": "Days until the client ends (1 to 366)",
+    "api.f-days-keep": "Leave empty to keep the end date.",
+    "api.f-secret-days": "Days the secret works (1 to 90)",
+    "api.check-name": "Write a name of 1 to 32 lowercase letters, digits or dashes.",
+    "api.check-owner": "Write the owner's email.",
+    "api.check-scopes": "Name at least one scope.",
+    "api.check-relays": "Name at least one relay, or * for all.",
+    "api.check-json": "The credentials are not a JSON list.",
+    "api.check-number": "Write a whole number in the range shown.",
+    "api.check-hours": "Fill in all of the hours, with days from 1 to 7, or none of them.",
+    "api.reveal-secret": "New secret for <name>",
+    "api.reveal-token": "New scrape token <label>",
+    "api.secret-once": "Copy this secret now. It is shown only once.",
+    "api.close": "Close",
+    "api.scrape": "Relay scrape tokens",
+    "api.scrape-new": "Create a relay scrape token",
+    "api.f-scrape-days": "Days (30 to 90)",
+    "api.grace": "Grace after expiry",
+    "api.grace-help": "Hours a credential still works after it ends, from 0 to 168. Raising a value needs a second admin.",
+    "api.grace-person": "People's devices",
+    "api.grace-app": "Apps and API clients",
+    "api.grace-connector": "Connectors",
+    "api.grace-relay": "Relays",
+    "api.stage": "Stage",
+    "api.check-grace": "Each grace is a whole number of hours from 0 to 168.",
+    "api.origins": "Relay API origins",
+    "api.col-origin": "Origin",
+    "api.col-applied": "Changes applied",
+    "api.col-synced": "In sync",
+    "api.set-origin": "Set origin",
+    "api.f-origin": "Origin with its port; empty removes it; it must start with https://",
+    "api.check-origin": "The origin must start with https:// and name a port.",
+    "api.kill": "Kill switch",
+    "api.off": "Turn off the API",
+    "api.on": "Turn the API back on",
+    "api.journal": "Changes applied at once",
+    "api.col-target": "Target",
+    "api.col-when": "When",
+    "api.undo": "Undo",
+    "api.explain": "Explain a request",
+    "api.explain-help": "See which check would refuse a request from a client now, and why.",
+    "api.f-client": "Client",
+    "api.f-method": "Method",
+    "api.f-path": "Path, like /v1/health",
+    "api.f-ip": "Source IP (optional)",
+    "api.explain-run": "Explain",
+    "api.check-passes": "Passes",
+    "api.check-refuses": "Refused (<code>): <words>",
+    "api.explain-first": "Check <n> refuses this request.",
+    "api.explain-ok": "Every check passes.",
+    "api.staged": "Staged changes",
+    "api.staged-none": "Nothing is staged.",
+    "api.staged-by": "Staged by <email>. Kept until <time> unless changed again.",
+    "api.two-person": "A second admin must approve this save because it:",
+    "api.tests-needed": "These destinations need a passing test before saving:",
+    "api.discard": "Discard",
+    "api.f-sign-relay": "Relay your Hub device uses",
+    "api.signing-waiting": "Waiting for your Hub device on <relay> to sign the map.",
+    "api.signing-waiting-other": "Waiting for the Hub device of <email> on <relay> to sign the map.",
+    "api.signing-done": "The map was signed and sent to the relays.",
+    "api.signing-failed": "The map was not signed: <why>",
+    "api.signing-sending": "Asking the relay to send the signing request to your device.",
+    "api.signing-cancel": "Cancel signing",
+    "api.action-client-limit": "Client limits lowered",
+    "exports.destinations": "API destinations",
+    "exports.dest-org": "Destinations of <org>",
+    "exports.dest-preset": "Kind and preset",
+    "exports.dest-add": "Add a destination",
+    "exports.dest-from-siem": "Copy from SIEM settings",
+    "exports.dest-test": "Test",
+    "exports.dest-credential": "Set credential",
+    "exports.test-ok": "The test record arrived.",
+    "exports.test-failed": "The test record did not arrive: <why>",
+    "exports.col-signals": "Signals",
+    "exports.col-source": "Source",
+    "exports.col-backlog": "Backlog",
+    "exports.col-oldest": "Oldest waiting",
+    "exports.col-last-success": "Last success",
+    "exports.col-credential": "Credential",
+    "exports.col-tested": "Tested",
+    "exports.source-staged": "Staged",
+    "exports.source-pinned": "Signed",
+    "exports.state-ok": "Delivering",
+    "exports.state-retrying": "Retrying",
+    "exports.state-paused": "Paused: audit is waiting",
+    "exports.state-failed": "Failed",
+    "exports.state-suspended": "Suspended",
+    "exports.state-none": "No status yet",
+    "exports.cred-held": "Held",
+    "exports.cred-missing": "Not set",
+    "exports.rotate-by": "Rotate by <date>",
+    "exports.cred-sealed": "The credential is sealed. It is never shown again.",
+    "exports.untested": "Needs a passing test",
+    "exports.f-signals": "Signals, separated by commas (metrics, logs, traces, audit, events)",
+    "exports.f-identities": "People and devices in records",
+    "exports.identities-as-is": "As they are",
+    "exports.identities-pseudonymized": "Pseudonymized",
+    "exports.identities-removed": "Removed",
+    "exports.f-failover": "Relays send directly when they cannot reach the console (failover)",
+    "exports.f-private": "Allow a private network address",
+    "exports.f-endpoint": "Endpoint address",
+    "exports.f-queue-mib": "Queue size in MiB (64 to 65536)",
+    "exports.f-queue-hours": "Oldest record kept, in hours (1 to 720)",
+    "exports.f-credential-type": "Credential type",
+    "exports.cred-entra": "Microsoft Entra certificate",
+    "exports.cred-aws": "AWS IAM Roles Anywhere",
+    "exports.cred-gcp": "Google Cloud service account key",
+    "exports.cred-mtls": "Client certificate (mTLS)",
+    "exports.cred-token": "Vendor token",
+    "exports.s-traces": "Traces endpoint",
+    "exports.s-metrics": "Metrics endpoint",
+    "exports.s-logs": "Logs endpoint",
+    "exports.s-temporality": "Temporality",
+    "exports.s-delta": "Delta",
+    "exports.s-cumulative": "Cumulative",
+    "exports.s-headers": "Header names, separated by commas",
+    "exports.s-sampling": "Trace sampling, from 0 to 1",
+    "exports.s-index": "Index",
+    "exports.s-sourcetypes": "Source types, separated by commas",
+    "exports.s-dce": "Logs ingestion endpoint",
+    "exports.s-dcr": "DCR immutable ID",
+    "exports.s-stream": "Stream",
+    "exports.s-events": "Events, separated by commas (audit, security, relays)",
+    "exports.m-token": "Token",
+    "exports.m-cert": "Certificate (PEM)",
+    "exports.m-key": "Private key (PEM)",
+    "exports.m-ca": "CA certificate (PEM, optional)",
+    "exports.m-chain": "Chain (PEM, optional)",
+    "exports.m-key-json": "Service account key (JSON)",
+    "exports.m-tenant": "Tenant ID",
+    "exports.m-client-id": "Application (client) ID",
+    "exports.m-cloud": "Cloud",
+    "exports.m-cloud-public": "Public",
+    "exports.m-cloud-usgov": "US Government",
+    "exports.m-trust-anchor": "Trust anchor ARN",
+    "exports.m-profile": "Profile ARN",
+    "exports.m-role": "Role ARN",
+    "exports.m-region": "Region",
+    "exports.check-name": "Write a name.",
+    "exports.check-endpoint": "The endpoint address must start with https://.",
+    "exports.check-material": "Fill in every field the credential needs.",
+    "exports.failover": "Failover credentials",
+    "exports.failover-help": "Relays use these only when they cannot reach the console.",
+    "exports.col-public-id": "Public ID",
+    "exports.col-valid-from": "Valid from",
+    "exports.fo-pending": "Pending",
+    "exports.fo-armed": "Armed",
+    "exports.fo-deleted": "Deleted",
+    "exports.fo-csr": "Request CSR",
+    "exports.fo-install": "Install",
+    "exports.fo-csr-shown": "Register this certificate request with the tool, then install the certificate it issues.",
+    "exports.fo-download": "Download the PEM",
+    "exports.fo-days": "Days until it ends (1 to 90)",
+    // API-1 revision 4 13.2 (API-1b8): the client editor's Compliance and Directory sections and the relay set.
+    "api.kind-compliance": "Compliance",
+    "api.f-compliance": "Compliance block (JSON): holds_per_day, or recipient, job_max_bytes, day_max_bytes and jobs_per_day",
+    "api.f-directory": "Directory block (JSON): provider, resource (the SCIM URL) and domains",
+    "api.f-block-keep": "Leave empty to keep it. Write null to remove it.",
+    "api.check-block": "The compliance and directory blocks are JSON objects.",
+    "api.blocks": "Compliance and directory",
+    "api.compliance": "Compliance",
+    "api.compliance-rule": "Exports need 2 archive reviewers; the owner cannot be one.",
+    "api.cap-holds": "Holds a day",
+    "api.cap-jobs": "Exports a day",
+    "api.cap-job-bytes": "Largest export",
+    "api.cap-day-bytes": "Export bytes a day",
+    "api.f-cap-holds": "Holds a day (1 to 100)",
+    "api.f-cap-jobs": "Exports a day (1 to 20)",
+    "api.f-cap-job-mib": "Largest export in MiB (1 to 51200)",
+    "api.f-cap-day-mib": "Export MiB a day (up to 204800)",
+    "api.recipient": "Recipient key",
+    "api.recipient-none": "No recipient key",
+    "api.thumbprint": "Thumbprint (SHA-256)",
+    "api.recipient-set": "Set recipient key",
+    "api.recipient-drop": "Drop recipient key",
+    "api.caps-set": "Change export limits",
+    "api.f-recipient": "Public key (JWK or PEM, EC P-256)",
+    "api.check-recipient": "Paste a public EC P-256 key as a JWK or a PEM.",
+    "api.check-caps": "Each limit is a whole number in its range.",
+    "api.meet-ca": "Meet CA fingerprint (SHA-256) for compliance tools to pin",
+    "api.directory": "Directory",
+    "api.dir-provider": "Identity provider",
+    "api.dir-scim": "SCIM URL",
+    "api.dir-domains": "Domains",
+    "api.dir-tenant": "Tenant",
+    "api.dir-audience": "Audience",
+    "api.dir-azp": "Authorized party",
+    "api.dir-paste": "Paste these into Entra (Provisioning, Admin credentials), then use Test Connection:",
+    "api.dir-client-id": "Client ID",
+    "api.dir-token-url": "Token URL",
+    "api.relay-set": "Relays of this organization",
+    "api.col-connected": "Connected",
+    "api.col-features": "Reports",
+    "api.col-lacks": "Lacks",
+    "api.lacks-none": "Nothing",
+    "api.not-reported": "Not reported yet",
+    "api.retire": "Retire",
+    "api.outdated": "Some relays of this organization do not support what its map needs. Update them, or retire a relay that no longer serves it.",
+    // API-1 revision 5 14.2 (API-1c7): connectors, identity providers (EMA), the client editor's Content and Delegation, and People.
+    "api.kind-app": "App",
+    "api.kind-agent": "Agent",
+    "api.kind-agent-delegated": "Delegated agent",
+    "api.connectors": "Connectors",
+    "api.connectors-help": "A connector reads and posts conversations for the organization's api apps, on its own host. Clients reach conversations only through a connector.",
+    "api.conn-add": "Add connector",
+    "api.conn-no-apps": "This console holds no verified policy listing api apps of this organization, so no connector can be added yet. Add an api app to the organization policy from a Hub first.",
+    "api.col-apps": "Apps",
+    "api.col-conversations": "Conversations",
+    "api.col-sync-age": "Sync age",
+    "api.col-key-store": "Key store",
+    "api.sync-age": "<n> seconds ago",
+    "api.shown-stale": "Stale",
+    "api.shown-never-synced": "Never synced",
+    "api.change": "Change",
+    "api.f-conn-origin": "Origin with its port; it must start with https://",
+    "api.f-conn-apps": "Apps (the api apps of the organization policy)",
+    "api.f-conn-stale": "Seconds without a full sync before it is stale (30 to 300)",
+    "api.check-conn": "Write a name, an origin with its port, 1 to 16 apps and a stale time from 30 to 300 seconds.",
+    "api.idps": "Identity providers (EMA)",
+    "api.idps-help": "Enterprise-managed sign-in: an identity provider such as Okta gives an AI app a signed assertion for a person, and this console trades it for a token that acts as that person.",
+    "api.idp-add": "Add identity provider",
+    "api.idp-test": "Test",
+    "api.col-provider": "Provider",
+    "api.col-issuer": "Issuer",
+    "api.col-algs": "Algorithms",
+    "api.col-max-age": "Longest assertion (seconds)",
+    "api.col-auth-max": "Oldest sign-in (seconds)",
+    "api.col-private": "Private addresses",
+    "api.col-last-test": "Last test",
+    "api.col-keys": "Keys",
+    "api.f-issuer": "Issuer, exactly as the identity provider signs it; it must start with https://",
+    "api.f-algs": "Signing algorithms",
+    "api.f-tenant": "Tenant (optional; when set, each assertion's tenant must equal it)",
+    "api.f-max-age": "Longest assertion lifetime in seconds (60 to 600)",
+    "api.f-auth-max": "Oldest sign-in accepted, in seconds (300 to 86400)",
+    "api.check-idp": "Write a name, pick at least one algorithm, keep the ages in their ranges, and give an issuer; it must start with https://.",
+    "api.check-idp-change": "Pick at least one algorithm and keep the ages in their ranges.",
+    "api.idp-tested": "Test result",
+    "api.idp-jwks": "Key set address",
+    "api.col-kid": "Key id",
+    "api.col-alg": "Algorithm",
+    "api.col-kty": "Key type",
+    "api.providers": "Sign-in providers of this organization",
+    "api.providers-help": "The identity providers of the organization's signed policy. Set the SSO URL of each provider people sign in with, then copy the return address into the SSO service's sso.json as api_return.",
+    "api.col-sso-url": "SSO URL",
+    "api.not-set": "Not set",
+    "api.sso-set": "Set SSO URL",
+    "api.f-sso-url": "The SSO service's public address; empty removes it; it must start with https://",
+    "api.check-sso-url": "The SSO URL must start with https://.",
+    "api.api-return": "api_return for sso.json",
+    "api.api-return-none": "The return address comes from the console's issuer URL, which is not set yet.",
+    "api.f-content-only": "For kinds App, Agent and Delegated agent.",
+    "api.f-connectors": "Connectors it reaches",
+    "api.f-apps": "Apps whose conversations it reads or posts in",
+    "api.f-channels": "Conversations",
+    "api.channels-all": "All conversations these apps are in",
+    "api.channels-list": "Only the conversations listed below",
+    "api.f-channel-ids": "Conversation ids, one per line",
+    "api.f-confirm": "Ask a person before posting",
+    "api.confirm-forced": "Always on for a delegated agent, and for an agent that both reads and posts.",
+    "api.check-content": "A content client needs 1 to 4 connectors, 1 to 16 of their apps, and its conversations.",
+    "api.f-delegation-only": "For kind Delegated agent.",
+    "api.f-groups": "Groups whose people may delegate (from Who may use AI)",
+    "api.f-people": "People who may delegate, one email per line",
+    "api.f-denied": "People who may not delegate, one email per line",
+    "api.f-idps": "Identity providers (EMA) it accepts",
+    "api.f-consent-days": "Days a person's consent lasts (1 to 30)",
+    "api.f-redirects": "Redirect URIs, one per line; each must start with https:// or be a loopback address such as 127.0.0.1",
+    "api.f-cimd": "Client ID Metadata Document (CIMD) address; it must start with https://",
+    "api.f-cimd-note": "A new address replaces the client's credentials unless the credentials list above is filled in.",
+    "api.f-loopback": "This app runs on people's computers (loopback only)",
+    "api.loopback-warn": "Lucid cannot check which program on a person's computer receives access. People see this warning before they allow it: This app runs on your own computer. Lucid cannot check which program on this computer receives access. Allow only if you just started this sign-in from this app.",
+    "api.check-delegation": "A delegated agent needs at least one group or person, and consent days from 1 to 30.",
+    "api.check-redirects": "Each redirect URI must start with https:// or be a 127.0.0.1 or ::1 loopback address with a path.",
+    "api.check-cimd": "The CIMD address must start with https://.",
+    "api.content": "Content and delegation",
+    "api.col-connectors": "Connectors",
+    "api.delegation": "Delegation",
+    "api.dlg-groups": "Groups",
+    "api.dlg-people": "People",
+    "api.dlg-denied": "People denied",
+    "api.dlg-idps": "Identity providers",
+    "api.dlg-consent": "Consent days",
+    "api.redirects": "Redirect URIs",
+    "api.loopback": "Runs on people's computers (loopback only)",
+    "api.cimd": "Client ID Metadata Document",
+    "api.people": "People",
+    "api.people-help": "People with a live refresh token family or a delegated token in the last 24 hours.",
+    "api.col-person": "Person",
+    "api.col-grant": "Grant",
+    "api.col-first-use": "First use",
+    "api.col-last-use": "Last use",
+    "api.revoked": "Revoked",
+    "api.revoke": "Revoke",
+    "api.revokes": "People who stopped or were revoked",
+    "api.revokes-help": "These people may not delegate to the client again until an admin allows them. Allow again is staged, and a second admin must approve the save.",
+    "api.allow": "Allow again",
+    "api.revoke-all": "Revoke for every client",
+    "api.all-clients": "All delegated clients",
+    "api.approvals": "Approvals",
+    "api.approvals-help": "Posts people approved or declined on their devices, from the connectors' audit chains. No text is shown.",
+    "api.col-approval": "Approval",
+    "api.col-result": "Result",
+    "api.col-app": "App",
+    // API-1 revision 6 7.14 (API-1d5): the Agents and Remote Spokes tabs, the Tasks list, the client editor's service
+    // hub and agent fields, the partner card check and the partner hand-off (7.1.2 R6-12).
+    "api.tabs": "API access sections",
+    "api.tab-general": "Clients and settings",
+    "api.tab-agents": "Agents",
+    "api.tab-spokes": "Remote Spokes",
+    "api.agents": "Agents",
+    "api.agents-help": "Each agent publishes a signed A2A Agent Card built from the signed map. Partners reach it through a connector, and a person at your organization approves each task on Remote Spokes.",
+    "api.agent-add": "Add agent",
+    "api.agents-url": "Agent list",
+    "api.col-version": "Version",
+    "api.col-connector": "Connector",
+    "api.col-hub": "Service hub",
+    "api.col-skills": "Skills",
+    "api.col-card": "Card",
+    "api.card-served": "Served",
+    "api.card-unsigned": "Not signed",
+    "api.card-off": "Off",
+    "api.card-not-pinned": "Not in a signed map",
+    "api.card-url": "Card URL",
+    "api.card-copy-url": "Copy card URL",
+    "api.card-signed": "Signed <time> with <kids>, map <seq>",
+    "api.card-preview": "Signed card",
+    "api.card-etag": "ETag",
+    "api.skill-dropped": "Dropped",
+    "api.col-targets": "Spokes",
+    "api.col-model": "Model",
+    "api.col-turns": "Turns",
+    "api.col-approve-within": "Approval wait (seconds)",
+    "api.targets-all": "All spokes",
+    "api.f-agent-name": "Name shown on the card (1 to 64 characters)",
+    "api.f-description": "Description (1 to 1024 characters)",
+    "api.f-version": "Version; change it whenever the card changes",
+    "api.f-connector": "Connector",
+    "api.f-hub": "Service hub client",
+    "api.f-provider-org": "Provider organization (optional)",
+    "api.f-provider-url": "Provider URL (optional); it must start with https://",
+    "api.f-doc-url": "Documentation URL (optional); it must start with https://",
+    "api.f-streaming": "Streaming",
+    "api.f-push": "Push notifications",
+    "api.f-skills": "Skills (a JSON list)",
+    "api.f-skills-note": "Each skill has id, name, description, tags, examples, targets (spoke node ids), model (optional), turns (one or many), approve_within_s (300 to 86400) and idle_close_s (optional).",
+    "api.check-agent": "Write a name, a description and a version of letters, digits, dots, plus and minus signs, pick a connector and a service hub, and give addresses that start with https://.",
+    "api.check-skills": "Skills must be a list of 1 to 16 skills, each with an id of lowercase letters, digits and dashes, a name, a description, 1 to 8 tags, 1 to 64 spokes, turns one or many, and an approval wait from 300 to 86400 seconds.",
+    "api.refusal-card-version": "Change the agent's version: its card changes with this save.",
+    "api.refusal-well-known-taken": "Another organization on this console already publishes the root agent card.",
+    "api.refusal-card-unsigned": "No card key is inside its window. Make a card key and save the map.",
+    "api.a2a-second": "These changes need a second admin:",
+    "api.two-a2a-client": "Adds a service hub client, gives a client spokes.tasks.submit, or widens such a client",
+    "api.two-a2a-private": "Lets pushes or partner card fetches reach private addresses",
+    "api.two-a2a-agent": "Adds an agent, a skill or a target, or allows a longer approval wait",
+    "api.two-well-known": "Publishes an agent at this console's root well-known address",
+    "api.card-keys": "Card keys",
+    "api.card-keys-help": "Each card is signed with every card key inside its window. The private keys are made and sealed on this console and never leave it.",
+    "api.card-key-new": "Make a card key",
+    "api.card-key-drop": "Drop key",
+    "api.draft-keys": "Card keys in the staged changes",
+    "api.col-thumbprint": "Thumbprint",
+    "api.col-sealed": "Sealed here",
+    "api.key-active": "Active",
+    "api.key-pending": "Not yet in force",
+    "api.key-expired": "Ended",
+    "api.key-dropped": "Dropped",
+    "api.well-known": "Root well-known card",
+    "api.well-known-help": "One agent may be published at this console's root address: <url>",
+    "api.well-known-none": "No agent",
+    "api.well-known-set": "Choose the root agent",
+    "api.f-well-known": "Agent published at the root address",
+    "api.tasks": "Tasks",
+    "api.tasks-help": "Task metadata from the connectors' audit chains this console holds. No text is shown.",
+    "api.filter-all": "All",
+    "api.col-task": "Task",
+    "api.col-agent": "Agent",
+    "api.col-skill": "Skill",
+    "api.col-spoke": "Spoke",
+    "api.col-created": "Created",
+    "api.col-updated": "Updated",
+    "api.col-bytes-in": "Bytes in",
+    "api.col-bytes-out": "Bytes out",
+    "api.spokes": "Remote Spokes",
+    "api.spokes-help": "Spokes relays bound to this organization enforce its map for service hubs. Each needs the same organization root as this console.",
+    "api.console-root": "This console's Remote Spokes root",
+    "api.map-root": "Root in the signed map",
+    "api.draft-root": "Root in the staged changes",
+    "api.root-none": "None",
+    "api.root-set": "Set root",
+    "api.bound-relays": "Spokes relays of this organization",
+    "api.col-bound": "Bound",
+    "api.col-listed": "In the signed map",
+    "api.col-staged": "Staged",
+    "api.needs-update": "Needs an update",
+    "api.bind": "Bind",
+    "api.unbind": "Unbind",
+    "api.candidates": "Spokes relays that can be bound",
+    "api.hubs": "Service hubs",
+    "api.col-principal": "Principal",
+    "api.col-node": "Node",
+    "api.col-serial": "Serial",
+    "api.kind-spokes-hub": "Service hub",
+    "api.f-spokes-only": "For kind Service hub.",
+    "api.f-targets": "Spokes it may send to, one node id per line, or * for all",
+    "api.f-node-cert": "Node certificate token from lucid-spoke root approve --service (empty keeps the credentials)",
+    "api.f-key-store": "Where the node key is kept",
+    "api.key-store-os-store": "Operating system store",
+    "api.key-store-pkcs11": "PKCS#11 hardware module",
+    "api.key-store-azure-key-vault": "Azure Key Vault",
+    "api.key-store-tpm": "TPM",
+    "api.check-spokes-hub": "A service hub needs exactly the scope spokes.tasks.submit, its spokes, and a node certificate.",
+    "api.f-a2a-only": "For kind Agent with the scope spokes.tasks.submit.",
+    "api.f-a2a-agents": "Agents it may use",
+    "api.f-a2a-skills": "Skills, one agent id/skill id per line, or * for all",
+    "api.f-max-tasks": "Most open tasks at once (1 to 256)",
+    "api.f-push-origins": "Push origins, one https origin per line (empty: no pushes)",
+    "api.f-push-cidrs": "Private networks pushes may reach, one CIDR per line",
+    "api.f-card-url": "Partner card URL (optional); it must start with https://",
+    "api.f-card-jwks": "Partner key set URL the card is checked with; it must start with https://",
+    "api.f-card-cidrs": "Private networks the partner card fetch may reach, one CIDR per line",
+    "api.check-a2a": "An agent with spokes.tasks.submit needs 1 to 16 agents, its skills, 1 to 256 open tasks, https push origins and partner card addresses, and private networks as CIDRs.",
+    "api.partners": "Partner agents",
+    "api.col-max-tasks": "Most open tasks",
+    "api.push-origins": "Push origins",
+    "api.partner-card": "Partner card",
+    "api.partner-unchecked": "Not checked yet",
+    "api.partner-verified": "Verified",
+    "api.partner-invalid": "Did not verify",
+    "api.col-checked": "Checked",
+    "api.col-why": "Why",
+    "api.partner-interfaces": "Interfaces",
+    "api.card-check": "Check now",
+    "api.push-off": "Push off",
+    "api.handoff": "Partner hand-off",
+    "api.handoff-help": "Give the partner this key set address and these key thumbprints when you register them. The partner must pin this key source and verify your cards only with it, and must never follow a card's own jku.",
+    "api.handoff-jwks": "Key set address",
+    "api.handoff-thumbprints": "Key thumbprints",
+    // API-1 revision 5 10.6 and 14.2: Settings > AI > Local MCP.
+    "lmcp.title": "Local MCP",
+    "lmcp.help": "AI apps on people's own computers may use these Hub tools through the person's running Hub. The Hub records each call.",
+    "lmcp.enterprise": "Enterprise only",
+    "lmcp.standard": "Local MCP for the organization's people needs an enterprise license. This relay's license is Standard, so it stays off.",
+    "lmcp.state": "State",
+    "lmcp.classes": "Data classes",
+    "lmcp.tools": "Tools",
+    "lmcp.send": "Allow sending",
+    "lmcp.change": "Change Local MCP",
+    "lmcp.f-enabled": "Local MCP",
+    "lmcp.f-classes": "Data classes it may return (never CUI)",
+    "lmcp.f-tools": "Tools",
+    "lmcp.f-send": "Allow sending (needs send_message)",
+    "lmcp.check": "Pick at least one tool. Allow sending needs the send_message tool.",
+    // API-1 revision 4 13.2: Exports, webhook destinations, webhook keys and the outbound identity.
+    "exports.cred-none": "None",
+    "exports.cred-entra-fed": "Microsoft Entra federation (no stored secret)",
+    "exports.cred-gcp-fed": "Google Cloud workload identity federation (no stored secret)",
+    "exports.prefer-federation": "Prefer federation: a service account key is a long-lived secret.",
+    "exports.m-audience": "Audience",
+    "exports.m-token-audience": "Token audience",
+    "exports.m-service-account": "Service account email (optional)",
+    "exports.s-client": "Client whose events it receives",
+    "exports.s-types": "Event types, separated by commas; empty means every type the client may see",
+    "exports.s-signing": "Signing",
+    "exports.s-signing-v2a": "Ed25519 (v2a)",
+    "exports.s-signing-v1": "Shared secret (v1, needs a second admin)",
+    "exports.s-verification": "Endpoint verification",
+    "exports.s-verify-wev": "Verify the endpoint first",
+    "exports.s-verify-none": "Skip it (needs a second admin)",
+    "exports.s-events-stream": "Events stream",
+    "exports.col-events": "Events",
+    "exports.ev-verified": "Verified",
+    "exports.ev-unverified": "Not verified: nothing is sent",
+    "exports.ev-none": "Not checked",
+    "exports.ev-paused": "Paused: events wait for Resume",
+    "exports.ev-at": "Delivered up to <cursor>",
+    "exports.send-test": "Send a test",
+    "exports.verify": "Verify",
+    "exports.verify-ok": "The endpoint passed verification.",
+    "exports.verify-failed": "The endpoint did not pass verification: <why>",
+    "exports.replay": "Replay from",
+    "exports.f-from": "Feed position to replay from; empty means the oldest event kept",
+    "exports.resume": "Resume",
+    "exports.secret": "New v1 secret",
+    "exports.secret-title": "New signing secret for <name>",
+    "exports.secret-once": "Copy this secret into the receiver now. It is shown only once.",
+    "exports.secret-rotate": "Rotate it by <date>.",
+    "webhooks.keys": "Webhook keys",
+    "webhooks.keys-help": "Receivers check v2a signatures with these public keys, also published at <url>.",
+    "webhooks.key-new": "Make a webhook key",
+    "webhooks.col-public": "Public key",
+    "webhooks.drop": "Drop",
+    "webhooks.dropped": "Dropped",
+    "webhooks.in-force": "In force",
+    "federation.title": "Outbound identity",
+    "federation.help": "Destinations sign in to Microsoft Entra or Google Cloud with short tokens this console issues, so no cloud secret is stored.",
+    "federation.none": "No outbound identity is set.",
+    "federation.issuer": "Issuer",
+    "federation.set": "Set the issuer",
+    "federation.f-issuer": "Issuer URL; empty uses this console's front door",
+    "federation.key-new": "Make a federation key",
+    "federation.download": "Download documents",
+    "federation.front-door": "The console's front door serves these documents itself.",
+    "federation.publish": "Publish the discovery document at <discovery> and the key set at <jwks>.",
+    "federation.staged": "The staged documents differ. Publish them before you save a key rotation.",
+    "federation.republished": "Confirm it is gone",
+    "federation.test": "Test exchange",
+    "federation.test-ok": "The exchange worked: <provider> issued a token until <time>.",
+    "federation.test-failed": "The exchange failed: <why>",
+    // API-1 revision 4 13.2: the Compliance page (holds, exports and their reviewers; never content).
+    "compliance.title": "Compliance",
+    "compliance.help": "Holds and exports that compliance tools asked for through the API, with their relay and archive states. Nothing here shows content.",
+    "compliance.holds": "Holds",
+    "compliance.exports": "Exports",
+    "compliance.col-by": "Placed by",
+    "compliance.col-people": "People",
+    "compliance.col-matter": "Matter",
+    "compliance.col-placed": "Placed",
+    "compliance.col-relays": "Relays",
+    "compliance.col-archive": "Archive",
+    "compliance.col-client": "Client",
+    "compliance.col-requested": "Requested",
+    "compliance.col-reviewers": "Reviewers",
+    "compliance.col-size": "Size",
+    "compliance.by-console": "Console admin",
+    "compliance.archive-waiting": "Waiting for a reviewer",
+    "compliance.archive-placed": "Placed",
+    "compliance.archive-declined": "Declined",
+    "compliance.archive-failed": "Failed",
+    "compliance.archive-none": "No archive",
+    "compliance.relay-placed": "Placed",
+    "compliance.relay-released": "Released",
+    "compliance.relay-off": "Holds are off",
+    "compliance.job-waiting": "Waiting for reviewers",
+    "compliance.job-released": "Released",
+    "compliance.job-building": "Building",
+    "compliance.job-transferring": "Transferring",
+    "compliance.job-ready": "Ready to download",
+    "compliance.job-canceled": "Canceled",
+    "compliance.job-expired": "Expired",
+    "compliance.job-failed": "Failed",
+    "compliance.job-refused": "Refused",
+    "compliance.released": "<n> of 2 reviewers released it",
+    "compliance.released-by": "Released by <reviewers>",
+    "compliance.waiting-until": "Ends unreleased on <time>",
+    "compliance.ask-reviewers": "Ask reviewers to open their Lucid Hub. Each reviewer releases an export there, on their own device; this console cannot release one.",
+    "compliance.cancel": "Cancel export",
+    "compliance.storage-low": "The console has less than 10 GiB free, so new exports are refused. Free space on its disk.",
+    "compliance.no-archive": "No archive relay of this organization is known, so exports cannot run.",
+    // API-1 revision 4 13.2: the Directory card of the People page.
+    "directory.title": "Directory",
+    "directory.governed": "Governed: identity providers provision people through API clients, and a relay checks and audits every SCIM request.",
+    "directory.legacy": "Legacy: identity providers provision people with the relays' own SCIM tokens.",
+    "directory.clients": "SCIM clients",
+    "directory.col-last": "Last request",
+    "directory.col-requests": "Requests",
+    "directory.col-refused": "Refused",
+    "directory.refusals": "Refusals: <list>",
+    "directory.tokens": "Legacy SCIM tokens",
+    "directory.col-issued": "Issued",
+    "directory.col-networks": "Address list",
+    "directory.pre-r4d3": "Made before the upgrade",
+    "directory.pre-r4d3-help": "Tokens made before the upgrade end 90 days after it and keep working from any address until then if they had no address list.",
+    "directory.any-address": "Any address until it ends",
+    "directory.pending": "Group confirmations waiting",
+    "directory.pending-help": "Memberships a SCIM client made stay pending until the directory reader confirms them.",
+    "directory.col-group": "Group",
+    "directory.col-since": "Waiting since",
+    "directory.not-reported": "The relays do not report these yet: <list>.",
+    "directory.owner-gone": "Owners who left with API clients",
+    "directory.col-clients": "Clients",
+    // API-1d6 (r6 8.11): Settings > AI > Tools (MCP).
+    "mcp.title": "Tools (MCP)",
+    "mcp.help": "The AI gateways may call these MCP servers' read tools while answering a person who turned on organization tools for that request. Each call uses the gateway's own credential, not the person's.",
+    "mcp.readers": "Tools can be staged once the Enterprise edition is installed, every Meeting Hub and iPhone app is at <version> or later and every AI gateway reads MCP servers.",
+    "mcp.servers": "MCP servers",
+    "mcp.staged": "Staged MCP servers (saved with the AI settings)",
+    "mcp.none": "No MCP server is listed.",
+    "mcp.add": "Add an MCP server",
+    "mcp.stage": "Stage",
+    "mcp.update": "Change",
+    "mcp.server-off": "Turn off this server",
+    "mcp.off": "Turn off all tools",
+    "mcp.credential": "Credential",
+    "mcp.test": "Test",
+    "mcp.col-url": "Address",
+    "mcp.col-ceiling": "Highest data class",
+    "mcp.col-groups": "Groups",
+    "mcp.col-activities": "Activities",
+    "mcp.col-tools": "Tools",
+    "mcp.col-credential": "Credential",
+    "mcp.col-ends": "Credential ends",
+    "mcp.col-gateway": "Gateway",
+    "mcp.col-action": "Action",
+    "mcp.col-target": "Target",
+    "mcp.col-when": "When",
+    "mcp.col-state": "State",
+    "mcp.offered": "Offered",
+    "mcp.not-offered": "Not offered (<why>)",
+    "mcp.risk": "The gateway calls <server> with its own credential, not the person's: any member of <groups> may reach, through the model, everything that credential can read, even records the source system would not show them.",
+    "mcp.statement": "Every member of <groups> may read everything the <scope> credential of <server> can read.",
+    "mcp.scope-mtls": "client certificate",
+    "mcp.attest": "Attestation",
+    "mcp.attest-help": "You and the second admin you name state this. The save that carries it must be requested and approved by you two.",
+    "mcp.attest-by": "Attested by <by> on <date>",
+    "mcp.second": "Second admin who attests (their email)",
+    "mcp.second-help": "Needed to add a server, or when a change adds a group or tool, approves a changed tool, raises the ceiling, changes the address, scope or credential, or allows a private address.",
+    "mcp.journal": "Turned off at once",
+    "mcp.journal-none": "Nothing is turned off.",
+    "mcp.active": "In force",
+    "mcp.done": "No longer in force",
+    "mcp.gateways": "Gateways",
+    "mcp.applied": "Applied",
+    "mcp.not-applied": "Not yet applied",
+    "mcp.waiting": "Not yet applied: <n> changes wait. The console sends them again every minute.",
+    "mcp.gateway-error": "Did not answer: <why>",
+    "mcp.expires-soon": "The credential of <server> ends in <days> days.",
+    "mcp.expired": "The credential of <server> has ended. Its tools are not offered.",
+    "mcp.tool-changed": "The tool <tool> of <server> changed on <gateway>. It is not offered until an admin approves the new hash.",
+    "mcp.tool-approve": "Approve the new hash",
+    "mcp.f-id": "Server id (m_ and 16 hex digits)",
+    "mcp.f-name": "Name",
+    "mcp.f-url": "MCP endpoint address; it must start with https://",
+    "mcp.f-ceiling": "Highest data class it may see",
+    "mcp.f-private": "Allow a private network address",
+    "mcp.f-groups": "Groups, one per line (from Who may use AI)",
+    "mcp.f-activities": "Activities, separated by commas (search, catch_up, notes, summary, brief, assist)",
+    "mcp.f-auth": "Credential type",
+    "mcp.auth-jwt": "OAuth with a signed key (private_key_jwt)",
+    "mcp.auth-mtls": "OAuth with a client certificate",
+    "mcp.auth-mtls-only": "Client certificate only (in-house servers)",
+    "mcp.f-issuer": "Authorization server issuer; it must start with https://",
+    "mcp.f-client-id": "Client ID",
+    "mcp.f-scope": "Scope",
+    "mcp.f-kids": "Key ids, one per line: gateway principal = key id",
+    "mcp.f-expires": "Credential ends (YYYY-MM-DD, at most 366 days ahead)",
+    "mcp.f-ca": "Server CA certificate (PEM, optional)",
+    "mcp.f-tools": "Tools (JSON, filled from Test)",
+    "mcp.f-max-calls": "Tool calls per request (1 to 8)",
+    "mcp.f-args-max": "Argument bytes per call (256 to 16384)",
+    "mcp.f-result-max": "Result bytes per call (1024 to 262144)",
+    "mcp.f-clear": "Journal ids to clear, one per line (optional)",
+    "mcp.f-op": "What to do",
+    "mcp.op-key": "Make a signing key on every gateway",
+    "mcp.op-csr": "Make a certificate request on every gateway",
+    "mcp.op-cert": "Install a certificate on one gateway",
+    "mcp.f-cert": "Certificate (PEM)",
+    "mcp.f-chain": "Chain (PEM, optional)",
+    "mcp.answers": "Gateway answers",
+    "mcp.answer-kid": "Key id <kid>: register this public key with the authorization server.",
+    "mcp.answer-csr": "Have this certificate request issued, then install the certificate.",
+    "mcp.answer-cert": "Installed. The certificate ends on <date>.",
+    "mcp.tested": "Tools the server lists",
+    "mcp.use-tools": "Use these tools",
+    "mcp.journaled": "<n> changes were turned off at once on every gateway.",
+    "mcp.dlg-add": "Add the MCP server <server> to the staged AI settings?",
+    "mcp.dlg-add-body": "It is saved with the AI settings. The save is signed from your device once the second admin approves it.",
+    "mcp.dlg-update": "Change the MCP server <server>?",
+    "mcp.dlg-update-body": "Narrowing changes reach every gateway at once. Widening changes wait for the signed save.",
+    "mcp.dlg-server-off": "Turn off the MCP server <server> on every gateway?",
+    "mcp.dlg-server-off-body": "Gateways stop offering its tools at once. Only a newer signed AI map that clears this turns it back on.",
+    "mcp.dlg-off": "Turn off all MCP tools of <org>?",
+    "mcp.dlg-off-body": "Every gateway stops offering MCP tools at once. Only a newer signed AI map that clears this turns them back on.",
+    "mcp.dlg-credential": "Change the credential of <server>?",
+    "mcp.dlg-credential-body": "Each gateway makes its own key; the private key never leaves it.",
+    "mcp.dlg-test": "Test the MCP server <server>?",
+    "mcp.dlg-test-body": "A gateway connects to the server, signs in with its credential and lists its tools.",
     "local.title": "Lucid Admin Console",
     "local.join": "Join a console",
     "local.read-only": "Read only from the console",
@@ -632,6 +1349,19 @@
     "attention.relay-cert-expired": "The management certificate of <relay> has ended. Enroll it again with Replace.",
     "attention.relay-left": "<relay> left the console.",
     "attention.relay-flapping": "Two machines are connecting as <relay>. Its key may have been copied.",
+    "attention.export-audit-backlog": "Audit records of <org> are waiting to reach <destination>. They are kept until it takes them.",
+    "attention.failover-credential-expiring": "The failover credential of <destination> on <relay> ends in <days> days. Install a new one.",
+    "attention.failover-credential-expired": "The failover credential of <destination> on <relay> has ended. The relay no longer uses it.",
+    // API-1 revision 4: the attention items of slices 1b1, 1b3, 1b5, 1b6 and 1b7.
+    "attention.relay-outdated": "<relay> does not support what the API map of <org> needs (<needs>). Update it, or retire it from the organization.",
+    "attention.api-owner-gone": "<principal> left <org> but still owns <n> API clients. Give them a new owner or delete them.",
+    "attention.federation-jwks-republish": "The federation key <kid> of <org> was dropped. Remove it from every key set you host or uploaded, then confirm it on Exports.",
+    "attention.webhook-paused": "Events to <destination> of <org> are paused after failing too long. Nothing was dropped; fix the receiver, then Resume.",
+    "attention.webhook-key-dropped": "The webhook key <kid> of <org> was dropped. Tell receivers, then save a map without it.",
+    // API-1 revision 6 7.1.2 and 7.13.
+    "attention.a2a-card-key-missing": "The agent <agent> of <org> has no card key inside its window, so its card is not served. Make a card key and save the map.",
+    "attention.a2a-partner-card-invalid": "The partner card of client <client> of <org> did not verify: <why>",
+    "attention.export-storage": "The console has less than 10 GiB free, so compliance exports of <org> are refused. Free space on its disk.",
     "attention.relay-read-only": "<relay> is read only from the console.",
     "attention.relay-confirm-waiting": "<n> changes wait for the operator of <relay>.",
     "attention.relay-scopes-pending": "<relay> has not accepted the scopes you asked for yet.",
@@ -837,6 +1567,75 @@
     "meet-ca-revoke": { title: "Revoke certificate <serial>?", body: "Relays refuse it once they get the new revocation list.", button: "Revoke" },
     "meet-ca-remove": { title: "Remove the CA from this console?", body: "The sealed key is wiped. The last revocation list is valid until <date>; after that, relays that trust this CA refuse everyone unless another signer renews it.", button: "Remove CA" },
     "spokes-root": { title: "Use root <id> for new Remote Spokes relays?", body: "Relays this console installs trust it only when it matches their license.", button: "Save" },
+    // API-1 7.3 (API-1a6)
+    "api-client": { title: "Stage the client <name>?", body: "It joins the next API map. Nothing changes on relays until the map is saved and signed.", button: "Stage" },
+    "api-client-update": { title: "Stage changes to <name>?", body: "Removals apply on relays at once. The rest waits for the next signed map.", button: "Stage" },
+    "api-client-suspend": { title: "Suspend <name>?", body: "Relays refuse it at once. Resuming it needs a signed map.", button: "Suspend" },
+    "api-client-resume": { title: "Resume <name>?", body: "It works again once the next map is signed.", button: "Resume" },
+    "api-client-delete": { title: "Delete <name>?", body: "Relays refuse it at once, and the next map leaves it out.", button: "Delete" },
+    "api-secret": { title: "Make a new secret for <name>?", body: "The secret is shown once. It works for <days> days once the next map is signed. Saving needs a second admin.", button: "Make secret" },
+    "api-revoke-tokens": { title: "Revoke the tokens of <name>?", body: "Relays refuse every access token it holds now. It can ask for new ones.", button: "Revoke" },
+    "api-scrape-token": { title: "Create a relay scrape token for <label>?", body: "The token is shown once. It reads health metrics of <relays> for <days> days once the next map is signed.", button: "Create" },
+    "api-scrape-delete": { title: "Delete the scrape token <hint>?", body: "Relays refuse it at once.", button: "Delete" },
+    "api-grace": { title: "Stage grace hours for <org>?", body: "Lowering a value applies on relays at once. Raising one waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-off": { title: "Turn off the API for <org>?", body: "Every API client and scrape token of this organization is refused at once. Exports continue.", button: "Turn off" },
+    "api-on": { title: "Turn the API back on for <org>?", body: "It works again once the next map is signed. Saving needs a second admin.", button: "Stage" },
+    "api-undo": { title: "Undo <change>?", body: "It is undone once the next map is signed.", button: "Stage" },
+    "api-origin": { title: "Set the API origin of <relay>?", body: "API clients reach this relay at this origin once the next map is signed.", button: "Stage" },
+    "api-discard": { title: "Discard the staged changes for <org>?", body: "Changes already applied on relays stay as they are.", button: "Discard" },
+    "api-save": { title: "Save the API settings of <org>?", body: "Your Hub device signs the new map, then the console sends it to the organization's relays.", button: "Save" },
+    "api-signing-cancel": { title: "Cancel the signing for <org>?", body: "The Hub device is no longer asked to sign this map, and nothing is sent to the relays.", button: "Cancel signing" },
+    "dest-add": { title: "Stage the destination <name>?", body: "It joins the next API map. Test it before you save.", button: "Stage" },
+    "dest-update": { title: "Stage changes to the destination <name>?", body: "Removals apply on relays at once. Test it again before you save.", button: "Stage" },
+    "dest-delete": { title: "Delete the destination <name>?", body: "Relays stop sending to it at once and delete its queues and failover credentials.", button: "Delete" },
+    "dest-credential": { title: "Set the credential of <name>?", body: "It is sealed on this console and never shown again.", button: "Set" },
+    "dest-siem": { title: "Copy the SIEM settings into a destination for <org>?", body: "The SIEM export keeps running until you turn it off.", button: "Copy" },
+    "failover-csr": { title: "Ask <relay> for a certificate request?", body: "The relay makes the key and keeps it. Register the request with the tool, then install the certificate.", button: "Ask" },
+    "failover-install": { title: "Install the failover credential of <name> on <relay>?", body: "The relay seals it and uses it only when it cannot reach the console.", button: "Install" },
+    "failover-delete": { title: "Delete the failover credential of <name> on <relay>?", body: "The relay deletes it and stops failover delivery for this destination.", button: "Delete" },
+    // API-1 revision 4 13.2 (API-1b8).
+    "api-recipient": { title: "Set the recipient key of <name>?", body: "Exports are sealed to this key. Saving needs a second admin.", button: "Stage" },
+    "api-caps": { title: "Change the export limits of <name>?", body: "Lowering a limit applies at once. Raising one waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-recipient-drop": { title: "Drop the recipient key of <name>?", body: "Exports stop at once and ready ones are deleted. A new key needs a signed map.", button: "Drop" },
+    "api-retire": { title: "Retire <relay> from <org>?", body: "It leaves this organization's relay set. If it reports the organization again, it rejoins.", button: "Retire" },
+    "compliance-cancel": { title: "Cancel the export <job>?", body: "It ends at once and its parts are deleted. The client must ask again.", button: "Cancel export" },
+    "webhook-key": { title: "Make a webhook key for <org>?", body: "The private key is made and sealed on this console. Its public key joins the next signed map.", button: "Make key" },
+    "webhook-key-drop": { title: "Drop the webhook key <kid>?", body: "Signatures with it stop at once. Tell receivers before the next map leaves it out.", button: "Drop" },
+    "dest-secret": { title: "Make a new v1 secret for <name>?", body: "The secret is shown once. A webhook not yet on v1 moves to it with the next signed map, which needs a second admin.", button: "Make secret" },
+    "dest-replay": { title: "Send the events of <name> again?", body: "Events from the position you give are sent again. Receivers drop repeats by webhook-id.", button: "Replay" },
+    "dest-resume": { title: "Resume events to <name>?", body: "Delivery goes on from where it paused. Nothing was dropped.", button: "Resume" },
+    "federation-issuer": { title: "Set the outbound identity of <org>?", body: "It joins the next signed map. The first key is made and sealed on this console.", button: "Stage" },
+    "federation-key": { title: "Make a federation key for <org>?", body: "The private key never leaves this console. It signs 24 hours after the next signed map lists it.", button: "Make key" },
+    "federation-key-drop": { title: "Drop the federation key <kid>?", body: "This console stops signing with it at once and the key sets leave it out. Remove it from any key set you host or uploaded.", button: "Drop" },
+    "federation-republished": { title: "Confirm the key <kid> is gone from hosted key sets?", body: "Confirm only once every key set you host or uploaded no longer lists it.", button: "Confirm" },
+    // API-1 revision 5 14.2 (API-1c7).
+    "api-connector": { title: "Stage the connector <name>?", body: "It joins the next API map. Saving needs a second admin.", button: "Stage" },
+    "api-connector-update": { title: "Change the connector <name>?", body: "Removing an app or narrowing its networks applies at once. Adding an app, wider networks or a longer stale time waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-connector-suspend": { title: "Suspend the connector <name>?", body: "Clients are refused through it at once. Resuming it needs a signed map and a second admin.", button: "Suspend" },
+    "api-connector-resume": { title: "Resume the connector <name>?", body: "It works again once the next map is signed. Saving needs a second admin.", button: "Resume" },
+    "api-connector-delete": { title: "Delete the connector <name>?", body: "Clients are refused through it at once, and the next map leaves it out, also from every client that lists it.", button: "Delete" },
+    "api-idp": { title: "Stage the identity provider <name>?", body: "It joins the next API map. Saving needs a second admin.", button: "Stage" },
+    "api-idp-update": { title: "Change the identity provider <name>?", body: "Narrowing applies at once. Widening (another algorithm, a longer age, a removed or changed tenant, private addresses) waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-idp-test": { title: "Test the identity provider <name>?", body: "The console fetches its discovery document and key set now and shows what it found. Nothing is kept but the time and the number of keys.", button: "Test" },
+    "api-idp-suspend": { title: "Suspend the identity provider <name>?", body: "Its assertions are refused at once. Resuming it needs a signed map and a second admin.", button: "Suspend" },
+    "api-idp-resume": { title: "Resume the identity provider <name>?", body: "Its assertions work again once the next map is signed. Saving needs a second admin.", button: "Resume" },
+    "api-sso-url": { title: "Set the SSO URL of <provider>?", body: "People who sign in to an AI app through this provider are sent to this address.", button: "Set" },
+    "api-delegation-revoke": { title: "Revoke <principal> for <name>?", body: "The person's tokens end at once, and the person may not delegate again until an admin allows it.", button: "Revoke" },
+    "api-delegation-revoke-all": { title: "Revoke <principal> for every delegated client?", body: "The person's tokens for every delegated client end at once, and the person may not delegate to any of them until an admin allows it.", button: "Revoke" },
+    "api-delegation-allow": { title: "Allow <principal> to delegate to <name> again?", body: "It is staged, and a second admin must approve the save before it applies.", button: "Stage" },
+    "local-mcp": { title: "Stage Local MCP for <org>?", body: "It is saved with the AI settings, signed from your device.", button: "Stage" },
+    // API-1 revision 6 7.14 (API-1d5).
+    "api-agent": { title: "Stage the agent <name>?", body: "It joins the next API map, and its card is signed once the map is saved. Saving needs a second admin.", button: "Stage" },
+    "api-agent-update": { title: "Change the agent <name>?", body: "Removing a skill applies at once. Adding a skill or a spoke, or a longer approval wait, waits for the next signed map and needs a second admin.", button: "Stage" },
+    "api-agent-delete": { title: "Delete the agent <name>?", body: "Its card and new tasks are refused at once, and the next map leaves it out, also from every client that lists it.", button: "Delete" },
+    "api-a2a-key": { title: "Make a card key for <org>?", body: "The private key is made and sealed on this console. Its public key joins the next signed map, and cards are signed with it from then on.", button: "Make key" },
+    "api-a2a-key-drop": { title: "Drop the card key <kid>?", body: "Cards stop being signed with it at once. A card with no other key is not served until a new key is in a signed map.", button: "Drop" },
+    "api-well-known": { title: "Choose the root agent card of <org>?", body: "The chosen agent is published at this console's root well-known address once the next map is signed. Saving needs a second admin.", button: "Stage" },
+    "api-spokes-bind": { title: "Bind <relay> to <org>?", body: "The relay joins the organization's spokes relays and receives its map. Saving needs a second admin.", button: "Bind" },
+    "api-spokes-unbind": { title: "Unbind <relay> from <org>?", body: "The relay stops serving this organization's service hubs once it drops the map.", button: "Unbind" },
+    "api-spokes-root": { title: "Set the Remote Spokes root of <org>?", body: "This console's Remote Spokes root <root> joins the next signed map. Spokes relays take the map only when their root matches.", button: "Stage" },
+    "api-push-off": { title: "Turn off pushes to <name>?", body: "Push notifications to this partner stop at once, and the next map leaves its push origins out.", button: "Push off" },
+    "api-card-check": { title: "Check the partner card of <name> now?", body: "The console fetches the partner's card and verifies it with the key set you pinned, never with the card's own jku.", button: "Check" },
   };
   // An AC-1-shaped dialog spec (title, body lines, buttons) from a fleet dialog.
   const fspec = (k) => ({ title: FD[k].title, body: [FD[k].body], button: [FD[k].button] });
@@ -851,7 +1650,7 @@
     { id: "nav.license", route: "license", pages: [] },
     { id: "nav.sign-in", route: "sign-in", pages: [] },
     { id: "nav.email", route: "email", pages: [] },
-    { id: "nav.security", route: "security", pages: [["approvals", "Approvals"], ["requests", "Requests"], ["audit", "Audit log"], ["settings", "Security settings"], ["exports", "Exports"]] },
+    { id: "nav.security", route: "security", pages: [["approvals", "Approvals"], ["requests", "Requests"], ["audit", "Audit log"], ["settings", "Security settings"], ["exports", "Exports"], ["api", "API access"], ["compliance", "Compliance"]] },
     { id: "nav.settings", route: "settings", pages: [["console", "Console"], ["setup", "Setup"], ["consoles", "Other consoles"], ["account", "Your account"]] },
   ];
   // Role views (12.4): viewers see health and lists without people and no controls; user managers add People and the
@@ -943,7 +1742,8 @@
     turnOff: "Turn off",
     label: "Label",
     relaysAll: "All relays",
-    daysField: "Days (30 to 365)",
+    daysField: "Days (30 to 90)",
+    olderToken: "Made for more than 90 days, before the limit. Replace it before it ends.",
     codeCopy: "Copy the code",
     commandsCopy: "Copy the command",
     consoleUrl: "Console address",
@@ -1997,7 +2797,19 @@
       if (f.value != null) s.value = f.value;
       s.addEventListener("change", changed);
       getters[f.key] = () => s.value;
-      return el("div", { class: "field" }, el("label", { for: id }, f.label), s);
+      return el("div", { class: "field" }, el("label", { for: id }, f.label), s, f.note ? el("span", { class: "count-note" }, f.note) : null);
+    }
+    if (f.kind === "checks") {
+      // A pick of several from a list (f.options [value, words]); the value is the list of picked values.
+      const boxes = f.options.map(([v, w]) => {
+        const cid = uid("chk");
+        const c = el("input", { id: cid, type: "checkbox", value: v, checked: (f.value || []).includes(v) ? true : null });
+        c.addEventListener("change", changed);
+        return { c, v, label: el("label", { class: "inline", for: cid }, c, clean(w)) };
+      });
+      getters[f.key] = () => boxes.filter((b) => b.c.checked).map((b) => b.v);
+      return el("fieldset", { class: "choice" }, el("legend", null, f.label), boxes.length ? boxes.map((b) => b.label) : el("span", { class: "count-note" }, MSG.noneYet),
+        f.note ? el("span", { class: "count-note" }, f.note) : null);
     }
     if (f.kind === "password") {
       // Passwords are never trimmed; the browser's password manager may fill or save them.
@@ -2072,6 +2884,8 @@
     const s = S.dlg;
     if (!s) return;
     S.dlg = null;
+    // Typed values (credential material among them) leave the page with the dialog.
+    $("confirm-fields").replaceChildren();
     if (s.opener && document.contains(s.opener)) s.opener.focus();
     else {
       const h = $("page-title");
@@ -3584,6 +4398,225 @@
     if (!a.archive && isAdmin()) kids.push(btn(AIW.addArchive, addArchive));
     return panel(AIW.archive, ...kids);
   }
+  // Settings > AI > Tools (MCP) (r6 8.11): the servers with each gateway's state, the journal and whether each gateway
+  // applied it, credentials (8.4) and tests (8.9). Adding or widening a server names a second admin, who must approve the
+  // save that carries the attestation (8.1, 13); turning off reaches every gateway at once (8.2).
+  const MCP = { tested: null, answers: null };
+  const nl = (t) => [...new Set(String(t || "").split("\n").map((x) => x.trim()).filter(Boolean))];
+  function mcpNewId() {
+    const c = typeof crypto !== "undefined" && crypto.getRandomValues ? crypto.getRandomValues(new Uint8Array(8)) : null;
+    return c ? "m_" + Array.from(c, (b) => b.toString(16).padStart(2, "0")).join("") : "";
+  }
+  function mcpServerFrom(v, id) {
+    const auth = { type: v.auth };
+    if (v.auth !== "mtls_only") Object.assign(auth, { issuer: v.issuer, client_id: v.client_id, scope: v.scope });
+    if (v.auth === "oauth_private_key_jwt") {
+      auth.kids = Object.fromEntries(nl(v.kids).map((l) => l.split("=").map((x) => x.trim())).filter((p) => p.length === 2 && p[0] && p[1]));
+    }
+    auth.expires = Math.floor(Date.parse(String(v.expires || "") + "T00:00:00Z") / 1000) || 0;
+    if (v.ca) auth.ca_pem = v.ca;
+    const server = { id, name: v.name, url: v.url, ceiling: v.ceiling, private_ok: v.private === "yes", groups: nl(v.groups), activities: lines(v.activities), auth,
+      max_calls: Number(v.max_calls), args_max: Number(v.args_max), result_max: Number(v.result_max) };
+    if (v.tools !== undefined) server.tools = JSON.parse(v.tools || "[]");
+    return server;
+  }
+  function mcpFields(s, m, withTools) {
+    const a = s.auth || {};
+    const ends = a.expires ? new Date(a.expires * 1000).toISOString().slice(0, 10) : "";
+    const ceilings = m.ceilings || ["public", "internal", "confidential", "cui"];
+    return [
+      { key: "name", label: FW["mcp.f-name"], value: s.name || "", maxlength: "64" },
+      { key: "url", label: FW["mcp.f-url"], value: s.url || "", maxlength: "512" },
+      { kind: "select", key: "ceiling", label: FW["mcp.f-ceiling"], options: ceilings.map((c) => [c, FW["api.ceiling-" + c] || c]), value: s.ceiling || "internal" },
+      { kind: "select", key: "private", label: FW["mcp.f-private"], options: yesNoOptions(), value: s.private_ok ? "yes" : "no" },
+      { kind: "textarea", key: "groups", label: FW["mcp.f-groups"], value: (s.groups || []).join("\n") },
+      { key: "activities", label: FW["mcp.f-activities"], value: (s.activities || ["search"]).join(", ") },
+      { kind: "select", key: "auth", label: FW["mcp.f-auth"], value: a.type || "oauth_private_key_jwt",
+        options: [["oauth_private_key_jwt", FW["mcp.auth-jwt"]], ["oauth_mtls", FW["mcp.auth-mtls"]], ["mtls_only", FW["mcp.auth-mtls-only"]]] },
+      { key: "issuer", label: FW["mcp.f-issuer"], value: a.issuer || "", maxlength: "512" },
+      { key: "client_id", label: FW["mcp.f-client-id"], value: a.client_id || "", maxlength: "256" },
+      { key: "scope", label: FW["mcp.f-scope"], value: a.scope || "", maxlength: "512" },
+      { kind: "textarea", key: "kids", label: FW["mcp.f-kids"], value: Object.entries(a.kids || {}).map(([p, k]) => p + " = " + k).join("\n") },
+      { key: "expires", label: FW["mcp.f-expires"], value: ends, maxlength: "10" },
+      { kind: "textarea", key: "ca", label: FW["mcp.f-ca"], value: a.ca_pem || "" },
+    ].concat(withTools ? [{ kind: "textarea", key: "tools", label: FW["mcp.f-tools"], value: JSON.stringify(s.tools || [], null, 2) }] : []).concat([
+      { key: "max_calls", label: FW["mcp.f-max-calls"], value: s.max_calls || 4, inputmode: "numeric" },
+      { key: "args_max", label: FW["mcp.f-args-max"], value: s.args_max || 4096, inputmode: "numeric" },
+      { key: "result_max", label: FW["mcp.f-result-max"], value: s.result_max || 65536, inputmode: "numeric" },
+    ]);
+  }
+  // The attestation the console pre-fills and the residual risk, live as the form changes (8.1, 8.6).
+  function mcpAttestLines(body, cur) {
+    const groups = nl(cur.groups).join(", ");
+    const scope = cur.auth === "mtls_only" ? FW["mcp.scope-mtls"] : cur.scope || "";
+    return [body, el("p", null, el("strong", null, FW["mcp.attest"] + ": "), fill(FW["mcp.statement"], { groups, scope, server: cur.name || "" })),
+      FW["mcp.attest-help"], fill(FW["mcp.risk"], { server: cur.name || "", groups })];
+  }
+  function mcpCheck(v) {
+    try {
+      JSON.parse(v.tools || "[]");
+      return "";
+    } catch (e) {
+      return MSG.unreadable;
+    }
+  }
+  function mcpAdd(m, s) {
+    const id = s.id || mcpNewId();
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-add"], body: [FW["mcp.dlg-add-body"]], button: [FW["mcp.stage"]] }, vals: { server: s.name || "" }, vals2: (v) => ({ server: v.name || "" }),
+      name: m.org, id: m.org,
+      fields: [{ key: "id", label: FW["mcp.f-id"], value: id }].concat(mcpFields(s, m, true), [{ key: "second", label: FW["mcp.second"], note: FW["mcp.second-help"] }, { kind: "reason" }]),
+      body: (vv, cur) => mcpAttestLines(FW["mcp.dlg-add-body"], cur),
+      check: mcpCheck,
+      run: (v) => post("meet/ai/mcp/servers", { org: m.org, server: mcpServerFrom(v, v.id), second: v.second, reason: v.reason }, { action: "meet.ai.mcp.server", target: m.org }),
+    });
+  }
+  function mcpUpdate(m, s, tools) {
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-update"], body: [FW["mcp.dlg-update-body"]], button: [FW["mcp.stage"]] }, vals: { server: s.name }, name: s.name, id: s.id,
+      fields: mcpFields(tools ? Object.assign({}, s, { tools }) : s, m, true).concat([{ key: "second", label: FW["mcp.second"], note: FW["mcp.second-help"] },
+        { kind: "textarea", key: "clear", label: FW["mcp.f-clear"] }, { kind: "reason" }]),
+      body: (vv, cur) => mcpAttestLines(FW["mcp.dlg-update-body"], cur),
+      check: mcpCheck,
+      run: (v) => {
+        const body = { org: m.org, server: mcpServerFrom(v, s.id), reason: v.reason };
+        if (v.second) body.second = v.second;
+        const clear = nl(v.clear);
+        if (clear.length) body.clear = clear;
+        return post("meet/ai/mcp/servers/update", body, { action: "meet.ai.mcp.update", target: m.org });
+      },
+      done: (r) => render({ keepMessages: true }).then(() => r && (r.journaled || []).length && say(fillText(FW["mcp.journaled"], { n: r.journaled.length }))),
+    });
+  }
+  function mcpServerOff(m, s) {
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-server-off"], body: [FW["mcp.dlg-server-off-body"]], button: [FW["mcp.server-off"]] }, vals: { server: s.name }, name: s.name, id: s.id,
+      danger: true, fields: [{ kind: "reason" }],
+      run: (v) => post("meet/ai/mcp/servers/off", { org: m.org, server: s.id, reason: v.reason }),
+    });
+  }
+  function mcpOff(m) {
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-off"], body: [FW["mcp.dlg-off-body"]], button: [FW["mcp.off"]] }, vals: { org: m.org }, name: m.org, id: m.org,
+      danger: true, fields: [{ kind: "reason" }],
+      run: (v) => post("meet/ai/mcp/off", { org: m.org, reason: v.reason }),
+    });
+  }
+  function mcpCredential(m, s) {
+    const gws = (m.gateways || []).map((g) => [g.url, g.url]);
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-credential"], body: [FW["mcp.dlg-credential-body"]], button: [FW["mcp.credential"]] }, vals: { server: s.name || s.id || "" },
+      vals2: (v) => ({ server: s.name || s.id || v.id || "" }), name: s.name || "", id: s.id || m.org,
+      fields: (s.id ? [] : [{ key: "id", label: FW["mcp.f-id"], value: mcpNewId() }]).concat([
+        { kind: "select", key: "op", label: FW["mcp.f-op"], options: [["key", FW["mcp.op-key"]], ["csr", FW["mcp.op-csr"]], ["cert", FW["mcp.op-cert"]]] },
+        { kind: "select", key: "gateway", label: FW["mcp.col-gateway"], options: gws.length ? gws : [["", ""]] },
+        { kind: "textarea", key: "cert", label: FW["mcp.f-cert"] }, { kind: "textarea", key: "chain", label: FW["mcp.f-chain"] }, { kind: "reason" }]),
+      run: (v) => {
+        const server = s.id || v.id;
+        const body = { org: m.org, server, op: v.op, reason: v.reason };
+        if (v.op === "cert") Object.assign(body, { cert_pem: v.cert, chain_pem: v.chain || "", gateway: v.gateway });
+        return post("meet/ai/mcp/credential", body, { action: "meet.ai.mcp.credential", target: server });
+      },
+      done: (r) => {
+        MCP.answers = r;
+        render({ keepMessages: true });
+      },
+    });
+  }
+  // A test of a listed server, or of a new one from its form (`draft`); the tools come back with their hashes.
+  function mcpTest(m, s) {
+    const fresh = !s;
+    const id = fresh ? mcpNewId() : s.id;
+    confirmDialog({
+      spec: { title: FW["mcp.dlg-test"], body: [FW["mcp.dlg-test-body"]], button: [FW["mcp.test"]] }, vals: { server: fresh ? "" : s.name }, vals2: (v) => ({ server: fresh ? v.name || "" : s.name }),
+      name: fresh ? m.org : s.name, id: fresh ? m.org : s.id,
+      fields: fresh ? [{ key: "id", label: FW["mcp.f-id"], value: id }].concat(mcpFields({}, m, false)) : [],
+      run: (v) => {
+        const body = { org: m.org, server: fresh ? v.id : s.id };
+        if (fresh) body.draft = mcpServerFrom(v, v.id);
+        MCP.draft = fresh ? body.draft : null;
+        return post("meet/ai/mcp/test", body);
+      },
+      done: (r) => {
+        const t = (r && r.test) || {};
+        MCP.tested = { id: (r && r.server) || id, server: MCP.draft || s, tools: (t.tools || []).map((x) => ({ name: x.name, effect: "read", schema_sha256: x.schema_sha256 })), listed: t.tools || [] };
+        render({ keepMessages: true });
+      },
+    });
+  }
+  function mcpAnswer(a) {
+    const who = u(a.gateway + ": ");
+    if (a.error) return el("p", null, who, fillText(FW["mcp.gateway-error"], { why: a.error }));
+    const v = a.answer || {};
+    if (v.jwk) return el("div", null, el("p", null, who, fillText(FW["mcp.answer-kid"], { kid: v.kid || "" })), el("pre", null, u(JSON.stringify(v.jwk, null, 2))), copyButton(JSON.stringify(v.jwk)));
+    if (v.csr_pem) return el("div", null, el("p", null, who, FW["mcp.answer-csr"]), el("pre", null, u(v.csr_pem)), copyButton(v.csr_pem));
+    return el("p", null, who, fillText(FW["mcp.answer-cert"], { date: v.not_after ? whenSec(v.not_after) : "" }));
+  }
+  // One gateway's view of a server: offered or why not, its credential, each tool offered or why not.
+  function mcpGatewayLine(g, s) {
+    if (!g.state) return fillText(FW["mcp.gateway-error"], { why: g.error || "" });
+    const st = (g.state.servers || []).find((x) => x.id === s.id);
+    if (!st) return fillText(FW["mcp.not-offered"], { why: "not-listed" });
+    const head = st.offered ? FW["mcp.offered"] : fillText(FW["mcp.not-offered"], { why: st.error || "" });
+    const c = st.credential || {};
+    const cred = c.state ? [FW["mcp.col-credential"] + ": " + stateWord(c.state), c.kid || "", c.not_after ? whenSec(c.not_after) : ""].filter(Boolean).join(" ") : "";
+    const tools = (st.tools || []).map((t) => t.name + " " + (t.offered ? FW["mcp.offered"] : fillText(FW["mcp.not-offered"], { why: t.why || "" }))).join(", ");
+    return [head, cred, tools].filter(Boolean).join("; ");
+  }
+  function mcpServerBlock(m, s, signed) {
+    const a = s.auth || {};
+    const at = s.attest || {};
+    const rows = [[FW["mcp.col-url"], u(s.url)], [FW["mcp.col-ceiling"], FW["api.ceiling-" + s.ceiling] || s.ceiling], [FW["mcp.col-groups"], (s.groups || []).join(", ")],
+      [FW["mcp.col-activities"], (s.activities || []).join(", ")], [FW["mcp.col-tools"], (s.tools || []).map((t) => t.name).join(", ")],
+      [FW["mcp.col-credential"], a.type || ""], [FW["mcp.col-ends"], a.expires ? whenSec(a.expires) : ""],
+      [FW["mcp.attest"], at.by ? fillText(FW["mcp.attest-by"], { by: (at.by || []).join(", "), date: whenSec(at.at) }) + ". " + (at.statement || "") : ""]];
+    if (signed) for (const g of m.gateways || []) rows.push([FW["mcp.col-gateway"] + " " + g.url, mcpGatewayLine(g, s)]);
+    const acts = isAdmin() ? [btn(FW["mcp.update"], () => mcpUpdate(m, s)), btn(FW["mcp.credential"], () => mcpCredential(m, s)), btn(FW["mcp.test"], () => mcpTest(m, s)),
+      signed ? btn(FW["mcp.server-off"], () => mcpServerOff(m, s), "danger") : null] : [];
+    return sub(s.name + " (" + s.id + ")", pairs(rows), el("p", null, u(s.risk || "")), el("div", { class: "page-head" }, ...acts));
+  }
+  async function mcpPanel(d) {
+    const m = await api("GET", "meet/ai/mcp" + aiQ(d.org)).catch((e) => ({ error: e.message }));
+    m.org = m.org || d.org;
+    const kids = [el("p", null, FW["mcp.help"])];
+    if (m.error) kids.push(emptyLine(u(m.error)));
+    if (m.readers) kids.push(banner("warn", MSG.sev.warn, fill(FW["mcp.readers"], { version: (m.minimums || {}).hub || "" }), " ", u(m.readers)));
+    for (const w of m.warnings || []) {
+      const sev = w.severity === "bad" ? "bad" : "warn";
+      kids.push(banner(sev, MSG.sev[sev], fill(w.ended ? FW["mcp.expired"] : FW["mcp.expires-soon"], { server: w.name, days: String(w.days) })));
+    }
+    for (const c of m.changed || []) {
+      const s = (m.servers || []).find((x) => x.id === c.server);
+      const tools = s ? (s.tools || []).map((t) => (t.name === c.tool ? Object.assign({}, t, { schema_sha256: c.schema_sha256 }) : t)) : null;
+      kids.push(banner("warn", MSG.sev.warn, fill(FW["mcp.tool-changed"], { tool: c.tool, server: c.name, gateway: c.gateway }), " ",
+        isAdmin() && s ? btn(FW["mcp.tool-approve"], () => mcpUpdate(m, s, tools)) : null));
+    }
+    const signed = m.servers || [];
+    kids.push(sub(FW["mcp.servers"], signed.length ? signed.map((s) => mcpServerBlock(m, s, true)) : emptyLine(FW["mcp.none"])));
+    const staged = (m.staged || {}).servers || [];
+    if (staged.length) kids.push(sub(FW["mcp.staged"], staged.map((s) => mcpServerBlock(m, s, false))));
+    if (MCP.tested) {
+      const t = MCP.tested;
+      const known = signed.concat(staged).find((x) => x.id === t.id);
+      kids.push(sub(FW["mcp.tested"], genericTable(FW["mcp.tested"], t.listed.map((x) => ({ name: x.name, description: x.description || "", schema_sha256: x.schema_sha256 })), MSG.noneYet),
+        isAdmin() && t.tools.length ? btn(FW["mcp.use-tools"], () => (known ? mcpUpdate(m, known, t.tools) : mcpAdd(m, Object.assign({}, t.server || {}, { id: t.id, tools: t.tools })))) : null));
+    }
+    if (MCP.answers && MCP.answers.answers) kids.push(sub(FW["mcp.answers"], ...MCP.answers.answers.map(mcpAnswer)));
+    kids.push(sub(FW["mcp.gateways"], pairs((m.gateways || []).map((g) => [u(g.url), g.applied ? FW["mcp.applied"] : fillText(FW["mcp.waiting"], { n: g.waiting || 0 })]))));
+    kids.push(sub(FW["mcp.journal"], dataTable({
+      caption: FW["mcp.journal"], rows: (m.journal || []).slice().reverse(), empty: FW["mcp.journal-none"], name: (e) => e.id, text: (e) => [e.id, e.action].join(" "),
+      cols: [{ key: "id", label: W["dialog.id"], cell: (e) => code(e.id) }, { key: "action", label: FW["mcp.col-action"] },
+        { key: "target", label: FW["mcp.col-target"], cell: (e) => u(typeof e.target === "string" ? e.target : JSON.stringify(e.target)), sortable: false },
+        { key: "ts", label: FW["mcp.col-when"], cell: (e) => whenSec(e.ts) },
+        { key: "state", label: FW["mcp.col-state"], sortable: false, cell: (e) => {
+          const behind = (m.gateways || []).filter((g) => (g.ack || 0) < e.tseq).map((g) => g.url);
+          return (e.state === "done" ? FW["mcp.done"] : FW["mcp.active"]) + (behind.length ? "; " + FW["mcp.not-applied"] + ": " + behind.join(", ") : "");
+        } }],
+    })));
+    const head = isAdmin() ? el("div", { class: "page-head" }, btn(FW["mcp.add"], () => mcpAdd(m, {}), "primary"), btn(FW["mcp.test"], () => mcpTest(m, null)),
+      btn(FW["mcp.credential"], () => mcpCredential(m, {})), btn(FW["mcp.off"], () => mcpOff(m), "danger")) : null;
+    return panel(FW["mcp.title"], head, ...kids);
+  }
   pages.meet_ai = async () => {
     const want = (location.hash.split("?org=")[1] || "").split("&")[0];
     const d = await api("GET", "meet/ai" + aiQ(decodeURIComponent(want)));
@@ -3615,8 +4648,35 @@
     kids.push(panel(AIW.hold, isAdmin() ? btn(AIW.hold, () => aiHold(d), "primary") : null,
       genericTable(AIW.hold, (d.results || []).filter((r) => r.op === "hold").map((r) => ({ at: r.at, reviewer: r.reviewer, placed: r.placed ? "yes" : "no" })), MSG.noneYet)));
     kids.push(aiArchivePanel(d, a));
+    kids.push(lmcpPanel(d));
+    kids.push(await mcpPanel(d));
     return kids;
   };
+  // Settings > AI > Local MCP (API-1c 10.6, 14.2): ai.local_mcp, staged and signed with the AI settings. Enterprise only
+  // (decision O6): on a standard license the card says why and offers no change.
+  const LOCAL_MCP_TOOLS = ["search", "read_conversation", "list_meetings", "read_meeting_notes", "draft_reply", "send_message"];
+  function lmcpPanel(d) {
+    const lm = (d.ai || {}).local_mcp || {};
+    const standard = d.edition === "standard";
+    return panel(FW["lmcp.title"], el("p", null, toneChip(FW["lmcp.enterprise"]), " ", FW["lmcp.help"]), standard ? banner("warn", MSG.sev.warn, FW["lmcp.standard"]) : null,
+      pairs([[FW["lmcp.state"], onOff(!!lm.enabled)], [FW["lmcp.classes"], (lm.classes || []).join(", ")], [FW["lmcp.tools"], (lm.tools || []).join(", ")], [FW["lmcp.send"], yesNo(!!lm.send)]]),
+      isAdmin() && !standard ? btn(FW["lmcp.change"], () => lmcpStage(d), "primary") : null);
+  }
+  function lmcpStage(d) {
+    const ai = d.ai || {};
+    const lm = ai.local_mcp || {};
+    const cui = ai.cui_classes || [];
+    confirmDialog({
+      spec: fspec("local-mcp"), vals: { org: d.org }, name: d.org, id: d.org,
+      fields: [{ kind: "select", key: "enabled", label: FW["lmcp.f-enabled"], options: [["off", MSG.off], ["on", MSG.on]], value: lm.enabled ? "on" : "off" },
+        { kind: "checks", key: "classes", label: FW["lmcp.f-classes"], options: (ai.classes || []).filter((c) => !cui.includes(c)).map((c) => [c, c]), value: lm.classes || [] },
+        { kind: "checks", key: "tools", label: FW["lmcp.f-tools"], options: LOCAL_MCP_TOOLS.map((t) => [t, t]), value: lm.tools || [] },
+        { kind: "select", key: "send", label: FW["lmcp.f-send"], options: yesNoOptions(), value: lm.send ? "yes" : "no" }],
+      check: (v) => (!v.tools.length || (v.send === "yes" && !v.tools.includes("send_message")) ? FW["lmcp.check"] : ""),
+      run: (v) => post("meet/ai/stage", { org: d.org, preset: d.preset || "advanced",
+        ai: { local_mcp: { enabled: v.enabled === "on", classes: v.classes, tools: v.tools, send: v.send === "yes" } } }, { action: "meet.ai.stage", target: d.org }),
+    });
+  }
 
   // Releases (4.9): one admin only for the same minimums, or raising one back to what a lowering in the last 24 h replaced.
   function vkey(v) {
@@ -4763,7 +5823,7 @@
     if (a === "email") return pages.fleetEmail;
     if (a === "security") {
       if (b === "requests") return fleetProduct("security", "requests", r);
-      return { approvals: pages.approvals, audit: pages.admins_audit, settings: pages.fleetSecurity, exports: pages.fleetExports }[b] || pages.approvals;
+      return { approvals: pages.approvals, audit: pages.admins_audit, settings: pages.fleetSecurity, exports: pages.fleetExports, api: pages.fleetApi, compliance: pages.fleetCompliance }[b] || pages.approvals;
     }
     if (a === "settings") {
       return { console: pages.fleetConsole, setup: pages.fleetSetup, consoles: pages.fleetConsoles, account: pages.admins_account }[b] || pages.admins_account;
@@ -5936,6 +6996,8 @@
           return x.rows || x.people || [];
         } : null,
       }))];
+    // API-1 revision 4 13.2: one Directory card per organization the console holds an API map for.
+    kids.push(...(await directoryCards()));
     if (isManager()) kids.push(await seatStrips(mrel, stopped), csvPanel());
     if (admin) kids.push(...(await pages.admins_people()).slice(2));
     return kids;
@@ -6447,12 +7509,12 @@
     const relaysWord = (v) => (v === "all" || !v ? FMSG.relaysAll : [].concat(v).map(relayName).join(", "));
     const tokenBox = el("div");
     const newToken = btn(FW["exports.token-new"], () => confirmDialog({
-      spec: fspec("token"), vals: { label: "", relays: FMSG.relaysAll, days: 365 },
+      spec: fspec("token"), vals: { label: "", relays: FMSG.relaysAll, days: 90 },
       fields: [{ kind: "text", key: "label", label: FMSG.label, maxlength: "64", required: true },
         { kind: "select", key: "relays", label: FMSG.cols.count, options: [["all", FMSG.relaysAll]].concat(relays.map((x) => [x.id, x.name])), value: "all" },
-        { kind: "text", type: "number", key: "days", label: FMSG.daysField, value: 365, min: "30", max: "365", inputmode: "numeric" }],
+        { kind: "text", type: "number", key: "days", label: FMSG.daysField, value: 90, min: "30", max: "90", inputmode: "numeric" }],
       vals2: (v) => ({ label: v.label, relays: relaysWord(v.relays), days: v.days }),
-      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 365) ? FMSG.daysField : ""),
+      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 90) ? FMSG.daysField : ""),
       run: (v) => post("settings/exports/token", { label: v.label, relays: v.relays === "all" ? "all" : [v.relays], days: v.days }, { action: "exports.token.create", target: v.label }),
       plain: true,
       // The token is shown once, here, and never again (10.1).
@@ -6465,7 +7527,8 @@
       caption: FMSG.tokens, rows: tokens, empty: MSG.noneYet, name: (t) => t.label,
       cols: [{ key: "label", label: FMSG.label }, { key: "hint", label: W["dialog.id"], cell: (t) => code(t.hint) }, { key: "relays", label: FMSG.cols.count, cell: (t) => relaysWord(t.relays), sortable: false },
         { key: "createdBy", label: FMSG.enrolledBy }, { key: "createdAt", label: FMSG.created, cell: (t) => when(t.createdAt) },
-        { key: "expires", label: FMSG.cols.ends, cell: (t) => when(t.expires) }, { key: "lastUsedAt", label: "Last used", cell: (t) => when(t.lastUsedAt) }],
+        { key: "expires", label: FMSG.cols.ends, cell: (t) => (t.olderThan90 ? el("span", { title: FMSG.olderToken }, when(t.expires), " ", el("small", null, FMSG.olderToken)) : when(t.expires)) },
+        { key: "lastUsedAt", label: "Last used", cell: (t) => when(t.lastUsedAt) }],
       actions: (t) => [{ label: FMSG.revoke, run: async () => {
         try {
           await api("POST", "settings/exports/token/revoke", { hint: t.hint }, { direct: true });
@@ -6524,8 +7587,1804 @@
           siem ? btn(FMSG.turnOff, () => confirmDialog({
             spec: fspec("siem-off"), name: siem.host, id: siem.host + ":" + siem.port, danger: true, two: true, fields: [{ kind: "reason" }],
             run: (v) => post("settings/exports/siem", { off: true, reason: v.reason }, { action: "exports.siem", target: "-" }),
-          }), "danger") : null))];
+          }), "danger") : null)),
+      exportsApi(d)];
   };
+
+  // ---- Settings > API access and the API destinations of Exports (API-1 4, 6.2, 6.6, 7.3, 11, 12.3; API-1a6) ----
+  // Every change is staged per organization: removals apply on relays at once (the journal) and the rest waits for the
+  // staged save, which a second admin approves where 6.6 says so and the admin's own Hub device signs (meet.api.sign).
+  // A secret or token is shown once, in its own dialog, and kept nowhere else.
+  const CEILINGS = ["public", "internal", "confidential", "cui"];
+  const ceilingWord = (c) => FW["api.ceiling-" + c] || stateWord(c);
+  const yesNoOptions = () => [["no", MSG.no], ["yes", MSG.yes]];
+  const commaList = (t) => [...new Set(String(t || "").split(",").map((x) => x.trim()).filter(Boolean))];
+  const wholeIn = (v, lo, hi) => /^[0-9]{1,9}$/.test(String(v == null ? "" : v).trim()) && Number(v) >= lo && Number(v) <= hi;
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  function jsonList(t) {
+    try {
+      const v = JSON.parse(t);
+      return Array.isArray(v) ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  // Rows without a step-up post as they are; step-up rows bind the action to the organization (target "org").
+  const apiPost = (path, body) => api("POST", path, body, { direct: true });
+  const apiStep = (path, body, action) => post(path, body, { action, target: body.org });
+  const relaysText = (list) => ((list || []).includes("*") || !(list || []).length ? FMSG.relaysAll : list.map(relayName).join(", "));
+  // The organization's relays as {id, synced}: the API view lists objects, the exports view ids.
+  const orgRelays = (list) => (list || []).map((x) => (typeof x === "string" ? { id: x, synced: true } : x)).filter((x) => x && x.id);
+
+  // The one-time reveal: the value lives in this dialog only, and the dialog leaves the page when it closes.
+  function revealOnce(title, id, sentence, value) {
+    const d = el("dialog", { class: "confirm reveal", "aria-labelledby": "reveal-title" });
+    let held = String(value || "");
+    const copy = el("button", { type: "button" }, MSG.copy);
+    const close = el("button", { type: "button", class: "primary" }, FW["api.close"]);
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(held);
+        say(MSG.copied);
+      } catch (e) {
+        fail(e);
+      }
+    });
+    close.addEventListener("click", () => d.close());
+    d.addEventListener("close", () => {
+      held = "";
+      d.remove();
+      const h = $("page-title");
+      if (h) h.focus();
+    });
+    d.append(el("h2", { id: "reveal-title", tabindex: "-1" }, title),
+      el("div", { class: "target" }, el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), " ", code(id))),
+      el("p", null, sentence), el("p", null, el("code", { class: "code-once" }, clean(held))), el("div", { class: "dlg-actions" }, copy, close));
+    document.body.append(d);
+    d.showModal();
+    $("reveal-title").focus();
+  }
+
+  // The staged changes of one organization, shared by API access and Exports, with the signing state and Save.
+  function apiStaged(o) {
+    const s = o.staged;
+    const sg = o.signing;
+    const kids = [];
+    if (sg && sg.state === "waiting") {
+      const relay = relayName(sg.relay || "");
+      kids.push(banner("info", MSG.sev.info, sg.by && sg.by !== myEmail() ? fill(FW["api.signing-waiting-other"], { email: sg.by, relay }) : fill(FW["api.signing-waiting"], { relay }),
+        " ", code(sg.request || "")));
+    } else if (sg && sg.state === "sending") kids.push(banner("info", MSG.sev.info, FW["api.signing-sending"]));
+    else if (sg && sg.state === "done") kids.push(banner("info", MSG.sev.info, FW["api.signing-done"]));
+    else if (sg && sg.state === "failed") kids.push(banner("bad", MSG.sev.bad, fill(FW["api.signing-failed"], { why: sg.error || "" })));
+    // One signing at a time per organization: while one is in flight, Cancel signing takes the place of Save.
+    const inFlight = !!sg && (sg.state === "waiting" || sg.state === "sending");
+    if (inFlight && isAdmin()) {
+      kids.push(el("div", { class: "wizard-actions" }, btn(FW["api.signing-cancel"], () => confirmDialog({
+        spec: fspec("api-signing-cancel"), vals: { org: o.org }, name: o.org, id: sg.request || o.org, danger: true,
+        run: () => apiPost("settings/api/signing/cancel", { org: o.org }),
+      }), "danger")));
+    }
+    if (!s) return section(uid("api-h"), FW["api.staged"], ...kids, emptyLine(FW["api.staged-none"]));
+    const names = o.names || {};
+    kids.push(el("p", null, fill(FW["api.staged-by"], { email: s.by || "", time: when(s.expires_at) })), el("ul", null, (s.changes || []).map((c) => el("li", null, u(c)))));
+    if (s.two_person) kids.push(el("p", null, FW["api.two-person"]), el("ul", null, (s.two_person_reasons || []).map((c) => el("li", null, u(c)))));
+    if ((s.tests_needed || []).length) kids.push(el("p", null, FW["api.tests-needed"]), el("ul", null, s.tests_needed.map((id) => el("li", null, u(names[id] || id), " ", code(id)))));
+    if (isAdmin()) {
+      kids.push(el("div", { class: "wizard-actions" }, inFlight ? null : btn(MSG.save, () => apiSave(o), "primary"), btn(FW["api.discard"], () => confirmDialog({
+        spec: fspec("api-discard"), vals: { org: o.org }, name: o.org, id: s.id, danger: true,
+        run: () => apiPost("settings/api/discard", { org: o.org }),
+      }))));
+    }
+    return section(uid("api-h"), FW["api.staged"], ...kids);
+  }
+  // Save: two-person when the stage says so (6.6); the Hub devices of the chosen relay see the signing request.
+  function apiSave(o) {
+    const s = o.staged;
+    const relays = orgRelays(o.relays);
+    const first = (relays.find((x) => x.synced) || relays[0] || {}).id;
+    const pick = relays.length > 1 ? [{ kind: "select", key: "relay", label: FW["api.f-sign-relay"], options: relays.map((x) => [x.id, relayName(x.id)]), value: first }] : [];
+    confirmDialog({
+      spec: fspec("api-save"), vals: { org: o.org }, name: o.org, id: s.id, two: !!s.two_person, fields: pick.concat([{ kind: "reason" }]),
+      params: [[FW["api.staged"], (s.changes || []).join("; ")]],
+      run: (v) => apiPost("settings/api/save", Object.assign({ org: o.org, stage: s.id, reason: v.reason }, v.relay ? { relay: v.relay } : {})),
+    });
+  }
+
+  pages.fleetApi = async (c) => {
+    const [d] = await Promise.all([api("GET", "settings/api", null, { direct: true }), fleetRelays().catch(() => [])]);
+    const orgs = d.orgs || [];
+    if (!orgs.length) return [head(FW["api.title"]), panel(null, emptyLine(FW["api.no-orgs"]))];
+    const want = c && c.q ? c.q.get("org") : null;
+    const o = orgs.find((x) => x.org === want) || orgs[0];
+    const pick = orgs.length > 1 ? el("nav", { class: "chips", "aria-label": FW["api.org"] },
+      orgs.map((x) => el("a", { href: "#/security/api?org=" + encodeURIComponent(x.org), "aria-current": x.org === o.org ? "page" : null }, u(x.org)))) : null;
+    const map = o.map;
+    const view = o.draft || map || {};
+    const admin = isAdmin();
+    const state = o.state || "none";
+    const stopped = ["off", "expired", "set-aside"].includes(state);
+    const lim = o.limits || {};
+    const kids = [head(FW["api.title"], pick), banner(stopped ? "bad" : "info", stopped ? MSG.sev.bad : MSG.sev.info, FW["api.state-" + state] || stateWord(state))];
+    if (o.edition && o.edition !== "enterprise") kids.push(banner("warn", MSG.sev.warn, FW["api.edition"]));
+    kids.push(panel(null, el("p", { class: "id-line" }, el("span", { class: "id-label" }, FW["api.org"]), " ", code(o.org)),
+      map ? el("p", null, fill(FW["api.map"], { seq: map.seq, issued: whenSec(map.issued), expires: whenSec(map.expires) })) : null,
+      el("p", { class: "note" }, fill(FW["api.limits"], { clients: lim.clients, destinations: lim.destinations, tokens: lim.scrape_tokens }))));
+    // Revision 4 2.3: a relay of the org's set lacking what the map needs closes saves until it is updated or retired.
+    if ((o.relay_set || []).some((x) => (x.lacks || []).length)) kids.push(banner("bad", MSG.sev.bad, FW["api.outdated"]));
+    // Revision 6 7.14: the tabs Clients and settings, Agents (with Tasks) and Remote Spokes.
+    const tab = c && c.q ? c.q.get("tab") || "" : "";
+    const tabLink = (t, w) => el("a", { href: "#/security/api?org=" + encodeURIComponent(o.org) + (t ? "&tab=" + t : ""), "aria-current": tab === t ? "page" : null }, w);
+    kids.push(el("nav", { class: "chips", "aria-label": FW["api.tabs"] }, tabLink("", FW["api.tab-general"]), tabLink("agents", FW["api.tab-agents"]), tabLink("spokes", FW["api.tab-spokes"])));
+    const staged = apiStaged({ org: o.org, staged: o.staged, signing: o.signing, relays: o.relays });
+    if (tab === "agents") return kids.concat([staged], await apiAgentsTab(o, view, admin, c.q));
+    if (tab === "spokes") return kids.concat([staged], await apiSpokesTab(o, admin));
+    // Revision 5 14.2: the content and delegated clients' people and approvals, read per client.
+    const people = await apiPeopleOf(o, view);
+    kids.push(staged, apiClients(o, view, admin), apiBlocks(o, view, admin, map, d.meet_ca),
+      apiContent(o, view, admin, people), apiPartners(o, view, admin), apiRevokes(o, view, admin), apiConnectors(o, view, admin), apiIdps(o, view, admin), apiProviders(o, view, admin),
+      apiScrape(o, view, admin), apiGrace(o, view, admin), apiOrigins(o, view, admin), apiRelaySet(o, admin));
+    if (admin) kids.push(apiKill(o, state));
+    kids.push(apiJournal(o, admin), apiExplain(o, view));
+    return kids;
+  };
+
+  // API clients (4.1 to 4.3): the hints of their credentials only; a new secret is shown once.
+  const SHOWN_TONE = { active: "ok", suspended: "warn", expired: "bad", "owner-gone": "bad" };
+  const credHints = (list) => (list || []).map((x) => x.type + " " + (x.hint || "") + (x.expires ? " (" + daySec(x.expires) + ")" : "")).join("; ");
+  function apiClients(o, view, admin) {
+    const org = o.org;
+    const ctx = { o, view };
+    const add = admin ? btn(FW["api.client-add"], () => confirmDialog({
+      spec: fspec("api-client"), vals: { name: "" }, vals2: (v) => ({ name: v.name }), fields: clientFields(null, ctx),
+      check: (v) => clientCheck(v, null),
+      run: (v) => apiStep("settings/api/clients", { org, client: clientBody(v, null, ctx) }, "api.client.stage"),
+    }), "primary") : null;
+    return section(uid("api-h"), FW["api.clients"], add ? el("div", { class: "page-head" }, add) : null, dataTable({
+      caption: FW["api.clients"], rows: view.clients || [], empty: MSG.noneYet, name: (x) => x.name, text: (x) => [x.name, x.owner, x.id].join(" "),
+      cols: [{ key: "name", label: FMSG.cols.name, cell: (x) => u(x.name) }, { key: "kind", label: FMSG.cols.kind, cell: (x) => kindWord(x.kind) },
+        { key: "owner", label: FW["api.col-owner"], cell: (x) => u(x.owner) }, { key: "scopes", label: FW["api.col-scopes"], cell: (x) => (x.scopes || []).join(", "), sortable: false },
+        { key: "ceiling", label: FW["api.col-ceiling"], cell: (x) => ceilingWord(x.ceiling) }, { key: "relays", label: FMSG.cols.count, cell: (x) => relaysText(x.relays), sortable: false },
+        { key: "shown_state", label: FMSG.cols.state, cell: (x) => toneChip(FW["api.shown-" + x.shown_state] || stateWord(x.shown_state || x.state), SHOWN_TONE[x.shown_state]) },
+        { key: "credentials", label: FW["api.col-credentials"], cell: (x) => credHints(x.credentials), sortable: false },
+        { key: "expires", label: FMSG.cols.ends, cell: (x) => whenSec(x.expires) }],
+      actions: (x) => (admin ? clientActions(org, x, ctx) : []),
+    }));
+  }
+  function clientActions(org, x, ctx) {
+    const named = { name: x.name };
+    const out = [{
+      label: FW["api.edit"], run: () => confirmDialog({
+        spec: fspec("api-client-update"), vals: named, name: x.name, id: x.id, fields: clientFields(x, ctx),
+        check: (v) => clientCheck(v, x),
+        run: (v) => apiStep("settings/api/clients/update", { org, id: x.id, client: clientBody(v, x, ctx) }, "api.client.update"),
+      }),
+    }];
+    if (x.state === "suspended") {
+      out.push({ label: FW["api.resume"], run: () => confirmDialog({
+        spec: fspec("api-client-resume"), vals: named, name: x.name, id: x.id,
+        run: () => apiPost("settings/api/clients/resume", { org, id: x.id }),
+      }) });
+    } else {
+      out.push({ label: FW["api.suspend"], run: () => confirmDialog({
+        spec: fspec("api-client-suspend"), vals: named, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => apiPost("settings/api/clients/suspend", { org, id: x.id, reason: v.reason }),
+      }) });
+    }
+    out.push({ label: FW["api.new-secret"], run: () => confirmDialog({
+      spec: fspec("api-secret"), vals: { name: x.name, days: 90 }, vals2: (v) => ({ days: v.days }), name: x.name, id: x.id,
+      fields: [{ key: "days", label: FW["api.f-secret-days"], value: 90, inputmode: "numeric" }],
+      check: (v) => (wholeIn(v.days, 1, 90) ? "" : FW["api.check-number"]),
+      run: (v) => apiStep("settings/api/clients/secret", { org, id: x.id, days: Number(v.days) }, "api.client.secret"),
+      plain: true,
+      done: (r) => render({ keepMessages: true }).then(() => {
+        if (r && r.secret) revealOnce(fill(FW["api.reveal-secret"], named), r.hint || x.id, FW["api.secret-once"], r.secret);
+      }),
+    }) }, { label: FW["api.revoke-tokens"], run: () => confirmDialog({
+      spec: fspec("api-revoke-tokens"), vals: named, name: x.name, id: x.id, danger: true,
+      run: () => apiPost("settings/api/clients/revoke-tokens", { org, id: x.id }),
+      done: (r) => render({ keepMessages: true }).then(() => say(fillText(FW["api.denied"], { n: r && r.denied != null ? r.denied : 0 }))),
+    }) }, { label: FW["api.delete"], run: () => confirmDialog({
+      spec: fspec("api-client-delete"), vals: named, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiPost("settings/api/clients/delete", { org, id: x.id, reason: v.reason }),
+    }) });
+    return out;
+  }
+  // The client fields of 2.2 (client_secret credentials come only from New secret).
+  function clientFields(x, ctx) {
+    const h = (x && x.hours) || {};
+    const rate = (x && x.rate) || {};
+    return [
+      { key: "name", label: FW["api.f-name"], value: x ? x.name : "", maxlength: "32", required: true },
+      { kind: "select", key: "kind", label: FW["api.f-kind"], options: CLIENT_KINDS.map((k) => [k, kindWord(k)]), value: x ? x.kind : "monitoring" },
+      { key: "owner", label: FW["api.f-owner"], value: x ? x.owner : "", maxlength: "254" },
+      { key: "scopes", label: FW["api.f-scopes"], value: x ? (x.scopes || []).join(", ") : "monitor.read" },
+      { kind: "select", key: "ceiling", label: FW["api.col-ceiling"], options: CEILINGS.map((c) => [c, ceilingWord(c)]), value: x ? x.ceiling : "internal" },
+      { key: "relays", label: FW["api.f-relays"], value: x ? (x.relays || []).join(", ") : "*" },
+      { key: "networks", label: FW["api.f-networks"], value: x ? (x.networks || []).join(", ") : "" },
+      { key: "tz", label: FW["api.f-hours-tz"], value: h.tz || "", maxlength: "64" },
+      { key: "from", label: FW["api.f-hours-from"], value: h.from || "", maxlength: "5" },
+      { key: "to", label: FW["api.f-hours-to"], value: h.to || "", maxlength: "5" },
+      { key: "weekdays", label: FW["api.f-hours-days"], value: (h.days || []).join(", ") },
+      { kind: "select", key: "mtls", label: FW["api.f-mtls"], options: yesNoOptions(), value: x && x.mtls_required ? "yes" : "no" },
+      { key: "perMinute", label: FW["api.f-rate-minute"], value: rate.per_minute_each || 120, inputmode: "numeric" },
+      { key: "perDay", label: FW["api.f-rate-day"], value: rate.per_day_each || 100000, inputmode: "numeric" },
+      { kind: "textarea", key: "credentials", label: FW["api.f-credentials"], value: x ? "" : "[]", note: x ? FW["api.f-credentials-keep"] : null },
+      // Revision 4 2.2: the compliance and directory blocks (the recipient and lowered limits also have their own actions)
+      { kind: "textarea", key: "compliance", label: FW["api.f-compliance"], value: "", note: x ? FW["api.f-block-keep"] : null },
+      { kind: "textarea", key: "directory", label: FW["api.f-directory"], value: "", note: x ? FW["api.f-block-keep"] : null },
+      { key: "lifetime", label: FW["api.f-days"], value: x ? "" : 366, inputmode: "numeric", note: x ? FW["api.f-days-keep"] : null },
+    ].concat(contentFields(x, ctx), delegationFields(x, ctx), spokesHubFields(x), a2aFields(x, ctx));
+  }
+  // A block field: empty keeps (or leaves out) the block, `null` removes it, else a JSON object; undefined when unreadable.
+  function jsonBlock(t) {
+    if (!t) return null;
+    if (t === "null") return "null";
+    try {
+      const v = JSON.parse(t);
+      return v && typeof v === "object" && !Array.isArray(v) ? v : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  }
+  function clientCheck(v, x) {
+    const hours = [v.tz, v.from, v.to, v.weekdays];
+    if (!/^[a-z0-9-]{1,32}$/.test(v.name)) return FW["api.check-name"];
+    if (!/^[^@\s]+@[^@\s]+$/.test(v.owner)) return FW["api.check-owner"];
+    if (!commaList(v.scopes).length) return FW["api.check-scopes"];
+    if (!commaList(v.relays).length) return FW["api.check-relays"];
+    if (hours.some(Boolean) && !(hours.every(Boolean) && commaList(v.weekdays).every((n) => wholeIn(n, 1, 7)))) return FW["api.check-hours"];
+    if (!wholeIn(v.perMinute, 1, 6000) || !wholeIn(v.perDay, 1, 10000000)) return FW["api.check-number"];
+    if ((v.credentials || !x) && !jsonList(v.credentials)) return FW["api.check-json"];
+    if ((v.lifetime || !x) && !wholeIn(v.lifetime, 1, 366)) return FW["api.check-number"];
+    if (jsonBlock(v.compliance) === undefined || jsonBlock(v.directory) === undefined) return FW["api.check-block"];
+    return contentCheck(v) || a2aCheck(v, x);
+  }
+  // An edit sends every field shown; cleared hours go as null (any time), empty credentials and days keep the old ones.
+  function clientBody(v, x, ctx) {
+    const c = { name: v.name, kind: v.kind, owner: v.owner, scopes: commaList(v.scopes), ceiling: v.ceiling, relays: commaList(v.relays), networks: commaList(v.networks),
+      mtls_required: v.mtls === "yes", rate: { per_minute_each: Number(v.perMinute), per_day_each: Number(v.perDay) } };
+    if (v.tz) c.hours = { tz: v.tz, from: v.from, to: v.to, days: commaList(v.weekdays).map(Number) };
+    else if (x && x.hours) c.hours = null;
+    if (v.credentials || !x) c.credentials = jsonList(v.credentials);
+    if (v.lifetime || !x) c.days = Number(v.lifetime);
+    // 2.2: reach R1 exactly for an export client (kind compliance, scopes exactly compliance.export.request)
+    c.reach = v.kind === "compliance" && c.scopes.length === 1 && c.scopes[0] === "compliance.export.request" ? "R1" : "R0";
+    for (const k of ["compliance", "directory"]) {
+      const b = jsonBlock(v[k]);
+      if (b === "null") {
+        if (x) c[k] = null;
+      } else if (b) c[k] = b;
+    }
+    contentBody(v, x, c);
+    a2aBody(v, x, c, ctx);
+    return c;
+  }
+
+  // ---- Revision 5 14.2 (API-1c7): the client editor's Content and Delegation, the client's people, connectors and
+  // identity providers (EMA). Adding or widening any of them is a two-person save (13.2); narrowing journals at once.
+  const CLIENT_KINDS = ["monitoring", "integration", "compliance", "app", "agent", "agent_delegated", "spokes_hub"];
+  const CONTENT_KINDS = ["app", "agent", "agent_delegated"];
+  const CONTENT_SCOPES = ["content.read", "content.post"];
+  const IDP_ALGS = ["ES256", "RS256", "PS256"];
+  const kindWord = (k) => FW["api.kind-" + String(k || "").replace(/_/g, "-")] || stateWord(k);
+  // 3.2 (R5-14): content.post always needs the person's approval for a delegated agent, and for an agent that reads too.
+  const confirmForced = (kind, scopes) => kind === "agent_delegated" || (kind === "agent" && CONTENT_SCOPES.every((s) => scopes.includes(s)));
+  const cimdOf = (x) => (x ? (x.credentials || []).find((k) => k.type === "cimd") || x.cimd || null : null);
+  // 3.2: https, or a loopback IP literal with a path (any port); never localhost, never a fragment.
+  const redirectOk = (r) => r.length <= 512 && !r.includes("#") && (/^https:\/\/[^\s/?]+(\/\S*)?$/.test(r) || /^http:\/\/(127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?\/\S*$/.test(r));
+  const groupOptions = (ctx) => (ctx.o.ai_groups || []).map((g) => [g.id, g.label ? g.label + " (" + g.id + ")" : g.id]);
+  function contentFields(x, ctx) {
+    const view = ctx.view;
+    const conns = view.connectors || [];
+    const apps = [...new Set(conns.flatMap((k) => k.apps || []))];
+    const names = Object.fromEntries((ctx.o.api_apps || []).map((a) => [a.principal, a.name]));
+    const channels = (x && x.channels) || ["*"];
+    const all = channels.includes("*");
+    return [
+      { kind: "checks", key: "connectors", label: FW["api.f-connectors"], options: conns.map((k) => [k.id, k.name]), value: (x && x.connectors) || [], note: FW["api.f-content-only"] },
+      { kind: "checks", key: "apps", label: FW["api.f-apps"], options: apps.map((p) => [p, names[p] ? names[p] + " (" + p + ")" : p]), value: (x && x.apps) || [] },
+      { kind: "select", key: "channels", label: FW["api.f-channels"], options: [["*", FW["api.channels-all"]], ["list", FW["api.channels-list"]]], value: all ? "*" : "list" },
+      { kind: "textarea", key: "channelIds", label: FW["api.f-channel-ids"], value: all ? "" : channels.join("\n") },
+      { kind: "select", key: "confirm", label: FW["api.f-confirm"], options: yesNoOptions(), value: x && (x.confirm || []).includes("content.post") ? "yes" : "no", note: FW["api.confirm-forced"] },
+    ];
+  }
+  function delegationFields(x, ctx) {
+    const dg = (x && x.delegation) || {};
+    const cimd = cimdOf(x);
+    return [
+      { kind: "checks", key: "groups", label: FW["api.f-groups"], options: groupOptions(ctx), value: dg.groups || [], note: FW["api.f-delegation-only"] },
+      { kind: "textarea", key: "people", label: FW["api.f-people"], value: (dg.principals || []).join("\n") },
+      { kind: "textarea", key: "denied", label: FW["api.f-denied"], value: (dg.denied || []).join("\n") },
+      { kind: "checks", key: "idps", label: FW["api.f-idps"], options: (ctx.view.idps || []).map((i) => [i.id, i.id + " (" + i.issuer + ")"]), value: dg.idps || [] },
+      { key: "consentDays", label: FW["api.f-consent-days"], value: dg.consent_days || 7, inputmode: "numeric" },
+      { kind: "textarea", key: "redirects", label: FW["api.f-redirects"], value: ((x && x.redirect_uris) || []).join("\n") },
+      { key: "cimd", label: FW["api.f-cimd"], value: cimd ? cimd.hint || cimd.url || "" : "", maxlength: "512", note: FW["api.f-cimd-note"] },
+      { kind: "select", key: "loopback", label: FW["api.f-loopback"], options: yesNoOptions(), value: x && x.loopback_ok ? "yes" : "no", note: FW["api.loopback-warn"] },
+    ];
+  }
+  function contentCheck(v) {
+    if (!CONTENT_KINDS.includes(v.kind)) return "";
+    const scopes = commaList(v.scopes);
+    const content = scopes.some((s) => CONTENT_SCOPES.includes(s));
+    const conns = v.connectors || [];
+    if ((v.kind === "app" || content || conns.length) && (conns.length < 1 || conns.length > 4)) return FW["api.check-content"];
+    if (content && ((v.apps || []).length < 1 || v.apps.length > 16 || (v.channels !== "*" && !lines(v.channelIds).length))) return FW["api.check-content"];
+    if (v.kind !== "agent_delegated") return "";
+    if ((!(v.groups || []).length && !lines(v.people).length) || !wholeIn(v.consentDays, 1, 30)) return FW["api.check-delegation"];
+    if (!lines(v.redirects).every(redirectOk)) return FW["api.check-redirects"];
+    if (v.cimd && !/^https:\/\/\S+$/.test(v.cimd)) return FW["api.check-cimd"];
+    return "";
+  }
+  // The 3.2 fields of a content or delegated client, added to the client body `c` of the editor's values `v`.
+  function contentBody(v, x, c) {
+    // An edit removes (null, CLIENT_NULLABLE) each field the client holds that its new kind, reach or scopes do not allow.
+    const drop = (...keys) => keys.forEach((k) => {
+      if (x && x[k] != null) c[k] = null;
+    });
+    const conns = CONTENT_KINDS.includes(v.kind) ? v.connectors || [] : [];
+    if (v.kind === "app" || conns.length) {
+      c.reach = "R1";
+      c.connectors = conns;
+      if (c.scopes.some((s) => CONTENT_SCOPES.includes(s))) {
+        c.apps = v.apps || [];
+        c.channels = v.channels === "*" ? ["*"] : lines(v.channelIds);
+        c.confirm = c.scopes.includes("content.post") && (v.confirm === "yes" || confirmForced(v.kind, c.scopes)) ? ["content.post"] : [];
+      } else drop("apps", "channels", "confirm");
+    } else drop("connectors", "apps", "channels", "confirm");
+    if (v.kind !== "agent_delegated") {
+      // 4.1: the console itself drops a cimd credential once the client is no longer delegated (the editor sees only
+      // hints, so it never resends the credentials for that)
+      drop("delegation", "redirect_uris", "loopback_ok");
+      return;
+    }
+    c.delegation = { groups: v.groups || [], principals: lines(v.people), idps: v.idps || [], consent_days: Number(v.consentDays), denied: lines(v.denied) };
+    c.redirect_uris = lines(v.redirects);
+    if (v.loopback === "yes") c.loopback_ok = true;
+    else if (x && x.loopback_ok) c.loopback_ok = false;
+    const had = cimdOf(x);
+    if (v.cimd && v.cimd !== (had ? had.hint || had.url || "" : "")) {
+      // 4.1: one cimd credential, never private, ending with the client
+      const expires = v.lifetime ? nowSec() + Number(v.lifetime) * 86400 : (x && x.expires) || nowSec() + 366 * 86400;
+      c.credentials = (c.credentials || []).filter((k) => k.type !== "cimd").concat([{ type: "cimd", url: v.cimd, private_ok: false, expires }]);
+    }
+  }
+  // ---- Revision 6 7.14 (API-1d5): the client editor's service hub and agent (spokes.tasks.submit) fields. Narrowing
+  // journals at once on the console; adding or widening, and any private network, is a two-person save (13).
+  const KEY_STORES = ["os_store", "pkcs11", "azure_key_vault", "tpm"];
+  const TASK_SCOPE = "spokes.tasks.submit";
+  const originOk = (t) => t.length <= 512 && /^https:\/\/[^\s/?#@]+$/.test(t);
+  const httpsOk = (t) => !!t && t.length <= 512 && /^https:\/\/[^\s#]+$/.test(t);
+  const nodeCred = (x) => (x ? (x.credentials || []).find((k) => k.type === "spokes_node") || null : null);
+  const a2aAgentsOf = (view) => (view.a2a && view.a2a.agents) || [];
+  function spokesHubFields(x) {
+    const had = nodeCred(x);
+    return [
+      { kind: "textarea", key: "targets", label: FW["api.f-targets"], value: ((x && x.spokes && x.spokes.targets) || []).join("\n"), note: FW["api.f-spokes-only"] },
+      { kind: "textarea", key: "nodeCert", label: FW["api.f-node-cert"], value: "" },
+      { kind: "select", key: "keyStore", label: FW["api.f-key-store"], options: KEY_STORES.map((k) => [k, FW["api.key-store-" + k.replace(/_/g, "-")]]), value: (had && had.key_store) || "os_store" },
+    ];
+  }
+  function a2aFields(x, ctx) {
+    const a = (x && x.a2a) || {};
+    const push = a.push || {};
+    const card = (x && x.card) || {};
+    const agents = a2aAgentsOf(ctx.view).map((g) => [g.id, g.name + " (" + g.id + ")"]);
+    for (const id of a.agents || []) if (!agents.some((g) => g[0] === id)) agents.push([id, id]);
+    return [
+      { kind: "checks", key: "a2aAgents", label: FW["api.f-a2a-agents"], options: agents, value: a.agents || [], note: FW["api.f-a2a-only"] },
+      { kind: "textarea", key: "a2aSkills", label: FW["api.f-a2a-skills"], value: (a.skills || ["*"]).join("\n") },
+      { key: "maxTasks", label: FW["api.f-max-tasks"], value: a.max_open_tasks || 8, inputmode: "numeric" },
+      { kind: "textarea", key: "pushOrigins", label: FW["api.f-push-origins"], value: (push.origins || []).join("\n") },
+      { kind: "textarea", key: "pushCidrs", label: FW["api.f-push-cidrs"], value: (push.private_cidrs || []).join("\n") },
+      { key: "cardUrl", label: FW["api.f-card-url"], value: card.url || "", maxlength: "512" },
+      { key: "cardJwks", label: FW["api.f-card-jwks"], value: card.jwks_uri || "", maxlength: "512" },
+      { kind: "textarea", key: "cardCidrs", label: FW["api.f-card-cidrs"], value: (card.private_cidrs || []).join("\n") },
+    ];
+  }
+  function a2aCheck(v, x) {
+    const scopes = commaList(v.scopes);
+    if (v.kind === "spokes_hub") {
+      const t = lines(v.targets);
+      const targetsOk = (t.length === 1 && t[0] === "*") || (t.length >= 1 && t.length <= 256 && t.every((n) => /^n_[0-9a-f]{32}$/.test(n)));
+      const cert = !!v.nodeCert || !!nodeCred(x) || (jsonList(v.credentials) || []).length > 0;
+      return scopes.length === 1 && scopes[0] === TASK_SCOPE && v.mtls === "no" && targetsOk && cert ? "" : FW["api.check-spokes-hub"];
+    }
+    if (v.kind !== "agent" || !scopes.includes(TASK_SCOPE)) return "";
+    const skills = lines(v.a2aSkills);
+    const skillsOk = (skills.length === 1 && skills[0] === "*") || (skills.length >= 1 && skills.length <= 64 && skills.every((s) => /^a_[0-9a-f]{16}\/[a-z0-9-]{1,64}$/.test(s)));
+    const origins = lines(v.pushOrigins);
+    const nets = [lines(v.pushCidrs), lines(v.cardCidrs)];
+    const ok = v.a2aAgents.length >= 1 && v.a2aAgents.length <= 16 && skillsOk && wholeIn(v.maxTasks, 1, 256) && origins.length <= 8 && origins.every(originOk)
+      && nets.every((n) => n.length <= 8 && n.every(cidrOk)) && (!nets[0].length || origins.length > 0) && (!nets[1].length || !!v.cardUrl)
+      && (!v.cardUrl || (httpsOk(v.cardUrl) && httpsOk(v.cardJwks)));
+    return ok ? "" : FW["api.check-a2a"];
+  }
+  // The 2.2 fields of a service hub (a pasted node certificate becomes a spokes_node credential on the console) or of an
+  // agent with spokes.tasks.submit (its connectors include those of its agents), added to the client body `c`.
+  function a2aBody(v, x, c, ctx) {
+    if (v.kind === "spokes_hub") {
+      c.reach = "R1";
+      c.mtls_required = false;
+      c.spokes = { targets: lines(v.targets) };
+      if (v.nodeCert) c.credentials = (c.credentials || []).concat([{ type: "spokes_node", cert: v.nodeCert, key_store: v.keyStore }]);
+      return;
+    }
+    if (v.kind !== "agent" || !c.scopes.includes(TASK_SCOPE)) return;
+    const connOf = Object.fromEntries(a2aAgentsOf(ctx.view).map((g) => [g.id, g.connector]));
+    c.reach = "R1";
+    c.connectors = [...new Set((c.connectors || v.connectors || []).concat(v.a2aAgents.map((id) => connOf[id]).filter(Boolean)))];
+    c.a2a = { agents: v.a2aAgents, skills: lines(v.a2aSkills), max_open_tasks: Number(v.maxTasks) };
+    if (lines(v.pushOrigins).length) c.a2a.push = { origins: lines(v.pushOrigins), private_cidrs: lines(v.pushCidrs) };
+    if (v.cardUrl) c.card = { url: v.cardUrl, jwks_uri: v.cardJwks, private_cidrs: lines(v.cardCidrs) };
+    else if (x && x.card) c.card = null;
+  }
+  // 7.13 and 7.1.2 (R6-12): per client with `a2a`, what it may use, its partner card check (Check now) and Push off, and
+  // the hand-off the admin gives the partner: the key set address and the key thumbprints to pin.
+  const PARTNER_TONE = { verified: "ok", invalid: "bad", unchecked: "warn" };
+  function apiPartners(o, view, admin) {
+    const list = (view.clients || []).filter((x) => x.a2a);
+    if (!list.length) return null;
+    return section(uid("api-h"), FW["api.partners"], list.map((x) => sub([u(x.name), " ", code(x.id)], partnerPairs(x), partnerCard(o, x, admin), partnerHandoff(x))));
+  }
+  function partnerPairs(x) {
+    const a = x.a2a;
+    const card = x.card;
+    return pairs([[FW["api.f-a2a-agents"], (a.agents || []).join(", ")], [FW["api.col-skills"], (a.skills || []).join(", ")],
+      [FW["api.col-max-tasks"], String(a.max_open_tasks == null ? "" : a.max_open_tasks)],
+      [FW["api.push-origins"], a.push ? (a.push.origins || []).join(", ") : FW["api.not-set"]],
+      [FW["api.partner-card"], card ? code(card.url) : FW["api.not-set"]], [FW["api.handoff-jwks"], card ? code(card.jwks_uri) : undefined]]);
+  }
+  function partnerCard(o, x, admin) {
+    const named = { name: x.name };
+    const acts = admin && (x.card || x.a2a.push) ? el("div", { class: "wizard-actions" }, x.card ? btn(FW["api.card-check"], () => confirmDialog({
+      spec: fspec("api-card-check"), vals: named, name: x.name, id: x.id,
+      run: () => apiPost("settings/api/clients/card-check", { org: o.org, id: x.id }),
+    })) : null, x.a2a.push ? btn(FW["api.push-off"], () => confirmDialog({
+      spec: fspec("api-push-off"), vals: named, name: x.name, id: x.id, danger: true,
+      run: () => apiPost("settings/api/clients/push-off", { org: o.org, id: x.id }),
+    }), "danger") : null) : null;
+    if (!x.card) return acts;
+    const p = x.card_check || { state: "unchecked" };
+    const st = p.state || "unchecked";
+    const pv = p.provider || {};
+    const rows = [[FW["api.col-checked"], p.checked_at ? whenSec(p.checked_at) : FW["api.partner-unchecked"]], [FW["api.col-why"], p.why ? u(p.why) : undefined],
+      [FMSG.cols.name, p.name ? u(p.name) : undefined], [FW["api.col-provider"], pv.organization ? u(pv.organization + (pv.url ? " " + pv.url : "")) : undefined],
+      [FW["api.col-version"], p.version ? code(p.version) : undefined], [FW["api.col-kid"], (p.kids || []).length ? p.kids.join(", ") : undefined]];
+    return el("div", null, el("p", null, el("strong", null, FW["api.partner-card"]), " ", toneChip(FW["api.partner-" + st] || stateWord(st), PARTNER_TONE[st])), pairs(rows),
+      (p.interfaces || []).length ? [el("p", null, el("strong", null, FW["api.partner-interfaces"])),
+        el("ul", null, p.interfaces.map((i) => el("li", null, code(i.url || ""), " ", u((i.protocolBinding || "") + " " + (i.protocolVersion || "")))))] : null, acts);
+  }
+  function partnerHandoff(x) {
+    const h = x.handoff;
+    if (!h) return null;
+    return el("div", null, el("p", null, el("strong", null, FW["api.handoff"])), el("p", { class: "note" }, FW["api.handoff-help"]),
+      pairs([[FW["api.handoff-jwks"], h.jwks_url ? el("span", null, code(h.jwks_url), " ", copyButton(h.jwks_url)) : FW["api.not-set"]],
+        [FW["api.handoff-thumbprints"], el("span", null, (h.thumbprints || []).map((t) => [code(t), " "]))]]));
+  }
+
+  // ---- Revision 6 7.14: the Agents tab (agents with their skills and signed cards, card keys, the root well-known card)
+  // and its Tasks list (metadata only, never text).
+  async function apiAgentsTab(o, view, admin, q) {
+    const enc = encodeURIComponent;
+    const filt = { agent: q.get("agent") || "", client: q.get("client") || "", state: q.get("state") || "" };
+    const qs = "org=" + enc(o.org) + Object.entries(filt).filter(([, x]) => x).map(([k, x]) => "&" + k + "=" + enc(x)).join("");
+    const [a, t] = await Promise.all([api("GET", "settings/api/a2a?org=" + enc(o.org), null, { direct: true }),
+      api("GET", "settings/api/a2a/tasks?" + qs, null, { direct: true }).catch((e) => ({ error: e.message }))]);
+    return [apiAgents(o, a, admin), apiCardKeys(o, a, admin), apiWellKnown(o, a, admin), apiTasks(o, a, view, filt, t)];
+  }
+  const CARD_TONE = { served: "ok", unsigned: "bad", off: "warn", "not-pinned": "warn" };
+  const cardState = (g) => (g.off ? "off" : (g.card && g.card.state) || "not-pinned");
+  const cardChip = (g) => toneChip(FW["api.card-" + cardState(g)] || stateWord(cardState(g)), CARD_TONE[cardState(g)]);
+  function apiAgents(o, a, admin) {
+    const conns = a.connectors || {};
+    const hubName = Object.fromEntries((a.hubs || []).map((h) => [h.id, h.name]));
+    const add = admin ? btn(FW["api.agent-add"], () => agentDialog(o, a, null), "primary") : null;
+    return section(uid("api-h"), FW["api.agents"], el("p", { class: "note" }, FW["api.agents-help"]),
+      pairs([[FW["api.agents-url"], a.agents_url ? code(a.agents_url) : FW["api.not-set"]], [FW["api.handoff-jwks"], a.jwks_url ? code(a.jwks_url) : FW["api.not-set"]]]),
+      el("p", null, FW["api.a2a-second"]), el("ul", null, ["api.two-a2a-agent", "api.two-a2a-client", "api.two-a2a-private", "api.two-well-known"].map((k) => el("li", null, FW[k]))),
+      add ? el("div", { class: "page-head" }, add) : null, dataTable({
+        caption: FW["api.agents"], rows: a.agents || [], empty: MSG.noneYet, name: (g) => g.name, text: (g) => [g.name, g.id].join(" "),
+        cols: [{ key: "name", label: FMSG.cols.name, cell: (g) => el("span", null, u(g.name), " ", code(g.id)) },
+          { key: "version", label: FW["api.col-version"], cell: (g) => code(g.version || "") },
+          { key: "connector", label: FW["api.col-connector"], cell: (g) => {
+            const k = conns[g.connector] || {};
+            return el("span", null, u(k.name || g.connector || ""), k.stale ? [" ", toneChip(FW["api.shown-stale"], "bad")] : null);
+          } },
+          { key: "hub", label: FW["api.col-hub"], cell: (g) => u(hubName[g.hub] || g.hub || "") },
+          { key: "skills", label: FW["api.col-skills"], sortable: false, cell: (g) => (g.skills || []).map((s) => s.id).join(", ") },
+          { key: "card", label: FW["api.col-card"], sort: cardState, cell: cardChip }],
+        actions: (g) => (admin ? [{ label: FW["api.change"], run: () => agentDialog(o, a, g) }, g.off ? null : { label: FW["api.delete"], run: () => confirmDialog({
+          spec: fspec("api-agent-delete"), vals: { name: g.name }, name: g.name, id: g.id, danger: true, fields: [{ kind: "reason" }],
+          run: (v) => apiPost("settings/api/a2a/agents/delete", { org: o.org, id: g.id, reason: v.reason }),
+        }) }] : []),
+      }), (a.agents || []).map(agentCard));
+  }
+  // One agent: its card URL with Copy, the signing state, the signed card as served, and its skills.
+  function agentCard(g) {
+    const cv = g.card || {};
+    return sub([u(g.name), " ", code(g.id)], pairs([[FW["api.card-url"], g.card_url ? el("span", null, code(g.card_url), " ", copyButton(g.card_url, FW["api.card-copy-url"])) : FW["api.not-set"]],
+      [FMSG.cols.state, cardChip(g)], [FW["api.card-etag"], cv.etag ? code(cv.etag) : undefined]]),
+      cardState(g) === "unsigned" ? banner("bad", MSG.sev.bad, FW["api.refusal-card-unsigned"]) : null,
+      cv.signed_at ? el("p", null, fillText(FW["api.card-signed"], { time: whenSec(cv.signed_at), kids: (cv.kids || []).join(", "), seq: cv.map_seq == null ? "" : cv.map_seq })) : null,
+      cv.card ? [el("p", null, el("strong", null, FW["api.card-preview"])), el("pre", null, el("code", null, cleanLines(JSON.stringify(cv.card, null, 2))))] : null,
+      dataTable({
+        caption: FW["api.col-skills"] + ": " + g.name, rows: g.skills || [], empty: MSG.noneYet, name: (s) => s.id,
+        cols: [{ key: "id", label: W["dialog.id"], cell: (s) => code(s.id) }, { key: "name", label: FMSG.cols.name, cell: (s) => u(s.name) },
+          { key: "targets", label: FW["api.col-targets"], sortable: false, cell: (s) => (s.targets || []).join(", ") },
+          { key: "model", label: FW["api.col-model"], cell: (s) => (s.model ? code(s.model) : "") }, { key: "turns", label: FW["api.col-turns"], cell: (s) => u(s.turns || "") },
+          { key: "approve_within_s", label: FW["api.col-approve-within"], cell: (s) => String(s.approve_within_s == null ? "" : s.approve_within_s) },
+          { key: "dropped", label: FMSG.cols.state, cell: (s) => (s.dropped ? toneChip(FW["api.skill-dropped"], "bad") : toneChip(FW["api.shown-active"], "ok")) }],
+      }));
+  }
+  // The skills editor: a JSON list of 2.2 skills, checked here before the console checks it again.
+  const SKILL_KEYS = ["id", "name", "description", "tags", "examples", "targets", "model", "turns", "approve_within_s", "idle_close_s"];
+  const skillOf = (s) => Object.fromEntries(SKILL_KEYS.filter((k) => s[k] != null).map((k) => [k, s[k]]));
+  const textIn = (t, lo, hi) => typeof t === "string" && t.length >= lo && t.length <= hi;
+  function skillsOk(list) {
+    return Array.isArray(list) && list.length >= 1 && list.length <= 16 && new Set(list.map((s) => s && s.id)).size === list.length && list.every((s) => s && typeof s === "object"
+      && /^[a-z0-9-]{1,64}$/.test(s.id) && textIn(s.name, 1, 64) && textIn(s.description, 1, 1024)
+      && Array.isArray(s.tags) && s.tags.length >= 1 && s.tags.length <= 8 && s.tags.every((t) => textIn(t, 1, 32))
+      && (s.examples == null || (Array.isArray(s.examples) && s.examples.length <= 4 && s.examples.every((t) => textIn(t, 1, 256))))
+      && Array.isArray(s.targets) && s.targets.length >= 1 && s.targets.length <= 64 && (s.turns === "one" || s.turns === "many")
+      && Number.isInteger(s.approve_within_s) && s.approve_within_s >= 300 && s.approve_within_s <= 86400);
+  }
+  // 7.1.3: what the generated card shows of an agent; a change to it needs a new version (card-version).
+  const cardFace = (g) => JSON.stringify([g.name, g.description, g.provider || null, g.documentation_url || null, !!g.streaming, !!g.push,
+    (g.skills || []).map((s) => [s.id, s.name, s.description, s.tags || [], s.examples || []])]);
+  // Add agent or Change: the console draws the a_ id. A change widens (two-person) when it adds a skill or a spoke, or
+  // allows a longer approval wait; a removed skill journals agent_drop_skill at once.
+  function agentDialog(o, a, g) {
+    const conns = Object.entries(a.connectors || {}).map(([id, k]) => [id, (k.name || id) + " (" + id + ")"]);
+    const hubs = (a.hubs || []).map((h) => [h.id, h.name + " (" + h.id + ")"]);
+    const p = (g && g.provider) || {};
+    const skills = g ? (g.skills || []).filter((s) => !s.dropped).map(skillOf) : [];
+    const was = Object.fromEntries(skills.map((s) => [s.id, s]));
+    const read = (v) => {
+      const agent = { name: v.name, description: v.description, version: v.version, connector: v.connector, hub: v.hub };
+      if (v.providerOrg) agent.provider = { organization: v.providerOrg, url: v.providerUrl };
+      else if (g && g.provider) agent.provider = null;
+      if (v.docUrl) agent.documentation_url = v.docUrl;
+      else if (g && g.documentation_url) agent.documentation_url = null;
+      agent.streaming = v.streaming === "yes";
+      agent.push = v.push === "yes";
+      agent.skills = jsonList(v.skills);
+      return agent;
+    };
+    const widens = (v) => !g || (jsonList(v.skills) || []).some((s) => !s || !was[s.id] || (s.targets || []).some((t) => !(was[s.id].targets || []).includes(t))
+      || Number(s.approve_within_s) > Number(was[s.id].approve_within_s));
+    confirmDialog({
+      spec: fspec(g ? "api-agent-update" : "api-agent"), vals: { name: g ? g.name : "" }, vals2: g ? null : (v) => ({ name: v.name }),
+      name: g ? g.name : o.org, id: g ? g.id : o.org, two: widens,
+      fields: [{ key: "name", label: FW["api.f-agent-name"], value: g ? g.name : "", maxlength: "64" },
+        { kind: "textarea", key: "description", label: FW["api.f-description"], value: g ? g.description : "" },
+        { key: "version", label: FW["api.f-version"], value: g ? g.version : "1.0.0", maxlength: "32" },
+        { kind: "select", key: "connector", label: FW["api.f-connector"], options: conns, value: g ? g.connector : (conns[0] || [])[0] },
+        { kind: "select", key: "hub", label: FW["api.f-hub"], options: hubs, value: g ? g.hub : (hubs[0] || [])[0] },
+        { key: "providerOrg", label: FW["api.f-provider-org"], value: p.organization || "", maxlength: "64" },
+        { key: "providerUrl", label: FW["api.f-provider-url"], value: p.url || "", maxlength: "512" },
+        { key: "docUrl", label: FW["api.f-doc-url"], value: (g && g.documentation_url) || "", maxlength: "512" },
+        { kind: "select", key: "streaming", label: FW["api.f-streaming"], options: yesNoOptions(), value: g && g.streaming ? "yes" : "no" },
+        { kind: "select", key: "push", label: FW["api.f-push"], options: yesNoOptions(), value: g && g.push ? "yes" : "no" },
+        { kind: "textarea", key: "skills", label: FW["api.f-skills"], value: JSON.stringify(skills, null, 2), note: FW["api.f-skills-note"] }],
+      check: (v) => {
+        if (!(textIn(v.name, 1, 64) && textIn(v.description, 1, 1024) && /^[0-9A-Za-z.+-]{1,32}$/.test(v.version) && v.connector && v.hub
+          && (!v.providerOrg || (v.providerOrg.length <= 64 && httpsOk(v.providerUrl))) && (!v.providerUrl || !!v.providerOrg) && (!v.docUrl || httpsOk(v.docUrl)))) return FW["api.check-agent"];
+        if (!skillsOk(jsonList(v.skills))) return FW["api.check-skills"];
+        return g && v.version === g.version && cardFace(read(v)) !== cardFace(Object.assign({}, g, { skills })) ? FW["api.refusal-card-version"] : "";
+      },
+      run: (v) => (g ? apiStep("settings/api/a2a/agents/update", { org: o.org, id: g.id, agent: read(v) }, "api.a2a.agent.update")
+        : apiStep("settings/api/a2a/agents", { org: o.org, agent: read(v) }, "api.a2a.agent.stage")),
+    });
+  }
+  // 7.1.2: the card keys (signed map and staged ones): Make a card key is step-up only; Drop key journals at once.
+  const KEY_TONE = { active: "ok", pending: "warn", expired: "bad", dropped: "bad" };
+  function cardKeys(caption, list, org, admin) {
+    return dataTable({
+      caption, rows: list, empty: MSG.noneYet, name: (k) => k.kid,
+      cols: [{ key: "kid", label: W["dialog.id"], cell: (k) => code(k.kid) }, { key: "nbf", label: FW["exports.col-valid-from"], cell: (k) => whenSec(k.nbf) },
+        { key: "exp", label: FMSG.cols.ends, cell: (k) => whenSec(k.exp) },
+        { key: "state", label: FMSG.cols.state, cell: (k) => toneChip(FW["api.key-" + k.state] || stateWord(k.state), KEY_TONE[k.state]) },
+        { key: "sealed", label: FW["api.col-sealed"], cell: (k) => yesNo(k.sealed) }, { key: "thumbprint", label: FW["api.col-thumbprint"], sortable: false, cell: (k) => code(k.thumbprint || "") }],
+      actions: (k) => (admin && k.state !== "dropped" && k.state !== "expired" ? [{ label: FW["api.card-key-drop"], run: () => confirmDialog({
+        spec: fspec("api-a2a-key-drop"), vals: { kid: k.kid }, name: org, id: k.kid, danger: true,
+        run: () => apiPost("settings/api/a2a/keys/drop", { org, kid: k.kid }),
+      }) }] : []),
+    });
+  }
+  function apiCardKeys(o, a, admin) {
+    const org = o.org;
+    const add = admin ? btn(FW["api.card-key-new"], () => confirmDialog({
+      spec: fspec("api-a2a-key"), vals: { org }, name: org, id: org,
+      run: () => apiStep("settings/api/a2a/keys", { org }, "api.a2a.key"),
+    }), "primary") : null;
+    const staged = a.draft ? (a.draft.keys || []).filter((k) => !(a.keys || []).some((m) => m.kid === k.kid)) : [];
+    return section(uid("api-h"), FW["api.card-keys"], el("p", { class: "note" }, FW["api.card-keys-help"]), add ? el("div", { class: "page-head" }, add) : null,
+      cardKeys(FW["api.card-keys"], a.keys || [], org, admin), staged.length ? [el("p", null, el("strong", null, FW["api.draft-keys"])), cardKeys(FW["api.draft-keys"], staged, org, admin)] : null);
+  }
+  // 7.1.5: the agent this console publishes at its root well-known address (one per console, two-person).
+  function apiWellKnown(o, a, admin) {
+    const org = o.org;
+    const names = Object.fromEntries((a.agents || []).map((g) => [g.id, g.name]));
+    const opts = [["", FW["api.well-known-none"]]].concat((a.agents || []).filter((g) => !g.off).map((g) => [g.id, g.name + " (" + g.id + ")"]));
+    const set = admin ? btn(FW["api.well-known-set"], () => confirmDialog({
+      spec: fspec("api-well-known"), vals: { org }, name: org, id: org, two: (v) => !!v.agent,
+      fields: [{ kind: "select", key: "agent", label: FW["api.f-well-known"], options: opts, value: a.well_known || "" }],
+      run: (v) => apiStep("settings/api/a2a/well-known", { org, agent: v.agent || null }, "api.a2a.well-known"),
+    })) : null;
+    return section(uid("api-h"), FW["api.well-known"], a.well_known_url ? el("p", { class: "note" }, fill(FW["api.well-known-help"], { url: code(a.well_known_url) })) : null,
+      pairs([[FW["api.f-well-known"], a.well_known ? el("span", null, u(names[a.well_known] || a.well_known), " ", code(a.well_known)) : FW["api.well-known-none"]]]),
+      set ? el("div", { class: "wizard-actions" }, set) : null);
+  }
+  const TASK_STATES = ["submitted", "working", "input_required", "auth_required", "completed", "canceled", "failed", "rejected"];
+  function apiTasks(o, a, view, filt, t) {
+    const enc = encodeURIComponent;
+    const go = (k, val) => {
+      const f = Object.assign({}, filt, { [k]: val });
+      location.hash = "#/security/api?org=" + enc(o.org) + "&tab=agents" + Object.entries(f).filter(([, x]) => x).map(([n, x]) => "&" + n + "=" + enc(x)).join("");
+    };
+    const pick = (k, label, options) => {
+      const id = uid("flt");
+      const s = el("select", { id, "data-filter": k }, [["", FW["api.filter-all"]]].concat(options).map(([v, w]) => el("option", { value: v }, clean(w))));
+      s.value = filt[k];
+      s.addEventListener("change", () => go(k, s.value));
+      return el("div", { class: "field" }, el("label", { for: id }, label), s);
+    };
+    const agentName = Object.fromEntries((a.agents || []).map((g) => [g.id, g.name]));
+    return section(uid("api-h"), FW["api.tasks"], el("p", { class: "note" }, FW["api.tasks-help"]),
+      el("div", { class: "wizard-actions" }, pick("agent", FW["api.col-agent"], (a.agents || []).map((g) => [g.id, g.name])),
+        pick("client", FW["api.f-client"], (view.clients || []).filter((x) => x.a2a).map((x) => [x.id, x.name])), pick("state", FMSG.cols.state, TASK_STATES.map((s) => [s, stateWord(s)]))),
+      t.error ? emptyLine(u(t.error)) : dataTable({
+        caption: FW["api.tasks"], rows: t.tasks || [], empty: MSG.noneYet, name: (r) => r.task, sortKey: "updated", sortDir: -1,
+        text: (r) => [r.task, r.client_name, r.agent, r.skill, r.spoke].join(" "),
+        cols: [{ key: "task", label: FW["api.col-task"], cell: (r) => code(r.task) }, { key: "client_name", label: FW["api.f-client"], cell: (r) => u(r.client_name || r.client || "") },
+          { key: "agent", label: FW["api.col-agent"], cell: (r) => u(agentName[r.agent] || r.agent || "") }, { key: "skill", label: FW["api.col-skill"], cell: (r) => code(r.skill || "") },
+          { key: "spoke", label: FW["api.col-spoke"], cell: (r) => (r.spoke ? code(r.spoke) : "") }, { key: "state", label: FMSG.cols.state, cell: (r) => u(stateWord(r.state)) },
+          { key: "created", label: FW["api.col-created"], cell: (r) => whenSec(r.created) }, { key: "updated", label: FW["api.col-updated"], cell: (r) => whenSec(r.updated) },
+          { key: "bytes_in", label: FW["api.col-bytes-in"], cell: (r) => String(r.bytes_in || 0) }, { key: "bytes_out", label: FW["api.col-bytes-out"], cell: (r) => String(r.bytes_out || 0) }],
+      }));
+  }
+
+  // ---- Revision 6 7.14 and 5.1: the Remote Spokes tab: the console's root and the map's, Set root, the org's spokes
+  // relays with Bind and Unbind (two-person to bind), the relays that can be bound, and the service hubs.
+  async function apiSpokesTab(o, admin) {
+    const org = o.org;
+    const s = await api("GET", "settings/api/spokes?org=" + encodeURIComponent(org), null, { direct: true });
+    const bind = (r, on) => confirmDialog({
+      spec: fspec(on ? "api-spokes-bind" : "api-spokes-unbind"), vals: { relay: r.name || r.id, org }, name: r.name || r.id, id: r.id, two: on, danger: !on,
+      run: () => apiStep("settings/api/spokes/" + (on ? "bind" : "unbind"), { org, relay: r.id }, on ? "api.spokes.bind" : "api.spokes.unbind"),
+    });
+    const rootLine = (x) => (x ? el("span", null, code(x.root), " ", code(x.root_spki)) : FW["api.root-none"]);
+    const yn = (b) => toneChip(yesNo(b), b ? "ok" : "none");
+    const relayCell = (r) => el("span", null, u(r.name || r.id), " ", code(r.id));
+    const setRoot = admin && s.console_root ? btn(FW["api.root-set"], () => confirmDialog({
+      spec: fspec("api-spokes-root"), vals: { org, root: s.console_root.id }, name: org, id: s.console_root.id,
+      run: () => apiStep("settings/api/spokes/root", { org }, "api.spokes.root"),
+    }), "primary") : null;
+    const credText = (h) => (h.credentials || []).map((k) => [FW["api.col-node"] + " " + k.node, FW["api.col-serial"] + " " + k.serial, daySec(k.expires),
+      FW["api.key-store-" + String(k.key_store || "").replace(/_/g, "-")] || k.key_store].join(", ")).join("; ");
+    return [section(uid("api-h"), FW["api.spokes"], el("p", { class: "note" }, FW["api.spokes-help"]),
+      pairs([[FW["api.console-root"], s.console_root ? code(s.console_root.id) : FW["api.root-none"]], [FW["api.map-root"], rootLine(s.map_root)],
+        [FW["api.draft-root"], s.draft_root ? rootLine(s.draft_root) : undefined]]), setRoot ? el("div", { class: "wizard-actions" }, setRoot) : null),
+    section(uid("api-h"), FW["api.bound-relays"], dataTable({
+      caption: FW["api.bound-relays"], rows: s.relays || [], empty: MSG.noneYet, name: (r) => r.name || r.id,
+      cols: [{ key: "name", label: FMSG.cols.relay, cell: relayCell }, { key: "connected", label: FW["api.col-connected"], cell: (r) => yn(r.connected) },
+        { key: "bound", label: FW["api.col-bound"], cell: (r) => yn(r.bound) }, { key: "listed", label: FW["api.col-listed"], cell: (r) => yn(r.listed) },
+        { key: "staged", label: FW["api.col-staged"], cell: (r) => yn(r.staged) }, { key: "outdated", label: FMSG.cols.state, cell: (r) => (r.outdated ? toneChip(FW["api.needs-update"], "bad") : "") }],
+      actions: (r) => (admin ? [r.bound ? { label: FW["api.unbind"], run: () => bind(r, false) } : { label: FW["api.bind"], run: () => bind(r, true) }] : []),
+    })),
+    section(uid("api-h"), FW["api.candidates"], dataTable({
+      caption: FW["api.candidates"], rows: s.candidates || [], empty: MSG.noneYet, name: (r) => r.name || r.id,
+      cols: [{ key: "name", label: FMSG.cols.relay, cell: relayCell }],
+      actions: (r) => (admin ? [{ label: FW["api.bind"], run: () => bind(r, true) }] : []),
+    })),
+    section(uid("api-h"), FW["api.hubs"], dataTable({
+      caption: FW["api.hubs"], rows: s.hubs || [], empty: MSG.noneYet, name: (h) => h.name, text: (h) => [h.name, h.id, h.principal].join(" "),
+      cols: [{ key: "name", label: FMSG.cols.name, cell: (h) => el("span", null, u(h.name), " ", code(h.id)) }, { key: "principal", label: FW["api.col-principal"], cell: (h) => u(h.principal || "") },
+        { key: "state", label: FMSG.cols.state, cell: (h) => toneChip(FW["api.shown-" + h.state] || stateWord(h.state), SHOWN_TONE[h.state]) },
+        { key: "ceiling", label: FW["api.col-ceiling"], cell: (h) => ceilingWord(h.ceiling) },
+        { key: "targets", label: FW["api.col-targets"], sortable: false, cell: (h) => ((h.targets || []).includes("*") ? FW["api.targets-all"] : (h.targets || []).join(", ")) },
+        { key: "relays", label: FMSG.cols.count, sortable: false, cell: (h) => relaysText(h.relays) },
+        { key: "credentials", label: FW["api.col-credentials"], sortable: false, cell: credText },
+        { key: "agent", label: FW["api.col-agent"], cell: (h) => (h.agent ? code(h.agent) : "") }],
+    }))];
+  }
+  const enterpriseOnly = (o, list) => !!o.edition && o.edition !== "enterprise" && !list.length;
+  // 14.1: each delegated client's people (GET settings/api/delegations) and each content client's approvals (GET
+  // settings/api/approvals, metadata only); a failed read shows its words in place of the list.
+  async function apiPeopleOf(o, view) {
+    const ask = (path, id) => api("GET", path + "?org=" + encodeURIComponent(o.org) + "&client=" + encodeURIComponent(id), null, { direct: true }).catch((e) => ({ error: e.message }));
+    const out = {};
+    await Promise.all((view.clients || []).filter((x) => CONTENT_KINDS.includes(x.kind)).map(async (x) => {
+      const [people, approvals] = await Promise.all([x.kind === "agent_delegated" ? ask("settings/api/delegations", x.id) : null,
+        (x.connectors || []).length ? ask("settings/api/approvals", x.id) : null]);
+      out[x.id] = { people, approvals };
+    }));
+    return out;
+  }
+  // Per content or delegated client: what it reaches, its delegation, its people (Revoke) and its approvals.
+  function apiContent(o, view, admin, people) {
+    const list = (view.clients || []).filter((x) => CONTENT_KINDS.includes(x.kind));
+    if (!list.length) return null;
+    const connName = Object.fromEntries((view.connectors || []).map((k) => [k.id, k.name]));
+    return section(uid("api-h"), FW["api.content"], list.map((x) => sub([u(x.name), " ", code(x.id)], contentPairs(x, connName), clientPeople(o, x, admin, people[x.id] || {}))));
+  }
+  function contentPairs(x, connName) {
+    const rows = [[FMSG.cols.kind, kindWord(x.kind)]];
+    if ((x.connectors || []).length) {
+      const ch = x.channels || [];
+      rows.push([FW["api.col-connectors"], x.connectors.map((id) => connName[id] || id).join(", ")], [FW["api.col-apps"], (x.apps || []).join(", ")],
+        [FW["api.f-channels"], ch.includes("*") ? FW["api.channels-all"] : ch.join(", ")], [FW["api.f-confirm"], yesNo((x.confirm || []).includes("content.post"))]);
+    }
+    const dg = x.delegation;
+    const dgRows = dg ? [[FW["api.dlg-groups"], (dg.groups || []).join(", ")], [FW["api.dlg-people"], (dg.principals || []).join(", ")],
+      [FW["api.dlg-denied"], (dg.denied || []).join(", ")], [FW["api.dlg-idps"], (dg.idps || []).join(", ")],
+      [FW["api.dlg-consent"], String(dg.consent_days == null ? "" : dg.consent_days)], [FW["api.redirects"], (x.redirect_uris || []).join(", ")],
+      [FW["api.loopback"], yesNo(x.loopback_ok)]] : [];
+    const cimd = cimdOf(x);
+    if (cimd) (dg ? dgRows : rows).push([FW["api.cimd"], code(cimd.hint || cimd.url || "")]);
+    return el("div", null, pairs(rows), dg ? [el("p", null, el("strong", null, FW["api.delegation"])), pairs(dgRows)] : null,
+      x.loopback_ok ? el("p", { class: "note" }, FW["api.loopback-warn"]) : null);
+  }
+  function clientPeople(o, x, admin, got) {
+    const kids = [];
+    const failed = (r) => (r && r.error ? emptyLine(u(r.error)) : null);
+    if (got.people) {
+      kids.push(el("p", null, el("strong", null, FW["api.people"])), el("p", { class: "note" }, FW["api.people-help"]), failed(got.people) || dataTable({
+        caption: FW["api.people"] + ": " + x.name, rows: got.people.people || [], empty: MSG.noneYet, name: (p) => p.principal, text: (p) => [p.principal, p.grant].join(" "),
+        cols: [{ key: "principal", label: FW["api.col-person"], cell: (p) => u(p.principal) }, { key: "grant", label: FW["api.col-grant"], cell: (p) => code(p.grant) },
+          { key: "first_use", label: FW["api.col-first-use"], cell: (p) => whenSec(p.first_use) }, { key: "last_use", label: FW["api.col-last-use"], cell: (p) => whenSec(p.last_use) },
+          { key: "ends", label: FMSG.cols.ends, cell: (p) => (p.ends ? whenSec(p.ends) : "") },
+          { key: "revoked", label: FMSG.cols.state, cell: (p) => (p.revoked ? toneChip(FW["api.revoked"], "bad") : toneChip(FW["api.shown-active"], "ok")) }],
+        actions: (p) => (admin && !p.revoked ? [{ label: FW["api.revoke"], run: () => confirmDialog({
+          spec: fspec("api-delegation-revoke"), vals: { principal: p.principal, name: x.name }, name: p.principal, id: x.id, danger: true,
+          run: () => apiStep("settings/api/delegations/revoke", { org: o.org, client: x.id, principal: p.principal }, "api.delegation.revoke"),
+        }) }] : []),
+      }));
+    }
+    if (got.approvals) {
+      kids.push(el("p", null, el("strong", null, FW["api.approvals"])), el("p", { class: "note" }, FW["api.approvals-help"]), failed(got.approvals) || dataTable({
+        caption: FW["api.approvals"] + ": " + x.name, rows: got.approvals.approvals || [], empty: MSG.noneYet, name: (a) => a.approval, sortKey: "ts", sortDir: -1,
+        cols: [{ key: "ts", label: FW["api.col-when"], cell: (a) => whenSec(a.ts) }, { key: "approval", label: FW["api.col-approval"], cell: (a) => code(a.approval) },
+          { key: "action", label: FMSG.change, cell: (a) => code(a.action) }, { key: "result", label: FW["api.col-result"], cell: (a) => u(a.result || "") },
+          { key: "app", label: FW["api.col-app"], cell: (a) => u(a.app || "") }, { key: "connector", label: FW["api.col-connectors"], cell: (a) => code(a.connector) }],
+      }));
+    }
+    return kids.length ? el("div", null, kids) : null;
+  }
+  // The org's active person_revoke entries (4.2): Allow again stages the clearing, a two-person save (O18).
+  function apiRevokes(o, view, admin) {
+    const list = o.person_revokes || [];
+    if (!list.length) return null;
+    const names = Object.fromEntries((view.clients || []).map((x) => [x.id, x.name]));
+    const clientWord = (c) => (c === "*" ? FW["api.all-clients"] : names[c] || c);
+    return section(uid("api-h"), FW["api.revokes"], el("p", { class: "note" }, FW["api.revokes-help"]), dataTable({
+      caption: FW["api.revokes"], rows: list, empty: MSG.noneYet, name: (r) => r.principal, text: (r) => [r.principal, r.client, r.id].join(" "),
+      cols: [{ key: "principal", label: FW["api.col-person"], cell: (r) => u(r.principal) }, { key: "client", label: FW["api.f-client"], cell: (r) => u(clientWord(r.client)) },
+        { key: "ts", label: FW["api.col-when"], cell: (r) => whenSec(r.ts) }, { key: "id", label: W["dialog.id"], cell: (r) => code(r.id) }],
+      actions: (r) => (admin ? [{ label: FW["api.allow"], run: () => confirmDialog({
+        spec: fspec("api-delegation-allow"), vals: { principal: r.principal, name: clientWord(r.client) }, name: r.principal, id: r.id, two: true,
+        run: () => apiStep("settings/api/delegations/allow", { org: o.org, client: r.client, principal: r.principal }, "api.delegation.allow"),
+      }) }, r.client === "*" ? null : { label: FW["api.revoke-all"], run: () => confirmDialog({
+        spec: fspec("api-delegation-revoke-all"), vals: { principal: r.principal }, name: r.principal, id: r.id, danger: true,
+        run: () => apiStep("settings/api/delegations/revoke", { org: o.org, client: "*", principal: r.principal }, "api.delegation.revoke"),
+      }) }] : []),
+    }));
+  }
+
+  // Connectors (3.1, 14.2): each with its apps, conversations, sync age, state (stale and never synced from the
+  // connector's last ack) and key store. Suspend and Delete journal at once; adding and widening are two-person.
+  const CONN_TONE = { active: "ok", suspended: "warn", stale: "bad", "never-synced": "warn" };
+  function connShown(k, st) {
+    if (k.shown_state) return k.shown_state;
+    if (k.state === "suspended") return "suspended";
+    if (st.stale) return st.sync_age_s == null ? "never-synced" : "stale";
+    return "active";
+  }
+  function apiConnectors(o, view, admin) {
+    const list = view.connectors || [];
+    if (enterpriseOnly(o, list)) return null;
+    const status = o.connector_status || {};
+    const apps = o.api_apps || [];
+    const appName = Object.fromEntries(apps.map((a) => [a.principal, a.name]));
+    const add = admin && apps.length ? btn(FW["api.conn-add"], () => connectorDialog(o, null), "primary") : null;
+    return section(uid("api-h"), FW["api.connectors"], el("p", { class: "note" }, FW["api.connectors-help"]), add ? el("div", { class: "page-head" }, add) : null,
+      admin && !apps.length ? emptyLine(FW["api.conn-no-apps"]) : null, dataTable({
+        caption: FW["api.connectors"], rows: list, empty: MSG.noneYet, name: (k) => k.name, text: (k) => [k.name, k.id, k.origin].join(" "),
+        cols: [{ key: "name", label: FMSG.cols.name, cell: (k) => el("span", null, u(k.name), " ", code(k.id)) },
+          { key: "origin", label: FW["api.col-origin"], cell: (k) => code(k.origin), sortable: false },
+          { key: "apps", label: FW["api.col-apps"], cell: (k) => (k.apps || []).map((p) => appName[p] || p).join(", "), sortable: false },
+          { key: "conversations", label: FW["api.col-conversations"], sort: (k) => (status[k.id] || {}).conversations,
+            cell: (k) => ((status[k.id] || {}).conversations == null ? FW["api.not-reported"] : String(status[k.id].conversations)) },
+          { key: "sync_age_s", label: FW["api.col-sync-age"], sort: (k) => (status[k.id] || {}).sync_age_s,
+            cell: (k) => ((status[k.id] || {}).sync_age_s == null ? FW["api.shown-never-synced"] : fillText(FW["api.sync-age"], { n: status[k.id].sync_age_s })) },
+          { key: "shown_state", label: FMSG.cols.state, cell: (k) => {
+            const s = connShown(k, status[k.id] || {});
+            return toneChip(FW["api.shown-" + s] || stateWord(s), CONN_TONE[s]);
+          } },
+          { key: "seal", label: FW["api.col-key-store"], sortable: false, cell: (k) => ((status[k.id] || {}).seal ? code(status[k.id].seal) : FW["api.not-reported"]) }],
+        actions: (k) => (admin ? connectorActions(o, k) : []),
+      }));
+  }
+  function connectorActions(o, k) {
+    const named = { name: k.name };
+    const org = o.org;
+    return [{ label: FW["api.change"], run: () => connectorDialog(o, k) }, k.state === "suspended" ? { label: FW["api.resume"], run: () => confirmDialog({
+      spec: fspec("api-connector-resume"), vals: named, name: k.name, id: k.id, two: true,
+      run: () => apiStep("settings/api/connectors/resume", { org, id: k.id }, "api.connector.resume"),
+    }) } : { label: FW["api.suspend"], run: () => confirmDialog({
+      spec: fspec("api-connector-suspend"), vals: named, name: k.name, id: k.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiStep("settings/api/connectors/suspend", { org, id: k.id, reason: v.reason }, "api.connector.suspend"),
+    }) }, { label: FW["api.delete"], run: () => confirmDialog({
+      spec: fspec("api-connector-delete"), vals: named, name: k.name, id: k.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiStep("settings/api/connectors/delete", { org, id: k.id, reason: v.reason }, "api.connector.delete"),
+    }) }];
+  }
+  // Add connector (name, origin, apps, networks, stale seconds) or Change (apps, networks, stale seconds); the console
+  // draws the k_ id. A change widens (two-person) when it adds an app, a network, empties the networks or waits longer.
+  function connectorDialog(o, k) {
+    const opts = (o.api_apps || []).map((a) => [a.principal, a.name + " (" + a.principal + ")"]);
+    for (const p of (k && k.apps) || []) if (!opts.some((x) => x[0] === p)) opts.push([p, p]);
+    const was = (k && k.networks) || [];
+    const widens = (v) => {
+      const nets = commaList(v.networks);
+      return !k || v.apps.some((p) => !(k.apps || []).includes(p)) || Number(v.stale) > k.stale_s || nets.some((n) => !was.includes(n)) || (!nets.length && was.length > 0);
+    };
+    confirmDialog({
+      spec: fspec(k ? "api-connector-update" : "api-connector"), vals: { name: k ? k.name : "" }, vals2: k ? null : (v) => ({ name: v.name }),
+      name: k ? k.name : o.org, id: k ? k.id : o.org, two: widens,
+      fields: (k ? [] : [{ key: "name", label: FW["api.f-name"], maxlength: "32", required: true }, { key: "origin", label: FW["api.f-conn-origin"], maxlength: "256" }]).concat([
+        { kind: "checks", key: "apps", label: FW["api.f-conn-apps"], options: opts, value: k ? k.apps || [] : [] },
+        { key: "networks", label: FW["api.f-networks"], value: was.join(", ") },
+        { key: "stale", label: FW["api.f-conn-stale"], value: k ? k.stale_s : 60, inputmode: "numeric" }]),
+      check: (v) => ((!k && (!/^[a-z0-9-]{1,32}$/.test(v.name) || !/^https:\/\/[^\s/?#@]+:[0-9]{1,5}$/.test(v.origin))) || v.apps.length < 1 || v.apps.length > 16
+        || !wholeIn(v.stale, 30, 300) ? FW["api.check-conn"] : ""),
+      run: (v) => {
+        const connector = { apps: v.apps, networks: commaList(v.networks), stale_s: Number(v.stale) };
+        return k ? apiStep("settings/api/connectors/update", { org: o.org, id: k.id, connector }, "api.connector.update")
+          : apiStep("settings/api/connectors", { org: o.org, connector: Object.assign({ name: v.name, origin: v.origin }, connector) }, "api.connector.stage");
+      },
+    });
+  }
+
+  // Identity providers for EMA (3.1, 6.4): Test fetches discovery and keys (nothing stored but the time and the key
+  // count); Suspend journals at once; adding, Resume and a private address are two-person.
+  const IDP = { tested: null };
+  function apiIdps(o, view, admin) {
+    const list = view.idps || [];
+    if (enterpriseOnly(o, list)) return null;
+    const t = IDP.tested && IDP.tested.org === o.org ? IDP.tested : null;
+    return section(uid("api-h"), FW["api.idps"], el("p", { class: "note" }, FW["api.idps-help"]), dataTable({
+      caption: FW["api.idps"], rows: list, empty: MSG.noneYet, name: (i) => i.id, text: (i) => [i.id, i.provider, i.issuer].join(" "),
+      cols: [{ key: "id", label: FMSG.cols.name, cell: (i) => u(i.id) }, { key: "provider", label: FW["api.col-provider"], cell: (i) => u(i.provider) },
+        { key: "issuer", label: FW["api.col-issuer"], cell: (i) => code(i.issuer), sortable: false }, { key: "algs", label: FW["api.col-algs"], cell: (i) => (i.algs || []).join(", "), sortable: false },
+        { key: "tenant", label: FW["api.dir-tenant"], cell: (i) => (i.tenant ? code(i.tenant) : "") }, { key: "max_age_s", label: FW["api.col-max-age"] },
+        { key: "auth_max_s", label: FW["api.col-auth-max"], cell: (i) => String(i.auth_max_s || 43200) }, { key: "private_ok", label: FW["api.col-private"], cell: (i) => yesNo(i.private_ok) },
+        { key: "shown_state", label: FMSG.cols.state, cell: (i) => {
+          const s = i.shown_state || i.state;
+          return toneChip(FW["api.shown-" + s] || stateWord(s), SHOWN_TONE[s]);
+        } },
+        { key: "last_test", label: FW["api.col-last-test"], cell: (i) => whenSec(i.last_test) }, { key: "keys", label: FW["api.col-keys"], cell: (i) => (i.keys == null ? "" : String(i.keys)) }],
+      actions: (i) => (admin ? idpActions(o, i) : []),
+    }), t ? idpTested(t) : null);
+  }
+  function idpActions(o, i) {
+    const named = { name: i.id };
+    const org = o.org;
+    return [{ label: FW["api.idp-test"], run: () => confirmDialog({
+      spec: fspec("api-idp-test"), vals: named, name: i.id, id: i.id,
+      run: () => apiStep("settings/api/idps/test", { org, id: i.id }, "api.idp.test"),
+      plain: true,
+      done: (r) => {
+        IDP.tested = { org, id: i.id, r: r || {} };
+        render({ keepMessages: true });
+      },
+    }) }, { label: FW["api.change"], run: () => idpChange(o, i) }, i.state === "suspended" ? { label: FW["api.resume"], run: () => confirmDialog({
+      spec: fspec("api-idp-resume"), vals: named, name: i.id, id: i.id, two: true,
+      run: () => apiStep("settings/api/idps/resume", { org, id: i.id }, "api.idp.resume"),
+    }) } : { label: FW["api.suspend"], run: () => confirmDialog({
+      spec: fspec("api-idp-suspend"), vals: named, name: i.id, id: i.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiStep("settings/api/idps/suspend", { org, id: i.id, reason: v.reason }, "api.idp.suspend"),
+    }) }];
+  }
+  // Change an identity provider (idps/update): a narrowing journals idp_limit at once; widening (an algorithm added, a
+  // longer age, the tenant removed or changed, private addresses on) is two-person (13.2).
+  function idpChange(o, i) {
+    const algs = i.algs || [];
+    const auth = i.auth_max_s || 43200;
+    const widens = (v) => v.algs.some((a) => !algs.includes(a)) || Number(v.maxAge) > i.max_age_s || Number(v.authMax) > auth
+      || (!!i.tenant && v.tenant !== i.tenant) || (v.private === "yes" && !i.private_ok);
+    confirmDialog({
+      spec: fspec("api-idp-update"), vals: { name: i.id }, name: i.id, id: i.id, two: widens, params: [[FW["api.col-issuer"], i.issuer]],
+      fields: [{ kind: "checks", key: "algs", label: FW["api.f-algs"], options: IDP_ALGS.map((a) => [a, a]), value: algs },
+        { key: "tenant", label: FW["api.f-tenant"], value: i.tenant || "", maxlength: "128" },
+        { key: "maxAge", label: FW["api.f-max-age"], value: i.max_age_s, inputmode: "numeric" },
+        { key: "authMax", label: FW["api.f-auth-max"], value: auth, inputmode: "numeric" },
+        { kind: "select", key: "private", label: FW["exports.f-private"], options: yesNoOptions(), value: i.private_ok ? "yes" : "no" }],
+      check: (v) => (v.algs.length && wholeIn(v.maxAge, 60, 600) && wholeIn(v.authMax, 300, 86400) ? "" : FW["api.check-idp-change"]),
+      run: (v) => apiStep("settings/api/idps/update", { org: o.org, id: i.id, idp: { algs: v.algs, tenant: v.tenant || null, max_age_s: Number(v.maxAge),
+        auth_max_s: Number(v.authMax), private_ok: v.private === "yes" } }, "api.idp.update"),
+    });
+  }
+  // What a test found: the issuer, the key set address and each key's id, algorithm and type.
+  function idpTested(t) {
+    const r = t.r;
+    return sub(FW["api.idp-tested"] + ": " + t.id, pairs([[FW["api.col-issuer"], code(r.issuer || "")], [FW["api.idp-jwks"], code(r.jwks_uri || "")]]), dataTable({
+      caption: FW["api.col-keys"], rows: r.keys || [], empty: MSG.noneYet, name: (k) => k.kid || "",
+      cols: [{ key: "kid", label: FW["api.col-kid"], cell: (k) => code(k.kid || "") }, { key: "alg", label: FW["api.col-alg"], cell: (k) => u(k.alg || "") },
+        { key: "kty", label: FW["api.col-kty"], cell: (k) => u(k.kty || "") }],
+    }));
+  }
+  // 3.2 (R5-9): the issuer is prefilled from the registry entry's iss where it matches: for Okta its org authorization
+  // server (the scheme and host of the entry), for the others the entry's iss itself.
+  function issuerFor(p) {
+    try {
+      return p.kind === "okta" ? new URL(p.iss).origin : p.iss || "";
+    } catch (e) {
+      return p.iss || "";
+    }
+  }
+  function idpDialog(o, p) {
+    confirmDialog({
+      spec: fspec("api-idp"), vals: { name: "" }, vals2: (v) => ({ name: v.id }), name: p.id, id: p.id, two: true, params: [[FW["api.col-provider"], p.id]],
+      fields: [{ key: "id", label: FW["api.f-name"], value: /^[a-z0-9-]{1,32}$/.test(p.id) ? p.id : "", maxlength: "32" },
+        { key: "issuer", label: FW["api.f-issuer"], value: issuerFor(p), maxlength: "1024" },
+        { kind: "checks", key: "algs", label: FW["api.f-algs"], options: IDP_ALGS.map((a) => [a, a]), value: ["RS256"] },
+        { key: "tenant", label: FW["api.f-tenant"], maxlength: "128" },
+        { key: "maxAge", label: FW["api.f-max-age"], value: 300, inputmode: "numeric" },
+        { key: "authMax", label: FW["api.f-auth-max"], value: 43200, inputmode: "numeric" },
+        { kind: "select", key: "private", label: FW["exports.f-private"], options: yesNoOptions(), value: "no" }],
+      check: (v) => (/^[a-z0-9-]{1,32}$/.test(v.id) && /^https:\/\/\S+$/.test(v.issuer) && v.issuer.length <= 1024 && v.algs.length && wholeIn(v.maxAge, 60, 600)
+        && wholeIn(v.authMax, 300, 86400) ? "" : FW["api.check-idp"]),
+      run: (v) => {
+        const idp = { id: v.id, provider: p.id, issuer: v.issuer, algs: v.algs, max_age_s: Number(v.maxAge), auth_max_s: Number(v.authMax), private_ok: v.private === "yes" };
+        if (v.tenant) idp.tenant = v.tenant;
+        return apiStep("settings/api/idps", { org: o.org, idp }, "api.idp.stage");
+      },
+    });
+  }
+  // The org's ID-1 providers (6.5 step 2): each one's SSO URL with Set, Add identity provider from it, and the exact
+  // api_return value the SSO operator copies into sso.json.
+  function apiProviders(o, view, admin) {
+    const list = o.providers || [];
+    if (!list.length || enterpriseOnly(o, [])) return null;
+    const ret = o.api_return || (list.find((p) => p.api_return) || {}).api_return || null;
+    return section(uid("api-h"), FW["api.providers"], el("p", { class: "note" }, FW["api.providers-help"]),
+      ret ? el("dl", { class: "pairs" }, el("dt", null, FW["api.api-return"]), el("dd", null, code(ret), " ", copyButton(ret))) : emptyLine(FW["api.api-return-none"]), dataTable({
+        caption: FW["api.providers"], rows: list, empty: MSG.noneYet, name: (p) => p.id,
+        cols: [{ key: "id", label: W["dialog.id"], cell: (p) => code(p.id) }, { key: "kind", label: FMSG.cols.kind, cell: (p) => u(p.kind || "") },
+          { key: "iss", label: FW["api.col-issuer"], cell: (p) => code(p.iss || ""), sortable: false },
+          { key: "sso_url", label: FW["api.col-sso-url"], cell: (p) => (p.sso_url ? code(p.sso_url) : FW["api.not-set"]), sortable: false }],
+        actions: (p) => (admin ? [{ label: FW["api.idp-add"], run: () => idpDialog(o, p) }, { label: FW["api.sso-set"], run: () => confirmDialog({
+          spec: fspec("api-sso-url"), vals: { provider: p.id }, name: p.id, id: p.id,
+          fields: [{ key: "url", label: FW["api.f-sso-url"], value: p.sso_url || "", maxlength: "512" }],
+          check: (v) => (!v.url || /^https:\/\/[^\s?#]+$/.test(v.url) ? "" : FW["api.check-sso-url"]),
+          run: (v) => apiStep("settings/api/sso-url", { org: o.org, provider: p.id, url: v.url || null }, "api.sso-url"),
+        }) }] : []),
+      }));
+  }
+
+  // Revision 4 13.2: per client with a compliance or directory block, its limits and recipient key (with its
+  // thumbprint), the reviewers rule and the org's Meet CA fingerprint for compliance tools to pin; for a directory
+  // client its identity provider, SCIM URL and domains, and for Entra the tenant, audience and authorized party with the
+  // three values to paste into Entra. Raising a limit or a new recipient is a two-person save (13.3); lowering a limit
+  // and dropping the recipient apply at once (2.4).
+  const CAPS = [["holds_per_day", "api.cap-holds", "api.f-cap-holds", 1, 100, 1], ["jobs_per_day", "api.cap-jobs", "api.f-cap-jobs", 1, 20, 1],
+    ["job_max_bytes", "api.cap-job-bytes", "api.f-cap-job-mib", 1, 51200, 1048576], ["day_max_bytes", "api.cap-day-bytes", "api.f-cap-day-mib", 1, 204800, 1048576]];
+  function apiBlocks(o, view, admin, map, meetCa) {
+    const list = (view.clients || []).filter((x) => x.compliance || x.directory);
+    if (!list.length) return null;
+    const issuer = (map && map.issuer_url) || view.issuer_url || "";
+    const kids = [];
+    if (list.some((x) => x.compliance) && meetCa && meetCa.fingerprint) kids.push(pairs([[FW["api.meet-ca"], el("code", { class: "fingerprint" }, clean(meetCa.fingerprint))]]));
+    for (const x of list) kids.push(sub([u(x.name), " ", code(x.id)], x.compliance ? complianceBlock(o.org, x, admin) : null, x.directory ? directoryBlock(x, issuer) : null));
+    return section(uid("api-h"), FW["api.blocks"], ...kids);
+  }
+  // The recipient key as the route takes it: {jwk} from a JSON object, {pem} from a PEM; null when it is neither.
+  function recipientBody(t) {
+    const s = String(t || "").trim();
+    if (/^-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----$/.test(s)) return { pem: s };
+    if (!s.startsWith("{")) return null;
+    try {
+      const v = JSON.parse(s);
+      return v && typeof v === "object" && !Array.isArray(v) && v.kty === "EC" && !("d" in v) ? { jwk: v } : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function complianceBlock(org, x, admin) {
+    const cp = x.compliance;
+    const r = cp.recipient;
+    const exportClient = (x.scopes || []).includes("compliance.export.request");
+    const rows = CAPS.filter(([k]) => cp[k] != null).map(([k, w, , , , unit]) => [FW[w], unit > 1 ? fmtBytes(Number(cp[k])) : String(cp[k])]);
+    if (exportClient) rows.push([FW["api.recipient"], r ? code(r.kid) : FW["api.recipient-none"]]);
+    if (r) rows.push([FW["api.thumbprint"], el("code", { class: "fingerprint" }, clean(r.jkt || ""))]);
+    const named = { name: x.name };
+    const acts = admin ? [
+      exportClient ? btn(FW["api.recipient-set"], () => confirmDialog({
+        spec: fspec("api-recipient"), vals: named, name: x.name, id: x.id, two: true,
+        fields: [{ kind: "textarea", key: "key", label: FW["api.f-recipient"] }],
+        check: (v) => (recipientBody(v.key) ? "" : FW["api.check-recipient"]),
+        run: (v) => apiStep("settings/api/clients/recipient", Object.assign({ org, id: x.id }, recipientBody(v.key)), "api.client.recipient"),
+      })) : null,
+      exportClient && r ? btn(FW["api.recipient-drop"], () => confirmDialog({
+        spec: fspec("api-recipient-drop"), vals: named, name: x.name, id: r.kid, danger: true,
+        run: () => apiPost("settings/api/clients/recipient/drop", { org, id: x.id }),
+      }), "danger") : null,
+      rows.length ? btn(FW["api.caps-set"], () => capsDialog(org, x)) : null,
+    ] : [];
+    return el("div", null, el("p", null, el("strong", null, FW["api.compliance"])), pairs(rows), exportClient ? el("p", { class: "note" }, FW["api.compliance-rule"]) : null,
+      acts.some(Boolean) ? el("div", { class: "wizard-actions" }, acts) : null);
+  }
+  function capsDialog(org, x) {
+    const cp = x.compliance || {};
+    const has = CAPS.filter(([k]) => cp[k] != null);
+    confirmDialog({
+      spec: fspec("api-caps"), vals: { name: x.name }, name: x.name, id: x.id, two: true,
+      fields: has.map(([k, , label, , , unit]) => ({ key: k, label: FW[label], value: Math.max(1, Math.round(Number(cp[k]) / unit)), inputmode: "numeric" })),
+      check: (v) => (has.every(([k, , , lo, hi]) => wholeIn(v[k], lo, hi)) ? "" : FW["api.check-caps"]),
+      run: (v) => apiStep("settings/api/clients/caps", { org, id: x.id, caps: Object.fromEntries(has.map(([k, , , , , unit]) => [k, Number(v[k]) * unit])) }, "api.client.caps"),
+    });
+  }
+  function directoryBlock(x, issuer) {
+    const d = x.directory;
+    const wif = (x.credentials || []).find((c) => c.type === "entra_wif");
+    const kids = [el("p", null, el("strong", null, FW["api.directory"])),
+      pairs([[FW["api.dir-provider"], u(d.provider || "")], [FW["api.dir-scim"], code(d.resource || "")], [FW["api.dir-domains"], (d.domains || []).join(", ")]])];
+    if (wif) {
+      kids.push(pairs([[FW["api.dir-tenant"], code(wif.tenant || "")], [FW["api.dir-audience"], code(wif.audience || "")], [FW["api.dir-azp"], code(wif.azp || "")]]));
+      // 6.8: what the admin pastes back into Entra's provisioning settings
+      const paste = [[FW["api.dir-client-id"], x.id], [FW["api.dir-token-url"], issuer ? issuer.replace(/\/+$/, "") + "/oauth/token" : ""], [FW["api.dir-scim"], d.resource || ""]];
+      kids.push(el("p", null, FW["api.dir-paste"]), el("dl", { class: "pairs" }, paste.map(([k, v]) => [el("dt", null, k), el("dd", null, code(v), " ", copyButton(v))])));
+    }
+    return el("div", null, kids);
+  }
+  // Revision 4 2.3: the org's relay set with what each reported (api-features) and what it lacks for the pinned map;
+  // Retire takes a relay out of the set (refused while it is connected and still reports the org).
+  function apiRelaySet(o, admin) {
+    const set = o.relay_set || [];
+    if (!set.length) return null;
+    return section(uid("api-h"), FW["api.relay-set"], dataTable({
+      caption: FW["api.relay-set"], rows: set, empty: MSG.noneYet, name: (x) => relayName(x.id),
+      cols: [{ key: "id", label: FMSG.cols.relay, cell: (x) => u(relayName(x.id)) }, { key: "connected", label: FW["api.col-connected"], cell: (x) => yesNo(x.connected) },
+        { key: "features", label: FW["api.col-features"], sortable: false,
+          cell: (x) => (x.reported_at ? (x.map || []).map((n) => "v" + n).concat(x.features || []).join(", ") : FW["api.not-reported"]) },
+        { key: "lacks", label: FW["api.col-lacks"], sortable: false, cell: (x) => ((x.lacks || []).length ? toneChip(x.lacks.join(", "), "bad") : FW["api.lacks-none"]) }],
+      actions: (x) => (admin && (!x.connected || (x.lacks || []).length) ? [{ label: FW["api.retire"], run: () => confirmDialog({
+        spec: fspec("api-retire"), vals: { relay: relayName(x.id), org: o.org }, name: relayName(x.id), id: x.id, danger: true,
+        run: () => apiStep("settings/api/relays/retire", { org: o.org, relay: x.id }, "api.relay.retire"),
+      }) }] : []),
+    }));
+  }
+
+  // Relay scrape tokens (4.4): a new token is shown once; deleting one journals scrape_deny.
+  function apiScrape(o, view, admin) {
+    const org = o.org;
+    let label = "";
+    const add = admin ? btn(FW["api.scrape-new"], () => confirmDialog({
+      spec: fspec("api-scrape-token"), vals: { label: "", relays: FMSG.relaysAll, days: 90 },
+      fields: [{ key: "label", label: FMSG.label, maxlength: "64", required: true },
+        { kind: "select", key: "relays", label: FMSG.cols.count, options: [["*", FMSG.relaysAll]].concat(orgRelays(o.relays).map((x) => [x.id, relayName(x.id)])), value: "*" },
+        { key: "days", label: FW["api.f-scrape-days"], value: 90, inputmode: "numeric" }],
+      vals2: (v) => ({ label: v.label, relays: relaysText([v.relays]), days: v.days }),
+      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !wholeIn(v.days, 30, 90) ? FW["api.check-number"] : ""),
+      run: (v) => {
+        label = v.label;
+        return apiStep("settings/api/scrape-tokens", { org, action: "create", label: v.label, relays: [v.relays], days: Number(v.days) }, "api.scrape-token");
+      },
+      plain: true,
+      done: (r) => render({ keepMessages: true }).then(() => {
+        if (r && r.token) revealOnce(fill(FW["api.reveal-token"], { label }), r.hint || "", FW["exports.token-once"], r.token);
+      }),
+    }), "primary") : null;
+    return section(uid("api-h"), FW["api.scrape"], add ? el("div", { class: "page-head" }, add) : null, dataTable({
+      caption: FW["api.scrape"], rows: view.scrape_tokens || [], empty: MSG.noneYet, name: (t) => t.label,
+      cols: [{ key: "label", label: FMSG.label, cell: (t) => u(t.label) }, { key: "hint", label: W["dialog.id"], cell: (t) => code(t.hint) },
+        { key: "relays", label: FMSG.cols.count, cell: (t) => relaysText(t.relays), sortable: false }, { key: "expires", label: FMSG.cols.ends, cell: (t) => whenSec(t.expires) }],
+      actions: (t) => (admin ? [{ label: FW["api.delete"], run: () => confirmDialog({
+        spec: fspec("api-scrape-delete"), vals: { hint: t.hint }, name: t.label, id: t.hint, danger: true,
+        run: () => apiStep("settings/api/scrape-tokens", { org, action: "delete", hint: t.hint }, "api.scrape-token"),
+      }) }] : []),
+    }));
+  }
+
+  // Grace hours (3.1): 0 to 168 per kind; raising is two-person at save, lowering journals grace_lower.
+  const GRACE = ["person", "app", "connector", "relay"];
+  function apiGrace(o, view, admin) {
+    const g = view.grace || {};
+    const inputs = GRACE.map((k) => {
+      const f = textField(FW["api.grace-" + k], { inputmode: "numeric", maxlength: "3", disabled: admin ? null : true });
+      f.input.value = String(g[k] == null ? 0 : g[k]);
+      return [k, f];
+    });
+    const stage = admin ? btn(FW["api.stage"], () => {
+      const typed = Object.fromEntries(inputs.map(([k, f]) => [k, f.input.value.trim()]));
+      if (!GRACE.every((k) => wholeIn(typed[k], 0, 168))) {
+        fail(FW["api.check-grace"]);
+        return;
+      }
+      const grace = Object.fromEntries(GRACE.map((k) => [k, Number(typed[k])]));
+      confirmDialog({
+        spec: fspec("api-grace"), vals: { org: o.org }, name: o.org, id: o.org, params: GRACE.map((k) => [FW["api.grace-" + k], String(grace[k])]),
+        run: () => apiStep("settings/api/grace", { org: o.org, grace }, "api.grace"),
+      });
+    }, "primary") : null;
+    return section(uid("api-h"), FW["api.grace"], el("p", { class: "note" }, FW["api.grace-help"]), inputs.map(([, f]) => f.box), stage ? el("div", { class: "wizard-actions" }, stage) : null);
+  }
+
+  // Relay API origins (2.2 relay_origins), with each relay's journal acknowledgment and sync.
+  function apiOrigins(o, view, admin) {
+    const origins = view.relay_origins || {};
+    return section(uid("api-h"), FW["api.origins"], dataTable({
+      caption: FW["api.origins"], rows: orgRelays(o.relays), empty: MSG.noneYet, name: (x) => relayName(x.id),
+      cols: [{ key: "id", label: FMSG.cols.relay, cell: (x) => u(relayName(x.id)) }, { key: "origin", label: FW["api.col-origin"], cell: (x) => (origins[x.id] ? code(origins[x.id]) : ""), sortable: false },
+        { key: "acked", label: FW["api.col-applied"], cell: (x) => (typeof x.acked === "boolean" ? yesNo(x.acked) : String(x.acked == null ? "" : x.acked)) },
+        { key: "synced", label: FW["api.col-synced"], cell: (x) => yesNo(x.synced) }],
+      actions: (x) => (admin ? [{ label: FW["api.set-origin"], run: () => confirmDialog({
+        spec: fspec("api-origin"), vals: { relay: relayName(x.id) }, name: relayName(x.id), id: x.id,
+        fields: [{ key: "origin", label: FW["api.f-origin"], value: origins[x.id] || "", maxlength: "300" }],
+        check: (v) => (!v.origin || /^https:\/\/[^\s/?#@]+:[0-9]{1,5}$/.test(v.origin) ? "" : FW["api.check-origin"]),
+        run: (v) => apiStep("settings/api/relay-origins", { org: o.org, relay: x.id, origin: v.origin }, "api.relay-origin"),
+      }) }] : []),
+    }));
+  }
+
+  // The kill switch (2.5 api_off): off journals at once with a reason; on stages its clearing (two-person at save).
+  function apiKill(o, state) {
+    const org = o.org;
+    const on = state === "off"
+      ? btn(FW["api.on"], () => confirmDialog({ spec: fspec("api-on"), vals: { org }, name: org, id: org, run: () => apiPost("settings/api/on", { org }) }), "primary")
+      : btn(FW["api.off"], () => confirmDialog({
+        spec: fspec("api-off"), vals: { org }, name: org, id: org, danger: true, fields: [{ kind: "reason" }],
+        run: (v) => apiPost("settings/api/off", { org, reason: v.reason }),
+      }), "danger");
+    return section(uid("api-h"), FW["api.kill"], el("div", { class: "wizard-actions" }, on));
+  }
+
+  // The tightening journal (2.5, newest 50); a client or destination tightening can be undone by a signed clearing.
+  const UNDO = /^(client_(suspend|drop_scope|drop_relay|lower_ceiling|drop_credential|limit)|destination_(suspend|disable_failover|drop_signal|lower_ceiling|identities))$/;
+  // Journal actions with words of their own; the rest show the action as it is written.
+  const ACTION_WORD = { client_limit: "api.action-client-limit" };
+  const actionWord = (a) => (ACTION_WORD[a] ? FW[ACTION_WORD[a]] : a);
+  // A target such as client_limit's {client, relays, networks, rate}: lists joined, objects as JSON.
+  const journalTarget = (t) => (t && typeof t === "object"
+    ? Object.entries(t).map(([k, v]) => k + " " + (Array.isArray(v) ? v.join(" ") : v && typeof v === "object" ? JSON.stringify(v) : String(v))).join(", ")
+    : String(t == null ? "" : t));
+  function apiJournal(o, admin) {
+    const j = o.journal || {};
+    return section(uid("api-h"), FW["api.journal"], dataTable({
+      caption: FW["api.journal"], rows: j.entries || [], empty: MSG.noneYet, name: (e) => actionWord(e.action), text: (e) => [e.id, e.action, journalTarget(e.target)].join(" "),
+      cols: [{ key: "id", label: W["dialog.id"], cell: (e) => code(e.id), sort: (e) => e.tseq }, { key: "action", label: FMSG.change, cell: (e) => (ACTION_WORD[e.action] ? actionWord(e.action) : code(e.action)) },
+        { key: "target", label: FW["api.col-target"], cell: (e) => journalTarget(e.target), sortable: false }, { key: "ts", label: FW["api.col-when"], cell: (e) => whenSec(e.ts) },
+        { key: "until", label: FMSG.cols.ends, cell: (e) => (e.until ? whenSec(e.until) : "") }],
+      actions: (e) => (admin && UNDO.test(e.action) ? [{ label: FW["api.undo"], run: () => confirmDialog({
+        spec: fspec("api-undo"), vals: { change: actionWord(e.action) }, name: actionWord(e.action), id: e.id,
+        run: () => apiStep("settings/api/resume", { org: o.org, tightening: e.id }, "api.resume"),
+      }) }] : []),
+    }));
+  }
+
+  // Explain (6.2): each check in order with ok or the code and words that would refuse the request.
+  function apiExplain(o, view) {
+    const id = uid("ex");
+    const clients = view.clients || [];
+    const client = el("select", { id: id + "-c" }, clients.map((x) => el("option", { value: x.id }, clean(x.name))));
+    const method = el("select", { id: id + "-m" }, ["GET", "POST"].map((m) => el("option", { value: m }, m)));
+    if (clients.length) client.value = clients[0].id;
+    method.value = "GET";
+    const path = textField(FW["api.f-path"], { maxlength: "512" });
+    path.input.value = "/v1/health";
+    const ip = textField(FW["api.f-ip"], { maxlength: "64" });
+    const out = el("div", { "aria-live": "polite" });
+    const run = btn(FW["api.explain-run"], async () => {
+      const body = { org: o.org, client: client.value, method: method.value, path: path.input.value.trim() };
+      if (ip.input.value.trim()) body.ip = ip.input.value.trim();
+      try {
+        const r = await apiPost("settings/api/explain", body);
+        out.replaceChildren(el("ul", { class: "checks" }, (r.checks || []).map((ch) => el("li", null, String(ch.n) + ". ", u(ch.name), ": ",
+          ch.ok ? FW["api.check-passes"] : fill(FW["api.check-refuses"], { code: ch.code || "", words: ch.words || "" })))),
+        el("p", null, r.first_fail == null ? FW["api.explain-ok"] : fill(FW["api.explain-first"], { n: r.first_fail })));
+      } catch (e) {
+        fail(e);
+      }
+    }, "primary");
+    return section(uid("api-h"), FW["api.explain"], el("p", { class: "note" }, FW["api.explain-help"]),
+      el("div", { class: "field" }, el("label", { for: id + "-c" }, FW["api.f-client"]), client),
+      el("div", { class: "field" }, el("label", { for: id + "-m" }, FW["api.f-method"]), method), path.box, ip.box, el("div", { class: "wizard-actions" }, run), out);
+  }
+
+  // ---- Exports: API destinations (11.1 to 11.7) and their failover credentials (12.3) ----
+  const DEST_TONE = { ok: "ok", retrying: "warn", paused: "bad", failed: "bad", suspended: "warn" };
+  const CRED_WORD = { entra_certificate: "exports.cred-entra", aws_roles_anywhere: "exports.cred-aws", gcp_service_account_key: "exports.cred-gcp", mtls: "exports.cred-mtls", token: "exports.cred-token",
+    entra_federated: "exports.cred-entra-fed", gcp_federated: "exports.cred-gcp-fed", none: "exports.cred-none" };
+  const credWord = (t) => FW[CRED_WORD[t]] || stateWord(t);
+  // Revision 4 8: credentials the console makes itself from its outbound identity (no material to enter).
+  const FEDERATED = ["entra_federated", "gcp_federated"];
+  // R4-D12: a Google Cloud service account key is offered with the advice to prefer federation.
+  const preferFederation = (t) => (t === "gcp_service_account_key" ? FW["exports.prefer-federation"] : "");
+  // Failover types whose key the relay makes (a CSR first).
+  const CSR_TYPES = ["entra_certificate", "aws_roles_anywhere", "mtls"];
+  const IDENTITIES = [["pseudonymized", "exports.identities-pseudonymized"], ["removed", "exports.identities-removed"], ["as_is", "exports.identities-as-is"]];
+  const presetWord = (p) => p.id + " (" + p.kind + ")";
+  function credCell(c) {
+    if (!c || !c.type) return FW["exports.cred-missing"];
+    if (c.type === "none" || FEDERATED.includes(c.type)) return credWord(c.type);
+    const advice = preferFederation(c.type);
+    return credWord(c.type) + ": " + (c.held ? FW["exports.cred-held"] : FW["exports.cred-missing"]) + (c.rotate_by ? "; " + fillText(FW["exports.rotate-by"], { date: dayAny(c.rotate_by) }) : "") +
+      (advice ? ". " + advice : "");
+  }
+  // Revision 4 7.4: a destination's events state (a webhook's verification first, then paused or its feed position).
+  function eventsCell(x) {
+    const ev = x.status && x.status.events;
+    if (!ev) return "";
+    const parts = [];
+    if (ev.verification) parts.push(toneChip(FW["exports.ev-" + ev.verification] || stateWord(ev.verification), ev.verification === "unverified" ? "bad" : ev.verification === "none" ? "warn" : "ok"), " ");
+    if (ev.cursor) parts.push(fill(FW["exports.ev-at"], { cursor: code(ev.cursor) }));
+    return el("span", null, parts);
+  }
+  // A destination's state; paused events say they wait for Resume (an audit backlog keeps its own words).
+  function destState(x) {
+    if (!x.status) return FW["exports.state-none"];
+    const s = x.status.state;
+    if (s === "paused" && x.status.events && x.status.events.paused) return toneChip(FW["exports.ev-paused"], "bad");
+    return toneChip(FW["exports.state-" + s] || stateWord(s), DEST_TONE[s]);
+  }
+  function exportsApi(d) {
+    const presets = d.presets || [];
+    const entries = d.api || [];
+    if (!entries.length) return null;
+    return section("dest-h", FW["exports.destinations"], el("div", { id: "fo-csr" }), entries.map((e) => exportsOrg(e, presets, !!d.siem)));
+  }
+  function exportsOrg(e, presets, siem) {
+    const org = e.org;
+    const admin = isAdmin();
+    const dests = e.destinations || [];
+    const names = Object.fromEntries(dests.map((x) => [x.id, x.name]));
+    const kids = [];
+    if (admin && presets.length) {
+      const sid = uid("pre");
+      const pick = el("select", { id: sid }, presets.map((p) => el("option", { value: p.id }, clean(presetWord(p)))));
+      pick.value = presets[0].id;
+      kids.push(el("div", { class: "page-head" }, el("label", { for: sid }, FW["exports.dest-preset"], pick),
+        btn(FW["exports.dest-add"], () => destDialog(org, presets.find((p) => p.id === pick.value) || presets[0], null, e), "primary"),
+        siem ? btn(FW["exports.dest-from-siem"], () => confirmDialog({
+          spec: fspec("dest-siem"), vals: { org }, name: org, id: org,
+          run: () => apiStep("settings/exports/destinations", { org, from_siem: true }, "exports.destination.stage"),
+        })) : null));
+    }
+    kids.push(dataTable({
+      caption: fillText(FW["exports.dest-org"], { org }), rows: dests, empty: MSG.noneYet, name: (x) => x.name, text: (x) => [x.name, x.id, x.preset].join(" "),
+      cols: [{ key: "name", label: FMSG.cols.name, cell: (x) => u(x.name) }, { key: "preset", label: FW["exports.dest-preset"], cell: (x) => (x.preset || "") + " (" + (x.kind || "") + ")" },
+        { key: "signals", label: FW["exports.col-signals"], cell: (x) => (x.signals || []).join(", "), sortable: false },
+        { key: "source", label: FW["exports.col-source"], cell: (x) => FW["exports.source-" + x.source] || stateWord(x.source) },
+        { key: "state", label: FMSG.cols.state, sort: (x) => (x.status ? x.status.state : null),
+          cell: destState },
+        { key: "backlog", label: FW["exports.col-backlog"], cell: (x) => (x.status ? fmtBytes(Number(x.status.backlog_bytes || 0)) : ""), sort: (x) => (x.status ? x.status.backlog_bytes : null) },
+        { key: "oldest", label: FW["exports.col-oldest"], cell: (x) => (x.status && x.status.oldest_s ? span(x.status.oldest_s) : ""), sortable: false },
+        { key: "success", label: FW["exports.col-last-success"], cell: (x) => (x.status ? whenAny(x.status.last_success) : ""), sortable: false },
+        { key: "error", label: FMSG.lastError, cell: (x) => u((x.status && x.status.last_error) || ""), sortable: false },
+        { key: "credential", label: FW["exports.col-credential"], cell: (x) => credCell(x.credential), sortable: false },
+        { key: "events", label: FW["exports.col-events"], cell: eventsCell, sortable: false },
+        { key: "tested", label: FW["exports.col-tested"], cell: (x) => (x.tested ? MSG.yes : FW["exports.untested"]) }],
+      actions: (x) => (admin ? destActions(org, x, presets, e) : []),
+    }));
+    for (const x of dests.filter((y) => y.failover)) kids.push(failoverPart(org, x, e));
+    kids.push(webhookKeys(e, admin), outboundIdentity(e, admin));
+    kids.push(apiStaged({ org, staged: e.staged, signing: null, relays: e.relays, names }));
+    return sub(fill(FW["exports.dest-org"], { org }), ...kids);
+  }
+  function destActions(org, x, presets, e) {
+    const p = presets.find((y) => y.id === x.preset) || { id: x.preset, kind: x.kind, credential_types: [(x.credential || {}).type].filter(Boolean), signals: x.signals || [] };
+    const type = (x.credential || {}).type;
+    const hook = x.kind === "webhook";
+    const ev = (x.status && x.status.events) || {};
+    const named = { name: x.name };
+    // Revision 4 7.4, 13.2: Verify, Replay from, Resume (while paused) and a v1 secret shown once, for a webhook.
+    const hookActions = !hook ? [] : [{
+      label: FW["exports.verify"], run: async () => {
+        try {
+          const r = await apiPost("settings/exports/destinations/verify", { org, id: x.id });
+          if (r && r.ok === false) fail(fillText(FW["exports.verify-failed"], { why: r.error || "" }));
+          else say(FW["exports.verify-ok"]);
+        } catch (err) {
+          fail(err && err.status === 200 ? fillText(FW["exports.verify-failed"], { why: err.message }) : err);
+        }
+        render({ keepMessages: true });
+      },
+    }, { label: FW["exports.replay"], run: () => confirmDialog({
+      spec: fspec("dest-replay"), vals: named, name: x.name, id: x.id, fields: [{ key: "from", label: FW["exports.f-from"], value: ev.cursor || "", maxlength: "512" }],
+      run: (v) => apiStep("settings/exports/destinations/replay", { org, id: x.id, from: v.from || "oldest" }, "exports.destination.replay"),
+    }) }].concat(ev.paused ? [{ label: FW["exports.resume"], run: () => confirmDialog({
+      spec: fspec("dest-resume"), vals: named, name: x.name, id: x.id,
+      run: () => apiPost("settings/exports/destinations/resume", { org, id: x.id }),
+    }) }] : [], [{ label: FW["exports.secret"], run: () => confirmDialog({
+      spec: fspec("dest-secret"), vals: named, name: x.name, id: x.id, two: ((x.settings || {}).signing || "v2a") !== "v1",
+      run: () => apiStep("settings/exports/destinations/secret", { org, id: x.id }, "exports.destination.secret"),
+      plain: true,
+      // The secret lives in its own dialog only and leaves the page when the dialog closes.
+      done: (r) => render({ keepMessages: true }).then(() => {
+        if (r && r.secret) revealOnce(fill(FW["exports.secret-title"], named), x.id, r.rotate_by ? [FW["exports.secret-once"], " ", fill(FW["exports.secret-rotate"], { date: dayAny(r.rotate_by) })] : FW["exports.secret-once"], r.secret);
+      }),
+    }) }]);
+    // Revision 4 8: one token exchange through the outbound identity, the result only.
+    const fedTest = FEDERATED.includes(type) ? [{ label: FW["federation.test"], run: async () => {
+      try {
+        const r = await apiPost("settings/exports/destinations/federation-test", { org, id: x.id });
+        if (r && r.ok === false) fail(fillText(FW["federation.test-failed"], { why: r.error || "" }));
+        else say(fillText(FW["federation.test-ok"], { provider: (r && r.provider) || "", time: r && r.exp ? whenAny(r.exp) : "" }));
+      } catch (err) {
+        fail(err && err.status === 200 ? fillText(FW["federation.test-failed"], { why: err.message }) : err);
+      }
+    } }] : [];
+    const settable = materialFields(type, false).length > 0;
+    return [{ label: FW["api.edit"], run: () => destDialog(org, p, x, e) }].concat(hookActions, fedTest, [{
+      label: hook ? FW["exports.send-test"] : FW["exports.dest-test"], run: async () => {
+        try {
+          await apiPost("settings/exports/destinations/test", { org, id: x.id });
+          say(FW["exports.test-ok"]);
+        } catch (err) {
+          // {ok: false, error} arrives inside a 200 answer: the record did not arrive.
+          fail(err && err.status === 200 ? fillText(FW["exports.test-failed"], { why: err.message }) : err);
+        }
+        render({ keepMessages: true });
+      },
+    }], settable ? [{ label: FW["exports.dest-credential"], run: () => confirmDialog({
+      spec: fspec("dest-credential"), vals: { name: x.name }, name: x.name, id: x.id, fields: materialFields(type, false),
+      params: [[FW["exports.f-credential-type"], credWord(type)]].concat(preferFederation(type) ? [[FW["exports.cred-gcp"], preferFederation(type)]] : []),
+      check: (v) => materialCheck(type, v, false),
+      run: (v) => apiStep("settings/exports/destinations/credential", { org, id: x.id, credential: Object.assign({ type }, materialOf(type, v, false)) }, "exports.destination.credential"),
+      plain: true,
+      done: () => render({ keepMessages: true }).then(() => say(FW["exports.cred-sealed"])),
+    }) }] : [], [{ label: FW["api.delete"], run: () => confirmDialog({
+      spec: fspec("dest-delete"), vals: { name: x.name }, name: x.name, id: x.id, danger: true, fields: [{ kind: "reason" }],
+      run: (v) => apiStep("settings/exports/destinations/delete", { org, id: x.id, reason: v.reason }, "exports.destination.delete"),
+    }) }]);
+  }
+  // Add or edit a destination of one preset: the 11.1 settings of its kind and a credential type the preset allows.
+  function destDialog(org, p, x, e) {
+    const q = (x && x.queue) || {};
+    const types = (p.credential_types || []).length ? p.credential_types : [(x && x.credential && x.credential.type) || "token"];
+    // Revision 4 2.2: the client whose grant selects the events (webhook `client`, other kinds `events_client`).
+    const evClients = ((e && e.events_clients) || []).map((c) => [c.id, c.name + " (" + c.id + ")"]);
+    const advice = types.map(preferFederation).find(Boolean);
+    const fields = [
+      { key: "name", label: FMSG.cols.name, value: x ? x.name : "", maxlength: "64", required: true },
+      { key: "signals", label: FW["exports.f-signals"], value: ((x ? x.signals : p.signals) || []).join(", ") },
+      { kind: "select", key: "ceiling", label: FW["api.col-ceiling"], options: CEILINGS.map((c) => [c, ceilingWord(c)]), value: x ? x.ceiling : "internal" },
+      { kind: "select", key: "identities", label: FW["exports.f-identities"], options: IDENTITIES.map(([v, k]) => [v, FW[k]]), value: x ? x.identities : "pseudonymized" },
+      { kind: "select", key: "failover", label: FW["exports.f-failover"], options: yesNoOptions(), value: x && x.failover ? "yes" : "no" },
+      { kind: "select", key: "private", label: FW["exports.f-private"], options: yesNoOptions(), value: x && x.private_ok ? "yes" : "no" },
+      { key: "endpoint", label: FW["exports.f-endpoint"], value: x ? x.endpoint || "" : "", maxlength: "2048" },
+    ].concat(settingsFields(p.kind, (x && x.settings) || {}, evClients), [
+      { kind: "select", key: "credType", label: FW["exports.f-credential-type"], options: types.map((t) => [t, credWord(t)]), value: x && x.credential && types.includes(x.credential.type) ? x.credential.type : types[0] },
+    ], credPublicFields(types, (x && x.credential) || {}), [
+      { key: "queueMib", label: FW["exports.f-queue-mib"], value: q.max_bytes ? Math.round(q.max_bytes / 1048576) : 1024, inputmode: "numeric" },
+      { key: "queueHours", label: FW["exports.f-queue-hours"], value: q.max_age_s ? Math.round(q.max_age_s / 3600) : 72, inputmode: "numeric" },
+    ]);
+    confirmDialog({
+      spec: fspec(x ? "dest-update" : "dest-add"), vals: { name: x ? x.name : "" }, vals2: (v) => ({ name: v.name }), name: x ? x.name : p.id, id: x ? x.id : p.id, fields,
+      params: [[FW["exports.dest-preset"], presetWord(p)]].concat(advice ? [[FW["exports.cred-gcp"], advice]] : []),
+      check: (v) => destCheck(p.kind, v),
+      run: (v) => (x ? apiStep("settings/exports/destinations/update", { org, id: x.id, destination: destBody(p, v) }, "exports.destination.update")
+        : apiStep("settings/exports/destinations", { org, destination: destBody(p, v) }, "exports.destination.stage")),
+    });
+  }
+  function settingsFields(kind, s, evClients) {
+    const e = s.endpoints || {};
+    const clients = evClients || [];
+    if (kind === "webhook") {
+      return [{ kind: "select", key: "client", label: FW["exports.s-client"], options: clients, value: s.client || (clients[0] || [""])[0] },
+        { key: "types", label: FW["exports.s-types"], value: (s.types || []).join(", ") },
+        { kind: "select", key: "signing", label: FW["exports.s-signing"], options: [["v2a", FW["exports.s-signing-v2a"]], ["v1", FW["exports.s-signing-v1"]]], value: s.signing || "v2a" },
+        { kind: "select", key: "verification", label: FW["exports.s-verification"], options: [["wev", FW["exports.s-verify-wev"]], ["none", FW["exports.s-verify-none"]]], value: s.verification || "wev" }];
+    }
+    // Revision 4 7.5: the other kinds name the client whose events they carry when their signals include events.
+    const evField = kind === "syslog_cef" ? [] : [{ kind: "select", key: "eventsClient", label: FW["exports.s-client"], options: [["", FW["exports.cred-none"]]].concat(clients), value: s.events_client || "" }];
+    return settingsOf(kind, s, e).concat(evField, kind === "azure_logs" ? [{ key: "eventsStream", label: FW["exports.s-events-stream"], value: s.events_stream || "Custom-LucidEvents_CL", maxlength: "128" }] : []);
+  }
+  function settingsOf(kind, s, e) {
+    if (kind === "otlp") {
+      return [{ key: "traces", label: FW["exports.s-traces"], value: e.traces || "", maxlength: "2048" }, { key: "metrics", label: FW["exports.s-metrics"], value: e.metrics || "", maxlength: "2048" },
+        { key: "logs", label: FW["exports.s-logs"], value: e.logs || "", maxlength: "2048" },
+        { kind: "select", key: "temporality", label: FW["exports.s-temporality"], options: [["delta", FW["exports.s-delta"]], ["cumulative", FW["exports.s-cumulative"]]], value: s.temporality || "delta" },
+        { key: "headers", label: FW["exports.s-headers"], value: (s.headers || []).join(", ") },
+        { key: "sampling", label: FW["exports.s-sampling"], value: s.sampling == null ? 1 : s.sampling, inputmode: "decimal" }];
+    }
+    if (kind === "splunk_hec") {
+      return [{ key: "index", label: FW["exports.s-index"], value: s.index || "", maxlength: "128" },
+        { key: "sourcetypes", label: FW["exports.s-sourcetypes"], value: (s.sourcetypes || ["lucid:audit", "lucid:relay", "lucid:api", "lucid:events"]).join(", ") }];
+    }
+    if (kind === "azure_logs") {
+      return [{ key: "dce", label: FW["exports.s-dce"], value: s.dce || "", maxlength: "2048" }, { key: "dcr", label: FW["exports.s-dcr"], value: s.dcr_immutable_id || "", maxlength: "128" },
+        { key: "stream", label: FW["exports.s-stream"], value: s.stream || "Custom-LucidAudit_CL", maxlength: "128" }];
+    }
+    if (kind === "syslog_cef") {
+      return [{ key: "host", label: FMSG.siemHost, value: s.host || "", maxlength: "253" }, { key: "port", label: FMSG.siemPort, value: s.port || 6514, inputmode: "numeric" },
+        { kind: "textarea", key: "caPem", label: FMSG.siemCa, value: s.caPem || "" }, { kind: "textarea", key: "clientCertPem", label: FMSG.siemCert, value: s.clientCertPem || "" },
+        { key: "events", label: FW["exports.s-events"], value: (s.events || ["audit", "security"]).join(", ") },
+        { kind: "select", key: "includeReasons", label: FW["exports.siem-reasons"], options: yesNoOptions(), value: s.includeReasons ? "yes" : "no" }];
+    }
+    return [];
+  }
+  function destCheck(kind, v) {
+    if (!v.name) return FW["exports.check-name"];
+    const urls = kind === "otlp" ? [v.endpoint, v.traces, v.metrics, v.logs] : kind === "azure_logs" ? [v.endpoint, v.dce] : [v.endpoint];
+    if (!urls.every((t) => !t || /^https:\/\/\S+$/.test(t)) || (kind !== "syslog_cef" && !urls.some(Boolean))) return FW["exports.check-endpoint"];
+    if (kind === "otlp" && !(v.sampling !== "" && Number(v.sampling) >= 0 && Number(v.sampling) <= 1)) return FW["api.check-number"];
+    if (kind === "syslog_cef" && !wholeIn(v.port, 1, 65535)) return FW["api.check-number"];
+    if (!wholeIn(v.queueMib, 64, 65536) || !wholeIn(v.queueHours, 1, 720)) return FW["api.check-number"];
+    if ((CRED_PUBLIC[v.credType] || []).some((k) => !v[k])) return FW["exports.check-material"];
+    // 2.2: a webhook and every destination carrying events name a client holding events.subscribe
+    const events = kind === "webhook" || commaList(v.signals).includes("events");
+    if (events && !(kind === "webhook" ? v.client : v.eventsClient)) return FW["exports.s-client"];
+    return "";
+  }
+  // The public fields the map entry's credential names (11.3): Entra and AWS Roles Anywhere carry them in the map, and
+  // the revision 4 federated credentials are public fields only (8.3).
+  const CRED_PUBLIC = { entra_certificate: ["tenant", "client_id", "cloud"], aws_roles_anywhere: ["trust_anchor_arn", "profile_arn", "role_arn", "region"],
+    entra_federated: ["tenant", "client_id", "cloud", "audience"], gcp_federated: ["audience", "token_audience"] };
+  function credPublicFields(types, c) {
+    const out = [];
+    if (types.includes("entra_certificate") || types.includes("entra_federated")) {
+      out.push({ key: "tenant", label: FW["exports.m-tenant"], value: c.tenant || "", maxlength: "512" }, { key: "client_id", label: FW["exports.m-client-id"], value: c.client_id || "", maxlength: "512" },
+        { kind: "select", key: "cloud", label: FW["exports.m-cloud"], options: [["public", FW["exports.m-cloud-public"]], ["usgov", FW["exports.m-cloud-usgov"]]], value: c.cloud || "public" });
+    }
+    if (types.includes("entra_federated") || types.includes("gcp_federated")) {
+      out.push({ key: "audience", label: FW["exports.m-audience"], value: c.audience || (types.includes("entra_federated") ? "api://AzureADTokenExchange" : ""), maxlength: "600" });
+    }
+    if (types.includes("gcp_federated")) {
+      out.push({ key: "token_audience", label: FW["exports.m-token-audience"], value: c.token_audience || "", maxlength: "600" },
+        { key: "service_account", label: FW["exports.m-service-account"], value: c.service_account || "", maxlength: "254" });
+    }
+    if (types.includes("aws_roles_anywhere")) {
+      out.push({ key: "trust_anchor_arn", label: FW["exports.m-trust-anchor"], value: c.trust_anchor_arn || "", maxlength: "512" },
+        { key: "profile_arn", label: FW["exports.m-profile"], value: c.profile_arn || "", maxlength: "512" },
+        { key: "role_arn", label: FW["exports.m-role"], value: c.role_arn || "", maxlength: "512" }, { key: "region", label: FW["exports.m-region"], value: c.region || "", maxlength: "64" });
+    }
+    return out;
+  }
+  // The destination body: credential {type} plus the public fields Entra and AWS name in the map; the material goes
+  // through Set credential and is never echoed back.
+  function destBody(p, v) {
+    const credential = { type: v.credType };
+    for (const k of CRED_PUBLIC[v.credType] || []) credential[k] = v[k];
+    if (v.credType === "gcp_federated" && v.service_account) credential.service_account = v.service_account;
+    let settings = {};
+    if (p.kind === "webhook") {
+      // 2.2: a webhook carries exactly the events signal and exactly these settings
+      return { name: v.name, kind: "webhook", preset: p.id, signals: ["events"], ceiling: v.ceiling, identities: v.identities, failover: false, private_ok: v.private === "yes",
+        endpoint: v.endpoint, settings: { client: v.client, types: commaList(v.types), signing: v.signing, verification: v.verification }, credential,
+        queue: { max_bytes: Number(v.queueMib) * 1048576, max_age_s: Number(v.queueHours) * 3600 } };
+    }
+    if (p.kind === "otlp") {
+      const endpoints = {};
+      for (const n of ["traces", "metrics", "logs"]) if (v[n]) endpoints[n] = v[n];
+      settings = { endpoints, temporality: v.temporality, headers: commaList(v.headers), sampling: Number(v.sampling) };
+    } else if (p.kind === "splunk_hec") settings = { index: v.index, sourcetypes: commaList(v.sourcetypes), ack: true };
+    else if (p.kind === "azure_logs") settings = { dce: v.dce, dcr_immutable_id: v.dcr, stream: v.stream };
+    else if (p.kind === "syslog_cef") {
+      settings = { host: v.host, port: Number(v.port), events: commaList(v.events), includeReasons: v.includeReasons === "yes" };
+      if (v.caPem) settings.caPem = v.caPem;
+      if (v.clientCertPem) settings.clientCertPem = v.clientCertPem;
+    }
+    // Revision 4 7.5: the events signal names its client (and, on Logs Ingestion, its stream)
+    if (p.kind !== "syslog_cef" && commaList(v.signals).includes("events")) {
+      settings.events_client = v.eventsClient;
+      if (p.kind === "azure_logs") settings.events_stream = v.eventsStream;
+    }
+    return { name: v.name, kind: p.kind, preset: p.id, signals: commaList(v.signals), ceiling: v.ceiling, identities: v.identities, failover: v.failover === "yes",
+      private_ok: v.private === "yes", endpoint: v.endpoint, settings, credential,
+      queue: { max_bytes: Number(v.queueMib) * 1048576, max_age_s: Number(v.queueHours) * 3600 } };
+  }
+  // The 11.3 material per credential type (Set credential), or the 12.3 install material of a failover credential.
+  const OPTIONAL_MATERIAL = ["ca_pem", "chain_pem"];
+  function materialFields(type, failover) {
+    const ta = (key, label) => ({ kind: "textarea", key, label });
+    const tx = (key, label) => ({ key, label, maxlength: "512" });
+    const cert = failover ? [ta("cert_pem", FW["exports.m-cert"]), ta("chain_pem", FW["exports.m-chain"])] : [ta("cert_pem", FW["exports.m-cert"]), ta("key_pem", FW["exports.m-key"])];
+    let f = [];
+    if (type === "token") f = [ta("token", FW["exports.m-token"])];
+    else if (type === "gcp_service_account_key") f = [ta(failover ? "key_json" : "key", FW["exports.m-key-json"])];
+    else if (type === "mtls") f = cert.concat([ta("ca_pem", FW["exports.m-ca"])]);
+    else if (type === "entra_certificate") {
+      f = [tx("tenant", FW["exports.m-tenant"]), tx("client_id", FW["exports.m-client-id"]),
+        { kind: "select", key: "cloud", label: FW["exports.m-cloud"], options: [["public", FW["exports.m-cloud-public"]], ["usgov", FW["exports.m-cloud-usgov"]]], value: "public" }].concat(cert);
+    } else if (type === "aws_roles_anywhere") {
+      f = [tx("trust_anchor_arn", FW["exports.m-trust-anchor"]), tx("profile_arn", FW["exports.m-profile"]), tx("role_arn", FW["exports.m-role"]), tx("region", FW["exports.m-region"])].concat(cert);
+    }
+    return failover && f.length ? f.concat([{ key: "days", label: FW["exports.fo-days"], value: 90, inputmode: "numeric" }]) : f;
+  }
+  function materialCheck(type, v, failover) {
+    const fields = materialFields(type, failover);
+    if (!fields.length || fields.some((f) => f.key !== "days" && !OPTIONAL_MATERIAL.includes(f.key) && !v[f.key])) return FW["exports.check-material"];
+    return failover && !wholeIn(v.days, 1, 90) ? FW["api.check-number"] : "";
+  }
+  function materialOf(type, v, failover) {
+    const out = {};
+    for (const f of materialFields(type, failover)) if (f.key !== "days" && v[f.key]) out[f.key] = v[f.key];
+    if (failover) out.expires = nowSec() + Number(v.days) * 86400;
+    return out;
+  }
+  // Failover credentials per relay (12.3): one row per relay of the organization, with its record when there is one.
+  function failoverPart(org, x, e) {
+    const recs = x.failover_records || [];
+    const ids = orgRelays(e.relays).map((r) => r.id);
+    for (const r of recs) if (!ids.includes(r.relay)) ids.push(r.relay);
+    const rows = ids.map((relay) => Object.assign({ relay }, recs.find((r) => r.relay === relay) || {}));
+    const type = (x.credential || {}).type;
+    const admin = isAdmin();
+    return sub([FW["exports.failover"], ": ", u(x.name)], el("p", { class: "note" }, FW["exports.failover-help"]), dataTable({
+      caption: FW["exports.failover"], rows, empty: MSG.noneYet, name: (r) => relayName(r.relay),
+      cols: [{ key: "relay", label: FMSG.cols.relay, cell: (r) => u(relayName(r.relay)) }, { key: "type", label: FMSG.cols.kind, cell: (r) => (r.type ? credWord(r.type) : "") },
+        { key: "public_id", label: FW["exports.col-public-id"], cell: (r) => (r.public_id ? code(r.public_id) : ""), sortable: false },
+        { key: "not_before", label: FW["exports.col-valid-from"], cell: (r) => (r.not_before ? whenAny(r.not_before) : "") },
+        { key: "expires", label: FMSG.cols.ends, cell: (r) => (r.expires ? whenAny(r.expires) : "") },
+        { key: "state", label: FMSG.cols.state, cell: (r) => (r.state ? (FW["exports.fo-" + r.state] || stateWord(r.state)) + (r.note ? " (" + r.note + ")" : "") : "") }],
+      actions: (r) => (admin ? failoverActions(org, x, r, type) : []),
+    }));
+  }
+  function failoverActions(org, x, r, type) {
+    const vals = { name: x.name, relay: relayName(r.relay) };
+    const out = [];
+    if (CSR_TYPES.includes(type)) {
+      out.push({ label: FW["exports.fo-csr"], run: () => confirmDialog({
+        spec: fspec("failover-csr"), vals, name: vals.relay, id: r.relay,
+        run: () => apiPost("settings/exports/destinations/failover/csr", { org, id: x.id, relay: r.relay }),
+        plain: true,
+        done: (a) => render({ keepMessages: true }).then(() => showCsr(x, r.relay, a && a.csr)),
+      }) });
+    }
+    out.push({ label: FW["exports.fo-install"], run: () => confirmDialog({
+      spec: fspec("failover-install"), vals, name: x.name, id: r.relay, fields: materialFields(type, true),
+      check: (v) => materialCheck(type, v, true),
+      run: (v) => apiStep("settings/exports/destinations/failover/install", { org, id: x.id, relay: r.relay, material: materialOf(type, v, true) }, "exports.failover.install"),
+    }) });
+    if (r.state && r.state !== "deleted") {
+      out.push({ label: FW["api.delete"], run: () => confirmDialog({
+        spec: fspec("failover-delete"), vals, name: x.name, id: r.relay, danger: true,
+        run: () => apiPost("settings/exports/destinations/failover/delete", { org, id: x.id, relay: r.relay }),
+      }) });
+    }
+    return out;
+  }
+  // The CSR the relay made (no secret): shown with copy and download until the page is left.
+  function showCsr(x, relay, csr) {
+    const box = $("fo-csr");
+    if (!box || !csr) return;
+    const file = (x.name + "-" + relayName(relay) + ".csr.pem").replace(/[^A-Za-z0-9._-]/g, "_");
+    box.replaceChildren(panel(FW["exports.fo-csr"], el("p", null, FW["exports.fo-csr-shown"]),
+      el("p", { class: "id-line" }, el("span", { class: "id-label" }, FMSG.cols.relay), " ", u(relayName(relay))),
+      el("pre", null, el("code", null, cleanLines(csr))), copyButton(csr), " ", btn(FW["exports.fo-download"], () => saveText(file, csr))));
+  }
+  // Revision 4 7.4, 13.2: the org's webhook keys for v2a signing: a new one is made and sealed here and staged; a drop
+  // applies at once (webhook_key_drop).
+  function webhookKeys(e, admin) {
+    const org = e.org;
+    const keys = e.webhook_keys || [];
+    if (!keys.length && !(e.destinations || []).some((x) => x.kind === "webhook")) return null;
+    const add = admin ? btn(FW["webhooks.key-new"], () => confirmDialog({
+      spec: fspec("webhook-key"), vals: { org }, name: org, id: org,
+      run: () => apiStep("settings/api/webhook-keys", { org }, "api.webhook-key"),
+    }), "primary") : null;
+    return sub(FW["webhooks.keys"], e.issuer_url ? el("p", { class: "note" }, fill(FW["webhooks.keys-help"], { url: code(e.issuer_url.replace(/\/+$/, "") + "/v1/webhooks/keys") })) : null,
+      add ? el("div", { class: "page-head" }, add) : null, dataTable({
+        caption: FW["webhooks.keys"], rows: keys, empty: MSG.noneYet, name: (k) => k.kid,
+        cols: [{ key: "kid", label: W["dialog.id"], cell: (k) => code(k.kid) }, { key: "public", label: FW["webhooks.col-public"], cell: (k) => code(k.public), sortable: false },
+          { key: "nbf", label: FW["exports.col-valid-from"], cell: (k) => whenSec(k.nbf) }, { key: "exp", label: FMSG.cols.ends, cell: (k) => whenSec(k.exp) },
+          { key: "dropped", label: FMSG.cols.state, cell: (k) => toneChip(k.dropped ? FW["webhooks.dropped"] : FW["webhooks.in-force"], k.dropped ? "bad" : "ok") }],
+        actions: (k) => (admin && !k.dropped ? [{ label: FW["webhooks.drop"], run: () => confirmDialog({
+          spec: fspec("webhook-key-drop"), vals: { kid: k.kid }, name: org, id: k.kid, danger: true,
+          run: () => apiPost("settings/api/webhook-keys/drop", { org, kid: k.kid }),
+        }) }] : []),
+      }));
+  }
+  // Revision 4 8, 13.2: the outbound identity (issuer and keys), its documents to publish, a dropped key's
+  // confirmation that hosted key sets no longer list it; each federated destination has "Test exchange".
+  function outboundIdentity(e, admin) {
+    const org = e.org;
+    const f = e.federation;
+    const pending = e.federation_republish || [];
+    if (!f && !pending.length && !admin) return null;
+    const confirmGone = (kid) => confirmDialog({
+      spec: fspec("federation-republished"), vals: { kid }, name: org, id: kid,
+      run: () => apiPost("settings/api/federation/republished", { org, kid }),
+    });
+    const docs = el("div", { "aria-live": "polite" });
+    const tools = admin ? [btn(FW["federation.set"], () => confirmDialog({
+      spec: fspec("federation-issuer"), vals: { org }, name: org, id: org,
+      fields: [{ key: "issuer", label: FW["federation.f-issuer"], value: f ? f.issuer || "" : "", maxlength: "512" }],
+      check: (v) => (!v.issuer || /^https:\/\/[^\s?#@]+$/.test(v.issuer) ? "" : FW["exports.check-endpoint"]),
+      run: (v) => apiStep("settings/api/federation", Object.assign({ org }, v.issuer ? { issuer: v.issuer } : {}), "api.federation.issuer"),
+    }), f ? "" : "primary"), f ? btn(FW["federation.key-new"], () => confirmDialog({
+      spec: fspec("federation-key"), vals: { org }, name: org, id: org,
+      run: () => apiStep("settings/api/federation/key", { org }, "api.federation.key"),
+    })) : null] : [];
+    if (f) {
+      tools.push(btn(FW["federation.download"], async () => {
+        try {
+          const d = await api("GET", "settings/api/federation/documents?org=" + encodeURIComponent(org), null, { direct: true });
+          docs.replaceChildren(...[d.pinned, d.staged].map((x, i) => (x ? fedDocs(org, x, i === 1) : null)).filter(Boolean));
+        } catch (err) {
+          fail(err);
+        }
+      }));
+    }
+    const kids = [el("p", { class: "note" }, FW["federation.help"]), tools.length ? el("div", { class: "page-head" }, tools) : null];
+    if (!f) kids.push(emptyLine(FW["federation.none"]));
+    else {
+      kids.push(pairs([[FW["federation.issuer"], code(f.issuer)]]), dataTable({
+        caption: FW["federation.title"], rows: f.keys || [], empty: MSG.noneYet, name: (k) => k.kid,
+        cols: [{ key: "kid", label: W["dialog.id"], cell: (k) => code(k.kid) }, { key: "nbf", label: FW["exports.col-valid-from"], cell: (k) => whenSec(k.nbf) },
+          { key: "exp", label: FMSG.cols.ends, cell: (k) => whenSec(k.exp) },
+          { key: "dropped", label: FMSG.cols.state, cell: (k) => toneChip(k.dropped ? FW["webhooks.dropped"] : FW["webhooks.in-force"], k.dropped ? "bad" : "ok") }],
+        actions: (k) => (!admin ? [] : k.dropped ? (pending.includes(k.kid) ? [{ label: FW["federation.republished"], run: () => confirmGone(k.kid) }] : [])
+          : [{ label: FW["webhooks.drop"], run: () => confirmDialog({
+            spec: fspec("federation-key-drop"), vals: { kid: k.kid }, name: org, id: k.kid, danger: true,
+            run: () => apiPost("settings/api/federation/key/drop", { org, kid: k.kid }),
+          }) }]),
+      }));
+    }
+    // A dropped key the map no longer lists still waits for its confirmation (the federation-jwks-republish item).
+    const listed = ((f && f.keys) || []).map((k) => k.kid);
+    const gone = pending.filter((kid) => !listed.includes(kid));
+    if (gone.length) {
+      kids.push(el("ul", { class: "plain" }, gone.map((kid) => el("li", null, fill(FW["attention.federation-jwks-republish"], { kid: code(kid), org }), " ",
+        admin ? btn(FW["federation.republished"], () => confirmGone(kid)) : null))));
+    }
+    kids.push(docs);
+    return sub(FW["federation.title"], ...kids);
+  }
+  // One federation block's documents: where to publish them (unless the front door serves them), each with Copy, and
+  // one download of both files.
+  function fedDocs(org, x, staged) {
+    const disc = JSON.stringify(x.discovery, null, 2);
+    const jwks = JSON.stringify(x.jwks, null, 2);
+    const base = (org + (staged ? "-staged" : "")).replace(/[^A-Za-z0-9._-]/g, "_");
+    return panel(null, staged ? banner("warn", MSG.sev.warn, FW["federation.staged"]) : null,
+      el("p", null, x.front_door ? FW["federation.front-door"] : fill(FW["federation.publish"], { discovery: code(x.discovery_url), jwks: code(x.jwks_url) })),
+      el("pre", null, el("code", null, cleanLines(disc))), copyButton(disc), el("pre", null, el("code", null, cleanLines(jwks))), copyButton(jwks), " ",
+      btn(FW["federation.download"], () => {
+        saveText(base + "-openid-configuration.json", disc, "application/json");
+        saveText(base + "-jwks.json", jwks, "application/json");
+      }));
+  }
+  function saveText(name, text, type) {
+    const url = URL.createObjectURL(new Blob([text], { type: type || "application/x-pem-file" }));
+    const a = el("a", { href: url, download: name, hidden: true });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  // ---- Compliance (API-1 revision 4 13.2): each organization's API holds and export jobs, never content ----
+  // Reviewers release an export in their own Lucid Hub; this page shows who was asked and who released it.
+  const ARCHIVE_TONE = { waiting: "warn", placed: "ok", declined: "bad", failed: "bad" };
+  const JOB_TONE = { waiting: "warn", released: "ok", building: "ok", transferring: "ok", ready: "ok", failed: "bad", refused: "bad" };
+  const JOB_ENDS_OPEN = ["waiting", "released", "building", "transferring", "ready"];
+  pages.fleetCompliance = async (c) => {
+    const d = await api("GET", "settings/api", null, { direct: true });
+    await fleetRelays().catch(() => []);
+    const orgs = (d.orgs || []).map((x) => x.org);
+    if (!orgs.length) return [head(FW["compliance.title"]), panel(null, emptyLine(FW["api.no-orgs"]))];
+    const want = c && c.q ? c.q.get("org") : null;
+    const org = orgs.includes(want) ? want : orgs[0];
+    const pick = orgs.length > 1 ? el("nav", { class: "chips", "aria-label": FW["api.org"] },
+      orgs.map((x) => el("a", { href: "#/security/compliance?org=" + encodeURIComponent(x), "aria-current": x === org ? "page" : null }, u(x)))) : null;
+    const q = "?org=" + encodeURIComponent(org);
+    const [holds, jobs] = await Promise.all([api("GET", "compliance/holds" + q, null, { direct: true }), api("GET", "compliance/exports" + q, null, { direct: true })]);
+    const kids = [head(FW["compliance.title"], pick), el("p", { class: "note" }, FW["compliance.help"])];
+    if (jobs.storage && jobs.storage.low) kids.push(banner("bad", MSG.sev.bad, FW["compliance.storage-low"]));
+    kids.push(complianceHolds(holds), complianceJobs(org, jobs, isAdmin()));
+    return kids;
+  };
+  function complianceHolds(h) {
+    const relayStates = (x) => Object.entries(x.relays || {}).map(([r, s]) => relayName(r) + ": " + (FW["compliance.relay-" + s] || stateWord(s))).join("; ");
+    const by = (x) => (x.by && x.by.client ? code(x.by.client) : x.by && x.by.admin ? u(x.by.admin) : FW["compliance.by-console"]);
+    return section(uid("cmp-h"), FW["compliance.holds"], missingLine((h.partial || []).map(relayName)), dataTable({
+      caption: FW["compliance.holds"], rows: h.holds || [], empty: MSG.noneYet, name: (x) => x.hold, text: (x) => [x.hold, x.matter, (x.by || {}).client].join(" "),
+      cols: [{ key: "hold", label: W["dialog.id"], cell: (x) => code(x.hold) }, { key: "by", label: FW["compliance.col-by"], cell: by, sortable: false },
+        { key: "count", label: FW["compliance.col-people"], cell: (x) => String(x.count != null ? x.count : (x.principals || []).length) },
+        { key: "matter", label: FW["compliance.col-matter"], cell: (x) => u(x.matter || "") }, { key: "placed_at", label: FW["compliance.col-placed"], cell: (x) => whenAny(x.placed_at) },
+        { key: "relays", label: FW["compliance.col-relays"], cell: relayStates, sortable: false },
+        { key: "archive", label: FW["compliance.col-archive"], cell: (x) => (x.archive ? toneChip(FW["compliance.archive-" + x.archive] || stateWord(x.archive), ARCHIVE_TONE[x.archive]) : "") },
+        { key: "released_at", label: FW["compliance.relay-released"], cell: (x) => (x.released_at ? whenAny(x.released_at) : "") }],
+    }));
+  }
+  function complianceJobs(org, j, admin) {
+    const reviewed = (x) => el("span", null, fill(FW["compliance.released"], { n: x.releases || 0 }),
+      (x.released_by || []).length ? [el("br"), fill(FW["compliance.released-by"], { reviewers: x.released_by.join(", ") })] : null,
+      x.state === "waiting" && x.expires_waiting ? [el("br"), fill(FW["compliance.waiting-until"], { time: whenAny(x.expires_waiting) })] : null);
+    return section(uid("cmp-h"), FW["compliance.exports"], el("p", null, FW["compliance.ask-reviewers"]), el("p", { class: "note" }, FW["api.compliance-rule"]),
+      (j.archive_relays || []).length ? null : banner("warn", MSG.sev.warn, FW["compliance.no-archive"]), dataTable({
+        caption: FW["compliance.exports"], rows: j.jobs || [], empty: MSG.noneYet, name: (x) => x.job, text: (x) => [x.job, x.client_name, x.matter, x.owner].join(" "),
+        cols: [{ key: "job", label: W["dialog.id"], cell: (x) => code(x.job) }, { key: "client_name", label: FW["compliance.col-client"], cell: (x) => u(x.client_name || x.client) },
+          { key: "matter", label: FW["compliance.col-matter"], cell: (x) => u(x.matter || "") }, { key: "requested_at", label: FW["compliance.col-requested"], cell: (x) => whenAny(x.requested_at) },
+          { key: "state", label: FMSG.cols.state, cell: (x) => toneChip(FW["compliance.job-" + x.state] || stateWord(x.state), JOB_TONE[x.state]) },
+          { key: "reviewers", label: FW["compliance.col-reviewers"], cell: (x) => (x.reviewers || []).join(", "), sortable: false },
+          { key: "releases", label: FW["compliance.relay-released"], cell: reviewed, sortable: false },
+          { key: "zip_bytes", label: FW["compliance.col-size"], cell: (x) => (x.zip_bytes ? fmtBytes(Number(x.zip_bytes)) : "") },
+          { key: "expires", label: FMSG.cols.ends, cell: (x) => (x.expires ? whenAny(x.expires) : "") }],
+        actions: (x) => (admin && JOB_ENDS_OPEN.includes(x.state) ? [{ label: FW["compliance.cancel"], run: () => confirmDialog({
+          spec: fspec("compliance-cancel"), vals: { job: x.job }, name: x.client_name || x.client, id: x.job, danger: true, fields: [{ kind: "reason" }],
+          run: (v) => apiPost("compliance/exports/cancel", { org, job: x.job, reason: v.reason }),
+        }) }] : []),
+      }));
+  }
+
+  // ---- The Directory card of the People page (API-1 revision 4 13.2): governed or legacy SCIM and its activity ----
+  const NOT_REPORTED = { legacy_token_dates: "directory.tokens", pre_r4d3: "directory.pre-r4d3", pending_group_confirmations: "directory.pending" };
+  async function directoryCards() {
+    let orgs = [];
+    try {
+      orgs = (await api("GET", "settings/api", null, { direct: true })).orgs || [];
+    } catch (e) {
+      return [];
+    }
+    const out = [];
+    for (const o of orgs) {
+      try {
+        const s = await api("GET", "directory/status?org=" + encodeURIComponent(o.org), null, { direct: true });
+        if (s && s.mode) out.push(directoryCard(o, s));
+      } catch (e) {
+        // an organization without a directory answer shows no card
+      }
+    }
+    return out;
+  }
+  function refusedCell(r) {
+    const t = r || {};
+    const list = Object.entries(t.refusals || {}).map(([k, n]) => k + " " + n).join(", ");
+    return el("span", null, String(t.refused || 0), list ? [" ", fill(FW["directory.refusals"], { list })] : null);
+  }
+  const activityCols = [{ key: "last", label: FW["directory.col-last"], cell: (x) => whenAny((x.requests || x).last_request), sort: (x) => (x.requests || x).last_request },
+    { key: "ok", label: FW["directory.col-requests"], cell: (x) => String((x.requests || x).ok || 0) },
+    { key: "refused", label: FW["directory.col-refused"], cell: (x) => refusedCell(x.requests || x), sortable: false }];
+  function directoryCard(o, s) {
+    const kids = [banner(s.governed ? "info" : "warn", s.governed ? MSG.sev.info : MSG.sev.warn, FW[s.governed ? "directory.governed" : "directory.legacy"])];
+    const nr = (s.not_reported || []).map((k) => (NOT_REPORTED[k] ? FW[NOT_REPORTED[k]] : k));
+    if (nr.length) kids.push(el("p", { class: "note" }, fill(FW["directory.not-reported"], { list: nr.join(", ") })));
+    if ((s.clients || []).length || s.governed) {
+      kids.push(sub(FW["directory.clients"], dataTable({
+        caption: FW["directory.clients"], rows: s.clients || [], empty: MSG.noneYet, name: (x) => x.name || x.id,
+        cols: [{ key: "name", label: FMSG.cols.name, cell: (x) => u(x.name || x.id) }, { key: "provider", label: FW["api.dir-provider"], cell: (x) => u(x.provider || "") },
+          { key: "resource", label: FW["api.dir-scim"], cell: (x) => code(x.resource || ""), sortable: false },
+          { key: "state", label: FMSG.cols.state, cell: (x) => toneChip(FW["api.shown-" + x.state] || stateWord(x.state), SHOWN_TONE[x.state]) }].concat(activityCols),
+      })));
+    }
+    const tokens = (s.legacy && s.legacy.tokens) || [];
+    if (tokens.length) {
+      // the SSO service reports no_address_list, never the addresses themselves (API-1 revision 4 13.1)
+      const addresses = (x) => ((x.ip_allow || []).length ? x.ip_allow.join(", ") : x.no_address_list ? FW["directory.any-address"] : "");
+      kids.push(sub(FW["directory.tokens"], tokens.some((x) => x.pre_r4d3) ? el("p", { class: "note" }, FW["directory.pre-r4d3-help"]) : null, dataTable({
+        caption: FW["directory.tokens"], rows: tokens, empty: MSG.noneYet, name: (x) => x.token_id,
+        cols: [{ key: "token_id", label: W["dialog.id"], cell: (x) => el("span", null, code(x.token_id), x.hint ? [" ", code(x.hint)] : null, x.pre_r4d3 ? [" ", toneChip(FW["directory.pre-r4d3"], "warn")] : null) },
+          { key: "issued", label: FW["directory.col-issued"], cell: (x) => (x.issued ? whenAny(x.issued) : "") },
+          // 6.1.1: from 14 days before its end the date is a warning
+          { key: "expires", label: FMSG.cols.ends, cell: (x) => (!x.expires ? "" : x.ending ? toneChip(whenAny(x.expires), "warn") : whenAny(x.expires)) },
+          { key: "ip_allow", label: FW["directory.col-networks"], cell: addresses, sortable: false }].concat(activityCols),
+      })));
+    }
+    if ((s.pending || []).length) {
+      kids.push(sub(FW["directory.pending"], el("p", { class: "note" }, FW["directory.pending-help"]), dataTable({
+        caption: FW["directory.pending"], rows: s.pending, empty: MSG.noneYet, name: (x) => x.group,
+        cols: [{ key: "group", label: FW["directory.col-group"], cell: (x) => u(x.group_name || x.group) }, { key: "principal", label: FMSG.cols.name, cell: (x) => u(x.principal || "") },
+          { key: "since", label: FW["directory.col-since"], cell: (x) => whenAny(x.since) }],
+      })));
+    }
+    // 6.7: owners the directory deprovisioned, or the console marks gone, whose clients the map still lists
+    const clients = (o.map && o.map.clients) || [];
+    const gone = new Set((s.people || []).filter((p) => p.state === "deprovisioned").map((p) => p.principal));
+    for (const x of clients) if (x.shown_state === "owner-gone") gone.add(x.owner);
+    const rows = [...gone].map((p) => ({ principal: p, clients: clients.filter((x) => x.owner === p).map((x) => x.name) })).filter((r) => r.clients.length);
+    if (rows.length) {
+      kids.push(sub(FW["directory.owner-gone"], dataTable({
+        caption: FW["directory.owner-gone"], rows, empty: MSG.noneYet, name: (r) => r.principal,
+        cols: [{ key: "principal", label: FW["api.col-owner"], cell: (r) => u(r.principal) }, { key: "clients", label: FW["directory.col-clients"], cell: (r) => r.clients.join(", "), sortable: false }],
+      })));
+    }
+    return section(uid("dir-h"), [FW["directory.title"], ": ", u(o.org)], ...kids);
+  }
 
   // ---- Sign-in, Email and Settings on a fleet console (12.4) ----
   pages.fleetSignIn = async () => {

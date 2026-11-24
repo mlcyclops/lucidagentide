@@ -318,6 +318,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         }
         Err(E::Conflict(msg)) | Err(E::ConflictInfo(msg, _)) => (409, err(msg)),
         Err(E::NotFound(msg)) => (404, err(msg)),
+        Err(E::Coded(status, _, msg)) => (status, err(msg)),
         Err(E::Unavailable(msg)) => (501, err(msg)),
         Err(E::Gone(msg)) => (410, err(msg)),
         Err(E::Bad(msg)) => (400, err(msg)),

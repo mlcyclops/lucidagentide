@@ -1,0 +1,500 @@
+{
+ "v": 1,
+ "typ": "spokes-directory-v1",
+ "now": 1795437618,
+ "note": "API-1d 5.2 and 5.8. Accept each directory at `now` with a fresh holder trusting `root` (version 1 is newer than none held). A good answer gives org_domains (null when absent) and the urls of relays marked api: true, in directory order; every malformed one is refused as a whole. An api entry names its relay id (relay, r_ and 1 to 62 of A-Z, a-z, 0-9, ., _ and -); a missing, malformed or shared one refuses the directory. grants: the urls a connector's service hub dials from the named good directory for its client's relays grant (map_relays: the map's spokes.relays, for [\"*\"]): entries marked api whose relay is granted, lowest priority first. emails: is the address a service hub's under org_domains (null: the fail-closed rule, every apps. domain)? The domain after the last @ is compared in lower case.",
+ "root": {
+  "id": "n_f77530e24fcf56685512fa4e38a45d5f",
+  "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE50igvAmDklMXNx5vIFBDert94K0qTOMRoM_KsHYSmoCZmh4k7UmDhhzldNuqlDEy4Opzd-XB39tZamicnsKtyg",
+  "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE50igvAmDklMXNx5vIFBDert94K0q\nTOMRoM/KsHYSmoCZmh4k7UmDhhzldNuqlDEy4Opzd+XB39tZamicnsKtyg==\n-----END PUBLIC KEY-----\n"
+ },
+ "directories": [
+  {
+   "name": "no new fields (byte-identical to a directory signed before API-1d)",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjEsInJlZ2lvbiI6InVzLWVhc3QiLCJ1cmwiOiJodHRwczovL3Nwb2tlcy11cy5leGFtcGxlOjg0NDMifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEUCIFEjx8anQVEQrancOrDzpdGe1MryVr5RouCqdDe8dX1MAiEA4BFYXfdMLhE3E9hFhC_i9YSd4to3rQlJl6-pSxKxvVM",
+   "expect": {
+    "ok": true,
+    "org_domains": null,
+    "api_relays": []
+   }
+  },
+  {
+   "name": "org_domains with one domain",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiYWNtZS5leGFtcGxlIl0sInJlbGF5cyI6W3sicHJpb3JpdHkiOjAsInJlZ2lvbiI6ImV1LXdlc3QiLCJ1cmwiOiJodHRwczovL3JlbGF5LWV1LmV4YW1wbGUifSx7InByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIQCGhSxhwjX3fB6jk271V8nyQnbQQ1cM86tqjfZO5ctDugIgTzCSvFAFeaGsv2r4MXkDa_K82IS-wZuq3QbnV74magw",
+   "expect": {
+    "ok": true,
+    "org_domains": [
+     "acme.example"
+    ],
+    "api_relays": []
+   }
+  },
+  {
+   "name": "org_domains with 16 domains",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiZDEuZXhhbXBsZSIsImQyLmV4YW1wbGUiLCJkMy5leGFtcGxlIiwiZDQuZXhhbXBsZSIsImQ1LmV4YW1wbGUiLCJkNi5leGFtcGxlIiwiZDcuZXhhbXBsZSIsImQ4LmV4YW1wbGUiLCJkOS5leGFtcGxlIiwiZDEwLmV4YW1wbGUiLCJkMTEuZXhhbXBsZSIsImQxMi5leGFtcGxlIiwiZDEzLmV4YW1wbGUiLCJkMTQuZXhhbXBsZSIsImQxNS5leGFtcGxlIiwiZDE2LmV4YW1wbGUiXSwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjEsInJlZ2lvbiI6InVzLWVhc3QiLCJ1cmwiOiJodHRwczovL3Nwb2tlcy11cy5leGFtcGxlOjg0NDMifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEQCICj9GkdzzBTg43qm1_6aR8EC8ypyOztdN7dq8gH3bslnAiA3616LAUe1tsUEtJm1muFfUFjSHUzcIDbcsVNXotRfCQ",
+   "expect": {
+    "ok": true,
+    "org_domains": [
+     "d1.example",
+     "d2.example",
+     "d3.example",
+     "d4.example",
+     "d5.example",
+     "d6.example",
+     "d7.example",
+     "d8.example",
+     "d9.example",
+     "d10.example",
+     "d11.example",
+     "d12.example",
+     "d13.example",
+     "d14.example",
+     "d15.example",
+     "d16.example"
+    ],
+    "api_relays": []
+   }
+  },
+  {
+   "name": "one relay marked api, with org_domains",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiYWNtZS5leGFtcGxlIiwiYWNtZS1sYWJzLmV4YW1wbGUiXSwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsiYXBpIjp0cnVlLCJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInJlbGF5Ijoicl91cyIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIGqAe0tRIBB3-KiJOS0F-46JSmHuM9WWNvrTb16gL5CeAiEA6fxxkblfrlbUq0n_GIVe8xM_1AaYT8FCm86mqFy2HuA",
+   "expect": {
+    "ok": true,
+    "org_domains": [
+     "acme.example",
+     "acme-labs.example"
+    ],
+    "api_relays": [
+     "https://spokes-us.example:8443"
+    ]
+   }
+  },
+  {
+   "name": "every relay marked api, without org_domains",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2V1IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJhcGkiOnRydWUsInByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwicmVsYXkiOiJyX3VzIiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEQCIDC7auKAA1VZArIwXXaGHZM4Pi7bZ28pArmmRikZg2avAiABrZ8tSqgm4QpBkG28a6EHHgaNb_t7obZXNiE2SGYloQ",
+   "expect": {
+    "ok": true,
+    "org_domains": null,
+    "api_relays": [
+     "https://relay-eu.example",
+     "https://spokes-us.example:8443"
+    ]
+   }
+  },
+  {
+   "name": "org_domains with cert_grace_hours",
+   "token": "eyJjZXJ0X2dyYWNlX2hvdXJzIjoyNCwiZXhwIjoxODI2OTczNjE4LCJpYXQiOjE3OTU0Mzc2MTgsIm9yZ19kb21haW5zIjpbImFjbWUuZXhhbXBsZSJdLCJyZWxheXMiOlt7InByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEQCIDZbN6A3ydst715WF-BDOWzEaW4gbMiYghX7tkbLRqE7AiALwRmob7tq58fgzqe1mCaXoArT-nSDgl0C4b3uQ-aTsw",
+   "expect": {
+    "ok": true,
+    "org_domains": [
+     "acme.example"
+    ],
+    "api_relays": []
+   }
+  },
+  {
+   "name": "a relay id on an entry without api",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInJlbGF5Ijoicl9ldSIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjEsInJlZ2lvbiI6InVzLWVhc3QiLCJ1cmwiOiJodHRwczovL3Nwb2tlcy11cy5leGFtcGxlOjg0NDMifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEYCIQCQ3QPL2Q7MFB533wJCuKo4JcTf5ZxJzXF4tf2oo9ZwMQIhAL_xol3sdfk5Tou0_TrYrRgB03QqEe8NZz-tJH-aEged",
+   "expect": {
+    "ok": true,
+    "org_domains": null,
+    "api_relays": []
+   }
+  },
+  {
+   "name": "a relay id of 62 characters",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhIiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIBEPbykSiZkHowwgCp1tgQ-0s2EN3gIsupQ41RYItHE7AiEA7M6nc4Wyvf89CETiayl2ehx4YAnm3hEEf0gpDJ4VfsE",
+   "expect": {
+    "ok": true,
+    "org_domains": null,
+    "api_relays": [
+     "https://relay-eu.example"
+    ]
+   }
+  },
+  {
+   "name": "three api relays and a plain one, out of priority order",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwicmVsYXkiOiJyX3VzIiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn0seyJhcGkiOnRydWUsInByaW9yaXR5IjoyLCJyZWdpb24iOiJhcC1zb3V0aCIsInJlbGF5Ijoicl9hcC4xIiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtYXAuZXhhbXBsZSJ9LHsiYXBpIjp0cnVlLCJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInJlbGF5Ijoicl9ldSIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjMsInJlZ2lvbiI6ImV1LXdlc3QiLCJyZWxheSI6InJfcGxhaW4iLCJ1cmwiOiJodHRwczovL21lZXQtZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEYCIQDYdJsyiH5TYzx2JAzJVCTFMbOqef3m8tMS2YfKa5QeOwIhAKgu3MMo8omV21VIwcE-BfSt8WnRHw-r9_g71XiVL1h9",
+   "expect": {
+    "ok": true,
+    "org_domains": null,
+    "api_relays": [
+     "https://spokes-us.example:8443",
+     "https://spokes-ap.example",
+     "https://relay-eu.example"
+    ]
+   }
+  },
+  {
+   "name": "relays[].api false",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOmZhbHNlLCJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEYCIQD4NuU1lpI1hygMZHyKmaGBS8wr4EIZ0P-K6OYRGvLErAIhAKZwHJdG8ZRuF_SkrgYlN1WwZ0jWwUaDeCKsluUM6Cq2",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].api \"yes\"",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOiJ5ZXMiLCJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIE91ZUYL09b9KDbUOAu51ZbhpfWjmI5GviyeowMkSckjAiEA4ZD6qyghOEonxrKgHH_v8M5rdpSl_rmf7kdog0LCNkg",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].api 1",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOjEsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEQCIHdCwU3dbbDQJb4WaQnZXWFlD7VbEbFGZrru3IN8pHGxAiA6j-e59tY-prRSQaHag11O2xg_kBPXCU4yLTbxkVmqxg",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].api null",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOm51bGwsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIQDgD0WnUcNtbm0laI7sJLKA6PPZsAnCz02uaselvRSI2gIgdBo-XjylbJnJEfDTQSLulClU0U1rIA8jxfNBiPkJOoo",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "unknown entry key",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGlzIjp0cnVlLCJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIFXnZfIIm1HHBtcWtGlbe6SD9OdkYNhhy8aurE5VLJHdAiEApiQXhplgKjzDJqCGaJsBGmDQ01NfXuQq0xZexO4FmVs",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].api without relay",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIEFmrojD4TQQDiF32jxL7KbkNMYdtA2OeGeZGb2bUjXDAiEA5WOyVw30HzS8DXTSxZWMsBEFYh1srbUe5_Rd-R5uavo",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay missing on the second api entry",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2V1IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJhcGkiOnRydWUsInByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIQC0gy1kTOaUAaXkLKPUao999F6f2_rd9MrnlXepPRvnXgIgS7VE4blN32Qggsy5e_MyxOIRkDhLliNFtqoX9AukUrg",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "two api entries with the same relay",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2V1IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJhcGkiOnRydWUsInByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwicmVsYXkiOiJyX2V1IiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEQCIGPM_qKUqotvUNaP95WkhsRGiLB2HWSMZbd4j9a-Rs4KAiBfZO8Rb1gm1UsE5vV9XRHK1RvIWuhSxugxgNWTi153wA",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "a plain entry repeating an api entry's relay",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2V1IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInJlbGF5Ijoicl9ldSIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIQDHTjB2JeBcYfaUUaIDGdWwNO4v83BrrlBuPc4AsFjidAIgB7IiTHCuW551nWuoXWf0zyuMaIPLSeMkLeiARFjxGtE",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay without r_",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJldSIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIQC0AkszonkPhRnWlEM2EZ5wtF-wYcXzLeSjQ3YYoWmKIQIgGOICFBMtogCG31T-MrZPEHbrXi-FX54iH7qRoPYsZ_U",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay r_ alone",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyXyIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIGqcYoOoWqUaoIZzb4Pab452OiQuwRYF9V6NUKAFE5ZKAiEA5oc2RRZfqloXy6dXzCKYCsSY7mbeFA2JXdneSQCbLoM",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay with a space",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2UgdSIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEYCIQDwHWP0fmnSCW77F0oATkZZGEpED3qZBgzno03BSRVLlQIhANolwU_DvA0fI4mZBo5P3jORe6UcaFnNGHynskKTyO0b",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay upper-case prefix",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJSX2V1IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEUCIQCujco9OMM1oNvQgC4qYqP7Br6HvKAvbIC1WsJBISv8_gIgQQfRRta7o53WhjcaS1pmJg-RI8KN7y87ga7oRkFoVAs",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay of 63 characters after r_",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOiJyX2FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEQCIEgYHu7gymddd2XR9ntPe9e6-acsZWu6ZvC0cJgWGmNvAiBA5YNQYeBil4F0x3G_z3XUvjXEJJY8jeZoULipCHmnYg",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay a number",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOjIxLCJ1cmwiOiJodHRwczovL3JlbGF5LWV1LmV4YW1wbGUifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEQCID3hmhhsNmLpQdEXj-HgC4YGhOFrN6RGiC166epXuDKOAiAvXRLP6ssk_Nblb8pzREJChaiYaWbBuAlwQ5tpTArfbg",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay null",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJhcGkiOnRydWUsInByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwicmVsYXkiOm51bGwsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEQCIB5UYeVyBioySg2OrKsrmOFouU_3kXW-mo_Ovw3uerZsAiATNLIiufr7HsdWsojm5PlsX8Bl-9Wgk7NIyTq39nTfdw",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "relays[].relay malformed on a plain entry",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInJlbGF5IjoiZXUiLCJ1cmwiOiJodHRwczovL3JlbGF5LWV1LmV4YW1wbGUifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEUCIQCMHfpSvHMorS9NgL9_NjMxhiuUxr_QYObgkpvXGCQOQwIgEkqH0glQbvlGblHHfV78W9R3JxVJlyxPKK9Epvl_XtI",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains with 17 domains",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiZDEuZXhhbXBsZSIsImQyLmV4YW1wbGUiLCJkMy5leGFtcGxlIiwiZDQuZXhhbXBsZSIsImQ1LmV4YW1wbGUiLCJkNi5leGFtcGxlIiwiZDcuZXhhbXBsZSIsImQ4LmV4YW1wbGUiLCJkOS5leGFtcGxlIiwiZDEwLmV4YW1wbGUiLCJkMTEuZXhhbXBsZSIsImQxMi5leGFtcGxlIiwiZDEzLmV4YW1wbGUiLCJkMTQuZXhhbXBsZSIsImQxNS5leGFtcGxlIiwiZDE2LmV4YW1wbGUiLCJkMTcuZXhhbXBsZSJdLCJyZWxheXMiOlt7InByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEYCIQC-UGqwsCrvjQ14CB0IAVULTab5ukWZTXKxdj0vg415ywIhAJuMT3lU52uBOO7A16fNEYd_v9UoFnaIEmklIQ975fG7",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains empty",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOltdLCJyZWxheXMiOlt7InByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIQCdeeZiq-GG3z8iKIJDX1zU5T7r_hVE0CSYkw-fMbiBvAIgBO9irRQg-WmUxDLcjOqh1sdZ_BJEPIAwzMjD2TB3IFw",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains duplicate",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiYWNtZS5leGFtcGxlIiwiYWNtZS5leGFtcGxlIl0sInJlbGF5cyI6W3sicHJpb3JpdHkiOjAsInJlZ2lvbiI6ImV1LXdlc3QiLCJ1cmwiOiJodHRwczovL3JlbGF5LWV1LmV4YW1wbGUifSx7InByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEYCIQCG2LEHfKPS2jnn7p00_ZOkcF8u7r1sD5fKbxFyjmfbwwIhAL6qoNYzsp2Al5cEJarNSqVUZNRB6xFASpRmmYjSGbP8",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains upper case",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiQWNtZS5leGFtcGxlIl0sInJlbGF5cyI6W3sicHJpb3JpdHkiOjAsInJlZ2lvbiI6ImV1LXdlc3QiLCJ1cmwiOiJodHRwczovL3JlbGF5LWV1LmV4YW1wbGUifSx7InByaW9yaXR5IjoxLCJyZWdpb24iOiJ1cy1lYXN0IiwidXJsIjoiaHR0cHM6Ly9zcG9rZXMtdXMuZXhhbXBsZTo4NDQzIn1dLCJyb290Ijoibl9mNzc1MzBlMjRmY2Y1NjY4NTUxMmZhNGUzOGE0NWQ1ZiIsInR5cCI6Imx1Y2lkLXJlbGF5LWRpcmVjdG9yeSIsInYiOjEsInZlcnNpb24iOjF9.MEYCIQDMWBndJhgA0ibX2_-ADns68Grar0x1ywlTLDioxz0MTwIhAIKnRv5Vo_drkRtuMuBNXqFePNQNDkGVBvMTxcZhw4vZ",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains not a DNS name (no dot)",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiYWNtZSJdLCJyZWxheXMiOlt7InByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEUCIDAH0IvXaZcWRzRmR67TEqQJpiE8ImctnBMQ-lXuA9LzAiEA2MsiiA_nNiq0Oi3WrFNJLK1vzET1Kj-CTZ2AwcgPn0k",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains a string, not a list",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOiJhY21lLmV4YW1wbGUiLCJyZWxheXMiOlt7InByaW9yaXR5IjowLCJyZWdpb24iOiJldS13ZXN0IiwidXJsIjoiaHR0cHM6Ly9yZWxheS1ldS5leGFtcGxlIn0seyJwcmlvcml0eSI6MSwicmVnaW9uIjoidXMtZWFzdCIsInVybCI6Imh0dHBzOi8vc3Bva2VzLXVzLmV4YW1wbGU6ODQ0MyJ9XSwicm9vdCI6Im5fZjc3NTMwZTI0ZmNmNTY2ODU1MTJmYTRlMzhhNDVkNWYiLCJ0eXAiOiJsdWNpZC1yZWxheS1kaXJlY3RvcnkiLCJ2IjoxLCJ2ZXJzaW9uIjoxfQ.MEYCIQDMRzRfYhsrKacnvT4WmLXFxDV5htRmVGJnuFR3PV12yAIhAO5TBG3j5_uhwCZpFIFMQnF5VfjIJiNtksHZwTtMjejj",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "org_domains with a number",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbnMiOlsiYWNtZS5leGFtcGxlIiw3XSwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjEsInJlZ2lvbiI6InVzLWVhc3QiLCJ1cmwiOiJodHRwczovL3Nwb2tlcy11cy5leGFtcGxlOjg0NDMifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEYCIQCTuy5p4PFdBanxxUVOi_Qzy0xfmXuNK2Ij8NVeeoVo1QIhAI-x73ES0GC2got1tywm8IJ75gnG7z7JgmXr3Kf38uNf",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  },
+  {
+   "name": "unknown top-level key",
+   "token": "eyJleHAiOjE4MjY5NzM2MTgsImlhdCI6MTc5NTQzNzYxOCwib3JnX2RvbWFpbiI6WyJhY21lLmV4YW1wbGUiXSwicmVsYXlzIjpbeyJwcmlvcml0eSI6MCwicmVnaW9uIjoiZXUtd2VzdCIsInVybCI6Imh0dHBzOi8vcmVsYXktZXUuZXhhbXBsZSJ9LHsicHJpb3JpdHkiOjEsInJlZ2lvbiI6InVzLWVhc3QiLCJ1cmwiOiJodHRwczovL3Nwb2tlcy11cy5leGFtcGxlOjg0NDMifV0sInJvb3QiOiJuX2Y3NzUzMGUyNGZjZjU2Njg1NTEyZmE0ZTM4YTQ1ZDVmIiwidHlwIjoibHVjaWQtcmVsYXktZGlyZWN0b3J5IiwidiI6MSwidmVyc2lvbiI6MX0.MEUCIQDJCr1rcxUoQf7ebZ-ySPsV4nkgsWBi_lHmncnyzZMJogIgRGhIzhNeYD2f_UQ0iTuf2_2HzwSnaol7flyH4qbATU0",
+   "expect": {
+    "ok": false,
+    "reason": "malformed relay directory"
+   }
+  }
+ ],
+ "grants": [
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "r_us"
+   ],
+   "dials": [
+    "https://spokes-us.example:8443"
+   ]
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "r_ap.1",
+    "r_us"
+   ],
+   "dials": [
+    "https://spokes-us.example:8443",
+    "https://spokes-ap.example"
+   ]
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "*"
+   ],
+   "map_relays": [
+    "r_eu",
+    "r_us",
+    "r_ap.1"
+   ],
+   "dials": [
+    "https://relay-eu.example",
+    "https://spokes-us.example:8443",
+    "https://spokes-ap.example"
+   ]
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "*"
+   ],
+   "map_relays": [
+    "r_us"
+   ],
+   "dials": [
+    "https://spokes-us.example:8443"
+   ]
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "*"
+   ],
+   "map_relays": [],
+   "dials": []
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "r_zz"
+   ],
+   "dials": []
+  },
+  {
+   "directory": "three api relays and a plain one, out of priority order",
+   "grant": [
+    "r_plain"
+   ],
+   "dials": []
+  },
+  {
+   "directory": "one relay marked api, with org_domains",
+   "grant": [
+    "r_eu"
+   ],
+   "dials": []
+  },
+  {
+   "directory": "one relay marked api, with org_domains",
+   "grant": [
+    "r_eu",
+    "r_us"
+   ],
+   "dials": [
+    "https://spokes-us.example:8443"
+   ]
+  }
+ ],
+ "emails": [
+  {
+   "email": "x@apps.example.org",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": false
+  },
+  {
+   "email": "x@apps.acme.example",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": true
+  },
+  {
+   "email": "x@apps.example.org",
+   "org_domains": null,
+   "service": true
+  },
+  {
+   "email": "x@apps.acme.example",
+   "org_domains": null,
+   "service": true
+  },
+  {
+   "email": "x@acme.example",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": false
+  },
+  {
+   "email": "x@acme.example",
+   "org_domains": null,
+   "service": false
+  },
+  {
+   "email": "x@apps.acme.example",
+   "org_domains": [
+    "other.example",
+    "acme.example"
+   ],
+   "service": true
+  },
+  {
+   "email": "x@apps.sub.acme.example",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": false
+  },
+  {
+   "email": "x@apps.sub.acme.example",
+   "org_domains": null,
+   "service": true
+  },
+  {
+   "email": "x@apps.acme.example.evil.test",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": false
+  },
+  {
+   "email": "x@sub.apps.acme.example",
+   "org_domains": null,
+   "service": false
+  },
+  {
+   "email": "x@appsacme.example",
+   "org_domains": null,
+   "service": false
+  },
+  {
+   "email": "x@APPS.ACME.EXAMPLE",
+   "org_domains": [
+    "acme.example"
+   ],
+   "service": true
+  }
+ ]
+}

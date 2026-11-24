@@ -11,7 +11,7 @@
 // Interval metrics (`messages`, `call_minutes`, `spokes_busy`, `net_in`, `net_out`, `quota_hits`) count what happened
 // since the last snapshot; the first snapshot after start has `null` for the CPU and network deltas.
 
-use crate::fleet_metrics::KEYS;
+use crate::fleet_metrics::{Kind, KEYS};
 use crate::license::Product;
 use parking_lot::Mutex;
 use serde_json::{Map, Number, Value};
@@ -171,6 +171,19 @@ impl Counters {
         self.mgmt_not_after.store(ms.unwrap_or(UNSET), Ordering::Relaxed);
     }
 
+    /// The interval values so far, nothing reset (the API listener's `v1/metrics`, API-1 7.2).
+    fn peek_interval(&self) -> Interval {
+        let busy = self.busy_spokes.lock().len() as u64;
+        let mut pings = self.pings.lock().clone();
+        Interval {
+            messages: self.messages.load(Ordering::Relaxed),
+            participant_samples: self.participant_samples.load(Ordering::Relaxed),
+            quota_hits: self.quota_hits.load(Ordering::Relaxed),
+            busy_spokes: busy,
+            latency: median(&mut pings),
+        }
+    }
+
     /// The interval values, taken and reset.
     fn take_interval(&self) -> Interval {
         let busy = std::mem::take(&mut *self.busy_spokes.lock()).len() as u64;
@@ -185,6 +198,7 @@ impl Counters {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Interval {
     messages: u64,
     participant_samples: u64,
@@ -234,7 +248,64 @@ pub fn snapshot(product: Product) -> Value {
     st.seq = seq;
     let prev = st.last.replace(reading);
     drop(st);
-    build(product, now, seq, prev.as_ref(), &reading, counters().take_interval(), &source, counters())
+    let snap = build(product, now, seq, prev.as_ref(), &reading, counters().take_interval(), &source, counters());
+    if let Some(m) = snap.get("m").and_then(Value::as_object) {
+        let mut p = PUSHED.lock();
+        add_interval(&mut p.totals, m);
+        p.latest = Some((now, m.clone()));
+    }
+    snap
+}
+
+/// What `snapshot` last built, and every interval key summed over all snapshots since start.
+#[derive(Default)]
+struct Pushed {
+    latest: Option<(i64, Map<String, Value>)>,
+    totals: Map<String, Value>,
+}
+
+static PUSHED: LazyLock<Mutex<Pushed>> = LazyLock::new(Default::default);
+
+/// Add the interval keys of a snapshot's `m` to `totals` (null values add nothing).
+fn add_interval(totals: &mut Map<String, Value>, m: &Map<String, Value>) {
+    for k in KEYS.iter().filter(|k| k.kind == Kind::Interval) {
+        if let Some(x) = m.get(k.key).and_then(Value::as_f64) {
+            let sum = totals.get(k.key).and_then(Value::as_f64).unwrap_or(0.0) + x;
+            totals.insert(k.key.to_owned(), number(sum));
+        }
+    }
+}
+
+/// The `m` and time (ms) of the last snapshot built, None before the first.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn latest() -> Option<(i64, Map<String, Value>)> {
+    PUSHED.lock().latest.clone()
+}
+
+/// This relay's values now, for its API listener (API-1 7.2 `RR/v1/metrics`).
+#[derive(Clone, Debug)]
+pub struct Peek {
+    /// When read (ms).
+    pub ts: i64,
+    /// Every key of the product's 9.1 list as a snapshot would carry it; interval keys count since the last snapshot.
+    pub m: Map<String, Value>,
+    /// Every interval key summed over all snapshots since start plus the interval so far.
+    pub totals: Map<String, Value>,
+}
+
+/// API-1 7.2: the relay's values now WITHOUT resetting anything: `snapshot` stays the only reader that takes the
+/// interval counters, so the console's next `metrics` event still carries every count, in normal and failover mode
+/// alike.
+pub fn peek(product: Product) -> Peek {
+    let now = crate::codec::now_ms();
+    let reading = OsReading::read();
+    let source = SOURCE.lock().as_ref().map(|f| f(now)).unwrap_or_default();
+    let prev = PROBE.lock().last;
+    let snap = build(product, now, 0, prev.as_ref(), &reading, counters().peek_interval(), &source, counters());
+    let m = snap.get("m").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut totals = PUSHED.lock().totals.clone();
+    add_interval(&mut totals, &m);
+    Peek { ts: now, m, totals }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -686,6 +757,37 @@ mod tests {
         // The first reading after start has no interval: CPU and network are null, memory is there.
         let first = os_values(None, &b);
         assert!(first.cpu_process.is_none() && first.cpu_host.is_none() && first.net_in.is_none());
+    }
+
+    #[test]
+    fn peek_reads_the_interval_without_resetting_it_and_snapshot_still_takes_it() {
+        // a counter set of its own: the process-wide one is shared with every other test
+        let c = Counters::default();
+        c.message(7);
+        c.participants_sample(12);
+        c.quota_hit();
+        c.spoke_mail("n1");
+        c.ping_rtt(40);
+        let first = c.peek_interval();
+        let again = c.peek_interval();
+        assert_eq!(first, again, "peek resets nothing");
+        assert_eq!((first.messages, first.participant_samples, first.quota_hits, first.busy_spokes, first.latency), (7, 12, 1, 1, Some(40.0)));
+        let taken = c.take_interval();
+        assert_eq!(taken, first, "the snapshot gets exactly what peek saw");
+        let after = c.peek_interval();
+        assert_eq!((after.messages, after.participant_samples, after.quota_hits, after.busy_spokes, after.latency), (0, 0, 0, 0, None));
+        // running totals: every snapshot's interval keys add up; a gauge never does
+        let mut totals = Map::new();
+        let m = |msgs: i64| serde_json::json!({"messages": msgs, "people_online": 3, "net_in": null}).as_object().unwrap().clone();
+        add_interval(&mut totals, &m(5));
+        add_interval(&mut totals, &m(4));
+        assert_eq!(totals.get("messages"), Some(&Value::from(9)));
+        assert!(totals.get("people_online").is_none() && totals.get("net_in").is_none());
+        // the global peek after a snapshot returns the totals so far plus the interval since
+        let _ = snapshot(Product::Meet);
+        let p = peek(Product::Meet);
+        assert!(latest().is_some_and(|(_, m)| m.contains_key("messages")), "a snapshot was built");
+        assert!(p.m.contains_key("messages") && p.totals.contains_key("messages"));
     }
 
     #[test]

@@ -452,9 +452,14 @@ struct Conn(rustls::StreamOwned<rustls::ClientConnection, TcpStream>);
 impl Conn {
     fn open(host: &str, port: u16, cfg: &Arc<ClientConfig>) -> Result<Conn, String> {
         let addrs: Vec<_> = (host, port).to_socket_addrs().map_err(|_| "the SIEM's host name did not resolve".to_string())?.collect();
+        Conn::connect(host, &addrs, cfg)
+    }
+
+    /// The first of `addrs` that answers, then TLS with `host`'s name checked.
+    fn connect(host: &str, addrs: &[std::net::SocketAddr], cfg: &Arc<ClientConfig>) -> Result<Conn, String> {
         let mut last = "the SIEM did not answer".to_string();
         for a in addrs {
-            match TcpStream::connect_timeout(&a, CONNECT_TIMEOUT) {
+            match TcpStream::connect_timeout(a, CONNECT_TIMEOUT) {
                 Ok(tcp) => {
                     let _ = tcp.set_read_timeout(Some(IO_TIMEOUT));
                     let _ = tcp.set_write_timeout(Some(IO_TIMEOUT));
@@ -493,6 +498,157 @@ fn send_test(s: &SiemSettings, cfg: &Arc<ClientConfig>, host: &str, version: &st
     c.send(&frame(&msg))?;
     c.close();
     Ok(())
+}
+
+// ── API-1 11.1: the `syslog_cef` export destination ─────────────────────────────────────────────────────────
+
+/// A `syslog_cef` destination (contract API-1 11.1, 8.1): today's RFC 5424 messages with CEF over TLS, built by
+/// `message` and framed by `frame` unchanged, to the entry's `settings` (`host`, `port`, `caPem`, `clientCertPem`,
+/// `events`, `includeReasons`) with the `mtls` credential's key. Every resolved address is checked (`address_allowed`
+/// with the entry's `private_ok`) and the connection goes to a checked address. One connection is kept between
+/// batches; a failed write closes it.
+pub struct CefSink {
+    settings: SiemSettings,
+    cfg: Arc<ClientConfig>,
+    private_ok: bool,
+    host: String,
+    version: String,
+    conn: Mutex<Option<Conn>>,
+}
+
+/// The sink of a `syslog_cef` destination entry: `host` and `version` as the console's SIEM export writes them.
+pub fn cef_sink(destination: &Value, credential: crate::api_export_wire::Credential, host: &str, version: &str) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
+    use crate::api_export_wire::{Credential, SinkError};
+    let bad = |m: String| SinkError { retryable: false, code: "config", message: m };
+    let s = destination.get("settings").cloned().unwrap_or(Value::Null);
+    let target = s.get("host").and_then(Value::as_str).filter(|h| host_ok(h)).ok_or_else(|| bad("The syslog destination needs a host name or address.".into()))?;
+    let port = s.get("port").and_then(Value::as_u64).and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0).unwrap_or(DEFAULT_PORT);
+    let (cert, key, ca) = match credential {
+        Credential::Mtls { cert_pem, key_pem, ca_pem } => (Some(cert_pem), Some(key_pem), ca_pem),
+        Credential::None => (None, None, None),
+        _ => return Err(bad("A syslog destination takes an mtls credential or none.".into())),
+    };
+    let text = |k: &str| s.get(k).and_then(Value::as_str).map(str::to_owned);
+    let settings = SiemSettings {
+        host: target.to_owned(),
+        port,
+        ca_pem: text("caPem").or(ca),
+        client_cert_pem: text("clientCertPem").or(cert),
+        events: s.get("events").and_then(Events::from_json).unwrap_or(Events { audit: true, security: true, relays: true }),
+        include_reasons: s.get("includeReasons").and_then(Value::as_bool).unwrap_or(false),
+    };
+    let cfg = tls_config(&settings, key.as_deref()).map_err(|e| bad(format!("The syslog TLS settings cannot be used: {e}.")))?;
+    let private_ok = destination.get("private_ok").and_then(Value::as_bool).unwrap_or(false);
+    Ok(Box::new(CefSink { settings, cfg, private_ok, host: host.to_owned(), version: version.to_owned(), conn: Mutex::new(None) }))
+}
+
+impl CefSink {
+    /// One exported record (10.3 shape) as today's message: an API audit entry as an `Audit` message (a relay's
+    /// chain as `Relays` with its relay id), its `ts` in seconds made milliseconds, `client` as the actor, `resource`
+    /// as the target and `check` as `detail.code`; a log event as a `Security` message. None when `events` leaves
+    /// that source out.
+    fn message(&self, signal: crate::api_export_wire::Signal, rec: &Value) -> Option<String> {
+        use crate::api_export_wire::Signal;
+        let body = rec.get("body")?.as_object()?;
+        let mut e = Map::new();
+        match signal {
+            Signal::Audit => {
+                let relay = if body.get("source").and_then(Value::as_str) == Some("relay") { body.get("relay").and_then(Value::as_str) } else { None };
+                if !(if relay.is_some() { self.settings.events.relays } else { self.settings.events.audit }) {
+                    return None;
+                }
+                e.insert("ts".into(), Value::from(body.get("ts")?.as_i64()?.saturating_mul(1000)));
+                for (k, from) in [("seq", "seq"), ("action", "action"), ("result", "result"), ("ip", "ip"), ("hash", "hash"), ("target", "resource")] {
+                    if let Some(v) = body.get(from) {
+                        e.insert(k.into(), v.clone());
+                    }
+                }
+                if let Some(a) = body.get("client").or_else(|| body.get("principal")) {
+                    e.insert("actor".into(), a.clone());
+                }
+                if let Some(c) = body.get("check").or_else(|| body.get("code")) {
+                    e.insert("detail".into(), json!({ "code": c }));
+                }
+                let source = if relay.is_some() { Source::Relays } else { Source::Audit };
+                message(source, &e, relay, &self.host, &self.version, self.settings.include_reasons)
+            }
+            Signal::Logs => {
+                if !self.settings.events.security {
+                    return None;
+                }
+                e.insert("ts".into(), Value::from(rec.get("t_ms")?.as_i64()?));
+                for k in ["level", "event", "ip", "code"] {
+                    if let Some(v) = body.get(k) {
+                        e.insert(k.into(), v.clone());
+                    }
+                }
+                message(Source::Security, &e, None, &self.host, &self.version, false)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// 8.1: a syslog destination's addresses, resolved within the DNS limit `api_fetch` uses (5 s), on a helper thread
+/// with its own runtime (so a caller inside or outside a runtime alike never waits longer). An address literal
+/// resolves to itself. Never empty when Ok.
+fn resolve_bounded(host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, String> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
+    }
+    let limit = crate::api_fetch::Limits::default().dns;
+    let name = host.to_owned();
+    let found = std::thread::Builder::new()
+        .name("syslog-dns".into())
+        .spawn(move || -> Result<Vec<std::net::SocketAddr>, String> {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let r = rt.block_on(async {
+                match tokio::time::timeout(limit, tokio::net::lookup_host((name.as_str(), port))).await {
+                    Ok(Ok(a)) => Ok(a.collect()),
+                    Ok(Err(e)) => Err(e.kind().to_string()),
+                    Err(_) => Err("timed out".to_owned()),
+                }
+            });
+            // a lookup still blocked in the system resolver is left behind, not waited for
+            rt.shutdown_background();
+            r
+        })
+        .map_err(|e| e.to_string())?
+        .join()
+        .unwrap_or_else(|_| Err("the resolver stopped".to_owned()))?;
+    if found.is_empty() {
+        return Err("no address".into());
+    }
+    Ok(found)
+}
+
+impl crate::api_export_wire::Sink for CefSink {
+    fn deliver(&self, batch: &crate::api_export_wire::Batch) -> Result<(), crate::api_export_wire::SinkError> {
+        use crate::api_export_wire::SinkError;
+        let framed: String = batch.records.iter().filter_map(|r| self.message(batch.signal, r)).map(|m| frame(&m)).collect();
+        if framed.is_empty() {
+            return Ok(());
+        }
+        let mut g = self.conn.lock();
+        if g.is_none() {
+            let (host, port) = (self.settings.host.as_str(), self.settings.port);
+            let addrs = resolve_bounded(host, port).map_err(|why| SinkError { retryable: true, code: "dns", message: format!("The syslog destination's host name did not resolve ({why}).") })?;
+            if let Some(a) = addrs.iter().find(|a| !crate::api_fetch::address_allowed(a.ip(), self.private_ok)) {
+                return Err(SinkError { retryable: false, code: "address", message: format!("The syslog destination resolves to {}, which is not allowed.", a.ip()) });
+            }
+            let c = Conn::connect(host, &addrs, &self.cfg).map_err(|e| SinkError { retryable: true, code: "connect", message: format!("The syslog destination could not be reached: {e}.") })?;
+            *g = Some(c);
+        }
+        let sent = match g.as_mut() {
+            Some(c) => c.send(&framed),
+            None => Err("no connection".into()),
+        };
+        if let Err(e) = sent {
+            *g = None;
+            return Err(SinkError { retryable: true, code: "send", message: format!("The syslog destination did not take the messages: {e}.") });
+        }
+        Ok(())
+    }
 }
 
 // ── Spool ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1276,6 +1432,60 @@ mod tests {
 
     fn settings(port: u16, ca: Option<String>) -> SiemSettings {
         SiemSettings { host: "localhost".into(), port, ca_pem: ca, client_cert_pem: None, events: Events { audit: true, security: true, relays: true }, include_reasons: false }
+    }
+
+    fn cef(private_ok: bool, host: &str) -> Box<dyn crate::api_export_wire::Sink> {
+        let d = json!({"id": "d_00000000000000c1", "kind": "syslog_cef", "private_ok": private_ok, "settings": {"host": host, "port": 6514, "includeReasons": false}});
+        cef_sink(&d, crate::api_export_wire::Credential::None, HOST, "1.2.3").unwrap_or_else(|e| panic!("{}", e.message))
+    }
+
+    fn cef_message(private_ok: bool, signal: crate::api_export_wire::Signal, rec: &Value) -> Option<String> {
+        let d = json!({"id": "d_00000000000000c1", "kind": "syslog_cef", "private_ok": private_ok, "settings": {"host": "siem.acme.example"}});
+        let s = SiemSettings { host: "siem.acme.example".into(), port: DEFAULT_PORT, ca_pem: None, client_cert_pem: None, events: Events { audit: true, security: true, relays: true }, include_reasons: false };
+        let sink = CefSink { cfg: tls_config(&s, None).unwrap(), settings: s, private_ok: d["private_ok"].as_bool().unwrap(), host: HOST.into(), version: "1.2.3".into(), conn: Mutex::new(None) };
+        sink.message(signal, rec)
+    }
+
+    /// API-1 11.1: a log event through a `syslog_cef` destination is byte for byte the message the console's own SIEM
+    /// export writes for that security line.
+    #[test]
+    fn cef_sink_writes_todays_security_message() {
+        let t = 1_800_000_000_000i64;
+        let line = json!({"ts": crate::codec::iso_time(t), "level": "warn", "cat": "security", "component": "console", "event": "api.refusal", "ip": "203.0.113.7", "code": "scope", "org": "acme"});
+        let mut today = Map::new();
+        for k in ["ts", "level", "event", "ip", "code"] {
+            today.insert(k.into(), line[k].clone());
+        }
+        let want = message(Source::Security, &today, None, HOST, "1.2.3", false).unwrap();
+        let got = cef_message(false, crate::api_export_wire::Signal::Logs, &json!({"t_ms": t, "severity": 13, "event": "api.refusal", "body": line})).unwrap();
+        assert_eq!(got, want);
+    }
+
+    /// API-1 11.1: a relay chain's audit entry leaves as a `relay` message naming the relay, its time in milliseconds.
+    #[test]
+    fn cef_sink_writes_relay_chain_entries_as_relay_messages() {
+        let body = json!({"seq": 7, "ts": 1_800_000_000i64, "org": "acme", "source": "relay", "relay": "r_0123456789abcdef", "action": "api.call", "client": "p_0123456789abcdef", "result": "ok", "check": "none", "resource": "r_0123456789abcdef", "hash": "a".repeat(64)});
+        let m = cef_message(false, crate::api_export_wire::Signal::Audit, &json!({"t_ms": 1_800_000_000_000i64, "body": body})).unwrap();
+        assert!(m.contains(" lucid-console - relay - CEF:0|"), "{m}");
+        assert!(m.contains("rt=1800000000000 ") && m.contains("cs2=r_0123456789abcdef") && m.contains("suser=p_0123456789abcdef") && m.contains("cn1=7"), "{m}");
+    }
+
+    /// 8.1: a syslog host on a loopback address is refused for good, even with `private_ok`.
+    #[test]
+    fn cef_sink_refuses_a_loopback_address() {
+        let b = crate::api_export_wire::Batch {
+            signal: crate::api_export_wire::Signal::Audit,
+            resource: Vec::new(),
+            records: vec![json!({"t_ms": 1, "body": {"seq": 1, "ts": 1, "action": "api.call", "result": "ok", "source": "console"}})],
+        };
+        let e = cef(true, "127.0.0.1").deliver(&b).unwrap_err();
+        assert_eq!((e.retryable, e.code), (false, "address"));
+        // a name goes through the bounded resolver, then the same address check
+        let started = std::time::Instant::now();
+        let e = cef(true, "localhost").deliver(&b).unwrap_err();
+        assert!(matches!(e.code, "address" | "dns"), "{}", e.message);
+        assert!(started.elapsed() < Duration::from_secs(7), "the resolver kept its 5 s limit");
+        assert_eq!(resolve_bounded("192.0.2.1", 6514).unwrap(), vec!["192.0.2.1:6514".parse::<std::net::SocketAddr>().unwrap()]);
     }
 
     /// A one-connection TLS syslog receiver: everything it read.
