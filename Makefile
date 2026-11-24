@@ -1919,3 +1919,7 @@ demo-P-PERF.IDLE1: ## P-PERF.IDLE1: opening LUCID runs no git and an idle window
 	$(BUN) test $(TEST_IGNORES) tools/session_files.test.ts desktop/repo_fs.test.ts desktop/repo_identity.test.ts harness/code_activity.test.ts harness/usage_ledger.test.ts desktop/sessions.test.ts desktop/sessions_index.test.ts desktop/sessions_asklucid.test.ts desktop/sessions_ingest.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_perf_idle_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_perf_idle_1.mjs; else echo "demo-P-PERF.IDLE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-FLEET.CONN1
+demo-P-FLEET.CONN1: ## P-FLEET.CONN1: with several agents working, the window's other requests to the engine are still answered. Every running agent, Main's turn and each Visualize watch hold one HTTP connection open; Chromium's six-per-host cap then queued fleet status forever (Visualize "0 agents", status "Checking"). main.ts lifts the cap for the loopback hosts; Visualize's fleet poll also gives up on a reply after 10 s instead of stopping. Proof in this repo's Electron: 8 open streams, then one quick request, pending without the switch and answered with it.
+	$(BUN) run desktop/scripts/demo_p_fleet_conn_1.ts

@@ -6541,3 +6541,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** an install request with no valid plugin id is refused and logged without a high Live block (the eight `plugin ""` blocks were a QA script's malformed calls, not purchases); the store gives owner accounts every item (add-on ADR-A156, deployed); every on-sale package passes the real install gates with zero blocks. ADR-0673.
 - **stubbed:** none.
 - **next:** a signed-in owner check in the running app (every card reads Install).
+## P-FLEET.CONN1: lift Chromium's per-host connection cap for the loopback engine
+- **shipped (2026-11-23):** with 4+ agents working, their turn streams used up Chromium's six connections to the engine and every other request queued (Visualize "0 agents", status "Checking"); main.ts now lifts the cap for 127.0.0.1/localhost and Visualize's fleet poll gives up on a reply after 10 s. ADR-0674.
+- **stubbed:** none.
+- **next:** carry every lane's events on one multiplexed stream so the window holds one connection however many agents run.

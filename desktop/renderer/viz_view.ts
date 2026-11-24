@@ -168,6 +168,8 @@ export interface VizDeps {
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
+/** P-FLEET.CONN1: how long one fleet poll waits for its reply before the chain moves on. */
+const FLEET_WAIT_MS = 10_000;
 const RUNS_MS = 2500; // the subagent card's run cadence
 const TICK_MS = 100;
 /** Read-only lane watches the view opens itself, at most. Each is a long-lived request; the browser allows
@@ -1474,7 +1476,9 @@ async function pollFleet(): Promise<void> {
     return;
   }
   fleetBusy = true;
-  const st = await deps.fleetStatus().catch(() => null);
+  // P-FLEET.CONN1: a reply that never comes (the window's connections to the engine all held by streams) must not
+  // stop the poll chain for good; after FLEET_WAIT_MS this cycle counts as offline and the next one asks again.
+  const st = await Promise.race([deps.fleetStatus().catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), FLEET_WAIT_MS))]);
   fleetBusy = false;
   if (model !== m) return;
   fleetOffline = !st;
