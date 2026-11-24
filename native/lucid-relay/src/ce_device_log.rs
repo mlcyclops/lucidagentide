@@ -1,6 +1,6 @@
 // CE-1 member and service logs, org policies, key stores and sender keys, the device side (docs/chat-e2ee/
-// contract.md revision 9: section 5 sender keys and epochs, 7.1 DM device sets with archives, 7.2 the member log
-// with its revision 6 service ops and the revision 9 membership intervals (docs/api/contract-r5-1c.md 5.2), 10
+// contract.md revision 11: section 5 sender keys and epochs, 7.1 DM device sets with archives, 7.2 the member log
+// with its revision 6 service ops and the revision 11 membership intervals (docs/api/contract-r5-1c.md 5.2), 10
 // retention bookkeeping). A port of the `LogState`, `extend_log`, `replay_log`, `PolicyView`, `KeyStore` and
 // `SenderKeys` parts of `src/meet_chat_e2ee.py`; the encodings, signatures and messages are in `ce_device.rs`.
 //
@@ -253,7 +253,7 @@ impl LogState {
         state.members
     }
 
-    /// Revision 9 (API-1c 5.2): the times (entry `ts`, ms) `principal` was a member by this replay, as `(from, to)`
+    /// Revision 11 (API-1c 5.2): the times (entry `ts`, ms) `principal` was a member by this replay, as `(from, to)`
     /// with `to` 0 while still a member (`in_intervals`).
     pub fn member_intervals(&self, principal: &str) -> Vec<(i64, i64)> {
         let mut out: Vec<(i64, i64)> = Vec::new();

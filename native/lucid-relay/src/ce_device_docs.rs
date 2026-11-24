@@ -1,4 +1,4 @@
-// CE-1 shared documents (chat-e2ee contract revision 9, PC-1 section 2; API-1c r5 2.1 to 2.8 device side): the Yjs
+// CE-1 shared documents (chat-e2ee contract revision 11, PC-1 section 2; API-1c r5 2.1 to 2.8 device side): the Yjs
 // client id of a device in a document (`doc_client_id`, from `meet_chat_e2ee.py`) and the checks every device runs on
 // a `doc` update or a `docsnap` (`meet_docs.py`): a strict Yjs v1 update reader, the client and generation rules,
 // the limits, and state vectors. Refusals carry the `meet_docs` codes (`malformed`, `too_large`, `foreign_client`,

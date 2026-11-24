@@ -1,4 +1,4 @@
-// CE-1 encrypted files (chat-e2ee contract revision 9, section 9; API-1c r5 2.1 to 2.8 device side): a file is cut
+// CE-1 encrypted files (chat-e2ee contract revision 11, section 9; API-1c r5 2.1 to 2.8 device side): a file is cut
 // into 64 KiB chunks, each sealed with AES-256-GCM under the file key, nonce `0^4 || u64(i)` and the additional data
 // `lp("lucid-meet-chat-file-v1", fid, u64(i), "1" | "0")` (final flag). Nothing decrypted is released before the
 // final chunk, the size and the SHA-256 of the descriptor have all been checked. The reader side of

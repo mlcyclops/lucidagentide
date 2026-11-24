@@ -1322,7 +1322,7 @@ impl AppSession {
         }
     }
 
-    /// A verified message, authorized (CE-1 6 table, revision 9 with the pinned `api` apps), then applied: group chat
+    /// A verified message, authorized (CE-1 6 table, revision 11 with the pinned `api` apps), then applied: group chat
     /// and channel content to the store and `event`; the person's `apra` and `stop` in the app's DM to the hooks.
     fn apply_message(&self, st: &mut State, msg: OpenedMessage, now_ms: i64) -> Result<(), String> {
         let store = &self.shared.store;
@@ -1545,14 +1545,14 @@ impl AppSession {
         Ok(cid)
     }
 
-    /// Revision 9 `apr` in the app's DM with `person` (`t` "", `m` []).
+    /// Revision 11 `apr` in the app's DM with `person` (`t` "", `m` []).
     pub fn send_apr(&self, person: &str, apr: &Value, now_ms: i64) -> Result<Value, String> {
         ce::check_apr(apr).map_err(|e| e.to_string())?;
         let cid = self.open_dm(person, now_ms)?;
         self.send(&cid, "post", "", json!({"t": "", "m": [], "apr": apr}), "", now_ms)
     }
 
-    /// Revision 9 delegated or program post: `text` with `dlg` in a group chat or channel, in `thread` ("" for none).
+    /// Revision 11 delegated or program post: `text` with `dlg` in a group chat or channel, in `thread` ("" for none).
     pub fn post_dlg(&self, cid: &str, text: &str, thread: &str, dlg: &Value, now_ms: i64) -> Result<Value, String> {
         self.send(cid, "post", "", json!({"t": text, "m": [], "dlg": dlg}), thread, now_ms)
     }
@@ -1565,7 +1565,7 @@ impl AppSession {
         st.device.as_ref().is_some_and(|d| ce::dm_cid(&d.id.principal, &person).is_ok_and(|cid| !d.pair(&cid).is_empty()))
     }
 
-    /// Revision 9 delegation notice in the app's DM with `person` under `mid`, the id `connector_notice` sealed in its
+    /// Revision 11 delegation notice in the app's DM with `person` under `mid`, the id `connector_notice` sealed in its
     /// outbox first (r5 6.3): a retry is the same message, and Err `connector_device::ID_KEPT` means the relay keeps it.
     pub fn send_dlgn(&self, person: &str, dlgn: &Value, mid: &str, now_ms: i64) -> Result<Value, String> {
         let cid = self.open_dm(person, now_ms)?;

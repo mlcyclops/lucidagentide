@@ -1,4 +1,4 @@
-// CE-1 end-to-end encrypted chat, the device side (docs/chat-e2ee/contract.md revision 9: section 2 encodings,
+// CE-1 end-to-end encrypted chat, the device side (docs/chat-e2ee/contract.md revision 11: section 2 encodings,
 // 3 signature validity over time, 4 device chat key bundles, 5 wraps, 6 envelopes, payloads and who may send them,
 // 7.3 call-room catch-up, 8 own-device history share, 11 folding; docs/api/contract-r5-1c.md 2.1 to 2.8 device side
 // and 7.4 to 7.6: API apps, approvals, delegated posts and Stop). A port of `src/meet_chat_e2ee.py` (and of the
@@ -135,9 +135,9 @@ pub const ROLE_OPS: [&str; 4] = ["remove", "leave", "admin", "unadmin"];
 pub const TEXT_WAITING_KEY: &str = "Waiting for the key to this message";
 pub const TEXT_LOG_CHANGED: &str = "This conversation's member list was changed in a way that could not be verified";
 pub const TEXT_MEMBER_LIST_NOT_VERIFIED: &str = "The member list of this conversation could not be verified";
-// revision 9 (API-1c 2.3, 7.4 to 7.6): API apps, approvals, delegated posts and Stop
+// revision 11 (API-1c 2.3, 7.4 to 7.6): API apps, approvals, delegated posts and Stop
 pub const API_APP_TYPE: &str = "api";
-pub const REV9_EXTRAS: [&str; 5] = ["apr", "apra", "dlg", "dlgn", "stop"];
+pub const REV11_EXTRAS: [&str; 5] = ["apr", "apra", "dlg", "dlgn", "stop"];
 pub const APR_ACTIONS: [&str; 1] = ["post"];
 /// Characters.
 pub const APR_TEXT_MAX: usize = 4000;
@@ -2287,7 +2287,7 @@ fn is_person(v: &Value) -> bool {
 }
 
 /// Revision 6 post fields: `mf` (a mention forwarded to a linked app), `cmd` (a slash command), `used_by` (an app's
-/// answer to a command) and `wfs` (a workflow status); then the revision 9 extras.
+/// answer to a command) and `wfs` (a workflow status); then the revision 11 extras.
 fn check_post_extras(payload: &Obj) -> CeResult<()> {
     if let Some(mf) = payload.get("mf") {
         let mf = keys(mf, &["conv", "ref", "th"], &[])?;
@@ -2325,7 +2325,7 @@ fn check_post_extras(payload: &Obj) -> CeResult<()> {
             return rules("unknown workflow state");
         }
     }
-    check_rev9_extras(payload)
+    check_rev11_extras(payload)
 }
 
 fn chars_in(v: &Value, low: usize, high: usize, what: &str) -> CeResult<()> {
@@ -2349,7 +2349,7 @@ fn hex32(v: &Value, what: &str) -> CeResult<()> {
     Ok(())
 }
 
-/// Revision 9 `apr` (approval request): `id` 32 hex, `client` an API client name, `agent` 1 to 64 characters,
+/// Revision 11 `apr` (approval request): `id` 32 hex, `client` an API client name, `agent` 1 to 64 characters,
 /// `action` "post", `conv` a `ch:` cid, `conv_name` 1 to 100 characters, `thread` "" or a message id, `text` 1 to
 /// 4000 characters, `exp` ms.
 pub fn check_apr(apr: &Value) -> CeResult<()> {
@@ -2375,10 +2375,10 @@ pub fn apr_hash(apr: &Value) -> CeResult<String> {
     Ok(hex(&sha256(&canonical_json(apr)?)))
 }
 
-/// Revision 9 post fields (API-1c 7.4): at most one of `apr`, `apra`, `dlg`, `dlgn` and `stop`, never with `mf`,
+/// Revision 11 post fields (API-1c 7.4): at most one of `apr`, `apra`, `dlg`, `dlgn` and `stop`, never with `mf`,
 /// `cmd`, `used_by` or `wfs`. `apr`, `apra` and `stop` carry nothing else (`t` "", `m` []).
-fn check_rev9_extras(payload: &Obj) -> CeResult<()> {
-    let present: Vec<&str> = REV9_EXTRAS.iter().copied().filter(|k| payload.contains_key(*k)).collect();
+fn check_rev11_extras(payload: &Obj) -> CeResult<()> {
+    let present: Vec<&str> = REV11_EXTRAS.iter().copied().filter(|k| payload.contains_key(*k)).collect();
     let Some(&kind) = present.first() else { return Ok(()) };
     if present.len() > 1 || ["mf", "cmd", "used_by", "wfs"].iter().any(|k| payload.contains_key(*k)) {
         return rules("a message carries one app extra");
@@ -2599,7 +2599,7 @@ pub fn check_payload(kind: &str, ref_: &str, payload: &Value) -> CeResult<()> {
 // -- section 6: who may send what --------------------------------------------------------------------------------
 
 /// What `authorize` needs beyond the members: the admins, the target's author and kind (edit, delete), the poll's
-/// author and payload (close, vote), and (revision 9) the principals the reader's verified org policies list as
+/// author and payload (close, vote), and (revision 11) the principals the reader's verified org policies list as
 /// `api` apps (`api_app_principals`).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AuthorizeContext<'a> {
@@ -2615,9 +2615,9 @@ fn has(list: &[String], p: &str) -> bool {
     list.iter().any(|x| x == p)
 }
 
-/// Revision 9 sender and cid rules of a `post`.
-fn authorize_rev9(msg: &OpenedMessage, kind: &str, sender: &str, members: &[String], api_apps: &[String]) -> CeResult<()> {
-    let Some(extra) = REV9_EXTRAS.iter().copied().find(|k| msg.payload.get(*k).is_some()) else { return Ok(()) };
+/// Revision 11 sender and cid rules of a `post`.
+fn authorize_rev11(msg: &OpenedMessage, kind: &str, sender: &str, members: &[String], api_apps: &[String]) -> CeResult<()> {
+    let Some(extra) = REV11_EXTRAS.iter().copied().find(|k| msg.payload.get(*k).is_some()) else { return Ok(()) };
     if extra == "dlg" {
         if kind != "ch" || !has(api_apps, &msg.from_p) {
             return rules("only an API app posts for a client, in a channel or group chat");
@@ -2645,7 +2645,7 @@ fn authorize_rev9(msg: &OpenedMessage, kind: &str, sender: &str, members: &[Stri
 
 /// Who may send each kind (contract section 6 table; revision 6: documents by members, never in call-room chat;
 /// `wf`, `mf` and `cmd` only in a DM; `used_by` and `wfs` only from an app; the archive never sends. Revision 8: in
-/// an `ai:` cid only its own person sends `ai`, and `delete` only of its own `ai` records. Revision 9: `apr` and
+/// an `ai:` cid only its own person sends `ai`, and `delete` only of its own `ai` records. Revision 11: `apr` and
 /// `dlgn` only from an API app in its DM with a person, `apra` and `stop` only from the person in that DM, `dlg`
 /// only from an API app in a `ch:` conversation).
 pub fn authorize(msg: &OpenedMessage, members: &[String], ctx: &AuthorizeContext) -> CeResult<()> {
@@ -2678,7 +2678,7 @@ pub fn authorize(msg: &OpenedMessage, members: &[String], ctx: &AuthorizeContext
         if (p.get("used_by").is_some() || p.get("wfs").is_some()) && sender != "app" {
             return rules("only an app answers a command or reports a workflow");
         }
-        authorize_rev9(msg, kind, sender, members, ctx.api_apps)?;
+        authorize_rev11(msg, kind, sender, members, ctx.api_apps)?;
     }
     if sender == "app" && kind == "room" {
         return rules("apps are not in call-room chat");
@@ -2913,7 +2913,7 @@ pub fn open_share(share: &Value, me_p: &str, me_d: &str, my_bundles: &[(Verified
     Ok(OpenedShare { cid, orig_p, orig_d, epoch, key, from_d, ts })
 }
 
-// -- revision 9 (API-1c 2.3, 7.4 to 7.6): API apps, approvals, delegated posts, Stop ----------------------------
+// -- revision 11 (API-1c 2.3, 7.4 to 7.6): API apps, approvals, delegated posts, Stop ----------------------------
 
 /// The principals the in-force org policies list as `api` apps (`authorize`'s `api_apps`), sorted.
 pub fn api_app_principals(view: &PolicyView) -> Vec<String> {

@@ -1,4 +1,4 @@
-// CE-1 vectors (docs/chat-e2ee/contract.md revision 9 section 14; docs/api/contract-r5-1c.md 7.4 to 7.6): every
+// CE-1 vectors (docs/chat-e2ee/contract.md revision 11 section 14; docs/api/contract-r5-1c.md 7.4 to 7.6): every
 // case of tests/chat_e2ee_v1.json the device side owns, asserted exactly as `check()` in
 // tests/vectors/make_chat_e2ee_v1.py asserts it (one test per section, each case's name in the message, an empty
 // section fails), plus round trips of what `check()` never signs (bundles, wraps, envelopes, log entries). The
@@ -640,18 +640,18 @@ fn ai_wraps() {
     check_dm_wraps("ai_wrap");
 }
 
-// -- revision 9 (API-1c 7.4 to 7.6) ------------------------------------------------------------------------------
+// -- revision 11 (API-1c 7.4 to 7.6) ------------------------------------------------------------------------------
 
 #[test]
-fn rev9_payloads() {
-    for c in cases("rev9_payload") {
+fn rev11_payloads() {
+    for c in cases("rev11_payload") {
         assert_eq!(outcome(&check_payload("post", "", &c["payload"])), expected(c), "{}", name(c));
     }
 }
 
 #[test]
-fn rev9_apr_hashes() {
-    for c in cases("rev9_apr_hash") {
+fn rev11_apr_hashes() {
+    for c in cases("rev11_apr_hash") {
         let canonical = canonical_json(&c["apr"]).expect("canonical");
         assert_eq!(hx(&canonical), s(c, "canonical_hex"), "{}", name(c));
         let h = apr_hash(&c["apr"]).expect("a hash");
@@ -661,8 +661,8 @@ fn rev9_apr_hashes() {
 }
 
 #[test]
-fn rev9_authorize() {
-    for c in cases("rev9_authorize") {
+fn rev11_authorize() {
+    for c in cases("rev11_authorize") {
         check_payload(s(c, "kind"), s(c, "ref"), &c["payload"]).unwrap_or_else(|e| panic!("{}: {e}", name(c)));
         let (members, api_apps) = (strings(&c["members"]), strings(&c["api_apps"]));
         let ctx = AuthorizeContext { api_apps: &api_apps, ..AuthorizeContext::default() };
@@ -672,16 +672,16 @@ fn rev9_authorize() {
 }
 
 #[test]
-fn rev9_apr_states() {
-    for c in cases("rev9_apr_state") {
+fn rev11_apr_states() {
+    for c in cases("rev11_apr_state") {
         let answers = c["answers"].as_array().expect("answers");
         assert_eq!(apr_state(&c["apr"], answers, n(c, "now_ms")), Ok(s(c, "state")), "{}", name(c));
     }
 }
 
 #[test]
-fn rev9_member_intervals() {
-    for c in cases("rev9_member_intervals") {
+fn rev11_member_intervals() {
+    for c in cases("rev11_member_intervals") {
         let view = policy_view(&c["policies"]);
         let state = replay_log(s(c, "cid"), c["entries"].as_array().expect("entries"), &certs_for, &verifier(false), n(c, "now_ms"), None, view.as_ref()).unwrap_or_else(|e| panic!("{}: {e}", name(c)));
         let intervals = c["intervals"].as_object().expect("intervals");

@@ -183,7 +183,7 @@ pub struct StoredMessage {
     pub reactions: Vec<Reaction>,
     /// The CE-1 `post` payload's mentions (`m`, principals; r5 7.2 `mentions`). Empty in records written before 1c4.
     pub mentions: Vec<String>,
-    /// The revision 9 `dlg` of a delegated or program post (r5 7.2 `via`), as verified.
+    /// The revision 11 `dlg` of a delegated or program post (r5 7.2 `via`), as verified.
     pub dlg: Option<Value>,
 }
 
