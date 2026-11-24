@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "bun:test";
 import {
-  askFraming, AUTO_GAP_MS, clampToCanvas, defaultSpot, DRIFT_S, driftDelay, fromFraction, ideaCount, isStale, loadPositions,
+  askFraming, AUTO_GAP_MS, buddyTip, clampToCanvas, defaultSpot, GLOW_S, glowDelay, fromFraction, ideaCount, isStale, loadPositions,
   readBuddySettings, saveBuddySettings, savePositions, shouldAutoSuggest, STALE_MS, toFraction,
 } from "./agent_buddy.ts";
 
