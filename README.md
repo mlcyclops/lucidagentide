@@ -99,12 +99,37 @@ Sign in with the subscriptions you already have or bring an API key. Keys stay i
 
 ## New in v2.7: Agents you can see, schedule and keep light
 
-- **Agents on the right rail**: every folder you work in is a mini Lucid in a glass brick, bright while it works. Activate one into the main composer, a new Fleet lane or an Agent World, or add a folder and say what the Agent is for.
-- **Schedule an Agent**: once on a date, or daily, on weekdays, on chosen days or monthly, at a time of day, with the instructions or goal it should work toward. LUCID wakes it in its folder at that time.
-- **Floating Agents** on the main composer and each Fleet lane suggest next steps from a smaller model, run one in a parallel worktree or hand it to Ask Lucid, and hide for the session with a tiny red x.
-- **Ask Lucid** says what it is doing while it answers, uses the newest small model (Claude Haiku 5.5) and flies out beside the rail.
-- **Lighter and steadier**: no git runs when LUCID opens, an idle LUCID uses about 1% of the CPU instead of about 25%, and the window keeps answering with many agents running at once.
-- **World Packs** lead the store, and purchased worlds restore themselves after an upgrade.
+**The short version for leadership.** One person can now keep several AI agents working side by side and see at a glance which ones are busy. Routine work, such as a nightly test run or a weekly report, can be scheduled to run on its own. LUCID itself now uses a small fraction of the computer it used before. Every agent still sits behind the same security gate, and that gate cannot fail open.
+
+| What changed | Why it matters |
+| :-- | :-- |
+| **Agents on the right rail**: each project folder is a small Lucid that lights up while it works | You see who is working and who is idle without opening anything |
+| **Schedule this Agent**: once, daily, weekdays, chosen days or monthly, with a goal in plain words | Routine work runs on time without anyone starting it |
+| **Floating Agents** suggest the next step, ready to run in parallel or to ask about | Less time deciding what to do next, more work in parallel |
+| **Ask Lucid** shows what it is doing while you wait, and answers with Claude Haiku 5.5 | Quick answers about your work without stopping the main agent |
+| **Lighter and steadier**: an idle LUCID went from about 25% of the CPU to about 1%, and no git runs at startup | Laptops stay quiet, and the window keeps up with many agents at once |
+
+<div align="center">
+<img src="docs/images/readme/v27/v27-fleet-rail.webp" alt="LUCID Fleet with four agents at work: Checkout Service, Intake API, SOC 2 Evidence and Release Notes, each with its own task, folder and floating Agent" height="360" />
+<img src="docs/images/readme/v27/v27-activate.webp" alt="An Agent's card on the right rail, where the working Agents' figures are lit: its name and folder, a color picker, and Activate with four choices: take over the main composer, start a new Fleet session, start an Agent World session, or schedule this Agent" height="360" />
+<br/><sub><b>Four agents at work</b> · <b>Each one lit on the rail; one click puts an Agent to work, or schedules it</b></sub>
+<br/><br/>
+<img src="docs/images/readme/v27/v27-schedule.webp" alt="Schedule this Agent: Once, Daily, Weekdays, Weekly or Monthly, a time of day of 7:30 AM, and the goal: run the full test suite, fix anything red, and post a short summary of what changed. The line below says when it runs next" height="340" />
+<img src="docs/images/readme/v27/v27-add-agent.webp" alt="Add an Agent: a short explanation that an Agent is a small Lucid that lives in one folder, and a Choose a folder button" height="290" />
+<img src="docs/images/readme/v27/v27-agent-ideas.webp" alt="A floating Agent's ideas: three suggested next steps, each with Run in parallel worktree and Ask Lucid buttons" height="340" />
+<br/><sub><b>Schedule work in plain words</b> · <b>Add an Agent in two steps</b> · <b>Next steps, ready to run</b></sub>
+<br/><br/>
+<img src="docs/images/readme/v27/v27-ask-lucid.webp" alt="Ask Lucid answering a question in its side panel beside the Agents rail" width="64%" />
+<br/><sub><b>Ask Lucid answers beside the rail without stopping the main agent</b></sub>
+<br/><br/>
+<img src="docs/images/readme/v27/v27-performance.svg" alt="Measured on the same machine: an idle LUCID went from about 25 percent of the CPU to 1.1 percent; five working Agents from 10.2 to 3.2 percent; listing sessions from 3.5 seconds to 0.13 seconds; Ask Lucid's context gathering from 8.9 seconds to 0.016 seconds; no git runs when LUCID opens" width="100%" />
+</div>
+
+Also in 2.7:
+- **World Packs** come first in the store.
+- Worlds you bought restore themselves after an upgrade.
+- One preview button now works the same in the composer, Fleet lanes and Agent Worlds.
+- The Visualize view and the rail stay accurate when four or more agents run at once.
 
 **v2.7.1 is the current stable release.** [Full release notes](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.7.1).
 

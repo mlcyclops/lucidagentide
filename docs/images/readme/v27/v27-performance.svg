@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-label="LUCID 2.7 performance, measured on the same Windows machine: an idle LUCID went from about 25 percent of the CPU to 1.1 percent; five working Agents on the rail from 10.2 to 3.2 percent; listing sessions from 3.5 seconds to 0.13 seconds; the Ask Lucid context sweep from 8.9 seconds to 0.016 seconds; no git runs when LUCID opens">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#4fe08a"/><stop offset="1" stop-color="#54d6e6"/></linearGradient>
+  </defs>
+  <rect width="960" height="400" rx="16" fill="#0b0f16"/>
+  <g font-family="Segoe UI, system-ui, -apple-system, Helvetica, Arial, sans-serif">
+    <text x="32" y="44" fill="#f2f4f8" font-size="22" font-weight="700">Lighter in 2.7, measured on the same machine</text>
+    <g font-size="13" fill="#9aa3b2">
+      <rect x="640" y="30" width="14" height="10" rx="2" fill="#4a505c"/><text x="660" y="40">2.6.1</text>
+      <rect x="712" y="30" width="14" height="10" rx="2" fill="url(#g)"/><text x="732" y="40">2.7.1</text>
+      <text x="790" y="40">bar = share of 2.6.1</text>
+    </g>
+
+    <g transform="translate(0,78)">
+      <text x="32" y="16" fill="#d8dde6" font-size="15" font-weight="600">Idle LUCID, whole app (CPU)</text>
+      <rect x="32" y="26" width="760" height="14" rx="4" fill="#4a505c"/><text x="804" y="38" fill="#9aa3b2" font-size="14">~25%</text>
+      <rect x="32" y="44" width="34" height="14" rx="4" fill="url(#g)"/><text x="804" y="56" fill="#4fe08a" font-size="14" font-weight="700">1.1%</text>
+    </g>
+    <g transform="translate(0,146)">
+      <text x="32" y="16" fill="#d8dde6" font-size="15" font-weight="600">Five Agents working on the rail (CPU)</text>
+      <rect x="32" y="26" width="760" height="14" rx="4" fill="#4a505c"/><text x="804" y="38" fill="#9aa3b2" font-size="14">10.2%</text>
+      <rect x="32" y="44" width="238" height="14" rx="4" fill="url(#g)"/><text x="804" y="56" fill="#4fe08a" font-size="14" font-weight="700">3.2%</text>
+    </g>
+    <g transform="translate(0,214)">
+      <text x="32" y="16" fill="#d8dde6" font-size="15" font-weight="600">Listing your sessions</text>
+      <rect x="32" y="26" width="760" height="14" rx="4" fill="#4a505c"/><text x="804" y="38" fill="#9aa3b2" font-size="14">3.5 s</text>
+      <rect x="32" y="44" width="28" height="14" rx="4" fill="url(#g)"/><text x="804" y="56" fill="#4fe08a" font-size="14" font-weight="700">0.13 s</text>
+    </g>
+    <g transform="translate(0,282)">
+      <text x="32" y="16" fill="#d8dde6" font-size="15" font-weight="600">Ask Lucid gathering context</text>
+      <rect x="32" y="26" width="760" height="14" rx="4" fill="#4a505c"/><text x="804" y="38" fill="#9aa3b2" font-size="14">8.9 s</text>
+      <rect x="32" y="44" width="4" height="14" rx="2" fill="url(#g)"/><text x="804" y="56" fill="#4fe08a" font-size="14" font-weight="700">0.016 s</text>
+    </g>
+    <text x="32" y="378" fill="#9aa3b2" font-size="14">And no git runs when LUCID opens: zero git processes in the first 200 seconds.</text>
+  </g>
+</svg>
