@@ -109,6 +109,16 @@ export function agentArt(st: ArtState, delay: number, cls = ""): string {
     + "</svg>";
 }
 
+/** The seated Lucid alone, no glass brick (Ask Lucid header, P-BUDDY.1). Transparent background; a soft floor
+ *  shadow in --G grounds him. No defs, so no ids needed. */
+export function lucidFigureArt(st: ArtState, delay: number, cls = ""): string {
+  const dl = Number.isFinite(delay) ? delay.toFixed(2) : "0";
+  return `<svg class="agr-art agr-lu agr-${st} agr-fig${cls ? ` ${cls}` : ""}" viewBox="0 0 40 40" style="--dl:${dl}s" aria-hidden="true" focusable="false">`
+    + '<ellipse class="agr-fig-floor" cx="20" cy="37.6" rx="12.5" ry="1.9"/>'
+    + figure(st)
+    + "</svg>";
+}
+
 /** The dashed "+ Add agent" glyph, in the art slot. */
 export function addArt(): string {
   return '<svg class="agr-art agr-add-art" viewBox="0 0 40 28" aria-hidden="true" focusable="false"><rect x="1" y="1" width="38" height="26" rx="5"/><path d="M20 9v10M15 14h10"/></svg>';

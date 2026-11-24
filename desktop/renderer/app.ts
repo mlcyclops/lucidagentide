@@ -148,6 +148,8 @@ import { folderName, handoffFailure, handoffToast, pendingCopy, planTakeover, sa
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
 import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
+import { BUDDY_SETTINGS_KEY, mountAgentBuddies, readBuddySettings, saveBuddySettings, type AgentBuddies } from "./agent_buddy.ts"; // P-BUDDY.1 (ADR-0667): floating Agent buddies
+import type { BuddyIdea } from "./bridge.ts";
 import { AGENTS_KEY, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
 import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
@@ -3247,7 +3249,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
       if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
       // P-RAIL.AGENTS1: Main's folder Agent plays the turn-end ring (a lane turn is caught by the rail's fleet poll).
-      if (!opts.laneId && state.workspace?.current) agentsRail?.noteTurnEnd(state.workspace.current);
+      if (!opts.laneId && state.workspace?.current) { agentsRail?.noteTurnEnd(state.workspace.current); agentBuddies?.noteTurnEnd(state.workspace.current); }
     }
   };
   const settle = () => {
@@ -4220,7 +4222,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
   if (e.type === "done") {
     settleLaneWatchNode();
     releaseHeldPrompt();
-    if (isLaneTarget(state.composerTarget)) agentsRail?.noteTurnEnd(state.composerTarget.cwd); // P-RAIL.AGENTS1: the lane's Agent rings now, not at the next poll
+    if (isLaneTarget(state.composerTarget)) { agentsRail?.noteTurnEnd(state.composerTarget.cwd); agentBuddies?.noteTurnEnd(state.composerTarget.cwd); } // P-RAIL.AGENTS1: the lane's Agent rings now, not at the next poll
   }
 }
 
@@ -4685,6 +4687,33 @@ async function openJobsSheet(): Promise<void> {
 }
 /** P-RAIL.AGENTS1: the rail's Agents view (agents_rail.ts), mounted at init. */
 let agentsRail: AgentsRail | null = null;
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddies (agent_buddy.ts), mounted at init after the rail. */
+let agentBuddies: AgentBuddies | null = null;
+/** P-BUDDY.1 (ADR-0667): a buddy's idea runs in a NEW worktree lane of its folder (Push now's path), the idea's
+ *  prompt as that lane's first turn. The user hears it at once, before the engine is asked anything. */
+async function runBuddyIdea(folder: string, idea: BuddyIdea, name: string): Promise<void> {
+  const main = sameFolder(state.workspace?.current, folder);
+  const src: PushSource = main
+    ? { kind: "master", name: "main", cwd: folder, model: state.model || state.config.find((c) => c.id === "model")?.currentValue || "" }
+    : { kind: "lane", name, cwd: folder, model: "" };
+  const busy = main && state.streaming && !isLaneTarget(state.composerTarget);
+  let dismiss = showToast({ tone: "info", title: `Starting a worktree agent for ${name}`, desc: idea.title, timeout: 0 });
+  const r = await pushToNewLane(src, idea.prompt, [], {
+    announce: (lane) => {
+      dismiss();
+      const n = parallelPushNotice(src, lane, { busy });
+      dismiss = showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 0 });
+    },
+  });
+  dismiss();
+  if (r.ok) {
+    const n = parallelPushNotice(src, r.name, { busy, branch: r.branch });
+    showToast({ tone: "ok", title: n.title, desc: n.desc, timeout: 9000 });
+    return;
+  }
+  const why = r.code === "no-repo" ? "This folder is not a git repository, so there is no worktree to give a parallel agent." : r.reason;
+  showToast({ tone: "warn", title: `${name}: the worktree agent did not start`, desc: why, timeout: 9000 });
+}
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
@@ -6714,6 +6743,20 @@ function secMiniLucid(): string {
   return setCard("miniLucid", "Mini Lucid", "show · off · sometimes · always · size · suggestions · sight", `${miniLucidCardHtml(readPresence(store), esc, icon("info", 12), readMascotSize(store), readMascotHidden(store))}\n    ${suggestToggleHtml(suggestEnabled(store))}\n    ${pictureToggleHtml(pictureEnabled(store))}`, true);
 }
 
+// ── P-BUDDY.1 (ADR-0667): Settings -> Floating Agents ───────────────────────────────────────────────
+// The buddies over the composers and in Agent Worlds, and whether they fetch ideas on their own after a turn.
+// Rendered from localStorage (agent_buddy.ts), no fetch; a change applies live through agentBuddies.sync().
+function secFloatingAgents(): string {
+  const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+  const inner = `
+    <label class="set-toggle"><input type="checkbox" id="buddyShow" ${s.show ? "checked" : ""}/>
+      <span><b>Show floating Agents</b> - a small Agent in its folder's color floats over the main composer, each Fleet card and each agent in Agent Worlds. Drag it anywhere; a double-click puts it back. Click it for ideas.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="buddyAuto" ${s.auto ? "checked" : ""}/>
+      <span><b>Suggest ideas after each turn</b> - when an agent finishes a turn, its buddy asks for a few ideas on its own, at most every 3 minutes per agent.</span></label>
+    <div class="set-note">${icon("info", 12)} Ideas come from a smaller model and cost a little each time they are made.</div>`;
+  return setCard("floatingAgents", "Floating Agents", "buddies · ideas after each turn", inner, true);
+}
+
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
 // choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
@@ -7098,6 +7141,7 @@ const SET_SHELL: Record<SettingsSecId, () => string> = {
   chatScroll: () => secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
   workingStatus: () => secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
   miniLucid: () => secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
+  floatingAgents: () => secFloatingAgents(), // P-BUDDY.1 (ADR-0667): the floating Agent buddies
   trivia: () => secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
   settingsLayout: () => secSettingsLayout(),
   developer: () => setSkel("developer", "Developer", "logs · diagnostics", true),
@@ -13387,6 +13431,7 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
+  agentBuddies?.sync(); // P-BUDDY.1: Main's buddy follows Main's folder
   if (state.workspace) {
     setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
     void offerVaultEnvImport(w.current, () => openSettingsTo(VAULT_ENV_SEC)); // P-VAULT-ENV.1: once per workspace with a .env
@@ -19502,6 +19547,21 @@ function wire(): void {
     activate: (kind, folder, name) => activateAgentFolder(kind, folder, name),
     perfTier: () => perfWatch.tier(),
   });
+  // P-BUDDY.1 (ADR-0667): floating Agent buddies over the main composer and each Fleet card (Agent Worlds attaches its
+  // own through initViz). They poll fleet status only while the grid or Agent Worlds is on screen.
+  agentBuddies = mountAgentBuddies({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    getMainFolder: () => state.workspace?.current ?? null,
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    suggest: (req) => bridge.buddySuggest(req),
+    runInWorktree: runBuddyIdea,
+    askLucid: (text) => askLucid().prefill(text),
+    toast: showToast,
+    perfTier: () => perfWatch.tier(),
+  });
 
   // composer agent controls → focused per-control dropdowns
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
@@ -19769,6 +19829,7 @@ function wire(): void {
       isOver: () => previewOverViz,
       viewClosed: () => { previewReturn = null; syncPreviewCover(); },
     },
+    attachBuddies: (stage, src) => agentBuddies?.attachWorlds(stage, src) ?? (() => {}), // P-BUDDY.1 (ADR-0667)
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 
@@ -19821,6 +19882,14 @@ function wire(): void {
     // P-MINI.2 (ADR-0583): "Lucid may suggest things".
     if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
     if (t0.id === "lucidPicture") { setPictureEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; } // P-ASKLUCID.7 (ADR-0588)
+    // P-BUDDY.1 (ADR-0667): the Floating Agents switches apply at once.
+    if (t0.id === "buddyShow" || t0.id === "buddyAuto") {
+      const on = (t0 as HTMLInputElement).checked;
+      const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+      try { miniStore()?.setItem(BUDDY_SETTINGS_KEY, saveBuddySettings(t0.id === "buddyShow" ? { ...s, show: on } : { ...s, auto: on })); } catch { /* storage blocked: this window only */ }
+      agentBuddies?.sync();
+      return;
+    }
     // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
     if ((t0 as HTMLInputElement).name === "miniPresence") {
       const next = parsePresence((t0 as HTMLInputElement).value);

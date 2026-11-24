@@ -153,3 +153,40 @@ export function resolveCheckerModel(opts: { chosen: string; models: ModelOption[
   if (rec) return { value: rec.value, source: "recommended" };
   return { value: opts.current, source: "maker" };
 }
+
+/** P-BUDDY.1 (ADR-0667): buddy fitness of a model. 3 = the provider's mid tier ("Sonnet level": sonnet, the
+ *  plain gpt, Gemini flash), 2 = small (haiku/mini), 1 = ultra-cheap (nano/lite), 0 = flagship. Gemini flash is
+ *  Google's mid tier, so it ranks with sonnet rather than with haiku. */
+function buddyTier(value: string): 0 | 1 | 2 | 3 {
+  if (sizePenalty(value) > 0) return 0;
+  const n = value.toLowerCase();
+  if (/gemini[^/]*flash/.test(n) && !/lite/.test(n)) return 3; // any route to Gemini (google/, vertex, gateways)
+  const t = tier(n);
+  return t === 0 ? 3 : t === 2 ? 2 : 1;
+}
+
+/** P-BUDDY.1 (ADR-0667): the model a floating Agent buddy writes its ideas with. A buddy's ideas are short
+ *  but should be good, so it wants a current mid-tier model, not a flagship and not the checker's small one:
+ *  mid tier first, then small, then ultra-cheap; within a tier the current provider, then the newest
+ *  version, then a clean alias. A flagship is never picked while `current` can stand in instead. */
+export function recommendBuddyModel(models: ModelOption[], current: string): CheckerRecommendation | null {
+  const usable = models.filter((m) => m?.value && isUsable(m.value));
+  const curProvider = provider(current);
+  const score = (m: ModelOption): number => {
+    const sameProvider = provider(m.value) === curProvider && curProvider ? 1 : 0;
+    return buddyTier(m.value) * 1_000_000 + sameProvider * 100_000 + version(m.value) * 100 - sizePenalty(m.value) + (isAlias(m.value) ? 5 : 0);
+  };
+  let best: ModelOption | null = null;
+  let bestScore = -Infinity;
+  for (const m of usable) { const s = score(m); if (s > bestScore) { best = m; bestScore = s; } }
+  const t = best ? buddyTier(best.value) : 0;
+  if (!best || t === 0) {
+    if (current) return { value: current, why: "No mid-tier or small model is available, so the buddy uses your current model." };
+    return best ? { value: best.value, why: "Only flagship models are available, so the buddy uses the most economical one." } : null;
+  }
+  const where = provider(best.value) === curProvider && curProvider ? ` in your ${curProvider} family` : "";
+  const why = t === 3
+    ? `Newest mid-tier model${where}: good ideas at a fraction of flagship cost.`
+    : `No mid-tier model is available, so the buddy uses the newest small model${where}.`;
+  return { value: best.value, why };
+}

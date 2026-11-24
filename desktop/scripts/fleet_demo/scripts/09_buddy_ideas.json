@@ -1,0 +1,9 @@
+{
+  "id": "buddy-ideas",
+  "title": "Floating Agent ideas (the buddy's side completion)",
+  "prompt": "You are a small helper riding along with a coding agent in LUCID Agent IDE.",
+  "keywords": ["small helper riding along with a coding agent", "suggest next steps that a SECOND agent could do in parallel"],
+  "steps": [
+    { "type": "say", "ms": 900, "text": "{\"doing\": \"Writing the release notes and changelog for 2.4.0 from the merged history\", \"ideas\": [{\"title\": \"Check every changelog entry links its evidence\", \"prompt\": \"Read CHANGELOG.md for 2.4.0 and confirm each security-relevant entry links the evidence file or PR that proves it. List any entry without a link and propose the missing link. Do not edit the release notes the other agent is writing.\"}, {\"title\": \"Add a test for the session id rotation fix\", \"prompt\": \"Write a regression test proving the session id rotates on login (the d14f6c8 session fixation fix). Put it next to the existing auth tests and run only that test file.\"}, {\"title\": \"Draft the upgrade notes for operators\", \"prompt\": \"Draft docs/UPGRADING-2.4.md for operators: migrations, config changes and anything breaking since 2.3.0, taken from git log v2.3.0..HEAD. Keep it under one page.\"}]}" }
+  ]
+}

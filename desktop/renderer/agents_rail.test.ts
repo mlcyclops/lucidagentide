@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from "bun:test";
 import { arrowState, glanceDelay, lookDirs, loopDelay, pageTarget, passedIds, placeModule, readView, scrollTarget, slotFor, SCROLL_STEP } from "./agents_rail.ts";
-import { agentArt, huePalette, paletteOf, paletteStyle, themePalette } from "./agents_rail_art.ts";
+import { agentArt, huePalette, lucidFigureArt, paletteOf, paletteStyle, themePalette } from "./agents_rail_art.ts";
 
 const view = { w: 1600, h: 1000 };
 const box = (left: number, top: number) => ({ left, top, right: left + 76, width: 76, height: 49 });
@@ -112,6 +112,16 @@ describe("art", () => {
     expect(b).toContain("agr-work");
     expect(b).toContain("agr-kb-b"); // the keyboard only while typing
     expect(a).not.toContain("agr-kb-b");
+  });
+  it("the boxless figure is the seated Lucid without the brick", () => {
+    const a = lucidFigureArt("idle", -1, "x"), b = lucidFigureArt("work", Number.NaN);
+    expect(a).toContain('class="agr-art agr-lu agr-idle agr-fig x"');
+    expect(a).toContain('viewBox="0 0 40 40"');
+    expect(a).toContain("agr-fig-floor");
+    expect(a).not.toContain("agr-bk-trim"); // no glass brick
+    expect(a).not.toContain("<defs>");
+    expect(b).toContain("agr-kb-b");
+    expect(b).toContain("--dl:0s");
   });
   it("palettes come from the mascot themes or a clamped hue", () => {
     expect(themePalette("lucid").G).toBe("#41ff8b");

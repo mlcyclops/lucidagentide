@@ -144,6 +144,13 @@ import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts
 export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
 import type { AskExtrasView, AskReplyView, AskTurnView } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): types only
 import { pathFileName, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): pure
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddy. `main` rides the main composer, `lane` a Fleet lane card. */
+export type BuddySurface = "main" | "lane";
+/** One recommendation: a one-line `title` (<= 80 chars) and a `prompt` (<= 600 chars) a parallel agent could run. */
+export interface BuddyIdea { id: string; title: string; prompt: string }
+/** POST /api/buddy/suggest's answer. `doing` (<= 140 chars) says what the agent is doing now; at most 3 `ideas`.
+ *  `withheld` = the agent's recent work failed the security scan, so no model was called. */
+export interface BuddyReply { ok: boolean; error?: string; model?: string; doing: string; ideas: BuddyIdea[]; withheld: boolean }
 /** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
 export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
@@ -962,6 +969,8 @@ export interface LucidBridge {
   setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
   /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation. */
   askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-BUDDY.1 (ADR-0667): a buddy's short read of what its agent is doing, with up to 3 next-step ideas. Null = no answer. */
+  buddySuggest(req: { surface: BuddySurface; laneId?: string; purpose?: "app" | "docs" | "analysis" | "other" | null }): Promise<BuddyReply | null>;
   /** P-ASKLUCID.9 (ADR-0600): the image models the engine's keys make usable, best first (or why none may be). */
   imageModels(): Promise<ImageModelsView | null>;
   /** P-ASKLUCID.9: edit one image the user attached, after they confirmed the card. Null = no answer. */
@@ -2026,6 +2035,7 @@ export const bridge: LucidBridge = {
   resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
   setResultWindow: (setting) => post("/api/result-window", { setting }),
   askLucid: (text, history, extras) => post("/api/ask-lucid", { text, history, ...(extras ?? {}) }), // P-ASKLUCID.1 (ADR-0581)
+  buddySuggest: (req) => post("/api/buddy/suggest", req), // P-BUDDY.1 (ADR-0667)
   imageModels: () => getData("/api/image/models"), // P-ASKLUCID.9 (ADR-0600)
   imageEdit: (req) => post("/api/image/edit", req), // P-ASKLUCID.9
   saveEditedImageAs: async (path) => {

@@ -3878,6 +3878,55 @@ body.lucid-capturing #toasts{visibility:hidden}
 .agr-add-row{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;padding:0 4px 2px}
 .agr-add-row .btn-mini{flex:none;white-space:nowrap}
 .agr-add-row .btn-mini:disabled{opacity:.5;cursor:not-allowed}
+
+/* P-BUDDY.1 (ADR-0667): floating Agent buddies (agent_buddy.ts). A small Agent brick (the .agr-lu art, palette
+   vars on .abd-host) over the main composer, each lane card's composer and beside World nodes: a soft breathing
+   glow in --G, a 3 x 2 px ellipse drift, a badge for ideas not seen yet. Above the composer and lane content,
+   below the popovers (95), Preview (90/94), the slash menu (30) and the Ask Lucid dock (250). Only the buddy
+   itself takes the pointer. */
+.abd-canvas{position:relative}
+.abd-host{position:absolute;left:0;top:0;z-index:27;display:block;pointer-events:none}
+.abd-host[hidden]{display:none}
+.abd-host[data-where="lane"]{z-index:5}
+.abd-host[data-where="world"]{z-index:4}
+.abd-drift{display:block;animation:abdDrift 8s linear var(--abd-ph,0s) infinite}
+.abd{position:relative;display:block;margin:0;padding:0;border:0;border-radius:7px;background:transparent;line-height:0;cursor:grab;
+  pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}
+.abd::before{content:"";position:absolute;inset:-7px -6px;border-radius:50%;pointer-events:none;opacity:.5;
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--G) 45%,transparent),transparent);animation:abdGlow 4.8s ease-in-out var(--abd-ph,0s) infinite}
+.abd .agr-art{position:relative;display:block;height:23px;width:auto;
+  filter:drop-shadow(0 0 3px color-mix(in srgb,var(--G) 55%,transparent)) drop-shadow(0 1px 1.5px rgb(var(--sh-rgb) / .35))}
+.abd:hover::before,.abd[aria-expanded="true"]::before{opacity:.9}
+.abd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.abd-dragging .abd{cursor:grabbing}
+.abd-dragging .abd-drift{animation-play-state:paused}
+.abd-badge{position:absolute;top:-5px;right:-6px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;font-style:normal;font-size:9.5px;font-weight:700;
+  line-height:14px;text-align:center;white-space:nowrap;color:#0a0e12;background:var(--G);box-shadow:0 0 0 1.5px var(--bg-1),0 0 6px var(--G)}
+.abd-badge[hidden]{display:none}
+.abd-chip{position:absolute;left:calc(100% + 6px);top:3px;padding:2px 7px;border-radius:9px;font-size:10.5px;font-weight:600;line-height:1.4;white-space:nowrap;
+  color:var(--txt);background:var(--bg-4);border:1px solid color-mix(in srgb,var(--G) 45%,var(--line));box-shadow:0 4px 10px -6px rgb(var(--sh-rgb) / .6);
+  pointer-events:none;opacity:0;transform:translateY(2px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}
+.abd-chip.show{opacity:1;transform:none}
+@keyframes abdDrift{0%,100%{transform:translate(1.5px,0)}12.5%{transform:translate(1.06px,.71px)}25%{transform:translate(0,1px)}37.5%{transform:translate(-1.06px,.71px)}
+  50%{transform:translate(-1.5px,0)}62.5%{transform:translate(-1.06px,-.71px)}75%{transform:translate(0,-1px)}87.5%{transform:translate(1.06px,-.71px)}}
+@keyframes abdGlow{0%,100%{opacity:.4}50%{opacity:.75}}
+/* perf tier "minimal" (.abd-calm) and reduced motion: no drift, no breathing; the art's own loops stop via .agr-calm */
+.abd-calm .abd-drift,.abd-calm .abd::before{animation:none}
+@media (prefers-reduced-motion:reduce){.abd-drift,.abd::before{animation:none!important}.abd-chip{transition:none!important}}
+/* the ideas bubble (the rail module's shell) */
+.popover.abd-pop{width:300px}
+.abd-ideas{display:flex;flex-direction:column;gap:7px}
+.abd-note{margin:0;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.abd-note.abd-warn{color:var(--amber-txt)}
+.abd-idea{min-width:0;padding:8px 9px;border-radius:9px;border:1px solid color-mix(in srgb,var(--G) 22%,var(--line));background:color-mix(in srgb,var(--G) 6%,var(--bg-2))}
+.abd-idea-t{font-size:12.5px;font-weight:650;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.abd-idea-p{margin-top:3px;font-size:11.5px;line-height:1.45;color:var(--txt-2);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.abd-idea-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.abd-idea-acts .btn-mini,.abd-foot .btn-mini{flex:none;white-space:nowrap}
+.abd-idea-acts .btn-mini:focus-visible,.abd-foot .btn-mini:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.abd-foot{display:flex;align-items:center;gap:8px;padding:8px 12px 10px;border-top:1px solid var(--line-soft)}
+.abd-foot .btn-mini:disabled{opacity:.5;cursor:progress}
+.abd-model{flex:1;min-width:0;text-align:right;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .agr-ph-state{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--txt-2);min-width:0}
 .agr-ph-state i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--txt-4)}
 .agr-ph-state.work i{background:var(--G);box-shadow:0 0 6px var(--G)}
@@ -8546,6 +8595,43 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-send{flex:none;height:38px;padding:0 14px;border:1px solid rgb(var(--accent-rgb) / .5);border-radius:10px;background:var(--accent-dim);color:var(--txt);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;white-space:nowrap}
 .al-send:hover:not(:disabled){border-color:var(--accent-2)}
 .al-send:disabled{opacity:.5;cursor:default}
+/* P-BUDDY.1 (ADR-0667): Ask Lucid in the Agents glass look (reference: .popover.agr-pop). Scoped to .al-dock, which
+   carries the Lucid palette vars (--G etc.), so the other .ald docks keep their style. Colors mix theme tokens with
+   --G, so the light themes stay readable. The figure is boxless (lucidFigureArt). */
+.ald.al-dock{background:linear-gradient(180deg,color-mix(in srgb,var(--G) 5%,var(--bg-1)),var(--bg-1) 140px);background-color:var(--bg-1)}
+.ald.al-dock[data-mode="right"]{border-left-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:-24px 0 48px -30px rgb(var(--sh-rgb) / .75),-1px 0 0 color-mix(in srgb,var(--G) 18%,transparent),-10px 0 32px -18px color-mix(in srgb,var(--G) 22%,transparent)}
+.ald.al-dock[data-mode="bottom"]{border-top-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:0 -24px 48px -30px rgb(var(--sh-rgb) / .75),0 -10px 32px -18px color-mix(in srgb,var(--G) 22%,transparent)}
+.ald.al-dock[data-mode="floating"]{border-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:var(--shadow-lg),0 30px 70px -30px rgb(var(--sh-rgb) / .7),0 0 28px -8px color-mix(in srgb,var(--G) 26%,transparent)}
+.ald.al-dock .ald-frame{position:relative}
+.ald.al-dock .ald-frame::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;pointer-events:none;z-index:2;
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--G) 70%,transparent),transparent);opacity:.7}
+.ald.al-dock .ald-head{min-height:56px;border-bottom-color:color-mix(in srgb,var(--G) 16%,var(--line-soft))}
+.al-dock .al-head{gap:9px}
+.al-fig{flex:none;display:block;width:40px;height:40px;line-height:0;border-radius:50%;filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}
+.al-fig .agr-fig{display:block;width:40px;height:40px}
+.al-fig .agr-fig-floor{fill:var(--G);opacity:.18}
+.al-fig.al-fig-paused .agr-lu,.al-fig.al-fig-paused .agr-lu *{animation-play-state:paused}
+.al-fig.al-fig-ok{animation:alFigOk 1.4s ease-out 1}
+.al-fig.al-fig-err{animation:alFigErr 1.4s ease-out 1}
+@keyframes alFigOk{0%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}25%{filter:drop-shadow(0 0 14px var(--G))}100%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}}
+@keyframes alFigErr{0%,100%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}25%{filter:drop-shadow(0 0 10px var(--red-txt)) sepia(.4) hue-rotate(-90deg)}}
+.al-dock .al-title{font-size:13.5px;font-weight:700}
+/* the state line as .agr-ph-state: a dot then the text. The dot is a pseudo element, so the span keeps one text
+   child and stays a block that ellipsizes (Invariant 11). */
+.al-dock .al-state{display:block;margin-top:3px;color:var(--txt-2)}
+.al-dock .al-state::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:1px;background:var(--txt-4)}
+.al-dock .al-state.work::before{background:var(--G);box-shadow:0 0 6px var(--G)}
+.al-dock .al-sug,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):not(.al-chip-more){transition:border-color var(--t),background var(--t),box-shadow var(--t)}
+.al-dock .al-sug:hover,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):hover,.al-dock .al-sug:focus-visible,.al-dock .al-chip:focus-visible{
+  border-color:color-mix(in srgb,var(--G) 60%,var(--line));background:color-mix(in srgb,var(--G) 9%,var(--bg-2));box-shadow:0 0 10px -4px color-mix(in srgb,var(--G) 55%,transparent)}
+.al-dock .al-sug:active,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):active{background:color-mix(in srgb,var(--G) 16%,var(--bg-2))}
+.al-dock .al-chip-brief{border-color:color-mix(in srgb,var(--G) 45%,var(--line));background:color-mix(in srgb,var(--G) 11%,var(--bg-2))}
+.al-dock .al-quick{border-top-color:color-mix(in srgb,var(--G) 14%,var(--line-soft))}
+.al-dock .al-input:focus{border-color:color-mix(in srgb,var(--G) 65%,var(--line))}
+@media (prefers-reduced-motion:reduce){.al-fig.al-fig-ok,.al-fig.al-fig-err{animation:none}}
 .tb-ask{white-space:nowrap}
 @media (prefers-reduced-motion: reduce){
   .ald-pill.working,.ald-unread,.al-msg{animation:none}

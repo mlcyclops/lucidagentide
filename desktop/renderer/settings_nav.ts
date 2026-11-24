@@ -68,6 +68,7 @@ export const SETTINGS_SECTIONS = [
   { sec: "chatScroll", cat: "appearance", title: "Chat scrolling", sub: "follow, agent switching", keywords: ["scroll", "follow", "spoke", "switch"] },
   { sec: "workingStatus", cat: "appearance", title: "Working status", sub: "one line, details, estimate", keywords: ["status", "progress", "estimate", "eta", "footer"] },
   { sec: "miniLucid", cat: "appearance", title: "Mini Lucid", sub: "the prompt-bar mascot", keywords: ["mascot", "mini", "lucid", "suggestions", "sight"] },
+  { sec: "floatingAgents", cat: "appearance", title: "Floating Agents", sub: "buddies over the composers", keywords: ["buddy", "floating", "agents", "ideas", "suggestions"] }, // P-BUDDY.1 (ADR-0667)
   { sec: "trivia", cat: "appearance", title: "Trivia Wire", sub: "status-bar game", keywords: ["trivia", "game", "ticker", "points"] },
   { sec: "settingsLayout", cat: "appearance", title: "Settings window", sub: "window or side panel", keywords: ["settings", "layout", "flyout", "panel", "window", "dialog"] },
   { sec: "developer", cat: "developer", title: "Developer", sub: "logs, diagnostics", keywords: ["developer", "logs", "diagnostics", "debug", "telemetry"] },

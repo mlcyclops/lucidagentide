@@ -195,6 +195,9 @@ import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { parseBuddyRequest, suggestForBuddy } from "./agent_buddy_service.ts"; // P-BUDDY.1 (ADR-0667)
+import { recommendBuddyModel } from "./checker_model.ts"; // P-BUDDY.1: the buddy's mid-tier model
+import type { BuddyReply } from "./renderer/bridge.ts"; // P-BUDDY.1: types only
 import { ATTACH_DISABLED, attachmentsPromptBlock, describeStaged, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
 import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
 import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
@@ -1936,6 +1939,10 @@ let autoArchiveTimer: Timer | null = null;
 /** P-ASKLUCID.7 (ADR-0588): models that answered a picture of the screen with an error, for this run of the
  *  engine. In memory on purpose: a provider or a model can gain vision between runs. */
 const askLucidNoPictures = new Set<string>();
+/** P-BUDDY.1 (ADR-0667): each buddy's last answer (key: surface + lane id), reused for 20 s so many buddies
+ *  asking at once cost one model call each. The promise is kept, so a request while one is in flight shares it. */
+const BUDDY_CACHE_MS = 20_000;
+const buddyCache = new Map<string, { at: number; reply: Promise<BuddyReply> }>();
 
 /** P-ASKLUCID.5 (ADR-0586): sweep Ask Lucid's throwaway sessions (one per question) once they are an hour
  *  old: two minutes after start, then every six hours. Unref'd: it never keeps the engine alive. */
@@ -6696,6 +6703,35 @@ return Bun.serve({
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
         }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
+        return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
+      }
+      // P-BUDDY.1 (ADR-0667): a floating Agent buddy's read of one agent plus up to 3 next-step ideas, from a mid-tier
+      // model. UI token only (never AGENT_ROUTES): an agent must not be able to feed itself ideas through it. Reads
+      // only; the context and every idea are scanned (agent_buddy_service.ts). Running an idea is the user's press.
+      if (p === "/api/buddy/suggest" && req.method === "POST") {
+        const parsed = parseBuddyRequest(await readBody<unknown>(req));
+        if (!parsed.ok) return json({ ok: false, error: parsed.error, data: { ok: false, error: parsed.error, doing: "", ideas: [], withheld: false } });
+        const key = `${parsed.req.surface}:${parsed.req.laneId ?? ""}`;
+        const now = Date.now();
+        for (const [k, v] of buddyCache) if (now - v.at >= BUDDY_CACHE_MS) buddyCache.delete(k);
+        let hit = buddyCache.get(key);
+        if (!hit) {
+          hit = {
+            at: now,
+            reply: suggestForBuddy(parsed.req, {
+              fleetStatus: () => fleet.status(),
+              laneTranscript: (laneId) => fleet.laneTranscript(laneId),
+              currentSessionId: () => backend.currentSessionId(),
+              sessionTail: (id) => sessionMessages(id, 6),
+              scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
+              pinModel: () => { const info = backend.checkerModelInfo(); return backend.completionModel(recommendBuddyModel(info.options, info.current)?.value); },
+              complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
+              now: () => Date.now(),
+            }),
+          };
+          buddyCache.set(key, hit);
+        }
+        const reply = await hit.reply;
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified

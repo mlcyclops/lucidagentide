@@ -21,11 +21,40 @@ import { createDock, type DockHandle } from "./dock.ts";
 import { copyToClipboard } from "./ctxmenu.ts"; // P-ASKLUCID.8: the answer's Copy button
 import { acceptAttachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "./composer_attachments.ts"; // P-ASKLUCID.8: the composer's image chips
 import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
-import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
+import type { MiniState } from "./mascot_mini.ts";
+import { lucidFigureArt, paletteOf, paletteStyle } from "./agents_rail_art.ts"; // P-BUDDY.1 (ADR-0667): boxless Lucid header
 import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachBridge, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598)
 import type { StagedAttachment } from "../attach_kinds.ts";
 import { imageCardState, pathBreakParts, readSavedImageModel, saveImageModel, type ImageCardState, type ImageModelOptionView, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600)
 import { tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): new controls use data-tip
+
+const LUCID_PALETTE = paletteOf({ theme: "lucid", hue: 145 });
+/** The header figure behind the same setState/setActive surface the mini mascot had (P-BUDDY.1). The SVG is
+ *  rebuilt only when idle/work flips; done/error are idle plus a one-shot flash class. */
+interface FigureHandle { setState(s: MiniState): void; setActive(on: boolean): void }
+function mountFigure(host: HTMLElement): FigureHandle {
+  let art: "idle" | "work" | null = null;
+  let flashT = 0;
+  const draw = (st: "idle" | "work"): void => {
+    if (st === art) return;
+    art = st;
+    host.innerHTML = lucidFigureArt(st, -0.7); // our own constant SVG, no user text
+  };
+  draw("idle");
+  return {
+    setState: (s) => {
+      draw(s === "working" ? "work" : "idle");
+      host.classList.remove("al-fig-ok", "al-fig-err");
+      window.clearTimeout(flashT);
+      if (s === "done" || s === "error") {
+        void host.offsetWidth; // restart the one-shot animation
+        host.classList.add(s === "done" ? "al-fig-ok" : "al-fig-err");
+        flashT = window.setTimeout(() => host.classList.remove("al-fig-ok", "al-fig-err"), 1600);
+      }
+    },
+    setActive: (on) => { host.classList.toggle("al-fig-paused", !on); },
+  };
+}
 
 export interface AskTurnView { role: "user" | "lucid"; text: string }
 /** The engine's answer (desktop/ask_lucid_service.ts AskReply). */
@@ -206,13 +235,14 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
 
   // Header: mini Lucid, the title and one status line.
   const head = el("div", "al-head");
-  const miniHost = el("span", "");
+  const miniHost = el("span", "al-fig");
+  miniHost.setAttribute("style", paletteStyle(LUCID_PALETTE));
   const headText = el("div", "al-head-text");
   const title = el("span", "al-title", "Ask Lucid");
   const stateEl = el("span", "al-state", stateLine("idle"));
   headText.append(title, stateEl);
   head.append(miniHost, headText);
-  let mini: MiniMascotHandle | null = null;
+  let mini: FigureHandle | null = null;
 
   // Body: the log and the composer.
   const panel = el("div", "al-panel");
@@ -416,13 +446,19 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     headerStart: head,
     body: panel,
     pillContent: pillIn,
-    onShow: () => { mini ??= mountMiniMascot(miniHost, { size: "sm" }); mini.setActive(true); setTimeout(() => input.focus(), 60); loadMemory(); deps.onFollow?.(followMode(memory)); void refreshRecs(); },
+    onShow: () => { mini ??= mountFigure(miniHost); mini.setActive(true); setTimeout(() => input.focus(), 60); loadMemory(); deps.onFollow?.(followMode(memory)); void refreshRecs(); },
     onHide: () => { mini?.setActive(false); settleShown(); },
   });
+
+  // P-BUDDY.1: the Agents glass look is scoped to this dock (other docks share .ald); the Lucid palette vars on
+  // the root let every rule below tint with --G.
+  dock.root.classList.add("al-dock");
+  for (const k of ["K", "D", "L", "G", "g"] as const) dock.root.style.setProperty(`--${k}`, LUCID_PALETTE[k]); // setProperty: the dock owns inline geometry
 
   const setState = (s: MiniState): void => {
     mini?.setState(s);
     stateEl.textContent = stateLine(s);
+    stateEl.classList.toggle("work", s === "working");
     dock.pill.classList.toggle("working", s === "working");
     if (s === "done" || s === "error") setTimeout(() => { if (!busy) stateEl.textContent = stateLine("idle"); }, 1600);
   };

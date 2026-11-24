@@ -9,7 +9,7 @@
 // excluded; and that resolveCheckerModel honors a valid override but fails safe past a stale one.
 
 import { describe, expect, test } from "bun:test";
-import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
+import { recommendBuddyModel, recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, resolveLockdownModel, type ModelOption } from "./checker_model.ts";
 import { isAsksageRouted } from "./lockdown_route.ts";
 
 const opt = (value: string): ModelOption => ({ value });
@@ -179,5 +179,70 @@ describe("resolveGovernedModel", () => {
     const r = resolveGovernedModel(true, undefined, "openai/gpt-5.5", ["openai/gpt-5.5"]);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/AskSage/);
+  });
+});
+
+// P-BUDDY.1 (ADR-0667): the floating Agent buddy wants the provider's current MID tier ("Sonnet level").
+describe("recommendBuddyModel", () => {
+  const ALL = [
+    "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-4-5", "anthropic/claude-haiku-5-5",
+    "openai/gpt-5.5", "openai/gpt-5.5-mini", "openai/gpt-5.5-pro",
+    "google/gemini-3-flash", "google/gemini-3-flash-lite", "google/gemini-4-argon",
+  ].map(opt);
+
+  test("anthropic flagship user gets the newest sonnet, not opus or haiku", () => {
+    const r = recommendBuddyModel(ALL, "anthropic/claude-opus-5-5");
+    expect(r!.value).toBe("anthropic/claude-sonnet-5-5");
+    expect(r!.why).toContain("anthropic");
+    expect(r!.why).not.toContain("\u2014");
+  });
+
+  test("openai user gets the plain gpt, never mini or pro", () => {
+    expect(recommendBuddyModel(ALL, "openai/gpt-5.5-pro")!.value).toBe("openai/gpt-5.5");
+  });
+
+  test("google user gets flash (Google's mid tier), not flash-lite or argon", () => {
+    expect(recommendBuddyModel(ALL, "google/gemini-4-argon")!.value).toBe("google/gemini-3-flash");
+  });
+
+  test("a current mid-tier model still loses to a newer mid-tier model of the same provider", () => {
+    expect(recommendBuddyModel(ALL, "anthropic/claude-sonnet-4-5")!.value).toBe("anthropic/claude-sonnet-5-5");
+  });
+
+  test("a clean alias beats a date-pinned snapshot of the same version", () => {
+    const list = ["anthropic/claude-sonnet-5-5-20261001", "anthropic/claude-sonnet-5-5"].map(opt);
+    expect(recommendBuddyModel(list, "anthropic/claude-opus-5-5")!.value).toBe("anthropic/claude-sonnet-5-5");
+  });
+
+  test("no mid tier in any provider falls back to the small tier, preferring small over lite", () => {
+    const list = ["anthropic/claude-opus-5-5", "anthropic/claude-haiku-5-5", "openai/gpt-5.5-nano"].map(opt);
+    const r = recommendBuddyModel(list, "anthropic/claude-opus-5-5");
+    expect(r!.value).toBe("anthropic/claude-haiku-5-5");
+    expect(r!.why).toMatch(/small/);
+  });
+
+  test("mid tier in another provider beats a small model in the current one", () => {
+    const list = ["anthropic/claude-opus-5-5", "anthropic/claude-haiku-5-5", "openai/gpt-5.5"].map(opt);
+    expect(recommendBuddyModel(list, "anthropic/claude-opus-5-5")!.value).toBe("openai/gpt-5.5");
+  });
+
+  test("only flagships: the current model stands, never a different flagship", () => {
+    const list = ["anthropic/claude-opus-5-5", "openai/gpt-5.5-pro", "google/gemini-4-argon"].map(opt);
+    expect(recommendBuddyModel(list, "openai/gpt-5.5-pro")!.value).toBe("openai/gpt-5.5-pro");
+  });
+
+  test("only flagships and no current model: the most economical flagship", () => {
+    const list = ["anthropic/claude-opus-5-5", "openai/gpt-5.5-pro"].map(opt);
+    expect(recommendBuddyModel(list, "")!.value).toBe("openai/gpt-5.5-pro");
+  });
+
+  test("empty list falls back to current, and to null with no current", () => {
+    expect(recommendBuddyModel([], "anthropic/claude-opus-5-5")!.value).toBe("anthropic/claude-opus-5-5");
+    expect(recommendBuddyModel([], "")).toBeNull();
+  });
+
+  test("unusable routes are never picked", () => {
+    const list = ["openai-codex/codex-auto-review", "asksage-query/rag", "openai-codex/gpt-5.5-mini"].map(opt);
+    expect(recommendBuddyModel(list, "openai-codex/gpt-5.5")!.value).toBe("openai-codex/gpt-5.5-mini");
   });
 });

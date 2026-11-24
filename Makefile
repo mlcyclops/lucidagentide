@@ -1901,3 +1901,9 @@ demo-P-RAIL.AGENTS1c: ## P-RAIL.AGENTS1c: + Add agent on the rail opens a two-st
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_rail_agents_1c.mjs
 	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1c.mjs; else echo "demo-P-RAIL.AGENTS1c: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-BUDDY.1
+demo-P-BUDDY.1: ## P-BUDDY.1: floating Agent buddies: a small glass-brick Lucid in its folder's color on the upper-left corner of the main composer, each Fleet card's composer and beside each Agent Worlds node; a few-pixel ellipse drift and a soft glow, drag anywhere (persisted, double-click resets); ideas from a smaller current model (POST /api/buddy/suggest, scanned and fenced, fail-closed) after each turn or on a click, each one runnable in a parallel worktree lane or handed to Ask Lucid, now in the Agents style with the boxless Lucid. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts desktop/agent_buddy_service.test.ts desktop/checker_model.test.ts desktop/renderer/agents_rail.test.ts desktop/renderer/settings_nav.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_buddy_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_1.mjs; else echo "demo-P-BUDDY.1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
