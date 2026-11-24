@@ -1878,6 +1878,12 @@ demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or t
 demo-P-DOCS.0: ## P-DOCS.0 (ADR-0660): the 2.6.1 docs release: every relative image README.md shows exists (markdown and <img> tags, fenced code skipped), README names v2.6.1 the current stable release, and ADR numbers stay unique with ADR-0660 (the docs.lucid-agents.com plan)
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts tools/readme_images.test.ts
 
+.PHONY: demo-P-DOCS.1
+demo-P-DOCS.1: ## P-DOCS.1 (ADR-0660): docs.lucid-agents.com. Recaptures every docs screenshot from the real app on an isolated QA engine (desktop/scripts/docs_capture_p_docs_1.mjs, steps in desktop/scripts/docs_shots/; a step that cannot find its element fails), then builds the docs repo checked out beside this one (../lucid-agent-docs, or DOCS_REPO=...) and fails on a broken link, an image without alt text, a video without captions, an em dash or a missing shot
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	$(BUN) desktop/scripts/docs_capture_p_docs_1.mjs --docs $(or $(DOCS_REPO),../lucid-agent-docs)
+	cd $(or $(DOCS_REPO),../lucid-agent-docs) && bun install --frozen-lockfile && bun run check
+
 .PHONY: demo-P-PREVIEW.CHIP1
 demo-P-PREVIEW.CHIP1: ## P-PREVIEW.CHIP1: one preview chip (preview_chip.ts, .pchip) in the composer, inside each fleet lane's transcript (upper-right, out of the header, never over the lane's composer; the page alone on a narrow card), above each orbit spoke and beside each agent and Main in Agent Worlds (stacked over its artifact chip, hover card with title, path, Open preview and the agent's snapshots); an Agent Worlds chip flies the Preview out over Visualize (z 94, resizable), X, Esc or a press on the world slides it back to the chip, a second Esc closes Visualize. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --lanes 2 --no-main): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/?vizScript=1 node desktop/scripts/demo_p_preview_chip_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/renderer/preview_tabs.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts

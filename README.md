@@ -26,6 +26,7 @@ and proof of which model wrote every line. It works with the models your teams a
 <a href="https://github.com/mlcyclops/lucidagentide/releases/latest/download/LucidAgent-x86_64.AppImage"><img src="https://img.shields.io/badge/Linux-f0a500?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux" /></a>
 
 <a href="https://lucid-agents.com"><b>Website</b></a> ·
+<a href="https://docs.lucid-agents.com"><b>Docs</b></a> ·
 <a href="https://store.lucid-agents.com"><b>Store</b></a> ·
 <a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.7.1"><b>Release notes</b></a> ·
 <a href="docs/guides/README.md"><b>Guides</b></a> ·
