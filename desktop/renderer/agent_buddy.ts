@@ -20,6 +20,7 @@ import { AGENTS_KEY, baseName, defaultTheme, displayNames, isLaneBusy, laneFolde
 import { agentArt, paletteOf, paletteStyle, type AgentPalette, type ArtState } from "./agents_rail_art.ts";
 import { DRAG_SLOP, loopDelay, placeModule } from "./agents_rail.ts";
 import { esc } from "./format.ts";
+import { icon } from "./icons.ts";
 import { baseTier, pollDelay, type PerfTier } from "./perf_tier.ts";
 import type { BuddyIdea, BuddyReply, BuddySurface, FleetStatusView } from "./bridge.ts";
 import { setTip, type ToastOpts } from "./ui.ts";
@@ -27,6 +28,10 @@ import { tipValue } from "./tip_text.ts";
 
 export const BUDDY_POS_KEY = "lucid.buddies.v1";
 export const BUDDY_SETTINGS_KEY = "lucid.buddies.settings.v1";
+/** P-BUDDY.HIDE1: buddies the user closed with their red x, one key per session (see hiddenKey). */
+export const BUDDY_HIDDEN_KEY = "lucid.buddies.hidden.v1";
+/** The newest keys kept; sessions long gone fall off the end. */
+export const HIDDEN_MAX = 200;
 /** Ideas older than this (or from before the agent's last turn) are fetched again when the bubble opens. */
 export const STALE_MS = 120_000;
 /** At most one automatic fetch per agent this often. */
@@ -103,6 +108,23 @@ export function savePositions(spots: Readonly<Record<string, Spot>>): string {
   return JSON.stringify({ v: 1, spots });
 }
 
+/** P-BUDDY.HIDE1: what a red x hides: Main's buddy for one Main session, a lane's for one lane session. A new
+ *  session (a new chat, a respawned lane) brings the buddy back. `none` stands for Main before its first session. */
+export function hiddenKey(where: "main" | "lane", session: string | null, laneId: string | null): string {
+  if (where === "main") return `main:${session || "none"}`;
+  return `lane:${session || `id:${laneId ?? ""}`}`;
+}
+
+/** The stored hidden keys, newest last; anything malformed reads as nothing hidden. */
+export function loadHidden(raw: string | null | undefined): string[] {
+  try {
+    const v: unknown = JSON.parse(raw ?? "[]");
+    return Array.isArray(v) ? v.filter((k): k is string => typeof k === "string" && k.length > 0 && k.length < 300).slice(-HIDDEN_MAX) : [];
+  } catch { return []; }
+}
+
+export function saveHidden(keys: Iterable<string>): string { return JSON.stringify([...keys].slice(-HIDDEN_MAX)); }
+
 /** Both settings default on; only an explicit false turns one off. */
 export function readBuddySettings(raw: string | null | undefined): BuddySettings {
   let p: unknown = null;
@@ -173,6 +195,8 @@ export interface AgentBuddiesDeps {
   /** `#fleetGrid`, when the Fleet panel has been built. */
   fleetGrid(): HTMLElement | null;
   getMainFolder(): string | null;
+  /** P-BUDDY.HIDE1: Main's current session id (null before its first turn): a hidden Main buddy stays hidden for it. */
+  getMainSession(): string | null;
   isMainBusy(): boolean;
   fleetStatus(): Promise<FleetStatusView | null>;
   suggest(req: { surface: BuddySurface; laneId?: string; purpose?: "app" | "docs" | "analysis" | "other" | null }): Promise<BuddyReply | null>;
@@ -255,7 +279,8 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   let docRaw: string | null = null;
   let doc: AgentsDoc = loadDoc(null);
   let names = new Map<string, string>();
-  let lanes: (LaneLike & { name: string })[] = [];
+  let lanes: (LaneLike & { name: string; sessionId: string | null })[] = [];
+  let hidden = new Set(loadHidden(kv.getItem(BUDDY_HIDDEN_KEY)));
   let laneMemo: Map<string, LaneMemo> | null = null;
   let lastLanePoll = 0;
   let mainTurns = 0;
@@ -283,7 +308,10 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     if (!s) { s = { reply: null, error: null, at: 0, turnsAt: 0, loading: null, unseen: 0, lastAuto: 0 }; ideas.set(agent, s); }
     return s;
   };
-  const laneById = (id: string | null): (LaneLike & { name: string }) | undefined => (id ? lanes.find((l) => l.id === id) : undefined);
+  const laneById = (id: string | null): (LaneLike & { name: string; sessionId: string | null }) | undefined => (id ? lanes.find((l) => l.id === id) : undefined);
+  /** P-BUDDY.HIDE1: the key a red x on this buddy writes (world buddies have no x). */
+  const hideKeyOf = (where: Where, laneId: string | null): string =>
+    where === "main" ? hiddenKey("main", d.getMainSession(), null) : hiddenKey("lane", laneById(laneId)?.sessionId ?? null, laneId);
   const turnsOf = (agent: string): number => (agent === "main" ? mainTurns : laneById(agent)?.turns ?? 0);
 
   // ── Agents records: palette, name, purpose ──
@@ -329,7 +357,10 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     const host = document.createElement("div");
     host.className = "abd-host";
     host.dataset.where = where;
-    host.innerHTML = `<button type="button" class="abd" aria-haspopup="dialog" style="--abd-ph:${glowDelay(key).toFixed(2)}s"></button>`
+    // P-BUDDY.HIDE1: the brick and its red x share one box, so the x sits on the brick's upper-right corner however
+    // wide the name under it is. World buddies follow their node and have no x.
+    const x = where === "world" ? "" : `<button type="button" class="abd-x" data-abd-hide aria-label="Hide this floating Agent for this session">${icon("close", 9)}</button>`;
+    host.innerHTML = `<span class="abd-brick"><button type="button" class="abd" aria-haspopup="dialog" style="--abd-ph:${glowDelay(key).toFixed(2)}s"></button>${x}</span>`
       + `<span class="abd-name" aria-hidden="true"></span><span class="abd-chip" aria-hidden="true"></span>`;
     const btn = host.querySelector(".abd") as HTMLButtonElement; // built just above
     btn.dataset.abdSurface = where;
@@ -514,6 +545,28 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     // The double-click's first click may have opened the bubble; the reset is the intent, so it closes again.
     b.btn.addEventListener("dblclick", () => { if (cur === b) closePop(false); resetSpot(b); });
     b.btn.addEventListener("keydown", (e) => { if (e.key === "Escape" && cur === b) { e.preventDefault(); closePop(true); } });
+    const x = b.host.querySelector<HTMLButtonElement>("[data-abd-hide]");
+    if (!x) return;
+    x.addEventListener("pointerdown", (e) => e.stopPropagation()); // never a drag, never the canvas's press
+    x.addEventListener("click", (e) => { e.stopPropagation(); hideBuddy(b); });
+  }
+
+  /** P-BUDDY.HIDE1: the red x. The buddy leaves this surface for this session (Main's chat, or the lane's), and the
+   *  toast offers Undo; a new session brings it back on its own. */
+  function hideBuddy(b: Buddy): void {
+    if (b.where === "world") return;
+    const key = hideKeyOf(b.where, b.laneId);
+    hidden.delete(key);
+    hidden.add(key);
+    kv.setItem(BUDDY_HIDDEN_KEY, saveHidden(hidden));
+    dropBuddy(b.key);
+    const where = b.where === "main" ? "Main session" : "lane's session";
+    d.toast({
+      title: `${b.name} is hidden`,
+      desc: `It stays off this ${where} and comes back with a new one. Settings > Appearance > Floating Agents turns them all off.`,
+      timeout: 6000,
+      actions: [{ label: "Undo", run: () => { hidden.delete(key); kv.setItem(BUDDY_HIDDEN_KEY, saveHidden(hidden)); syncAll(); } }],
+    });
   }
 
   // ── ideas ──
@@ -691,6 +744,11 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     const folder = d.getMainFolder();
     const canvas = d.mainCanvas();
     if (!settings.show || !folder || !canvas) { dropBuddy("main"); return; }
+    // P-BUDDY.HIDE1: hidden before Main's first turn means hidden for the session that turn starts.
+    const sid = d.getMainSession();
+    const early = hiddenKey("main", null, null);
+    if (sid && hidden.has(early)) { hidden.delete(early); hidden.add(hiddenKey("main", sid, null)); kv.setItem(BUDDY_HIDDEN_KEY, saveHidden(hidden)); }
+    if (hidden.has(hiddenKey("main", sid, null))) { dropBuddy("main"); return; }
     const b = buddies.get("main");
     if (b && (b.canvas !== canvas || normFolder(b.folder) !== normFolder(folder))) dropBuddy("main");
     const m = buddies.get("main") ?? makeBuddy("main", "main", "main", null, folder, canvas, d.mainAnchor());
@@ -725,6 +783,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
         const lane = laneById(laneId);
         const canvas = card.querySelector<HTMLElement>(".fleet-card-main");
         if (!lane?.cwd || !canvas) continue;
+        if (hidden.has(hiddenKey("lane", lane.sessionId, laneId))) continue; // P-BUDDY.HIDE1: its red x, this session
         const key = `lane:${laneId}`;
         seen.add(key);
         let b = buddies.get(key);
@@ -785,7 +844,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     // P-FLEET.CONN1: give up on a reply that never comes, so the clock keeps ticking (agents_rail.ts does the same).
     const st = await Promise.race([d.fleetStatus().catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), 8000))]);
     if (!st) return [];
-    lanes = st.lanes.map((l) => ({ id: l.id, cwd: l.cwd, status: l.status, turns: l.turns, name: l.name }));
+    lanes = st.lanes.map((l) => ({ id: l.id, cwd: l.cwd, status: l.status, turns: l.turns, name: l.name, sessionId: l.sessionId ?? null }));
     const prev = laneMemo;
     const ended = prev ? lanes.filter((l) => laneTurnEnds(prev, [l]).ended.length > 0).map((l) => l.id) : [];
     laneMemo = laneTurnEnds(prev, lanes).next;

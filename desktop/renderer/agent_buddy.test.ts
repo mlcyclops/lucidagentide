@@ -9,6 +9,7 @@ import { describe, expect, it } from "bun:test";
 import {
   askFraming, AUTO_GAP_MS, buddyTip, clampToCanvas, defaultSpot, GLOW_S, glowDelay, fromFraction, ideaCount, isStale, loadPositions,
   readBuddySettings, saveBuddySettings, savePositions, shouldAutoSuggest, STALE_MS, toFraction,
+  hiddenKey, HIDDEN_MAX, loadHidden, saveHidden,
 } from "./agent_buddy.ts";
 
 const size = { w: 32, h: 24 };
@@ -160,5 +161,26 @@ describe("ideaCount / askFraming", () => {
     expect(t).toContain("Add retries");
     expect(t).toContain("Wrap the fetch in a retry with backoff.");
     expect(t).not.toContain("\u2014");
+  });
+});
+
+// P-BUDDY.HIDE1: a red x hides one buddy for one session; a new session brings it back.
+describe("hidden buddies", () => {
+  it("scopes Main to its session and a lane to its own session, not to each other", () => {
+    expect(hiddenKey("main", "s1", null)).not.toBe(hiddenKey("main", "s2", null));
+    expect(hiddenKey("main", null, null)).toBe("main:none");
+    expect(hiddenKey("lane", "ls1", "lane-a")).toBe("lane:ls1");
+    expect(hiddenKey("lane", "ls2", "lane-a")).not.toBe(hiddenKey("lane", "ls1", "lane-a")); // a respawned lane: new session
+    expect(hiddenKey("lane", null, "lane-a")).toBe("lane:id:lane-a");
+    expect(hiddenKey("main", "x", null)).not.toBe(hiddenKey("lane", "x", "lane-a"));
+  });
+  it("round-trips, keeps the newest HIDDEN_MAX and reads anything malformed as nothing hidden", () => {
+    expect(loadHidden(saveHidden(["main:s1", "lane:ls1"]))).toEqual(["main:s1", "lane:ls1"]);
+    const many = Array.from({ length: HIDDEN_MAX + 5 }, (_, i) => `lane:s${i}`);
+    const kept = loadHidden(saveHidden(many));
+    expect(kept).toHaveLength(HIDDEN_MAX);
+    expect(kept[kept.length - 1]).toBe(`lane:s${HIDDEN_MAX + 4}`);
+    expect(kept).not.toContain("lane:s0");
+    for (const bad of [null, "", "{", "{\"a\":1}", "[1,null,\"\"]"]) expect(loadHidden(bad)).toEqual([]);
   });
 });

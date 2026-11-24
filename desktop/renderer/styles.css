@@ -3922,6 +3922,18 @@ body.lucid-capturing #toasts{visibility:hidden}
 .abd-badge{position:absolute;top:-5px;right:-6px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;font-style:normal;font-size:9.5px;font-weight:700;
   line-height:14px;text-align:center;white-space:nowrap;color:#0a0e12;background:var(--G);box-shadow:0 0 0 1.5px var(--bg-1),0 0 6px var(--G)}
 .abd-badge[hidden]{display:none}
+/* P-BUDDY.HIDE1: a tiny red x on the brick's upper-right corner, only while the brick is hovered (or the x has keyboard
+   focus): it hides this buddy for this session. Hidden, it takes no clicks, so the corner stays the brick's. */
+.abd-brick{position:relative;display:block;width:fit-content;margin:0 auto;line-height:0}
+.abd-x{position:absolute;top:-6px;right:-7px;z-index:3;width:14px;height:14px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;
+  color:#fff;background:var(--red);box-shadow:0 0 0 1.5px var(--bg-1),0 1px 3px rgb(var(--sh-rgb) / .4);cursor:pointer;pointer-events:auto;
+  visibility:hidden;opacity:0;transform:scale(.7);transition:opacity .12s,transform .12s,visibility 0s .12s}
+.abd-x svg{display:block;stroke-width:3}
+.abd-brick:hover .abd-x,.abd-x:focus-visible{visibility:visible;opacity:1;transform:none;transition:opacity .12s,transform .12s}
+.abd-x:hover{background:var(--red-mid)}
+.abd-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.abd-brick:hover .abd-badge{opacity:0}
+.abd-dragging .abd-x{visibility:hidden}
 .abd-chip{position:absolute;left:calc(100% + 6px);top:3px;padding:2px 7px;border-radius:9px;font-size:10.5px;font-weight:600;line-height:1.4;white-space:nowrap;
   color:var(--txt);background:var(--bg-4);border:1px solid color-mix(in srgb,var(--G) 45%,var(--line));box-shadow:0 4px 10px -6px rgb(var(--sh-rgb) / .6);
   pointer-events:none;opacity:0;transform:translateY(2px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}

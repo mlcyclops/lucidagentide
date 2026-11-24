@@ -28486,3 +28486,10 @@ The dock gains `rightOf`: a right dock sits against that panel's left edge (foll
 **Decision.** A visible rail polls lanes every `LANE_POLL_MS` and ticks every `TICK_MS` on every tier; the buddies' lane poll the same; a hidden window still backs off x4. Their lane polls also give up on a reply after 8 s instead of freezing (the ADR-0674 Visualize rule). Render work (figure loops, glances) still follows the tier.
 
 **Consequences.** `demo_p_rail_live_1.mjs` streams real lanes from the window and compares the rail with the engine every second (the rail's own rule: `working` or `needs-approval` is working). On the dev build: five lanes, worst rail lag 1.0 s, worst window request 1.7 s; before ADR-0674 the same run failed at once (the window answered nothing with five agents working).
+
+## ADR-0676 -- P-BUDDY.HIDE1: a red x hides a floating Agent for one session (2026-11-24, Accepted)
+**Context.** The owner asked to dismiss a floating Agent (the mini Lucid on the main composer or a Fleet lane card) with a tiny red x on its upper-right corner, shown on hover, for that session only.
+
+**Decision.** Main and lane buddies get an `.abd-x` button in a shared `.abd-brick` box with the brick, so the x sits on the brick's corner however wide the name is. It is `visibility:hidden` (no clicks) until the brick is hovered or the x has keyboard focus; its own pointerdown never starts a drag. A click writes `hiddenKey`: `main:<Main session id>` or `lane:<lane session id>` (`main:none` before Main's first turn, carried to the session that turn opens), kept in `lucid.buddies.hidden.v1` (newest 200). A toast says how it comes back and offers Undo. A new session (a new chat, a respawned lane) brings the buddy back. World buddies have no x.
+
+**Consequences.** `demo_p_buddy_hide_1.mjs` drives it with the real mouse in the QA engine, wide and narrow: the x takes no clicks at rest, shows on hover as a 14 px red x on the corner (topmost), hides Main's buddy, Undo restores it, a reload keeps it hidden, and a lane's x hides only that lane's buddy. Unit tests for the session scoping and the store.

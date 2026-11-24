@@ -19631,6 +19631,7 @@ function wire(): void {
     mainAnchor: () => $(".composer-wrap"),
     fleetGrid: () => $("#fleetGrid"),
     getMainFolder: () => state.workspace?.current ?? null,
+    getMainSession: () => ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null, // P-BUDDY.HIDE1: the sidebar's active session
     isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
     fleetStatus: () => bridge.fleetStatus(),
     suggest: (req) => bridge.buddySuggest(req),

@@ -1928,3 +1928,9 @@ demo-P-FLEET.CONN1: ## P-FLEET.CONN1: with several agents working, the window's 
 demo-P-FLEET.CONN1-live: ## P-FLEET.CONN1 live: real lanes on a real (local, zero-cost) model, their turns streamed by the window like the Fleet grid; every second the rail's working/idle tiles must match the engine within one poll cycle and the window must keep answering. LUCID_DEMO_BROWSER_URL=http://127.0.0.1:9340 LUCID_DEMO_URL=http://127.0.0.1:5401/ LUCID_DEMO_MODEL=dgx-spark/glm-5.3-flash LUCID_DEMO_LANES=5 node desktop/scripts/demo_p_rail_live_1.mjs
 	node --check desktop/scripts/demo_p_rail_live_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_live_1.mjs; else echo "demo-P-FLEET.CONN1-live: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL), LUCID_DEMO_URL and LUCID_DEMO_MODEL to run it"; fi
+
+.PHONY: demo-P-BUDDY.HIDE1
+demo-P-BUDDY.HIDE1: ## P-BUDDY.HIDE1: hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner (it takes no clicks until then); a click hides that buddy for that session (Main's chat, or the lane's), a toast offers Undo, a reload keeps it hidden, a new session brings it back; world buddies have no x. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_hide_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_buddy_hide_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_hide_1.mjs; else echo "demo-P-BUDDY.HIDE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi

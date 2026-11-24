@@ -6549,3 +6549,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** the rail and buddy lane polls run every 2.5 s on every render tier (the busy-machine governor stretched them to 10 s) and give up on a lost reply after 8 s; live harness `demo_p_rail_live_1.mjs` (5 real lanes on local GLM): rail within 1.0 s of the engine. ADR-0675.
 - **stubbed:** none.
 - **next:** one multiplexed stream for every lane's events.
+## P-BUDDY.HIDE1: a red x hides a floating Agent for one session
+- **shipped (2026-11-24):** hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner; a click hides it for that Main or lane session (Undo in the toast; a new session brings it back). ADR-0676.
+- **stubbed:** none.
+- **next:** offer the same x on Agent Worlds buddies if the owner wants it there.
