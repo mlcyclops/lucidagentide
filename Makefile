@@ -1923,3 +1923,8 @@ demo-P-PERF.IDLE1: ## P-PERF.IDLE1: opening LUCID runs no git and an idle window
 .PHONY: demo-P-FLEET.CONN1
 demo-P-FLEET.CONN1: ## P-FLEET.CONN1: with several agents working, the window's other requests to the engine are still answered. Every running agent, Main's turn and each Visualize watch hold one HTTP connection open; Chromium's six-per-host cap then queued fleet status forever (Visualize "0 agents", status "Checking"). main.ts lifts the cap for the loopback hosts; Visualize's fleet poll also gives up on a reply after 10 s instead of stopping. Proof in this repo's Electron: 8 open streams, then one quick request, pending without the switch and answered with it.
 	$(BUN) run desktop/scripts/demo_p_fleet_conn_1.ts
+
+.PHONY: demo-P-FLEET.CONN1-live
+demo-P-FLEET.CONN1-live: ## P-FLEET.CONN1 live: real lanes on a real (local, zero-cost) model, their turns streamed by the window like the Fleet grid; every second the rail's working/idle tiles must match the engine within one poll cycle and the window must keep answering. LUCID_DEMO_BROWSER_URL=http://127.0.0.1:9340 LUCID_DEMO_URL=http://127.0.0.1:5401/ LUCID_DEMO_MODEL=dgx-spark/glm-5.3-flash LUCID_DEMO_LANES=5 node desktop/scripts/demo_p_rail_live_1.mjs
+	node --check desktop/scripts/demo_p_rail_live_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_live_1.mjs; else echo "demo-P-FLEET.CONN1-live: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL), LUCID_DEMO_URL and LUCID_DEMO_MODEL to run it"; fi

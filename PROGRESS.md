@@ -6545,3 +6545,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** with 4+ agents working, their turn streams used up Chromium's six connections to the engine and every other request queued (Visualize "0 agents", status "Checking"); main.ts now lifts the cap for 127.0.0.1/localhost and Visualize's fleet poll gives up on a reply after 10 s. ADR-0674.
 - **stubbed:** none.
 - **next:** carry every lane's events on one multiplexed stream so the window holds one connection however many agents run.
+## P-FLEET.CONN1b: the rail's working/idle state is not stretched by the render tier
+- **shipped (2026-11-23):** the rail and buddy lane polls run every 2.5 s on every render tier (the busy-machine governor stretched them to 10 s) and give up on a lost reply after 8 s; live harness `demo_p_rail_live_1.mjs` (5 real lanes on local GLM): rail within 1.0 s of the engine. ADR-0675.
+- **stubbed:** none.
+- **next:** one multiplexed stream for every lane's events.

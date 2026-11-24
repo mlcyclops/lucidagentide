@@ -36,6 +36,8 @@ export const TURN_DEDUPE_MS = 4000;
 export const SCROLL_STEP = 3;
 const TICK_MS = 1000;
 const LANE_POLL_MS = 2500;
+/** P-FLEET.CONN1: how long one lane poll waits for the engine before it gives up. */
+const FLEET_WAIT_MS = 8000;
 /** P-PERF.IDLE1: how often a working figure's pose advances (see stepFigures). */
 const STEP_FPS = 8;
 
@@ -251,7 +253,9 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
   // ── data ──
   async function pollLanes(): Promise<string[]> {
     lastLanePoll = Date.now();
-    const st = await d.fleetStatus().catch(() => null);
+    // P-FLEET.CONN1: a reply that never comes must not freeze the rail on the state of the last answer (two working
+    // Agents shown idle for a whole turn); this poll gives up after FLEET_WAIT_MS and the next one asks again.
+    const st = await Promise.race([d.fleetStatus().catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), FLEET_WAIT_MS))]);
     if (!st) { lanesLoaded = true; return []; }
     lanes = st.lanes.map((l) => ({ id: l.id, cwd: l.cwd, status: l.status, turns: l.turns }));
     laneNames = new Map(st.lanes.map((l) => [l.id, l.name]));
@@ -299,14 +303,17 @@ export function mountAgentsRail(d: AgentsRailDeps): AgentsRail {
     if (timer) { clearTimeout(timer); timer = 0; }
     try {
       if (active()) {
-        const due = !lanesLoaded || Date.now() - lastLanePoll >= pollDelay(LANE_POLL_MS, d.perfTier(), false);
+        // P-FLEET.CONN1: who is working is information, not decoration, so a visible rail polls at LANE_POLL_MS on
+        // every render tier. The frame governor caps the tier on a busy machine (exactly when several agents run),
+        // and its x4 stretch left a working Agent shown idle for ten seconds and more.
+        const due = !lanesLoaded || Date.now() - lastLanePoll >= LANE_POLL_MS;
         const ended = due ? await pollLanes() : [];
         sync();
         for (const f of ended) ring(f);
       } else laneMemo = null;
     } finally {
       ticking = false;
-      timer = window.setTimeout(() => void tick(), pollDelay(TICK_MS, d.perfTier(), document.hidden));
+      timer = window.setTimeout(() => void tick(), pollDelay(TICK_MS, "full", document.hidden)); // hidden still backs off
     }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void tick(); });

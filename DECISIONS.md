@@ -28479,3 +28479,10 @@ The dock gains `rightOf`: a right dock sits against that panel's left edge (foll
 **Decision.** `main.ts` appends `--ignore-connections-limit=127.0.0.1,localhost` before app-ready. The engine is this machine's own loopback server behind the token gate; the cap exists to be polite to remote servers and protects nothing here. Visualize's fleet poll also races its reply against 10 s, so a reply that never comes ends that cycle instead of the chain.
 
 **Consequences.** `demo_p_fleet_conn_1.ts` runs this repo's Electron against a loopback server: with 8 open streams a quick request is still pending after 5 s without the switch and answered with main.ts's exact value. Requires a restart of the app (main process) to take effect. Remote origins keep Chromium's cap.
+
+## ADR-0675 -- P-FLEET.CONN1b: the rail's working/idle state is not stretched by the render tier (2026-11-23, Accepted)
+**Context.** After ADR-0674 the window no longer starved, but a live run of five lanes on the local GLM model still showed working Agents as idle for up to eight seconds. The rail and the buddies polled lanes through `pollDelay(..., perfTier())`, and the frame governor caps the tier on a busy machine, which is exactly when several agents run: its x4 stretch made a 2.5 s lane poll a 10 s one, behind a 4 s tick.
+
+**Decision.** A visible rail polls lanes every `LANE_POLL_MS` and ticks every `TICK_MS` on every tier; the buddies' lane poll the same; a hidden window still backs off x4. Their lane polls also give up on a reply after 8 s instead of freezing (the ADR-0674 Visualize rule). Render work (figure loops, glances) still follows the tier.
+
+**Consequences.** `demo_p_rail_live_1.mjs` streams real lanes from the window and compares the rail with the engine every second (the rail's own rule: `working` or `needs-approval` is working). On the dev build: five lanes, worst rail lag 1.0 s, worst window request 1.7 s; before ADR-0674 the same run failed at once (the window answered nothing with five agents working).

@@ -782,7 +782,8 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   // ── clock ──
   async function pollLanes(): Promise<string[]> {
     lastLanePoll = Date.now();
-    const st = await d.fleetStatus().catch(() => null);
+    // P-FLEET.CONN1: give up on a reply that never comes, so the clock keeps ticking (agents_rail.ts does the same).
+    const st = await Promise.race([d.fleetStatus().catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), 8000))]);
     if (!st) return [];
     lanes = st.lanes.map((l) => ({ id: l.id, cwd: l.cwd, status: l.status, turns: l.turns, name: l.name }));
     const prev = laneMemo;
@@ -819,7 +820,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
       watchGrid();
       // Lanes are only polled while a lane buddy can be on screen (the Fleet grid or Agent Worlds).
       if (settings.show && !document.hidden && (gridShown() || worldsShown())) {
-        const ended = Date.now() - lastLanePoll >= pollDelay(LANE_POLL_MS, d.perfTier(), false) ? await pollLanes() : [];
+        const ended = Date.now() - lastLanePoll >= LANE_POLL_MS ? await pollLanes() : []; // P-FLEET.CONN1: not stretched by the render tier
         syncAll();
         for (const id of ended) maybeAuto(id);
       } else {
@@ -828,7 +829,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
       }
     } finally {
       ticking = false;
-      timer = window.setTimeout(() => void tick(), pollDelay(TICK_MS, d.perfTier(), document.hidden));
+      timer = window.setTimeout(() => void tick(), pollDelay(TICK_MS, "full", document.hidden)); // P-FLEET.CONN1: hidden still backs off
     }
   }
   document.addEventListener("visibilitychange", () => { if (!document.hidden) void tick(); });
