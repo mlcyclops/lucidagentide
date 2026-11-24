@@ -119,6 +119,17 @@ const browser = await puppeteer.launch({
   args: [`--window-size=${VIEW.width},${VIEW.height}`, "--force-color-profile=srgb", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check"],
 });
 
+// Waits (up to 4 s) for every finite CSS or Web animation on the page to finish; endless ones (spinners, glows) are
+// ignored. A box measured mid-animation lands where the element was, not where the image shows it.
+async function settle(page) {
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming?.().endTime))
+      .map((a) => a.finished.catch(() => {}))),
+    new Promise((r) => setTimeout(r, 4000)),
+  ]));
+}
+
 async function rectOf(page, target) {
   if (typeof target !== "string") return target;
   const r = await page.evaluate((sel) => {
@@ -143,6 +154,10 @@ try {
     });
     const context = await browser.createBrowserContext(); // no storage carried over from the previous module
     const page = await context.newPage();
+    // Lucid's own suggestions (lucid_suggest.ts: a holiday theme on the calendar's occasions, what-is-new notes after
+    // an update) pop up over whatever is open; a shot must not depend on the capture date or version history, so the
+    // docs browser has Settings' "Lucid may suggest things" off.
+    await page.evaluateOnNewDocument(() => { localStorage.setItem("lucid.suggest.enabled", "0"); });
     await page.goto(url, { waitUntil: "domcontentloaded" });
     const record = { module: name, capturedAt: new Date().toISOString(), shots: {} };
     const ctx = {
@@ -150,6 +165,7 @@ try {
       reload: () => page.reload({ waitUntil: "domcontentloaded" }),
       async shoot(id, { boxes = {}, clip, pad = 12 } = {}) {
         if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error(`shot id "${id}" must be lowercase words joined by hyphens`);
+        await settle(page);
         let area = { x: 0, y: 0, ...VIEW };
         if (clip) {
           const c = await rectOf(page, clip);
@@ -157,12 +173,29 @@ try {
           const x = Math.max(0, Math.floor(c.x - p)), y = Math.max(0, Math.floor(c.y - p));
           area = { x, y, width: Math.min(VIEW.width - x, Math.ceil(c.width + 2 * p)), height: Math.min(VIEW.height - y, Math.ceil(c.height + 2 * p)) };
         }
-        const stored = {};
-        for (const [key, target] of Object.entries(boxes)) {
-          const b = await rectOf(page, target);
-          stored[key] = [Math.round(b.x - area.x), Math.round(b.y - area.y), Math.round(b.width), Math.round(b.height)];
+        // Callouts must land on the pixels in the image: finite animations have finished (settle above), measure
+        // until two frames agree, capture without puppeteer resizing the viewport (captureBeyondViewport would
+        // re-lay out the page between the measure and the pixels), then measure again and fail on any drift.
+        const measure = async () => {
+          const out = {};
+          for (const [key, target] of Object.entries(boxes)) {
+            const b = await rectOf(page, target);
+            out[key] = [Math.round(b.x - area.x), Math.round(b.y - area.y), Math.round(b.width), Math.round(b.height)];
+          }
+          return out;
+        };
+        let stored = await measure();
+        for (let i = 0; i < 20; i++) {
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+          const again = await measure();
+          if (JSON.stringify(again) === JSON.stringify(stored)) break;
+          stored = again;
         }
-        const png = await page.screenshot({ type: "png", clip: area });
+        const png = await page.screenshot({ type: "png", clip: area, captureBeyondViewport: false });
+        const after = await measure();
+        for (const [key, b] of Object.entries(stored)) {
+          if (b.some((v, i) => Math.abs(v - after[key][i]) > 1)) throw new Error(`shot ${id}: box "${key}" moved during the capture (${b} then ${after[key]})`);
+        }
         const file = `${id}.webp`;
         mkdirSync(join(DOCS, "public", "shots"), { recursive: true });
         await sharp(png).webp({ quality: 84 }).toFile(join(DOCS, "public", "shots", file));

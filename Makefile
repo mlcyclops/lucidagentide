@@ -1879,7 +1879,7 @@ demo-P-DOCS.0: ## P-DOCS.0 (ADR-0660): the 2.6.1 docs release: every relative im
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts tools/readme_images.test.ts
 
 .PHONY: demo-P-DOCS.1
-demo-P-DOCS.1: ## P-DOCS.1 (ADR-0660): docs.lucid-agents.com. Recaptures every docs screenshot from the real app on an isolated QA engine (desktop/scripts/docs_capture_p_docs_1.mjs, steps in desktop/scripts/docs_shots/; a step that cannot find its element fails), then builds the docs repo checked out beside this one (../lucid-agent-docs, or DOCS_REPO=...) and fails on a broken link, an image without alt text, a video without captions, an em dash or a missing shot
+demo-P-DOCS.1: ## P-DOCS.1 (ADR-0660): docs.lucid-agents.com. Recaptures every docs screenshot from the real app on an isolated QA engine (desktop/scripts/docs_capture_p_docs_1.mjs, steps in desktop/scripts/docs_shots/; a step that cannot find its element fails), then builds the docs repo checked out beside this one (../lucid-agent-docs, or DOCS_REPO=...) and fails on a broken link, an image without alt text, a video without captions, an em dash, a missing shot, or (P-DOCS.1b, in Chrome) a callout layer off its image or two callout numbers on top of each other. The worlds shots import signed world packages from ../lucidagentIDEaddon/worlds/dist (or LUCID_DOCS_WORLDS_DIR)
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
 	$(BUN) desktop/scripts/docs_capture_p_docs_1.mjs --docs $(or $(DOCS_REPO),../lucid-agent-docs)
 	cd $(or $(DOCS_REPO),../lucid-agent-docs) && bun install --frozen-lockfile && bun run check
