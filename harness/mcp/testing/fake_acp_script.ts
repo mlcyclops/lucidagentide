@@ -51,6 +51,8 @@ export interface FleetScript {
   keywords: string[];
   /** Chosen when no keyword matches. */
   default?: boolean;
+  /** P-BUDDY.1: a side completion's canned answer (e.g. the buddy's ideas JSON), not fleet demo footage. */
+  side?: boolean;
   model?: string;
   steps: ScriptStep[];
 }
@@ -168,6 +170,7 @@ export function parseScript(json: string): FleetScript {
   if (!isStr(o.title) || !isStr(o.prompt)) throw new Error(`${o.id}: title and prompt are required`);
   if (!Array.isArray(o.keywords) || !o.keywords.every(isStr)) throw new Error(`${o.id}: keywords must be strings`);
   if (o.model !== undefined && !isStr(o.model)) throw new Error(`${o.id}: bad model`);
+  if (o.side !== undefined && typeof o.side !== "boolean") throw new Error(`${o.id}: bad side`);
   if (!Array.isArray(o.steps) || o.steps.length === 0) throw new Error(`${o.id}: no steps`);
   o.steps.forEach((s, i) => checkStep(s, `${o.id}.steps[${i}]`));
   if (o.steps.filter((s) => rec(s).type === "ask").length > 1) throw new Error(`${o.id}: at most one ask per script`);

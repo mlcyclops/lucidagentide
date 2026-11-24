@@ -72,6 +72,30 @@ describe("makeFirebaseMarketProvider", () => {
     expect(calls[0]!.body).toEqual({ data: { packId: "pathfinder", licensing: "one-time" } });
   });
 
+  test("P-WORLDS.STORE1: the Sponsor world pack's checkout carries its picks; other packs send none", async () => {
+    reply = () => ({ ok: true, body: { result: { url: "https://x/co" } } });
+    const picks = ["world-farm", "world-golf", "world-circus", "world-tennis", "world-hockey", "world-soccer"];
+    await signedIn().checkoutUrl("bundle-sponsor", "one-time", { picks });
+    expect(calls[0]!.body).toEqual({ data: { packId: "bundle-sponsor", licensing: "one-time", picks } });
+    await signedIn().checkoutUrl("bundle-patron", "one-time", {});
+    expect(calls[1]!.body).toEqual({ data: { packId: "bundle-patron", licensing: "one-time" } });
+  });
+
+  test("P-WORLDS.STORE1: redeemWorldCredit returns the credits left, or the callable's own reason", async () => {
+    reply = () => ({ ok: true, body: { result: { ok: true, remaining: 5 } } });
+    const p = signedIn();
+    expect(await p.redeemWorldCredit("world-farm")).toEqual({ ok: true, remaining: 5 });
+    expect(calls[0]!.url).toBe(`${BASE}/redeemWorldCredit`);
+    expect(calls[0]!.body).toEqual({ data: { packId: "world-farm" } });
+    reply = () => ({ ok: false, body: { error: { message: "No world credits are left on this Sponsor pack." } } });
+    expect(await p.redeemWorldCredit("world-golf")).toEqual({ ok: false, error: "No world credits are left on this Sponsor pack." });
+    reply = () => ({ ok: true, body: { result: { ok: "yes" } } });
+    expect((await p.redeemWorldCredit("world-golf")).ok).toBe(false);
+    const before = calls.length;
+    expect((await signedIn({ user: { signedIn: false }, token: null }).redeemWorldCredit("world-golf")).ok).toBe(false);
+    expect(calls.length).toBe(before);
+  });
+
   test("government access: a known status passes through; an error, junk, or no token reads as none", async () => {
     reply = (n) => ({ ok: true, body: { result: { status: n === "getGovAccess" ? "approved" : "pending" } } });
     const p = signedIn();

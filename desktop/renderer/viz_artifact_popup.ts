@@ -20,10 +20,14 @@
 // sample) and Demo (the ?vizDemo=1 feed) chips and Close; the game area is 16:10 (viz_build_model.fitArtWidth),
 // as big as the viewport allows up to ART_DEFAULT_W, and the grip at the end of the action row resizes it (drag or
 // arrow keys) within the viewport; the size holds for the session. Play becomes Restart (a fresh frame).
+//
+// P-PREVIEW.CHIP1: the chip's spot over its node is preview_curtain.chipStackAt, the same rule the node's preview
+// chip (preview_chip.ts) stacks above it by; heightOf tells that chip how much room this one takes.
 
 import { authHeaders } from "./bridge.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
+import { chipStackAt } from "./preview_curtain.ts";
 import { popover } from "./ui.ts";
 import { ART_DEFAULT_W, fitArtWidth, frameAttrs, readVerdict, type ArtifactVerdict, type BuildArtifact } from "./viz_build_model.ts";
 
@@ -235,6 +239,8 @@ export interface ArtifactChips {
   /** Show (or replace) the chip over `node`, or remove it (null). */
   set(node: string, a: BuildArtifact | null): void;
   has(node: string): boolean;
+  /** The chip's height over `node` (px), 0 when it has none or it is off screen. */
+  heightOf(node: string): number;
   destroy(): void;
 }
 
@@ -250,7 +256,8 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
       const b = boxOf(id);
       chip.hidden = !b;
       if (!b) continue;
-      chip.style.transform = `translate(${Math.round(b.x - s.left - chip.offsetWidth / 2)}px, ${Math.round(b.y - s.top - b.r - chip.offsetHeight - 6)}px)`;
+      const at = chipStackAt(b, s, { w: chip.offsetWidth, h: chip.offsetHeight });
+      chip.style.transform = `translate(${at.x}px, ${at.y}px)`;
     }
     raf = requestAnimationFrame(place);
   };
@@ -278,6 +285,10 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
       if (chips.size && !raf) raf = requestAnimationFrame(place);
     },
     has: (node) => chips.has(node),
+    heightOf(node) {
+      const chip = chips.get(node);
+      return chip && !chip.hidden ? chip.offsetHeight : 0;
+    },
     destroy() {
       if (raf) cancelAnimationFrame(raf);
       raf = 0;

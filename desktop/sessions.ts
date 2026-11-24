@@ -8,8 +8,8 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { closeSync, constants, copyFileSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { open, readdir } from "node:fs/promises";
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { UNTRUSTED_END, UNTRUSTED_START } from "../harness/prompt/assembler.ts";
@@ -17,6 +17,7 @@ import { EXTRACT_SYSTEM } from "../harness/personal/distiller.ts";
 import { ASK_LUCID_SYSTEM } from "./ask_lucid.ts"; // P-ASKLUCID.5 (ADR-0586): to recognize its throwaway sessions
 import { CARRIED_MARKER } from "./interject_store.ts";
 import { currentWorkspace } from "./workspace.ts";
+import { __resetSessionFiles, noteSessionFileChanged, sessionFiles, sessionFilesSync, type SessionFileEntry } from "../tools/session_files.ts";
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -316,27 +317,41 @@ export function __resetSessionIndex(): void {
   sessionIndex.clear(); allScans.clear(); archiveScanned.clear(); indexParses = 0;
   if (indexSaveTimer) { clearTimeout(indexSaveTimer); indexSaveTimer = null; }
   indexStoreLoaded = false;
+  __resetSessionFiles(); // P-PERF.IDLE1: a restart forgets the file index too (and closes its watchers)
 }
 
-/** The file of session `id` under `root`: the index first (no file read), else a scan for its session
- *  record (a file the index has not seen yet). */
+/** P-PERF.IDLE1: bytes of a transcript the id lookup and the throwaway sweeps read. The session record and the first
+ *  user message sit at the top (after omp 18's fixed-width title slot); a sweep never judges a file whose first user
+ *  message is not in the head, so it never deletes one. */
+const HEAD_BYTES = 256 * 1024;
+
+/** P-PERF.IDLE1: the head of an open transcript (at most `buf.length` bytes), cut back to its last whole line when
+ *  the file runs on, so a torn JSON line is never judged. */
+function headText(fd: number, buf: Buffer): string {
+  const n = readSync(fd, buf, 0, buf.length, 0);
+  const text = buf.toString("utf8", 0, n);
+  return n < buf.length ? text : text.slice(0, text.lastIndexOf("\n") + 1);
+}
+
+/** The file of session `id` under `root`: the index first (no file read), else a look for its session
+ *  record in a file the index has not parsed. P-PERF.IDLE1: over the shared file index (no tree walk), reading
+ *  only each such file's head. */
 function findSessionPath(id: string, root: string): string | null {
   loadIndexStore(root);
   for (const [k, e] of sessionIndex) {
     if (under(k, root) && (e.meta?.id === id || basename(k) === id) && existsSync(k)) return k;
   }
-  let dirs: string[];
-  try { dirs = readdirSync(root); } catch { return null; } // no sessions folder (yet, or any more)
-  for (const d of dirs) {
-    const dir = join(root, d);
+  if (!existsSync(root)) return null; // no sessions folder (yet, or any more)
+  const buf = Buffer.allocUnsafe(HEAD_BYTES);
+  for (const f of sessionFilesSync(root)) {
+    if (f.name === id) return f.p;
+    if (sessionIndex.get(f.p)?.meta) continue; // parsed: its id was checked above
+    let fd: number | null = null;
     try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        try { if (f === id || sessionRecord(readFileSync(p, "utf8"), f).id === id) return p; } catch { /* unreadable */ }
-      }
-    } catch { /* skip dir */ }
+      fd = openSync(f.p, "r");
+      if (sessionRecord(headText(fd, buf), f.name).id === id) return f.p;
+    } catch { /* unreadable */ }
+    finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
   }
   return null;
 }
@@ -471,6 +486,8 @@ function moveSession(from: string, to: string): MoveResult {
     if (code === "EEXIST") return { ok: false, error: "a session file with that name is already there; nothing was moved" };
     return { ok: false, error: code === "EBUSY" || code === "EPERM" ? "the session file is in use by a running agent; close it and try again" : `could not move the session file (${code || "error"})` };
   }
+  noteSessionFileChanged(from); // P-PERF.IDLE1: the file index sees our own move on its next query
+  noteSessionFileChanged(to);
   const e = sessionIndex.get(from);
   sessionIndex.delete(from);
   markDirty(from);
@@ -600,68 +617,93 @@ function scanSessions(root: string, reuseMs: number): Promise<ScannedSession[]> 
 async function scanAllSessions(root: string): Promise<ScannedSession[]> {
   if (!existsSync(root)) return [];
   loadIndexStore(root);
-  const all: ScannedSession[] = [];
+  // P-PERF.IDLE1: the shared file index (tools/session_files.ts) supplies every file's mtime+size without a tree
+  // walk, so an unchanged transcript costs no I/O at all; only a file whose mtime or size moved is opened.
+  const live: IndexEntry[] = [];
   const seen = new Set<string>();
-  let dirs: string[];
-  try { dirs = await readdir(root); } catch { return []; }
-  for (const d of dirs) {
-    const dir = join(root, d);
-    let files: string[];
-    try { files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")); } catch { continue; } // not a dir / unreadable
-    for (let i = 0; i < files.length; i += ALL_SCAN_BATCH) {
-      await Promise.all(files.slice(i, i + ALL_SCAN_BATCH).map(async (f) => {
-        const p = join(dir, f);
+  const changed: SessionFileEntry[] = [];
+  for (const f of await sessionFiles(root)) {
+    const hit = sessionIndex.get(f.p);
+    if (hit && hit.mtimeMs === f.mtimeMs && hit.size === f.size) { seen.add(f.p); live.push(hit); }
+    else changed.push(f);
+  }
+  for (let i = 0; i < changed.length; i += ALL_SCAN_BATCH) {
+    await Promise.all(changed.slice(i, i + ALL_SCAN_BATCH).map(async ({ p, name }) => {
+      try {
+        // One handle for the size/mtime check and the read: nothing can swap the file in between.
+        const h = await open(p, "r");
+        let e: IndexEntry;
         try {
-          // One handle for the size/mtime check and the read: nothing can swap the file in between.
-          const h = await open(p, "r");
-          let e: IndexEntry;
-          try {
-            const st = await h.stat();
-            const hit = sessionIndex.get(p);
-            e = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit : indexedEntry(p, f, st, await h.readFile("utf8"));
-          } finally { await h.close(); }
-          seen.add(p);
-          if (!e.meta) return; // empty/probe session
-          all.push({ row: { ...e.meta, updatedAt: e.mtimeMs, cwd: e.scwd }, text: e.text });
-        } catch { /* skip unreadable file */ }
-      }));
-    }
+          const st = await h.stat();
+          const hit = sessionIndex.get(p);
+          e = hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size ? hit : indexedEntry(p, name, st, await h.readFile("utf8"));
+        } finally { await h.close(); }
+        seen.add(p);
+        live.push(e);
+      } catch { /* skip unreadable file */ }
+    }));
   }
   for (const k of sessionIndex.keys()) if (under(k, root) && !seen.has(k)) { sessionIndex.delete(k); markDirty(k); }
+  const all: ScannedSession[] = [];
+  for (const e of live) if (e.meta) all.push({ row: { ...e.meta, updatedAt: e.mtimeMs, cwd: e.scwd }, text: e.text }); // no meta = empty/probe session
   all.sort((a, b) => b.row.updatedAt - a.row.updatedAt);
   return all;
 }
 
+/** The session cwd and the first user message found in a transcript head (`firstUser` null = none in the head). */
+function headFacts(head: string): { scwd: string; firstUser: string | null } {
+  let scwd = "";
+  let firstUser: string | null = null;
+  for (const ln of head.split("\n")) {
+    if (!ln) continue;
+    let o: unknown;
+    try { o = JSON.parse(ln); } catch { continue; }
+    if (!o || typeof o !== "object" || !("type" in o)) continue;
+    if (o.type === "session") scwd = "cwd" in o && typeof o.cwd === "string" ? o.cwd : "";
+    else if (o.type === "message" && firstUser === null && "message" in o && o.message && typeof o.message === "object"
+      && "role" in o.message && o.message.role === "user") firstUser = firstUserText(o.message);
+    if (scwd && firstUser !== null) break; // we know cwd + the first user message: stop reading
+  }
+  return { scwd, firstUser };
+}
+
+/** P-PERF.IDLE1: the throwaway sweeps' one loop. It walks the shared file index (no tree walk) and rules files out
+ *  before opening any: newer than `cutoff`, or a current index entry (same mtime and size) that says another kind or
+ *  another workspace. Each remaining candidate is judged on ONE descriptor (the age re-checked on it, so the file
+ *  judged is the file read) from at most HEAD_BYTES, and deleted only when BOTH guards hold on those bytes: the
+ *  session cwd is `want` AND the first user message is a `kind` prompt. No first user message in the head = kept. */
+function sweepThrowaways(root: string, want: string, kind: "kg-ingest" | "ask-lucid", cutoff: number): number {
+  loadIndexStore(root);
+  const isKind = kind === "kg-ingest" ? isIngestPrompt : isAskLucidPrompt;
+  const buf = Buffer.allocUnsafe(HEAD_BYTES);
+  let cleared = 0;
+  for (const f of sessionFilesSync(root)) {
+    if (f.mtimeMs > cutoff) continue;
+    const e = sessionIndex.get(f.p);
+    if (e && e.mtimeMs === f.mtimeMs && e.size === f.size && (e.meta?.kind !== kind || norm(e.scwd) !== want)) continue;
+    let hit = false;
+    let fd: number | null = null;
+    try {
+      fd = openSync(f.p, "r");
+      if (fstatSync(fd).mtimeMs <= cutoff) {
+        const { scwd, firstUser } = headFacts(headText(fd, buf));
+        hit = firstUser !== null && isKind(firstUser) && norm(scwd) === want;
+      }
+    } catch { /* skip unreadable/locked file */ }
+    finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
+    if (!hit) continue;
+    try { rmSync(f.p, { force: true }); cleared++; noteSessionFileChanged(f.p); } catch { /* locked: the next sweep takes it */ }
+  }
+  return cleared;
+}
+
 /** P-KG-INGEST.2 (ADR-0079): delete ALL kg-ingest throwaway sessions for one workspace. Defense in depth:
  *  only removes files that BOTH (a) belong to the current workspace AND (b) are extractor throwaways
- *  (`isIngestPrompt` on the first user message) — a real chat is never touched. Returns the count removed. */
+ *  (`isIngestPrompt` on the first user message): a real chat is never touched. Returns the count removed. */
 export function clearIngestSessions(cwd: string = currentWorkspace(), root: string = join(homedir(), ".omp", "agent", "sessions")): { ok: boolean; cleared: number } {
   if (!existsSync(root)) return { ok: true, cleared: 0 };
   allScans.delete(root); // P-BOOTPERF.1: a scan in flight may predate the removal; the next list rescans
-  const want = norm(cwd);
-  let cleared = 0;
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        try {
-          let scwd = "", isIngest = false, sawUser = false;
-          for (const ln of readFileSync(p, "utf8").split("\n")) {
-            if (!ln) continue;
-            let o: any; try { o = JSON.parse(ln); } catch { continue; }
-            if (o.type === "session") scwd = o.cwd ?? "";
-            else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isIngest = isIngestPrompt(firstUserText(o.message)); }
-            if (scwd && sawUser) break; // we know cwd + ingest-ness — stop reading
-          }
-          if (isIngest && norm(scwd) === want) { rmSync(p, { force: true }); cleared++; }
-        } catch { /* skip unreadable/locked file */ }
-      }
-    } catch { /* skip dir */ }
-  }
-  return { ok: true, cleared };
+  return { ok: true, cleared: sweepThrowaways(root, norm(cwd), "kg-ingest", Infinity) };
 }
 
 /** P-ASKLUCID.5 (ADR-0586): delete this workspace's Ask Lucid throwaway sessions that are at least
@@ -671,39 +713,8 @@ export function clearIngestSessions(cwd: string = currentWorkspace(), root: stri
 export function clearAskLucidSessions(opts: { cwd?: string; root?: string; olderThanMs?: number; now?: number } = {}): { ok: boolean; cleared: number } {
   const root = opts.root ?? sessionsRoot();
   if (!existsSync(root)) return { ok: true, cleared: 0 };
-  const want = norm(opts.cwd ?? currentWorkspace());
   const cutoff = (opts.now ?? Date.now()) - (opts.olderThanMs ?? 3_600_000);
-  let cleared = 0;
-  for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try {
-      if (!statSync(dir).isDirectory()) continue;
-      for (const f of readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const p = join(dir, f);
-        // ONE descriptor for the age check and the read, so the file that is judged is the file that is read
-        // (a stat by path followed by a read by path can be handed a different file in between).
-        let side = false;
-        let fd: number | null = null;
-        try {
-          fd = openSync(p, "r");
-          if (fstatSync(fd).mtimeMs <= cutoff) {
-            let scwd = "", isSide = false, sawUser = false;
-            for (const ln of readFileSync(fd, "utf8").split("\n")) {
-              if (!ln) continue;
-              let o: any; try { o = JSON.parse(ln); } catch { continue; }
-              if (o.type === "session") scwd = o.cwd ?? "";
-              else if (o.type === "message" && o.message?.role === "user" && !sawUser) { sawUser = true; isSide = isAskLucidPrompt(firstUserText(o.message)); }
-              if (scwd && sawUser) break;
-            }
-            side = isSide && norm(scwd) === want;
-          }
-        } catch { /* skip unreadable/locked file */ }
-        finally { if (fd !== null) { try { closeSync(fd); } catch { /* already closed */ } } }
-        if (side) { try { rmSync(p, { force: true }); cleared++; } catch { /* locked: the next sweep takes it */ } }
-      }
-    } catch { /* skip dir */ }
-  }
+  const cleared = sweepThrowaways(root, norm(opts.cwd ?? currentWorkspace()), "ask-lucid", cutoff);
   if (cleared > 0) allScans.delete(root);
   return { ok: true, cleared };
 }
@@ -782,6 +793,7 @@ export function deleteSession(id: string, cwd: string = currentWorkspace(), root
   if (scwd && norm(scwd) !== norm(cwd)) return { ok: false, error: "session belongs to another workspace" };
   try { rmSync(p, { force: true }); }
   catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  noteSessionFileChanged(p); // P-PERF.IDLE1
   sessionIndex.delete(p);
   markDirty(p);
   allScans.clear();

@@ -13,7 +13,7 @@
 // supplied (managed config); with none, the fail-closed nullProvider stays and the storefront is a hint.
 
 import { parseGovAccessStatus, type AuthState, type Entitlement, type GovAccessRequest, type PackLicensing } from "../../harness/market/entitlement.ts";
-import { registerMarketProvider, type EntitlementProvider } from "./market_gate.ts";
+import { registerMarketProvider, type CheckoutOptions, type EntitlementProvider, type RedeemResult } from "./market_gate.ts";
 
 export interface FirebaseMarketConfig {
   /** e.g. https://us-central1-lucid-agent.cloudfunctions.net (the deployed functions base). */
@@ -51,11 +51,24 @@ export function makeFirebaseMarketProvider(cfg: FirebaseMarketConfig): Entitleme
       try { return await callable<Entitlement | null>(base, "getEntitlement", token, { packId }); }
       catch { return null; }
     },
-    checkoutUrl: async (packId: string, licensing: PackLicensing) => {
+    checkoutUrl: async (packId: string, licensing: PackLicensing, opts?: CheckoutOptions) => {
       const token = await auth.getIdToken();
       if (!token) return null;
-      try { return (await callable<{ url: string }>(base, "createCheckout", token, { packId, licensing }))?.url ?? null; }
+      // P-WORLDS.STORE1: the Sponsor world pack names its 6 picked worlds; the backend validates them.
+      const data = opts?.picks ? { packId, licensing, picks: [...opts.picks] } : { packId, licensing };
+      try { return (await callable<{ url: string }>(base, "createCheckout", token, data))?.url ?? null; }
       catch { return null; }
+    },
+    // P-WORLDS.STORE1: spend one Sponsor world credit. The callable's own message says why a refusal happened.
+    redeemWorldCredit: async (packId: string): Promise<RedeemResult> => {
+      const token = await auth.getIdToken();
+      if (!token) return { ok: false, error: "Sign in to use a world credit." };
+      try {
+        const r = await callable<{ ok?: unknown; remaining?: unknown } | null>(base, "redeemWorldCredit", token, { packId });
+        return r?.ok === true && typeof r.remaining === "number" ? { ok: true, remaining: r.remaining } : { ok: false, error: "The LUCID store did not confirm the credit." };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error && e.message ? e.message : "The LUCID store could not be reached." };
+      }
     },
     downloadUrl: async (packId: string) => {
       const token = await auth.getIdToken();

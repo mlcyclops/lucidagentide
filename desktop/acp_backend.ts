@@ -46,7 +46,7 @@ import { isLearnableAssistantText } from "./thinking_governance.ts";
 import { recordBlock } from "./security_log.ts";
 import { bunProbeVerdict, OMP_PROBE_TIMEOUT_MS, type OmpResolution, resolveOmpBin, resolveOmpBinAsync } from "./omp_bin.ts"; // one probed omp resolver, shared with dev.ts + agent_run.ts
 import { gatePath, gateRefusal, repoAsset, resolvedRepo } from "./repo_root.ts"; // P-GATE-PATH.1 (ADR-0356): one probed repo root, never import.meta.dir
-import { asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, perCallModelOverlayFile, perCallModelSetting, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
+import { addModelsSeen, asksageOnly, attribution, checkerModel, chosenModel, localProviderPrefixes, judgeFailures, judgmentOverlayFile, judgmentProvider, lastModel, listLocalProviders, load as loadSettings, mcpServersForAcp, modelRolesOverlayFile, modelsSeen, perCallModelOverlayFile, perCallModelSetting, resultWindowOverlayFile, resultWindowSetting, sessionMode, setCheckerModel, setLastModel, voiceSettings } from "./settings_store.ts";
 import { heavyRoleModel, writeModelRolesOverlay } from "./model_roles.ts"; // P-MODEL.8 (ADR-0448)
 import { chatModelContextWindow, resolveResultWindow, spillFromRawOutput, type ResultSpill } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { writeResultWindowOverlay } from "./result_window_overlay.ts";
@@ -65,7 +65,7 @@ import { observeToolCall } from "./repo_probe.ts"; // P-REPO.1 (ADR-0406): which
 import { userTurnedSandboxOff } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { loadGrants, managedPolicyFolderPlan, saveGrants, setPending, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { caps } from "../harness/runs/profiles.ts";
-import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, type ModelOption } from "./checker_model.ts";
+import { recommendCheckerModel, resolveCheckerModel, resolveGovernedModel, withSeenModels, type ModelOption } from "./checker_model.ts";
 import { enclaveHostSet, enclaveProviderSet, isAsksageRouted, isLockdownRoutable, lockdownEgressExempt, LOCKDOWN_SWITCH_FAILED_ERROR } from "./lockdown_route.ts"; // CUI lockdown: AskSage + DGX enclave routes
 import { resolveStartupModel } from "./startup_model.ts"; // P-MODEL.1 (ADR-0250): fresh-session picker default
 import { isLocalModel, providerAllowedOnPlatform, providerPrefixOf } from "./renderer/model_families.ts"; // P-MODEL.6: platform-bound providers
@@ -471,6 +471,9 @@ const CONFIG_WARM_MS = 6000;
 // idle clock (a real turn can legitimately think for minutes).
 const HANDSHAKE_MS = 20_000; // initialize
 const SESSION_MS = 30_000;   // session/new, session/set_config_option
+/** P-ASKLUCID.SPEED1: a warm spare side-completion session older than this is closed and reopened (omp config,
+ *  keys or the workspace may have changed under it). */
+const SPARE_MAX_AGE_MS = 10 * 60_000;
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
@@ -490,10 +493,25 @@ function errText(e: unknown): string {
   return String(e).slice(0, 200);
 }
 
+/** P-ASKLUCID.SPEED1: where a side completion is, for a caller that shows it: behind another one, opening its
+ *  throwaway session, or receiving the answer's first text. */
+export type CompletePhase = "queued" | "starting" | "writing";
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
-/** `images` (P-ASKLUCID.7, ADR-0588): picture blocks that ride after the text, the same ACP shape a
- *  user-attached image uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
-export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal; images?: readonly { data: string; mimeType: string }[] };
+export type CompleteOpts = {
+  idleMs?: number; model?: string; signal?: AbortSignal;
+  /** P-ASKLUCID.7 (ADR-0588): picture blocks that ride after the text, the same ACP shape a user-attached image
+   *  uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
+  images?: readonly { data: string; mimeType: string }[];
+  /** A text-only side completion (Ask Lucid, the buddy ideas) opens its throwaway session with NO MCP servers:
+   *  it never uses tools, and every server (plugin, agent-firewall stdio child) would otherwise be connected or
+   *  spawned for each call. */
+  noMcp?: boolean;
+  onPhase?: (p: CompletePhase) => void;
+  /** P-ASKLUCID.MODEL1: the model to use when omp refuses `model` (e.g. one its list has not loaded yet); clamped
+   *  by lockdown like `model`. `onModel` hears the model the session actually runs on. */
+  fallbackModel?: string;
+  onModel?: (model: string | undefined) => void;
+};
 /** The ACP prompt for a side completion: the text, then any pictures. */
 function completionPrompt(system: string, user: string, opts: CompleteOpts): { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] {
   const images = (opts.images ?? []).filter((im) => !!im?.data && !!im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
@@ -2582,10 +2600,14 @@ class Backend {
 
   // P-GOAL.6 (ADR-0048): the user's accessible models, as the model config reports them (provider-
   // prefixed value + display name). Empty until omp has reported a config.
-  private accessibleModels(): ModelOption[] {
+  private accessibleModels(withSeen = false): ModelOption[] {
     const opt = this.configOptions.find((c) => c?.id === "model");
     const list = Array.isArray(opt?.options) ? opt!.options : [];
     let models = list.filter((o: any) => o?.value).map((o: any) => ({ value: String(o.value), name: o.name, description: o.description }));
+    this.noteSeen(models.map((m: ModelOption) => m.value));
+    // P-ASKLUCID.MODEL1: for a recommendation, add the ids omp offered here before, for providers live now: right
+    // after a start omp lists only its built-in models (Haiku 4.5) while the picker shows Haiku 5.5.
+    if (withSeen) models = withSeenModels(models, this.seenModels());
     // P-MODEL.6: the same platform rule the picker applies (omp's on-device `apple` on darwin only), so the
     // startup default and the checker recommendation can never pick a model the picker would not list.
     models = models.filter((m: ModelOption) => providerAllowedOnPlatform(providerPrefixOf(m.value), process.platform));
@@ -2609,13 +2631,30 @@ class Backend {
     }
     return models;
   }
+  /** P-ASKLUCID.MODEL1: the model ids omp has offered on this machine (settings `modelsSeen`), read once. */
+  private seen: Set<string> | null = null;
+  private seenModels(): Set<string> {
+    this.seen ??= new Set(modelsSeen());
+    return this.seen;
+  }
+  private noteSeen(values: readonly string[]): void {
+    const seen = this.seenModels();
+    const fresh = values.filter((v) => !seen.has(v));
+    if (!fresh.length) return;
+    for (const v of fresh) seen.add(v);
+    try { addModelsSeen(fresh); } catch { /* a settings write failure only costs the memory across restarts */ }
+  }
   /** P-GOAL.6: the CHECKER model picker state for the UI — the user's saved choice, the auto
    *  recommendation, the current (maker) model, and the full accessible list. */
-  checkerModelInfo(): { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[] } {
+  checkerModelInfo(): { selected: string; recommended: string; recommendedWhy: string; current: string; options: ModelOption[]; newest: string } {
     const models = this.accessibleModels();
     const current = this.activeModel();
     const rec = recommendCheckerModel(models, current);
-    return { selected: checkerModel(), recommended: rec?.value ?? current, recommendedWhy: rec?.why ?? "", current, options: models };
+    // P-ASKLUCID.MODEL1: the same pick over every model omp has offered here (providers live now), so a list omp
+    // has not finished loading never downgrades Ask Lucid to an older generation. Callers fall back to
+    // `recommended` when omp refuses it.
+    const newest = recommendCheckerModel(this.accessibleModels(true), current)?.value ?? rec?.value ?? current;
+    return { selected: checkerModel(), recommended: rec?.value ?? current, recommendedWhy: rec?.why ?? "", current, options: models, newest };
   }
   /** P-GOAL.6: persist the checker-model choice ("" = auto/recommended). Returns the refreshed state. */
   setCheckerModelChoice(value: string): ReturnType<Backend["checkerModelInfo"]> {
@@ -2972,6 +3011,8 @@ class Backend {
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.
   private utilLock: Promise<void> = Promise.resolve();
+  /** Side completions queued or running on utilLock (P-ASKLUCID.SPEED1: a new one reports "queued" when > 0). */
+  private utilPending = 0;
   // P-KG-INGEST.3 (ADR-0081): lets background extraction (complete()) yield to a live chat turn on the
   // SHARED connection (the fallback path below). Superseded by the dedicated util connection when available.
   private chatGate = new ChatGate();
@@ -2983,6 +3024,52 @@ class Backend {
   private utilAcp: ACPClient | null = null;
   private utilStarting: Promise<ACPClient | null> | null = null;
   private utilSink: ((text: string) => void) | null = null; // active util completion's text collector
+
+  /** P-ASKLUCID.SPEED1: one fresh, MCP-free throwaway session opened ahead of time on the util connection (model
+   *  already set), so the next text-only completion skips session/new and the model switch: measured 5 to 17 s
+   *  per Ask Lucid answer on a loaded machine. Used once, then closed; never shared, never prompted twice. */
+  private spare: { acp: ACPClient; sid: string; model: string | undefined; cwd: string; at: number } | null = null;
+  private spareWarming: Promise<void> | null = null;
+
+  /** Open the spare for `model` if there is none (or it is stale or for another model). Best effort: a failure
+   *  just means the next completion opens its own session, as before. CUI lockdown pins the model the same way a
+   *  completion does; a refused pin warms nothing. */
+  warmSpare(model: string | undefined): Promise<void> {
+    const pin = this.completionModel(model);
+    if (!pin.ok) return Promise.resolve();
+    const fresh = this.spare && !this.spare.acp.isDead && this.spare.model === pin.model && Date.now() - this.spare.at < SPARE_MAX_AGE_MS;
+    if (fresh || this.spareWarming) return this.spareWarming ?? Promise.resolve();
+    this.spareWarming = (async () => {
+      try {
+        this.dropSpare();
+        const acp = await this.startUtil();
+        if (!acp) return;
+        const cwd = currentWorkspace();
+        const s: any = await acp.request("session/new", { cwd, mcpServers: [] }, { timeoutMs: SESSION_MS });
+        const sid: string | null = s?.sessionId ?? s?.id ?? null;
+        if (!sid) return;
+        if (pin.model) {
+          const ok = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: pin.model }, { timeoutMs: SESSION_MS }).then(() => true, () => false);
+          if (!ok) { acp.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {}); return; }
+        }
+        this.spare = { acp, sid, model: pin.model, cwd, at: Date.now() };
+      } catch { /* the next completion opens its own session */ }
+      finally { this.spareWarming = null; }
+    })();
+    return this.spareWarming;
+  }
+  /** The spare, if it fits this call (same connection, model and workspace, MCP-free, not stale); taken = gone. */
+  private takeSpare(acp: ACPClient, model: string | undefined, noMcp: boolean): string | null {
+    const s = this.spare;
+    if (!s || !noMcp || s.acp !== acp || s.model !== model || s.cwd !== currentWorkspace() || Date.now() - s.at >= SPARE_MAX_AGE_MS) return null;
+    this.spare = null;
+    return s.sid;
+  }
+  private dropSpare(): void {
+    const s = this.spare;
+    this.spare = null;
+    if (s && !s.acp.isDead) s.acp.request("session/close", { sessionId: s.sid }, { timeoutMs: SESSION_MS }).catch(() => {});
+  }
 
   /** Lazily spawn the dedicated util omp. Returns null on spawn failure (→ shared-connection fallback). */
   private async startUtil(): Promise<ACPClient | null> {
@@ -3036,6 +3123,8 @@ class Backend {
    *  the model only ever sees text that already passed the scanner gate, and tool-call events
    *  (if any) are ignored — only assistant text is collected. */
   async complete(system: string, user: string, opts: CompleteOpts = {}): Promise<string> {
+    if (this.utilPending > 0) opts.onPhase?.("queued"); // another side completion holds utilLock
+    this.utilPending++;
     const run = this.utilLock.then(async () => {
       if (opts.signal?.aborted) return "";
       // Hard ceiling for the WHOLE attempt. Every inner await is individually bounded, but this is the
@@ -3053,13 +3142,29 @@ class Backend {
         // P-KG-INGEST.4: prefer the DEDICATED util connection (true concurrency, never touches chat). If it
         // couldn't spawn, fall back to the shared connection with the ChatGate (chat preempts, max 1 extraction).
         const util = await this.startUtil();
-        const inner = { ...opts, model: pin.model, signal: deadline.signal };
+        const fb = opts.fallbackModel && opts.fallbackModel !== opts.model ? this.completionModel(opts.fallbackModel) : null;
+        const inner = { ...opts, model: pin.model, fallbackModel: fb?.ok ? fb.model : undefined, signal: deadline.signal };
         return completionPath(!!util) === "dedicated" ? await this.completeOn(util!, system, user, inner) : await this.completeShared(system, user, inner);
       } catch { return ""; } // start()/startUtil() can now REJECT (timeout); an extraction failure is just "no facts"
       finally { deadline.dispose(); }
     });
     this.utilLock = run.then(() => {}, () => {}); // next complete() waits for this one
+    void this.utilLock.then(() => { this.utilPending--; });
     return run;
+  }
+
+  /** Put a throwaway session on `opts.model`, else (P-ASKLUCID.MODEL1) on `opts.fallbackModel` when omp refuses
+   *  the first, and tell `onModel` which one it runs. False = stop: under CUI lockdown a session omp would leave
+   *  on its default (direct) model is never used. No model asked = omp's default, as before. */
+  private async pinSessionModel(acp: ACPClient, sid: string, opts: CompleteOpts, signal?: AbortSignal): Promise<boolean> {
+    if (!opts.model) { opts.onModel?.(undefined); return true; }
+    const set = (value: string): Promise<boolean> =>
+      acp.request("session/set_config_option", { sessionId: sid, configId: "model", value }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+    if (await set(opts.model)) { opts.onModel?.(opts.model); return true; }
+    if (opts.fallbackModel && (await set(opts.fallbackModel))) { opts.onModel?.(opts.fallbackModel); return true; }
+    if (this.asksageLocked()) return false; // CUI lockdown: never fall back to omp's default (direct) model
+    opts.onModel?.(undefined);
+    return true;
   }
 
   /** Run a completion on the DEDICATED util connection (P-KG-INGEST.4): independent process + sink, so it
@@ -3072,16 +3177,19 @@ class Backend {
     let idle: ReturnType<typeof setTimeout> | undefined;
     let onStall: (e: Error) => void = () => {};
     try {
-      const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
-      sid = s?.sessionId ?? s?.id ?? null;
-      if (!sid) return "";
-      if (opts.model) {
-        const pinned = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
-        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      // P-ASKLUCID.SPEED1: a warm spare (opened ahead, model already set) skips both round trips below.
+      sid = this.takeSpare(acp, opts.model, !!opts.noMcp);
+      if (sid) opts.onModel?.(opts.model);
+      else {
+        opts.onPhase?.("starting");
+        const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: opts.noMcp ? [] : mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
+        sid = s?.sessionId ?? s?.id ?? null;
+        if (!sid) return "";
+        if (!(await this.pinSessionModel(acp, sid, opts, signal))) return "";
       }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-      this.utilSink = (t) => { arm(); text += t; };
+      this.utilSink = (t) => { arm(); if (!text) opts.onPhase?.("writing"); text += t; };
       arm();
       const stall = Promise.withResolvers<never>();
       onStall = stall.reject;
@@ -3116,16 +3224,14 @@ class Backend {
       // Chat preempts extraction here, but a chat turn whose end() never fires must not park us forever:
       // the deadline/cancel signal from complete() releases the wait.
       await whenIdleOrAborted(this.chatGate, signal);
-      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
+      opts.onPhase?.("starting");
+      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: opts.noMcp ? [] : mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
-      if (opts.model) {
-        const pinned = await this.acp!.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
-        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
-      }
+      if (!(await this.pinSessionModel(this.acp!, sid, opts, signal))) return "";
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-      myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
+      myListener = (e: ChatEvent) => { arm(); if (e.type === "token") { if (!text) opts.onPhase?.("writing"); text += e.text; } };
       this.listener = myListener;
       arm();
       const stall = Promise.withResolvers<never>();

@@ -55,6 +55,7 @@ import type { RepoContext } from "./repo_identity.ts";
 import type { CollabToolRecord, CollabTranscriptTurn } from "./collab/frames.ts";
 import { copyTool } from "./collab/turn_journal.ts";
 import { toolChip } from "./renderer/answer_chips.ts";
+import { ranTitle } from "./renderer/fleet_dock_model.ts"; // the `[ran: ...]` title rule the card strips by
 
 /** Closed set. Everything the LED can show; no other values, ever. */
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
@@ -1670,7 +1671,9 @@ export class FleetLaneManager {
             break;
           }
           lane.stepText.tool(); // text after a new call is a new model message
-          if (title && lane.liveTools.length < 40) lane.liveTools.push(title.slice(0, 160));
+          // One line per call: a multi-line title (a heredoc bash command) used to break the `[ran: ...]` block that
+          // readers strip line by line, so every line after it showed as prose instead of tool chips.
+          if (title && lane.liveTools.length < 40) lane.liveTools.push(ranTitle(title));
           trackToolCall(lane.openCalls, u, lane.lastActivityAt); // P-HEALTH.1: this call is now awaited
           this.#deps.repo?.observe(typeof params?.sessionId === "string" ? params.sessionId : lane.sessionId, u, lane.cwd); // P-REPO.1
           // P-FLEET.L3 (mirrors P-CHAT.1): shared extraction handles writes, replacement pairs, and

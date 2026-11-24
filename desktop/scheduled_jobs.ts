@@ -56,6 +56,8 @@ export interface ScheduledJob {
   autoApprove: boolean;
   maxMinutes: number;
   missed: MissedPolicy;
+  /** P-SCHED.AGENT1: a one-time run on a date: the scheduler disarms the job once it acts on that fire. */
+  once?: boolean;
   createdAt: number;
   /** The last fire the scheduler ACTED on (started, skipped, or suspended), as the scheduled instant. */
   lastFireAt?: number;
@@ -75,9 +77,13 @@ export interface JobSpec {
   autoApprove?: boolean;
   maxMinutes?: number;
   missed?: MissedPolicy;
+  once?: boolean;
 }
 
 export const HISTORY_MAX = 50;
+/** P-SCHED.AGENT1: a one-time run is a date and a time, at most this far ahead (cron has no year, so a date more than
+ *  a year out would fire on its earlier anniversary). */
+export const ONCE_MAX_AHEAD_MS = 366 * 86_400_000;
 export const MISSED_GRACE_MS = 2 * 3600_000;
 export const MAX_MINUTES_DEFAULT = 60;
 export const MAX_MINUTES_CAP = 12 * 60;
@@ -107,7 +113,14 @@ export function normalizeJobSpec(raw: unknown): { ok: true; spec: Required<JobSp
   if (!nextFire(cron, new Date())) return { ok: false, reason: `"${cron}" never fires (no such date)` };
   const maxMinutes = Math.min(MAX_MINUTES_CAP, Math.max(1, Math.round(Number(o.maxMinutes ?? MAX_MINUTES_DEFAULT) || MAX_MINUTES_DEFAULT)));
   const missed: MissedPolicy = o.missed === "skip" ? "skip" : "run-once";
-  return { ok: true, spec: { name, prompt, target, cron, armed: o.armed === true, autoApprove: o.autoApprove === true, maxMinutes, missed } };
+  // P-SCHED.AGENT1: a one-time run names one minute of one day of one month (any weekday), within a year.
+  const once = o.once === true;
+  if (once) {
+    if (!/^\d{1,2} \d{1,2} \d{1,2} \d{1,2} \*$/.test(cron)) return { ok: false, reason: "a one-time run needs one date and one time" };
+    const at = nextFire(cron, new Date());
+    if (!at || at.getTime() - Date.now() > ONCE_MAX_AHEAD_MS) return { ok: false, reason: "a one-time run must be within the next year" };
+  }
+  return { ok: true, spec: { name, prompt, target, cron, armed: o.armed === true, autoApprove: o.autoApprove === true, maxMinutes, missed, once } };
 }
 
 /** A lane's repo as the Jobs sheet shows it (JobTarget.repo, display only): the push target's web page, else
@@ -154,10 +167,11 @@ export function dueVerdict(job: ScheduledJob, now: number, graceMs = MISSED_GRAC
   return { due: false, skippedFireAt: latest };
 }
 
-/** PURE: the job after a run (or a skip) has been recorded; history is capped newest-first. */
+/** PURE: the job after a run (or a skip) has been recorded; history is capped newest-first. A one-time job is
+ *  disarmed here, whatever the outcome: its date has been acted on and must not come round again next year. */
 export function withRun(job: ScheduledJob, run: JobRun, fireAt: number): ScheduledJob {
   const history = [run, ...job.history].slice(0, HISTORY_MAX);
-  return { ...job, lastFireAt: fireAt, lastRunAt: run.startedAt, lastOutcome: run.outcome, history };
+  return { ...job, lastFireAt: fireAt, lastRunAt: run.startedAt, lastOutcome: run.outcome, history, ...(job.once ? { armed: false } : {}) };
 }
 
 // ── the store ────────────────────────────────────────────────────────────────────────────────────
@@ -181,7 +195,7 @@ export function loadJobs(): ScheduledJob[] {
     let list: unknown[] = [];
     if (Array.isArray(raw)) list = raw;
     else if (raw && typeof raw === "object" && "jobs" in raw && Array.isArray(raw.jobs)) list = raw.jobs;
-    return list.filter(isJob).map((j) => ({ ...j, history: Array.isArray(j.history) ? j.history : [], armed: j.armed === true, autoApprove: j.autoApprove === true, missed: j.missed === "skip" ? "skip" : "run-once", maxMinutes: Number(j.maxMinutes) || MAX_MINUTES_DEFAULT }));
+    return list.filter(isJob).map((j) => ({ ...j, history: Array.isArray(j.history) ? j.history : [], armed: j.armed === true, autoApprove: j.autoApprove === true, missed: j.missed === "skip" ? "skip" : "run-once", maxMinutes: Number(j.maxMinutes) || MAX_MINUTES_DEFAULT, once: j.once === true }));
   } catch { return []; }
 }
 

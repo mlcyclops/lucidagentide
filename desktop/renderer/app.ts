@@ -58,7 +58,7 @@ import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, eta
 import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
-import { createPluginsFlyout } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
+import { createPluginsFlyout, drawerAnchor } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -70,7 +70,9 @@ import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
 // P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
-import { CURTAIN, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type CurtainDecision, type CurtainEntry, type CurtainProbe, type LaneMini, type PaintStats } from "./preview_curtain.ts";
+import { CURTAIN, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
+import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
+import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -85,7 +87,7 @@ import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannab
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
 import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
 import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
-import { initViz, openVizWorld, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648)
+import { initViz, isOpen as vizIsOpen, openVizAgent, openVizWorld, paintVizPreview, setPendingWorldRestores, setVizPreviewCover, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1; P-PREVIEW.CHIP1
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -139,11 +141,18 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, revealFleetLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
 import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
 import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
+import { folderName, handoffFailure, handoffToast, pendingCopy, planTakeover, sameFolder, startFailure, STOP_FAILED, switchFailure, takeoverQueue, takeoverSheetCopy, worldMissing, type BusyChoice, type MainView, type TakeoverStep } from "./agent_activate.ts"; // P-RAIL.AGENTS1: the Agents rail's Activate choices
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
+import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
+import { BUDDY_SETTINGS_KEY, mountAgentBuddies, readBuddySettings, saveBuddySettings, type AgentBuddies } from "./agent_buddy.ts"; // P-BUDDY.1 (ADR-0667): floating Agent buddies
+import type { BuddyIdea } from "./bridge.ts";
+import { mountSpinupWalkers, type SpinupWalkers } from "./agent_spinup.ts"; // P-SPINUP.1 (ADR-0668): a walking mini Lucid while an agent starts
+import { AGENTS_KEY, baseName, displayNames, laneFolderIds, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
+import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -609,8 +618,13 @@ function buildShell(): void {
         </div>
         <div class="insp-body" id="inspBody"></div>
         <div class="metrics-rail" id="metricsRail">
-          <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+          <div class="rail-head">
+            <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+            <!-- P-RAIL.AGENTS1: flips the rail between the live metrics and your Agents (agents_rail.ts) -->
+            <button class="agr-toggle" id="railAgents" type="button" aria-pressed="false" aria-label="Show Agents" data-tip="Agents|Show your Agents: one Lucid per folder you work in" data-tip-side="bottom">${agentsToggleArt()}</button>
+          </div>
           <div class="rail-tiles" id="railTiles"></div>
+          <div id="railAgentsView" hidden></div>
         </div>
       </aside>
 
@@ -3235,6 +3249,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // (mode + key + lockdown), never a stale client copy.
       // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
       if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
+      // P-RAIL.AGENTS1: Main's folder Agent plays the turn-end ring (a lane turn is caught by the rail's fleet poll).
+      if (!opts.laneId && state.workspace?.current) { agentsRail?.noteTurnEnd(state.workspace.current); agentBuddies?.noteTurnEnd(state.workspace.current); }
     }
   };
   const settle = () => {
@@ -3249,6 +3265,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     scheduleKnowledgeRefresh(); maybeListen();
     // P-TURN-RECOVERY-DRAIN: only a turn that finished releases a held prompt. A deliberate Stop never does
     // (stopHoldsQueue); an interrupted connection waits for reconnect.
+    if (!opts.laneId) void runQueuedTakeover(); // P-RAIL.AGENTS1: "After this turn" runs once Main is idle
     if (terminal) releaseHeldPrompt();
     renderQueued(); // a pill still staged now offers "Send now" instead of pushing into a turn that ended
   };
@@ -3759,6 +3776,244 @@ function snapshotThread(): { role: string; text: string }[] {
   }));
 }
 
+// ── P-RAIL.AGENTS1: the Agents rail's Activate choices ─────────────────────────────────────────────────────────
+// The rail's hover module calls activateAgentFolder and shows `message` when ok is false; nothing here touches the
+// rail. What a takeover does is agent_activate.planTakeover's decision; this runs it against the engine and the
+// composer. Main's work is never dropped: its session goes to a Fleet lane, and a busy Main asks first.
+
+type ActivateResult = { ok: boolean; message?: string };
+/** "After this turn": the folder Main opens once its turn ends, the quiet status that says so, and the backstop check
+ *  (a /goal loop or an adopted turn settles outside renderChatTurn's done). */
+interface QueuedTakeover { folder: string; name: string; dismiss: () => void; timer: number }
+const takeovers = takeoverQueue<QueuedTakeover>();
+let takeoverRunning = false;
+/** P-SPINUP.1 (ADR-0668): the folder a running takeover moves Main to (its walker wears that Agent's name). */
+let takeoverFolder: string | null = null;
+
+/** Take over main composer / Start new Fleet session / Agent World session, for the Agent `name` on `folder`. */
+async function activateAgentFolder(kind: "takeover" | "fleet" | "world", folder: string, name: string): Promise<ActivateResult> {
+  const label = name.trim() || folderName(folder);
+  // A real move is announced by the workspace switch itself ("Workspace set"); takeOver says it is moving at once.
+  if (kind === "takeover") return takeOver(folder, label, null);
+  // Fleet and world both start a lane in the background (never promoted); a refusal carries the engine's reason.
+  // A real agent takes a while to load (the engine answers the spawn only after its handshake), so the user sees the
+  // lane at once: the engine lists it as "starting" as soon as it registers, and that is shown while it loads.
+  // Nothing is awaited before this feedback: the engine can be slow to answer while other agents load.
+  const pending = showToast({
+    tone: "info", title: kind === "fleet" ? `Starting ${label} in the Fleet` : `Starting ${label} in Agent Worlds`,
+    desc: kind === "fleet" ? "The agent is loading. Its card appears now; it takes prompts as soon as it is ready."
+      : "The agent is loading. It appears in Agent Worlds with its prompt panel; it takes prompts as soon as it is ready.", timeout: 0,
+  });
+  if (kind === "fleet") openFleetGrid(); else if (!vizIsOpen()) toggleViz();
+  const spawn = bridge.fleetSpawn({ cwd: folder, name: label }).catch(() => null);
+  let settled = false;
+  void spawn.finally(() => { settled = true; });
+  let early: string | null = null;
+  while (!settled && !early) {
+    const lanes = (await bridge.fleetStatus().catch(() => null))?.lanes ?? [];
+    // ours: the lane still starting in this folder (the engine registers it before its slow handshake)
+    early = lanes.find((l) => l.status === "starting" && sameFolder(l.cwd, folder))?.id ?? null;
+    if (!early) { const t = Promise.withResolvers<void>(); window.setTimeout(t.resolve, 700); await t.promise; }
+  }
+  if (early) { if (kind === "fleet") void revealFleetLane(early, false); else void openVizAgent(early, 20_000); }
+  const r = await spawn;
+  if (!r?.ok || !r.lane) { pending(); return { ok: false, message: startFailure(r?.reason) }; }
+  if (kind === "fleet") {
+    await revealFleetLane(r.lane.id);
+    pending();
+    showToast({ tone: "ok", title: `${r.lane.name} is ready`, desc: "Type its first prompt in its card.", timeout: 5000 });
+    return { ok: true };
+  }
+  // The loading note stays until the agent stands in Agent Worlds (the fleet poll behind it can lag a busy engine).
+  const shown = await openVizAgent(r.lane.id, 45_000);
+  pending();
+  if (shown) showToast({ tone: "ok", title: `${r.lane.name} is ready in Agent Worlds`, desc: "Its prompt panel is open.", timeout: 5000 });
+  return shown ? { ok: true } : { ok: false, message: worldMissing(r.lane.name) };
+}
+
+/** What Main is doing, from the engine when it answers (busy + session id), else from this composer. */
+async function readMainView(): Promise<MainView> {
+  const st = await bridge.sessionBusy().catch(() => null);
+  return {
+    folder: state.workspace?.current ?? null,
+    busy: st ? !!st.busy : state.streaming && !isLaneTarget(state.composerTarget),
+    // The engine's id; when Main's child has not loaded one yet, the conversation on screen (the active sidebar row).
+    sessionId: st?.sessionId || (($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null),
+    hasWork: $$("#thread .msg").length > 0,
+    prompt: state.lastPrompt,
+  };
+}
+
+async function takeOver(folder: string, name: string, choice: BusyChoice | null): Promise<ActivateResult> {
+  if (takeoverRunning) return { ok: false, message: "A takeover is already moving Main. Try again in a moment." };
+  if (isLaneTarget(state.composerTarget)) demoteLane(); // "main composer" is Main's: leave an attached lane first
+  // Reading Main can take seconds while its agent is busy: acknowledge the click at once.
+  const reading = sameFolder(state.workspace?.current, folder) ? () => {} : showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Checking what Main is doing first.", timeout: 0 });
+  const main = await readMainView().finally(reading);
+  const plan = planTakeover(main, folder, choice);
+  if (plan.kind === "none") return { ok: true };
+  // Planned again with the answer and a fresh view: a turn that ended while the sheet was open just hands off.
+  if (plan.kind === "ask") return takeOver(folder, name, await askTakeover(main.folder ? folderName(main.folder) : "this folder", name));
+  if (plan.kind === "queue") { queueTakeover(folder, name); return { ok: true }; }
+  dropQueuedTakeover(); // this takeover supersedes one waiting for the turn
+  takeoverRunning = true;
+  takeoverFolder = folder;
+  spinup?.sync(); // P-SPINUP.1: the target Agent walks over the composer while Main moves
+  // Moving Main restarts its agent in the new folder (several seconds with a real model): say so at once.
+  const moving = showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Main's agent is restarting in this folder. The composer is ready when this note goes away.", timeout: 0 });
+  try { return await runTakeover(plan.steps, main, folder, name); }
+  finally { takeoverRunning = false; takeoverFolder = null; moving(); spinup?.sync(); }
+}
+
+async function runTakeover(steps: readonly TakeoverStep[], main: MainView, folder: string, toName: string): Promise<ActivateResult> {
+  const from = main.folder ?? "";
+  const fromName = from ? folderName(from) : "the previous folder";
+  const prompt = main.prompt.trim();
+  const info = cachedSessionInfo(main.sessionId);
+  const model = info?.model || state.model || state.config.find((c) => c.id === "model")?.currentValue || "";
+  let lane: LaneView | null = null;
+  let staged: boolean | null = null, stageReason: string | undefined;
+  let stopped = false;
+  for (const step of steps) {
+    if (step === "stop-main") {
+      if (!(await stopMainTurn())) return { ok: false, message: STOP_FAILED };
+      stopped = true;
+    } else if (step === "switch-main") {
+      // FIRST, so Main lets go of its session before a lane loads it: one session, one omp process (P-SWITCH.1).
+      await applyWorkspace(folder);
+      const ws = sameFolder(state.workspace?.current, folder) ? state.workspace : await bridge.workspace().catch(() => null);
+      if (!sameFolder(ws?.current, folder)) {
+        const back = stopped && !!prompt && !composerHasDraft();
+        if (back) { const ta = $("#input") as HTMLTextAreaElement; ta.value = prompt; autosize(ta); setSendEnabled(); }
+        return { ok: false, message: switchFailure(toName, back) };
+      }
+    } else if (step === "spawn-lane") {
+      if (!from) continue;
+      const r = await bridge.fleetSpawn({
+        cwd: from,
+        name: spokeNameFor(info?.title ?? fromName),
+        ...(model ? { model } : {}),
+        ...(main.sessionId ? { sessionId: main.sessionId } : {}),
+      }).catch(() => null);
+      if (!r?.ok || !r.lane) return { ok: false, message: handoffFailure(fromName, toName, r?.reason) };
+      lane = r.lane;
+    } else if (step === "stage-prompt") {
+      if (!lane) continue;
+      // Staged, not sent: the lane manager runs no turn where nobody can see it, so the Fleet dock opens and drains it.
+      const q = await bridge.fleetQueueAdd(lane.id, prompt).catch(() => null);
+      staged = !!q?.ok; stageReason = q?.reason;
+      void revealFleetLane(lane.id, false);
+    } else {
+      const input = $("#input") as HTMLTextAreaElement | null;
+      // "Take over main composer" lands the user in Main's composer: a floating Fleet dock lying over it is put away
+      // (its pill brings it back), so the focused composer is also the visible one.
+      const dock = $("#fleetDock") as HTMLElement | null;
+      if (input && dock && fleetGridState() === "shown") {
+        const a = input.getBoundingClientRect(), b = dock.getBoundingClientRect();
+        if (Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)) closeFleetGrid();
+      }
+      input?.focus();
+    }
+  }
+  if (lane) {
+    const shown = lane;
+    const t = handoffToast(fromName, toName, shown.name, staged, stageReason);
+    showToast({ tone: staged === false ? "warn" : "ok", title: t.title, desc: t.desc, actions: [{ label: "Show lane", run: () => void revealFleetLane(shown.id) }, { label: "OK" }], timeout: 9000 });
+  }
+  return { ok: true };
+}
+
+/** Move it now: end Main's turn through the Stop path, then wait (about 10 s at most) until the engine says idle. */
+async function stopMainTurn(): Promise<boolean> {
+  if (state.streaming && !isLaneTarget(state.composerTarget)) await stopTurn();
+  else await bridge.cancelChat().catch(() => null); // a turn this composer is not showing (a goal loop, a re-adopt)
+  for (let i = 0; i < 40; i++) {
+    const st = await bridge.sessionBusy().catch(() => null);
+    if (st && !st.busy) return true;
+    const tick = Promise.withResolvers<void>();
+    window.setTimeout(tick.resolve, 250);
+    await tick.promise;
+  }
+  return false;
+}
+
+/** The busy confirm, docked above the composer in the session-switch sheet's place and markup (it can stop work, so
+ *  it never times out and an outside click never answers it). Esc, Stay here, or another sheet replacing it = stay. */
+function askTakeover(fromName: string, toName: string): Promise<BusyChoice> {
+  const { promise, resolve } = Promise.withResolvers<BusyChoice>();
+  closeSwitchSheet();
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) { resolve("stay"); return promise; }
+  const copy = takeoverSheetCopy(fromName, toName);
+  const node = el(`<div id="switchSheet" role="alertdialog" aria-label="Main is still working">
+    <div class="perm perm-egress">
+      <div class="perm-eg-head">${icon("clock", 13)}<span class="switch-title"></span></div>
+      <div class="switch-body"></div>
+      <div class="perm-actions perm-actions-col">
+        <button class="perm-btn eg-allow" data-takeover="after"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn eg-block" data-takeover="now"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn" data-takeover="stay"></button>
+      </div>
+    </div>
+  </div>`);
+  ($(".switch-title", node) as HTMLElement).textContent = copy.title;
+  ($(".switch-body", node) as HTMLElement).textContent = copy.body;
+  ($('[data-takeover="after"] .switch-label', node) as HTMLElement).textContent = copy.after;
+  ($('[data-takeover="after"] .switch-hint', node) as HTMLElement).textContent = copy.afterHint;
+  ($('[data-takeover="now"] .switch-label', node) as HTMLElement).textContent = copy.now;
+  ($('[data-takeover="now"] .switch-hint', node) as HTMLElement).textContent = copy.nowHint;
+  ($('[data-takeover="stay"]', node) as HTMLElement).textContent = copy.stay;
+  let answered = false;
+  const gone = new MutationObserver(() => { if (!node.isConnected) finish("stay"); });
+  function finish(choice: BusyChoice): void {
+    if (answered) return;
+    answered = true;
+    gone.disconnect();
+    if (switchSheet === node) closeSwitchSheet();
+    resolve(choice);
+  }
+  node.addEventListener("click", (ev) => {
+    const c = ((ev.target as HTMLElement).closest("[data-takeover]") as HTMLElement | null)?.dataset.takeover;
+    if (c === "after" || c === "now" || c === "stay") finish(c);
+  });
+  (wrap.querySelector(".composer-row") ?? wrap.firstElementChild)?.before(node);
+  gone.observe(wrap, { childList: true, subtree: true });
+  switchSheet = node;
+  document.addEventListener("keydown", onSwitchSheetKey, true); // Esc closes it like the switch sheet
+  ($('[data-takeover="after"]', node) as HTMLButtonElement).focus(); // Enter takes the choice that stops nothing
+  return promise;
+}
+
+function queueTakeover(folder: string, name: string): void {
+  const copy = pendingCopy(name);
+  const job: QueuedTakeover = { folder, name, dismiss: () => undefined, timer: 0 };
+  job.dismiss = showToast({ tone: "info", title: copy.title, desc: copy.desc, actions: [{ label: "Cancel handoff", run: () => { if (takeovers.pending() === job) dropQueuedTakeover(); } }] });
+  job.timer = window.setInterval(() => void runQueuedTakeover(), 3000);
+  const was = takeovers.queue(job);
+  if (was) endQueuedTakeover(was);
+}
+
+function endQueuedTakeover(job: QueuedTakeover): void {
+  window.clearInterval(job.timer);
+  job.dismiss();
+}
+
+function dropQueuedTakeover(): void {
+  const was = takeovers.cancel();
+  if (was) endQueuedTakeover(was);
+}
+
+/** Main's turn ended (renderChatTurn's settle, or the backstop): run the queued handoff once Main is idle. */
+async function runQueuedTakeover(): Promise<void> {
+  if (!takeovers.pending() || takeoverRunning) return;
+  const st = await bridge.sessionBusy().catch(() => null);
+  const job = takeovers.onTurnEnd(st ? !!st.busy : state.streaming);
+  if (!job) return;
+  endQueuedTakeover(job);
+  const r = await takeOver(job.folder, job.name, null);
+  if (!r.ok && r.message) showToast({ tone: "warn", title: "The handoff did not finish", desc: r.message, actions: [{ label: "OK" }], timeout: 9000 });
+}
+
 /** P-FLEET.L8: attach the composer to a running lane. */
 async function promoteLane(laneId: string): Promise<void> {
   // Identity is the laneId alone (a lane may be renamed, cd, or swap models without becoming a different
@@ -3972,6 +4227,7 @@ function onLaneWatchEvent(e: LaneEvent): void {
   if (e.type === "done") {
     settleLaneWatchNode();
     releaseHeldPrompt();
+    if (isLaneTarget(state.composerTarget)) { agentsRail?.noteTurnEnd(state.composerTarget.cwd); agentBuddies?.noteTurnEnd(state.composerTarget.cwd); } // P-RAIL.AGENTS1: the lane's Agent rings now, not at the next poll
   }
 }
 
@@ -4302,7 +4558,13 @@ function renderMetricsRail(): void {
     { n: fmtNum(avg), label: "avg/turn", cls: "c", tip: "Average tokens per turn" },
     { n: fmtNum(cur), label: "context", cls: "b", tip: "Context tokens in use this turn" },
     { n: String(turns), label: "turns", cls: "b2", tip: "Agent turns in this session" },
-    ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
+    // P-PERF.IDLE1: LUCID runs no git until asked. The tile shows the last count (kept across restarts) and a click
+    // recounts; before any count it offers one.
+    linesCounting
+      ? { n: "...", label: "lines", cls: "g", tip: "Counting this month's workspace lines with git. This runs only because you asked." }
+      : ca && (ca.totals.files > 0 || ca.countedAt)
+        ? { n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.${ca.countedAt ? ` Counted ${relTime(Date.parse(ca.countedAt))}.` : ""} Click to recount with git.` }
+        : { n: "count", label: "lines", cls: "g", tip: "Workspace lines this month. LUCID does not run git until you ask, so nothing is counted yet. Click to count with git." },
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
     // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
@@ -4334,12 +4596,24 @@ function renderMetricsRail(): void {
     return `<div class="${cl}"${tip} data-tile="${esc(t.label)}"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
   }).join("");
   railPrimed = true;
+  const linesEl = tiles.querySelector('[data-tile="lines"]') as HTMLElement | null;
+  if (linesEl) { linesEl.style.cursor = "pointer"; linesEl.addEventListener("click", () => { void countCodeActivity(); }); }
   const jobsEl = tiles.querySelector('[data-tile="jobs"]') as HTMLElement | null;
   if (jobsEl && state.jobs) {
     attachRichTip(jobsEl, jobsHoverHtml(state.jobs, Date.now()));
     jobsEl.style.cursor = "pointer";
     jobsEl.addEventListener("click", () => { void openJobsSheet(); });
   }
+}
+
+// P-PERF.IDLE1: the one place the renderer asks the engine to run git for code activity (the lines tile click).
+let linesCounting = false;
+async function countCodeActivity(): Promise<void> {
+  if (linesCounting) return;
+  linesCounting = true; renderMetricsRail();
+  try { const ca = await bridge.codeActivity(true); if (ca) state.codeActivity = ca; }
+  catch { /* keep the last numbers */ }
+  finally { linesCounting = false; renderMetricsRail(); renderInspector(); }
 }
 
 // ── P-SCHED.1/.2 (ADR-0443): scheduled lane jobs - the rail's data, the sheet ─────────────────────────
@@ -4434,10 +4708,69 @@ async function openJobsSheet(): Promise<void> {
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
 }
+/** P-RAIL.AGENTS1: the rail's Agents view (agents_rail.ts), mounted at init. */
+let agentsRail: AgentsRail | null = null;
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddies (agent_buddy.ts), mounted at init after the rail. */
+let agentBuddies: AgentBuddies | null = null;
+/** P-SPINUP.1 (ADR-0668): the spin-up walkers (agent_spinup.ts), mounted at init after the buddies. */
+let spinup: SpinupWalkers | null = null;
+/** P-SPINUP.1: the startup recovery is restoring the previous session (its "Restoring your previous session" note). */
+let restoringSession = false;
+/** P-SPINUP.1: the boot standby counts as Main spinning up only this long (an offline boot never ends it). */
+const BOOT_SPIN_MAX_MS = 120_000;
+let bootSpinDone = false;
+let spinNamesRaw: string | null | undefined;
+let spinNames = new Map<string, string>();
+/** The Agents rail's display name for `folder` (its record, else its main checkout's), else its base name. */
+function agentDisplayName(folder: string): string {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(AGENTS_KEY); } catch { /* storage off: the base name */ }
+  if (raw !== spinNamesRaw) { spinNamesRaw = raw; spinNames = displayNames(loadAgentsDoc(raw).agents); }
+  for (const id of laneFolderIds(folder)) { const n = spinNames.get(id); if (n) return n; }
+  return baseName(folder) || "Lucid";
+}
+/** P-SPINUP.1: Main is spinning up (who is arriving), or null: a takeover moving Main (the TARGET's name), the boot
+ *  standby (net_monitor: engine, network, models, settings still pending; once it ends it never counts again), the
+ *  startup session restore. The boot ends early when Main's first model-list warm cycle ends (loadConfig). */
+function mainSpinup(): { name: string; folder: string | null } | null {
+  if (takeoverRunning && takeoverFolder) return { name: agentDisplayName(takeoverFolder), folder: takeoverFolder };
+  if (!bootSpinDone && (!netBooting() || Date.now() - windowOpenedAt > BOOT_SPIN_MAX_MS)) bootSpinDone = true;
+  // Not `state.configWarming`: the picker re-polls the model list on later loads too (every cycle when an agent
+  // never reports models), and a walker arriving every few seconds would say Main is starting when it is not.
+  if (bootSpinDone && !restoringSession) return null;
+  // Wait for the folder (a fraction of a second at boot) so the bubble names the Agent from its first line.
+  const folder = state.workspace?.current ?? null;
+  return folder ? { name: agentDisplayName(folder), folder } : null;
+}
+/** P-BUDDY.1 (ADR-0667): a buddy's idea runs in a NEW worktree lane of its folder (Push now's path), the idea's
+ *  prompt as that lane's first turn. The user hears it at once, before the engine is asked anything. */
+async function runBuddyIdea(folder: string, idea: BuddyIdea, name: string): Promise<void> {
+  const main = sameFolder(state.workspace?.current, folder);
+  const src: PushSource = main
+    ? { kind: "master", name: "main", cwd: folder, model: state.model || state.config.find((c) => c.id === "model")?.currentValue || "" }
+    : { kind: "lane", name, cwd: folder, model: "" };
+  const busy = main && state.streaming && !isLaneTarget(state.composerTarget);
+  let dismiss = showToast({ tone: "info", title: `Starting a worktree agent for ${name}`, desc: idea.title, timeout: 0 });
+  const r = await pushToNewLane(src, idea.prompt, [], {
+    announce: (lane) => {
+      dismiss();
+      const n = parallelPushNotice(src, lane, { busy });
+      dismiss = showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 0 });
+    },
+  });
+  dismiss();
+  if (r.ok) {
+    const n = parallelPushNotice(src, r.name, { busy, branch: r.branch });
+    showToast({ tone: "ok", title: n.title, desc: n.desc, timeout: 9000 });
+    return;
+  }
+  const why = r.code === "no-repo" ? "This folder is not a git repository, so there is no worktree to give a parallel agent." : r.reason;
+  showToast({ tone: "warn", title: `${name}: the worktree agent did not start`, desc: why, timeout: 9000 });
+}
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
-  if (rail) { renderMetricsRail(); return; }
+  if (rail) { renderMetricsRail(); agentsRail?.sync(); return; }
   // ADR-0021: expanding from rail → if active blocks exist, override to Security tab
   if (hasActiveBlocks() && state.inspectorTab !== "security") {
     focusInspector("security");
@@ -4832,7 +5165,9 @@ function runOnboarding(): void {
   const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
   const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
-  void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+  // P-RAIL.AGENTS1: no role yet = this install's first run, so the rail lands on Agents (unless a view was
+  // already chosen). Existing installs keep Metrics until they flip the toggle.
+  void promptForRole().then(() => { agentsRail?.adoptFirstRunDefault(); promptForEmailIfMissing(afterEmail); });
 }
 
 // P-PROV.2: first-run "connect a provider" step.
@@ -5069,7 +5404,14 @@ function syncImmersiveWithRole(role: UserRole | null): void {
 let askLucidPanel: AskLucidHandle | null = null;
 function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
-    ask: (text, history, extras) => bridge.askLucid(text, history, extras),
+    ask: (text, history, extras, onPhase) => bridge.askLucid(text, history, extras, onPhase),
+    warm: () => { void bridge.askLucidWarm(); },
+    // P-ASKLUCID.SPEED1: the waiting line and the answer name the model the way the picker does.
+    // The answer carries the bare id ("claude-haiku-4-5"), the phase the provider-prefixed one: match either.
+    modelName: (id) => {
+      const opt = state.config.find((c) => c.id === "model")?.options.find((o) => o.value === id || o.value.endsWith(`/${id}`));
+      return opt ? cleanModelName(opt.name) : modelLabel(id);
+    },
     screen: readScreenForLucid,
     shot: shotForLucid,
     recSignals: recSignalsForLucid,
@@ -5082,6 +5424,7 @@ function askLucid(): AskLucidHandle {
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
     zoomOf: "#app",
+    rightOf: "#inspector", // P-ASKLUCID.SPEED1b: fly out left of the right rail, over the page and its popups
     runAction: runAskAction,
     // P-ASKLUCID.9 (ADR-0600): the Edit image card's models (remembered choice in localStorage), the Providers
     // jump, and where an edited image opens.
@@ -5105,6 +5448,7 @@ let lastFleetLanes = 0;
 let lastOrbitGoal = false;
 let lastKnowledge = false;
 let lastAutoArchive = false;
+let autoArchiveKnown = false; // P-ASKLUCID.SPEED1: never tell Lucid a value the engine has not answered yet
 const FEATURE_SAMPLE_MS = 60_000;
 
 function readSeenFeatures(): string[] {
@@ -5136,8 +5480,11 @@ function featureRecsForLucid(): Rec[] {
  *  may propose changing, and the ids of the features this user has not used. The engine keeps only known
  *  keys, accepted values and catalog ids. */
 async function extrasForLucid(): Promise<AskExtrasView> {
-  const [arch, win] = await Promise.all([bridge.archivePolicy().catch(() => null), bridge.resultWindow().catch(() => null)]);
-  lastAutoArchive = !!arch?.policy.auto;
+  // P-ASKLUCID.SPEED1: these two engine reads are settings context, not the question: on a busy engine they took
+  // 3.6 s and the question waited for them. Each gets 1.2 s; a late one leaves its last known value (or none).
+  const within = <T,>(p: Promise<T>): Promise<T | null> => Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 1200))]);
+  const [arch, win] = await Promise.all([within(bridge.archivePolicy()), within(bridge.resultWindow())]);
+  if (arch) { lastAutoArchive = !!arch.policy.auto; autoArchiveKnown = true; }
   const prefs = seasonPrefs();
   const settings: Record<string, string> = {
     "season.follow": prefs.auto ? "on" : "off",
@@ -5145,7 +5492,7 @@ async function extrasForLucid(): Promise<AskExtrasView> {
     "theme": themePref() || "default",
     "mini.presence": readPresence(miniStore()),
     "suggest.enabled": suggestEnabled(miniStore()) ? "on" : "off",
-    "sessions.autoArchive": lastAutoArchive ? "on" : "off",
+    ...(autoArchiveKnown ? { "sessions.autoArchive": lastAutoArchive ? "on" : "off" } : {}),
   };
   if (win && (win.setting === "auto" || typeof win.setting === "number")) settings["toolOutput.window"] = String(win.setting);
   return { settings, unusedFeatures: unusedFeaturesForLucid().map((f) => f.id) };
@@ -5186,6 +5533,7 @@ async function applyAskSetting(key: AskSettingKey, value: string): Promise<AskAc
     const next = await bridge.archivePolicy({ ...cur.policy, auto: value === "on" }).catch(() => null);
     if (!next) return refused("The archive rule could not be saved.");
     lastAutoArchive = next.policy.auto;
+    autoArchiveKnown = true;
     return done;
   }
   const saved = await bridge.setResultWindow(value === "auto" ? "auto" : Number(value)).catch(() => null);
@@ -6461,6 +6809,20 @@ function secMiniLucid(): string {
   return setCard("miniLucid", "Mini Lucid", "show · off · sometimes · always · size · suggestions · sight", `${miniLucidCardHtml(readPresence(store), esc, icon("info", 12), readMascotSize(store), readMascotHidden(store))}\n    ${suggestToggleHtml(suggestEnabled(store))}\n    ${pictureToggleHtml(pictureEnabled(store))}`, true);
 }
 
+// ── P-BUDDY.1 (ADR-0667): Settings -> Floating Agents ───────────────────────────────────────────────
+// The buddies over the composers and in Agent Worlds, and whether they fetch ideas on their own after a turn.
+// Rendered from localStorage (agent_buddy.ts), no fetch; a change applies live through agentBuddies.sync().
+function secFloatingAgents(): string {
+  const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+  const inner = `
+    <label class="set-toggle"><input type="checkbox" id="buddyShow" ${s.show ? "checked" : ""}/>
+      <span><b>Show floating Agents</b> - a small Agent in its folder's color floats over the main composer, each Fleet card and each agent in Agent Worlds. Drag it anywhere; a double-click puts it back. Click it for ideas.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="buddyAuto" ${s.auto ? "checked" : ""}/>
+      <span><b>Suggest ideas after each turn</b> - when an agent finishes a turn, its buddy asks for a few ideas on its own, at most every 3 minutes per agent.</span></label>
+    <div class="set-note">${icon("info", 12)} Ideas come from a smaller model and cost a little each time they are made.</div>`;
+  return setCard("floatingAgents", "Floating Agents", "buddies · ideas after each turn", inner, true);
+}
+
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
 // A tile grid of every registered theme, plus a synthetic "Match system" tile that CLEARS the stored
 // choice (data-theme="") rather than selecting a theme, so "follow the OS" stays a real state and not a
@@ -6845,6 +7207,7 @@ const SET_SHELL: Record<SettingsSecId, () => string> = {
   chatScroll: () => secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
   workingStatus: () => secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
   miniLucid: () => secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
+  floatingAgents: () => secFloatingAgents(), // P-BUDDY.1 (ADR-0667): the floating Agent buddies
   trivia: () => secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
   settingsLayout: () => secSettingsLayout(),
   developer: () => setSkel("developer", "Developer", "logs · diagnostics", true),
@@ -10174,8 +10537,32 @@ let previewOpen = false;
 let agentPreviewRevision = 0;
 let pendingAgentPreviewPath = "";
 const dismissedAgentPreviews = new Set<string>();
+// P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies OVER it (#preview.over-viz, z 94, one above
+// .viz-view) with its resize edge and saved width; Visualize keeps running behind it and stops being modal. The
+// Agent Worlds chip that opened it gets focus back when it slides away.
+let previewOverViz = false;
+let previewReturn: HTMLElement | null = null;
+/** The slide-back in flight (closePreview over Visualize); a reopen cuts it short. */
+let previewLeaveTimer = 0;
+/** Raise the open panel over Visualize, or let it down. The class stays through a slide-back (endPreviewLeave). */
+function syncPreviewCover(): void {
+  const over = previewOpen && vizIsOpen();
+  if (over !== previewOverViz) { previewOverViz = over; setVizPreviewCover(over); }
+  if (!previewLeaveTimer) $("#preview")?.classList.toggle("over-viz", over);
+}
+/** End a slide-back now: the panel hides unless it is open again, and its leave and layer classes go. */
+function endPreviewLeave(): void {
+  if (!previewLeaveTimer) return;
+  window.clearTimeout(previewLeaveTimer);
+  previewLeaveTimer = 0;
+  const panel = $("#preview");
+  if (!panel) return;
+  panel.classList.remove("pchip-leave", "pchip-calm", "over-viz");
+  if (!previewOpen) panel.hidden = true;
+}
 function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
+  endPreviewLeave(); // P-PREVIEW.CHIP1: a slide-back still running is cut short; the panel is wanted again
   closeSettings();
   closeIde();
   closeKnowledge();
@@ -10199,6 +10586,7 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   // P-PREVIEW-CURTAIN.1: the panel is open, so every ready invitation is now a tab in front of the user.
   curtainEntries = curtainEntries.filter((e) => e.phase !== "ready");
   paintCurtainChip();
+  syncPreviewCover(); // P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies out over it
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
@@ -10312,7 +10700,9 @@ function openPreviewFile(path: string): void {
   loadPreview(path, "yours");
 }
 function closePreview(): void {
-  if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
+  // P-PLUGINS.1: another right-edge surface opening (this runs then) or the Preview panel it sits beside closing
+  // also closes the drawer. P-WORLDS.STORE1: the drawer no longer opens Preview to anchor itself.
+  if (document.querySelector(".plg-layer")) pluginsFlyout.close();
   closeArcadeMenu?.();
   setPreviewPan(false);
   // P-PREVIEW-CURTAIN.1 (ADR-0621): closing no longer dismisses the agent's document or cancels its pending
@@ -10326,8 +10716,24 @@ function closePreview(): void {
   // P-PREVIEW.6b. P-PREVIEW-CURTAIN.1: the agent's page now lives behind the curtain with the panel closed,
   // so its preview_inspect keeps working while the Agent tab holds one.
   if (!prevPathByLane.agent) stopPreviewInspectRelay();
-  $("#preview")!.hidden = true;
-  $("#preview")!.classList.remove("pcur-swing", "pcur-calm");
+  const panel = $("#preview")!;
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  // P-PREVIEW.CHIP1: over Visualize the panel slides back into the chip that opened it (still over the world until
+  // it is gone, and deaf to the pointer meanwhile), then focus goes back to that chip.
+  const back = previewOverViz ? previewReturn : null;
+  previewReturn = null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (previewOverViz && motion !== "still") {
+    const o = swingOrigin(back?.isConnected ? back.getBoundingClientRect() : null, panel.getBoundingClientRect());
+    panel.style.setProperty("--pchip-ox", `${o.x}px`);
+    panel.style.setProperty("--pchip-oy", `${o.y}px`);
+    panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
+    panel.classList.add("pchip-leave");
+    if (motion === "calm") panel.classList.add("pchip-calm");
+    previewLeaveTimer = window.setTimeout(endPreviewLeave, CURTAIN.swingMs);
+  } else panel.hidden = true;
+  syncPreviewCover();
+  if (back) window.setTimeout(() => { if (!previewOpen && back.isConnected && !back.hidden) back.focus({ preventScroll: true }); }, 0);
   paintCurtainChip(); // a page still loading behind the curtain shows its chip again
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
@@ -10389,6 +10795,7 @@ function onPreviewAvailable(path: string, opts: { open?: boolean } = {}): void {
     state.lastPreviewablePath = path;
     schedulePhoneAutoSend(path);
     kickPreviewShotSoon();
+    recordCurtainLaneShot("agent", path, r); // P-LANESHOTS.1: the main composer's picture while its tab is hidden
     startPreviewInspectRelay(); // the agent can still preview_inspect its page before the user opens it
     curtainReady("agent", path, r, opts.open === true);
   });
@@ -10501,24 +10908,29 @@ function curtainProbeFrame(path: string, p: CurtainProbe, timers: number[], isLi
   return f;
 }
 
-/** A gate started: the chip (and the lane's mini chip) shows the loading curtain. */
+/** A gate started: the composer chip (and the target's own chip: a lane's card, spoke and Worlds node, or Main's
+ *  Worlds hub) shows the loading curtain. */
 function curtainBegin(key: string, path: string): void {
   curtainEntries = upsertCurtain(curtainEntries, { key, path, label: curtainLabel(path), seq: ++curtainSeq });
-  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "loading", label: curtainLabel(path) });
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "loading", label: curtainLabel(path), path });
   paintCurtainChip();
 }
 /** A blank or failed page (or a superseded one): retire quietly. One dev-log line, no toast, no panel. */
 function curtainRetire(key: string, path: string, r: CurtainResult | null): void {
   const had = curtainEntries.some((e) => e.key === key && e.path === path);
   curtainEntries = settleCurtain(curtainEntries, key, path, "error");
-  if (had && key.startsWith("lane:")) setLaneMini(key.slice(5), null);
+  const target = chipTarget(key);
+  if (had && target) setTargetChip(target, null);
   if (r) console.info(`[preview-curtain] ${key} ${curtainLabel(path)}: ${r.verdict} (${r.reason}); not shown`);
   paintCurtainChip();
 }
 /** A page that renders: with the panel closed the chip turns into the invitation; with it open the tab is
- *  already there (badged), so the chip has nothing to add. `open` swings straight out. */
+ *  already there (badged), so the chip has nothing to add. `open` swings straight out. The target's own chip
+ *  stays ready either way: it is how that agent's page is reached again. */
 function curtainReady(key: string, path: string, r: CurtainResult, open: boolean): void {
-  if (key.startsWith("lane:")) setLaneMini(key.slice(5), { phase: "ready", label: r.title || curtainLabel(path) });
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "ready", label: curtainLabel(path), path, ...(r.title ? { title: r.title } : {}), ...(r.thumb ? { thumb: r.thumb } : {}) });
   if (open || previewOpen) {
     const chip = $("#prevCurtainChip") as HTMLElement | null;
     const from = chip && !chip.closest("[hidden]") ? chip : null;
@@ -10530,26 +10942,29 @@ function curtainReady(key: string, path: string, r: CurtainResult, open: boolean
   curtainEntries = settleCurtain(curtainEntries, key, path, "ready", { title: r.title, thumb: r.thumb });
   paintCurtainChip();
 }
-function setLaneMini(laneId: string, v: LaneMini | null): void {
-  paintLanePreview(laneId, v);
-  paintSpokePreview(laneId, v);
+/** P-PREVIEW.CHIP1: one target's own chip: a lane's (its fleet card, orbit spoke and Agent Worlds node) or Main's
+ *  ("main", the Agent Worlds hub; the composer has its own chip, paintCurtainChip). */
+function setTargetChip(target: string, v: ChipState | null): void {
+  if (target !== "main") {
+    paintLanePreview(target, v);
+    paintSpokePreview(target, v);
+  }
+  paintVizPreview(target, v);
 }
 
-/** The chip: one card at the chat column's top-right edge, nearest the panel it opens. Mounted on first use. */
+/** The composer chip: the one preview chip (preview_chip.ts, size "full") at the chat column's top-right edge,
+ *  nearest the panel it opens, with its "Not now" X. Mounted on first use. It also sets the motion every chip
+ *  follows (html[data-pchip-motion]): the perf tier and reduced motion, live. */
 function paintCurtainChip(): void {
   let dock = $("#prevCurtain") as HTMLElement | null;
-  const { head, more } = chipView(curtainEntries);
+  const head = headChip(curtainEntries);
   if (!dock) {
     if (!head) return;
     const center = document.querySelector("main.center");
     if (!center) return;
-    dock = el(`<div class="pcur-dock" id="prevCurtain" hidden aria-live="polite">
-      <button type="button" class="pcur-chip" id="prevCurtainChip">
-        <span class="pcur-art" aria-hidden="true"><span class="pcur-page"><i></i><i></i><i></i><i></i></span><span class="pcur-scan"></span><span class="pcur-orbit"><b></b><b></b><b></b></span><img class="pcur-thumb" alt="" hidden></span>
-        <span class="pcur-txt"><span class="pcur-k"></span><span class="pcur-name"></span></span>
-        <span class="pcur-more" hidden></span>
-      </button>
-      <button type="button" class="pcur-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
+    dock = el(`<div class="pchip-dock" id="prevCurtain" hidden aria-live="polite">
+      ${previewChipHtml("full", `id="prevCurtainChip"`)}
+      <button type="button" class="pchip-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
     </div>`) as HTMLElement;
     center.appendChild(dock);
     $("#prevCurtainChip", dock)?.addEventListener("click", (ev) => {
@@ -10559,40 +10974,27 @@ function paintCurtainChip(): void {
     });
     $("#prevCurtainX", dock)?.addEventListener("click", () => {
       for (const e of curtainEntries) if (e.key === "agent") dismissedAgentPreviews.add(e.path); // no chip for this file again until you open it
+      if (curtainEntries.some((e) => e.key === "agent")) setTargetChip("main", null); // Main's Worlds chip goes with it
       curtainEntries = [];
       paintCurtainChip();
     });
   }
-  dock.dataset.motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  // Every chip (composer, lanes, spokes, Agent Worlds) moves the same way: set with the first chip ever shown
+  // (curtainBegin lands here) and on every perf tier change; prefers-reduced-motion is also honored in CSS.
+  document.documentElement.dataset.pchipMotion = curtainMotion(perfWatch.tier(), reducedMotionNow());
   // The panel being open is the invitation accepted: nothing to show over it.
   dock.hidden = !head || previewOpen;
-  if (!head) return;
-  const chip = $("#prevCurtainChip", dock) as HTMLButtonElement;
-  const ready = head.phase === "ready";
-  chip.dataset.phase = head.phase;
-  chip.setAttribute("aria-disabled", String(!ready));
-  const name = head.title || head.label;
-  ($(".pcur-k", chip) as HTMLElement).textContent = ready ? "Preview ready" : "Preparing preview";
-  ($(".pcur-name", chip) as HTMLElement).textContent = name;
-  const thumb = $(".pcur-thumb", chip) as HTMLImageElement;
-  if (ready && head.thumb) { if (thumb.getAttribute("src") !== head.thumb) thumb.src = head.thumb; thumb.hidden = false; }
-  else { thumb.hidden = true; thumb.removeAttribute("src"); }
-  const badge = $(".pcur-more", chip) as HTMLElement;
-  badge.hidden = more === 0;
-  badge.textContent = `+${more}`;
-  chip.setAttribute("aria-label", ready ? `Open the preview of ${name}${more ? `, ${more} more waiting` : ""}` : `Preparing a preview of ${name}`);
-  setTip(chip, ready ? "Open the preview" : "Preparing a preview",
-    ready ? `${name} rendered. Click to swing the Preview panel out on its own tab.${more ? ` ${more} more waiting.` : ""}`
-      : `${name} is loading out of sight. It appears here only if it renders; a blank or failed page is never shown.`);
+  paintPreviewChip($("#prevCurtainChip", dock) as HTMLElement, head);
 }
 
 /** Open the Preview panel on tab `key` with the swing: a 3D unfold hinged at the point of the panel nearest
  *  the chip the user clicked (reduced motion or the minimal tier: instant). */
 function swingOutPreview(key: string, from: HTMLElement | null): void {
   const fromRect = from?.getBoundingClientRect() ?? null;
-  const wasOpen = previewOpen;
-  if (!wasOpen) openPreview({ reveal: key });
-  else switchPrevLane(key);
+  // P-PREVIEW.CHIP1: a panel left open under Visualize is not in front of the user: it swings out over it too.
+  const wasShown = previewOpen && (previewOverViz || !vizIsOpen());
+  if (!previewOpen) openPreview({ reveal: key });
+  else { switchPrevLane(key); syncPreviewCover(); }
   curtainEntries = dropCurtain(curtainEntries, key);
   paintCurtainChip();
   // The phone mirror photographs on-screen pixels, so the agent's page reaches connected phones once it is
@@ -10601,28 +11003,43 @@ function swingOutPreview(key: string, from: HTMLElement | null): void {
   for (const b of document.querySelectorAll<HTMLElement>(".prev-tab")) if (b.dataset.lane === key) { b.focus({ preventScroll: true }); break; }
   const panel = $("#preview") as HTMLElement | null;
   const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
-  if (wasOpen || !panel || motion === "still") return;
+  if (wasShown || !panel || motion === "still") return;
   const o = swingOrigin(fromRect, panel.getBoundingClientRect());
-  panel.style.setProperty("--pcur-ox", `${o.x}px`);
-  panel.style.setProperty("--pcur-oy", `${o.y}px`);
-  panel.style.setProperty("--pcur-ms", `${CURTAIN.swingMs}ms`);
+  panel.style.setProperty("--pchip-ox", `${o.x}px`);
+  panel.style.setProperty("--pchip-oy", `${o.y}px`);
+  panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
   // The class stays until closePreview: removing it would hand animation-name back to .kg's slideInR, which
-  // restarts that animation (a second entrance right after the swing).
-  panel.classList.add("pcur-swing");
-  if (motion === "calm") panel.classList.add("pcur-calm");
+  // restarts that animation (a second entrance right after the swing). A panel raised from under Visualize may
+  // still carry it from its first swing, so the animation is restarted on purpose.
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  void panel.offsetWidth;
+  panel.classList.add("pchip-swing");
+  if (motion === "calm") panel.classList.add("pchip-calm");
 }
-/** The fleet card's / orbit spoke's mini chip (FleetGridDeps / FleetOrbitDeps.openLanePreview). */
+/** The fleet card's / orbit spoke's chip (FleetGridDeps / FleetOrbitDeps.openLanePreview), and an Agent Worlds
+ *  lane node's (openTargetPreviewFrom). */
 function openLanePreviewFrom(laneId: string, from: HTMLElement | null): void {
   const id = laneTabId(laneId);
-  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setLaneMini(laneId, null); return; } // the tab was closed or evicted
+  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setTargetChip(laneId, null); return; } // the tab was closed or evicted
   swingOutPreview(id, from);
+}
+/** P-PREVIEW.CHIP1: an Agent Worlds chip (VizDeps.preview.open): a lane's tab, or for "main" the composer's Agent
+ *  tab. Visualize is up, so the panel flies out over it; the chip gets focus back when it slides away. */
+function openTargetPreviewFrom(target: string, from: HTMLElement): void {
+  if (target !== "main") openLanePreviewFrom(target, from);
+  else if (prevPathByLane.agent) swingOutPreview("agent", from);
+  else { setTargetChip("main", null); return; } // the agent's page went with its conversation
+  if (previewOverViz) previewReturn = from;
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
 // waiting up to a full 1.5s freshness tick. cacheRenderedPreviewShot no-ops when the agent lane isn't the
 // visible one, so this is a cheap no-op when the user is on their own tab.
+// P-LANESHOTS.1: the 700ms pass also takes the agent's strip snapshot (the panel's 380ms swing-out is over by
+// then); fleet lane tabs kick it too when shown.
 function kickPreviewShotSoon(): void {
-  for (const ms of [250, 700]) setTimeout(() => void cacheRenderedPreviewShot(), ms);
+  setTimeout(() => void cacheRenderedPreviewShot(), 250);
+  setTimeout(() => void cacheRenderedPreviewShot("now"), 700);
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
@@ -10739,6 +11156,10 @@ type PrevLane = string;
 let prevLane: PrevLane = "yours";
 /** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
 const laneTabFrames = new Map<string, HTMLIFrameElement>();
+/** P-LANESHOTS.1: preview frames between `src` and `load`; no strip snapshot is taken of them. */
+const laneShotLoading = new WeakSet<HTMLIFrameElement>();
+/** P-LANESHOTS.1: how long after `load` the strip snapshot is taken (the page paints asynchronously). */
+const LANE_SHOT_PAINT_MS = 900;
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
   l.startsWith("lane:") || l.startsWith("plugin:") || l === ASK_LUCID_TAB_ID ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null; // P-ASKLUCID.9: the Ask Lucid tab has its own frame too
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
@@ -10933,7 +11354,7 @@ function switchPrevLane(l: PrevLane): void {
   for (const [id, f] of laneTabFrames) f.hidden = l !== id || !prevPathByLane[id]; // P-PREVIEW.10: lane tab frames follow the same rule
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
   if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
-  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
+  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing a lane tab clears the rail badge + takes its strip snapshot (P-LANESHOTS.1)
   syncPrevPathField(prevPathByLane[l] ?? "");
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
@@ -11068,7 +11489,15 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
     if (active) { empty.hidden = true; clearPreviewCanvas(); } // P-PREVIEW.5: a fresh file starts with a clean markup layer
     // P-PREVIEW.3a-shot: once it paints, cache a PNG so the agent's preview_screenshot sees what it built
     // (cacheRenderedPreviewShot targets the AGENT lane and no-ops when that lane isn't the visible one).
-    frame.onload = () => { if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); } window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+    // P-LANESHOTS.1: the strip snapshot waits until the page has had time to paint, and none is taken while
+    // the frame is still loading (it would be the old page or a white flash).
+    laneShotLoading.add(frame);
+    frame.onload = () => {
+      laneShotLoading.delete(frame);
+      if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); }
+      window.setTimeout(() => void cacheRenderedPreviewShot(), 150);
+      window.setTimeout(() => void cacheRenderedPreviewShot("now"), LANE_SHOT_PAINT_MS);
+    };
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL only loads if the egress allow-list already approves the site
     // (honoring the managed ceiling); else it stays gated. The iframe is opaque-origin (no allow-same-origin),
@@ -11166,7 +11595,7 @@ function dropLaneTabFrame(tabId: string): void {
   curtainHiddenLoads.delete(tabId);
   if (!curtainRuns.has(tabId)) {
     curtainEntries = dropCurtain(curtainEntries, tabId);
-    if (tabId.startsWith("lane:")) setLaneMini(tabId.slice(5), null);
+    if (tabId.startsWith("lane:")) setTargetChip(tabId.slice(5), null);
     paintCurtainChip();
   }
 }
@@ -11202,6 +11631,7 @@ export function previewShowLaneFile(laneId: string, laneName: string, path: stri
     loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
     if (previewOpen) curtainHiddenLoads.delete(id); else curtainHiddenLoads.add(id);
     const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+    recordCurtainLaneShot(id, path, r); // P-LANESHOTS.1: a hidden tab's picture (canvas pages only)
     curtainReady(id, path, r, false);
   });
 }
@@ -11256,17 +11686,80 @@ window.addEventListener("message", (ev) => {
 });
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
- *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
-async function cacheRenderedPreviewShot(): Promise<void> {
-  // The agent's preview_screenshot reads THIS cache, so always capture the AGENT lane. Screen capture only sees
-  // on-screen pixels, so it no-ops unless the agent lane is the one currently shown (its DOM stays inspectable
+ *  plain browser or when the frame has no size. Never throws: a failed cache just means no shot this turn.
+ *
+ *  P-LANESHOTS.1: the same capture also feeds the per-agent snapshot strip (lane_shots.ts) that Agent Worlds
+ *  shows: the agent tab records under lane "main", a fleet lane's tab under its lane id. `strip` says whether
+ *  this pass may record one: "skip" (engine cache only, the default), "tick" (the freshness loop: at most one
+ *  per LANE_SHOT_TICK_MS per lane, so an animated page cannot churn the ring) or "now" (a load or a reveal).
+ *  Capture reads on-screen pixels, so a strip snapshot needs the panel open on that tab, the window visible,
+ *  the frame done loading and nothing of LUCID's drawn over it (see previewFrameUnobstructed). */
+async function cacheRenderedPreviewShot(strip: "skip" | "tick" | "now" = "skip"): Promise<void> {
+  // The agent's preview_screenshot reads THIS cache, so the engine copy is only ever the AGENT lane. Screen capture
+  // only sees on-screen pixels, so it no-ops unless that lane is the one currently shown (its DOM stays inspectable
   // while hidden via preview_inspect, which is the agent's primary review path when you're on your own tab).
-  const frame = laneFrame("agent");
-  if (!frame || prevLane !== "agent" || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const tab = prevLane;
+  const laneId = shotLaneOf(tab);
+  const frame = laneFrame(tab);
+  if (!laneId || !frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const forEngine = tab === "agent";
+  const now = Date.now();
+  const stripDue = strip === "now" || (strip === "tick" && now - (laneShotTakenAt.get(laneId) ?? 0) >= LANE_SHOT_TICK_MS);
+  const wantStrip = stripDue && previewOpen && document.visibilityState === "visible" && !laneShotLoading.has(frame);
+  if (!forEngine && !wantStrip) return;
   const rect = frame.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2) return;
+  const forStrip = wantStrip && previewFrameUnobstructed(frame, rect);
+  if (!forEngine && !forStrip) return;
+  const path = prevPathByLane[tab] ?? "";
+  if (forStrip) laneShotTakenAt.set(laneId, now);
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
-  if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+  if (!png) return;
+  if (forStrip && prevLane === tab && prevPathByLane[tab] === path) void recordCapturedLaneShot(laneId, path, png);
+  if (forEngine) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+}
+// ── P-LANESHOTS.1: per-agent preview snapshots for Agent Worlds ──────────────────────────────────
+// HOW CAPTURE WORKS. capturePage photographs the window's on-screen pixels, so a preview tab can only be
+// photographed while it is the tab showing in the open panel. A hidden tab's frame is `display:none` (or the
+// whole panel is closed), and making it visible for a capture would flash it at the user, so there is no
+// off-screen capture of a DOM page. What a hidden tab DOES get is the loading curtain's thumbnail: the curtain
+// already renders every auto preview in an invisible probe frame and reads back its largest canvas as a small
+// PNG (thumbFor), so a canvas or WebGL page records a picture the moment it is judged ready, tab shown or not.
+// Everything else is photographed when its tab is shown (switchPrevLane kicks it), after each load, and on
+// the panel's 1.5s freshness loop at most once per LANE_SHOT_TICK_MS. All of it stays in renderer memory.
+/** The lane a preview tab's snapshots belong to: the agent tab is the main composer ("main"), a fleet lane's
+ *  tab is that lane. Yours, plugin and Ask Lucid tabs are not an agent's preview and take none. */
+const shotLaneOf = (tab: PrevLane): string | null => (tab === "agent" ? "main" : tab.startsWith("lane:") ? tab.slice(5) || null : null);
+const LANE_SHOT_TICK_MS = 5000;
+/** When each lane's last strip snapshot was taken (throttles the freshness loop). */
+const laneShotTakenAt = new Map<string, number>();
+/** True when every sampled point of the frame's box hits the frame itself (or the preview's own markup
+ *  canvas / pan surface, which are part of what the user sees there). A toast, popover, the Agent Worlds
+ *  dialog, the reviewing pill or any other LUCID chrome over the frame would be photographed into the agent's
+ *  snapshot, so that pass records nothing. Nine elementFromPoint calls; no layout is forced beyond the rect. */
+function previewFrameUnobstructed(frame: HTMLIFrameElement, r: DOMRect): boolean {
+  const own: Element[] = [frame];
+  for (const sel of ["#prevCanvas", "#prevPanSurface"]) { const e = $(sel); if (e) own.push(e); }
+  const inset = Math.min(12, r.width / 4, r.height / 4);
+  for (const x of [r.left + inset, r.left + r.width / 2, r.right - inset]) {
+    for (const y of [r.top + inset, r.top + r.height / 2, r.bottom - inset]) {
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !own.includes(hit)) return false;
+    }
+  }
+  return true;
+}
+/** Scale a capture to a thumbnail and record it for `laneId` (title = the file name or host, like the chip). */
+async function recordCapturedLaneShot(laneId: string, path: string, png: string): Promise<void> {
+  const dataUrl = await makeLaneThumb(document, png);
+  if (dataUrl) recordLaneShot({ laneId, at: Date.now(), dataUrl, title: curtainLabel(path), path });
+}
+/** A hidden tab's only picture: the curtain's canvas thumbnail (already validated by thumbFor). Skipped when
+ *  the tab is the one showing, since the real capture after its load is the better picture. */
+function recordCurtainLaneShot(tab: PrevLane, path: string, r: CurtainResult): void {
+  const laneId = shotLaneOf(tab);
+  if (!laneId || !r.thumb || (previewOpen && prevLane === tab)) return;
+  recordLaneShot({ laneId, at: Date.now(), dataUrl: r.thumb, title: r.title || curtainLabel(path), path });
 }
 // P-PREVIEW.3a-shot freshness: the single on-load capture froze the shot at load+150ms, so the agent's
 // preview_screenshot saw an empty/early/stale frame the moment the previewed app animated or the file was
@@ -11278,7 +11771,7 @@ function startPreviewShotLoop(): void {
   if (previewShotTimer !== null) return;
   void cacheRenderedPreviewShot(); // refresh immediately on open, then keep it current
   previewShotTimer = window.setInterval(() => {
-    if (document.visibilityState === "visible") void cacheRenderedPreviewShot();
+    if (document.visibilityState === "visible") void cacheRenderedPreviewShot("tick"); // P-LANESHOTS.1: also a throttled strip snapshot
   }, 1500);
 }
 function stopPreviewShotLoop(): void {
@@ -13004,6 +13497,7 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
+  agentBuddies?.sync(); // P-BUDDY.1: Main's buddy follows Main's folder
   if (state.workspace) {
     setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
     void offerVaultEnvImport(w.current, () => openSettingsTo(VAULT_ENV_SEC)); // P-VAULT-ENV.1: once per workspace with a .env
@@ -13206,11 +13700,22 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
     return;
   }
   showRecoveryNotice(`${headline} Restoring your previous session\u2026`);
-  const r = await bridge.recoveryResume(previousId);
+  // P-SPINUP.1 (ADR-0668): Main's walker paces over the composer while the restore runs (until the notice settles).
+  restoringSession = true;
+  spinup?.sync();
+  const r = await (async () => {
+    try {
+      const res = await bridge.recoveryResume(previousId);
+      if (res?.ok) await resumeSession(res.sessionId ?? previousId, { loaded: true });
+      return res;
+    } finally {
+      restoringSession = false;
+      spinup?.sync();
+    }
+  })();
   // A failed resume records its own session-unrecoverable incident; the startup notice below covers it.
   if (r?.incidentId && r.incidentId !== inc.id) void bridge.incidentSeen(r.incidentId);
   if (r?.ok) {
-    await resumeSession(r.sessionId ?? previousId, { loaded: true });
     await settle("recovered", "The previous chat session was restored after launch.", `${headline} Your previous session was restored.`);
     return;
   }
@@ -13473,6 +13978,7 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept(purpose, false));
   };
 
+  const agentPurpose = (() => { try { return purposeOf(loadAgentsDoc(localStorage.getItem(AGENTS_KEY)), state.workspace?.current); } catch { return null; } })();
   if (!prof.isEmpty && prof.hasCode) {
     // Existing code repo: a single step - offer the scan + scaffold directly.
     const detected = prof.stack.length ? ` (detected: ${esc(prof.stack.join(", "))})` : "";
@@ -13488,6 +13994,9 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
       </div>`;
     $("#wsSetupNo", box)!.addEventListener("click", dismiss);
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept("app", true));
+  } else if (agentPurpose) {
+    // P-RAIL.AGENTS1c: the user already said what this folder is for when they added it as an Agent: skip the question.
+    frameworkStep(agentPurpose);
   } else {
     // Empty folder (or non-empty without code): ask what the folder is FOR first. Documents
     // leads the list when the folder already holds non-code content.
@@ -18219,9 +18728,9 @@ function openJoinPanel(): void {
   if (dockState.minimized) { dockState.minimized = false; persist(); } // a fresh open always SHOWS the dock
 }
 
-// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge, so every entry
-// point opens the Preview panel first. The ADR-0158 marketplace modal is gone; its rail button and palette
-// entry now open the drawer on FREE, where its catalog lives.
+// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge when that panel is
+// open, else out of the main work area's right edge (P-WORLDS.STORE1). The ADR-0158 marketplace modal is gone;
+// its rail button and palette entry now open the drawer on FREE, where its catalog lives.
 const pluginsFlyout = createPluginsFlyout({
   provider: getMarketProvider,
   user: marketUser,
@@ -18240,19 +18749,29 @@ const pluginsFlyout = createPluginsFlyout({
   // P-RS-WINDOW.1 (ADR-0543): Remote Spokes' panel opens in its own window, not as one more Preview tab.
   openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? void openRemoteAdmin(url) : openPluginTab(id, name, url)),
   toast: showToast,
-  anchor: () => $("#preview") as HTMLElement | null,
+  // P-WORLDS.STORE1: an open Preview panel anchors the drawer on its left edge; with it closed, the drawer sits on
+  // the right edge of the main work area (between the title bar and the status bar, never under the rail).
+  anchor: () => {
+    const prev = $("#preview") as HTMLElement | null;
+    const work = $("#app-inner > .body") as HTMLElement | null;
+    return drawerAnchor(previewOpen && prev && !prev.hidden ? prev.getBoundingClientRect() : null, work?.getBoundingClientRect() ?? null);
+  },
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
   // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
   worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
   worldExportUrl: (id) => bridge.worldExportUrl(id),
+  // P-WORLDS.HEAL1: purchases that went missing or got damaged come back (engine backup first, then the store).
+  pluginsHealth: () => bridge.pluginsHealth(),
+  pluginsRestore: () => bridge.pluginsRestore(),
+  worldsPending: setPendingWorldRestores,
   openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
-  const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
-  if (!previewOpen) openPreview();
-  pluginsFlyout.open(tier, from);
+  // P-WORLDS.STORE1: never open the Preview panel just to anchor the drawer (it flew out behind the drawer and
+  // stayed open after the drawer closed); pluginsFlyout anchors to the work area when Preview is closed.
+  pluginsFlyout.open(tier, document.activeElement as HTMLElement | null); // Esc returns focus here
 }
 /** ADR-0542: once after start, tell the user what the move from a dev build to this release removed (data kept)
  *  and which dev settings it now ignores. Shown once: acknowledged as soon as it appears. */
@@ -18476,6 +18995,13 @@ function wire(): void {
   $("#skillsBody")?.addEventListener("click", (e) => void onSkillAction(e));
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
+  // P-PREVIEW.CHIP1: over Visualize the panel is the layer above the world, so Esc with focus in it slides it back
+  // (Visualize's own Esc then waits for the next press). An Esc a menu inside it already took is left alone.
+  $("#preview")?.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !previewOverViz || (e.target as HTMLElement).closest("#prevMore")) return;
+    e.preventDefault();
+    closePreview();
+  });
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
@@ -19085,6 +19611,46 @@ function wire(): void {
   // inspector collapse ↔ metrics rail
   $("#inspCollapse")!.addEventListener("click", () => setInspectorRail(true));
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
+  // P-RAIL.AGENTS1: the Agents view of the rail. It polls fleet status itself (only while it is on screen) and
+  // reads Main's folder, busy flag and the recents from state on its own clock.
+  agentsRail = mountAgentsRail({
+    inspector: $("#inspector")!, toggle: $<HTMLButtonElement>("#railAgents")!, host: $("#railAgentsView")!,
+    getRecent: () => state.workspace?.recent ?? null,
+    getMainFolder: () => state.workspace?.current ?? null,
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    pickFolder: () => pickFolderDialog({ title: "Choose a folder to add as an Agent", confirm: "Add agent" }),
+    toast: showToast,
+    activate: (kind, folder, name) => activateAgentFolder(kind, folder, name),
+    // P-SCHED.AGENT1: Schedule this Agent writes the engine's scheduled jobs; the Jobs tile repaints after.
+    jobs: { list: () => bridge.jobsList(), create: (spec) => bridge.jobsCreate(spec), update: (id, patch) => bridge.jobsUpdate(id, patch), remove: (id) => bridge.jobsDelete(id), changed: () => { void refreshJobs(); } },
+    perfTier: () => perfWatch.tier(),
+  });
+  // P-BUDDY.1 (ADR-0667): floating Agent buddies over the main composer and each Fleet card (Agent Worlds attaches its
+  // own through initViz). They poll fleet status only while the grid or Agent Worlds is on screen.
+  agentBuddies = mountAgentBuddies({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    getMainFolder: () => state.workspace?.current ?? null,
+    getMainSession: () => ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null, // P-BUDDY.HIDE1: the sidebar's active session
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    suggest: (req) => bridge.buddySuggest(req),
+    runInWorktree: runBuddyIdea,
+    askLucid: (text) => askLucid().prefill(text),
+    toast: showToast,
+    perfTier: () => perfWatch.tier(),
+  });
+  // P-SPINUP.1 (ADR-0668): while Main or a lane is starting, a mini Lucid walks over its composer (Agent Worlds attaches
+  // its own through initViz) with a bubble of status lines. Synced from the boot, takeover, restore and warm signals.
+  spinup = mountSpinupWalkers({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    mainSpinup,
+    perfTier: () => perfWatch.tier(),
+  });
 
   // composer agent controls → focused per-control dropdowns
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
@@ -19344,6 +19910,16 @@ function wire(): void {
     // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
     fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
     respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
+    // P-PREVIEW.CHIP1: a node's preview chip flies the Preview panel out over Visualize; Visualize closing under it
+    // leaves the panel open on its side-panel tier.
+    preview: {
+      open: (target, chip) => openTargetPreviewFrom(target, chip),
+      close: () => closePreview(),
+      isOver: () => previewOverViz,
+      viewClosed: () => { previewReturn = null; syncPreviewCover(); },
+    },
+    attachBuddies: (stage, src) => agentBuddies?.attachWorlds(stage, src) ?? (() => {}), // P-BUDDY.1 (ADR-0667)
+    attachSpinup: (stage, src) => spinup?.attachWorlds(stage, src) ?? (() => {}), // P-SPINUP.1 (ADR-0668)
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 
@@ -19396,6 +19972,14 @@ function wire(): void {
     // P-MINI.2 (ADR-0583): "Lucid may suggest things".
     if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
     if (t0.id === "lucidPicture") { setPictureEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; } // P-ASKLUCID.7 (ADR-0588)
+    // P-BUDDY.1 (ADR-0667): the Floating Agents switches apply at once.
+    if (t0.id === "buddyShow" || t0.id === "buddyAuto") {
+      const on = (t0 as HTMLInputElement).checked;
+      const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+      try { miniStore()?.setItem(BUDDY_SETTINGS_KEY, saveBuddySettings(t0.id === "buddyShow" ? { ...s, show: on } : { ...s, auto: on })); } catch { /* storage blocked: this window only */ }
+      agentBuddies?.sync();
+      return;
+    }
     // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
     if ((t0 as HTMLInputElement).name === "miniPresence") {
       const next = parsePresence((t0 as HTMLInputElement).value);
@@ -20506,6 +21090,7 @@ function resetAgentPreviewLane(): void {
   curtainRuns.get("agent")?.();
   curtainHiddenLoads.delete("agent");
   curtainEntries = dropCurtain(curtainEntries, "agent");
+  setTargetChip("main", null); // P-PREVIEW.CHIP1: Main's Agent Worlds chip belonged to that conversation too
   paintCurtainChip();
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",
@@ -20711,6 +21296,10 @@ async function loadConfig(newCycle = true): Promise<void> {
       state.configCached = false;
       state.configWarming = false;
     }
+    // P-SPINUP.1: Main's boot walk ends when its first warm cycle ends, adopted or given up: a boot that never
+    // gets a model list (an offline or wedged agent) must not keep a walker saying it is almost there.
+    if (step.action !== "repoll") bootSpinDone = true;
+    spinup?.sync(); // P-SPINUP.1 (ADR-0668): a warm cycle is Main spinning up
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
     if (step.action === "adopt") {
@@ -22023,6 +22612,8 @@ onNetChange(() => {
   netModelKickAt = Date.now();
   void loadConfig(true).then(renderStatus);
 });
+// P-SPINUP.1 (ADR-0668): the boot standby is Main spinning up; its walker leaves the moment the boot ends.
+onNetChange(() => { if (!bootSpinDone) spinup?.sync(); });
 // P-BOOTPERF.1 (ADR-pending): the quiet Reconnect button heals itself. The net monitor's engine probe going
 // from silent to answering while the button shows re-runs the status probe, whose success hides it.
 let engineWasAnswering = false;
@@ -22036,6 +22627,9 @@ onNetChange(() => {
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
 initMarket(readMarketBootConfig());
+// P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
+// (the engine's backup restore, then the store) and say so.
+void pluginsFlyout.restorePurchases("auto");
 // P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
 // store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
 bridge.onKgDeviceUnlocked((r) => {

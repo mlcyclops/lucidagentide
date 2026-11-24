@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { WORLD_API_VERSION, type InstalledWorld, type WorldDefinition, type WorldOption, type WorldOptionValues } from "./viz_world_api.ts";
 import {
-  decideWorldAccess, loadWorlds, mergeEnvironment, mergeOptions, optionDefaults, parseStyle, RECEIPT_TTL_MS, RECEIPTS_KEY, receiptFresh, saveOption, loadOptions,
+  decideWorldAccess, loadWorlds, mergeEnvironment, mergeOptions, optionDefaults, parseStyle, RECEIPT_TTL_MS, RECEIPTS_KEY, receiptFresh, saveOption, loadOptions, savedWorldState,
   validateWorld, worldEnvironment, worldKeyOfStyle, worldStyle, worldAccess, worldUsable, type WorldsDeps,
 } from "./viz_worlds.ts";
 import { nullProvider, type EntitlementProvider } from "./market_gate.ts";
@@ -311,6 +311,16 @@ describe("style ids", () => {
     expect(parseStyle("world:football")).toBe("world:football");
     expect(parseStyle("world:<x>")).toBe("anime");
     expect(parseStyle(42)).toBe("anime");
+  });
+
+  // P-WORLDS.HEAL1: the Worlds menu says why a saved world is not drawn, and the saved style is never dropped for it.
+  test("a saved world that is not installed is pending while its restore is pending, else missing", () => {
+    expect(savedWorldState("world:christmas", [], ["world-christmas"])).toBe("pending");
+    expect(savedWorldState("world:christmas", [], ["world-golf"])).toBe("missing");
+    expect(savedWorldState("world:christmas", [], [])).toBe("missing");
+    expect(savedWorldState("world:christmas", ["world:christmas"], ["world-christmas"])).toBeNull();
+    expect(savedWorldState("anime", [], ["world-christmas"])).toBeNull();
+    expect(savedWorldState("professional", [], [])).toBeNull();
   });
 });
 

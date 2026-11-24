@@ -73,6 +73,16 @@ export function worldKeyOfStyle(style: string): string | null {
   return KEY_RE.test(key) ? key : null;
 }
 
+/** P-WORLDS.HEAL1: why the saved style is not drawn: "pending" while a restore of its world package is pending,
+ *  "missing" when that world is not installed at all, null for a built-in style or an installed world. The saved
+ *  style itself is never changed for this, so the world is selected again as soon as it is back. Pure. */
+export function savedWorldState(style: VizStyle, installedStyles: readonly VizStyle[], pendingPackageIds: Iterable<string>): "pending" | "missing" | null {
+  const key = worldKeyOfStyle(style);
+  if (!key || installedStyles.includes(style)) return null;
+  for (const id of pendingPackageIds) if (worldKey(id) === key) return "pending";
+  return "missing";
+}
+
 /** A saved style preference: a built-in, or a well-formed world id (whether it is still installed is decided
  *  once the worlds load); anything else is "anime". */
 export function parseStyle(raw: unknown): VizStyle {

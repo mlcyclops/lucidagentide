@@ -46,6 +46,7 @@ import { BUILTIN_DEFAULT_SCRIPT, DEFAULT_MODEL, parseScript, permissionAllowed, 
 
 const MODE = process.env.FAKE_ACP_MODE ?? "clean";
 const LOAD_SESSION = process.env.FAKE_ACP_LOAD_SESSION === "1";
+const INIT_MS = Math.max(0, Math.min(120_000, Number(process.env.FAKE_ACP_INIT_MS) || 0));
 const ZWSP = String.fromCodePoint(0x200b);
 let hangingPromptId: number | undefined;
 let sessions = 0;
@@ -178,7 +179,13 @@ async function handle(line: string): Promise<void> {
   // ADR-0501: FAKE_ACP_LOAD_SESSION=1 advertises session/load (as omp does), accepts any recorded id, and every
   // reply then names the session it ran in, so a restart test can prove a follow-up continued the SAME session
   // in a NEW process. Unset, the agent is exactly as before (no loadSession, replies unchanged).
-  if (method === "initialize") { write({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: LOAD_SESSION ? { loadSession: true } : {} } }); return; }
+  if (method === "initialize") {
+    const reply = (): void => write({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: LOAD_SESSION ? { loadSession: true } : {} } });
+    // QA only (P-SPINUP.1): a real agent's handshake takes seconds; FAKE_ACP_INIT_MS makes the fake one as slow,
+    // so the spin-up UI can be driven and watched. Unset: answers at once, as before.
+    if (INIT_MS > 0) setTimeout(reply, INIT_MS); else reply();
+    return;
+  }
   if (method === "session/load" && LOAD_SESSION) { write({ jsonrpc: "2.0", id, result: {} }); return; }
   // A fresh id per session/new, like a real agent: a client that closes its session and opens another
   // (the master's New session) must see the id change, or a hub-per-session check cannot tell them apart.

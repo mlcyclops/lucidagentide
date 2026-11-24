@@ -1838,6 +1838,27 @@ demo-P-WORLDS.FX1: ## P-WORLDS.FX1 (ADR-0652): plasma-light world streams (a sat
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_plasma_math.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_worlds_fx_1.mjs
 
+.PHONY: demo-P-WORLDS.STORE1
+demo-P-WORLDS.STORE1: ## P-WORLDS.STORE1: the worlds store in the Plugins drawer: Lucid Agent World Packs (Patron Class, Sponsor with its 6-world picker and world credits) above the worlds, every world and pack card plays its own loop, and Get more worlds opens the drawer on the work area without the Preview panel (X and Esc close only the drawer). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/ bun desktop/scripts/demo_p_worlds_store_1.mjs against a QA instance
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/market_gate.test.ts desktop/renderer/firebase_market_provider.test.ts desktop/renderer/market_stub_provider.test.ts desktop/renderer/viz_worlds.test.ts
+	node --check desktop/scripts/demo_p_worlds_store_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_store_1.mjs; else echo "demo-P-WORLDS.STORE1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-WORLDS.STORE1b
+demo-P-WORLDS.STORE1b: ## P-WORLDS.STORE1b: LIVE store proof from the desktop origin http://127.0.0.1: a throwaway account presses Buy on a world, Patron Class and Sponsor (6 picks) and each opens a real Stripe Checkout with the right price (unpaid sessions expire; the account is deleted). Opt-in: LUCID_DEMO_LIVE_STORE=1 LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/
+	node --check desktop/scripts/demo_p_worlds_checkout_1.mjs
+	@if [ "$$LUCID_DEMO_LIVE_STORE" = "1" ] && [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_checkout_1.mjs; else echo "demo-P-WORLDS.STORE1b: set LUCID_DEMO_LIVE_STORE=1, LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the live checkout proof"; fi
+
+.PHONY: demo-P-WORLDS.HEAL1
+demo-P-WORLDS.HEAL1: ## P-WORLDS.HEAL1 (ADR-0662): purchased worlds and store plugins survive upgrades and glitches: an install ledger outside plugins/ plus a signed backup per package; at engine start (and GET /api/plugins/health, POST /api/plugins/restore) a missing or damaged install is moved to plugins-quarantine and reinstalled from its backup through every install gate (a tampered backup is refused); what is still missing reinstalls from the store when the account owns it, else the user is told how to restore it
+	$(BUN) test $(TEST_IGNORES) desktop/plugins/restore.test.ts desktop/plugins/install.test.ts desktop/plugins/runtime.test.ts desktop/renderer/plugin_restore.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts
+
+.PHONY: demo-P-VIZ.NOFLASH1
+demo-P-VIZ.NOFLASH1: ## P-VIZ.NOFLASH1 (ADR-0663): Visualize never flashes a black or white frame under CPU pressure: a tier change swaps the new scene in on its first whole frame (the old picture stays, relieved, until then), resize draws in the same task, the governor has hysteresis and steps (spaced) straight to the tier the measured frame time supports, a lost GPU context is rebuilt once, and a saved world is drawn from the first visible frame (the spinner waits for it). Real-UI proof: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 bun desktop/scripts/demo_p_viz_noflash_1.mjs against a QA instance (CPU throttled x6 then x10, screencast luminance per frame)
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/perf_tier.test.ts
+	node --check desktop/scripts/demo_p_viz_noflash_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_viz_noflash_1.mjs; else echo "demo-P-VIZ.NOFLASH1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-FLEET.DEMO1
 demo-P-FLEET.DEMO1: ## P-FLEET.DEMO1 (ADR-0657): the scripted fake fleet for QA and video: FAKE_ACP_MODE=script replays the security-first scripts (prose, tools, one permission ask, a delegation, cancel). Live: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --every 60
 	$(BUN) test $(TEST_IGNORES) harness/mcp/testing/fake_acp_script.test.ts harness/adr_numbering.test.ts
@@ -1856,3 +1877,66 @@ demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or t
 .PHONY: demo-P-DOCS.0
 demo-P-DOCS.0: ## P-DOCS.0 (ADR-0660): the 2.6.1 docs release: every relative image README.md shows exists (markdown and <img> tags, fenced code skipped), README names v2.6.1 the current stable release, and ADR numbers stay unique with ADR-0660 (the docs.lucid-agents.com plan)
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts tools/readme_images.test.ts
+
+.PHONY: demo-P-PREVIEW.CHIP1
+demo-P-PREVIEW.CHIP1: ## P-PREVIEW.CHIP1: one preview chip (preview_chip.ts, .pchip) in the composer, inside each fleet lane's transcript (upper-right, out of the header, never over the lane's composer; the page alone on a narrow card), above each orbit spoke and beside each agent and Main in Agent Worlds (stacked over its artifact chip, hover card with title, path, Open preview and the agent's snapshots); an Agent Worlds chip flies the Preview out over Visualize (z 94, resizable), X, Esc or a press on the world slides it back to the chip, a second Esc closes Visualize. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --lanes 2 --no-main): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/?vizScript=1 node desktop/scripts/demo_p_preview_chip_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/renderer/preview_tabs.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_chip_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_preview_chip_1.mjs; else echo "demo-P-PREVIEW.CHIP1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL (with ?vizScript=1) to run the real-UI proof"; fi
+
+.PHONY: demo-P-AGENT.ACTIVATE1
+demo-P-AGENT.ACTIVATE1: ## P-RAIL.AGENTS1 Activate: the Agents rail's hover module starts a Fleet lane in the folder (card up, input focused), an Agent World session (background lane, Visualize on its prompt panel, input focused), or takes over the main composer (Main's session continues in a Fleet lane resuming it; a busy Main asks first: Move it now, or After this turn with a cancellable pending status). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_agent_activate_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_activate.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_agent_activate_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_agent_activate_1.mjs; else echo "demo-P-AGENT.ACTIVATE1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-RAIL.AGENTS1
+demo-P-RAIL.AGENTS1: ## P-RAIL.AGENTS1: the rail's Agents view: a mini Lucid toggle right of the expand button flips Metrics and Agents (lucid.rail.view; new installs land on Agents); one glass-brick Lucid per folder (recents, Main's folder, live lanes' folders, plus added or kept ones; lucid.agents.v1), typing while an agent works there, meditating and glancing when idle, the turn-end ring; thin arrows step 3 Agents or a page; drag or Alt+Arrow reorders (neighbors notice, FLIP); the hover module recolors, renames, activates and removes with confirm and Undo. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_rail_agents_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_rail_agents_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1.mjs; else echo "demo-P-RAIL.AGENTS1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-RAIL.AGENTS1c
+demo-P-RAIL.AGENTS1c: ## P-RAIL.AGENTS1c: + Add agent on the rail opens a two-step popover, not the OS folder dialog: step 1 explains what an Agent is and that it lives in one folder (recent folders in a click, or Choose a folder), step 2 names it and asks what it will do (the workspace setup purposes, persisted as AgentRecord.purpose, shown in its module, and answering the setup's purpose question for that folder). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_rail_agents_1c.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agents_store.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_rail_agents_1c.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_agents_1c.mjs; else echo "demo-P-RAIL.AGENTS1c: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-BUDDY.1
+demo-P-BUDDY.1: ## P-BUDDY.1: floating Agent buddies: a small glass-brick Lucid in its folder's color on the upper-left corner of the main composer, each Fleet card's composer and beside each Agent Worlds node; a few-pixel ellipse drift and a soft glow, drag anywhere (persisted, double-click resets); ideas from a smaller current model (POST /api/buddy/suggest, scanned and fenced, fail-closed) after each turn or on a click, each one runnable in a parallel worktree lane or handed to Ask Lucid, now in the Agents style with the boxless Lucid. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts desktop/agent_buddy_service.test.ts desktop/checker_model.test.ts desktop/renderer/agents_rail.test.ts desktop/renderer/settings_nav.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_buddy_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_1.mjs; else echo "demo-P-BUDDY.1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-SPINUP.1
+demo-P-SPINUP.1: ## P-SPINUP.1 (+ P-RAIL.AGENTS1d): a starting agent is shown, not just noted: a walking mini Lucid in its Agent's color crosses the top edge of the composer (Main booting, restoring or moving), of a starting Fleet card, or the starting lane's Agent Worlds node, under a glass status bubble that names the Agent and cycles playful lines (honest ones after 30 s and 90 s), then says it is ready and leaves; on the rail a working Agent stays at full opacity while idle ones rest at .55 (sidebar open or collapsed). Real-UI proof (QA engine: QA_AGENT_START_MS=6000 bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_spinup_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_spinup.test.ts desktop/renderer/agent_buddy.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_spinup_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_spinup_1.mjs; else echo "demo-P-SPINUP.1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-PERF.IDLE1
+demo-P-PERF.IDLE1: ## P-PERF.IDLE1: opening LUCID runs no git and an idle window draws nothing. The repo chip and every lane read branch, HEAD and push target from the .git files (no process); the lines tile shows the remembered count (kept across restarts) and runs git only when clicked; the omp session tree (19k files here) is one incremental, watched index instead of three 15 s re-walks; the usage ledger, code activity, compaction policy and obs DB reads are keyed on what they read; idle rail figures hold still and working ones are stepped 8 times a second. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_perf_idle_1.mjs
+	$(BUN) test $(TEST_IGNORES) tools/session_files.test.ts desktop/repo_fs.test.ts desktop/repo_identity.test.ts harness/code_activity.test.ts harness/usage_ledger.test.ts desktop/sessions.test.ts desktop/sessions_index.test.ts desktop/sessions_asklucid.test.ts desktop/sessions_ingest.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_perf_idle_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_perf_idle_1.mjs; else echo "demo-P-PERF.IDLE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-FLEET.CONN1
+demo-P-FLEET.CONN1: ## P-FLEET.CONN1: with several agents working, the window's other requests to the engine are still answered. Every running agent, Main's turn and each Visualize watch hold one HTTP connection open; Chromium's six-per-host cap then queued fleet status forever (Visualize "0 agents", status "Checking"). main.ts lifts the cap for the loopback hosts; Visualize's fleet poll also gives up on a reply after 10 s instead of stopping. Proof in this repo's Electron: 8 open streams, then one quick request, pending without the switch and answered with it.
+	$(BUN) run desktop/scripts/demo_p_fleet_conn_1.ts
+
+.PHONY: demo-P-FLEET.CONN1-live
+demo-P-FLEET.CONN1-live: ## P-FLEET.CONN1 live: real lanes on a real (local, zero-cost) model, their turns streamed by the window like the Fleet grid; every second the rail's working/idle tiles must match the engine within one poll cycle and the window must keep answering. LUCID_DEMO_BROWSER_URL=http://127.0.0.1:9340 LUCID_DEMO_URL=http://127.0.0.1:5401/ LUCID_DEMO_MODEL=dgx-spark/glm-5.3-flash LUCID_DEMO_LANES=5 node desktop/scripts/demo_p_rail_live_1.mjs
+	node --check desktop/scripts/demo_p_rail_live_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_live_1.mjs; else echo "demo-P-FLEET.CONN1-live: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL), LUCID_DEMO_URL and LUCID_DEMO_MODEL to run it"; fi
+
+.PHONY: demo-P-BUDDY.HIDE1
+demo-P-BUDDY.HIDE1: ## P-BUDDY.HIDE1: hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner (it takes no clicks until then); a click hides that buddy for that session (Main's chat, or the lane's), a toast offers Undo, a reload keeps it hidden, a new session brings it back; world buddies have no x. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_hide_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_buddy_hide_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_hide_1.mjs; else echo "demo-P-BUDDY.HIDE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-SCHED.AGENT1
+demo-P-SCHED.AGENT1: ## P-SCHED.AGENT1: an Agent's module on the right rail gets "Schedule this Agent" under Activate: once on a date (within a year), daily, weekdays, chosen days or a day of the month, at a time of day, with instructions or a goal (and an opt-in to approve its tool calls during the run). Saving writes an engine scheduled job targeting the Agent's folder (one-time jobs carry once:true and are disarmed after their fire); the module lists the Agent's schedules with pause, resume and delete. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811), including a real fire that starts a lane in the folder: LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_sched_agent_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/scheduled_jobs.test.ts desktop/renderer/agent_schedule.test.ts desktop/renderer/jobs_view.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_sched_agent_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sched_agent_1.mjs; else echo "demo-P-SCHED.AGENT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi

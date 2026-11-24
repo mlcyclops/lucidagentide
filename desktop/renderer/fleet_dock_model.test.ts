@@ -5,7 +5,7 @@
 // view is pinned, and a lane card's transcript backfill appends only what the card does not already show.
 
 import { describe, expect, test } from "bun:test";
-import { FOLLOW_MAX, fleetButtonAction, laneBusy, pickFollows, seedTail, seedText, shouldFollow, turnKey, type FollowCandidate, type SeedRecord } from "./fleet_dock_model.ts";
+import { FOLLOW_MAX, fleetButtonAction, laneBusy, pickFollows, ranTitle, seedTail, seedText, shouldFollow, turnKey, type FollowCandidate, type SeedRecord } from "./fleet_dock_model.ts";
 
 describe("fleetButtonAction", () => {
   test("a minimized grid comes back, whichever view is pinned", () => {
@@ -68,6 +68,27 @@ describe("pickFollows", () => {
     const lanes = [c("a", 3, { following: true }), c("b", 2, { following: true }), c("c", 1)];
     expect([...pickFollows(lanes)].sort()).toEqual(["a", "b"]);
     expect([...pickFollows(lanes.filter((l) => l.id !== "a"))].sort()).toEqual(["b", "c"]); // a went idle
+  });
+});
+
+describe("a multi-line tool title (a heredoc bash command)", () => {
+  // What an older engine recorded: each title raw (`slice(0, 160)`), so the heredoc spans three lines of the block.
+  const heredoc = "$ cat > /tmp/qa.mjs <<'EOF'\nconst a = 1;\nEOF";
+  const tools = [{ name: "bash", detail: "$ ls" }, { name: "bash", detail: heredoc }, { name: "bash", detail: "$ cd desktop && bun test" }, { name: "read", detail: "Viewing activate state" }];
+  const oldText = `[ran: $ ls]\n[ran: ${heredoc}]\n[ran: $ cd desktop && bun test]\n[ran: Viewing activate state]\nAll four checks pass.`;
+  test("the card shows only the prose: every title becomes a chip, none stays as text", () => {
+    expect(seedText({ role: "assistant", text: oldText, tools })).toBe("All four checks pass.");
+    expect(seedText({ role: "assistant", text: oldText.replace(/\nAll four checks pass\.$/, ""), tools })).toBe(""); // tools only
+  });
+  test("today's engine writes each title on one line, and the card strips that too", () => {
+    expect(ranTitle(heredoc)).toBe("$ cat > /tmp/qa.mjs <<'EOF' const a = 1; EOF");
+    const newText = `${tools.map((t) => `[ran: ${ranTitle(t.detail)}]`).join("\n")}\nAll four checks pass.`;
+    expect(seedText({ role: "assistant", text: newText, tools })).toBe("All four checks pass.");
+  });
+  test("the record still anchors a backfill (its key carries no fragment of the block)", () => {
+    expect(seedTail([{ role: "user", text: "check it" }, { role: "assistant", text: "All four checks pass." }], [
+      { role: "user", text: "check it" }, { role: "assistant", text: oldText, tools }, { role: "user", text: "next" },
+    ])).toBe(2);
   });
 });
 

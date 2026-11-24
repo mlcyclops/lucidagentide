@@ -112,7 +112,7 @@ import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhispe
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
-import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { devSnapshot, securitySnapshot, type SecuritySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
@@ -127,7 +127,7 @@ import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./secu
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, obsKey, cachedCodeActivity, codeActivity, setCodeActivityStore, setUsageLedgerStore, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, perCallModelView, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
@@ -195,6 +195,9 @@ import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { parseBuddyRequest, suggestForBuddy } from "./agent_buddy_service.ts"; // P-BUDDY.1 (ADR-0667)
+import { recommendBuddyModel } from "./checker_model.ts"; // P-BUDDY.1: the buddy's mid-tier model
+import type { BuddyReply } from "./renderer/bridge.ts"; // P-BUDDY.1: types only
 import { ATTACH_DISABLED, attachmentsPromptBlock, describeStaged, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
 import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
 import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
@@ -590,6 +593,7 @@ import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.
 import { MAX_DOWNLOAD_BYTES as MAX_PLUGIN_PACKAGE_BYTES, addonsDir, exportWorld, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, installWorldBytes, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons, ADR-0648 worlds
 import { listInstalledWorlds, readInstalled, resolveWorldAsset } from "./plugins/installed.ts" // ADR-0648 Lucid Agent Worlds
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
+import { createPluginHealer } from "./plugins/restore.ts" // P-WORLDS.HEAL1: purchased plugins and worlds come back after a glitch
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -992,8 +996,11 @@ setInterval(() => {
   })();
 }, 5000);
 
-// 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
+// P-PERF.IDLE1: /api/code-activity answers from the remembered counts (no git); `?count=1` is the user asking for
+// a recount, and only that spawns `git log`. One count at a time; a second ask shares it.
+let codeActivityCount: Promise<CodeActivity> | null = null;
+setCodeActivityStore(join(homedir(), ".omp", "agent", "lucid-code-activity.json"));
+setUsageLedgerStore(join(homedir(), ".omp", "agent", "lucid-usage-ledger.json")); // P-PERF.IDLE1: no cold re-parse per boot
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -1001,10 +1008,17 @@ const netProbe = new NetProbe();
 // (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
 // query, never overlap) + a short TTL so rapid polls are cheap and the loop stays free for the model stream.
 const SNAP_TTL_MS = 8000; // > the ~4s dashboard poll, so the steady poll is served from cache (the DuckDB read runs at most ~every 8s). Live gate blocks are merged FRESH from liveBlocks() at request time, so nothing urgent is delayed by this cache.
-let secSnapMemo: { at: number; p: ReturnType<typeof securitySnapshot> } | null = null;
-function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
-  const t = Date.now();
-  if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
+// P-PERF.IDLE1: also keyed on the obs store's stamp, so an idle dashboard poll reuses the last snapshot instead of
+// re-opening the DuckDB file (about a second of CPU) every SNAP_TTL_MS while nothing has written to it.
+// A null snapshot (the live gate held the file) is retried on the old clock rather than kept until the next write.
+let secSnapMemo: { at: number; key: string; empty: boolean; p: Promise<SecuritySnapshot | null> } | null = null;
+async function securitySnapshotMemo(): Promise<SecuritySnapshot | null> {
+  const t = Date.now(), key = await obsKey();
+  if (!secSnapMemo || ((secSnapMemo.key !== key || secSnapMemo.empty) && t - secSnapMemo.at > SNAP_TTL_MS)) {
+    const entry: NonNullable<typeof secSnapMemo> = { at: t, key, empty: false, p: securitySnapshot() };
+    void entry.p.then((s) => { entry.empty = s === null; });
+    secSnapMemo = entry;
+  }
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
 let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
@@ -1935,6 +1949,10 @@ let autoArchiveTimer: Timer | null = null;
 /** P-ASKLUCID.7 (ADR-0588): models that answered a picture of the screen with an error, for this run of the
  *  engine. In memory on purpose: a provider or a model can gain vision between runs. */
 const askLucidNoPictures = new Set<string>();
+/** P-BUDDY.1 (ADR-0667): each buddy's last answer (key: surface + lane id), reused for 20 s so many buddies
+ *  asking at once cost one model call each. The promise is kept, so a request while one is in flight shares it. */
+const BUDDY_CACHE_MS = 20_000;
+const buddyCache = new Map<string, { at: number; reply: Promise<BuddyReply> }>();
 
 /** P-ASKLUCID.5 (ADR-0586): sweep Ask Lucid's throwaway sessions (one per question) once they are an hour
  *  old: two minutes after start, then every six hours. Unref'd: it never keeps the engine alive. */
@@ -2169,6 +2187,9 @@ const plugins = new PluginRuntime({
   onMcpChange: () => backend.restart(),
 });
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
+// P-WORLDS.HEAL1: the install ledger's self-heal (desktop/plugins/restore.ts). A restore stops a running copy before
+// the damaged folder moves aside, like an update's switch.
+const pluginHealer = createPluginHealer({ beforeSwitch: async (id) => { await plugins.stop(id); } });
 // ADR-0542: the first start of a release after a dev build removes the development modules (data kept), before
 // any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
 // P-AUTH.RELOGIN1 (ADR-0640): read the previous version FIRST (the cleanup rewrites the marker), so a re-login
@@ -3054,13 +3075,17 @@ return Bun.serve({
       if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
-      // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
-      // every dashboard poll. `?force=1` bypasses the cache (manual refresh).
+      // P-PERF.IDLE1: the dashboard poll reads the remembered counts and spawns nothing; `?count=1` (the user clicked
+      // the tile or opened the usage card) recounts. P-PERF.GIT1 still applies to that count: a repo whose HEAD has not
+      // moved costs no git at all (tools/memory_data.ts).
       if (p === "/api/code-activity") {
-        const now = Date.now();
-        if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
-          codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: await codeActivityCache.data });
+        if (url.searchParams.get("count") !== "1") return json({ ok: true, data: await cachedCodeActivity() });
+        if (!codeActivityCount) {
+          const run = codeActivity();
+          codeActivityCount = run;
+          run.finally(() => { if (codeActivityCount === run) codeActivityCount = null; }).catch(() => { /* the route's await reports it */ });
+        }
+        return json({ ok: true, data: await codeActivityCount });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -6198,6 +6223,18 @@ return Bun.serve({
         return json({ ok: true, data: { plugins: plugins.list(), offered } });
       }
       if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      // P-WORLDS.HEAL1: every purchase the install ledger records against the disk (ok / missing / broken), the ids
+      // that need restoring and the reinstalls from backup since start; restore heals one id (or, with none, all)
+      // from its backup through every install gate. Both wait for a heal pass in flight.
+      if (p === "/api/plugins/health" && req.method === "GET") {
+        srv.timeout(req, 0); // the startup pass may be re-scanning a restored package
+        return json({ ok: true, data: await pluginHealer.health() });
+      }
+      if (p === "/api/plugins/restore" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await pluginHealer.restore(typeof b.id === "string" && b.id ? b.id : undefined) });
+      }
       if (p === "/api/plugins/install-from-url" && req.method === "POST") {
         srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
         const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
@@ -6512,7 +6549,7 @@ return Bun.serve({
         const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
         const current = loadJobs().find((j) => j.id === id);
         if (!current) return json({ ok: false, error: "no such job" });
-        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, once: current.once === true, ...patch });
         if (!merged.ok) return json({ ok: false, error: merged.reason });
         // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
         // restarts from now, so the fires missed while suspended are not owed.
@@ -6656,19 +6693,34 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown; stream?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         // P-ATTACH.1 (ADR-0598): the attached files' block, built and scanned now; a refusal refuses the question.
         const files = await promptWithAttachments("", b.attachments);
         if (!files.ok) return json({ ok: false, error: files.error, data: { ok: false, error: files.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
-        const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
+        // P-ASKLUCID.SPEED1: with `stream: true` the answer arrives as NDJSON: `phase` lines while Lucid works (reading,
+        // scanning, asking + model, queued, starting, writing), then one `reply` line. The panel shows the phase and
+        // a timer instead of sitting silent for the whole answer.
+        const modelInfo = backend.checkerModelInfo();
+        let ranOn: string | undefined;
+        const answer = (phase?: (e: { type: "phase"; phase: string; model?: string }) => void) => answerAskLucid(q.text, sanitizeHistory(b.history), {
+          onPhase: (p, model) => phase?.({ type: "phase", phase: p, ...(model ? { model } : {}) }),
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
           knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
           scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
-          pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
-          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, ...(images?.length ? { images } : {}) }),
+          // P-ASKLUCID.MODEL1: the newest small-tier model omp has offered here for the picker's provider (Haiku 5.5,
+          // not the Haiku 4.5 of a list omp has not finished loading); the live list's pick is the fallback.
+          pinModel: () => backend.completionModel(modelInfo.newest || undefined),
+          modelUsed: () => ranOn,
+          // P-ASKLUCID.SPEED1: no MCP servers for this text-only call, and its own phases go to the panel too.
+          complete: (system, user, model, images) => backend.complete(system, user, {
+            model, fallbackModel: modelInfo.recommended || undefined, idleMs: 45_000, noMcp: true,
+            onPhase: (p) => phase?.({ type: "phase", phase: p }),
+            onModel: (m) => { if (m && m !== model) { ranOn = m; phase?.({ type: "phase", phase: "asking", model: m }); } },
+            ...(images?.length ? { images } : {}),
+          }),
           // P-ASKLUCID.7 (ADR-0588): a model that answered a picture with an error is not sent another this run.
           visionRefused: (model) => askLucidNoPictures.has(model ?? ""),
           noteVisionRefused: (model) => { askLucidNoPictures.add(model ?? ""); },
@@ -6680,6 +6732,46 @@ return Bun.serve({
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
         }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
+        // P-ASKLUCID.SPEED1: the next question finds a warm session (opened while the user reads this answer).
+        const rewarm = () => { void backend.warmSpare(backend.checkerModelInfo().newest || undefined); };
+        if (b.stream === true) return ndjsonStream("ask-lucid", async (emit) => { emit({ type: "reply", data: await answer(emit) }); rewarm(); }, req.signal);
+        const reply = await answer();
+        rewarm();
+        return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
+      }
+      // P-ASKLUCID.SPEED1: the panel opened: open a warm side-completion session for the first question now. UI
+      // token only, no body, nothing returned but ok; a failure just means the question opens its own session.
+      if (p === "/api/ask-lucid/warm" && req.method === "POST") {
+        void backend.warmSpare(backend.checkerModelInfo().newest || undefined);
+        return json({ ok: true });
+      }
+      // P-BUDDY.1 (ADR-0667): a floating Agent buddy's read of one agent plus up to 3 next-step ideas, from a mid-tier
+      // model. UI token only (never AGENT_ROUTES): an agent must not be able to feed itself ideas through it. Reads
+      // only; the context and every idea are scanned (agent_buddy_service.ts). Running an idea is the user's press.
+      if (p === "/api/buddy/suggest" && req.method === "POST") {
+        const parsed = parseBuddyRequest(await readBody<unknown>(req));
+        if (!parsed.ok) return json({ ok: false, error: parsed.error, data: { ok: false, error: parsed.error, doing: "", ideas: [], withheld: false } });
+        const key = `${parsed.req.surface}:${parsed.req.laneId ?? ""}`;
+        const now = Date.now();
+        for (const [k, v] of buddyCache) if (now - v.at >= BUDDY_CACHE_MS) buddyCache.delete(k);
+        let hit = buddyCache.get(key);
+        if (!hit) {
+          hit = {
+            at: now,
+            reply: suggestForBuddy(parsed.req, {
+              fleetStatus: () => fleet.status(),
+              laneTranscript: (laneId) => fleet.laneTranscript(laneId),
+              currentSessionId: () => backend.currentSessionId(),
+              sessionTail: (id) => sessionMessages(id, 6),
+              scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
+              pinModel: () => { const info = backend.checkerModelInfo(); return backend.completionModel(recommendBuddyModel(info.options, info.current)?.value); },
+              complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000, noMcp: true }), // P-ASKLUCID.SPEED1: text only
+              now: () => Date.now(),
+            }),
+          };
+          buddyCache.set(key, hit);
+        }
+        const reply = await hit.reply;
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
@@ -7639,7 +7731,9 @@ backend.startAutomationScheduler();
 jobScheduler.start();
 // P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
 // the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
-void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
+// P-WORLDS.HEAL1: first put back any purchased plugin or world that went missing or got damaged (from its backup,
+// through every install gate), so autostart finds it whole. Detached like autostart; startup() never throws.
+void pluginHealer.startup().then(() => plugins.autostart()).catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.

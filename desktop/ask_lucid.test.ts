@@ -228,9 +228,12 @@ function deps(over: Partial<AskDeps> = {}): { d: AskDeps; probe: Probe } {
 
 describe("answerAskLucid", () => {
   test("the model gets the brief, the question, and all three views fenced; the reply says what was seen", async () => {
-    const { d, probe } = deps();
+    const phases: string[] = [];
+    const { d, probe } = deps({ onPhase: (p, m) => { phases.push(m ? `${p}:${m}` : p); } });
     const r = await answerAskLucid("what are my lanes doing?", [{ role: "user", text: "hi" }, { role: "lucid", text: "hello" }], d);
-    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", seen: { lanes: 2, tasks: 1, hits: 1, screen: 0, activity: 0, sessions: 0 }, withheld: [], actions: [], actionsDropped: 0 });
+    expect(r).toEqual({ ok: true, reply: "Two lanes: scout is working.", model: "claude-haiku-5-5", timing: { readMs: 0, scanMs: 0, modelMs: 0, totalMs: 0 }, seen: { lanes: 2, tasks: 1, hits: 1, screen: 0, activity: 0, sessions: 0 }, withheld: [], actions: [], actionsDropped: 0 });
+    // P-ASKLUCID.SPEED1: the panel's waiting line follows the answer, in order, and names the model it asks.
+    expect(phases).toEqual(["reading", "scanning", "asking:anthropic/claude-haiku-5-5"]);
     expect(probe.calls).toBe(1);
     expect(probe.system).toBe(ASK_LUCID_SYSTEM);
     expect(probe.model).toBe("anthropic/claude-haiku-5-5");

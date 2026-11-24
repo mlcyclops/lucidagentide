@@ -47,6 +47,12 @@ export interface AskDeps {
   scan(text: string): Promise<{ block: boolean; reason: string }>;
   /** The model the side completion may use, already clamped by CUI lockdown, or why there is none. */
   pinModel(): { ok: true; model?: string } | { ok: false; error: string };
+  /** P-ASKLUCID.SPEED1: where the answer is, as it happens, for the panel's waiting line: reading the views,
+   *  scanning them, asking the model (with its id). The route adds the completion's own phases. */
+  onPhase?(phase: "reading" | "scanning" | "asking", model?: string): void;
+  /** P-ASKLUCID.MODEL1: the model the completion really ran on, when it differs from the pin (omp refused the
+   *  pin and the fallback was used). Absent or undefined = the pinned model. */
+  modelUsed?(): string | undefined;
   /** `images` (P-ASKLUCID.7) ride after the text as picture blocks; an empty list is a text-only call. */
   complete(system: string, user: string, model: string | undefined, images?: readonly { data: string; mimeType: string }[]): Promise<string>;
   /** P-ASKLUCID.7 (ADR-0588): did this model already answer a picture with an error in this run? */
@@ -72,6 +78,8 @@ export interface AskReply {
   error?: string;
   /** The model that answered, without its provider prefix. */
   model?: string;
+  /** P-ASKLUCID.SPEED1: where the time went (ms): reading the views, scanning them, the model; and in all. */
+  timing?: { readMs: number; scanMs: number; modelMs: number; totalMs: number };
   /** How much Lucid was shown, so the panel can say "saw 3 lanes, 5 tasks, 2 knowledge pages". */
   seen: AskSeen;
   /** Blocks that did not pass the scan and were kept from the model. */
@@ -175,6 +183,8 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   const seen: AskSeen = { ...NOTHING_SEEN };
   const blocks: AskBlock[] = [];
   let screenRedacted = false;
+  const t0 = deps.now();
+  deps.onPhase?.("reading");
 
   // P-ASKLUCID.3 (ADR-0584): the screen goes first, because "this" in a question means what is on it. The
   // posted digest is rebuilt from its named fields (bounded and redacted again), then scanned below like
@@ -189,10 +199,19 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   let fleetRaw: unknown = null;
   let orbitRaw: unknown = null;
 
+  // P-ASKLUCID.SPEED1: the three slow reads (the fleet, the session list, the knowledge graph) start together and
+  // are awaited in block order, so the wait is the slowest of them, not their sum (about 7 to 11 s here). A read
+  // that fails still fails alone (each promise is settled by its own try below).
+  // Wrapped so a reader that throws synchronously rejects its own promise instead of the whole answer.
+  const fleetP = Promise.resolve().then(() => deps.fleetStatus());
+  const sessionsP = deps.sessions ? Promise.resolve().then(() => deps.sessions!()) : null;
+  const knowledgeP = Promise.resolve().then(() => deps.knowledge(question));
+  fleetP.catch(() => {}); sessionsP?.catch(() => {}); knowledgeP.catch(() => {}); // awaited below; never unhandled
+
   // Read each view on its own: one that fails says so and the others still arrive.
   let fleetText: string;
   try {
-    fleetRaw = await deps.fleetStatus();
+    fleetRaw = await fleetP;
     const f = fleetContext(fleetRaw, deps.now());
     fleetText = f.text;
     seen.lanes = f.lanes;
@@ -219,16 +238,16 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   blocks.push({ name: "orbit", text: orbitText });
 
   // P-ASKLUCID.4 (ADR-0585): the sessions in this workspace and the last exchange of the most recent ones.
-  if (deps.sessions) {
+  if (sessionsP) {
     try {
-      const s = sessionsContext(await deps.sessions(), (id) => deps.sessionTail?.(id), { currentId: deps.currentSessionId?.() ?? null, now: deps.now(), mode });
+      const s = sessionsContext(await sessionsP, (id) => deps.sessionTail?.(id), { currentId: deps.currentSessionId?.() ?? null, now: deps.now(), mode });
       if (s.text) { blocks.push({ name: "sessions", text: s.text }); seen.sessions = s.sessions; }
     } catch { /* a briefing without the sessions view is still a briefing */ }
   }
 
   let knowledgeText: string;
   try {
-    const k = knowledgeContext(await deps.knowledge(question));
+    const k = knowledgeContext(await knowledgeP);
     knowledgeText = k.text;
     seen.hits = k.hits;
   } catch { knowledgeText = "The knowledge graph could not be read just now."; }
@@ -245,6 +264,8 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   const past = historyContext(history);
   if (past) blocks.push({ name: "history", text: past });
 
+  const tScan = deps.now();
+  deps.onPhase?.("scanning");
   // Scan every block. A blocked or unscannable block is withheld and counted as not seen.
   const withheld: AskBlockName[] = [];
   for (const b of blocks) {
@@ -262,7 +283,9 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     else if (b.name === "knowledge") seen.hits = 0;
   }
 
+  const tModel = deps.now();
   const pin = deps.pinModel();
+  if (pin.ok) deps.onPhase?.("asking", pin.model);
   if (!pin.ok) {
     deps.onLockdownBlock?.(pin.error);
     return { ok: false, error: pin.error, seen, withheld, actions: [], actionsDropped: 0 };
@@ -306,6 +329,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
     if (!failed(again)) { deps.noteVisionRefused?.(pin.model); pictureUsed = picture === "sent" ? "model-refused" : picture; if (sentUser.length) attachedUsed = "model-refused"; reply = again; }
     else if (again) reply = again; // the text-only error is the one worth reporting
   }
+  const tDone = deps.now();
   const base = { seen, withheld, ...(pictureUsed ? { picture: pictureUsed } : {}), ...(attachedUsed ? { attached: attachedUsed } : {}) };
   if (!reply) return { ok: false, error: UNAVAILABLE, ...base, actions: [], actionsDropped: 0 };
   const status = providerErrorStatus(reply);
@@ -342,5 +366,7 @@ export async function answerAskLucid(question: string, history: readonly AskTurn
   }
   const text = parsed.text || (actions.length ? "Here is what I can set up. Nothing runs until you confirm it." : "");
   if (!text) return { ok: false, error: UNAVAILABLE, ...base, actions: [], actionsDropped };
-  return { ok: true, reply: text, ...(pin.model ? { model: pin.model.replace(/^[^/]*\//, "") } : {}), ...base, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
+  const timing = { readMs: tScan - t0, scanMs: tModel - tScan, modelMs: tDone - tModel, totalMs: deps.now() - t0 };
+  const ran = deps.modelUsed?.() ?? pin.model;
+  return { ok: true, reply: text, ...(ran ? { model: ran.replace(/^[^/]*\//, "") } : {}), timing, ...base, actions, actionsDropped, ...(followups.length ? { followups } : {}) };
 }

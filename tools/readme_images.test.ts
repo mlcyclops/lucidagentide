@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** The release README must call current. Bump it with the release that updates README. */
-const CURRENT_RELEASE = "2.6.1";
+const CURRENT_RELEASE = "2.7.1";
 
 const root = join(import.meta.dir, "..");
 const readme = readFileSync(join(root, "README.md"), "utf8");

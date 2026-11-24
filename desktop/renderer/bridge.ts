@@ -144,6 +144,13 @@ import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts
 export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
 import type { AskExtrasView, AskReplyView, AskTurnView } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): types only
 import { pathFileName, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): pure
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddy. `main` rides the main composer, `lane` a Fleet lane card. */
+export type BuddySurface = "main" | "lane";
+/** One recommendation: a one-line `title` (<= 80 chars) and a `prompt` (<= 600 chars) a parallel agent could run. */
+export interface BuddyIdea { id: string; title: string; prompt: string }
+/** POST /api/buddy/suggest's answer. `doing` (<= 140 chars) says what the agent is doing now; at most 3 `ideas`.
+ *  `withheld` = the agent's recent work failed the security scan, so no model was called. */
+export interface BuddyReply { ok: boolean; error?: string; model?: string; doing: string; ideas: BuddyIdea[]; withheld: boolean }
 /** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
 export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
@@ -290,6 +297,8 @@ export interface CodeActivity {
   workspaces: { name: string; path: string; added: number; deleted: number; files: number; spend: number }[];
   totals: { added: number; deleted: number; files: number };
   month: string; daysInMonth: number;
+  /** P-PERF.IDLE1: when git last counted (ISO); null before the first count. */
+  countedAt: string | null;
 }
 export interface ConfigOption {
   id: string; name: string; category: string; type: string;
@@ -650,6 +659,15 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** P-WORLDS.HEAL1: one purchase the engine's install ledger records, against the disk (desktop/plugins/restore.ts
+ *  HealthItem). `backup`: the engine still has a verified-at-install backup to restore it from. */
+export interface PluginHealthItem {
+  id: string; name: string; kind: PluginKind; version: string; status: "ok" | "missing" | "broken";
+  problem?: string; backup: boolean; restoreProblem?: string;
+}
+/** One reinstall the engine made from a backup since it started (shown once: "Repaired N worlds after an update"). */
+export interface PluginRepairView { id: string; name: string; kind: PluginKind; version: string; at: string }
+export interface PluginHealthView { items: PluginHealthItem[]; needsRestore: string[]; repairs: PluginRepairView[] }
 /** ADR-0542: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
 export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
@@ -951,8 +969,14 @@ export interface LucidBridge {
   /** P-CTX.2b (ADR-0579): read / store the tool-result window choice (applies at the next agent start). */
   resultWindow(): Promise<ResultWindowView | null>;
   setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
-  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation. */
-  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation.
+   *  P-ASKLUCID.SPEED1: `onPhase` streams where the answer is (reading, scanning, asking + model, queued, starting,
+   *  writing) while it is made. */
+  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView, onPhase?: (phase: string, model?: string) => void): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.SPEED1: open a warm side-completion session for the next question (best effort). */
+  askLucidWarm(): Promise<unknown>;
+  /** P-BUDDY.1 (ADR-0667): a buddy's short read of what its agent is doing, with up to 3 next-step ideas. Null = no answer. */
+  buddySuggest(req: { surface: BuddySurface; laneId?: string; purpose?: "app" | "docs" | "analysis" | "other" | null }): Promise<BuddyReply | null>;
   /** P-ASKLUCID.9 (ADR-0600): the image models the engine's keys make usable, best first (or why none may be). */
   imageModels(): Promise<ImageModelsView | null>;
   /** P-ASKLUCID.9: edit one image the user attached, after they confirmed the card. Null = no answer. */
@@ -1080,7 +1104,8 @@ export interface LucidBridge {
   remoteAgentRemove(id: string): Promise<unknown>;
   remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
-  codeActivity(): Promise<CodeActivity | null>;
+  /** P-PERF.IDLE1: the remembered counts (no git); `count` asks the engine to recount with git. */
+  codeActivity(count?: boolean): Promise<CodeActivity | null>;
   // P-COLLAB.3 (ADR-0192): live session sharing (view-only host). `status` is the poll; `start` mints the
   // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
   // configures the authorized relay (self-hosted default, public opt-in).
@@ -1344,6 +1369,11 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** P-WORLDS.HEAL1: every recorded purchase against the disk (waits for the engine's startup self-heal). */
+  pluginsHealth(): Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the engine restores one id (or, with none, every recorded one) from its backup, through every
+   *  install gate, then answers the health report. */
+  pluginsRestore(id?: string): Promise<PluginHealthView | null>;
   /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
   worldsList(): Promise<InstalledWorld[]>;
   /** Install a SIGNED world package file the user picked (an export from another machine). */
@@ -1811,6 +1841,35 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
+/** P-ASKLUCID.SPEED1: one Ask Lucid question as NDJSON: `phase` lines go to `onPhase`, the `reply` line is the
+ *  answer. A refusal before the stream (a bad question, a refused file) arrives as plain JSON and is returned as
+ *  is. Null when the engine cannot be reached or the stream ends without a reply. */
+async function askLucidStream(body: Record<string, unknown>, onPhase: (phase: string, model?: string) => void): Promise<AskReplyView | null> {
+  try {
+    const res = await fetch("/api/ask-lucid", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ ...body, stream: true }) });
+    if (!res.body || (res.headers.get("content-type") ?? "").includes("application/json")) return (await res.json())?.data ?? null;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let reply: AskReplyView | null = null;
+    const line = (s: string): void => {
+      if (!s.trim()) return;
+      let e: { type?: unknown; phase?: unknown; model?: unknown; data?: unknown };
+      try { e = JSON.parse(s); } catch { return; }
+      if (e.type === "phase" && typeof e.phase === "string") onPhase(e.phase, typeof e.model === "string" ? e.model : undefined);
+      else if (e.type === "reply" && e.data && typeof e.data === "object") reply = e.data as AskReplyView; // the engine's own AskReply
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) { line(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    line(buf);
+    return reply;
+  } catch { return null; }
+}
 /** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` (with `sessionId`,
  *  the session Main kept) and `heldBy` come only from the engine's 409 refusal; any other failure is a
  *  bare `ok: false`, which is NOT a completed switch (#460 case 4: the engine may still hold anything). */
@@ -2011,7 +2070,9 @@ export const bridge: LucidBridge = {
   codeGraphAgent: () => getData("/api/codegraph/agent"),
   resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
   setResultWindow: (setting) => post("/api/result-window", { setting }),
-  askLucid: (text, history, extras) => post("/api/ask-lucid", { text, history, ...(extras ?? {}) }), // P-ASKLUCID.1 (ADR-0581)
+  askLucid: (text, history, extras, onPhase) => (onPhase ? askLucidStream({ text, history, ...(extras ?? {}) }, onPhase) : post("/api/ask-lucid", { text, history, ...(extras ?? {}) })), // P-ASKLUCID.1 (ADR-0581)
+  askLucidWarm: () => post("/api/ask-lucid/warm", {}), // P-ASKLUCID.SPEED1
+  buddySuggest: (req) => post("/api/buddy/suggest", req), // P-BUDDY.1 (ADR-0667)
   imageModels: () => getData("/api/image/models"), // P-ASKLUCID.9 (ADR-0600)
   imageEdit: (req) => post("/api/image/edit", req), // P-ASKLUCID.9
   saveEditedImageAs: async (path) => {
@@ -2120,7 +2181,7 @@ export const bridge: LucidBridge = {
   remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
   remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
-  codeActivity: () => getData("/api/code-activity"),
+  codeActivity: (count) => getData(count ? "/api/code-activity?count=1" : "/api/code-activity"),
   sendPrompt: streamChat,
   chatStatus: async () => {
     const response = await fetch("/api/chat/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(10_000) });
@@ -2301,6 +2362,8 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  pluginsHealth: () => getData("/api/plugins/health"),
+  pluginsRestore: (id) => post("/api/plugins/restore", id ? { id } : {}),
   worldsList: async () => {
     const d: unknown = await getData("/api/worlds");
     return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];

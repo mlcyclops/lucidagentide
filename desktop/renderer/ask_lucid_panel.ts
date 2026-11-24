@@ -21,11 +21,42 @@ import { createDock, type DockHandle } from "./dock.ts";
 import { copyToClipboard } from "./ctxmenu.ts"; // P-ASKLUCID.8: the answer's Copy button
 import { acceptAttachment, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Attachment } from "./composer_attachments.ts"; // P-ASKLUCID.8: the composer's image chips
 import { followMode, followupRecs, noteMiss, noteOwnQuestion, noteUsed, parseMemory, rank, REC_LIMITS, REC_MEMORY_KEY, type Follow, type Rec, type RecMemory, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586)
-import { mountMiniMascot, type MiniMascotHandle, type MiniState } from "./mascot_mini.ts";
+import type { MiniState } from "./mascot_mini.ts";
+import { lucidFigureArt, paletteOf, paletteStyle } from "./agents_rail_art.ts"; // P-BUDDY.1 (ADR-0667): boxless Lucid header
 import { bindFileDrop, clipboardFiles, createAttachTray, folderDropNote, isAttachShortcut, mountPlusMenu, pickFiles, plusButtonTip, plusMenuItems, sentFilesEl, syncPlusButton, type AttachBridge, type AttachTray } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598)
 import type { StagedAttachment } from "../attach_kinds.ts";
 import { imageCardState, pathBreakParts, readSavedImageModel, saveImageModel, type ImageCardState, type ImageModelOptionView, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600)
 import { tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): new controls use data-tip
+
+const LUCID_PALETTE = paletteOf({ theme: "lucid", hue: 145 });
+/** The header figure behind the same setState/setActive surface the mini mascot had (P-BUDDY.1). The SVG is
+ *  rebuilt only when idle/work flips; done/error are idle plus a one-shot flash class. */
+interface FigureHandle { setState(s: MiniState): void; setActive(on: boolean): void }
+function mountFigure(host: HTMLElement): FigureHandle {
+  let art: "idle" | "work" | null = null;
+  let flashT = 0;
+  const draw = (st: "idle" | "work"): void => {
+    if (st === art) return;
+    art = st;
+    // Our own constant SVG, parsed as SVG so the panel's one innerHTML stays Lucid's sanitized reply.
+    const svg = new DOMParser().parseFromString(lucidFigureArt(st, -0.7), "image/svg+xml").documentElement;
+    host.replaceChildren(document.importNode(svg, true));
+  };
+  draw("idle");
+  return {
+    setState: (s) => {
+      draw(s === "working" ? "work" : "idle");
+      host.classList.remove("al-fig-ok", "al-fig-err");
+      window.clearTimeout(flashT);
+      if (s === "done" || s === "error") {
+        void host.offsetWidth; // restart the one-shot animation
+        host.classList.add(s === "done" ? "al-fig-ok" : "al-fig-err");
+        flashT = window.setTimeout(() => host.classList.remove("al-fig-ok", "al-fig-err"), 1600);
+      }
+    },
+    setActive: (on) => { host.classList.toggle("al-fig-paused", !on); },
+  };
+}
 
 export interface AskTurnView { role: "user" | "lucid"; text: string }
 /** The engine's answer (desktop/ask_lucid_service.ts AskReply). */
@@ -34,6 +65,8 @@ export interface AskReplyView {
   reply?: string;
   error?: string;
   model?: string;
+  /** P-ASKLUCID.SPEED1: where the time went (ms). */
+  timing?: { readMs: number; scanMs: number; modelMs: number; totalMs: number };
   /** `screen` counts the surfaces of the screen Lucid was shown (P-ASKLUCID.3, ADR-0584). */
   seen: { lanes: number; tasks: number; hits: number; screen?: number; activity?: number; sessions?: number };
   withheld: string[];
@@ -87,6 +120,10 @@ export function droppedLine(n: number): string {
 export const ASK_DOCK_KEY = "lucid.asklucid.dock.v1";
 /** How many earlier turns go back with a question (the engine bounds it again). */
 export const ASK_HISTORY_TURNS = 12;
+/** P-ASKLUCID.SPEED1: how long each part that goes WITH a question may take before it is left out (ms). */
+const PREP_SCREEN_MS = 2500;
+const PREP_EXTRAS_MS = 1500;
+const PREP_SHOT_MS = 2000;
 
 export const ASK_SUGGESTIONS: readonly string[] = [
   "What are my fleet agents doing right now?",
@@ -98,7 +135,7 @@ export const ASK_SUGGESTIONS: readonly string[] = [
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /** PURE: one line under a reply saying what Lucid was shown, and what was kept from him. */
-export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model" | "picture">): string {
+export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model" | "picture" | "timing">): string {
   // P-ASKLUCID.7 (ADR-0588): "with a picture" only when one really went with the question.
   const pic = r.picture === "sent" ? ", with a picture" : "";
   const screen = (r.seen.screen ?? 0) > 0 ? `your screen (${plural(r.seen.screen ?? 0, "surface", "surfaces")}${pic}), ` : "";
@@ -109,12 +146,32 @@ export function seenLine(r: Pick<AskReplyView, "seen" | "withheld" | "model" | "
   const names: Record<string, string> = { screen: "your screen", activity: "the agent conversations", sessions: "the sessions", fleet: "the fleet agents", orbit: "the Fleet Orbit", knowledge: "the knowledge graph", history: "the earlier turns" };
   const kept = r.withheld.map((w) => names[w] ?? w);
   const held = kept.length ? ` Withheld by the security scan: ${kept.join(", ")}.` : "";
-  return `${saw}${held}${r.model ? ` Answered by ${r.model}.` : ""}`;
+  const took = r.timing && r.timing.totalMs > 0 ? ` in ${(r.timing.totalMs / 1000).toFixed(1)} s` : "";
+  return `${saw}${held}${r.model ? ` Answered by ${r.model}${took}.` : ""}`;
 }
 
 /** PURE: the turns to send back with the next question: the most recent ones, oldest first. */
 export function historyToSend(turns: readonly AskTurnView[], max: number = ASK_HISTORY_TURNS): AskTurnView[] {
   return turns.slice(-max).map((t) => ({ role: t.role, text: t.text }));
+}
+
+/** PURE (P-ASKLUCID.SPEED1): the waiting line for one phase of an answer, naming the model once it is known. */
+export function phaseLine(phase: string, model: string): string {
+  const m = model || "the model";
+  switch (phase) {
+    case "reading": return "Reading your screen, the fleet and the knowledge graph";
+    case "scanning": return "Checking what he read with the security scanner";
+    case "queued": return "Waiting for another Lucid task to finish";
+    case "starting": return `Starting ${m}`;
+    case "writing": return `${m} is writing`;
+    default: return `Asking ${m}`;
+  }
+}
+
+/** PURE: elapsed seconds as the waiting line's timer ("0:07", "1:12"). */
+export function waitClock(ms: number): string {
+  const s = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 /** PURE: the header's status line for each state. */
@@ -140,8 +197,13 @@ export interface AskExtrasView {
 }
 
 export interface AskLucidDeps {
-  /** Ask the engine. Null means the request itself failed. */
-  ask(text: string, history: AskTurnView[], extras: AskExtrasView): Promise<AskReplyView | null>;
+  /** Ask the engine. Null means the request itself failed. `onPhase` (P-ASKLUCID.SPEED1) hears where the answer is
+   *  while it is made: reading, scanning, asking (with the model id), queued, starting, writing. */
+  ask(text: string, history: AskTurnView[], extras: AskExtrasView, onPhase?: (phase: string, model?: string) => void): Promise<AskReplyView | null>;
+  /** A model id as the picker names it ("anthropic/claude-haiku-4-5" -> "Claude Haiku 4.5"). Absent = the bare id. */
+  modelName?(id: string): string;
+  /** P-ASKLUCID.SPEED1: the panel opened: have the engine open a warm session for the first question. */
+  warm?(): void;
   /** P-ASKLUCID.7 (ADR-0588): take a picture of the screen. Null = none (a plain browser, or turned off). */
   shot?(): Promise<unknown>;
   /** P-ASKLUCID.6 (ADR-0587): more to send with every question (current settings, unused features). */
@@ -166,6 +228,8 @@ export interface AskLucidDeps {
   topBar?: string;
   /** Selector of the zoomed app root (see DockOptions.zoomOf). */
   zoomOf?: string;
+  /** Selector of the panel at the window's right edge; docked right, the panel flies out to its left (DockOptions.rightOf). */
+  rightOf?: string;
   /** P-ASKLUCID.2 (ADR-0582): carry out one action the user just confirmed. Absent = cards are not offered. */
   runAction?(action: AskAction, ctx?: AskActionContext): Promise<AskActionResult>;
   /** P-ASKLUCID.9 (ADR-0600): the image models, the Settings jump and where an edited image opens. */
@@ -206,13 +270,14 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
 
   // Header: mini Lucid, the title and one status line.
   const head = el("div", "al-head");
-  const miniHost = el("span", "");
+  const miniHost = el("span", "al-fig");
+  miniHost.setAttribute("style", paletteStyle(LUCID_PALETTE));
   const headText = el("div", "al-head-text");
   const title = el("span", "al-title", "Ask Lucid");
   const stateEl = el("span", "al-state", stateLine("idle"));
   headText.append(title, stateEl);
   head.append(miniHost, headText);
-  let mini: MiniMascotHandle | null = null;
+  let mini: FigureHandle | null = null;
 
   // Body: the log and the composer.
   const panel = el("div", "al-panel");
@@ -413,16 +478,23 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     storageKey: ASK_DOCK_KEY,
     topBar: deps.topBar,
     zoomOf: deps.zoomOf,
+    rightOf: deps.rightOf, // P-ASKLUCID.SPEED1b: docked right, he flies out left of the inspector rail
     headerStart: head,
     body: panel,
     pillContent: pillIn,
-    onShow: () => { mini ??= mountMiniMascot(miniHost, { size: "sm" }); mini.setActive(true); setTimeout(() => input.focus(), 60); loadMemory(); deps.onFollow?.(followMode(memory)); void refreshRecs(); },
+    onShow: () => { mini ??= mountFigure(miniHost); mini.setActive(true); setTimeout(() => input.focus(), 60); loadMemory(); deps.onFollow?.(followMode(memory)); void refreshRecs(); },
     onHide: () => { mini?.setActive(false); settleShown(); },
   });
+
+  // P-BUDDY.1: the Agents glass look is scoped to this dock (other docks share .ald); the Lucid palette vars on
+  // the root let every rule below tint with --G.
+  dock.root.classList.add("al-dock");
+  for (const k of ["K", "D", "L", "G", "g"] as const) dock.root.style.setProperty(`--${k}`, LUCID_PALETTE[k]); // setProperty: the dock owns inline geometry
 
   const setState = (s: MiniState): void => {
     mini?.setState(s);
     stateEl.textContent = stateLine(s);
+    stateEl.classList.toggle("work", s === "working");
     dock.pill.classList.toggle("working", s === "working");
     if (s === "done" || s === "error") setTimeout(() => { if (!busy) stateEl.textContent = stateLine("idle"); }, 1600);
   };
@@ -671,20 +743,44 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
     autosize();
     addUser(text, images, sentFiles);
     setState("working");
+    // P-ASKLUCID.SPEED1: a live waiting line in the conversation: what Lucid is doing now (the engine's phases),
+    // which model he asked, and how long it has been. Replaced by the answer (or the error).
+    const wait = el("div", "al-wait");
+    wait.setAttribute("role", "status");
+    const waitText = el("span", "al-wait-t", phaseLine("reading", ""));
+    const waitTime = el("span", "al-wait-time", "0:00");
+    waitTime.setAttribute("aria-hidden", "true");
+    wait.append(el("span", "al-wait-dots"), waitText, waitTime);
+    log.appendChild(wait);
+    scrollDown();
+    const askedAt = Date.now();
+    let model = "";
+    const waitTick = window.setInterval(() => { waitTime.textContent = waitClock(Date.now() - askedAt); }, 500);
+    const onPhase = (phase: string, id?: string): void => {
+      if (id) model = deps.modelName?.(id) ?? id.replace(/^[^/]*\//, "");
+      waitText.textContent = phaseLine(phase, model);
+      stateEl.textContent = waitText.textContent;
+    };
+    const endWait = (): void => { window.clearInterval(waitTick); wait.remove(); };
     const history = historyToSend(turns);
     turns.push({ role: "user", text });
     // The screen is read at the moment of asking, so "this" means what the user sees now.
-    const screen = deps.screen ? deps.screen().catch(() => null) : Promise.resolve(null);
-    const extra: Promise<AskExtrasView> = deps.extras ? deps.extras().catch(() => ({})) : Promise.resolve({});
+    // P-ASKLUCID.SPEED1: what goes WITH the question never holds it up for long. A cold first ask on a busy
+    // machine spent ~30 s here (the window picture and slow engine reads) before the question was even sent; past
+    // its budget a part is left out (the picture: the answer says none was sent).
+    const bounded = <T,>(p: Promise<T>, ms: number, none: T): Promise<T> => Promise.race([p.catch(() => none), new Promise<T>((r) => setTimeout(() => r(none), ms))]);
+    const screen = deps.screen ? bounded(deps.screen(), PREP_SCREEN_MS, null) : Promise.resolve(null);
+    const extra: Promise<AskExtrasView> = deps.extras ? bounded(deps.extras(), PREP_EXTRAS_MS, {}) : Promise.resolve({});
     // P-ASKLUCID.7 (ADR-0588): the picture is taken at the same moment as the text view of the screen.
-    const shot = deps.shot ? deps.shot().catch(() => null) : Promise.resolve(null);
-    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}), ...(images.length ? { images: images.map((a) => a.dataUrl) } : {}), ...(fileIds.length ? { attachments: fileIds } : {}) })).catch(() => null).then((r) => {
+    const shot = deps.shot ? bounded(deps.shot(), PREP_SHOT_MS, null) : Promise.resolve(null);
+    void Promise.all([screen, extra, shot]).then(([s, x, p]) => deps.ask(text, history, { ...x, ...more, ...(s ? { screen: s } : {}), ...(s && p ? { shot: p } : {}), ...(images.length ? { images: images.map((a) => a.dataUrl) } : {}), ...(fileIds.length ? { attachments: fileIds } : {}) }, onPhase)).catch(() => null).then((r) => {
+      endWait();
       busy = false;
       sendBtn.disabled = false;
       fileTray?.settle(fileIds, !!(r?.ok && r.reply));
       if (r?.ok && r.reply) {
         turns.push({ role: "lucid", text: r.reply });
-        addLucid(r.reply, seenLine(r));
+        addLucid(r.reply, seenLine(r.model ? { ...r, model: deps.modelName?.(r.model) ?? r.model } : r));
         // P-ASKLUCID.9 (ADR-0600): each card keeps the images of the question it answers, for edit_image.
         const urls = images.map((x) => x.dataUrl);
         for (const a of r.actions ?? []) addAction(a, urls);
@@ -718,12 +814,13 @@ export function createAskLucid(deps: AskLucidDeps): AskLucidHandle {
   });
   form.addEventListener("submit", (e) => { e.preventDefault(); send(input.value); });
 
+  // P-ASKLUCID.SPEED1: the panel coming up is the moment to open a warm session for the first question.
   return {
-    open: () => { dock.open(); dock.setUnread(false); },
+    open: () => { dock.open(); dock.setUnread(false); deps.warm?.(); },
     close: () => dock.close(),
-    toggle: () => { dock.toggle(); if (dock.isOpen()) dock.setUnread(false); },
+    toggle: () => { dock.toggle(); if (dock.isOpen()) { dock.setUnread(false); deps.warm?.(); } },
     isOpen: () => dock.isOpen(),
-    prefill(text) { dock.open(); input.value = text; autosize(); input.focus(); },
+    prefill(text) { dock.open(); deps.warm?.(); input.value = text; autosize(); input.focus(); },
     ask: (text) => send(text),
     brief: () => send(BRIEF_QUESTION, { brief: true }),
     say(markdown) { dock.open(); addLucid(markdown); },

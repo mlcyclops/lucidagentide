@@ -26,6 +26,13 @@ export interface Entitlement {
   /** P-PLUGINS.1 (ADR-0461): for a plugin id, the newest published package version (drives "Update"). Absent
    *  or null for packs and for a plugin with nothing published; never part of the ownership decision. */
   latestVersion?: string | null;
+  /** P-WORLDS.STORE1: the Sponsor world pack (`bundle-sponsor`) reports its unspent world credits and the ISO
+   *  date they lapse; Patron Class (`bundle-patron`) reports `coverUntil`, the date new worlds stop being
+   *  covered; both report `updatesUntil`. Advisory display facts, never part of the ownership decision. */
+  creditsRemaining?: number;
+  creditsUntil?: string;
+  coverUntil?: string;
+  updatesUntil?: string;
 }
 
 /** P-PLUGINS.5 (ADR-0465): the caller's government-access record, as `getGovAccess` reports it. */

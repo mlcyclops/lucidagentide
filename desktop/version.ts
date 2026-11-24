@@ -820,4 +820,14 @@
 // v2.6.1 = 2.6.0 plus documentation: the README and lucid-agents.com showcase Lucid Agent Worlds and name 2.6.1 as
 //            current; ADR-0660 plans docs.lucid-agents.com (screenshots, captioned videos, search, in-app Help links)
 //            for developers and non-developers alike. No app behavior change. STABLE: marked Latest; moves the cask.
-export const APP_VERSION = "2.6.1";
+// v2.7.1 = 2.6.1 plus (#671): the right rail's Agents view, mini Lucids in glass bricks with Activate into Main, a Fleet
+//            lane or an Agent World, a two-step + Add agent (ADR-0665, ADR-0666); Schedule this Agent, once or on a repeat
+//            with instructions (ADR-0677); floating Agent buddies with ideas from a smaller model and a red x to hide them
+//            for the session (ADR-0667, ADR-0669, ADR-0676); a walking mini Lucid while an agent starts (ADR-0668); one
+//            preview chip and lane snapshots (ADR-0664); World Packs lead the store and purchases self-heal, Visualize
+//            never flashes (ADR-0661..0663); Ask Lucid's live waiting line, newest small model and right-rail fly-out
+//            (ADR-0670, ADR-0671); no git at open and an idle LUCID near 1% CPU (ADR-0672); the loopback connection cap
+//            lifted so many agents keep the window answering, and a live rail (ADR-0674, ADR-0675); malformed plugin
+//            installs file no Live block, owners hold every store item (ADR-0673). 2.7.0 skipped. STABLE: marked Latest;
+//            moves the cask.
+export const APP_VERSION = "2.7.1";

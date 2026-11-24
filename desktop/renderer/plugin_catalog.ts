@@ -5,13 +5,15 @@
 //
 // PREMIUM: the LUCID apps sold at $29.99 one-time (ADR-0463) plus the link-outs that are never sold here (LEAPS
 // keeps its own subscription; MDMP Engine and Joint Planning Engine are Black Arrow Systems partner apps,
-// ADR-0465), and the Lucid Agent Worlds at $9.99 one-time each under their own heading (ADR-0648). FREE: the ADR-0158/0181 integrations registry, moved here from the retired `#scrim` marketplace
-// with its featured / built-in / planned semantics intact, plus the capabilities LUCID already ships.
+// ADR-0465), the Lucid Agent Worlds at $9.99 one-time each under their own heading (ADR-0648), and above them the
+// two Lucid Agent World Packs, Patron Class and Sponsor (P-WORLDS.STORE1). FREE: the ADR-0158/0181 integrations
+// registry, moved here from the retired `#scrim` marketplace with its featured / built-in / planned semantics
+// intact, plus the capabilities LUCID already ships.
 //
 // Pure data and pure decisions (no DOM, no fetch): plugins_flyout.ts renders and wires; this module decides.
 // Ids are stable forever (AGENTS.md invariant 9) and double as the entitlement id (PLUGINS-CONTRACT).
 
-import { decidePackAction, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
+import { decidePackAction, isEntitled, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
 
 export type PluginTier = "premium" | "free";
 export type PluginSection = "civilian" | "government";
@@ -31,7 +33,8 @@ interface PremiumBase {
   lucid: string;
   section: PluginSection;
   media: PluginMedia;
-  /** The drawer heading the card is listed under instead of its section's (WORLDS_GROUP for the worlds). */
+  /** The drawer heading the card is listed under instead of its section's (WORLDS_GROUP for the worlds,
+   *  WORLD_PACKS_GROUP for the world packs). */
   group?: string;
 }
 /** Sold through LUCID: one-time `price` (the label; the Stripe price is looked up by `lookupKey` server-side).
@@ -48,6 +51,14 @@ const APP_PRICE = "$29.99";
 const WORLD_PRICE = "$9.99";
 /** The drawer heading of the Lucid Agent Worlds: add-on packs for the Visualize view (ADR-0648). */
 export const WORLDS_GROUP = "Lucid Agent Worlds";
+/** P-WORLDS.STORE1: the drawer heading of the Lucid Agent World Packs, the first section on PREMIUM. */
+export const WORLD_PACKS_GROUP = "Lucid Agent World Packs";
+/** The backend catalog ids of the two world packs (stable forever, invariant 9). */
+export const SPONSOR_PACK_ID = "bundle-sponsor";
+export const PATRON_PACK_ID = "bundle-patron";
+/** Sponsor: exactly this many worlds are picked at checkout, and this many world credits are banked. */
+export const SPONSOR_PICKS = 6;
+export const SPONSOR_CREDITS = 6;
 export const PLUGIN_LICENSE_NAME = "LUCID Premium Plugin License";
 export const PLUGIN_LICENSE_URL = "https://lucid-agent.web.app/legal/plugins";
 export const BLACK_ARROW = "Black Arrow Systems";
@@ -105,6 +116,23 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     lucid: "A hub that runs on this machine and opens as Remote agents on the left rail. Until the signed release is on sale, a private build installs from the Installed tab and is marked unsigned.",
     media: { loop: false, poster: "generated", glyph: "share", tone: "cyan" },
   },
+  // P-WORLDS.STORE1: the Lucid Agent World Packs, listed above everything else on PREMIUM. A pack unlocks worlds on
+  // the account (the backend writes or resolves each world's entitlement); it has no package of its own, so its
+  // card never installs, opens or updates. Each card plays a collage loop of many worlds.
+  {
+    id: PATRON_PACK_ID, name: "Patron Class", section: "civilian", group: WORLD_PACKS_GROUP, sale: "buy", lookupKey: "BND-WORLDS-PATRON-OTF", available: true, price: "$99.99",
+    kicker: "Lucid Agent World Pack",
+    pitch: "Every Lucid Agent World live today, plus every world released in the next 3 years, yours to keep forever. Over 100 worlds are on the roadmap, and 3 years of updates bring improved graphics, mini games and Deluxe upgrades.",
+    lucid: "Every world card turns to Install the moment the pack is yours, and each new world unlocks on its own as it is released. Worlds open in the Visualize view.",
+    media: { loop: true, poster: "webp", glyph: "star", tone: "amber" },
+  },
+  {
+    id: SPONSOR_PACK_ID, name: "Sponsor", section: "civilian", group: WORLD_PACKS_GROUP, sale: "buy", lookupKey: "BND-WORLDS-SPONSOR-OTF", available: true, price: "$49.99",
+    kicker: "Lucid Agent World Pack",
+    pitch: "Pick any 6 Lucid Agent Worlds today and bank 6 more world credits to spend on any world, current or future, over the next 3 years. 12 worlds for about the price of 5, plus 3 years of updates on every world you own.",
+    lucid: "Choose your 6 worlds before checkout. Later, Use a credit on any world's card unlocks it, and every unlocked world installs and opens in the Visualize view.",
+    media: { loop: true, poster: "webp", glyph: "spark", tone: "violet" },
+  },
   // ADR-0648: Lucid Agent Worlds, add-on packs for the Visualize view. Each brings its own cast (the hub is the boss,
   // agents are the fleet lanes, subagents the helpers), stages, sky, three throwables and a storm. A world installs
   // like any store plugin and opens in Visualize's style picker; it never runs as a program.
@@ -113,203 +141,203 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     kicker: "Lucid Agent World",
     pitch: "Santa's workshop for your agents: Santa runs it, the elves build, and the reindeer fly the helpers in. Snowy stages, a winter sky, snowball throwables, and a Blizzard storm.",
     lucid: "Turns the Visualize view into the workshop: your main agent is Santa, every fleet lane an elf at a bench, and each subagent arrives by reindeer. Pick it from the Visualize style picker.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "accent" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "accent" },
   },
   {
     id: "world-valentines", name: "Valentine's Day", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-VALENTINES-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Mount Olympus in love: Cupid and the Greek gods take the stage, with marble temples, a rose sky, heart throwables, and a Heart Storm.",
     lucid: "Your main agent rules from Olympus, the fleet lanes are the gods, and Cupid's helpers are your subagents. Pick it from the Visualize style picker.",
-    media: { loop: false, poster: "generated", glyph: "spark", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "spark", tone: "violet" },
   },
   {
     id: "world-football", name: "Football", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-FOOTBALL-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Game day: a coach and the team in YOUR colors on a floodlit field, with footballs to throw and a Rain Delay or Hail storm.",
     lucid: "Your main agent is the coach on the sideline, every fleet lane a player, and subagents run on as the special teams. Set the team colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "shield", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "shield", tone: "blue" },
   },
   {
     id: "world-st-patricks", name: "St. Patrick's Day", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-STPATRICKS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Leprechauns, pots of gold, four-leaf clovers, and rainbows on rolling green hills, with a Rainbow Storm.",
     lucid: "Your main agent is the head leprechaun, the fleet lanes guard their pots of gold, and subagents ride in on rainbows. Pick it from the Visualize style picker.",
-    media: { loop: false, poster: "generated", glyph: "loop", tone: "green" },
+    media: { loop: true, poster: "webp", glyph: "loop", tone: "green" },
   },
   {
     id: "world-soccer", name: "Soccer", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-SOCCER-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Match day: a manager and a club in YOUR colors under the floodlights, with volleys, yellow cards, a trophy lift and a Flare Storm.",
     lucid: "Your main agent is the manager on the touchline, every fleet lane a player, and subagents run on as assistant coaches and ball kids. Set the club colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "cyan" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "cyan" },
   },
   {
     id: "world-baseball", name: "Baseball", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-BASEBALL-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "A day at the ballpark: a manager and a team in YOUR colors on a sunny diamond, with hot dogs, foam fingers and Fireworks Night.",
     lucid: "Your main agent is the manager in the dugout, every fleet lane a player, and subagents run out as base coaches and bat kids. Set the team colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "record", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "record", tone: "blue" },
   },
   {
     id: "world-basketball", name: "Basketball", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-BASKETBALL-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Game night in the arena: a coach and a team in YOUR colors on the hardwood, with the mascot, fresh sneakers and a Blackout Intro.",
     lucid: "Your main agent is the head coach on the sideline, every fleet lane a player, and subagents run on as assistant coaches and the team mascot. Set the team colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "bolt", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "bolt", tone: "amber" },
   },
   {
     id: "world-hockey", name: "Hockey", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-HOCKEY-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Puck drop: a coach and a team in YOUR colors on the ice, with hat tricks, an Ice Storm and the red goal light.",
     lucid: "Your main agent is the head coach behind the bench, every fleet lane a skater or goalie, and subagents run on as assistant coaches and the ice resurfacer driver. Set the team colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "shield", tone: "cyan" },
+    media: { loop: true, poster: "webp", glyph: "shield", tone: "cyan" },
   },
   {
     id: "world-winter-games", name: "Winter Games", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-WINTERGAMES-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "The mountain venue: skiers, snowboarders, skaters and curlers in YOUR national colors and flag, with an Avalanche and a gold medal podium.",
     lucid: "Your main agent is the flag bearer, every fleet lane an athlete, and subagents run on as coaches and a polar bear cub mascot. Design the team colors and flag in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "blue" },
   },
   {
     id: "world-summer-games", name: "Summer Games", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-SUMMERGAMES-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "The main stadium: sprinters, swimmers, gymnasts and archers in YOUR national colors and flag, with a Heat Wave and a world record on every commit.",
     lucid: "Your main agent is the torchbearer, every fleet lane an athlete, and subagents run on as coaches and judges with scorecards. Design the team colors and flag in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "spark", tone: "green" },
+    media: { loop: true, poster: "webp", glyph: "spark", tone: "green" },
   },
   {
     id: "world-golf", name: "Golf", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-GOLF-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Tournament day: golfers in YOUR club colors on a sunny course, with caddies, a Links Gale and a hole-in-one on every commit.",
     lucid: "Your main agent is the club pro, every fleet lane a golfer, and subagents run on as course marshals and caddies. Set the club colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "loop", tone: "green" },
+    media: { loop: true, poster: "webp", glyph: "loop", tone: "green" },
   },
   {
     id: "world-tennis", name: "Tennis", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-TENNIS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Center court: players in YOUR club colors on grass, clay or hard court, with ball kids, a Dust Devil and a championship ace.",
     lucid: "Your main agent is the coach in the player box, every fleet lane a player, and subagents run on as line judges and ball kids. Pick the court and colors in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "record", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "record", tone: "violet" },
   },
   {
     id: "world-horse-racing", name: "Horse Racing", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-HORSERACING-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Race day: jockeys on their horses in YOUR racing silks, with the trainer, the bugler, a Hat Flurry and a photo-finish win.",
     lucid: "Your main agent is the trainer, every fleet lane a jockey on a horse, and subagents run on as grooms and the bugler. Register your silks in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "gauge", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "gauge", tone: "blue" },
   },
   {
     id: "world-bowling", name: "Bowling", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-BOWLING-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Tournament night: bowlers in YOUR team shirts, with a walking pin mascot, the Pin Avalanche and a STRIKE on every commit.",
     lucid: "Your main agent is the bowling legend, every fleet lane a bowler, and subagents run on as scorekeepers and a walking pin mascot. Pick the shirts, balls, shoes and alley in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "record", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "record", tone: "blue" },
   },
   {
     id: "world-figure-skating", name: "Figure Skating", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-FIGURESKATING-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "The championship on ice: skaters in YOUR costume colors, with a Flower Shower and a perfect score on every commit.",
     lucid: "Your main agent is the coach, every fleet lane a figure skater, and subagents run on as judges and flower sweepers. Pick the costumes, sparkle, skates and rink in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "violet" },
   },
   {
     id: "world-extreme-sports", name: "Extreme Sports", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-EXTREMESPORTS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Action sports festival: BMX, skate, dirt bikes and wingsuits in YOUR team kit, with an Air Show and BIG AIR on every commit.",
     lucid: "Your main agent is the hype MC, every fleet lane an action sports athlete, and subagents run on as the DJ and camera operators. Pick the gear, helmets, smoke trails and venue in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "bolt", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "bolt", tone: "amber" },
   },
   {
     id: "world-wave-riders", name: "Wave Riders", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-WAVERIDERS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Beach contest: surf, kite, foil and watercraft in YOUR team colors, with a Rogue Wave and a perfect wave on every commit.",
     lucid: "Your main agent is the head judge, every fleet lane a surfer, kitesurfer, foil boarder or watercraft rider, and subagents run on as spotters and lifeguards. Pick the boards, suits, kites and beach in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "loop", tone: "cyan" },
+    media: { loop: true, poster: "webp", glyph: "loop", tone: "cyan" },
   },
   {
     id: "world-swim-dive", name: "Swim and Dive", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-SWIMDIVE-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "The championship pool: swimmers and divers in YOUR team colors, with the Splash Zone and a gold medal on every commit.",
     lucid: "Your main agent is the head coach, every fleet lane a swimmer or diver, and subagents run on as judges and the rubber-duck mascot. Pick the suits, caps, goggles and pool in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "refresh", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "refresh", tone: "blue" },
   },
   {
     id: "world-esports", name: "Esports", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-ESPORTS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Grand finals: pro gamers at RGB setups in YOUR org colors in a neon arena, with a Glitch Storm and a VICTORY on every commit.",
     lucid: "Your main agent is the head coach, every fleet lane a pro gamer, and subagents run on as analysts and broadcast camera operators. Brand your org in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "bolt", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "bolt", tone: "violet" },
   },
   {
     id: "world-dog-show", name: "Dog Show", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-DOGSHOW-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Show day: handlers and their poodles, corgis, dalmatians and retrievers in YOUR kennel colors, with Bath Time and Best in Show.",
     lucid: "Your main agent is the judge, every fleet lane a handler showing a dog, and subagents run on as ring stewards and groomers. Set the kennel colors and breeds in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "violet" },
   },
   {
     id: "world-farm", name: "Farm", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-FARM-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "A day on the farm: cows, pigs, sheep and goats in YOUR farm colors, with chicks, a Twister and a blue ribbon on every commit.",
     lucid: "Your main agent is the farmer, every fleet lane a farm animal, and subagents run on as farmhands and chicks. Paint the barn, pick the animals and the season in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "loop", tone: "green" },
+    media: { loop: true, poster: "webp", glyph: "loop", tone: "green" },
   },
   {
     id: "world-talent-show", name: "Talent Show", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-TALENTSHOW-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Live from the big stage: singers, dancers, jugglers and DJs in YOUR show colors, with a Glitter Bomb and a standing ovation.",
     lucid: "Your main agent is the host, every fleet lane a contestant, and subagents run on as judges and stagehands. Style the stage and costumes in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "mic", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "mic", tone: "amber" },
   },
   {
     id: "world-circus", name: "Circus", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-CIRCUS-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Under the big top: acrobats, jugglers, strongmen and unicyclists in YOUR circus colors, with clowns, the Clown Car and a TA-DA.",
     lucid: "Your main agent is the ringmaster, every fleet lane a performer, and subagents run on as clowns and performing seals. Paint the big top in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "star", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "star", tone: "amber" },
   },
   {
     id: "world-magic-show", name: "Magic Show", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-MAGICSHOW-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Curtain up: magicians in YOUR theater colors with white rabbits, Smoke and Mirrors and a grand vanishing act on every commit.",
     lucid: "Your main agent is the grand magician, every fleet lane a magician, and subagents run on as stage assistants and white rabbits. Choose the curtains and sparkle in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "spark", tone: "violet" },
+    media: { loop: true, poster: "webp", glyph: "spark", tone: "violet" },
   },
   {
     id: "world-chef-showdown", name: "Chef Showdown", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-CHEFSHOWDOWN-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Service! Cooks on the red team or the blue team in YOUR brigade colors, with a Flambe Frenzy and a signature dish on every commit.",
     lucid: "Your main agent is the head chef judging the pass, every fleet lane a cook at a station, and subagents run on as sous chefs and waiters. Set the team, jackets and kitchen in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "bolt", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "bolt", tone: "amber" },
   },
   {
     id: "world-hospital", name: "Hospital", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-HOSPITAL-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Rounds on the ward: surgeons, ER doctors, pediatricians and lab scientists in YOUR hospital colors, with Flu Season and a patient going home healthy.",
     lucid: "Your main agent is the chief of medicine, every fleet lane a doctor, and subagents run on as nurses and interns. Pick the scrubs, coats and ward in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "plus", tone: "cyan" },
+    media: { loop: true, poster: "webp", glyph: "plus", tone: "cyan" },
   },
   {
     id: "world-university", name: "University", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-UNIVERSITY-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Term time on campus: students in YOUR school colors, with the professor, the campus squirrel, Finals Week and a graduation on every commit.",
     lucid: "Your main agent is the professor, every fleet lane a student, and subagents run on as teaching assistants and the campus squirrel. Set the school colors, gowns and campus in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "bulb", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "bulb", tone: "amber" },
   },
   {
     id: "world-construction", name: "Construction", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-CONSTRUCTION-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "A busy job site: welders, carpenters, bricklayers and electricians in YOUR company colors, with little diggers, the Wrecking Ball and a topping-out.",
     lucid: "Your main agent is the foreman, every fleet lane a tradesperson, and subagents run on as site engineers and little diggers. Pick the hard hats, vests and machines in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "toolbox", tone: "amber" },
+    media: { loop: true, poster: "webp", glyph: "toolbox", tone: "amber" },
   },
   {
     id: "world-grand-prix", name: "Grand Prix", section: "civilian", group: WORLDS_GROUP, sale: "buy", lookupKey: "PLG-WORLD-GRANDPRIX-OTF", available: true, price: WORLD_PRICE,
     kicker: "Lucid Agent World",
     pitch: "Race weekend: drivers and open-wheel race cars in YOUR team livery, with the pit crew, a Burnout and a podium win with champagne.",
     lucid: "Your main agent is the team principal, every fleet lane a driver with a race car, and subagents run on as race engineers and pit crew. Design the livery and helmets in the world's options.",
-    media: { loop: false, poster: "generated", glyph: "gauge", tone: "blue" },
+    media: { loop: true, poster: "webp", glyph: "gauge", tone: "blue" },
   },
   {
     id: "leaps", name: "LEAPS", section: "civilian", sale: "link",
@@ -596,15 +624,34 @@ export type CardAction =
   | { kind: "open" }
   /** An installed Lucid Agent World: it opens in the Visualize view, never as a program (ADR-0648). */
   | { kind: "open-world" }
-  | { kind: "update"; to: string };
+  | { kind: "update"; to: string }
+  /** P-WORLDS.STORE1: an owned world pack. Terminal: a pack has no package, so it never installs, opens or
+   *  updates. `credits` is the Sponsor pack's unspent world credits; null for Patron Class. */
+  | { kind: "owned"; credits: number | null }
+  /** P-WORLDS.STORE1: a world not owned yet, while the Sponsor pack still has a live credit to unlock it. */
+  | { kind: "redeem" };
 
 /** Is this card a Lucid Agent World (ADR-0648)? */
 export function isWorldPlugin(p: PremiumPlugin): boolean { return p.group === WORLDS_GROUP; }
+
+/** Is this card a Lucid Agent World Pack (P-WORLDS.STORE1)? */
+export function isBundle(p: PremiumPlugin): boolean { return p.group === WORLD_PACKS_GROUP; }
+
+/** The Sponsor pack's spendable world credits right now: 0 unless the pack itself is entitled and its credits
+ *  have not lapsed (`creditsUntil` in the past). Fail-closed like isEntitled: a missing count is 0. Pure. */
+export function sponsorCredits(ent: Entitlement | null | undefined, nowIso: string): number {
+  if (!isEntitled(ent, nowIso)) return 0;
+  if (ent?.creditsUntil && ent.creditsUntil <= nowIso) return 0;
+  const n = ent?.creditsRemaining;
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
 
 export interface CardFacts {
   signedIn: boolean;
   /** The backend's (user, plugin) entitlement; `premium-all` is resolved server-side into this record. */
   entitlement: Entitlement | null;
+  /** P-WORLDS.STORE1: the Sponsor pack's entitlement (its credits can unlock a world). Absent reads as none. */
+  sponsor?: Entitlement | null;
   gov: GovAccessStatus;
   /** Version of the locally installed package, or null when it is not installed. */
   installedVersion: string | null;
@@ -620,10 +667,18 @@ export interface CardFacts {
  *  3. An installed plugin opens (it runs offline and never phones home; a world opens in Visualize), or offers Update when the user is
  *     still entitled and the backend has published a newer version.
  *  4. Otherwise the fail-closed pack decision: signed out -> signin; entitled -> install; else checkout,
- *     where a Government plugin buys ONLY with approved access and otherwise asks for it. */
+ *     where a Government plugin buys ONLY with approved access and otherwise asks for it, and a world the
+ *     Sponsor pack can still unlock offers its credit instead of Buy (P-WORLDS.STORE1).
+ *  A world pack (P-WORLDS.STORE1) has no package: after 1 it is only ever signin, buy, or the terminal owned. */
 export function decideCardAction(p: PremiumPlugin, f: CardFacts): CardAction {
   if (p.sale === "link") return { kind: "visit", url: p.href, label: p.linkLabel };
   if (!p.available) return { kind: "coming-soon" };
+  if (isBundle(p)) {
+    const pack = decidePackAction({ signedIn: f.signedIn }, f.entitlement, f.nowIso);
+    if (pack === "signin") return { kind: "signin" };
+    if (pack === "pull") return { kind: "owned", credits: p.id === SPONSOR_PACK_ID ? sponsorCredits(f.entitlement, f.nowIso) : null };
+    return { kind: "buy", price: p.price };
+  }
   if (f.busy) return { kind: "installing" };
   const decision = decidePackAction({ signedIn: f.signedIn }, f.entitlement, f.nowIso);
   if (f.installedVersion) {
@@ -636,6 +691,7 @@ export function decideCardAction(p: PremiumPlugin, f: CardFacts): CardAction {
   if (p.section === "government" && f.gov !== "approved") {
     return f.gov === "pending" ? { kind: "access-pending" } : { kind: "request-access", declined: f.gov === "declined" };
   }
+  if (isWorldPlugin(p) && sponsorCredits(f.sponsor, f.nowIso) > 0) return { kind: "redeem" };
   return { kind: "buy", price: p.price };
 }
 
@@ -653,7 +709,16 @@ export function cardActionLabel(a: CardAction): string {
     case "open": return "Open";
     case "open-world": return "Open in Visualize";
     case "update": return `Update to ${a.to}`;
+    case "owned": return "Owned";
+    case "redeem": return "Use a credit";
   }
+}
+
+/** The foot meta of an owned world pack: what it still gives. One short line (invariant 11). */
+export function ownedPackMeta(a: Extract<CardAction, { kind: "owned" }>): string {
+  if (a.credits === null) return "Every world unlocked";
+  if (a.credits === 0) return "No world credits left";
+  return `${a.credits} world ${a.credits === 1 ? "credit" : "credits"} left`;
 }
 
 /** What an optional add-on's card offers right now (ADR-0541). `open` also shows Remove beside it. */

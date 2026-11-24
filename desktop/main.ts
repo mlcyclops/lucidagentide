@@ -101,6 +101,12 @@ let PORT = IDENTITY_PORT;
 // makes them never share a lock. The default-port instance keeps the canonical identity, so the lucid://
 // OAuth deep-link still re-focuses the primary app rather than spawning an engine.
 // Must run before requestSingleInstanceLock() and before anything resolves a userData path.
+// P-FLEET.CONN1: Chromium allows six HTTP/1.1 connections per host, and every running agent holds one open for
+// its whole turn (its NDJSON stream), as do Main's turn and each Visualize watch. With four agents working the
+// window's other requests to the engine (fleet status, health, sessions) queued forever: Visualize showed
+// "0 agents" and the status bar sat on "Checking". The engine is this machine's own loopback server, so the cap
+// protects nothing here; it is lifted for the loopback hosts only, before app-ready as Chromium requires.
+app.commandLine.appendSwitch("ignore-connections-limit", "127.0.0.1,localhost");
 const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
 if (IDENTITY_PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${IDENTITY_PORT}`);
 // safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the

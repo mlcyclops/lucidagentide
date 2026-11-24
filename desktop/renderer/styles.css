@@ -1027,10 +1027,13 @@ button{font-family:inherit}
   color:var(--accent);font-size:14px;cursor:pointer;
   -webkit-app-region:no-drag;transition:filter var(--t) var(--ease)}
 .brand:hover{filter:brightness(1.08)}
-.brand .lucid-word{animation:lucidGlow 4.5s ease-in-out infinite}
+/* P-PERF.IDLE1: chrome glows play twice after load and again on hover, then rest. Any endless loop on screen keeps the
+   renderer and GPU drawing 60 frames a second while the user is doing nothing. */
+.brand .lucid-word{animation:lucidGlow 4.5s ease-in-out 2}
+.brand:hover .lucid-word,.brand:hover .pi{animation-iteration-count:infinite}
 @keyframes lucidGlow{0%,100%{text-shadow:0 0 10px rgb(var(--accent-rgb) / .35),0 0 20px rgb(var(--accent-rgb) / .12)}
   50%{text-shadow:0 0 16px rgb(var(--accent-rgb) / .75),0 0 34px rgb(var(--accent-rgb) / .42),0 0 54px rgb(var(--accent-rgb) / .22)}}
-.brand .pi{color:var(--cyan);display:flex;animation:piGlow 4.5s ease-in-out infinite}
+.brand .pi{color:var(--cyan);display:flex;animation:piGlow 4.5s ease-in-out 2}
 @keyframes piGlow{0%,100%{filter:drop-shadow(0 0 4px rgb(var(--cyan-rgb) / .4));opacity:.92}
   50%{filter:drop-shadow(0 0 10px rgb(var(--cyan-rgb) / .95)) drop-shadow(0 0 20px rgb(var(--cyan-rgb) / .45));opacity:1}}
 .tb-spacer{flex:1}
@@ -1189,6 +1192,8 @@ button{font-family:inherit}
 .resizer-l:active{background:linear-gradient(270deg,transparent,
   color-mix(in srgb,var(--accent) 30%,transparent))}
 body.resizing{cursor:col-resize;user-select:none}
+/* A drag that crosses a frame (the Preview's page) would hand its mousemoves to that frame and stall the resize. */
+body.resizing iframe,body.resizing webview{pointer-events:none}
 body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sidebar.collapsed{width:0;opacity:0;border-right:0;box-shadow:none}
 .side-head{display:flex;align-items:center;justify-content:space-between;
@@ -2037,6 +2042,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-chip[data-status="unsigned"]{color:var(--amber-txt);background:rgb(var(--amber-rgb) / .14);border-color:rgb(var(--amber-rgb) / .5)}
 .plg-inst-head{display:flex;align-items:flex-start;gap:14px;margin:0 0 14px}
 .plg-inst-head .plg-lede{margin:0}
+.plg-inst-head>.plg-act{flex:none;white-space:nowrap}
 .plg-warn{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid rgb(var(--amber-rgb) / .5);border-radius:10px;background:rgb(var(--amber-rgb) / .1);color:var(--txt)}
 .plg-warn .ic{flex:none;color:var(--amber);margin-top:1px}
 .plg-warn p{margin:0;font-size:12.5px;line-height:1.5}
@@ -2088,6 +2094,24 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .plg-sheet{width:min(520px,100%);max-height:100%;overflow:auto;box-sizing:border-box;display:flex;flex-direction:column;gap:10px;padding:18px 20px;
   background:var(--bg-1);border:1px solid var(--line-strong);border-radius:14px;box-shadow:0 20px 60px rgb(var(--sh-rgb) / .55);animation:rise var(--t-slow) var(--ease-out)}
 .plg-sheet-wide{width:min(760px,100%)}
+/* P-WORLDS.STORE1: the Sponsor picker. Tiles are a thumbnail, ONE ellipsized name and a nowrap tag in a grid (not a
+   flex row of prose), on generous 220px tracks so names never fold; the pressed state is the tile's aria-pressed. */
+.plg-pick-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;max-height:min(52vh,460px);overflow-y:auto;padding:2px}
+.plg-pick{display:grid;grid-template-columns:72px minmax(0,1fr) auto;align-items:center;gap:10px;min-width:0;padding:6px 10px 6px 6px;
+  border:1px solid var(--line);border-radius:10px;background:var(--bg-2);color:var(--txt);font:inherit;text-align:left;cursor:pointer;
+  transition:border-color var(--t),background var(--t),opacity var(--t)}
+.plg-pick:hover:not(:disabled){border-color:rgb(var(--cyan-rgb) / .45)}
+.plg-pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.plg-pick[aria-pressed="true"]{border-color:color-mix(in srgb,var(--accent) 65%,var(--line));background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgb(var(--accent-2-rgb) / .35)}
+.plg-pick:disabled{cursor:default;opacity:.55}
+.plg-pick-grid[data-full] .plg-pick[aria-pressed="false"]:not(:disabled){opacity:.6}
+.plg-pick-img{display:block;width:72px;height:auto;aspect-ratio:16/9;object-fit:cover;border-radius:6px;background:var(--bg-sunk)}
+.plg-pick-name{min-width:0;font-size:12.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plg-pick-tag{font-size:10px;font-weight:700;letter-spacing:.06em;white-space:nowrap;border-radius:999px;padding:1.5px 7px;border:1px solid rgb(var(--green-rgb) / .35);color:var(--green);background:rgb(var(--green-rgb) / .12)}
+.plg-pick-count{margin-right:auto;font-family:var(--mono);font-size:11.5px;color:var(--txt-2);white-space:nowrap}
+.plg-act[data-kind="redeem"]{border-color:rgb(var(--green-rgb) / .5);background:rgb(var(--green-rgb) / .14)}
+.plg-act[data-kind="redeem"]:hover{background:rgb(var(--green-rgb) / .24);box-shadow:none}
+.plg-act[data-kind="owned"]:disabled{opacity:1;color:var(--green);border-color:rgb(var(--green-rgb) / .35);background:rgb(var(--green-rgb) / .1)}
 .plg-sheet-h{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:15px;color:var(--txt)}
 .plg-sheet-price{margin:0;font-size:13px;line-height:1.5;color:var(--txt)}
 .plg-sheet-sub{margin:4px 0 0;font-size:12px;font-weight:650;color:var(--txt-3)}
@@ -3047,7 +3071,7 @@ body.lucid-capturing #toasts{visibility:hidden}
 
 /* ───────────────────────── sessions empty + active glow ───────────────────────── */
 .side-empty{padding:14px 12px;font-size:12px;color:var(--txt-4);line-height:1.6}
-.rail-btn.active::before{animation:railGlow 3.6s var(--ease) infinite}
+.rail-btn.active::before{animation:railGlow 3.6s var(--ease) 2} /* P-PERF.IDLE1: twice per switch, then rest */
 @keyframes railGlow{0%,100%{box-shadow:0 0 8px var(--accent)}50%{box-shadow:0 0 14px var(--accent),0 0 24px rgb(var(--accent-rgb) / .4)}}
 
 /* ───────────────────────── composer agent controls ───────────────────────── */
@@ -3656,7 +3680,7 @@ body.lucid-capturing #toasts{visibility:hidden}
   border:1px solid var(--line);border-radius:12px;min-width:48px;
   display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;gap:3px;padding:9px 6px 8px;cursor:default;
   box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .045),inset 0 -6px 14px -10px rgb(var(--sh-rgb) / .55),0 2px 6px -4px rgb(var(--sh-rgb) / .5);
-  transition:border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+  transition:border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t),opacity var(--t) var(--ease)}
 .tile:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
   box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,var(--shade)),0 2px 6px -4px rgb(var(--sh-rgb) / .6)}
 .tile .n{font-family:var(--mono);font-size:15px;font-weight:700;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.02em;color:var(--txt-1);transition:color var(--t),text-shadow var(--t)}
@@ -3691,6 +3715,398 @@ body.lucid-capturing #toasts{visibility:hidden}
 @property --sweep{syntax:"<angle>";inherits:false;initial-value:0deg}
 @keyframes tileSweep{to{--sweep:360deg}}
 @media (prefers-reduced-motion:reduce){.tile.changed .n,.tile.changed::before,.tile.changed:not(.attn)::after,.tile.attn::after{animation:none}.tile.changed::before{display:none}}
+
+/* ───────── P-RAIL.AGENTS1: rail header toggle + the Agents view (agents_rail.ts, agents_rail_art.ts) ─────────
+   Ported from mockups/agents-rail/a-glass-brick.html (Direction A). The header holds the expand button and, to
+   its right, the mini Lucid toggle. The Agents view keeps the width the metrics view measured (--agr-w, set by
+   agents_rail.ts) and shows at full opacity; the metrics rail keeps its .55 rest opacity. Each Agent box IS the
+   metric .tile (same shape and size); the art takes the number's slot and the name the label's. */
+.rail-head{display:flex;align-items:center;justify-content:center;gap:6px;flex:none}
+.inspector.rail.agents-view{opacity:1;width:max(96px,var(--agr-w,0px))}
+/* P-RAIL.AGENTS1d: the rail's resting dim moves from the whole panel to its parts, so an Agent with an agent
+   working in its folder (.work), or one whose module is open (.hot), stays at full opacity while the rest rest at
+   .55; hovering the rail lifts everything, as before. The id selector beats the left nav's
+   `#app-inner.sidebar-collapsed .rail` rule, which also matches this panel (both carry .rail). */
+#app-inner .inspector.rail.agents-view{opacity:1}
+.inspector.rail.agents-view .rail-head{transition:opacity var(--t) var(--ease)}
+.inspector.rail.agents-view:not(:hover) :is(.rail-head,.agr-arrow.agr-on,.agr-tile:not(.work):not(.hot):not(:focus-visible)){opacity:.55}
+.inspector.rail.agents-view .metrics-rail{overflow:hidden}
+.inspector.agents-view .rail-tiles{display:none}
+.agr-view{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
+.agr-view[hidden]{display:none}
+/* contain:inline-size: names never widen the rail; they ellipsize inside the box instead (invariant 11). */
+.agr-list{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;gap:7px;padding:3px 0 2px;
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;contain:inline-size}
+.agr-list::-webkit-scrollbar{width:0}
+.agr-arrow{-webkit-app-region:no-drag;flex:none;width:100%;height:14px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--txt-3);
+  display:grid;place-items:center;cursor:pointer;visibility:hidden;opacity:0;transition:opacity var(--t),background var(--t),color var(--t)}
+.agr-arrow.agr-on{visibility:visible;opacity:1}
+.agr-arrow:hover{background:var(--bg-3);color:var(--accent-2)}
+.agr-arrow:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+/* the toggle: a mini Lucid bust; muted in the metrics view, lit in the Agents view; hover lifts it, races a
+   green ring around it, tilts the head, flutters the scarf, swaps to happy eyes and pops a spark */
+.agr-toggle{position:relative;isolation:isolate;-webkit-app-region:no-drag;flex:none;width:32px;height:30px;padding:0;border-radius:8px;
+  border:1px solid var(--line);background:var(--bg-2);display:grid;place-items:center;cursor:pointer;
+  transition:background var(--t),border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.agr-toggle .agr-tb-fig{display:block;width:24px;height:24px;overflow:visible;filter:saturate(.3) brightness(.9);opacity:.8;transition:filter var(--t),opacity var(--t)}
+.agr-toggle[aria-pressed="true"]{border-color:color-mix(in srgb,var(--hero) 42%,var(--line));
+  background:linear-gradient(162deg,color-mix(in srgb,var(--hero) 14%,var(--bg-3)),var(--bg-2));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 0 14px -6px rgb(var(--hero-rgb) / .8)}
+.agr-toggle[aria-pressed="true"] .agr-tb-fig,.agr-toggle:hover .agr-tb-fig{filter:none;opacity:1}
+.agr-toggle:hover{transform:translateY(-1px);background:var(--bg-3);border-color:transparent;
+  box-shadow:0 8px 18px -10px rgb(var(--hero-rgb) / .9),0 0 0 1px rgb(var(--hero-rgb) / .16)}
+.agr-toggle::after{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1.4px;z-index:3;pointer-events:none;opacity:0;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 50%,rgb(var(--hero-rgb) / .5) 72%,var(--hero) 86%,var(--tint) 90%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;  /* P-THEME.1 theme-exempt: #000 is MASK ALPHA (opaque=keep), never a rendered color. */
+  transition:opacity var(--t)}
+.agr-toggle:hover::after{opacity:1;animation:tileSweep 1.8s linear infinite}
+.agr-toggle::before{content:"";position:absolute;left:50%;bottom:1px;width:20px;height:7px;margin-left:-10px;border-radius:50%;z-index:-1;
+  background:radial-gradient(closest-side,rgb(var(--hero-rgb) / .5),transparent);opacity:0;transition:opacity var(--t)}
+.agr-toggle:hover::before,.agr-toggle[aria-pressed="true"]::before{opacity:1}
+.agr-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agr-toggle:active{transform:scale(.95)}
+.agr-tb-head{transform-box:fill-box;transform-origin:50% 100%;transition:transform .5s var(--spring)}
+.agr-toggle:hover .agr-tb-head{transform:translateY(-1.2px) rotate(-7deg)}
+/* P-PERF.IDLE1: the toolbar Lucid wags twice after load, and while hovered; at rest it holds still. */
+.agr-tb-tail{transform-box:fill-box;transform-origin:0 50%;animation:agrTbTail 3.6s ease-in-out 2}
+.agr-toggle:hover .agr-tb-tail{animation-duration:.8s;animation-iteration-count:infinite}
+@keyframes agrTbTail{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(13deg)}}
+.agr-tb-eyes{transform-box:fill-box;transform-origin:50% 50%;animation:agrTbBlink 5.2s 2}
+@keyframes agrTbBlink{0%,94%,100%{transform:none}96.5%{transform:scaleY(.12)}}
+.agr-tb-happy{opacity:0}
+.agr-toggle:hover .agr-tb-eyes{opacity:0;animation:none}
+.agr-toggle:hover .agr-tb-happy{opacity:1}
+.agr-tb-spark{opacity:0;transform-box:fill-box;transform-origin:50% 50%}
+.agr-toggle:hover .agr-tb-spark{animation:agrTbSpark 1.5s ease-in-out infinite}
+@keyframes agrTbSpark{0%,100%{opacity:0;transform:scale(.4) rotate(0)}40%{opacity:1;transform:scale(1) rotate(45deg)}75%{opacity:0;transform:scale(.6) rotate(90deg)}}
+
+/* the Agent box: the metric .tile; --tc drives the .tile.changed ring (turn end) in the Agent's color */
+.agr-tile{--tc:var(--G);flex:none;padding:4px 6px;gap:2px;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+.agr-tile .agr-art{display:block;flex:none;height:28px;width:auto}
+.agr-tile .l{max-width:100%;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
+.agr-tile.work .l{color:var(--txt-2)}
+.agr-tile:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.agr-tile.hot{border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,var(--shade)),0 2px 6px -4px rgb(var(--sh-rgb) / .6)}
+.agr-led{position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:var(--G);box-shadow:0 0 6px var(--G);opacity:0;z-index:2}
+.agr-tile.work .agr-led{opacity:1;animation:agrLed 2.4s ease-in-out infinite}
+@keyframes agrLed{0%,100%{opacity:1}50%{opacity:.35}}
+.agr-tile.work .agr-art{filter:drop-shadow(0 0 4px color-mix(in srgb,var(--G) 40%,transparent))}
+.agr-add{--tc:var(--accent-2);border-style:dashed;background:transparent;box-shadow:none}
+.agr-add .l{color:var(--txt-3)}
+.agr-add-art rect{fill:none;stroke:var(--txt-4);stroke-dasharray:3 2.4}
+.agr-add-art path{fill:none;stroke:var(--txt-3);stroke-width:1.8;stroke-linecap:round}
+.agr-add:hover .agr-add-art path{stroke:var(--accent-2)}
+/* drag: the lifted box follows the pointer, the others slide (FLIP) */
+.agr-sorting .agr-tile{pointer-events:none;transition:transform 180ms var(--ease-out),border-color var(--t),box-shadow var(--t)}
+.agr-tile.agr-dragging{z-index:5;transition:none;cursor:grabbing;border-color:color-mix(in srgb,var(--tc) 50%,var(--line));
+  box-shadow:0 14px 28px -12px color-mix(in srgb,var(--tc) 60%,var(--shade)),0 4px 10px -4px rgb(var(--sh-rgb) / .6)}
+
+/* the mini Lucid (vector rig; palette from --K --D --L --G --g). P-THEME.1 theme-exempt: the skin, eye, pupil
+   and outline inks are the CHARACTER's own colors (MASCOT_PALETTE), identical in every theme like the mascot. */
+.agr-lu .agr-fK{fill:var(--K)} .agr-lu .agr-fD{fill:var(--D)} .agr-lu .agr-fL{fill:var(--L)} .agr-lu .agr-fG{fill:var(--G)} .agr-lu .agr-fg{fill:var(--g)}
+.agr-lu .agr-fS{fill:#eec39a} .agr-lu .agr-fs{fill:#d8a377} .agr-lu .agr-fW{fill:#f4f7f5} .agr-lu .agr-fB{fill:#0a0e12}
+.agr-lu .agr-sk{stroke:#10161d;stroke-width:.9;stroke-linejoin:round} .agr-lu .agr-sk2{stroke:#10161d;stroke-width:.6} .agr-lu .agr-sk3{stroke:#10161d;stroke-width:.5}
+.agr-lu .agr-sD{fill:none;stroke:var(--D);stroke-width:.9;stroke-linecap:round} .agr-lu .agr-sL{fill:none;stroke:var(--L);stroke-width:.9;stroke-linecap:round}
+.agr-lu .agr-sheen{stroke-width:1.6} .agr-lu .agr-sB{fill:none;stroke:#0a0e12;stroke-width:.85;stroke-linecap:round}
+.agr-lu .agr-kb-b{fill:color-mix(in srgb,var(--G) 22%,#0a0e12);stroke:var(--G);stroke-width:.45} .agr-lu .agr-kb-k,.agr-lu .agr-bit{fill:var(--G)}
+.agr-lu .agr-bkHi{stop-color:color-mix(in srgb,var(--G) 62%,#fff);stop-opacity:.72}
+.agr-lu .agr-bkMid{stop-color:color-mix(in srgb,var(--G) 58%,var(--K));stop-opacity:.5}
+.agr-lu .agr-bkSh{stop-color:color-mix(in srgb,var(--g) 70%,#000);stop-opacity:.8}
+.agr-lu .agr-bk-trim{fill:none;stroke:color-mix(in srgb,var(--G) 55%,#fff);stroke-opacity:.75;stroke-width:.8}
+.agr-lu .agr-glow0{stop-color:var(--G);stop-opacity:.42} .agr-lu .agr-glow1{stop-color:var(--G);stop-opacity:0}
+.agr-lu .agr-eyes,.agr-lu .agr-ec{transition:opacity .14s}
+.agr-lu .agr-ec{opacity:0}
+.agr-lu.agr-idle .agr-eyes{opacity:0} .agr-lu.agr-idle .agr-ec{opacity:1}
+.agr-lu .agr-eyes,.agr-lu .agr-head,.agr-lu .agr-tail{transform-box:fill-box}
+.agr-lu .agr-eyes{transform-origin:50% 50%} .agr-lu .agr-head{transform-origin:50% 100%} .agr-lu .agr-tail{transform-origin:0 50%}
+.agr-lu.agr-work .agr-pup{transform:translateY(.6px)}
+/* idle = still, meditating (P-PERF.IDLE1: an idle figure runs no loop; ten breathing SVGs repainted the rail every
+   frame, about 1.4 cores of renderer + GPU with nothing happening); work = breath, typing bursts with a rest, keys
+   flash, two code bits rise */
+.agr-lu.agr-work .agr-upper{animation:agrBreathe 4.8s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-tail{animation:agrTail 2.4s ease-in-out var(--dl,0s) infinite}
+.agr-lu.agr-idle .agr-aura{opacity:.8}
+.agr-lu.agr-work .agr-eyes{animation:agrBlink 4.6s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-hl{animation:agrTapL 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-hr{animation:agrTapR 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-k1{animation:agrKey1 2.4s var(--dl,0s) infinite}
+.agr-lu.agr-work .agr-k2{animation:agrKey2 2.4s var(--dl,0s) infinite}
+.agr-lu .agr-bit{opacity:0}
+.agr-lu.agr-work .agr-b1{animation:agrBit 2.4s ease-out calc(var(--dl,0s) - .5s) infinite}
+.agr-lu.agr-work .agr-b2{animation:agrBit 2.4s ease-out calc(var(--dl,0s) - 1.4s) infinite}
+/* glance, about every 60 s (agents_rail.ts adds .agr-glance for 3.2 s): left, up, down, then back to the center
+   toward the user with one blink and a slight gaze */
+.agr-lu.agr-glance .agr-eyes{opacity:1;animation:agrBlinkG 3.2s 1 both}
+.agr-lu.agr-glance .agr-ec{opacity:0}
+.agr-lu.agr-glance .agr-pup{animation:agrGaze 3.2s var(--ease) 1 both}
+.agr-lu.agr-glance .agr-head{animation:agrHeadG 3.2s var(--ease) 1 both}
+/* drag: neighbors notice the moved box (eyes up or down at it); the moved one looks around its new place */
+.agr-tile[data-eyes] .agr-eyes{opacity:1;animation:none}
+.agr-tile[data-eyes] .agr-ec{opacity:0}
+.agr-tile[data-eyes] .agr-pup{transition:transform .22s var(--ease-out)}
+.agr-tile[data-eyes="up"] .agr-pup{transform:translateY(-.8px)}
+.agr-tile[data-eyes="down"] .agr-pup{transform:translateY(.8px)}
+.agr-tile[data-eyes="around"] .agr-pup{animation:agrAround 2s var(--ease) 1 both}
+@keyframes agrBreathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-.6px)}}
+@keyframes agrTail{0%,100%{transform:rotate(-4deg)}50%{transform:rotate(8deg)}}
+@keyframes agrAura{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes agrBlink{0%,93%,100%{transform:none}95.5%{transform:scaleY(.12)}}
+@keyframes agrBlinkG{0%,84%,100%{transform:none}87%{transform:scaleY(.12)}}
+@keyframes agrGaze{0%,5%{transform:translate(0,0)}12%,27%{transform:translate(-1px,0)}34%,47%{transform:translate(0,-.7px)}54%,67%{transform:translate(0,.7px)}75%,100%{transform:translate(0,.25px)}}
+@keyframes agrHeadG{0%,5%{transform:none}12%,27%{transform:rotate(-5deg)}34%,47%{transform:translateY(-.5px)}54%,67%{transform:translateY(.35px) rotate(1deg)}75%,100%{transform:none}}
+@keyframes agrAround{0%{transform:none}16%,30%{transform:translate(-1px,0)}44%,58%{transform:translate(1px,0)}72%,84%{transform:translate(0,-.6px)}100%{transform:none}}
+@keyframes agrTapL{0%,12%,24%,36%,48%,100%{transform:none}6%,30%{transform:translateY(-1.3px)}}
+@keyframes agrTapR{0%,12%,24%,36%,48%,100%{transform:none}18%,42%{transform:translateY(-1.3px)}}
+@keyframes agrKey1{0%,10%,15%,34%,39%,100%{opacity:.35}12%,36%{opacity:1}}
+@keyframes agrKey2{0%,22%,27%,46%,51%,100%{opacity:.35}24%,48%{opacity:1}}
+@keyframes agrBit{0%{opacity:0;transform:translateY(0)}12%{opacity:.9}60%,100%{opacity:0;transform:translateY(-8px)}}
+/* perf tier "minimal" (agents_rail.ts sets .agr-calm) and reduced motion: every loop stops; pose and LED still show the state */
+.agr-calm .agr-lu,.agr-calm .agr-lu *,.agr-calm .agr-led{animation:none!important}
+/* P-PERF.IDLE1: rail figures never free-run. Their loops stay paused and agents_rail.ts moves each working figure's
+   clock (--dl) on 8 times a second, so between steps Chromium draws nothing (free-running, five working Agents kept
+   the renderer and GPU at about 0.8 of a core). */
+.agr-list .agr-tile .agr-lu.agr-work *,.agr-list .agr-tile.work .agr-led{animation-play-state:paused}
+.agr-list .agr-tile.work .agr-led{animation-delay:var(--dl,0s)}
+@media (prefers-reduced-motion:reduce){
+  .agr-lu,.agr-lu *,.agr-toggle,.agr-toggle *,.agr-toggle::after,.agr-led,.agr-tile,.agr-arrow,.agr-pop .agr-sub{animation:none!important;transition:none!important}
+}
+
+/* the hover module (reuses .popover, .cfg-sec, .cfg-lbl and .ctx-it) */
+.popover.agr-pop{width:272px;transform-origin:100% 50%;overflow-x:hidden;overflow-y:auto}
+.popover.agr-pop:not(.show){pointer-events:none}
+.agr-ph{display:flex;align-items:center;gap:11px;padding:12px 12px 10px;border-bottom:1px solid var(--line-soft)}
+.agr-ph-art{flex:none;width:80px;height:62px;display:grid;place-items:center;border-radius:11px;border:1px solid var(--line);
+  background:linear-gradient(162deg,var(--bg-3),var(--bg-2));box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .045)}
+.agr-ph-art .agr-art{display:block;height:46px;width:auto}
+.agr-ph-id{flex:1;min-width:0}
+.agr-ph-name{font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-ph-name-in{display:block;width:100%;font:inherit;font-size:13px;font-weight:700;color:var(--txt);background:var(--bg-2);
+  border:1px solid color-mix(in srgb,var(--G) 50%,var(--line));border-radius:6px;padding:1px 6px;outline:none}
+.agr-ph-path{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-ph-kind{margin-top:2px;font-size:11px;color:color-mix(in srgb,var(--G) 70%,var(--txt));white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the "+ Add agent" popout: what an Agent is, where it lives, then what it is for */
+.popover.agr-add-pop{width:300px}
+.agr-add-tx p{margin:0 0 8px;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.agr-add-tx p:last-child{margin-bottom:0}
+.agr-add-pick .agr-nm{font-weight:600;color:var(--txt)}
+.agr-kind[aria-pressed="true"]{background:color-mix(in srgb,var(--G) 14%,var(--bg-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--G) 45%,var(--line))}
+.agr-add-row{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;padding:0 4px 2px}
+.agr-add-row .btn-mini{flex:none;white-space:nowrap}
+.agr-add-row .btn-mini:disabled{opacity:.5;cursor:not-allowed}
+
+/* P-BUDDY.1 (ADR-0667): floating Agent buddies (agent_buddy.ts). A small Agent brick (the .agr-lu art, palette
+   vars on .abd-host) over the main composer, each lane card's composer and beside World nodes: a soft breathing
+   glow in --G, a 3 x 2 px ellipse drift, a badge for ideas not seen yet. Above the composer and lane content,
+   below the popovers (95), Preview (90/94), the slash menu (30) and the Ask Lucid dock (250). Only the buddy
+   itself takes the pointer. */
+.abd-canvas{position:relative}
+.abd-host{position:absolute;left:0;top:0;z-index:27;display:block;pointer-events:none}
+.abd-host[hidden]{display:none}
+.abd-host[data-where="lane"]{z-index:5}
+.abd-host[data-where="world"]{z-index:4}
+.abd{position:relative;display:block;margin:0 auto;padding:0;border:0;border-radius:7px;background:transparent;line-height:0;cursor:grab;
+  pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}
+.abd::before{content:"";position:absolute;inset:-7px -6px;border-radius:50%;pointer-events:none;opacity:.5;
+  background:radial-gradient(closest-side,color-mix(in srgb,var(--G) 45%,transparent),transparent);animation:abdGlow 4.8s ease-in-out var(--abd-ph,0s) 2}
+.abd:hover::before{animation-iteration-count:infinite} /* P-PERF.IDLE1: glows twice after it appears, then rests */
+.abd .agr-art{position:relative;display:block;height:23px;width:auto;
+  filter:drop-shadow(0 0 3px color-mix(in srgb,var(--G) 55%,transparent)) drop-shadow(0 1px 1.5px rgb(var(--sh-rgb) / .35))}
+.abd:hover::before,.abd[aria-expanded="true"]::before{opacity:.9}
+.abd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.abd-dragging .abd{cursor:grabbing}
+/* P-BUDDY.2: the Agent's name under the brick, no frame (the rail's label type, shadowed to read over any surface) */
+.abd-name{display:block;max-width:96px;margin:2px auto 0;font-size:8px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;line-height:1.15;
+  text-align:center;color:var(--txt-2);text-shadow:0 0 3px var(--bg-0),0 0 6px var(--bg-0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.abd-badge{position:absolute;top:-5px;right:-6px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;font-style:normal;font-size:9.5px;font-weight:700;
+  line-height:14px;text-align:center;white-space:nowrap;color:#0a0e12;background:var(--G);box-shadow:0 0 0 1.5px var(--bg-1),0 0 6px var(--G)}
+.abd-badge[hidden]{display:none}
+/* P-BUDDY.HIDE1: a tiny red x on the brick's upper-right corner, only while the brick is hovered (or the x has keyboard
+   focus): it hides this buddy for this session. Hidden, it takes no clicks, so the corner stays the brick's. */
+.abd-brick{position:relative;display:block;width:fit-content;margin:0 auto;line-height:0}
+.abd-x{position:absolute;top:-6px;right:-7px;z-index:3;width:14px;height:14px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;
+  color:#fff;background:var(--red);box-shadow:0 0 0 1.5px var(--bg-1),0 1px 3px rgb(var(--sh-rgb) / .4);cursor:pointer;pointer-events:auto;
+  visibility:hidden;opacity:0;transform:scale(.7);transition:opacity .12s,transform .12s,visibility 0s .12s}
+.abd-x svg{display:block;stroke-width:3}
+.abd-brick:hover .abd-x,.abd-x:focus-visible{visibility:visible;opacity:1;transform:none;transition:opacity .12s,transform .12s}
+.abd-x:hover{background:var(--red-mid)}
+.abd-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.abd-brick:hover .abd-badge{opacity:0}
+.abd-dragging .abd-x{visibility:hidden}
+.abd-chip{position:absolute;left:calc(100% + 6px);top:3px;padding:2px 7px;border-radius:9px;font-size:10.5px;font-weight:600;line-height:1.4;white-space:nowrap;
+  color:var(--txt);background:var(--bg-4);border:1px solid color-mix(in srgb,var(--G) 45%,var(--line));box-shadow:0 4px 10px -6px rgb(var(--sh-rgb) / .6);
+  pointer-events:none;opacity:0;transform:translateY(2px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}
+.abd-chip.show{opacity:1;transform:none}
+@keyframes abdGlow{0%,100%{opacity:.4}50%{opacity:.75}}
+/* perf tier "minimal" (.abd-calm) and reduced motion: no breathing glow; the art's own loops stop via .agr-calm */
+.abd-calm .abd::before{animation:none}
+@media (prefers-reduced-motion:reduce){.abd::before{animation:none!important}.abd-chip{transition:none!important}}
+/* the ideas bubble (the rail module's shell) */
+.popover.abd-pop{width:300px}
+.abd-ideas{display:flex;flex-direction:column;gap:7px}
+.abd-note{margin:0;font-size:12px;line-height:1.5;color:var(--txt-2)}
+.abd-note.abd-warn{color:var(--amber-txt)}
+.abd-idea{min-width:0;padding:8px 9px;border-radius:9px;border:1px solid color-mix(in srgb,var(--G) 22%,var(--line));background:color-mix(in srgb,var(--G) 6%,var(--bg-2))}
+.abd-idea-t{font-size:12.5px;font-weight:650;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.abd-idea-p{margin-top:3px;font-size:11.5px;line-height:1.45;color:var(--txt-2);overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.abd-idea-acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.abd-idea-acts .btn-mini,.abd-foot .btn-mini{flex:none;white-space:nowrap}
+.abd-idea-acts .btn-mini:focus-visible,.abd-foot .btn-mini:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.abd-foot{display:flex;align-items:center;gap:8px;padding:8px 12px 10px;border-top:1px solid var(--line-soft)}
+.abd-foot .btn-mini:disabled{opacity:.5;cursor:progress}
+.abd-model{flex:1;min-width:0;text-align:right;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-SPINUP.1 (ADR-0668): spin-up walkers (agent_spinup.ts). A standing mini Lucid (lucidWalkerArt, palette vars on
+   .spw-host) walks along the top of a composer that waits on a starting agent, or paces over its World node, under a
+   glass bubble cycling status lines. --spw-run (px, one way) and --spw-dur (s, there and back) come from walkTrack;
+   --spw-bw caps the bubble so it never leaves the track. One step above the buddy's tier; never takes the pointer. */
+.spw-canvas{position:relative}
+.spw-host{position:absolute;left:0;top:0;z-index:28;display:block;pointer-events:none;transition:opacity .36s var(--ease-out)}
+.spw-host *{pointer-events:none}
+.spw-host[hidden]{display:none}
+.spw-host[data-spw-surface="lane"]{z-index:6}
+.spw-host[data-spw-surface="world"]{z-index:5}
+.spw-host.spw-out{opacity:0}
+.spw-walk{position:relative;display:block;width:max-content;animation:spwWalk var(--spw-dur,6s) linear infinite}
+.spw-face{display:block;animation:spwFace var(--spw-dur,6s) linear infinite}
+.spw{display:block;line-height:0}
+.spw .agr-art{display:block;height:var(--spw-h,30px);width:auto;overflow:visible;
+  filter:drop-shadow(0 0 3px color-mix(in srgb,var(--G) 50%,transparent)) drop-shadow(0 1px 1.5px rgb(var(--sh-rgb) / .35))}
+.spw-fig .spw-floor{fill:var(--G);opacity:.22}
+.spw-fig .spw-legL,.spw-fig .spw-legR,.spw-fig .spw-armL,.spw-fig .spw-armR,.spw-fig .spw-body{transform-box:view-box}
+.spw-fig .spw-legL{transform-origin:16.9px 32px;animation:spwLegL .62s ease-in-out var(--dl,0s) infinite}
+.spw-fig .spw-legR{transform-origin:23.1px 32px;animation:spwLegR .62s ease-in-out var(--dl,0s) infinite}
+.spw-fig .spw-armL{transform-origin:13.6px 23.2px;animation:spwArmL .62s ease-in-out var(--dl,0s) infinite}
+.spw-fig .spw-armR{transform-origin:26.4px 23.2px;animation:spwArmR .62s ease-in-out var(--dl,0s) infinite}
+.spw-fig .spw-body{animation:spwBob .62s ease-in-out var(--dl,0s) infinite}
+.spw-fig .agr-tail{animation-duration:1.6s}
+.spw-fig .agr-eyes{animation:agrBlink 4.6s var(--dl,0s) infinite}
+/* the glass bubble: rides above him (inside .spw-walk, outside the mirrored .spw-face), tail pointing down at him */
+.spw-bubble{position:absolute;left:50%;bottom:calc(100% + 8px);display:flex;align-items:center;gap:7px;width:max-content;max-width:var(--spw-bw,280px);
+  padding:5px 6px 5px 11px;border-radius:12px;transform:translateX(-50%);color:var(--txt);
+  background:linear-gradient(165deg,color-mix(in srgb,var(--G) 12%,color-mix(in srgb,var(--bg-3) 82%,transparent)),color-mix(in srgb,var(--bg-2) 86%,transparent));
+  border:1px solid color-mix(in srgb,var(--G) 55%,var(--line));-webkit-backdrop-filter:blur(10px) saturate(1.3);backdrop-filter:blur(10px) saturate(1.3);
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .07),0 8px 20px -10px rgb(var(--sh-rgb) / .75),0 0 16px -3px color-mix(in srgb,var(--G) 50%,transparent);
+  animation:spwPop .32s var(--ease-out) both}
+.spw-bubble::after{content:"";position:absolute;left:50%;bottom:-5px;width:9px;height:9px;margin-left:-4.5px;transform:rotate(45deg);
+  background:color-mix(in srgb,var(--bg-2) 92%,transparent);border-right:1px solid color-mix(in srgb,var(--G) 55%,var(--line));border-bottom:1px solid color-mix(in srgb,var(--G) 55%,var(--line))}
+.spw-text{flex:1 1 auto;min-width:0;font-size:12px;font-weight:600;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .18s var(--ease-out)}
+.spw-text.spw-swap{opacity:0}
+.spw-time{flex:none;padding:1px 6px;border-radius:7px;font-size:10.5px;font-weight:600;line-height:1.4;font-variant-numeric:tabular-nums;white-space:nowrap;
+  color:var(--txt-3);background:color-mix(in srgb,var(--G) 10%,var(--bg-3))}
+.spw-check{display:none;flex:none;width:13px;height:13px;fill:none;stroke:var(--G);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* ready: the check shows, the walk and stride stop where he is, one hop */
+.spw-host[data-spw-phase="ready"] .spw-check{display:block}
+.spw-host[data-spw-phase="ready"] .spw-walk,.spw-host[data-spw-phase="ready"] .spw-face,.spw-host[data-spw-phase="ready"] .spw-fig *{animation-play-state:paused}
+.spw-host[data-spw-phase="ready"] .spw{animation:spwHop .5s var(--ease-out) 1 both}
+/* a track too short to walk: he marches in place, facing the viewer */
+.spw-still .spw-walk,.spw-still .spw-face{animation:none}
+@keyframes spwWalk{0%,100%{transform:translateX(0)}50%{transform:translateX(var(--spw-run,0px))}}
+@keyframes spwFace{0%,50%{transform:scaleX(-1)}50.01%,100%{transform:none}}
+@keyframes spwLegL{0%,100%{transform:rotate(16deg)}50%{transform:rotate(-16deg)}}
+@keyframes spwLegR{0%,100%{transform:rotate(-16deg)}50%{transform:rotate(16deg)}}
+@keyframes spwArmL{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(14deg)}}
+@keyframes spwArmR{0%,100%{transform:rotate(14deg)}50%{transform:rotate(-14deg)}}
+@keyframes spwBob{0%,50%,100%{transform:translateY(0)}25%,75%{transform:translateY(-.8px)}}
+@keyframes spwHop{0%,100%{transform:translateY(0)}40%{transform:translateY(-7px)}70%{transform:translateY(0)}85%{transform:translateY(-1.5px)}}
+@keyframes spwPop{from{opacity:0;transform:translateX(-50%) translateY(4px) scale(.96)}}
+/* perf tier "minimal" (.spw-calm) and reduced motion: he stands still mid-track; the bubble still cycles its text */
+.spw-calm .spw-walk,.spw-calm .spw-face,.spw-calm .spw,.spw-calm .spw-bubble,.spw-calm .spw-fig,.spw-calm .spw-fig *{animation:none!important}
+.spw-calm .spw-walk{transform:translateX(calc(var(--spw-run,0px) / 2))}
+@media (prefers-reduced-motion:reduce){
+  .spw-walk,.spw-face,.spw,.spw-bubble,.spw-fig,.spw-fig *{animation:none!important}
+  .spw-walk{transform:translateX(calc(var(--spw-run,0px) / 2))}
+  .spw-host,.spw-text{transition:none!important}
+}
+.agr-ph-state{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--txt-2);min-width:0}
+.agr-ph-state i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--txt-4)}
+.agr-ph-state.work i{background:var(--G);box-shadow:0 0 6px var(--G)}
+.agr-ph-state span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-pop .cfg-sec{padding:10px 12px}
+.agr-pop .cfg-lbl{margin-bottom:8px}
+.agr-pop .cfg-lbl .cur{white-space:nowrap}
+.agr-hue{-webkit-appearance:none;appearance:none;display:block;width:100%;height:16px;margin:0 0 9px;background:transparent;cursor:pointer}
+.agr-hue::-webkit-slider-runnable-track{height:6px;border-radius:99px;box-shadow:inset 0 0 0 1px rgb(var(--sh-rgb) / .35);
+  background:linear-gradient(90deg,hsl(0 100% 63%),hsl(40 100% 63%),hsl(80 100% 63%),hsl(120 100% 63%),hsl(160 100% 63%),hsl(200 100% 63%),hsl(240 100% 63%),hsl(280 100% 63%),hsl(320 100% 63%),hsl(360 100% 63%))}
+.agr-hue::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:50%;background:var(--G);border:2px solid var(--tint);box-shadow:0 1px 4px rgb(var(--sh-rgb) / .6)}
+.agr-hue:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:99px}
+.agr-sw{display:flex;gap:7px}
+.agr-sw button{flex:none;width:20px;height:20px;border-radius:50%;padding:0;cursor:pointer;border:1px solid rgb(var(--sh-rgb) / .5);
+  background:linear-gradient(135deg,var(--sg) 0 50%,var(--sk) 50% 100%);transition:transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.agr-sw button:hover{transform:scale(1.12)}
+.agr-sw button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--bg-1),0 0 0 3.5px var(--sg)}
+.agr-sw button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.agr-pop .agr-acts{padding:6px}
+.agr-acts .ctx-it>svg{flex:none;color:var(--txt-3)}
+.agr-acts .ctx-it:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.agr-nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-acts .agr-chev{transition:transform var(--t)}
+.agr-acts .ctx-it[aria-expanded="true"]{background:var(--bg-3)}
+.agr-acts .ctx-it[aria-expanded="true"] .agr-chev{transform:rotate(90deg)}
+.agr-sub{display:none;margin:3px 0 2px 12px;padding-left:8px;border-left:1px solid color-mix(in srgb,var(--G) 40%,var(--line))}
+.agr-sub.open{display:block;animation:rise var(--t) var(--ease-out)}
+.agr-sub .ctx-it:disabled{opacity:.5;cursor:progress}
+.agr-ic{flex:none;width:26px;height:26px;border-radius:7px;display:grid;place-items:center;color:color-mix(in srgb,var(--G) 70%,var(--txt));
+  background:color-mix(in srgb,var(--G) 12%,var(--bg-3));border:1px solid color-mix(in srgb,var(--G) 25%,var(--line))}
+.agr-tx{display:block;flex:1;min-width:0}
+.agr-tx b{display:block;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-tx i{display:block;font-style:normal;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-rm{margin-top:2px;padding-top:4px;border-top:1px solid var(--line-soft)}
+.agr-rm .ctx-it:hover{color:var(--red-txt)}
+.agr-rm .ctx-it:hover>svg{color:var(--red-txt)}
+.agr-confirm{display:flex;align-items:center;gap:8px;padding:3px 4px 3px 10px}
+.agr-confirm-q{flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--red-txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-yes,.agr-no{flex:none;font:inherit;font-size:12px;font-weight:600;white-space:nowrap;padding:4px 11px;border-radius:7px;cursor:pointer;border:1px solid var(--line)}
+.agr-yes{color:var(--on-fill);background:var(--red-deep);border-color:color-mix(in srgb,var(--red) 55%,var(--line))}
+.agr-yes:hover{background:var(--red-mid)}
+.agr-no{color:var(--txt-2);background:var(--bg-2)}
+.agr-no:hover{background:var(--bg-3);color:var(--txt)}
+.agr-yes:focus-visible,.agr-no:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.agr-msg{margin:6px 4px 2px;padding:7px 9px;border-radius:7px;font-size:11.5px;line-height:1.45;color:var(--amber-txt);background:var(--amber-dim)}
+.agr-msg[hidden]{display:none}
+.agr-msg.ok{color:var(--green-txt);background:color-mix(in srgb,var(--green) 14%,var(--bg-2))}
+/* P-SCHED.AGENT1: Schedule this Agent. Every label is one ellipsised line (invariant 11); each field stacks its label
+   over its control at the full width, so the controls share one width (ADR-0633). */
+.popover.agr-pop:has(.agr-sched){width:304px}
+.agr-sched{display:flex;flex-direction:column;gap:8px}
+.agr-sched .cfg-lbl{margin-bottom:0}
+.agr-sj-list{display:flex;flex-direction:column;gap:4px}
+.agr-sj-list[hidden]{display:none}
+.agr-sj{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 9px;border-radius:8px;border:1px solid color-mix(in srgb,var(--G) 30%,var(--line));
+  background:color-mix(in srgb,var(--G) 7%,var(--bg-2))}
+.agr-sj.off{border-color:var(--line);background:var(--bg-2);opacity:.75}
+.agr-sj-tx{flex:1;min-width:0}
+.agr-sj-tx b{display:block;font-size:12px;font-weight:600;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-sj-tx i{display:block;font-style:normal;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-sj-b{flex:none;width:24px;height:24px;display:grid;place-items:center;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--bg-1);color:var(--txt-3);cursor:pointer}
+.agr-sj-b:hover{color:var(--txt);background:var(--bg-3)}
+.agr-sj-b[data-sj-del]:hover{color:var(--red-txt)}
+.agr-sj-b:focus-visible,.agr-seg-b:focus-visible,.agr-day:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.agr-seg{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;padding:2px;border-radius:8px;background:var(--bg-2);border:1px solid var(--line)}
+.agr-seg-b{min-width:0;padding:5px 0;border:0;border-radius:6px;background:transparent;color:var(--txt-2);font:inherit;font-size:11px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.agr-seg-b:hover{color:var(--txt);background:var(--bg-3)}
+.agr-seg-b[aria-checked="true"]{color:var(--txt);background:color-mix(in srgb,var(--G) 18%,var(--bg-3));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--G) 50%,var(--line))}
+.agr-field{display:block}
+.agr-field>span{display:block;margin:0 0 3px 2px;font-size:11px;font-weight:600;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agr-field input,.agr-field select,.agr-field textarea{display:block;box-sizing:border-box;width:100%;font:inherit;font-size:12.5px;color:var(--txt);background:var(--bg-2);
+  border:1px solid var(--line);border-radius:7px;padding:5px 8px;outline:none;color-scheme:inherit}
+.agr-field textarea{resize:vertical;min-height:72px;line-height:1.45}
+.agr-field input:focus,.agr-field select:focus,.agr-field textarea:focus{border-color:color-mix(in srgb,var(--G) 60%,var(--line))}
+.agr-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.agr-day{min-width:0;padding:5px 0;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);color:var(--txt-2);font:inherit;font-size:10.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.agr-day[aria-pressed="true"]{color:var(--txt);background:color-mix(in srgb,var(--G) 18%,var(--bg-3));border-color:color-mix(in srgb,var(--G) 50%,var(--line))}
+.agr-check{position:relative;display:block;padding:2px 0 2px 24px;font-size:11.5px;line-height:1.4;color:var(--txt-2);cursor:pointer}
+.agr-check input{position:absolute;left:2px;top:3px;margin:0;accent-color:var(--G)}
+.agr-check span{display:block}
+.agr-sched-note{margin:0 2px;font-size:11px;line-height:1.45;color:var(--txt-3)}
+.agr-sched-note.warn{color:var(--amber-txt)}
+.agr-sched .agr-add-row{margin-top:0;padding:0}
+.agr-nub{position:fixed;z-index:96;width:12px;height:12px;background:var(--bg-1);border:1px solid var(--line-strong);transform:rotate(45deg);pointer-events:none;opacity:0;transition:opacity var(--t-fast)}
+.agr-nub.show{opacity:1}
+.agr-nub.l{border-left-color:transparent;border-bottom-color:transparent}
+.agr-nub.r{border-right-color:transparent;border-top-color:transparent}
 
 /* Mis-click safety: New session (destructive to the visible thread) used to sit 4px from Collapse
    panel (harmless), on 24px targets. 12px of dead header separates them; New session also confirms
@@ -3799,6 +4215,10 @@ body.set-open .popover{z-index:99}
 /* P-PREVIEW.OVERFLEET1 (ADR-0645): the side-panel tier, above the floating Fleet dock (55), so a lane's Preview
    opens on top of Fleet with its resize edge reachable instead of painting under the dock. */
 #preview{z-index:90;width:var(--preview-w,min(760px,50vw));max-width:50vw}
+/* P-PREVIEW.CHIP1: opened while Visualize is up (an Agent Worlds chip), the panel flies out OVER it: 94, one above
+   .viz-view (93), below the popover tier (95). Same column, so its resize edge and lucid.preview-w width hold, and
+   the world keeps running behind it. */
+#preview.over-viz{z-index:94}
 /* When the preview is open the chat column is narrower, so shrink its text a notch to keep it readable. */
 body.preview-open .thread{font-size:.9em}
 /* ============================================================================================
@@ -4135,6 +4555,18 @@ body.preview-open .thread{font-size:.9em}
 .preview-empty-msg b{color:var(--txt);font-weight:600}
 .preview-shot{flex-direction:column;align-items:flex-start;gap:6px}
 .preview-shot-img{max-width:100%;border:1px solid var(--line);border-radius:8px;margin-top:4px}
+/* P-LANESHOTS.1: an agent's preview snapshots (lane_shots.ts laneShotsStripHtml). Thumbs frame like
+   .preview-shot-img; the "From the agent" tag wears the untrusted look of .viz-art-tag.untrusted, because
+   every picture is of a page an agent wrote. Invariant 11: the head is a flex:none tag plus ONE nowrap
+   ellipsis label; the thumbs scroll sideways rather than wrap. */
+.lane-shots{display:flex;flex-direction:column;gap:6px;min-width:0}
+.lane-shots-head{display:flex;align-items:center;gap:8px;min-width:0}
+.lane-shots-tag{flex:none;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:999px;white-space:nowrap;color:var(--txt);border:1px solid rgb(var(--red-rgb) / .6);background:rgb(var(--red-rgb) / .12)}
+.lane-shots-lbl{flex:1;min-width:0;font-size:11.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lane-shots-row{display:flex;gap:6px;min-width:0;overflow-x:auto;padding-bottom:2px;scrollbar-width:thin}
+.lane-shot{flex:none;display:block;width:96px;height:60px;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg-0);cursor:pointer;transition:border-color var(--t)}
+.lane-shot:hover,.lane-shot:focus-visible{border-color:var(--accent);outline:none}
+.lane-shot-img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
 /* P-KGMARKET.5 (ADR-0333): WRAPS. Same mistake ADR-0325 found in .fleet-card-head: a no-wrap flex row of
    controls inside an `overflow:hidden` panel (.kg is exactly that) does not reflow when the user drags the
    panel narrow. A flex item never shrinks below its min-content width, so .kg-tools kept its width and
@@ -4262,11 +4694,13 @@ body.preview-open .thread{font-size:.9em}
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */
 /* The animated rail glyph: book gently breathes, the sparkle twinkles + drifts. */
 .rail-about .about-mark{overflow:visible}
-.rail-about .about-book{transform-box:fill-box;transform-origin:center;animation:aboutBreathe 5.5s var(--ease) infinite}
+/* P-PERF.IDLE1: twice after load, then only while hovered (an endless loop keeps the window drawing every frame). */
+.rail-about .about-book{transform-box:fill-box;transform-origin:center;animation:aboutBreathe 5.5s var(--ease) 2}
 .rail-about .about-spark{fill:var(--accent-2);stroke:none;transform-box:fill-box;transform-origin:60% 40%;
-  animation:aboutTwinkle 3.4s var(--ease) infinite}
+  animation:aboutTwinkle 3.4s var(--ease) 2}
 .rail-about:hover{color:var(--accent-2)}
-.rail-about:hover .about-spark{animation-duration:1.5s}
+.rail-about:hover .about-book{animation-iteration-count:infinite}
+.rail-about:hover .about-spark{animation-duration:1.5s;animation-iteration-count:infinite}
 @keyframes aboutBreathe{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
 @keyframes aboutTwinkle{
   0%,100%{opacity:.35;transform:scale(.7) rotate(0deg)}
@@ -5962,7 +6396,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-jump.show{opacity:1;transform:none;pointer-events:auto}
 .fleet-jump:hover{background:var(--accent);color:var(--on-fill);border-color:var(--accent)}
 .fleet-jump:active{transform:scale(.94)}
-.fleet-jump-page{bottom:38px}
+.fleet-jump-page{bottom:40px} /* 24px button + 6px gap above .fleet-jump-end (ADR-0633 spacing) */
 .fleet-jump-end{bottom:10px}
 /* A card the user has sized by its TOP edge sets an inline height; the transcript then owns the slack
    instead of staying pinned at 180px, which is the whole point of dragging the edge. */
@@ -8278,6 +8712,14 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-user-img{width:72px;height:72px;object-fit:cover;border-radius:var(--r-sm);border:1px solid var(--line)}
 .al-msg.al-err{align-self:stretch;background:var(--red-dim);border:1px solid rgb(var(--sh-rgb) / .2);color:var(--red-txt)}
 .al-meta{font-size:11px;line-height:1.4;color:var(--txt-4);margin:-4px 2px 0}
+/* P-ASKLUCID.SPEED1: the live waiting line while Lucid answers: three breathing dots, the phase (one line), a timer */
+.al-wait{display:flex;align-items:center;gap:9px;min-width:0;padding:9px 12px;border-radius:12px;font-size:12.5px;color:var(--txt-2);
+  background:color-mix(in srgb,var(--G,var(--accent)) 7%,var(--bg-2));border:1px solid color-mix(in srgb,var(--G,var(--accent)) 24%,var(--line-soft));animation:alIn var(--t) var(--ease-out)}
+.al-wait-dots{flex:none;width:22px;height:6px;background:radial-gradient(circle,var(--G,var(--accent)) 2.4px,transparent 2.6px) 0 50%/7.3px 6px repeat-x;animation:alWaitDots 1.2s ease-in-out infinite}
+.al-wait-t{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.al-wait-time{flex:none;font-family:var(--mono);font-size:11px;color:var(--txt-4);font-variant-numeric:tabular-nums}
+@keyframes alWaitDots{0%,100%{opacity:.35}50%{opacity:1}}
+@media (prefers-reduced-motion:reduce){.al-wait,.al-wait-dots{animation:none}}
 /* P-ASKLUCID.4 (ADR-0585): the quick row above the composer. The CHIPS wrap onto a second row when they do not fit
    (so "Something else" is never off screen); the text inside a chip never wraps. Each chip is one text child. */
 .al-quick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;border-top:1px solid var(--line-soft)}
@@ -8293,6 +8735,43 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .al-send{flex:none;height:38px;padding:0 14px;border:1px solid rgb(var(--accent-rgb) / .5);border-radius:10px;background:var(--accent-dim);color:var(--txt);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;white-space:nowrap}
 .al-send:hover:not(:disabled){border-color:var(--accent-2)}
 .al-send:disabled{opacity:.5;cursor:default}
+/* P-BUDDY.1 (ADR-0667): Ask Lucid in the Agents glass look (reference: .popover.agr-pop). Scoped to .al-dock, which
+   carries the Lucid palette vars (--G etc.), so the other .ald docks keep their style. Colors mix theme tokens with
+   --G, so the light themes stay readable. The figure is boxless (lucidFigureArt). */
+.ald.al-dock{background:linear-gradient(180deg,color-mix(in srgb,var(--G) 5%,var(--bg-1)),var(--bg-1) 140px);background-color:var(--bg-1)}
+.ald.al-dock[data-mode="right"]{border-left-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:-24px 0 48px -30px rgb(var(--sh-rgb) / .75),-1px 0 0 color-mix(in srgb,var(--G) 18%,transparent),-10px 0 32px -18px color-mix(in srgb,var(--G) 22%,transparent)}
+.ald.al-dock[data-mode="bottom"]{border-top-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:0 -24px 48px -30px rgb(var(--sh-rgb) / .75),0 -10px 32px -18px color-mix(in srgb,var(--G) 22%,transparent)}
+.ald.al-dock[data-mode="floating"]{border-color:color-mix(in srgb,var(--G) 30%,var(--line-strong));
+  box-shadow:var(--shadow-lg),0 30px 70px -30px rgb(var(--sh-rgb) / .7),0 0 28px -8px color-mix(in srgb,var(--G) 26%,transparent)}
+.ald.al-dock .ald-frame{position:relative}
+.ald.al-dock .ald-frame::before{content:"";position:absolute;left:0;right:0;top:0;height:1px;pointer-events:none;z-index:2;
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--G) 70%,transparent),transparent);opacity:.7}
+.ald.al-dock .ald-head{min-height:56px;border-bottom-color:color-mix(in srgb,var(--G) 16%,var(--line-soft))}
+.al-dock .al-head{gap:9px}
+.al-fig{flex:none;display:block;width:40px;height:40px;line-height:0;border-radius:50%;filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}
+.al-fig .agr-fig{display:block;width:40px;height:40px}
+.al-fig .agr-fig-floor{fill:var(--G);opacity:.18}
+.al-fig.al-fig-paused .agr-lu,.al-fig.al-fig-paused .agr-lu *{animation-play-state:paused}
+.al-fig.al-fig-ok{animation:alFigOk 1.4s ease-out 1}
+.al-fig.al-fig-err{animation:alFigErr 1.4s ease-out 1}
+@keyframes alFigOk{0%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}25%{filter:drop-shadow(0 0 14px var(--G))}100%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}}
+@keyframes alFigErr{0%,100%{filter:drop-shadow(0 0 6px color-mix(in srgb,var(--G) 35%,transparent))}25%{filter:drop-shadow(0 0 10px var(--red-txt)) sepia(.4) hue-rotate(-90deg)}}
+.al-dock .al-title{font-size:13.5px;font-weight:700}
+/* the state line as .agr-ph-state: a dot then the text. The dot is a pseudo element, so the span keeps one text
+   child and stays a block that ellipsizes (Invariant 11). */
+.al-dock .al-state{display:block;margin-top:3px;color:var(--txt-2)}
+.al-dock .al-state::before{content:"";display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;vertical-align:1px;background:var(--txt-4)}
+.al-dock .al-state.work::before{background:var(--G);box-shadow:0 0 6px var(--G)}
+.al-dock .al-sug,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):not(.al-chip-more){transition:border-color var(--t),background var(--t),box-shadow var(--t)}
+.al-dock .al-sug:hover,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):hover,.al-dock .al-sug:focus-visible,.al-dock .al-chip:focus-visible{
+  border-color:color-mix(in srgb,var(--G) 60%,var(--line));background:color-mix(in srgb,var(--G) 9%,var(--bg-2));box-shadow:0 0 10px -4px color-mix(in srgb,var(--G) 55%,transparent)}
+.al-dock .al-sug:active,.al-dock .al-chip:not(.al-rec-approval):not(.al-rec-failure):active{background:color-mix(in srgb,var(--G) 16%,var(--bg-2))}
+.al-dock .al-chip-brief{border-color:color-mix(in srgb,var(--G) 45%,var(--line));background:color-mix(in srgb,var(--G) 11%,var(--bg-2))}
+.al-dock .al-quick{border-top-color:color-mix(in srgb,var(--G) 14%,var(--line-soft))}
+.al-dock .al-input:focus{border-color:color-mix(in srgb,var(--G) 65%,var(--line))}
+@media (prefers-reduced-motion:reduce){.al-fig.al-fig-ok,.al-fig.al-fig-err{animation:none}}
 .tb-ask{white-space:nowrap}
 @media (prefers-reduced-motion: reduce){
   .ald-pill.working,.ald-unread,.al-msg{animation:none}
@@ -8355,80 +8834,121 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .prev-ask-act{flex:none}
 
 /* ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain in front of auto previews ──────────────────────
+   P-PREVIEW.CHIP1: ONE preview chip (.pchip, preview_chip.ts) wherever a preview loads or waits, in two sizes:
+   "full" (the composer) and "compact" (a fleet lane, an orbit spoke, an Agent Worlds node). Same look, same
+   states, same effects; only the size steps down.
    Layers (docs/UX-REVIEW.md "Overlay stack"):
-   - .pcur-dock is Content tier: positioned inside main.center at z-index 26, one above the chat's .jump-down
-     helpers (25). It covers only the chat column's top-right corner; the Fleet dock (55), Orbit (92),
+   - .pchip-dock (the composer chip) is Content tier: inside main.center at z-index 26, one above the chat's
+     .jump-down helpers (25). It covers only the chat column's top-right corner; the Fleet dock (55), Orbit (92),
      popovers, palette, sheets, toasts, modals, Ask Lucid, menus and tooltips all cover it.
+   - .pchip-host[data-where=lane] floats in a fleet lane's transcript corner, z-index 4 inside .fleet-out-wrap: over
+     the transcript, under the lane's jump pair (5); it never reaches the lane's composer below the transcript.
+   - .pchip-host[data-where=spoke] floats just above an orbit spoke card's upper-right corner, inside the card.
+   - In Visualize the chips sit at z-index 3 in .viz-stage beside the artifact chips, their hover card at 6.
    - .pcur-probe-host is BEHIND the app (z-index -1), transparent and inert: the hidden probe frame must be
      laid out and rendered (so a canvas app draws) without ever being seen or reached.
-   - The swing animates #preview itself (a layout column), so it adds no layer.
-   Motion: data-motion on the dock (full / calm / still from the perf tier) and prefers-reduced-motion. */
+   - The swing animates #preview itself (a layout column), so it adds no layer. Opened from Visualize the panel
+     lifts to 94 (#preview.over-viz, beside the #preview rule).
+   Motion: html[data-pchip-motion] (full / calm / still from the perf tier, app.ts) and prefers-reduced-motion. */
 /* Not display:none, visibility:hidden or opacity:0: Chromium may throttle a cross-origin frame hidden that way
    (no requestAnimationFrame, so a canvas app never draws). Behind the app and nearly transparent instead. */
 .pcur-probe-host{position:fixed;left:0;top:0;width:min(760px,50vw);height:calc(100vh - 60px);z-index:-1;opacity:.001;pointer-events:none;overflow:hidden}
 .pcur-probe{position:absolute;inset:0;width:100%;height:100%;border:0}
-.pcur-dock{position:absolute;top:12px;right:14px;z-index:26;display:flex;align-items:center;gap:5px;max-width:min(340px,calc(100% - 28px));animation:pcurIn .32s var(--ease-out) both}
-.pcur-dock[hidden]{display:none}
-.pcur-chip{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 12px 6px 6px;border-radius:12px;border:1px solid var(--line);
-  background:color-mix(in srgb,var(--bg-1) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--txt);font:inherit;text-align:left;cursor:default;
-  box-shadow:0 8px 24px -12px rgb(var(--sh-rgb) / .55);transition:border-color .2s,box-shadow .2s,transform .2s}
-.pcur-chip[data-phase="ready"]{cursor:pointer;border-color:rgb(var(--accent-rgb) / .55);box-shadow:0 10px 28px -12px rgb(var(--accent-rgb) / .55)}
-.pcur-chip[data-phase="ready"]:hover{transform:translateY(-1px);border-color:var(--accent)}
-.pcur-chip:focus-visible,.pcur-x:focus-visible,.pcur-mini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* The miniature page: four skeleton lines, a scanning shimmer and three dots orbiting on an ellipse. */
-.pcur-art{position:relative;flex:none;width:46px;height:34px;border-radius:7px;overflow:hidden;background:var(--bg-0);border:1px solid var(--line-soft)}
-.pcur-page{position:absolute;inset:5px 6px;display:flex;flex-direction:column;gap:3px}
-.pcur-page i{display:block;height:3px;border-radius:2px;background:var(--line)}
-.pcur-page i:first-child{width:60%;height:4px;background:rgb(var(--accent-rgb) / .45)}
-.pcur-page i:nth-child(2){width:90%}
-.pcur-page i:nth-child(3){width:74%}
-.pcur-page i:nth-child(4){width:48%}
-.pcur-scan{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(var(--accent-rgb) / .38) 50%,transparent 70%);transform:translateX(-100%);animation:pcurScan 1.4s ease-in-out infinite}
-.pcur-orbit{position:absolute;inset:0;transform:scaleY(.55)}
-.pcur-orbit b{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pcurOrbit 1.8s linear infinite}
-.pcur-orbit b:nth-child(2){animation-delay:-.6s;opacity:.7}
-.pcur-orbit b:nth-child(3){animation-delay:-1.2s;opacity:.45}
-.pcur-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.pcur-thumb[hidden]{display:none}
-.pcur-chip[data-phase="ready"] .pcur-scan,.pcur-chip[data-phase="ready"] .pcur-orbit{display:none}
-.pcur-chip[data-phase="ready"] .pcur-art{border-color:rgb(var(--accent-rgb) / .5);animation:pcurReady .6s var(--ease-out)}
-/* Invariant 11: the two text lines are ONE block, each line nowrap with an ellipsis. */
-.pcur-txt{display:block;min-width:0;flex:1 1 auto}
-.pcur-k,.pcur-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pcur-k{font-size:10.5px;font-weight:700;letter-spacing:.03em;color:var(--txt-2)}
-.pcur-chip[data-phase="ready"] .pcur-k{color:var(--accent-2)}
-.pcur-name{font-size:12.5px;font-weight:600;color:var(--txt);max-width:210px}
-.pcur-more{flex:none;padding:1px 7px;border-radius:999px;background:var(--accent-dim);color:var(--txt);font-size:11px;font-weight:700;white-space:nowrap}
-.pcur-more[hidden]{display:none}
-.pcur-x{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);cursor:pointer;opacity:.8}
-.pcur-x:hover{opacity:1;color:var(--txt);border-color:var(--line-strong)}
-.pcur-dock[data-motion="calm"] .pcur-orbit{display:none}
-.pcur-dock[data-motion="still"] .pcur-scan,.pcur-dock[data-motion="still"] .pcur-orbit{display:none}
-.pcur-dock[data-motion="still"],.pcur-dock[data-motion="still"] .pcur-art{animation:none}
-/* The swing: #preview unfolds out of the chip, hinged at the panel point nearest it (--pcur-ox/oy). */
-#preview.pcur-swing{transform-origin:var(--pcur-ox,0) var(--pcur-oy,0);animation:pcurSwing var(--pcur-ms,.38s) cubic-bezier(.2,.9,.25,1.04) both}
-#preview.pcur-swing.pcur-calm{animation-name:pcurSwingCalm}
-/* The mini chip on a fleet lane card and an orbit spoke. */
-.pcur-mini{flex:none;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px 0 5px;border-radius:999px;border:1px solid var(--line);
-  background:var(--bg-0);color:var(--txt-2);font:inherit;font-size:10.5px;font-weight:700;white-space:nowrap;cursor:default}
-.pcur-mini[hidden]{display:none}
-.pcur-mini[data-phase="ready"]{cursor:pointer;color:var(--txt);border-color:rgb(var(--accent-rgb) / .6);background:var(--accent-dim);animation:pcurReady .6s var(--ease-out)}
-.pcur-mini[data-phase="ready"]:hover{border-color:var(--accent)}
-.pcur-mini .ic{width:11px;height:11px}
-.pcur-mini-l{white-space:nowrap}
-.pcur-mini-art{position:relative;flex:none;width:10px;height:12px;border-radius:2px;border:1px solid var(--line-strong);overflow:hidden}
-.pcur-mini-art i{position:absolute;inset:0;background:linear-gradient(180deg,transparent 25%,rgb(var(--accent-rgb) / .65) 50%,transparent 75%);transform:translateY(-100%);animation:pcurScanY 1.2s ease-in-out infinite}
-.orbit-view.static .pcur-mini-art i,.orbit-view.static .pcur-mini{animation:none}
-@keyframes pcurIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes pcurScan{to{transform:translateX(100%)}}
-@keyframes pcurScanY{to{transform:translateY(100%)}}
-@keyframes pcurOrbit{from{transform:rotate(0deg) translateX(16px)}to{transform:rotate(360deg) translateX(16px)}}
-@keyframes pcurReady{0%{box-shadow:0 0 0 0 rgb(var(--accent-rgb) / .55)}100%{box-shadow:0 0 0 8px rgb(var(--accent-rgb) / 0)}}
-@keyframes pcurSwing{from{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}55%{opacity:1}to{opacity:1;transform:none}}
-@keyframes pcurSwingCalm{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+.pchip-dock{position:absolute;top:12px;right:14px;z-index:26;display:flex;align-items:center;gap:6px;max-width:min(340px,calc(100% - 28px))}
+.pchip-dock[hidden]{display:none}
+/* `backwards`, not `both`: a held end state would pin `transform` and eat the ready chip's hover lift. */
+.pchip{display:flex;align-items:center;gap:10px;min-width:0;padding:6px 12px 6px 6px;border-radius:12px;border:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg-1) 92%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);color:var(--txt);font:inherit;font-family:var(--font);text-align:left;cursor:default;
+  box-shadow:0 8px 24px -12px rgb(var(--sh-rgb) / .55);transition:border-color .2s,box-shadow .2s,transform .2s;animation:pchipIn .32s var(--ease-out) backwards}
+.pchip[hidden]{display:none}
+.pchip[data-phase="ready"]{cursor:pointer;border-color:rgb(var(--accent-rgb) / .55);box-shadow:0 10px 28px -12px rgb(var(--accent-rgb) / .55)}
+.pchip[data-phase="ready"]:hover{transform:translateY(-1px);border-color:var(--accent)}
+.pchip:focus-visible,.pchip-x:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* The miniature page: four skeleton lines, a scanning shimmer and three dots orbiting on an ellipse (radius --pchip-r). */
+.pchip-art{--pchip-r:16px;position:relative;flex:none;width:46px;height:34px;border-radius:7px;overflow:hidden;background:var(--bg-0);border:1px solid var(--line-soft)}
+.pchip-page{position:absolute;inset:5px 6px;display:flex;flex-direction:column;gap:3px}
+.pchip-page i{display:block;height:3px;border-radius:2px;background:var(--line)}
+.pchip-page i:first-child{width:60%;height:4px;background:rgb(var(--accent-rgb) / .45)}
+.pchip-page i:nth-child(2){width:90%}
+.pchip-page i:nth-child(3){width:74%}
+.pchip-page i:nth-child(4){width:48%}
+.pchip-scan{position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgb(var(--accent-rgb) / .38) 50%,transparent 70%);transform:translateX(-100%);animation:pchipScan 1.4s ease-in-out infinite}
+.pchip-orbit{position:absolute;inset:0;transform:scaleY(.55)}
+.pchip-orbit b{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pchipOrbit 1.8s linear infinite}
+.pchip-orbit b:nth-child(2){animation-delay:-.6s;opacity:.7}
+.pchip-orbit b:nth-child(3){animation-delay:-1.2s;opacity:.45}
+.pchip-thumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pchip-thumb[hidden]{display:none}
+.pchip[data-phase="ready"] .pchip-scan,.pchip[data-phase="ready"] .pchip-orbit{display:none}
+.pchip[data-phase="ready"] .pchip-art{border-color:rgb(var(--accent-rgb) / .5);animation:pchipReady .6s var(--ease-out)}
+/* Invariant 11: the two text lines are ONE block, each line nowrap with an ellipsis. The line heights are set,
+   not inherited, so the chip reads the same in the chat, a lane card and the Visualize stage. */
+.pchip-txt{display:block;min-width:0;flex:1 1 auto}
+.pchip-k,.pchip-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pchip-k{font-size:10.5px;line-height:1.5;font-weight:700;letter-spacing:.03em;color:var(--txt-2)}
+.pchip[data-phase="ready"] .pchip-k{color:var(--accent-2)}
+.pchip-name{font-size:12.5px;line-height:1.5;font-weight:600;color:var(--txt);max-width:210px}
+.pchip-more{flex:none;padding:1px 7px;border-radius:999px;background:var(--accent-dim);color:var(--txt);font-size:11px;font-weight:700;white-space:nowrap}
+.pchip-more[hidden]{display:none}
+.pchip-x{flex:none;display:grid;place-items:center;width:22px;height:22px;padding:0;border-radius:50%;border:1px solid var(--line);background:var(--bg-1);color:var(--txt-2);cursor:pointer;opacity:.8}
+.pchip-x:hover{opacity:1;color:var(--txt);border-color:var(--line-strong)}
+/* compact: the same parts, a size down (a lane, a spoke, an Agent Worlds node). */
+.pchip[data-size="compact"]{gap:8px;padding:3px 10px 3px 3px}
+.pchip[data-size="compact"] .pchip-art{--pchip-r:12px;width:34px;height:25px;border-radius:6px}
+.pchip[data-size="compact"] .pchip-page{inset:4px 5px;gap:2px}
+.pchip[data-size="compact"] .pchip-page i{height:2px}
+.pchip[data-size="compact"] .pchip-page i:first-child{height:3px}
+.pchip[data-size="compact"] .pchip-k{font-size:9.5px;line-height:1.25}
+.pchip[data-size="compact"] .pchip-name{font-size:11.5px;line-height:1.3;max-width:120px}
+/* A lane's or a spoke's chip floats: the host spans its corner and lets every press through but the chip's. */
+.pchip-host{position:absolute;z-index:4;display:flex;justify-content:flex-end;pointer-events:none;container-type:inline-size}
+.pchip-host>.pchip{pointer-events:auto;max-width:100%}
+/* In the lane's transcript: its upper-right corner, inset like the jump pair so the widened scrollbar stays free. */
+.pchip-host[data-where="lane"]{top:4px;left:8px;right:20px}
+/* On an orbit spoke: just above the card's upper-right corner, so it covers nothing on the card. */
+.pchip-host[data-where="spoke"]{left:0;right:0;bottom:calc(100% + 6px)}
+/* A narrow corner shows the miniature page alone; its tooltip and accessible name still say everything. */
+@container (max-width:299px){
+  .pchip-host>.pchip .pchip-txt,.pchip-host>.pchip .pchip-more{display:none}
+  .pchip-host>.pchip{padding-right:3px}
+}
+/* Agent Worlds: beside its node (preview_chip.ts moves it with `translate` every frame, so `transform` stays free
+   for the hover lift and the entrance), and its hover card. */
+.viz-stage .pchip{position:absolute;left:0;top:0;z-index:3}
+.pchip-pop{position:absolute;left:0;top:0;z-index:6;display:flex;flex-direction:column;gap:8px;width:min(300px,calc(100% - 16px));padding:10px 12px;
+  border-radius:12px;border:1px solid var(--line);background:color-mix(in srgb,var(--bg-1) 96%,transparent);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  color:var(--txt);box-shadow:0 14px 34px -14px rgb(var(--sh-rgb) / .6);animation:pchipIn .2s var(--ease-out) backwards}
+.pchip-pop[hidden]{display:none}
+.pchip-pop-id{display:block;min-width:0}
+.pchip-pop-title,.pchip-pop-path{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pchip-pop-title{font-size:12.5px;line-height:1.4;font-weight:600}
+.pchip-pop-path{font-family:var(--mono);font-size:10.5px;line-height:1.4;color:var(--txt-3)}
+.pchip-pop-note{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
+.pchip-pop-acts{display:flex;justify-content:flex-end}
+.pchip-pop-acts .btn-mini{flex:none;white-space:nowrap}
+/* Motion, one switch for every chip: calm keeps the shimmer and drops the orbiting dots; still animates nothing. */
+html[data-pchip-motion="calm"] .pchip-orbit{display:none}
+html[data-pchip-motion="still"] .pchip-scan,html[data-pchip-motion="still"] .pchip-orbit{display:none}
+html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .pchip-art,html[data-pchip-motion="still"] .pchip-pop{animation:none}
+.orbit-view.static .pchip-scan,.orbit-view.static .pchip-orbit{display:none}
+.orbit-view.static .pchip,.orbit-view.static .pchip .pchip-art{animation:none}
+/* The swing: #preview unfolds out of the chip, hinged at the panel point nearest it (--pchip-ox/oy). */
+#preview.pchip-swing{transform-origin:var(--pchip-ox,0) var(--pchip-oy,0);animation:pchipSwing var(--pchip-ms,.38s) cubic-bezier(.2,.9,.25,1.04) both}
+#preview.pchip-swing.pchip-calm{animation-name:pchipSwingCalm}
+/* P-PREVIEW.CHIP1: leaving from over Visualize, the panel folds back into the chip it came from, deaf to the pointer. */
+#preview.pchip-leave{transform-origin:var(--pchip-ox,0) var(--pchip-oy,0);animation:pchipLeave var(--pchip-ms,.38s) cubic-bezier(.5,0,.75,0) both;pointer-events:none}
+#preview.pchip-leave.pchip-calm{animation-name:pchipLeaveCalm}
+@keyframes pchipIn{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes pchipScan{to{transform:translateX(100%)}}
+@keyframes pchipOrbit{from{transform:rotate(0deg) translateX(var(--pchip-r,16px))}to{transform:rotate(360deg) translateX(var(--pchip-r,16px))}}
+@keyframes pchipReady{0%{box-shadow:0 0 0 0 rgb(var(--accent-rgb) / .55)}100%{box-shadow:0 0 0 8px rgb(var(--accent-rgb) / 0)}}
+@keyframes pchipSwing{from{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}55%{opacity:1}to{opacity:1;transform:none}}
+@keyframes pchipSwingCalm{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
+@keyframes pchipLeave{from{opacity:1;transform:none}to{opacity:0;transform:perspective(1100px) rotateY(-70deg) scale(.55)}}
+@keyframes pchipLeaveCalm{from{opacity:1;transform:none}to{opacity:0;transform:scale(.92)}}
 @media (prefers-reduced-motion: reduce){
-  .pcur-dock,.pcur-art,.pcur-scan,.pcur-orbit b,.pcur-mini,.pcur-mini-art i,#preview.pcur-swing{animation:none !important}
-  .pcur-scan,.pcur-orbit{display:none}
+  .pchip,.pchip-art,.pchip-scan,.pchip-orbit b,.pchip-pop,#preview.pchip-swing,#preview.pchip-leave{animation:none !important}
+  .pchip-scan,.pchip-orbit{display:none}
 }
 
 /* ============================== P-VIZ.1 (ADR-0622): Visualize (#vizView, viz_view.ts) ==============================
@@ -8462,11 +8982,18 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .viz-rec-btn:not(.on) .ic{color:var(--red)}
 .viz-rec-btn.on{color:var(--red);border-color:rgb(var(--red-rgb) / .6)}
 .viz-stage{position:relative;flex:1;min-height:0;overflow:hidden;contain:layout paint}
-.viz-cv{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
+/* P-VIZ.NOFLASH1: an undrawn canvas shows the backdrop's base color (the scene sets the world's inline), never black.
+   The outgoing picture of a remount stays on top (later in the stage) and lets the pointer reach the new canvas. */
+.viz-cv{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none;background:var(--bg-0)}
 .viz-cv:focus-visible{box-shadow:inset 0 0 0 2px rgb(var(--accent-rgb) / .6)}
+.viz-cv-out{pointer-events:none}
 .viz-state{position:absolute;inset:0;z-index:3;display:grid;place-content:center;justify-items:center;gap:12px;text-align:center;
   color:var(--txt-2);font-size:13px;pointer-events:none}
 .viz-state[hidden]{display:none}
+/* P-VIZ.NOFLASH1: the start spinner covers the canvas until the scene's first whole frame of the saved style, on its
+   backdrop color (viz_view sets --viz-backdrop on the stage), so nothing half-drawn or of another style shows. */
+.viz-state[data-viz-loading]{background:var(--viz-backdrop,var(--bg-0))}
+.viz-state.viz-state-light{color:#1a1d26}
 .viz-state p{margin:0;max-width:440px;line-height:1.5}
 .viz-error{pointer-events:auto;background:var(--bg-0)}
 .viz-spin{width:28px;height:28px;border-radius:50%;border:2px solid rgb(var(--accent-rgb) / .25);border-top-color:var(--accent);animation:vizSpin .9s linear infinite}

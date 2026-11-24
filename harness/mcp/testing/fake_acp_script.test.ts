@@ -228,12 +228,27 @@ describe("replayScript", () => {
 
 describe("shipped fleet demo scripts", () => {
   const all = shipped();
+  const footage = all.filter((s) => !s.script.side);
 
-  test("there are eight, with unique ids and exactly one default", () => {
-    expect(all).toHaveLength(8);
-    expect(new Set(all.map((s) => s.script.id)).size).toBe(8);
+  test("there are eight footage scripts, with unique ids and exactly one default", () => {
+    expect(footage).toHaveLength(8);
+    expect(new Set(all.map((s) => s.script.id)).size).toBe(all.length);
     expect(all.filter((s) => s.script.default)).toHaveLength(1);
   });
+
+  // P-BUDDY.1: a side completion (the buddy's ideas) answers at once with the JSON its caller parses.
+  for (const { file, script } of all.filter((s) => s.script.side)) {
+    test(`${file}: a side answer, quick and parseable`, async () => {
+      const h = harness(true);
+      const res = await replay(h, script);
+      expect(h.clock.now).toBeLessThan(10_000); // streamed prose takes a few virtual seconds; footage takes 40+
+      expect(h.asks).toHaveLength(0);
+      const reply = JSON.parse(res.text.trim()) as { doing?: unknown; ideas?: { title?: unknown; prompt?: unknown }[] };
+      expect(typeof reply.doing).toBe("string");
+      expect(reply.ideas?.length).toBe(3);
+      for (const i of reply.ideas ?? []) { expect(typeof i.title).toBe("string"); expect(typeof i.prompt).toBe("string"); }
+    });
+  }
 
   test("each script's own prompt selects it", () => {
     const scripts = all.map((s) => s.script);
@@ -244,7 +259,7 @@ describe("shipped fleet demo scripts", () => {
     for (const s of all) expect(s.text.includes("\u2014")).toBe(false);
   });
 
-  for (const { file, script } of shipped()) {
+  for (const { file, script } of footage) {
     test(`${file}: 40 to 90 seconds of activity, one ask, a delegation, usage`, async () => {
       for (const allow of [true, false]) {
         const h = harness(allow);

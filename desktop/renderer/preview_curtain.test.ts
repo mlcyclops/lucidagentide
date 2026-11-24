@@ -3,8 +3,8 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  CURTAIN, canvasShows, canvasVerdict, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain,
-  paintCommand, paintContentful, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain,
+  CURTAIN, canvasShows, canvasVerdict, chipCardAt, chipStackAt, chipTarget, chipText, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain,
+  headChip, paintCommand, paintContentful, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain,
   type CanvasSample, type CurtainInput, type PaintStats,
 } from "./preview_curtain.ts";
 
@@ -231,5 +231,69 @@ describe("small decisions", () => {
   });
   test("the paint command carries the thresholds the bridge needs", () => {
     expect(paintCommand()).toEqual({ what: "paint", minBoxPx: CURTAIN.minBoxPx, fullFrac: CURTAIN.fullFrac, sampleEdge: CURTAIN.sampleEdge, thumbW: CURTAIN.thumbW, thumbH: CURTAIN.thumbH });
+  });
+});
+
+describe("P-PREVIEW.CHIP1: one chip on every surface", () => {
+  const a = { key: "agent", path: "/w/a.html", label: "a.html", seq: 1 };
+  const b = { key: "lane:x", path: "/w/b.html", label: "b.html", seq: 2 };
+  test("a tab key names its chip's target: the Agent tab is Main, a lane tab its lane, other tabs none", () => {
+    expect(chipTarget("agent")).toBe("main");
+    expect(chipTarget("lane:abc")).toBe("abc");
+    expect(chipTarget("lane:")).toBeNull();
+    expect(chipTarget("yours")).toBeNull();
+    expect(chipTarget("plugin:x")).toBeNull();
+    expect(chipTarget("asklucid")).toBeNull();
+  });
+  test("the composer chip is the registry's head with the count behind it", () => {
+    expect(headChip([])).toBeNull();
+    expect(headChip(upsertCurtain([], a))).toEqual({ phase: "loading", label: "a.html", path: "/w/a.html" });
+    let l = settleCurtain(upsertCurtain([], a), "agent", a.path, "ready", { title: "Game", thumb: "data:image/png;base64,AA" });
+    l = upsertCurtain(l, b);
+    expect(headChip(l)).toEqual({ phase: "ready", label: "a.html", path: "/w/a.html", title: "Game", thumb: "data:image/png;base64,AA", more: 1 });
+  });
+  test("one wording: the page title over the file name, the waiting count only when there is one", () => {
+    const ready = chipText({ phase: "ready", label: "a.html", path: "/w/a.html", title: "Game", more: 2 });
+    expect(ready.k).toBe("Preview ready");
+    expect(ready.name).toBe("Game");
+    expect(ready.aria).toBe("Open the preview of Game, 2 more waiting");
+    expect(ready.tipTitle).toBe("Open the preview");
+    expect(ready.tipDesc.endsWith(" 2 more waiting.")).toBe(true);
+    const loading = chipText({ phase: "loading", label: "a.html", path: "/w/a.html" });
+    expect(loading).toMatchObject({ k: "Preparing preview", name: "a.html", aria: "Preparing a preview of a.html", tipTitle: "Preparing a preview" });
+    expect(chipText({ phase: "ready", label: "b.html", path: "/w/b.html" }).aria).toBe("Open the preview of b.html");
+  });
+  test("over a node the chip centers above its frame and stacks over the artifact chip without touching it", () => {
+    const box = { x: 500, y: 400, r: 30 };
+    const stage = { left: 100, top: 50 };
+    const art = chipStackAt(box, stage, { w: 140, h: 28 }); // the artifact chip's own spot
+    expect(art).toEqual({ x: 330, y: 286 });
+    const alone = chipStackAt(box, stage, { w: 120, h: 34 });
+    expect(alone).toEqual({ x: 340, y: 280 });
+    const stacked = chipStackAt(box, stage, { w: 120, h: 34 }, 28 + 6);
+    expect(stacked).toEqual({ x: 340, y: 246 });
+    expect(stacked.y + 34).toBeLessThanOrEqual(art.y - 6);
+    expect(chipStackAt(box, stage, { w: 120, h: 34 }, -50)).toEqual(alone);
+  });
+  test("a node near the stage's top keeps its chips on the stage, stacked without overlapping", () => {
+    const stage = { left: 0, top: 100, width: 800, height: 500 };
+    const box = { x: 790, y: 130, r: 20 }; // near the top-right corner: the natural spot is above the stage and off its right
+    const art = chipStackAt(box, stage, { w: 140, h: 28 });
+    expect(art).toEqual({ x: 656, y: 4 });
+    const chip = chipStackAt(box, stage, { w: 120, h: 34 }, 28 + 6);
+    expect(chip.x).toBe(676);
+    expect(chip.y).toBeGreaterThanOrEqual(art.y + 28 + 6); // under the artifact chip, never onto it
+    expect(chipStackAt(box, stage, { w: 120, h: 34 }).y).toBe(4);
+    // without the stage's size (callers that only pass the origin) nothing is clamped
+    expect(chipStackAt(box, { left: 0, top: 100 }, { w: 120, h: 34 }).y).toBeLessThan(0);
+  });
+  test("the hover card sits above its chip when it fits, else below, always inside the stage", () => {
+    const stage = { width: 800, height: 600 };
+    const card = { w: 300, h: 160 };
+    expect(chipCardAt({ left: 340, top: 246, width: 120, height: 34 }, card, stage)).toEqual({ left: 250, top: 78 });
+    expect(chipCardAt({ left: 340, top: 40, width: 120, height: 34 }, card, stage)).toEqual({ left: 250, top: 82 });
+    expect(chipCardAt({ left: 0, top: 300, width: 120, height: 34 }, card, stage).left).toBe(8);
+    expect(chipCardAt({ left: 760, top: 300, width: 120, height: 34 }, card, stage).left).toBe(492);
+    expect(chipCardAt({ left: 60, top: 20, width: 120, height: 34 }, card, { width: 200, height: 100 })).toEqual({ left: 8, top: 8 });
   });
 });

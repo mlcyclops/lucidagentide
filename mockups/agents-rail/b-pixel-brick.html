@@ -1,0 +1,885 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
+<!-- Agents rail mockup, Direction B: Pixel brick. A STATIC, self-contained visual harness (no network) for the
+     proposed Agents view of the right metrics rail. The mini LUCID is the real 20 x 26 authoring grid from
+     desktop/renderer/mascot.ts (BASE_20 + meditate rows) at 1 css px per cell, sealed in a pixel-art brick.
+     Tokens, the rail, the metric .tile, .popover, .cfg-sec and .ctx-it CSS are copied verbatim from
+     desktop/renderer/styles.css; rail-head, rail-agents, tile.agent, ap-, ag-, px is PROPOSED; mk- / win- is chrome. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LUCID · Agents rail · B Pixel brick</title>
+<style>
+/* ===================== verbatim: desktop/renderer/styles.css palette lucid-dark ===================== */
+:root, :root[data-theme="lucid-dark"] {
+  --bg-0:#0a0b0f; --bg-1:#0f1117; --bg-2:#151823; --bg-3:#1b1f2b; --bg-4:#222736;
+  --bg-glow:#16101f; --bg-sunk:#0a0c12; --bg-code:#0e1119; --bg-code-2:#0b0d14;
+  --bg-editor:#0b0e14; --bg-elev:#12151f; --bg-kg:#12141d; --bg-fade:#0c0d13; --check-1:#14161d;
+  --check-2:#0d0f15;
+  --tb-1:#13151e; --tb-2:#0f111a; --tb-3:#0c0e14; --sb-1:#0e1016; --sb-2:#0b0c12; --sb-3:#090a0e;
+  --scroll-thumb:#222838; --scroll-thumb-h:#2f3750; --scroll-thumb-a:#3a4361;
+  --line:#252a3a; --line-soft:#1a1e2a; --line-strong:#323a4f;
+  --txt:#edeff6; --txt-2:#aeb4c6; --txt-3:#727a90; --txt-4:#525a70; --txt-code:#dde2ef;
+  --accent:#c64bd6; --accent-2:#e07bf0; --accent-deep:#7d39c4; --cyan:#46c8dc; --cyan-2:#7ee7ff;
+  --green:#46d27e; --amber:#e8b23c; --red:#ef5f5f; --blue:#5e8df2; --red-mid:#e5564e;
+  --red-deep:#c8423b;
+  --red-txt:#ffb0b0; --red-txt-2:#ffd7d7; --amber-txt:#f3cf7a; --amber-txt-2:#ffd79a;
+  --green-txt:#8ee8ad; --green-txt-2:#c6f3d6; --blue-txt:#aec4ff; --blue-2:#8aa6f5;
+  --cyan-txt:#8fe0ee;
+  --violet:#8b5cf6; --violet-2:#7c3aed; --violet-ic:#c4b5fd; --violet-txt:#e9ddff; --hero:#41ff8b;
+  --hero-txt:#8ef5bc;
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#171008;
+  --accent-rgb:198 75 214; --accent-2-rgb:224 123 240; --cyan-rgb:70 200 220;
+  --cyan-2-rgb:126 231 255; --green-rgb:70 210 126; --amber-rgb:232 178 60; --red-rgb:239 95 95;
+  --red-deep-rgb:200 66 59; --blue-rgb:94 141 242; --violet-rgb:139 92 246; --hero-rgb:65 255 139;
+  --tint-rgb:255 255 255; --sh-rgb:0 0 0; --scrim-rgb:6 7 11; --scrim-2-rgb:20 14 28;
+  --glass-rgb:6 7 11;
+  color-scheme:dark;
+}
+/* ===================== verbatim: palette lucid-light ===================== */
+:root[data-theme="lucid-light"] {
+  --bg-0:#f6f7fb; --bg-1:#ffffff; --bg-2:#f1f2f8; --bg-3:#e8eaf2; --bg-4:#dfe2ec;
+  --bg-glow:#f7ecfb; --bg-sunk:#e4e7f0; --bg-code:#f4f5fa; --bg-code-2:#eceef6;
+  --bg-editor:#ffffff; --bg-elev:#ffffff; --bg-kg:#eef0f8; --bg-fade:#f6f7fb; --check-1:#e9ebf3;
+  --check-2:#dfe2ec;
+  --tb-1:#ffffff; --tb-2:#f8f9fd; --tb-3:#eef0f7; --sb-1:#f8f9fd; --sb-2:#f3f4fa; --sb-3:#eceef6;
+  --scroll-thumb:#c8cddc; --scroll-thumb-h:#b0b7ca; --scroll-thumb-a:#98a0b6;
+  --line:#d7dae6; --line-soft:#e7e9f2; --line-strong:#b8bfd2;
+  --txt:#14161f; --txt-2:#464c60; --txt-3:#697084; --txt-4:#949aab; --txt-code:#1a1d29;
+  --accent:#a324b4; --accent-2:#c332d6; --accent-deep:#7a1b8a; --cyan:#0f7d92; --cyan-2:#0d6f85;
+  --green:#1c7f45; --amber:#8a5a04; --red:#c02626; --blue:#2b52c8; --red-mid:#c42a22;
+  --red-deep:#9c1f19;
+  --red-txt:#8e1414; --red-txt-2:#a52222; --amber-txt:#6b4302; --amber-txt-2:#7a4e03;
+  --green-txt:#0f5c30; --green-txt-2:#146b39; --blue-txt:#1e3b96; --blue-2:#3a5fd0;
+  --cyan-txt:#0a5b6b;
+  --violet:#6d28d9; --violet-2:#5b21b6; --violet-ic:#5b21b6; --violet-txt:#3b1d8f; --hero:#0d7a3f;
+  --hero-txt:#0a5c30;
+  --tint:#ffffff; --shade:#000000; --on-fill:#ffffff; --on-amber:#ffffff;
+  --accent-rgb:163 36 180; --accent-2-rgb:195 50 214; --cyan-rgb:15 125 146;
+  --cyan-2-rgb:13 111 133; --green-rgb:28 127 69; --amber-rgb:138 90 4; --red-rgb:192 38 38;
+  --red-deep-rgb:156 31 25; --blue-rgb:43 82 200; --violet-rgb:109 40 217; --hero-rgb:13 122 63;
+  --tint-rgb:255 255 255; --sh-rgb:60 66 92; --scrim-rgb:30 32 48; --scrim-2-rgb:60 40 80;
+  --glass-rgb:255 255 255;
+  color-scheme:light;
+}
+/* ===================== verbatim: @derived + @shape ===================== */
+:root {
+  --accent-dim:rgb(var(--accent-rgb) / .14); --cyan-dim:rgb(var(--cyan-rgb) / .13);
+  --green-dim:rgb(var(--green-rgb) / .13); --amber-dim:rgb(var(--amber-rgb) / .14);
+  --red-dim:rgb(var(--red-rgb) / .14); --blue-dim:rgb(var(--blue-rgb) / .14);
+  --shadow:0 12px 34px -12px rgb(var(--sh-rgb) / .55), 0 2px 6px rgb(var(--sh-rgb) / .35);
+  --shadow-sm:0 1px 2px rgb(var(--sh-rgb) / .30), 0 2px 6px -2px rgb(var(--sh-rgb) / .32);
+  --shadow-md:0 2px 5px rgb(var(--sh-rgb) / .32), 0 8px 20px -6px rgb(var(--sh-rgb) / .44);
+  --shadow-lg:0 4px 10px rgb(var(--sh-rgb) / .36), 0 18px 44px -12px rgb(var(--sh-rgb) / .58);
+  --emboss:inset 0 1px 0 rgb(var(--tint-rgb) / .04);
+  --ring:0 0 0 1px color-mix(in srgb,var(--accent-2) 55%,transparent), 0 0 0 4px var(--accent-dim);
+}
+:root {
+  --r-lg:12px; --r-md:9px; --r-sm:6px;
+  --ease:cubic-bezier(.2,.8,.2,1); --ease-out:cubic-bezier(.16,1,.3,1);
+  --spring:cubic-bezier(.34,1.56,.64,1);
+  --t-fast:130ms; --t:180ms; --t-slow:240ms;
+  --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;
+  --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-reduced-motion: reduce){
+  *{transition-duration:.01ms!important;animation-duration:.01ms!important;
+    animation-iteration-count:1!important;scroll-behavior:auto!important}
+}
+*{box-sizing:border-box}
+@keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+/* ===================== verbatim: inspector + metrics rail + .tile (styles.css) ===================== */
+.inspector{
+  position:relative;width:var(--inspector-w,440px);background:var(--bg-1);border-left:1px solid var(--line-soft);
+  display:flex;flex-direction:column;overflow:hidden;
+  transition:width var(--t-slow) var(--ease)}
+.inspector .metrics-rail{display:none}
+.inspector.rail{width:fit-content;min-width:54px;max-width:168px;opacity:.55;
+  transition:width var(--t-slow) var(--ease-out),opacity var(--t) var(--ease)}
+.inspector.rail:hover{opacity:1}
+.inspector.rail .insp-tabs,.inspector.rail .insp-body{display:none}
+.inspector.rail .metrics-rail{display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:8px 6px 8px 13px;flex:1;min-height:0;overflow-y:auto;scrollbar-width:none}
+.inspector.rail .metrics-rail::-webkit-scrollbar{width:0} /* metric tiles scroll on a short window, no bar */
+.rail-expand{-webkit-app-region:no-drag;border:1px solid var(--line);background:var(--bg-2);color:var(--txt-3);align-self:center;
+  width:32px;height:30px;border-radius:8px;display:grid;place-items:center;cursor:pointer;transition:background var(--t),color var(--t)}
+.rail-expand:hover{background:var(--bg-3);color:var(--accent-2)}
+.rail-tiles{display:flex;flex-direction:column;gap:7px;align-self:stretch}
+.tile{--tc:var(--accent-2);position:relative;overflow:hidden;isolation:isolate;
+  background:linear-gradient(162deg,var(--bg-3),var(--bg-2));
+  border:1px solid var(--line);border-radius:12px;min-width:48px;
+  display:flex;flex-direction:column;align-items:center;text-align:center;justify-content:center;gap:3px;padding:9px 6px 8px;cursor:default;
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .045),inset 0 -6px 14px -10px rgb(var(--sh-rgb) / .55),0 2px 6px -4px rgb(var(--sh-rgb) / .5);
+  transition:border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.tile:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,var(--shade)),0 2px 6px -4px rgb(var(--sh-rgb) / .6)}
+.tile .n{font-family:var(--mono);font-size:15px;font-weight:700;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:-.02em;color:var(--txt-1);transition:color var(--t),text-shadow var(--t)}
+.tile .l{font-size:7.5px;color:var(--txt-3);letter-spacing:.4px;text-transform:uppercase;white-space:nowrap;font-weight:600}
+.tile.g{--tc:var(--green)} .tile.c{--tc:var(--cyan)} .tile.b{--tc:var(--blue)}
+.tile.b2{--tc:var(--blue-2)} .tile.m{--tc:var(--accent-2)} .tile.r{--tc:var(--red)}
+.tile.attn{border-color:color-mix(in srgb,var(--tc) 42%,var(--line));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .05),0 0 20px -7px color-mix(in srgb,var(--tc) 65%,transparent)}
+.tile.attn .n{color:var(--tc);text-shadow:0 0 12px color-mix(in srgb,var(--tc) 45%,transparent)}
+.tile.attn::after{content:"";position:absolute;inset:0;border-radius:inherit;padding:1.4px;z-index:3;pointer-events:none;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 58%,color-mix(in srgb,var(--tc) 70%,transparent) 76%,var(--tc) 86%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;  /* P-THEME.1 theme-exempt: #000 is MASK ALPHA (opaque=keep), never a rendered color. */
+  animation:tileSweep 2.6s linear infinite}
+@property --sweep{syntax:"<angle>";inherits:false;initial-value:0deg}
+@keyframes tileSweep{to{--sweep:360deg}}
+@media (prefers-reduced-motion:reduce){.tile.changed .n,.tile.changed::before,.tile.changed:not(.attn)::after,.tile.attn::after{animation:none}.tile.changed::before{display:none}}
+
+/* ===================== verbatim: .popover, .cfg-sec, .cfg-lbl, .ctx-it (styles.css) ===================== */
+.popover{position:fixed;z-index:95;width:366px;overflow-y:auto;overscroll-behavior:contain;
+  background:var(--bg-1);background-image:var(--emboss);
+  border:1px solid var(--line-strong);border-radius:14px;
+  box-shadow:var(--shadow-lg),0 0 0 1px rgb(var(--tint-rgb) / .02) inset;
+  opacity:0;transform:translateY(-6px) scale(.985);transform-origin:50% 0;
+  transition:opacity var(--t-fast) var(--ease-out),transform var(--t) var(--ease-out);overflow:hidden}
+.popover.show{opacity:1;transform:none}
+.cfg-sec{padding:14px 16px;border-bottom:1px solid var(--line-soft)}
+.cfg-sec:last-child{border-bottom:0}
+.cfg-lbl{font-size:10.5px;letter-spacing:1.3px;text-transform:uppercase;color:var(--txt-3);margin-bottom:10px;display:flex;align-items:center;justify-content:space-between}
+.cfg-lbl .cur{color:var(--cyan);font-weight:600;letter-spacing:0;text-transform:none;font-size:11.5px}
+.ctx-it{display:flex;align-items:center;gap:10px;width:100%;padding:7px 10px;border:0;border-radius:7px;
+  background:transparent;color:var(--txt);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.ctx-it:hover{background:var(--bg-3)}
+
+/* ===================== PROPOSED: rail header + Agents toggle (a 2x pixel LUCID head) ===================== */
+/* The rail keeps the width it measured in the metrics view (set inline, like the resizer does). In this direction the
+   toggle is 40 px wide so the 2x pixel head stays on whole pixels: 32 + 4 + 40 = the rail's 76 px content width. */
+.inspector.rail.agents-view{opacity:1}
+.rail-head{display:flex;align-items:center;justify-content:center;gap:4px;flex:none}
+.rail-agents{position:relative;isolation:isolate;-webkit-app-region:no-drag;flex:none;width:40px;height:30px;padding:0;border-radius:8px;
+  border:1px solid var(--line);background:var(--bg-2);display:grid;place-items:center;cursor:pointer;
+  transition:background var(--t),border-color var(--t),transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.rail-agents .tb-fig{display:block;width:38px;height:26px;shape-rendering:crispEdges;filter:saturate(.3) brightness(.9);opacity:.8;transition:filter var(--t),opacity var(--t)}
+.rail-agents[aria-pressed="true"]{border-color:color-mix(in srgb,var(--hero) 42%,var(--line));
+  background:linear-gradient(162deg,color-mix(in srgb,var(--hero) 14%,var(--bg-3)),var(--bg-2));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 0 14px -6px rgb(var(--hero-rgb) / .8)}
+.rail-agents[aria-pressed="true"] .tb-fig{filter:none;opacity:1}
+.rail-agents:is(:hover,.is-hover){transform:translateY(-1px);background:var(--bg-3);border-color:transparent;
+  box-shadow:0 8px 18px -10px rgb(var(--hero-rgb) / .9),0 0 0 1px rgb(var(--hero-rgb) / .16)}
+.rail-agents:is(:hover,.is-hover) .tb-fig{filter:none;opacity:1}
+.rail-agents::after{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1.4px;z-index:3;pointer-events:none;opacity:0;
+  background:conic-gradient(from var(--sweep,0deg),transparent 0 50%,rgb(var(--hero-rgb) / .5) 72%,var(--hero) 86%,var(--tint) 90%,transparent 96%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;
+  transition:opacity var(--t)}
+.rail-agents:is(:hover,.is-hover)::after{opacity:1;animation:tileSweep 1.8s linear infinite}
+.rail-agents::before{content:"";position:absolute;left:50%;bottom:1px;width:24px;height:7px;margin-left:-12px;border-radius:50%;z-index:-1;
+  background:radial-gradient(closest-side,rgb(var(--hero-rgb) / .5),transparent);opacity:0;transition:opacity var(--t)}
+.rail-agents:is(:hover,.is-hover)::before,.rail-agents[aria-pressed="true"]::before{opacity:1}
+.rail-agents:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rail-agents:active{transform:scale(.95)}
+/* pixel motion: whole-pixel steps only (no tweened sub-pixel transforms) */
+.rail-agents:is(:hover,.is-hover) .tb-head{transform:translateY(-1px)}
+.tb-ta{animation:pxA 2.4s steps(1,end) infinite}
+.tb-tb{opacity:0;animation:pxB 2.4s steps(1,end) infinite}
+.rail-agents:is(:hover,.is-hover) :is(.tb-ta,.tb-tb){animation-duration:.5s}
+.tb-eyes{animation:pxBo 5.2s steps(1,end) infinite}
+.tb-lid{opacity:0;animation:pxBc 5.2s steps(1,end) infinite}
+.tb-happy{opacity:0}
+.rail-agents:is(:hover,.is-hover) :is(.tb-eyes,.tb-lid){opacity:0;animation:none}
+.rail-agents:is(:hover,.is-hover) .tb-happy{opacity:1}
+.tb-spark{opacity:0}
+.rail-agents:is(:hover,.is-hover) .tb-spark{animation:pxSpark 1.2s steps(1,end) infinite}
+@keyframes pxSpark{0%{opacity:0}30%{opacity:1}55%{opacity:.4}75%{opacity:0}}
+
+/* ===================== PROPOSED: Agent tile (the real .tile, same box; art replaces the number) ===================== */
+.tile.agent{--tc:var(--G);padding:4px 6px;gap:2px;cursor:pointer}
+.tile.agent .art{display:block;height:28px;width:auto}
+.tile.agent .l{max-width:100%;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
+.tile.agent.work .l{color:var(--txt-2)}
+.tile.agent:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tile.agent.hot{transform:translateY(-2px);border-color:color-mix(in srgb,var(--tc) 34%,var(--line));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .06),0 10px 22px -12px color-mix(in srgb,var(--tc) 55%,var(--shade)),0 2px 6px -4px rgb(var(--sh-rgb) / .6)}
+.tile.agent .led{position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;background:var(--G);box-shadow:0 0 6px var(--G);opacity:0;z-index:2}
+.tile.agent.work .led{opacity:1;animation:agLed 2.4s ease-in-out infinite}
+@keyframes agLed{0%,100%{opacity:1}50%{opacity:.35}}
+.tile.agent.work .art{filter:drop-shadow(0 0 3px color-mix(in srgb,var(--G) 40%,transparent))}
+.tile.agent.add{border-style:dashed;background:transparent;box-shadow:none}
+.tile.agent.add .l{color:var(--txt-3)}
+.add-art rect{fill:none;stroke:var(--txt-4);stroke-dasharray:3 2.4}
+.add-art path{fill:none;stroke:var(--txt-3);stroke-width:1.8;stroke-linecap:round}
+
+/* ===================== PROPOSED: the mini LUCID (mascot.ts pixel grid, palette via CSS vars) ===================== */
+.px{shape-rendering:crispEdges}
+.px .ck{fill:#10161d} .px .cK{fill:var(--K)} .px .cD{fill:var(--D)} .px .cL{fill:var(--L)} .px .cG{fill:var(--G)} .px .cg{fill:var(--g)}
+.px .cS{fill:#eec39a} .px .cs{fill:#d8a377} .px .cW{fill:#f4f7f5} .px .cB{fill:#0a0e12} .px .cM{fill:#c2d1dc}
+/* the brick: 1 px outline, bevel, 3 px material sides with a neon seam, recessed window */
+.px .bHi{fill:color-mix(in srgb,var(--G) 55%,#fff)} .px .bMid{fill:color-mix(in srgb,var(--G) 58%,var(--K))} .px .bSh{fill:color-mix(in srgb,var(--g) 65%,#000)}
+.px .seam{fill:var(--G);opacity:.5}
+.px .win1{fill:#060b16} .px .win2{fill:#0b1426} .px .aur rect{fill:var(--G)}
+/* state */
+.px .eL,.px .eU,.px .ec,.px .f2,.px .f3,.px .kf,.px .tB{opacity:0}
+.px.work .eC{opacity:0}
+.px.idle .eD{opacity:0}
+.px.idle .eo{opacity:0} .px.idle .ec{opacity:1}
+/* motion (steps(1,end) everywhere: frames swap, nothing tweens) */
+.px.idle .hd{animation:pxBob 4.8s steps(1,end) var(--dl,0s) infinite}
+.px.idle .aur{animation:pxAura 4.8s steps(1,end) var(--dl,0s) infinite}
+.px .tA{animation:pxA 3.2s steps(1,end) var(--dl,0s) infinite}
+.px .tB{animation:pxB 3.2s steps(1,end) var(--dl,0s) infinite}
+.px.work .tA,.px.work .tB{animation-duration:1.6s}
+.px.work .eo{animation:pxBo 4.6s steps(1,end) var(--dl,0s) infinite}
+.px.work .ec{animation:pxBc 4.6s steps(1,end) var(--dl,0s) infinite}
+.px.work .f1{animation:pxT1 2.4s steps(1,end) var(--dl,0s) infinite}
+.px.work .f2{animation:pxT2 2.4s steps(1,end) var(--dl,0s) infinite}
+.px.work .f3{animation:pxT3 2.4s steps(1,end) var(--dl,0s) infinite}
+.px.work .kf1{animation:pxK1 2.4s steps(1,end) var(--dl,0s) infinite}
+.px.work .kf2{animation:pxK2 2.4s steps(1,end) var(--dl,0s) infinite}
+/* glance: about every 60 s (JS adds .glance for 3.2 s): left, up, down, then center toward the user + blink */
+.px.glance .eo{opacity:1;animation:pxGB 3.2s steps(1,end) 1 both}
+.px.glance .ec{opacity:0;animation:pxGBc 3.2s steps(1,end) 1 both}
+.px.glance .eC{animation:pxEC 3.2s steps(1,end) 1 both}
+.px.glance .eL{animation:pxEL 3.2s steps(1,end) 1 both}
+.px.glance .eU{animation:pxEU 3.2s steps(1,end) 1 both}
+.px.glance .eD{animation:pxED 3.2s steps(1,end) 1 both}
+@keyframes pxBob{0%{transform:none}50%{transform:translateY(1px)}}
+@keyframes pxAura{0%{opacity:.55}50%{opacity:1}}
+@keyframes pxA{0%{opacity:1}50%{opacity:0}}
+@keyframes pxB{0%{opacity:0}50%{opacity:1}}
+@keyframes pxBo{0%{opacity:1}95%{opacity:0}97%{opacity:1}}
+@keyframes pxBc{0%{opacity:0}95%{opacity:1}97%{opacity:0}}
+@keyframes pxT1{0%{opacity:0}8%{opacity:1}16%{opacity:0}24%{opacity:1}32%{opacity:0}40%{opacity:1}48%{opacity:0}56%{opacity:1}}
+@keyframes pxT2{0%{opacity:1}8%{opacity:0}32%{opacity:1}40%{opacity:0}}
+@keyframes pxT3{0%{opacity:0}16%{opacity:1}24%{opacity:0}48%{opacity:1}56%{opacity:0}}
+@keyframes pxK1{0%{opacity:0}8%{opacity:1}12%{opacity:0}40%{opacity:1}44%{opacity:0}}
+@keyframes pxK2{0%{opacity:0}24%{opacity:1}28%{opacity:0}56%{opacity:1}60%{opacity:0}}
+@keyframes pxGB{0%{opacity:1}86%{opacity:0}89%{opacity:1}}
+@keyframes pxGBc{0%{opacity:0}86%{opacity:1}89%{opacity:0}}
+@keyframes pxEC{0%{opacity:1}4%{opacity:0}68%{opacity:1}}
+@keyframes pxEL{0%{opacity:0}4%{opacity:1}28%{opacity:0}}
+@keyframes pxEU{0%{opacity:0}28%{opacity:1}48%{opacity:0}}
+@keyframes pxED{0%{opacity:0}48%{opacity:1}68%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.px,.px *,.rail-agents *,.rail-agents::after,.tile.agent .led{animation:none!important;transition:none!important}}
+html.rm .px,html.rm .px *,html.rm .rail-agents *,html.rm .rail-agents::after,html.rm .tile.agent .led,.still .px,.still .px *{animation:none!important;transition:none!important}
+
+/* ===================== PROPOSED: hover module (reuses .popover / .cfg-sec / .ctx-it) ===================== */
+.popover.agent-pop{width:272px;transform-origin:100% 50%}
+.popover.agent-pop:not(.show){pointer-events:none}
+.agent-pop .ap-head{display:flex;align-items:center;gap:11px;padding:12px 12px 10px;border-bottom:1px solid var(--line-soft)}
+.agent-pop .ap-art{flex:none;width:80px;height:62px;display:grid;place-items:center;border-radius:11px;border:1px solid var(--line);
+  background:linear-gradient(162deg,var(--bg-3),var(--bg-2));box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .045)}
+.agent-pop .ap-art .art{display:block;height:56px;width:auto}
+.agent-pop .ap-id{flex:1;min-width:0}
+.agent-pop .ap-name{font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-pop .ap-name-in{display:block;width:100%;font:inherit;font-size:13px;font-weight:700;color:var(--txt);background:var(--bg-2);
+  border:1px solid color-mix(in srgb,var(--G) 50%,var(--line));border-radius:6px;padding:1px 6px;outline:none}
+.agent-pop .ap-path{font-family:var(--mono);font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-pop .ap-state{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:11px;color:var(--txt-2);min-width:0}
+.agent-pop .ap-state i{flex:none;width:6px;height:6px;border-radius:50%;background:var(--txt-4)}
+.agent-pop .ap-state.work i{background:var(--G);box-shadow:0 0 6px var(--G)}
+.agent-pop .ap-state span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-pop .cfg-sec{padding:10px 12px}
+.agent-pop .cfg-lbl{margin-bottom:8px}
+.ap-hue{-webkit-appearance:none;appearance:none;display:block;width:100%;height:16px;margin:0 0 9px;background:transparent;cursor:pointer}
+.ap-hue::-webkit-slider-runnable-track{height:6px;border-radius:99px;box-shadow:inset 0 0 0 1px rgb(var(--sh-rgb) / .35);
+  background:linear-gradient(90deg,hsl(0 100% 63%),hsl(40 100% 63%),hsl(80 100% 63%),hsl(120 100% 63%),hsl(160 100% 63%),hsl(200 100% 63%),hsl(240 100% 63%),hsl(280 100% 63%),hsl(320 100% 63%),hsl(360 100% 63%))}
+.ap-hue::-moz-range-track{height:6px;border-radius:99px;box-shadow:inset 0 0 0 1px rgb(var(--sh-rgb) / .35);
+  background:linear-gradient(90deg,hsl(0 100% 63%),hsl(40 100% 63%),hsl(80 100% 63%),hsl(120 100% 63%),hsl(160 100% 63%),hsl(200 100% 63%),hsl(240 100% 63%),hsl(280 100% 63%),hsl(320 100% 63%),hsl(360 100% 63%))}
+.ap-hue::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:3px;background:var(--G);border:2px solid var(--tint);box-shadow:0 1px 4px rgb(var(--sh-rgb) / .6)}
+.ap-hue::-moz-range-thumb{width:10px;height:10px;border-radius:3px;background:var(--G);border:2px solid var(--tint);box-shadow:0 1px 4px rgb(var(--sh-rgb) / .6)}
+.ap-hue:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:99px}
+.ap-sw{display:flex;gap:7px}
+.ap-sw button{flex:none;width:20px;height:20px;border-radius:5px;padding:0;cursor:pointer;border:1px solid rgb(var(--sh-rgb) / .5);
+  background:linear-gradient(135deg,var(--sg) 0 50%,var(--sk) 50% 100%);transition:transform var(--t-fast) var(--ease-out),box-shadow var(--t)}
+.ap-sw button:hover{transform:scale(1.12)}
+.ap-sw button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--bg-1),0 0 0 3.5px var(--sg)}
+.agent-pop .ap-acts{padding:6px}
+.ap-acts .ctx-it>svg{flex:none;color:var(--txt-3)}
+.ap-acts .ctx-it .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-acts .ctx-it .chev{transition:transform var(--t)}
+.ap-acts .ctx-it[aria-expanded="true"]{background:var(--bg-3)}
+.ap-acts .ctx-it[aria-expanded="true"] .chev{transform:rotate(90deg)}
+.ap-sub{display:none;margin:3px 0 2px 12px;padding-left:8px;border-left:1px solid color-mix(in srgb,var(--G) 40%,var(--line))}
+.ap-sub.open{display:block;animation:rise var(--t) var(--ease-out)}
+.ap-sub .ic{flex:none;width:26px;height:26px;border-radius:5px;display:grid;place-items:center;color:color-mix(in srgb,var(--G) 70%,var(--txt));
+  background:color-mix(in srgb,var(--G) 12%,var(--bg-3));border:1px solid color-mix(in srgb,var(--G) 25%,var(--line))}
+.ap-tx{display:block;flex:1;min-width:0}
+.ap-tx b{display:block;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-tx i{display:block;font-style:normal;font-size:10.5px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ap-nub{position:fixed;z-index:96;width:12px;height:12px;background:var(--bg-1);border:1px solid var(--line-strong);transform:rotate(45deg);pointer-events:none;opacity:0;transition:opacity var(--t-fast)}
+.ap-nub.show{opacity:1}
+.ap-nub.l{border-left-color:transparent;border-bottom-color:transparent}
+.ap-nub.r{border-right-color:transparent;border-top-color:transparent}
+
+/* ===================== PROPOSED: first-run coach mark ===================== */
+.ag-coach{position:absolute;z-index:5;right:108px;top:6px;width:208px;padding:12px 13px 11px;background:var(--bg-1);
+  border:1px solid color-mix(in srgb,var(--hero) 40%,var(--line-strong));border-radius:12px;
+  box-shadow:var(--shadow-lg),0 0 22px -10px rgb(var(--hero-rgb) / .7);animation:rise var(--t-slow) var(--ease-out)}
+.ag-coach-nub{position:absolute;right:-7px;top:11px;width:12px;height:12px;background:var(--bg-1);
+  border:1px solid color-mix(in srgb,var(--hero) 40%,var(--line-strong));border-left-color:transparent;border-bottom-color:transparent;transform:rotate(45deg)}
+.ag-coach-t{font-size:12.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ag-coach-p{margin:4px 0 10px;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
+.ag-coach-row{display:flex;justify-content:flex-end;gap:6px}
+.ag-coach-go{flex:none;font:inherit;font-size:12px;font-weight:700;white-space:nowrap;color:var(--bg-0);background:var(--hero);border:0;border-radius:8px;padding:6px 12px;cursor:pointer}
+
+/* ===================== mockup chrome only ===================== */
+html,body{margin:0}
+body.mk{min-height:100vh;background:radial-gradient(1200px 700px at 80% -10%, var(--bg-glow) 0%, transparent 55%), var(--bg-0);color:var(--txt);
+  font-family:var(--font);font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;padding:22px 26px 48px}
+.mk-top{display:flex;align-items:center;gap:8px;margin:0 0 18px;flex-wrap:wrap}
+.mk-title{flex:1 1 380px;min-width:0;font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mk-btn{flex:none;font:inherit;font-size:12px;font-weight:600;color:var(--txt-2);background:var(--bg-2);border:1px solid var(--line);border-radius:8px;padding:6px 11px;cursor:pointer;white-space:nowrap;text-decoration:none}
+.mk-btn:hover{background:var(--bg-3);color:var(--txt)}
+.mk-btn[aria-pressed="true"]{color:var(--txt);border-color:color-mix(in srgb,var(--hero) 45%,var(--line));background:color-mix(in srgb,var(--hero) 10%,var(--bg-2))}
+.mk-grid{display:flex;flex-wrap:wrap;gap:26px;align-items:flex-start}
+.mk-col{display:flex;flex-direction:column;gap:22px;min-width:0}
+.mk-c1{width:760px}.mk-c2{width:646px}
+.mk-pair{display:flex;gap:16px}
+.mk-scene{display:flex;flex-direction:column;gap:8px;min-width:0}
+.mk-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mk-card{background:var(--bg-1);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.mk-spec,.mk-pal,.mk-tgl{display:flex;flex-wrap:wrap;gap:12px}
+.mk-pal{margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft);gap:10px}
+.mk-fig{margin:0;width:160px;min-width:0}
+.mk-pal .mk-fig{width:84px}
+.mk-stage{height:132px;display:grid;place-items:center;border-radius:12px;border:1px solid var(--line);background:linear-gradient(162deg,var(--bg-3),var(--bg-2))}
+.mk-pal .mk-stage{height:72px}
+.mk-stage .art{display:block;height:112px;width:auto}
+.mk-pal .mk-stage .art{height:56px}
+.mk-fig figcaption{margin-top:6px;font-size:11px;color:var(--txt-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+.mk-tfig{width:186px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.mk-tfig figcaption{width:100%}
+.mk-railbit{width:97px;padding:8px 6px 8px 13px;background:var(--bg-1);border:1px solid var(--line-soft);border-radius:10px}
+.mk-zoom{zoom:3;padding:2px}
+.mk-tip{margin:12px 0 0;font-size:11.5px;color:var(--txt-3)}
+.mk-notes ul{margin:0;padding:0 0 0 18px;color:var(--txt-2);font-size:12px;line-height:1.6}
+.mk-notes li{margin:0 0 4px}
+.mk-toast{position:fixed;left:50%;bottom:22px;z-index:200;transform:translate(-50%,12px);opacity:0;max-width:90vw;padding:8px 14px;
+  background:var(--bg-2);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow-lg);font-size:12.5px;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;transition:opacity var(--t),transform var(--t) var(--ease-out)}
+.mk-toast.show{opacity:1;transform:translate(-50%,0)}
+/* simulated app window edge */
+.win{position:relative;display:grid;grid-template-rows:34px minmax(0,1fr) 24px;background:var(--bg-0);border:1px solid var(--line-strong);border-radius:12px;overflow:hidden;box-shadow:var(--shadow-lg)}
+.win-tb{display:flex;align-items:center;gap:8px;padding-left:14px;overflow:hidden;background:linear-gradient(180deg,var(--tb-1),var(--tb-2));border-bottom:1px solid var(--line-soft)}
+.win-chip{flex:none;display:block;height:16px;border-radius:6px;background:var(--bg-3)}
+.win-ctl{margin-left:auto;display:flex;flex:none;color:var(--txt-3)}
+.win-ctl i{width:38px;height:34px;display:grid;place-items:center}
+.win-body{position:relative;display:flex;min-height:0}
+.win-body>.inspector{flex:none}
+.win-fade{position:absolute;left:0;top:0;bottom:0;width:60px;z-index:2;pointer-events:none;background:linear-gradient(90deg,var(--bg-0),transparent)}
+.win-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:14px;padding:18px 18px 14px}
+.sk-row{display:flex;justify-content:flex-end}
+.sk-blk{display:flex;flex-direction:column;gap:7px}
+.sk{display:block;height:9px;border-radius:5px;background:var(--bg-3)}
+.sk-row .sk{height:26px;border-radius:12px;background:var(--bg-2);border:1px solid var(--line)}
+.win-comp{margin-top:auto;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 13px;border:1px solid var(--line);border-radius:12px;background:var(--bg-1)}
+.win-ph{flex:1;min-width:0;font-size:12.5px;color:var(--txt-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win-send{flex:none;width:26px;height:26px;border-radius:8px;background:var(--accent-dim);border:1px solid var(--line)}
+.win-sb{display:flex;align-items:center;gap:8px;padding:0 10px;background:linear-gradient(180deg,var(--sb-1),var(--sb-3));border-top:1px solid var(--line-soft)}
+.win-sb .win-chip{height:9px}
+</style></head>
+<body class="mk">
+<div class="mk-top">
+  <div class="mk-title">Agents rail · Direction B · Pixel brick</div>
+  <button class="mk-btn" id="mkTheme" type="button" aria-pressed="false">Light theme</button>
+  <button class="mk-btn" id="mkRm" type="button" aria-pressed="false">Reduced motion</button>
+  <button class="mk-btn" id="mkGlance" type="button">Glance now</button>
+  <a class="mk-btn" href="index.html">All directions</a>
+</div>
+<div class="mk-grid">
+  <div class="mk-col mk-c1">
+    <section class="mk-scene">
+      <div class="mk-label">Agents view · module open on api-gateway, Activate expanded · hover any Agent</div>
+      <div class="win" id="winMain" data-view="agents" style="width:760px;height:640px"></div>
+    </section>
+    <section class="mk-scene">
+      <div class="mk-label">Specimens at 4x · palette swatches at 2x (whole pixels only)</div>
+      <div class="mk-card" id="loupe"></div>
+    </section>
+  </div>
+  <div class="mk-col mk-c2">
+    <section class="mk-scene">
+      <div class="mk-label">Toggle button · 2x pixel head, right of the existing expand button</div>
+      <div class="mk-card" id="toggles"></div>
+    </section>
+    <div class="mk-pair">
+      <section class="mk-scene">
+        <div class="mk-label">Metrics view (toggle off)</div>
+        <div class="win" id="winMetrics" data-view="metrics" style="width:300px;height:640px"></div>
+      </section>
+      <section class="mk-scene">
+        <div class="mk-label">First run · Agents by default</div>
+        <div class="win" id="winFirst" data-view="agents" data-first="1" style="width:330px;height:640px"></div>
+      </section>
+    </div>
+    <section class="mk-scene">
+      <div class="mk-label">Behavior notes</div>
+      <div class="mk-card mk-notes"><ul>
+        <li>The Agent box is the real metric .tile (copied verbatim) at the rail's measured width: 76 x 49 px. The art takes the number's slot (28 px), the name takes the label slot and ellipsizes.</li>
+        <li>The Lucid is the mascot itself: the 20 x 26 BASE_20 grid and its meditate rows from mascot.ts at 1 css px per cell. Typing is three new arm diffs plus a keyboard row, authored the mascot way (rows() diffs).</li>
+        <li>Block = a pixel Brick Brigade brick: 1 px outline, lit top-left and shaded bottom-right bevel, 3 px material sides with a neon seam and rivets, a dark recessed window, a pixel glass streak.</li>
+        <li>Idle: meditating, 1 px head bob, stepped aura, slow scarf flutter. Working: typing bursts with a rest, key pixels flash, faster scarf. Glance: about every 60 s; ml-notebooks glances every 6.5 s here for review.</li>
+        <li>Every animation is a frame swap (steps), never a tween, so the art stays on whole pixels at 1x, 2x and 4x.</li>
+        <li>Hover: 140 ms intent, 260 ms grace. The module prefers the left of the box, clamps inside the window, its nub tracks the box. Reduced motion stops every loop; pose and LED still read.</li>
+      </ul></div>
+    </section>
+  </div>
+</div>
+<div class="mk-toast" id="mkToast" role="status" aria-live="polite"></div>
+<script>
+(() => {
+'use strict';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Palettes: the six MASCOT_THEMES from desktop/renderer/mascot.ts (gi K/D/L, accent G/g) + a hue slider variant.
+const THEMES = {
+  lucid:   { name: 'Lucid',   K: '#223140', D: '#18232e', L: '#3d5a73', G: '#41ff8b', g: '#1e8f52', hue: 145 },
+  ember:   { name: 'Ember',   K: '#492a32', D: '#2c1b28', L: '#87504b', G: '#ff9354', g: '#a94732', hue: 21 },
+  glacier: { name: 'Glacier', K: '#24465e', D: '#172e43', L: '#527f99', G: '#75e8ff', g: '#2987ab', hue: 191 },
+  orchid:  { name: 'Orchid',  K: '#45305e', D: '#2a203e', L: '#795791', G: '#ec9cff', g: '#984faa', hue: 288 },
+  solar:   { name: 'Solar',   K: '#4b3d29', D: '#2f281d', L: '#887046', G: '#ffe56b', g: '#af802d', hue: 50 },
+  stealth: { name: 'Stealth', K: '#303b47', D: '#202833', L: '#596e7e', G: '#bddbcc', g: '#577b71', hue: 150 },
+};
+const hueTheme = (h) => ({ name: 'Custom ' + h + '°', K: `hsl(${h} 30% 21%)`, D: `hsl(${h} 30% 14%)`, L: `hsl(${h} 28% 36%)`, G: `hsl(${h} 100% 63%)`, g: `hsl(${h} 64% 34%)`, hue: h });
+const pal = (a) => (a.theme ? THEMES[a.theme] : hueTheme(a.hue));
+const vars = (a) => { const p = pal(a); return `--K:${p.K};--D:${p.D};--L:${p.L};--G:${p.G};--g:${p.g}`; };
+function applyVars(el, a) { const p = pal(a); for (const k of ['K', 'D', 'L', 'G', 'g']) el.style.setProperty('--' + k, p[k]); }
+
+const AGENTS = [
+  { id: 'lucid', name: 'LucidAgentIDE', path: '~/Apps/LucidAgentIDE', theme: 'lucid', state: 'work', where: 'Main composer', dl: -0.4 },
+  { id: 'brick', name: 'brick-brigade', path: '~/games/brick-brigade', theme: 'glacier', state: 'work', where: 'Fleet lane 2', dl: -1.7 },
+  { id: 'api', name: 'api-gateway', path: '~/work/api-gateway', theme: 'ember', state: 'idle', last: 'idle 2h', dl: -2.9 },
+  { id: 'nb', name: 'ml-notebooks', path: '~/research/ml-notebooks', theme: 'solar', state: 'idle', last: 'idle 25m', dl: -0.9, demo: true },
+  { id: 'portal', name: 'client-portal', path: '~/work/client-portal', theme: null, hue: 330, state: 'work', where: 'Agent World', dl: -3.6 },
+  { id: 'infra', name: 'infra-terraform', path: '~/ops/infra-terraform', theme: 'stealth', state: 'idle', last: 'idle 3d', dl: -2.2 },
+];
+const FIRST = [{ id: 'first', name: 'my-first-app', path: '~/code/my-first-app', theme: 'lucid', state: 'idle', last: 'new Agent for this folder', dl: -1.2 }];
+const ALL = new Map([...AGENTS, ...FIRST].map((a) => [a.id, a]));
+const METRICS = [['87%', 'savings', 'g'], ['6.2k', 'avg/turn', 'c'], ['148.3k', 'context', 'b'], ['24', 'turns', 'b2'], ['+3.1k', 'lines', 'g'], ['2', 'findings', 'm', 1], ['0', 'quarantd', 'r'], ['1,240', 'LUCID points', 'c']];
+
+const I = {
+  expand: '<path d="M17.5 6l-5 6 5 6"/><path d="M11.5 6l-5 6 5 6"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>',
+  play: '<path d="M8 5.5v13l10-6.5z"/>',
+  chev: '<path d="M9 6l6 6-6 6"/>',
+  chat: '<path d="M4 5.5h16v10a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.2V17H5.5A1.5 1.5 0 0 1 4 15.5z"/>',
+  fleet: '<path d="M4 4h7v7H4z"/><path d="M13 4h7v7h-7z"/><path d="M4 13h7v7H4z"/><path d="M13 13h7v7h-7z"/>',
+  world: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><path d="M12 4c2.6 2.6 2.6 13.4 0 16"/><path d="M12 4c-2.6 2.6-2.6 13.4 0 16"/>',
+  min: '<path d="M6 12h12"/>', max: '<path d="M7 7h10v10H7z"/>', close: '<path d="M7 7l10 10M17 7 7 17"/>',
+};
+const ic = (d, s, cls) => `<svg ${cls ? `class="${cls}" ` : ''}width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+
+// ---------- the mini LUCID: mascot.ts BASE_20 + meditate rows (eye and tail cells split out to animate) ----------
+const HEAD = [
+  '....kkkkkkkkkk......',
+  '...kKLLLLLLLLKk.....',
+  '..kKKLLKKKKLLKKk....',
+  '.kKKKKKKKKKKKKKKk...',
+  '.kgGGGGGGGGGGGGgk...',
+  '.kgGGGGGGGGGGGGgk...',
+  '.ksSSSSSSSSSSSSsk...',
+  '.ksSSSSSSSSSSSSsk...',
+  '.kDKKKKKKKKKKKKDk...',
+  '.kKKKKDKKKKDKKKKk...',
+  '..kDKKKKKKKKKKDk....',
+  '...kkDKKKKKKDkk.....',
+];
+const BODY = ['....kKKKKKKKKk......', '..kkKKKKKKKKKKkk....', '.kKKDKKKKKKKKDKKk...'];
+const ARMS_IDLE = ['..kSSkKKKKKKkSSk....', '...kkSSKKKKSSkk.....'];
+const BELT = ['....kGGGGGGGGk......'];
+const LEGS = ['...kKKKKKKKKKKk.....', '..kKKKKkkkkKKKKk....', '.kKKKKk....kKKKKk...', '.kkkkk......kkkkk...'];
+// typing: new arm diffs for rows 15-16 (both hands down, left up, right up) + a keyboard in the lap on row 17
+const T1 = ['..kKKkKKKKKKkKKk....', '...kSSkKKKKkSSk.....'];
+const T2 = ['..kSSkKKKKKKkKKk....', '...kkkKKKKKkSSk.....'];
+const T3 = ['..kKKkKKKKKKkSSk....', '...kSSkKKKKKkkk.....'];
+const KB = ['...kMGMGMGMGMGMk....'];
+const PC = { k: 'ck', K: 'cK', D: 'cD', S: 'cS', G: 'cG', g: 'cg', W: 'cW', B: 'cB', M: 'cM', L: 'cL', s: 'cs' };
+function px(rows, x0, y0) {
+  let out = '';
+  rows.forEach((r, y) => {
+    let x = 0;
+    while (x < r.length) {
+      const c = r[x];
+      if (c === '.') { x++; continue; }
+      let e = x + 1;
+      while (e < r.length && r[e] === c) e++;
+      out += `<rect class="${PC[c]}" x="${x0 + x}" y="${y0 + y}" width="${e - x}" height="1"/>`;
+      x = e;
+    }
+  });
+  return out;
+}
+const cell = (cls, x, y, w, h) => `<rect class="${cls}" x="${x}" y="${y}" width="${w || 1}" height="${h || 1}"/>`;
+function eyes(X, Y) {
+  const pup = (cls, dx, dy, h) => `<g class="${cls}">${cell('cB', X + dx, Y + dy, 1, h)}${cell('cB', X + dx + 7, Y + dy, 1, h)}</g>`;
+  return `<g class="eo">${cell('cW', X + 4, Y + 6, 3, 2)}${cell('cW', X + 11, Y + 6, 3, 2)}`
+    + pup('eC', 5, 6, 2) + pup('eL', 4, 6, 2) + pup('eU', 5, 6, 1) + pup('eD', 5, 7, 1) + '</g>'
+    + `<g class="ec">${cell('ck', X + 4, Y + 7, 3, 1)}${cell('ck', X + 11, Y + 7, 3, 1)}</g>`;
+}
+const tails = (X, Y) => `<g class="tA">${cell('cG', X + 17, Y + 5)}${cell('cg', X + 18, Y + 5)}${cell('cg', X + 18, Y + 6)}</g>`
+  + `<g class="tB">${cell('cG', X + 18, Y + 5)}${cell('cg', X + 19, Y + 5)}${cell('cG', X + 17, Y + 6)}${cell('cg', X + 18, Y + 6)}</g>`;
+function sprite(st, X, Y) {
+  const work = st === 'work';
+  const legs = px(LEGS, X, Y + 18);
+  const lap = work ? px(KB, X, Y + 17) + `<g class="kf kf1">${cell('cW', X + 5, Y + 17)}</g><g class="kf kf2">${cell('cW', X + 13, Y + 17)}</g>` : px(BELT, X, Y + 17);
+  const body = px(BODY, X, Y + 12);
+  const arms = work ? `<g class="f1">${px(T1, X, Y + 15)}</g><g class="f2">${px(T2, X, Y + 15)}</g><g class="f3">${px(T3, X, Y + 15)}</g>` : px(ARMS_IDLE, X, Y + 15);
+  return legs + lap + body + arms + `<g class="hd">${px(HEAD, X, Y)}${eyes(X, Y)}${tails(X, Y)}</g>`;
+}
+
+// ---------- Direction B block: a 34 x 28 pixel brick; the 22 x 22 window holds the sprite at 1 px per cell ----------
+function ART(a) {
+  let streak = '';
+  for (let i = 0; i < 10; i++) streak += `<rect x="${12 + i}" y="${22 - 2 * i}" width="1" height="2"/>`;
+  return `<svg class="art lu px ${a.state}" data-agent="${a.id}" viewBox="0 0 34 28" shape-rendering="crispEdges" style="--dl:${a.dl}s" aria-hidden="true">`
+    + '<rect class="ck" x="1" y="0" width="32" height="28"/><rect class="ck" x="0" y="1" width="34" height="26"/>'
+    + '<rect class="bMid" x="1" y="1" width="32" height="26"/>'
+    + '<rect class="bHi" x="1" y="1" width="32" height="1"/><rect class="bHi" x="1" y="2" width="1" height="24"/>'
+    + '<rect class="bSh" x="1" y="26" width="32" height="1"/><rect class="bSh" x="32" y="2" width="1" height="24"/>'
+    + '<rect class="seam" x="3" y="8" width="1" height="12"/><rect class="seam" x="30" y="8" width="1" height="12"/>'
+    + '<rect fill="#fff" fill-opacity=".8" x="3" y="4" width="1" height="1"/><rect class="bSh" x="3" y="5" width="1" height="1"/>'
+    + '<rect fill="#fff" fill-opacity=".8" x="30" y="4" width="1" height="1"/><rect class="bSh" x="30" y="5" width="1" height="1"/>'
+    + '<rect fill="#fff" fill-opacity=".8" x="3" y="22" width="1" height="1"/><rect class="bSh" x="3" y="23" width="1" height="1"/>'
+    + '<rect fill="#fff" fill-opacity=".8" x="30" y="22" width="1" height="1"/><rect class="bSh" x="30" y="23" width="1" height="1"/>'
+    + '<rect fill="#fff" fill-opacity=".85" x="1" y="1" width="2" height="1"/>'
+    + '<rect class="ck" x="5" y="2" width="24" height="24"/>'
+    + '<rect class="win1" x="6" y="3" width="22" height="22"/><rect class="win2" x="6" y="14" width="22" height="11"/>'
+    + '<g class="aur"><rect x="10" y="9" width="14" height="14" fill-opacity=".07"/><rect x="12" y="7" width="10" height="18" fill-opacity=".06"/><rect x="8" y="12" width="18" height="10" fill-opacity=".06"/></g>'
+    + sprite(a.state, 7, 3)
+    + '<rect fill="#fff" fill-opacity=".45" x="6" y="3" width="3" height="1"/><rect fill="#fff" fill-opacity=".3" x="6" y="4" width="1" height="2"/>'
+    + `<g fill="#fff" fill-opacity=".08">${streak}</g>`
+    + '</svg>';
+}
+
+// ---------- the toggle: the mascot head at 2x (viewBox 19 x 13 cells drawn at 38 x 26 px) ----------
+function toggleArt() {
+  const X = 0, Y = 1;
+  return `<svg class="tb-fig px" viewBox="1 0 19 13" shape-rendering="crispEdges" style="${vars({ theme: 'lucid' })}" aria-hidden="true">`
+    + `<g class="tb-head">${px(HEAD, X, Y)}`
+    + `<g class="tb-eyes">${cell('cW', 4, 7, 3, 2)}${cell('cW', 11, 7, 3, 2)}${cell('cB', 5, 7, 1, 2)}${cell('cB', 12, 7, 1, 2)}</g>`
+    + `<g class="tb-lid">${cell('ck', 4, 8, 3, 1)}${cell('ck', 11, 8, 3, 1)}</g>`
+    + `<g class="tb-happy">${cell('ck', 5, 7)}${cell('ck', 4, 8)}${cell('ck', 6, 8)}${cell('ck', 12, 7)}${cell('ck', 11, 8)}${cell('ck', 13, 8)}</g>`
+    + `<g class="tb-ta">${cell('cG', 17, 6)}${cell('cg', 18, 6)}${cell('cg', 18, 7)}</g>`
+    + `<g class="tb-tb">${cell('cG', 18, 6)}${cell('cg', 19, 6)}${cell('cG', 17, 7)}${cell('cg', 18, 7)}</g>`
+    + '</g>'
+    + '<g class="tb-spark" fill="#41ff8b"><rect x="18" y="0" width="1" height="3"/><rect x="17" y="1" width="3" height="1"/></g>'
+    + '</svg>';
+}
+
+// ---------- rail markup ----------
+function toggleBtn(view, extra) {
+  const on = view === 'agents';
+  const tip = on ? 'Metrics: back to live metrics' : 'Agents: show your Agents';
+  return `<button class="rail-agents${extra ? ' ' + extra : ''}" type="button" aria-pressed="${on}" aria-label="${tip}" title="${tip}">${toggleArt()}</button>`;
+}
+const railHead = (view, extra) => `<div class="rail-head"><button class="rail-expand" type="button" aria-label="Expand panel" title="Expand panel">${ic(I.expand, 16)}</button>${toggleBtn(view, extra)}</div>`;
+const agentTile = (a) => `<div class="tile agent ${a.state}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(a.name)}" data-agent="${a.id}" style="${vars(a)}"><i class="led"></i>${ART(a)}<div class="l">${esc(a.name)}</div></div>`;
+const addTile = () => '<div class="tile agent add" role="button" tabindex="0" aria-label="Save a folder as an Agent"><svg class="art add-art" viewBox="0 0 34 28" aria-hidden="true"><rect x="1" y="1" width="32" height="26" rx="3"/><path d="M17 9v10M12 14h10"/></svg><div class="l">add agent</div></div>';
+const metricsTiles = () => METRICS.map(([n, l, c, attn]) => `<div class="tile ${c}${attn ? ' attn' : ''}" data-tile="${esc(l)}"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join('');
+
+function renderRail(win) {
+  const agents = win.dataset.view === 'agents';
+  const list = win.dataset.first === '1' ? FIRST.map(agentTile).join('') + addTile() : AGENTS.map(agentTile).join('');
+  win.querySelector('.inspector').classList.toggle('agents-view', agents);
+  win.querySelector('.metrics-rail').innerHTML = railHead(agents ? 'agents' : 'metrics', '')
+    + `<div class="rail-tiles${agents ? ' agents' : ''}">${agents ? list : metricsTiles()}</div>`;
+}
+const COACH = '<div class="ag-coach" role="note"><i class="ag-coach-nub"></i><div class="ag-coach-t">Meet your Agents</div>'
+  + '<p class="ag-coach-p">Each folder you work in gets its own Lucid. Hover one to recolor, rename, or activate it. The Lucid button flips back to metrics.</p>'
+  + '<div class="ag-coach-row"><button class="mk-btn" type="button" data-coach="metrics">Show metrics</button><button class="ag-coach-go" type="button" data-coach="ok">Got it</button></div></div>';
+function mountWin(win) {
+  const first = win.dataset.first === '1';
+  win.innerHTML = '<div class="win-tb"><span class="win-chip" style="width:54px"></span><span class="win-chip" style="width:86px"></span><span class="win-chip" style="width:40px"></span>'
+    + `<span class="win-ctl"><i>${ic(I.min, 13)}</i><i>${ic(I.max, 12)}</i><i>${ic(I.close, 13)}</i></span></div>`
+    + '<div class="win-body"><div class="win-fade"></div><div class="win-main">'
+    + '<div class="sk-row"><i class="sk" style="width:38%"></i></div>'
+    + '<div class="sk-blk"><i class="sk" style="width:82%"></i><i class="sk" style="width:91%"></i><i class="sk" style="width:64%"></i></div>'
+    + '<div class="sk-row"><i class="sk" style="width:30%"></i></div>'
+    + '<div class="sk-blk"><i class="sk" style="width:76%"></i><i class="sk" style="width:58%"></i><i class="sk" style="width:70%"></i></div>'
+    + '<div class="win-comp"><span class="win-ph">Ask LUCID anything</span><i class="win-send"></i></div></div>'
+    + '<aside class="inspector rail" style="width:96px"><div class="metrics-rail"></div></aside>'
+    + (first ? COACH : '') + '</div>'
+    + '<div class="win-sb"><span class="win-chip" style="width:46px"></span><span class="win-chip" style="width:70px"></span><span class="win-chip" style="width:30px;margin-left:auto"></span></div>';
+  renderRail(win);
+}
+
+// ---------- hover module ----------
+const pop = document.createElement('div');
+pop.className = 'popover agent-pop';
+pop.setAttribute('role', 'dialog');
+document.body.appendChild(pop);
+const nub = document.createElement('div');
+nub.className = 'ap-nub';
+document.body.appendChild(nub);
+let cur = null, tOpen = 0, tClose = 0, quiet = false;
+
+function popHtml(a, expanded) {
+  const p = pal(a);
+  const st = a.state === 'work' ? 'Typing · ' + a.where : 'Meditating · ' + a.last;
+  const sw = Object.entries(THEMES).map(([k, t]) => `<button type="button" data-sw="${k}" style="--sg:${t.G};--sk:${t.K}" aria-label="${t.name}" title="${t.name}" aria-pressed="${a.theme === k}"></button>`).join('');
+  const go = (k, icon, t, s) => `<button class="ctx-it" role="menuitem" type="button" data-go="${k}"><span class="ic">${ic(icon, 15)}</span><span class="ap-tx"><b>${t}</b><i>${s}</i></span></button>`;
+  return `<div class="ap-head"><div class="ap-art">${ART(a)}</div><div class="ap-id"><div class="ap-name" title="${esc(a.name)}">${esc(a.name)}</div>`
+    + `<div class="ap-path" title="${esc(a.path)}">${esc(a.path)}</div><div class="ap-state ${a.state}"><i></i><span>${esc(st)}</span></div></div></div>`
+    + `<div class="cfg-sec"><div class="cfg-lbl"><span>Color</span><span class="cur" data-cur>${esc(p.name)}</span></div>`
+    + `<input class="ap-hue" type="range" min="0" max="359" step="1" value="${p.hue}" aria-label="Agent color hue"><div class="ap-sw" role="group" aria-label="Color presets">${sw}</div></div>`
+    + `<div class="cfg-sec ap-acts"><button class="ctx-it" type="button" data-act="rename">${ic(I.pencil, 15)}<span class="nm">Rename</span></button>`
+    + `<button class="ctx-it" type="button" data-act="activate" aria-expanded="${expanded}">${ic(I.play, 15)}<span class="nm">Activate</span>${ic(I.chev, 14, 'chev')}</button>`
+    + `<div class="ap-sub${expanded ? ' open' : ''}" role="menu" aria-label="Activate">`
+    + go('main', I.chat, 'Take over main composer', 'Main\'s run moves to a fleet lane')
+    + go('fleet', I.fleet, 'Start new Fleet session', 'A fresh lane next to your fleet')
+    + go('world', I.world, 'Agent World session', 'Background lane + Agent Worlds')
+    + '</div></div>';
+}
+function place() {
+  if (!cur) return;
+  const a = cur.tile.getBoundingClientRect(), f = cur.frame.getBoundingClientRect();
+  const M = 8, GAP = 12;
+  const L = Math.max(f.left, 0) + M, T = Math.max(f.top, 0) + M;
+  const B = Math.min(f.bottom, innerHeight) - M;
+  pop.style.maxHeight = Math.max(160, B - T) + 'px';
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  // Prefer the left of the box inside the window; a cropped mock window may lend the page margin; else flip right.
+  let side = 'l', x = a.left - GAP - pw;
+  if (x < L && x < M) { side = 'r'; x = a.right + GAP; if (x + pw > innerWidth - M) { side = 'l'; x = Math.max(M, a.left - GAP - pw); } }
+  let y = a.top + a.height / 2 - ph / 2;
+  y = Math.min(Math.max(y, T), Math.max(T, B - ph));
+  pop.style.left = x + 'px';
+  pop.style.top = y + 'px';
+  pop.style.transformOrigin = side === 'l' ? '100% 50%' : '0 50%';
+  const cy = Math.min(Math.max(a.top + a.height / 2, y + 18), y + ph - 18);
+  nub.className = 'ap-nub show ' + side;
+  nub.style.left = (side === 'l' ? x + pw - 6.5 : x - 5.5) + 'px';
+  nub.style.top = (cy - 6) + 'px';
+}
+function openPop(tile, expanded) {
+  clearTimeout(tClose); clearTimeout(tOpen);
+  const a = ALL.get(tile.dataset.agent);
+  if (!a) return;
+  document.querySelectorAll('.tile.agent.hot').forEach((t) => t.classList.remove('hot'));
+  tile.classList.add('hot');
+  cur = { a, tile, frame: tile.closest('.win'), locked: false };
+  applyVars(pop, a);
+  pop.innerHTML = popHtml(a, !!expanded);
+  pop.setAttribute('aria-label', 'Agent ' + a.name);
+  pop.classList.add('show');
+  place();
+}
+function closePop() {
+  clearTimeout(tOpen); clearTimeout(tClose);
+  if (cur) cur.tile.classList.remove('hot');
+  cur = null;
+  pop.classList.remove('show');
+  nub.classList.remove('show');
+}
+function refreshAgent(a) {
+  document.querySelectorAll(`.tile.agent[data-agent="${a.id}"]`).forEach((t) => {
+    applyVars(t, a);
+    t.setAttribute('aria-label', a.name);
+    const l = t.querySelector('.l');
+    if (l) l.textContent = a.name;
+  });
+  if (cur && cur.a === a) {
+    applyVars(pop, a);
+    const c = pop.querySelector('[data-cur]');
+    if (c) c.textContent = pal(a).name;
+    pop.querySelectorAll('[data-sw]').forEach((b) => b.setAttribute('aria-pressed', String(a.theme === b.dataset.sw)));
+  }
+}
+function startRename() {
+  const box = pop.querySelector('.ap-name');
+  if (!box || !cur) return;
+  cur.locked = true;
+  const a = cur.a;
+  const inp = document.createElement('input');
+  inp.className = 'ap-name-in';
+  inp.value = a.name;
+  inp.maxLength = 48;
+  inp.setAttribute('aria-label', 'Agent name');
+  box.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const v = inp.value.trim();
+    if (save && v) { a.name = v; refreshAgent(a); }
+    const d = document.createElement('div');
+    d.className = 'ap-name';
+    d.title = a.name;
+    d.textContent = a.name;
+    inp.replaceWith(d);
+    if (cur) cur.locked = false;
+  };
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') finish(true);
+    else if (e.key === 'Escape') { e.stopPropagation(); finish(false); }
+  });
+  inp.addEventListener('blur', () => finish(true));
+}
+const GO = { main: 'Take over main composer (main run moves to a fleet lane)', fleet: 'Start new Fleet session', world: 'Agent World session (lane starts, Agent Worlds opens on its prompt)' };
+pop.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b || !cur) return;
+  if (b.dataset.sw) {
+    cur.a.theme = b.dataset.sw;
+    const h = pop.querySelector('.ap-hue');
+    if (h) h.value = THEMES[b.dataset.sw].hue;
+    refreshAgent(cur.a);
+  } else if (b.dataset.act === 'rename') {
+    startRename();
+  } else if (b.dataset.act === 'activate') {
+    const sub = pop.querySelector('.ap-sub');
+    const open = !sub.classList.contains('open');
+    sub.classList.toggle('open', open);
+    b.setAttribute('aria-expanded', String(open));
+    place();
+  } else if (b.dataset.go) {
+    toast('Mockup only · ' + GO[b.dataset.go] + ' · ' + cur.a.name);
+    closePop();
+  }
+});
+pop.addEventListener('input', (e) => {
+  if (!cur || !e.target.classList.contains('ap-hue')) return;
+  cur.a.theme = null;
+  cur.a.hue = Number(e.target.value);
+  refreshAgent(cur.a);
+});
+
+// hover intent: open after 140 ms, close after a 260 ms grace (so the pointer can cross the gap)
+document.addEventListener('pointerover', (e) => {
+  const t = e.target.closest('.tile.agent:not(.add)');
+  if (t) {
+    clearTimeout(tClose);
+    if (cur && cur.tile === t) return;
+    clearTimeout(tOpen);
+    tOpen = setTimeout(() => openPop(t, false), 140);
+    return;
+  }
+  if (e.target.closest('.agent-pop')) { clearTimeout(tClose); clearTimeout(tOpen); }
+});
+document.addEventListener('pointerout', (e) => {
+  const from = e.target.closest('.tile.agent, .agent-pop');
+  if (!from) return;
+  const rt = e.relatedTarget;
+  const to = rt && rt.closest ? rt.closest('.tile.agent, .agent-pop') : null;
+  if (to === from) return;
+  clearTimeout(tOpen);
+  if (to || !cur || cur.locked) return;
+  tClose = setTimeout(closePop, 260);
+});
+document.addEventListener('pointerdown', (e) => {
+  if (cur && !e.target.closest('.agent-pop, .tile.agent')) closePop();
+});
+document.addEventListener('focusin', (e) => {
+  if (quiet) return;
+  const t = e.target.closest && e.target.closest('.tile.agent:not(.add)');
+  if (t && (!cur || cur.tile !== t)) openPop(t, false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && cur) {
+    const t = cur.tile;
+    closePop();
+    quiet = true; t.focus(); quiet = false;
+    return;
+  }
+  const t = e.target.closest && e.target.closest('.tile.agent');
+  if (t && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    t.click();
+    setTimeout(() => { const f = pop.querySelector('.ap-sub .ctx-it'); if (f && cur) f.focus(); }, 0);
+  }
+});
+document.addEventListener('click', (e) => {
+  const tg = e.target.closest('.win .rail-agents');
+  if (tg) {
+    const w = tg.closest('.win');
+    w.dataset.view = w.dataset.view === 'agents' ? 'metrics' : 'agents';
+    if (cur && cur.frame === w) closePop();
+    renderRail(w);
+    const nb = w.querySelector('.rail-agents');
+    if (nb) nb.focus();
+    return;
+  }
+  if (e.target.closest('.win .rail-expand')) { toast('Mockup only · expands the Memory / Security panel'); return; }
+  const cb = e.target.closest('[data-coach]');
+  if (cb) {
+    const w = cb.closest('.win');
+    const coach = w.querySelector('.ag-coach');
+    if (coach) coach.remove();
+    if (cb.dataset.coach === 'metrics') { w.dataset.view = 'metrics'; renderRail(w); }
+    return;
+  }
+  const t = e.target.closest('.tile.agent');
+  if (t) {
+    if (t.classList.contains('add')) { toast('Mockup only · pick a folder to save as an Agent'); return; }
+    openPop(t, true);
+  }
+});
+addEventListener('scroll', place, { passive: true });
+addEventListener('resize', place);
+
+// ---------- toast ----------
+const toastEl = document.getElementById('mkToast');
+let tToast = 0;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(tToast);
+  tToast = setTimeout(() => toastEl.classList.remove('show'), 2400);
+}
+
+// ---------- glance scheduler: about every 60 s, jittered; never under reduced motion ----------
+const RM = matchMedia('(prefers-reduced-motion: reduce)');
+const reduced = () => RM.matches || document.documentElement.classList.contains('rm');
+function glance(id) {
+  if (reduced()) return;
+  const els = document.querySelectorAll(`.lu[data-agent="${id}"]`);
+  els.forEach((el) => { el.classList.remove('glance'); el.getBoundingClientRect(); el.classList.add('glance'); });
+  setTimeout(() => els.forEach((el) => el.classList.remove('glance')), 3300);
+}
+function schedule(id, firstMs, everyMs, jitterMs) {
+  const loop = () => { glance(id); setTimeout(loop, everyMs + Math.random() * jitterMs); };
+  setTimeout(loop, firstMs);
+}
+[...AGENTS, ...FIRST].forEach((a) => {
+  if (a.demo) schedule(a.id, 1200, 6500, 0);
+  else schedule(a.id, 5000 + Math.random() * 50000, 52000, 16000);
+});
+schedule('spec-glance', 900, 4600, 0);
+
+// ---------- specimens ----------
+const SPEC = [
+  ['spec-idle', 'idle', 'Idle · meditating'],
+  ['spec-work', 'work', 'Working · typing'],
+  ['spec-glance', 'idle', 'Glance (left, up, down)'],
+  ['spec-still', 'work', 'Reduced motion'],
+];
+document.getElementById('loupe').innerHTML = '<div class="mk-spec">'
+  + SPEC.map(([id, st, cap], i) => { const a = { id, theme: 'lucid', state: st, dl: -i * 0.8 }; return `<figure class="mk-fig"><div class="mk-stage${id === 'spec-still' ? ' still' : ''}" style="${vars(a)}">${ART(a)}</div><figcaption>${cap}</figcaption></figure>`; }).join('')
+  + '</div><div class="mk-pal">'
+  + [...Object.keys(THEMES).map((k) => ({ id: 'pal-' + k, theme: k })), { id: 'pal-custom', theme: null, hue: 330 }]
+    .map((a, i) => { a.state = i % 3 === 1 ? 'work' : 'idle'; a.dl = -i * 0.6; return `<figure class="mk-fig"><div class="mk-stage" style="${vars(a)}">${ART(a)}</div><figcaption>${esc(pal(a).name)}</figcaption></figure>`; }).join('')
+  + '</div>';
+document.getElementById('toggles').innerHTML = '<div class="mk-tgl">'
+  + [['metrics', '', 'Metrics view (off)'], ['agents', '', 'Agents view (on)'], ['metrics', 'is-hover', 'Hover']]
+    .map(([v, h, cap]) => `<figure class="mk-fig mk-tfig"><div class="mk-railbit">${railHead(v, h)}</div><div class="mk-zoom">${toggleBtn(v, h)}</div><figcaption>${cap}</figcaption></figure>`).join('')
+  + '</div><p class="mk-tip">Tooltips: "Agents: show your Agents" while off, "Metrics: back to live metrics" while on. Hover lifts the button, races a green ring around it, hops the head one pixel, flutters the scarf, swaps to happy eyes and twinkles a pixel spark.</p>';
+
+// ---------- frames ----------
+document.querySelectorAll('.win').forEach(mountWin);
+const pinned = document.querySelector('#winMain .tile.agent[data-agent="api"]');
+const pinOpen = () => { if (pinned && (!cur || cur.tile === pinned)) openPop(pinned, true); };
+requestAnimationFrame(pinOpen);
+addEventListener('load', () => { if (cur) place(); });
+
+// ---------- mockup controls ----------
+document.getElementById('mkTheme').addEventListener('click', (e) => {
+  const light = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', String(light));
+  if (light) document.documentElement.setAttribute('data-theme', 'lucid-light');
+  else document.documentElement.removeAttribute('data-theme');
+});
+document.getElementById('mkRm').addEventListener('click', (e) => {
+  const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+  document.documentElement.classList.toggle('rm', on);
+  if (on) document.querySelectorAll('.lu.glance').forEach((el) => el.classList.remove('glance'));
+});
+document.getElementById('mkGlance').addEventListener('click', () => {
+  [...AGENTS, ...FIRST].forEach((a) => glance(a.id));
+  glance('spec-glance');
+});
+})();
+</script>
+</body></html>

@@ -10,6 +10,8 @@
 // the capability mask, the transcript seed, and the provenance strings. DOM-free / IO-free so the wording and
 // the fail-closed refusals are unit-tested headless; app.ts owns the DOM and the wiring.
 
+import { foldRanBlock, type SeedTool } from "./fleet_dock_model.ts";
+
 /** What the MAIN composer is currently driving. */
 export type ComposerTarget =
   | { kind: "master" }
@@ -78,7 +80,7 @@ export function targetCaps(t: ComposerTarget): TargetCaps {
 /** Seed the composer thread from a lane's bounded transcript. Drops empty entries, collapses the engine's
  *  `[ran: x]` tool prefix lines into a single leading note per assistant turn (they are memory, not prose),
  *  and NEVER reorders. Returns a NEW array. */
-export interface SeedTurn { role: "user" | "assistant"; text: string }
+export interface SeedTurn { role: "user" | "assistant"; text: string; tools?: SeedTool[] }
 
 /** fleet_lanes.ts #foldLiveTurn prefixes a folded assistant turn with one `[ran: <name>]` line per tool call. */
 const RAN_LINE = /^\[ran:\s*([\s\S]*)\]$/;
@@ -90,7 +92,8 @@ export function seedTurns(transcript: readonly SeedTurn[]): SeedTurn[] {
   for (const turn of transcript) {
     if (!turn || typeof turn.text !== "string") continue;
     // A user turn is kept verbatim: the user may have literally typed "[ran: ...]" and we do not rewrite them.
-    const text = turn.role === "assistant" ? collapseRanLines(turn.text) : turn.text;
+    // foldRanBlock first: a multi-line title from an older engine would otherwise leave half the block as prose.
+    const text = turn.role === "assistant" ? collapseRanLines(foldRanBlock(turn.text, turn.tools)) : turn.text;
     if (!text.trim()) continue;
     out.push({ role: turn.role, text });
   }

@@ -6481,3 +6481,83 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** README.md cut from 1,200 lines to about 185: a one-line pitch, a live release badge (v2.6.1), six value props taken from the website, a screenshot gallery led by new Fleet and Security panel shots (docs/images/readme/), Lucid Agent Worlds, a role table that links the guides, install with Homebrew, and the developer quick start folded into a details block. Old per-version notes and the Private AI Platform rename note were removed. Bug reporting and log collection moved to docs/SUPPORT.md, and the bug form now links there.
 - **stubbed:** assets only the old README used are deleted: the section icons, two corrupt voice screenshots (bytes replaced by U+FFFD), and ai-loc-dashboard.png (it showed a personal email; git history still holds it). Voice and live collaboration have no README screenshot until new captures exist.
 - **next:** P-DOCS.1 (ADR-0660): the Starlight docs site; move the long-form feature detail there.
+## P-WORLDS.STORE1 (ADR-0661): World Packs first, a loop on every world card, checkout reaches Stripe, the drawer stops opening Preview
+- **shipped (2026-11-23):** backend CORS now admits the desktop origin `http://127.0.0.1:<port>` (private PR #261, callables redeployed; createCheckout from that origin returns live Stripe URLs for a world and for Patron Class); PREMIUM leads with Lucid Agent World Packs (Patron Class, Sponsor with a 6-world picker and world credits) then the 29 worlds, each card playing its own highlight loop and each pack a collage loop; `openPluginsDrawer` no longer opens Preview, so X and Esc close only the drawer; `make demo-P-WORLDS.STORE1` and demo_p_worlds_store_1.mjs pass wide and narrow and fail on the old behavior.
+- **stubbed:** no signed-in purchase was completed in the QA engine (no store account there); the picker is driven through the live drawer's controller. "Get" on a world in the Worlds menu opens the store at the top, not scrolled to that world.
+- **next:** a real sandbox purchase of Sponsor from the IDE (6 picks), then redeeming a credit from a world card.
+## P-WORLDS.HEAL1 (ADR-0662) and P-VIZ.NOFLASH1 (ADR-0663): purchases survive glitches, no flash under CPU load, live checkout proof
+- **shipped (2026-11-23):** install ledger plus signed backups outside plugins/, startup self-heal through every install gate with quarantine, /api/plugins/health and /api/plugins/restore, Restore purchases and the restore toasts; Visualize swaps scenes on the new scene's first frame (no black frames under CPU x10), governor hysteresis and direct tier jump, resize without a cleared frame, context-loss rebuild, saved world drawn from the first frame; demo_p_worlds_checkout_1.mjs proved Buy opens live Stripe Checkout for a world, Patron Class and Sponsor from http://127.0.0.1.
+- **stubbed:** the store-reinstall branch of restore (no backup, account owns it) is unit-tested only; "Open in Visualize" from the store can still show the default style briefly before the world.
+- **next:** a real purchase on a test account end to end through install, then the store-reinstall restore branch against that account.
+## P-PREVIEW.CHIP1 (ADR-0664): one preview chip everywhere, Preview over Agent Worlds, lane snapshots; Agents rail mockups
+- **shipped (2026-11-23):** shared `.pchip` in the composer, inside each Fleet lane's transcript (upper right), on orbit spokes and beside agents in Agent Worlds; ready Worlds chip flies the Preview out over Visualize (z 94), resizable, X/Esc/press-on-world slide it back; hover card with the lane's snapshots (lane_shots.ts); resize no longer stalls over the page iframe; demo-P-PREVIEW.CHIP1 passes wide and narrow; mockups/agents-rail/ with three directions (glass brick, pixel brick, voxel cube) for the Agents rail.
+- **stubbed:** snapshots of hidden lane tabs only for canvas pages; the orbit spoke chip is not in the demo; the Agents rail is mockups only (awaiting a direction).
+- **next:** the user picks an Agents rail direction, then P-RAIL.AGENTS1 builds it (saved Agents store, Activate flows).
+## P-RAIL.AGENTS1 (ADR-0665): the right rail's Agents view
+- **shipped (2026-11-23):** rail toggle with an animated mini Lucid; Agents from recent and saved folders with autonames, newest first, persistent drag order with neighbor eye reactions, 3-step and page arrows, glass-brick Lucids typing when any agent works in the folder and meditating otherwise, the turn ring, the hover module (color, rename, two-step remove with Undo, Activate: take over Main with session handoff, new Fleet session, Agent World session); demo-P-RAIL.AGENTS1 and demo-P-AGENT.ACTIVATE1 pass wide and narrow.
+- **stubbed:** "Move it now" for a busy Main is unit-tested only; adding an Agent through the native folder picker is not driven by the demo.
+- **next:** user review of the live rail; light-theme pass on the brick art.
+## P-RAIL.AGENTS1b: Activate gives feedback at once with a real agent
+- **shipped (2026-11-23):** in the real Electron app the Activate choices looked dead: a real agent's spawn answers only after its handshake (12 to 35 s here), the module sat greyed with a tiny "Starting" line, and takeover moved Main silently. Now every choice closes the module at once; Fleet and Agent World open their view immediately with a persistent "Starting X" note, reveal the lane as soon as the engine lists it as starting, then focus its input or prompt panel and say it is ready; takeover says "Moving Main to X" before it reads Main; failures (including the engine's CPU admission refusal) come back as a toast or on the box. Measured in Electron: first feedback 0.1 to 0.9 s.
+- **stubbed:** the Agent Worlds node appears only once the lane is ready (starting lanes are not drawn); the QA rail demo's Activate step was refused by the engine's CPU admission on a machine at 100% CPU.
+- **next:** draw starting lanes in Agent Worlds with a loading state.
+## P-RAIL.AGENTS1c: + Add agent explains Agents, then asks what the Agent is for
+- **shipped (2026-11-23):** + Add agent no longer jumps to the OS folder dialog: a popover explains what an Agent is and that it lives in one folder (recent folders in a click, or Choose a folder), then asks its name and what it will do (the workspace setup purposes); the purpose is saved on the Agent, shown in its module, and skips the setup's purpose question for that folder. ADR-0666, `make demo-P-RAIL.AGENTS1c`.
+- **stubbed:** the "Choose a folder…" branch opens the native dialog, which the demo cannot drive; it is the same dialog as before.
+- **next:** draw starting lanes in Agent Worlds with a loading state.
+## P-BUDDY.1: floating Agent buddies with ideas, Ask Lucid in the Agents style
+- **shipped (2026-11-23):** a small glass-brick Lucid in its folder's color rides on the upper-left corner of the main composer, each Fleet card's composer and beside each Agent Worlds node, drifting a few pixels with a soft glow; drag it anywhere (persisted, double-click resets); click it for up to three ideas from a smaller current model (scanned, fenced, fail-closed; after each turn too, at most every 3 minutes), each runnable as a parallel worktree agent or handed to Ask Lucid, which now shows the boxless Lucid in the Agents glass style. ADR-0667, `make demo-P-BUDDY.1`.
+- **stubbed:** the demo's idea model is the QA engine's scripted fake agent; a real-model run is unverified (the live engine timed out restoring its session with the machine at 100% CPU); Main's own node in Agent Worlds has no buddy (Main's rides on the composer).
+- **next:** draw starting lanes in Agent Worlds with a loading state.
+## P-SPINUP.1: a starting agent walks in with a status bubble; working Agents stay bright on the rail
+- **shipped (2026-11-23):** while Main, a Fleet lane or an Agent Worlds lane is starting, a walking mini Lucid in its Agent's color paces the composer's top edge (or its World node) under a glass bubble naming the Agent and cycling playful lines (honest ones after 30 s and 90 s, with a timer), then says it is ready and leaves; on the rail a working Agent stays at full opacity while idle ones rest at .55, sidebar open or collapsed. ADR-0668, `make demo-P-SPINUP.1`.
+- **stubbed:** the QA demo slows the fake agent's handshake to stand in for a real one; the real-agent case was not re-run on this machine (CPU at 100%).
+- **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.
+## P-FLEET.RAN1: tool chips no longer turn into a wall of `[ran: ...]` text
+- **shipped (2026-11-23):** a lane turn whose tool title spans lines (a heredoc bash command) broke the `[ran: ...]` block the card strips line by line, so every later title showed as prose (and `$VAR` pairs rendered as math). The engine now writes each title on one line (`ranTitle`), and the card and the composer seed rebuild the block from the turn's own tool records, so turns recorded by older engines show chips too (`foldRanBlock`); regression tests in fleet_dock_model.test.ts and composer_target.test.ts.
+- **stubbed:** the remote PWA viewer (collab/pwa_view.ts) still strips line by line; new records are single-line, older ones may show the leftover lines there.
+- **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.
+## P-BUDDY.2: the buddy holds still, wears its name, explains itself on hover, pops ideas up only when there are some
+- **shipped (2026-11-23):** no more ellipse drift; the Agent's name under the brick (one unframed line); the app's hover helper replaces the browser tooltip (name, what it is doing, ideas waiting, click/drag/double-click); a click opens ideas only when there are some, else a chip says it is looking or that there is nothing to suggest; the idea model returns nothing rather than padding. ADR-0669, `make demo-P-BUDDY.1` updated.
+- **stubbed:** none.
+- **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.
+## P-PERF.GIT1: the month code-activity count stops re-running git log in every repo every 30 s
+- **shipped (2026-11-23):** the dashboard's "code this month" (tools/memory_data.ts codeActivity) ran `git log --since=<month> --numstat` in every session repo (18 here) on every 30 s recompute, keeping a git process alive more than half of every minute per engine and pinning a core plus the Program Compatibility Assistant service. This repo's count took 18 s and was killed at the 15 s timeout, so it re-ran every 30 s forever. Each repo's count is now remembered until its HEAD reflog changes (commit, checkout, merge, reset, pull) or the month turns; a repo without a reflog, or whose count failed, is retried after 10 minutes; the timeout is 60 s; the route never starts a second count while one runs. Measured: 0 `git log` runs per minute after warm-up vs 23 to 42 from the old engine. Regression test in harness/code_activity.test.ts.
+- **stubbed:** the installed app keeps the old behavior until it updates.
+- **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.
+## P-ASKLUCID.SPEED1: Ask Lucid says what he is doing while he answers, and answers sooner
+- **shipped (2026-11-23):** Ask Lucid already runs the newest small-tier model of the picker's provider (Claude Haiku here). The panel now shows a live waiting line (reading, scanning, asking <model>, starting, writing, with a timer) streamed from the engine, and the answer says which model answered and how long it took. Faster: budgets on what goes with a question, the engine's three slow reads in parallel, no MCP servers for text-only side completions, and a warm spare session opened when the panel opens and after each answer. Measured: 6.7 to 8.8 s with the panel open (was 15 to 28 s); a first question right after start 54 s (was 80 to 109 s). ADR-0670.
+- **stubbed:** the first question right after start still waits about 25 s for the engine to finish booting before it starts reading.
+- **next:** stream Ask Lucid's answer text as it is written.
+## P-ASKLUCID.MODEL1: Ask Lucid never drops to an older small model, and flies out left of the right rail
+- **shipped (2026-11-23):** Ask Lucid's model is the newest small-tier model omp has ever offered on this machine for the picker's provider (Haiku 5.5, not the Haiku 4.5 a just-started omp lists), with the live pick as fallback and the answer naming the model that really ran; docked right, the panel now flies out to the left of the Agents rail, over the page and its popups, and pushes nothing aside. ADR-0671.
+- **stubbed:** none.
+- **next:** stream Ask Lucid's answer text as it is written.
+## P-PERF.IDLE1: opening LUCID runs no git, and an idle LUCID does almost nothing
+- **shipped (2026-11-23):** no git at open (repo chip and lanes read .git files; code activity remembered and counted only on a click of the lines tile); one watched index over the 19k-file session tree instead of three 15 s re-walks, a head-only Ask Lucid sweep, a persisted usage ledger and change-keyed obs/compaction reads; idle rail figures and chrome glows hold still, working figures stepped at 8 fps. Idle app about 25% -> 1.1% of the machine (engine 7.9% -> 0.7%, window 17.3% -> 0.4%). ADR-0672.
+- **stubbed:** none.
+- **next:** measure 4-5 real working lanes with subagents end to end, and cut omp's own boot time per lane.
+## P-PLUGINS.ID1: a malformed install request files no Live block; owners hold every store item
+- **shipped (2026-11-23):** an install request with no valid plugin id is refused and logged without a high Live block (the eight `plugin ""` blocks were a QA script's malformed calls, not purchases); the store gives owner accounts every item (add-on ADR-A156, deployed); every on-sale package passes the real install gates with zero blocks. ADR-0673.
+- **stubbed:** none.
+- **next:** a signed-in owner check in the running app (every card reads Install).
+## P-FLEET.CONN1: lift Chromium's per-host connection cap for the loopback engine
+- **shipped (2026-11-23):** with 4+ agents working, their turn streams used up Chromium's six connections to the engine and every other request queued (Visualize "0 agents", status "Checking"); main.ts now lifts the cap for 127.0.0.1/localhost and Visualize's fleet poll gives up on a reply after 10 s. ADR-0674.
+- **stubbed:** none.
+- **next:** carry every lane's events on one multiplexed stream so the window holds one connection however many agents run.
+## P-FLEET.CONN1b: the rail's working/idle state is not stretched by the render tier
+- **shipped (2026-11-23):** the rail and buddy lane polls run every 2.5 s on every render tier (the busy-machine governor stretched them to 10 s) and give up on a lost reply after 8 s; live harness `demo_p_rail_live_1.mjs` (5 real lanes on local GLM): rail within 1.0 s of the engine. ADR-0675.
+- **stubbed:** none.
+- **next:** one multiplexed stream for every lane's events.
+## P-BUDDY.HIDE1: a red x hides a floating Agent for one session
+- **shipped (2026-11-24):** hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner; a click hides it for that Main or lane session (Undo in the toast; a new session brings it back). ADR-0676.
+- **stubbed:** none.
+- **next:** offer the same x on Agent Worlds buddies if the owner wants it there.
+## P-SCHED.AGENT1: schedule an Agent from its rail module
+- **shipped (2026-11-24):** Activate > Schedule this Agent: once on a date, daily, weekdays, chosen days or monthly, at a time, with instructions or a goal; saved as an engine scheduled job on the Agent's folder (one-time runs disarm after their fire); the module lists, pauses, resumes and deletes them; proven end to end including a real fire. ADR-0677.
+- **stubbed:** none.
+- **next:** run a schedule while LUCID is closed (ADR-0443's P-SCHED.3 keep-alive).
+## release v2.7.1 (stable)
+- **shipped (2026-11-24):** v2.7.1 = 2.6.1 plus PR #671: the right rail's Agents view with Activate, + Add agent and Schedule this Agent; floating Agent buddies (ideas, red x); the spin-up walker; one preview chip; World Packs first and self-healing purchases; Ask Lucid's waiting line and Haiku 5.5; no git at open and an idle app near 1% CPU; the loopback connection cap lifted and a live rail; malformed plugin installs file no Live block. README "New in v2.7"; desktop/package.json and version.ts at 2.7.1 (2.7.0 skipped). CodeQL: buddy spot keys are allow-listed, a demo regex is unambiguous.
+- **stubbed:** none.
+- **next:** schedules that run while LUCID is closed (P-SCHED.3 keep-alive), and one multiplexed stream for every lane's events.
