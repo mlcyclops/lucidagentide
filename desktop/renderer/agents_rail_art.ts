@@ -7,6 +7,7 @@
 //                    specular dot, troop trim) made translucent in the Agent's color, a seated chibi Lucid in its
 //                    window (meditating when idle, typing when working);
 //   toggleArt()      the rail toggle's mini Lucid bust (brand palette, 24 x 24);
+//   lucidWalkerArt() the standing Lucid with swingable limbs, for the spin-up walker (40 x 48);
 //   palettes         the six mascot themes from mascot.ts plus a custom hue.
 // Every color comes from CSS variables (--K gi, --D gi shadow, --L gi highlight, --G accent, --g accent shade) set
 // on the tile, so recoloring an Agent is a style write, never a re-render. Every class is `agr-` prefixed and
@@ -66,7 +67,12 @@ function figure(st: ArtState): string {
       + '<g class="agr-hr"><path class="agr-fK agr-sk" d="M28.8 29.2c-1.3 1.2-2.6 1.6-3.8 1.3l-.2-1.7c1.2.1 2.4-.1 3.4-.6z"/><circle class="agr-fS agr-sk2" cx="24.3" cy="30.5" r="1.45"/></g>'
       + '<rect class="agr-bit agr-b1" x="16.2" y="28.4" width="1.1" height="1.1"/><rect class="agr-bit agr-b2" x="22.6" y="28" width="1.1" height="1.1"/>'
     : "";
-  const head = '<g class="agr-head">'
+  return legs + kb + '<g class="agr-upper">' + torso + arms + LUCID_HEAD + "</g>" + hands;
+}
+
+/** The Lucid's head (the seated figure and the walker share it): headband and its knot tail in --G, the face
+ *  window, open eyes and the closed-eye arcs. Spans x 9.4-36.6, y 3.4-22.8 in figure units. */
+const LUCID_HEAD = '<g class="agr-head">'
     + '<g class="agr-tail"><path class="agr-fG agr-sk3" d="M29.4 10.6c2.6-1.4 5-1.2 7.2.2l-.8 1.3c-2-.9-4-.9-6 .2z"/><path class="agr-fg agr-sk3" d="M29.4 12.3c2.4.2 4.3 1.3 5.6 3.2l-1.2.8c-1.1-1.5-2.6-2.4-4.4-2.6z"/></g>'
     + '<rect class="agr-fK agr-sk" x="9.4" y="3.4" width="21.2" height="19.4" rx="8.4"/>'
     + '<path class="agr-sL agr-sheen" d="M14 5.9c4-1.6 8-1.6 12 0"/>'
@@ -77,7 +83,32 @@ function figure(st: ArtState): string {
     + '<g class="agr-pup"><circle class="agr-fB" cx="16.4" cy="15.5" r="1.08"/><circle class="agr-fB" cx="23.6" cy="15.5" r="1.08"/><circle class="agr-fW" cx="16.8" cy="15.05" r=".36"/><circle class="agr-fW" cx="24" cy="15.05" r=".36"/></g></g>'
     + '<path class="agr-ec agr-sB" d="M14.5 15.5q1.9 1.4 3.8 0M21.7 15.5q1.9 1.4 3.8 0"/>'
     + "</g>";
-  return legs + kb + '<g class="agr-upper">' + torso + arms + head + "</g>" + hands;
+
+/** P-SPINUP.1 (ADR-0668): the Lucid STANDING and walking (the spin-up walker, agent_spinup.ts), boxless, 40 x 48
+ *  units, the seated figure's design: the same head, a dark suit in --K with lapels in --D, a --G belt, tabi in --D.
+ *  Each limb is its own group so CSS swings it about its joint (`.spw-legL/.spw-legR` about the hip, `.spw-armL/
+ *  .spw-armR` about the shoulder, `.spw-body` bobs; the head's tail flutters through the shared `.agr-tail` loop).
+ *  Front-facing; the walker mirrors the whole figure to face the way it goes. A soft --G floor shadow grounds him.
+ *  `delay` (seconds, negative) de-syncs the loops between walkers. */
+export function lucidWalkerArt(delay = 0, cls = ""): string {
+  const dl = Number.isFinite(delay) ? delay.toFixed(2) : "0";
+  const leg = (c: string, x: number): string => `<g class="${c}">`
+    + `<rect class="agr-fK agr-sk" x="${x}" y="31.6" width="4.6" height="11" rx="2"/>`
+    // the tabi's toe points left (the way the unmirrored figure faces: its headband tail trails on the right)
+    + `<path class="agr-fD agr-sk" d="M${(x + 5.3).toFixed(1)} 42.6c0-1.3-1-2-2.3-2h-1.6c-1.6 0-2.8 1-2.8 2.3 0 .7.5 1.1 1.2 1.1h4.4c.7 0 1.1-.6 1.1-1.4z"/>`
+    + `<path class="agr-sL" d="M${x + 1} 34.2v4"/></g>`;
+  const arm = (c: string, d: string, hx: number): string => `<g class="${c}"><path class="agr-fK agr-sk" d="${d}"/><circle class="agr-fS agr-sk2" cx="${hx}" cy="31.4" r="1.45"/></g>`;
+  const torso = '<path class="agr-fK agr-sk" d="M14.4 21.6h11.2c1.3 0 2.1.8 2.3 2l.9 9.8H11.2l.9-9.8c.2-1.2 1-2 2.3-2z"/>'
+    + '<path class="agr-sD" d="M16.8 22.2l4.2 4.8M23.2 22.2l-2.4 2.8"/>'
+    + '<rect class="agr-fG" x="11.8" y="28.6" width="16.4" height="2.2" rx=".5"/><rect class="agr-fg" x="19.1" y="28.3" width="1.8" height="2.8" rx=".5"/>';
+  return `<svg class="agr-art agr-lu spw-fig${cls ? ` ${cls}` : ""}" viewBox="0 0 40 48" style="--dl:${dl}s" aria-hidden="true" focusable="false">`
+    + '<ellipse class="spw-floor" cx="20" cy="45.4" rx="9.5" ry="1.7"/>'
+    + leg("spw-legL", 14.6) + leg("spw-legR", 20.8)
+    + '<g class="spw-body">' + torso
+    + arm("spw-armL", "M13.9 22.6c-2.1.7-3.1 2.5-3.3 4.7l-.3 3.3c0 .8.6 1.3 1.4 1.3h.9l1.7-4.6z", 11.7)
+    + arm("spw-armR", "M26.1 22.6c2.1.7 3.1 2.5 3.3 4.7l.3 3.3c0 .8-.6 1.3-1.4 1.3h-.9l-1.7-4.6z", 28.3)
+    + LUCID_HEAD
+    + "</g></svg>";
 }
 
 let uidSeq = 0;

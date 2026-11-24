@@ -150,7 +150,8 @@ import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (
 import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
 import { BUDDY_SETTINGS_KEY, mountAgentBuddies, readBuddySettings, saveBuddySettings, type AgentBuddies } from "./agent_buddy.ts"; // P-BUDDY.1 (ADR-0667): floating Agent buddies
 import type { BuddyIdea } from "./bridge.ts";
-import { AGENTS_KEY, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
+import { mountSpinupWalkers, type SpinupWalkers } from "./agent_spinup.ts"; // P-SPINUP.1 (ADR-0668): a walking mini Lucid while an agent starts
+import { AGENTS_KEY, baseName, displayNames, laneFolderIds, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
 import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
@@ -3786,6 +3787,8 @@ type ActivateResult = { ok: boolean; message?: string };
 interface QueuedTakeover { folder: string; name: string; dismiss: () => void; timer: number }
 const takeovers = takeoverQueue<QueuedTakeover>();
 let takeoverRunning = false;
+/** P-SPINUP.1 (ADR-0668): the folder a running takeover moves Main to (its walker wears that Agent's name). */
+let takeoverFolder: string | null = null;
 
 /** Take over main composer / Start new Fleet session / Agent World session, for the Agent `name` on `folder`. */
 async function activateAgentFolder(kind: "takeover" | "fleet" | "world", folder: string, name: string): Promise<ActivateResult> {
@@ -3854,10 +3857,12 @@ async function takeOver(folder: string, name: string, choice: BusyChoice | null)
   if (plan.kind === "queue") { queueTakeover(folder, name); return { ok: true }; }
   dropQueuedTakeover(); // this takeover supersedes one waiting for the turn
   takeoverRunning = true;
+  takeoverFolder = folder;
+  spinup?.sync(); // P-SPINUP.1: the target Agent walks over the composer while Main moves
   // Moving Main restarts its agent in the new folder (several seconds with a real model): say so at once.
   const moving = showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Main's agent is restarting in this folder. The composer is ready when this note goes away.", timeout: 0 });
   try { return await runTakeover(plan.steps, main, folder, name); }
-  finally { takeoverRunning = false; moving(); }
+  finally { takeoverRunning = false; takeoverFolder = null; moving(); spinup?.sync(); }
 }
 
 async function runTakeover(steps: readonly TakeoverStep[], main: MainView, folder: string, toName: string): Promise<ActivateResult> {
@@ -4689,6 +4694,36 @@ async function openJobsSheet(): Promise<void> {
 let agentsRail: AgentsRail | null = null;
 /** P-BUDDY.1 (ADR-0667): the floating Agent buddies (agent_buddy.ts), mounted at init after the rail. */
 let agentBuddies: AgentBuddies | null = null;
+/** P-SPINUP.1 (ADR-0668): the spin-up walkers (agent_spinup.ts), mounted at init after the buddies. */
+let spinup: SpinupWalkers | null = null;
+/** P-SPINUP.1: the startup recovery is restoring the previous session (its "Restoring your previous session" note). */
+let restoringSession = false;
+/** P-SPINUP.1: the boot standby counts as Main spinning up only this long (an offline boot never ends it). */
+const BOOT_SPIN_MAX_MS = 120_000;
+let bootSpinDone = false;
+let spinNamesRaw: string | null | undefined;
+let spinNames = new Map<string, string>();
+/** The Agents rail's display name for `folder` (its record, else its main checkout's), else its base name. */
+function agentDisplayName(folder: string): string {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(AGENTS_KEY); } catch { /* storage off: the base name */ }
+  if (raw !== spinNamesRaw) { spinNamesRaw = raw; spinNames = displayNames(loadAgentsDoc(raw).agents); }
+  for (const id of laneFolderIds(folder)) { const n = spinNames.get(id); if (n) return n; }
+  return baseName(folder) || "Lucid";
+}
+/** P-SPINUP.1: Main is spinning up (who is arriving), or null: a takeover moving Main (the TARGET's name), the boot
+ *  standby (net_monitor: engine, network, models, settings still pending; once it ends it never counts again), the
+ *  startup session restore. The boot ends early when Main's first model-list warm cycle ends (loadConfig). */
+function mainSpinup(): { name: string; folder: string | null } | null {
+  if (takeoverRunning && takeoverFolder) return { name: agentDisplayName(takeoverFolder), folder: takeoverFolder };
+  if (!bootSpinDone && (!netBooting() || Date.now() - windowOpenedAt > BOOT_SPIN_MAX_MS)) bootSpinDone = true;
+  // Not `state.configWarming`: the picker re-polls the model list on later loads too (every cycle when an agent
+  // never reports models), and a walker arriving every few seconds would say Main is starting when it is not.
+  if (bootSpinDone && !restoringSession) return null;
+  // Wait for the folder (a fraction of a second at boot) so the bubble names the Agent from its first line.
+  const folder = state.workspace?.current ?? null;
+  return folder ? { name: agentDisplayName(folder), folder } : null;
+}
 /** P-BUDDY.1 (ADR-0667): a buddy's idea runs in a NEW worktree lane of its folder (Push now's path), the idea's
  *  prompt as that lane's first turn. The user hears it at once, before the engine is asked anything. */
 async function runBuddyIdea(folder: string, idea: BuddyIdea, name: string): Promise<void> {
@@ -13634,11 +13669,22 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
     return;
   }
   showRecoveryNotice(`${headline} Restoring your previous session\u2026`);
-  const r = await bridge.recoveryResume(previousId);
+  // P-SPINUP.1 (ADR-0668): Main's walker paces over the composer while the restore runs (until the notice settles).
+  restoringSession = true;
+  spinup?.sync();
+  const r = await (async () => {
+    try {
+      const res = await bridge.recoveryResume(previousId);
+      if (res?.ok) await resumeSession(res.sessionId ?? previousId, { loaded: true });
+      return res;
+    } finally {
+      restoringSession = false;
+      spinup?.sync();
+    }
+  })();
   // A failed resume records its own session-unrecoverable incident; the startup notice below covers it.
   if (r?.incidentId && r.incidentId !== inc.id) void bridge.incidentSeen(r.incidentId);
   if (r?.ok) {
-    await resumeSession(r.sessionId ?? previousId, { loaded: true });
     await settle("recovered", "The previous chat session was restored after launch.", `${headline} Your previous session was restored.`);
     return;
   }
@@ -19562,6 +19608,15 @@ function wire(): void {
     toast: showToast,
     perfTier: () => perfWatch.tier(),
   });
+  // P-SPINUP.1 (ADR-0668): while Main or a lane is starting, a mini Lucid walks over its composer (Agent Worlds attaches
+  // its own through initViz) with a bubble of status lines. Synced from the boot, takeover, restore and warm signals.
+  spinup = mountSpinupWalkers({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    mainSpinup,
+    perfTier: () => perfWatch.tier(),
+  });
 
   // composer agent controls → focused per-control dropdowns
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
@@ -19830,6 +19885,7 @@ function wire(): void {
       viewClosed: () => { previewReturn = null; syncPreviewCover(); },
     },
     attachBuddies: (stage, src) => agentBuddies?.attachWorlds(stage, src) ?? (() => {}), // P-BUDDY.1 (ADR-0667)
+    attachSpinup: (stage, src) => spinup?.attachWorlds(stage, src) ?? (() => {}), // P-SPINUP.1 (ADR-0668)
   });
   $("#ctViz")?.addEventListener("click", () => toggleViz());
 
@@ -21206,6 +21262,10 @@ async function loadConfig(newCycle = true): Promise<void> {
       state.configCached = false;
       state.configWarming = false;
     }
+    // P-SPINUP.1: Main's boot walk ends when its first warm cycle ends, adopted or given up: a boot that never
+    // gets a model list (an offline or wedged agent) must not keep a walker saying it is almost there.
+    if (step.action !== "repoll") bootSpinDone = true;
+    spinup?.sync(); // P-SPINUP.1 (ADR-0668): a warm cycle is Main spinning up
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
     if (step.action === "adopt") {
@@ -22518,6 +22578,8 @@ onNetChange(() => {
   netModelKickAt = Date.now();
   void loadConfig(true).then(renderStatus);
 });
+// P-SPINUP.1 (ADR-0668): the boot standby is Main spinning up; its walker leaves the moment the boot ends.
+onNetChange(() => { if (!bootSpinDone) spinup?.sync(); });
 // P-BOOTPERF.1 (ADR-pending): the quiet Reconnect button heals itself. The net monitor's engine probe going
 // from silent to answering while the button shows re-runs the status probe, whose success hides it.
 let engineWasAnswering = false;

@@ -228,6 +228,9 @@ function applyPalette(el: HTMLElement, p: AgentPalette): void {
 }
 
 const shown = (el: HTMLElement | null): el is HTMLElement => !!el && el.isConnected && el.getClientRects().length > 0;
+/** P-SPINUP.1 (ADR-0668): this surface's agent is still starting and its spin-up walker (agent_spinup.ts, same key,
+ *  same canvas) stands in for the buddy until it has faded out. */
+const spinningUp = (b: Pick<Buddy, "canvas" | "key">): boolean => !!b.canvas.querySelector(`:scope > .spw-host[data-spw-key="${CSS.escape(b.key)}"]`);
 /** CSS px per client px of `el` (an ancestor's CSS zoom scales client rects, not style lengths). */
 const scaleOf = (el: HTMLElement, r: DOMRect): number => (el.offsetWidth > 0 && r.width > 0 ? r.width / el.offsetWidth : 1);
 
@@ -379,7 +382,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   /** Main and lane buddies: the stored fraction of the canvas, else the default spot on the composer. */
   function layoutAnchored(b: Buddy): void {
     if (b.dragging) return;
-    if (!shown(b.canvas)) { b.host.hidden = true; return; }
+    if (!shown(b.canvas) || spinningUp(b)) { b.host.hidden = true; return; }
     b.host.hidden = false;
     const c = b.canvas.getBoundingClientRect();
     const s = scaleOf(b.canvas, c);
@@ -404,7 +407,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   function layoutWorld(b: Buddy, att: Attachment, nodeId: string, s: DOMRect): void {
     if (b.dragging) return;
     const base = worldBase(b, att, nodeId, s);
-    if (!base) { b.host.hidden = true; return; }
+    if (!base || spinningUp(b)) { b.host.hidden = true; return; }
     b.host.hidden = false;
     const k = scaleOf(att.stage, s);
     const off = spots[b.spotKey];

@@ -94,6 +94,8 @@ Object.assign(env, {
   HOME, USERPROFILE: HOME, PORT: String(port),
   LUCID_DATA_ROOT: DATA, LUCID_GUI_SETTINGS_FILE: SETTINGS, LUCID_OMP_BIN: shim,
   FAKE_ACP_MODE: "script", FAKE_ACP_SCRIPT_DIR: SCRIPT_DIR,
+  // P-SPINUP.1: QA_AGENT_START_MS=<ms> slows every fake agent's handshake like a real one (spin-up UI demos).
+  ...(process.env.QA_AGENT_START_MS ? { FAKE_ACP_INIT_MS: process.env.QA_AGENT_START_MS } : {}),
 });
 
 const OUT_LOG = join(ROOT, "engine.out.log");

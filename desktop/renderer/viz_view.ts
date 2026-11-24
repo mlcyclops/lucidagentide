@@ -99,6 +99,7 @@ import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifac
 import { mountWorldPreviewChips, type WorldChips } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the agents' preview chips
 import type { ChipState } from "./preview_curtain.ts";
 import type { WorldBuddySource } from "./agent_buddy.ts"; // P-BUDDY.1 (ADR-0667)
+import type { WorldSpinupSource } from "./agent_spinup.ts"; // P-SPINUP.1 (ADR-0668)
 import { createScaffold } from "./viz_build.ts";
 import { adoptArtifact, armSample, armTemplate, artifactOf, buildEvent, buildSiteFor, createBuildBook, demoSampleAt, discardArtifact, dropBuild, keepArtifact, miniGamesFor, sampleArtifact, type BuildStep } from "./viz_build_model.ts";
 import type { WorldDefinition, WorldScaffold } from "./viz_world_api.ts";
@@ -162,6 +163,8 @@ export interface VizDeps {
   preview: { open: (target: string, chip: HTMLElement) => void; close: () => void; isOver: () => boolean; viewClosed: () => void };
   /** P-BUDDY.1 (ADR-0667): floating Agent buddies beside each lane node (agent_buddy.attachWorlds); returns the detach. */
   attachBuddies: (stage: HTMLElement, src: WorldBuddySource) => () => void;
+  /** P-SPINUP.1 (ADR-0668): a walking mini Lucid over each lane node still starting (agent_spinup.attachWorlds); returns the detach. */
+  attachSpinup: (stage: HTMLElement, src: WorldSpinupSource) => () => void;
 }
 
 const POLL_MS = 2500; // the orbit's fleet cadence
@@ -677,6 +680,8 @@ const previewStates = new Map<string, ChipState>();
 let previewChips: WorldChips | null = null;
 /** P-BUDDY.1 (ADR-0667): detaches this open's floating Agent buddies. */
 let detachBuddies: (() => void) | null = null;
+/** P-SPINUP.1 (ADR-0668): detaches this open's spin-up walkers. */
+let detachSpinup: (() => void) | null = null;
 
 /** P-PREVIEW.CHIP1: show, update or (null) clear a target's chip ("main" or a lane id). */
 export function paintVizPreview(target: string, v: ChipState | null): void {
@@ -828,6 +833,13 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     folderOf: (id) => laneOf(id)?.cwd || null,
     laneOf: (id) => laneOf(id)?.id ?? null,
   });
+  // P-SPINUP.1 (ADR-0668): a mini Lucid paces over each lane node that is still starting, with a status bubble.
+  detachSpinup = d.attachSpinup($("[data-viz-stage]", view) as HTMLElement, {
+    ids: () => lastLanes.filter((l) => l.status === "starting" && model?.nodes.has(l.id)).map((l) => l.id),
+    boxOf: (id) => scene?.screenBoxOf(id) ?? null,
+    nameOf: (id) => laneOf(id)?.name || "Agent",
+    folderOf: (id) => laneOf(id)?.cwd || null,
+  });
   flights = 0;
   asks = mountApprovals({ // P-VIZ.APPROVE1 (ADR-0655)
     stage: $("[data-viz-stage]", view) as HTMLElement, model: () => model, demo: () => demo, boxOf: (id) => scene?.screenBoxOf(id) ?? null,
@@ -861,6 +873,7 @@ export function closeViz(): void {
   closeArtifactPopup(); chips?.destroy(); chips = null; // P-WORLDS.BUILD1 (ADR-0653); the scene disposes the scaffolds
   previewChips?.destroy(); previewChips = null; // P-PREVIEW.CHIP1 (their states stay in previewStates)
   detachBuddies?.(); detachBuddies = null; // P-BUDDY.1 (ADR-0667)
+  detachSpinup?.(); detachSpinup = null; // P-SPINUP.1 (ADR-0668)
   asks?.destroy(); asks = null; // P-VIZ.APPROVE1 (ADR-0655)
   headRo?.disconnect(); headRo = null;
   stopTimers();

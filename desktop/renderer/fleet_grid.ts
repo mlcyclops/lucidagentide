@@ -1616,7 +1616,8 @@ const baseName = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/).
  *  inserted before the live block and never touched again, and only the live block re-renders per token. The
  *  edge handles live at the end so the corner wins the overlap. */
 function buildCard(run: LaneRun): HTMLElement {
-  return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}">
+  // P-SPINUP.1 (ADR-0668): data-status / data-lane-name let agent_spinup.ts walk a mini Lucid over a starting card.
+  return el(`<div class="fleet-card" data-lane="${esc(run.view.id)}" data-status="${esc(run.view.status)}" data-lane-name="${esc(run.view.name)}" data-lane-cwd="${esc(run.view.cwd)}">
     <div class="fleet-card-head">
       <span class="fleet-grip" data-fleet-grip data-tip="Drag to reorder this agent" aria-hidden="true"></span>
       <span class="fleet-led" aria-hidden="true"></span>
@@ -1797,6 +1798,10 @@ function paintFrame(run: LaneRun): void {
   // unchanged frame, so a class this write erased would unfold a collapsed group on the next poll.
   const dragging = card.classList.contains("dragging");
   card.className = `fleet-card lane-${displayStatus(v)}${v.promoted ? " promoted" : ""}${dragging ? " dragging" : ""}${laneCollapsed(groups, v.id) ? " grp-hidden" : ""}`;
+  // P-SPINUP.1 (ADR-0668): the spin-up walker watches these (written only when they change, so no mutation churn).
+  if (card.dataset.status !== v.status) card.dataset.status = v.status;
+  if (card.dataset.laneName !== v.name) card.dataset.laneName = v.name;
+  if (card.dataset.laneCwd !== v.cwd) card.dataset.laneCwd = v.cwd; // its Agents palette
   paintPreviewMini(card, v.id); // P-PREVIEW-CURTAIN.1
   // P-FLEET.L8: promote / pull back. Hidden entirely when app.ts did not thread the dep, because a button
   // that cannot act is worse than no button.

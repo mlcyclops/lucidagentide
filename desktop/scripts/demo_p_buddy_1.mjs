@@ -119,6 +119,17 @@ export async function verifyBuddies(page) {
   };
   /** Evidence frames when LUCID_DEMO_SHOTS names a folder; nothing otherwise. */
   const shot = async (name) => { if (process.env.LUCID_DEMO_SHOTS) await page.screenshot({ path: `${process.env.LUCID_DEMO_SHOTS}/buddy-${name}.png` }).catch(() => {}); };
+  // P-SPINUP.1: while Main's agent starts, its walker stands in for the buddy; the buddy is back once it leaves.
+  const mainReady = async () => {
+    // Absent for 2 s in a row: right after a load the walker may not have arrived yet.
+    let since = 0;
+    await until(async () => {
+      const gone = await page.evaluate(() => !document.querySelector('.spw-host[data-spw-surface="main"]'));
+      if (!gone) since = 0; else if (!since) since = Date.now();
+      return gone && Date.now() - since >= 2000;
+    }, Boolean, 120_000, "Main's spin-up walker never left");
+    await page.waitForSelector(MAIN, { visible: true, timeout: 30_000 });
+  };
   const closeLayers = async () => { for (let i = 0; i < 3; i++) { await page.keyboard.press("Escape"); await pause(200); } };
   const vizShown = () => page.evaluate(() => { const v = document.getElementById("vizView"); return !!v && !v.hidden && v.classList.contains("open"); });
 
@@ -137,7 +148,7 @@ export async function verifyBuddies(page) {
     // buddies that ride on them, off the stage; the overview camera keeps the lane's node in view.
     camBefore = await page.evaluate((k) => { const v = localStorage.getItem(k); localStorage.setItem(k, "0"); return v; }, CAM_KEY);
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForSelector(MAIN, { visible: true, timeout: 30_000 });
+    await mainReady();
 
     for (const size of SIZES) {
       const label = size.name;
@@ -184,7 +195,7 @@ export async function verifyBuddies(page) {
       const stored = await page.evaluate((k) => JSON.parse(localStorage.getItem(k) || "null"), POS_KEY);
       assert(stored?.spots?.main && "fx" in stored.spots.main, `${label}: the spot was not stored (${JSON.stringify(stored)})`);
       await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForSelector(MAIN, { visible: true, timeout: 30_000 });
+      await mainReady();
       await pause(800);
       const back = await box(MAIN);
       assert(Math.abs(back.left - moved.left) <= 6 && Math.abs(back.top - moved.top) <= 6, `${label}: the spot did not survive a reload (${JSON.stringify({ moved, back })})`);

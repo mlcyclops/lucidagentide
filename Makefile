@@ -1907,3 +1907,9 @@ demo-P-BUDDY.1: ## P-BUDDY.1: floating Agent buddies: a small glass-brick Lucid 
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts desktop/agent_buddy_service.test.ts desktop/checker_model.test.ts desktop/renderer/agents_rail.test.ts desktop/renderer/settings_nav.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_buddy_1.mjs
 	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_buddy_1.mjs; else echo "demo-P-BUDDY.1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-SPINUP.1
+demo-P-SPINUP.1: ## P-SPINUP.1 (+ P-RAIL.AGENTS1d): a starting agent is shown, not just noted: a walking mini Lucid in its Agent's color crosses the top edge of the composer (Main booting, restoring or moving), of a starting Fleet card, or the starting lane's Agent Worlds node, under a glass status bubble that names the Agent and cycles playful lines (honest ones after 30 s and 90 s), then says it is ready and leaves; on the rail a working Agent stays at full opacity while idle ones rest at .55 (sidebar open or collapsed). Real-UI proof (QA engine: QA_AGENT_START_MS=6000 bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_spinup_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_spinup.test.ts desktop/renderer/agent_buddy.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
+	node --check desktop/scripts/demo_p_spinup_1.mjs
+	@if [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_spinup_1.mjs; else echo "demo-P-SPINUP.1: set LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the real-UI proof"; fi
