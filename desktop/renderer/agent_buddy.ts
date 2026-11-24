@@ -88,20 +88,23 @@ export function defaultSpot(anchor: Rect, canvas: Rect, size: Size, scale = 1): 
 
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+/** A stored spot's key is one of the buddy spot keys ("main", "lane:<folder>", "world:<folder>"); anything else, a
+ *  prototype name included, is never written into the result. */
+const SPOT_KEY = /^(main|(lane|world):[^\u0000]{1,600})$/;
 /** Parse the stored spots; anything malformed is dropped (never throws). */
 export function loadPositions(raw: string | null | undefined): Record<string, Spot> {
-  const out: Record<string, Spot> = {};
   let parsed: unknown;
-  try { parsed = JSON.parse(String(raw ?? "")); } catch { return out; }
-  if (!parsed || typeof parsed !== "object" || !("spots" in parsed)) return out;
+  try { parsed = JSON.parse(String(raw ?? "")); } catch { return {}; }
+  if (!parsed || typeof parsed !== "object" || !("spots" in parsed)) return {};
   const spots = parsed.spots;
-  if (!spots || typeof spots !== "object" || Array.isArray(spots)) return out;
+  if (!spots || typeof spots !== "object" || Array.isArray(spots)) return {};
+  const kept: [string, Spot][] = [];
   for (const [k, v] of Object.entries(spots)) {
-    if (!k || !v || typeof v !== "object") continue;
-    if ("fx" in v && "fy" in v && finite(v.fx) && finite(v.fy)) out[k] = { fx: clamp01(v.fx), fy: clamp01(v.fy) };
-    else if ("dx" in v && "dy" in v && finite(v.dx) && finite(v.dy)) out[k] = { dx: v.dx, dy: v.dy };
+    if (!SPOT_KEY.test(k) || !v || typeof v !== "object") continue;
+    if ("fx" in v && "fy" in v && finite(v.fx) && finite(v.fy)) kept.push([k, { fx: clamp01(v.fx), fy: clamp01(v.fy) }]);
+    else if ("dx" in v && "dy" in v && finite(v.dx) && finite(v.dy)) kept.push([k, { dx: v.dx, dy: v.dy }]);
   }
-  return out;
+  return Object.fromEntries(kept);
 }
 
 export function savePositions(spots: Readonly<Record<string, Spot>>): string {

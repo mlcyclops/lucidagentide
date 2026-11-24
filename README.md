@@ -27,7 +27,7 @@ and proof of which model wrote every line. It works with the models your teams a
 
 <a href="https://lucid-agents.com"><b>Website</b></a> ·
 <a href="https://store.lucid-agents.com"><b>Store</b></a> ·
-<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1"><b>Release notes</b></a> ·
+<a href="https://github.com/mlcyclops/lucidagentide/releases/tag/v2.7.1"><b>Release notes</b></a> ·
 <a href="docs/guides/README.md"><b>Guides</b></a> ·
 <a href="docs/SUPPORT.md"><b>Support</b></a>
 
@@ -97,6 +97,17 @@ Sign in with the subscriptions you already have or bring an API key. Keys stay i
 <br/><sub><b>Spend per model</b> · <b>A first view for each role</b> · <b>Your agent on your phone</b> · <b>Memory with a trust label on every fact</b></sub>
 </div>
 
+## New in v2.7: Agents you can see, schedule and keep light
+
+- **Agents on the right rail**: every folder you work in is a mini Lucid in a glass brick, bright while it works. Activate one into the main composer, a new Fleet lane or an Agent World, or add a folder and say what the Agent is for.
+- **Schedule an Agent**: once on a date, or daily, on weekdays, on chosen days or monthly, at a time of day, with the instructions or goal it should work toward. LUCID wakes it in its folder at that time.
+- **Floating Agents** on the main composer and each Fleet lane suggest next steps from a smaller model, run one in a parallel worktree or hand it to Ask Lucid, and hide for the session with a tiny red x.
+- **Ask Lucid** says what it is doing while it answers, uses the newest small model (Claude Haiku 5.5) and flies out beside the rail.
+- **Lighter and steadier**: no git runs when LUCID opens, an idle LUCID uses about 1% of the CPU instead of about 25%, and the window keeps answering with many agents running at once.
+- **World Packs** lead the store, and purchased worlds restore themselves after an upgrade.
+
+**v2.7.1 is the current stable release.** [Full release notes](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.7.1).
+
 ## New in v2.6: Lucid Agent Worlds
 
 <div align="center">
@@ -110,7 +121,7 @@ Visualize draws your AI agents as characters and their work as streams of light.
 - **Sample games** in every world open only after LUCID's security check, with no internet and no access to LUCID.
 - **Get them** one at a time or as a bundle at the **[LUCID store](https://store.lucid-agents.com)**, then install from **Preview > Plugins > Premium**.
 
-Also in 2.6: a Windows sandbox that names exactly what it needs, a Fleet button that always brings your agents back, and a notice when a sign-in expires. **v2.6.1 is the current stable release.** [Full release notes](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1).
+Also in 2.6: a Windows sandbox that names exactly what it needs, a Fleet button that always brings your agents back, and a notice when a sign-in expires. [2.6.1 release notes](https://github.com/mlcyclops/lucidagentide/releases/tag/v2.6.1).
 
 ## Built for every seat at the table
 

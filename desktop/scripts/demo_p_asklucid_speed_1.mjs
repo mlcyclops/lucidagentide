@@ -90,7 +90,7 @@ export async function verifyAskLucidWait(page) {
       assert(answered, `${label}: no answer within 2 minutes (lines seen: ${[...lines].join(" | ")})`);
       assert(!(await page.$(".ald.al-dock .al-wait")), `${label}: the waiting line stayed after the answer`);
       assert(lines.size >= 2, `${label}: the waiting line never moved past its first phase (${[...lines].join(" | ")})`);
-      assert([...lines].some((l) => /^(Asking|Starting) |is writing$/.test(l) && !/the model/.test(l)), `${label}: the waiting line never named the model (${[...lines].join(" | ")})`);
+      assert([...lines].some((l) => (/^(Asking|Starting) /.test(l) || / is writing$/.test(l)) && !/the model/.test(l)), `${label}: the waiting line never named the model (${[...lines].join(" | ")})`);
       assert(clocks.size >= 2 || tookMs < 1500, `${label}: the timer did not count (${[...clocks].join(",")})`);
       const meta = await page.$$eval(".ald.al-dock .al-msg.al-lucid", (ns) => ns[ns.length - 1]?.nextElementSibling?.textContent ?? ns[ns.length - 1]?.querySelector(".al-meta")?.textContent ?? "");
       const metaAll = meta || (await page.$$eval(".ald.al-dock .al-meta", (ns) => ns.map((n) => n.textContent).join(" | ")));

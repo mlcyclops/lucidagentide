@@ -79,8 +79,14 @@ describe("loadPositions / savePositions", () => {
     for (const raw of [null, undefined, "", "{", "null", "42", "[]", '{"spots":[]}', '{"spots":"x"}', '{"v":1}']) expect(loadPositions(raw)).toEqual({});
   });
   it("drops malformed entries and clamps fractions", () => {
-    const raw = JSON.stringify({ v: 1, spots: { a: { fx: 2, fy: -1 }, b: { fx: "1", fy: 0 }, c: null, d: { dx: 3 }, e: { dx: 1, dy: 2 }, "": { fx: 0, fy: 0 } } });
-    expect(loadPositions(raw)).toEqual({ a: { fx: 1, fy: 0 }, e: { dx: 1, dy: 2 } });
+    const raw = JSON.stringify({ v: 1, spots: { "lane:a": { fx: 2, fy: -1 }, "lane:b": { fx: "1", fy: 0 }, "lane:c": null, "world:d": { dx: 3 }, "world:e": { dx: 1, dy: 2 }, "": { fx: 0, fy: 0 } } });
+    expect(loadPositions(raw)).toEqual({ "lane:a": { fx: 1, fy: 0 }, "world:e": { dx: 1, dy: 2 } });
+  });
+  it("keeps only buddy spot keys: never a prototype name or a stray key", () => {
+    const raw = `{"v":1,"spots":{"__proto__":{"fx":0.5,"fy":0.5},"constructor":{"fx":0.1,"fy":0.1},"other":{"fx":0.2,"fy":0.2},"main":{"fx":0.3,"fy":0.3}}}`;
+    const out = loadPositions(raw);
+    expect(Object.keys(out)).toEqual(["main"]);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
   });
 });
 

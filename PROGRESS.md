@@ -6557,3 +6557,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-24):** Activate > Schedule this Agent: once on a date, daily, weekdays, chosen days or monthly, at a time, with instructions or a goal; saved as an engine scheduled job on the Agent's folder (one-time runs disarm after their fire); the module lists, pauses, resumes and deletes them; proven end to end including a real fire. ADR-0677.
 - **stubbed:** none.
 - **next:** run a schedule while LUCID is closed (ADR-0443's P-SCHED.3 keep-alive).
+## release v2.7.1 (stable)
+- **shipped (2026-11-24):** v2.7.1 = 2.6.1 plus PR #671: the right rail's Agents view with Activate, + Add agent and Schedule this Agent; floating Agent buddies (ideas, red x); the spin-up walker; one preview chip; World Packs first and self-healing purchases; Ask Lucid's waiting line and Haiku 5.5; no git at open and an idle app near 1% CPU; the loopback connection cap lifted and a live rail; malformed plugin installs file no Live block. README "New in v2.7"; desktop/package.json and version.ts at 2.7.1 (2.7.0 skipped). CodeQL: buddy spot keys are allow-listed, a demo regex is unambiguous.
+- **stubbed:** none.
+- **next:** schedules that run while LUCID is closed (P-SCHED.3 keep-alive), and one multiplexed stream for every lane's events.
