@@ -6684,19 +6684,24 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown; stream?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         // P-ATTACH.1 (ADR-0598): the attached files' block, built and scanned now; a refusal refuses the question.
         const files = await promptWithAttachments("", b.attachments);
         if (!files.ok) return json({ ok: false, error: files.error, data: { ok: false, error: files.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
-        const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
+        // P-ASKLUCID.SPEED1: with `stream: true` the answer arrives as NDJSON: `phase` lines while Lucid works (reading,
+        // scanning, asking + model, queued, starting, writing), then one `reply` line. The panel shows the phase and
+        // a timer instead of sitting silent for the whole answer.
+        const answer = (phase?: (e: { type: "phase"; phase: string; model?: string }) => void) => answerAskLucid(q.text, sanitizeHistory(b.history), {
+          onPhase: (p, model) => phase?.({ type: "phase", phase: p, ...(model ? { model } : {}) }),
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
           knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
           scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
           pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
-          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, ...(images?.length ? { images } : {}) }),
+          // P-ASKLUCID.SPEED1: no MCP servers for this text-only call, and its own phases go to the panel too.
+          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, noMcp: true, onPhase: (p) => phase?.({ type: "phase", phase: p }), ...(images?.length ? { images } : {}) }),
           // P-ASKLUCID.7 (ADR-0588): a model that answered a picture with an error is not sent another this run.
           visionRefused: (model) => askLucidNoPictures.has(model ?? ""),
           noteVisionRefused: (model) => { askLucidNoPictures.add(model ?? ""); },
@@ -6708,7 +6713,18 @@ return Bun.serve({
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
         }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
+        // P-ASKLUCID.SPEED1: the next question finds a warm session (opened while the user reads this answer).
+        const rewarm = () => { void backend.warmSpare(backend.checkerModelInfo().recommended || undefined); };
+        if (b.stream === true) return ndjsonStream("ask-lucid", async (emit) => { emit({ type: "reply", data: await answer(emit) }); rewarm(); }, req.signal);
+        const reply = await answer();
+        rewarm();
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
+      }
+      // P-ASKLUCID.SPEED1: the panel opened: open a warm side-completion session for the first question now. UI
+      // token only, no body, nothing returned but ok; a failure just means the question opens its own session.
+      if (p === "/api/ask-lucid/warm" && req.method === "POST") {
+        void backend.warmSpare(backend.checkerModelInfo().recommended || undefined);
+        return json({ ok: true });
       }
       // P-BUDDY.1 (ADR-0667): a floating Agent buddy's read of one agent plus up to 3 next-step ideas, from a mid-tier
       // model. UI token only (never AGENT_ROUTES): an agent must not be able to feed itself ideas through it. Reads
@@ -6730,7 +6746,7 @@ return Bun.serve({
               sessionTail: (id) => sessionMessages(id, 6),
               scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
               pinModel: () => { const info = backend.checkerModelInfo(); return backend.completionModel(recommendBuddyModel(info.options, info.current)?.value); },
-              complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000 }),
+              complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000, noMcp: true }), // P-ASKLUCID.SPEED1: text only
               now: () => Date.now(),
             }),
           };

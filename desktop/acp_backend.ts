@@ -471,6 +471,9 @@ const CONFIG_WARM_MS = 6000;
 // idle clock (a real turn can legitimately think for minutes).
 const HANDSHAKE_MS = 20_000; // initialize
 const SESSION_MS = 30_000;   // session/new, session/set_config_option
+/** P-ASKLUCID.SPEED1: a warm spare side-completion session older than this is closed and reopened (omp config,
+ *  keys or the workspace may have changed under it). */
+const SPARE_MAX_AGE_MS = 10 * 60_000;
 // Whole-completion ceiling for ONE utility extraction (spawn + handshake + session + prompt). The import
 // runs hundreds of these back-to-back behind utilLock, so one wedged call must never stall the queue.
 const COMPLETE_MS = 180_000;
@@ -490,10 +493,21 @@ function errText(e: unknown): string {
   return String(e).slice(0, 200);
 }
 
+/** P-ASKLUCID.SPEED1: where a side completion is, for a caller that shows it: behind another one, opening its
+ *  throwaway session, or receiving the answer's first text. */
+export type CompletePhase = "queued" | "starting" | "writing";
 /** Options for one utility completion. `signal` lets a batch caller (chat-history import) stop mid-flight. */
-/** `images` (P-ASKLUCID.7, ADR-0588): picture blocks that ride after the text, the same ACP shape a
- *  user-attached image uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
-export type CompleteOpts = { idleMs?: number; model?: string; signal?: AbortSignal; images?: readonly { data: string; mimeType: string }[] };
+export type CompleteOpts = {
+  idleMs?: number; model?: string; signal?: AbortSignal;
+  /** P-ASKLUCID.7 (ADR-0588): picture blocks that ride after the text, the same ACP shape a user-attached image
+   *  uses (P-VISION.1). Absent or empty is a text-only completion, as before. */
+  images?: readonly { data: string; mimeType: string }[];
+  /** A text-only side completion (Ask Lucid, the buddy ideas) opens its throwaway session with NO MCP servers:
+   *  it never uses tools, and every server (plugin, agent-firewall stdio child) would otherwise be connected or
+   *  spawned for each call. */
+  noMcp?: boolean;
+  onPhase?: (p: CompletePhase) => void;
+};
 /** The ACP prompt for a side completion: the text, then any pictures. */
 function completionPrompt(system: string, user: string, opts: CompleteOpts): { type: "text" | "image"; text?: string; data?: string; mimeType?: string }[] {
   const images = (opts.images ?? []).filter((im) => !!im?.data && !!im?.mimeType).map((im) => ({ type: "image" as const, data: im.data, mimeType: im.mimeType }));
@@ -2972,6 +2986,8 @@ class Backend {
 
   // Serializes utility completions so they never clobber a concurrent chat turn's listener.
   private utilLock: Promise<void> = Promise.resolve();
+  /** Side completions queued or running on utilLock (P-ASKLUCID.SPEED1: a new one reports "queued" when > 0). */
+  private utilPending = 0;
   // P-KG-INGEST.3 (ADR-0081): lets background extraction (complete()) yield to a live chat turn on the
   // SHARED connection (the fallback path below). Superseded by the dedicated util connection when available.
   private chatGate = new ChatGate();
@@ -2983,6 +2999,52 @@ class Backend {
   private utilAcp: ACPClient | null = null;
   private utilStarting: Promise<ACPClient | null> | null = null;
   private utilSink: ((text: string) => void) | null = null; // active util completion's text collector
+
+  /** P-ASKLUCID.SPEED1: one fresh, MCP-free throwaway session opened ahead of time on the util connection (model
+   *  already set), so the next text-only completion skips session/new and the model switch: measured 5 to 17 s
+   *  per Ask Lucid answer on a loaded machine. Used once, then closed; never shared, never prompted twice. */
+  private spare: { acp: ACPClient; sid: string; model: string | undefined; cwd: string; at: number } | null = null;
+  private spareWarming: Promise<void> | null = null;
+
+  /** Open the spare for `model` if there is none (or it is stale or for another model). Best effort: a failure
+   *  just means the next completion opens its own session, as before. CUI lockdown pins the model the same way a
+   *  completion does; a refused pin warms nothing. */
+  warmSpare(model: string | undefined): Promise<void> {
+    const pin = this.completionModel(model);
+    if (!pin.ok) return Promise.resolve();
+    const fresh = this.spare && !this.spare.acp.isDead && this.spare.model === pin.model && Date.now() - this.spare.at < SPARE_MAX_AGE_MS;
+    if (fresh || this.spareWarming) return this.spareWarming ?? Promise.resolve();
+    this.spareWarming = (async () => {
+      try {
+        this.dropSpare();
+        const acp = await this.startUtil();
+        if (!acp) return;
+        const cwd = currentWorkspace();
+        const s: any = await acp.request("session/new", { cwd, mcpServers: [] }, { timeoutMs: SESSION_MS });
+        const sid: string | null = s?.sessionId ?? s?.id ?? null;
+        if (!sid) return;
+        if (pin.model) {
+          const ok = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: pin.model }, { timeoutMs: SESSION_MS }).then(() => true, () => false);
+          if (!ok) { acp.request("session/close", { sessionId: sid }, { timeoutMs: SESSION_MS }).catch(() => {}); return; }
+        }
+        this.spare = { acp, sid, model: pin.model, cwd, at: Date.now() };
+      } catch { /* the next completion opens its own session */ }
+      finally { this.spareWarming = null; }
+    })();
+    return this.spareWarming;
+  }
+  /** The spare, if it fits this call (same connection, model and workspace, MCP-free, not stale); taken = gone. */
+  private takeSpare(acp: ACPClient, model: string | undefined, noMcp: boolean): string | null {
+    const s = this.spare;
+    if (!s || !noMcp || s.acp !== acp || s.model !== model || s.cwd !== currentWorkspace() || Date.now() - s.at >= SPARE_MAX_AGE_MS) return null;
+    this.spare = null;
+    return s.sid;
+  }
+  private dropSpare(): void {
+    const s = this.spare;
+    this.spare = null;
+    if (s && !s.acp.isDead) s.acp.request("session/close", { sessionId: s.sid }, { timeoutMs: SESSION_MS }).catch(() => {});
+  }
 
   /** Lazily spawn the dedicated util omp. Returns null on spawn failure (→ shared-connection fallback). */
   private async startUtil(): Promise<ACPClient | null> {
@@ -3036,6 +3098,8 @@ class Backend {
    *  the model only ever sees text that already passed the scanner gate, and tool-call events
    *  (if any) are ignored — only assistant text is collected. */
   async complete(system: string, user: string, opts: CompleteOpts = {}): Promise<string> {
+    if (this.utilPending > 0) opts.onPhase?.("queued"); // another side completion holds utilLock
+    this.utilPending++;
     const run = this.utilLock.then(async () => {
       if (opts.signal?.aborted) return "";
       // Hard ceiling for the WHOLE attempt. Every inner await is individually bounded, but this is the
@@ -3059,6 +3123,7 @@ class Backend {
       finally { deadline.dispose(); }
     });
     this.utilLock = run.then(() => {}, () => {}); // next complete() waits for this one
+    void this.utilLock.then(() => { this.utilPending--; });
     return run;
   }
 
@@ -3072,16 +3137,21 @@ class Backend {
     let idle: ReturnType<typeof setTimeout> | undefined;
     let onStall: (e: Error) => void = () => {};
     try {
-      const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
-      sid = s?.sessionId ?? s?.id ?? null;
-      if (!sid) return "";
-      if (opts.model) {
-        const pinned = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
-        if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+      // P-ASKLUCID.SPEED1: a warm spare (opened ahead, model already set) skips both round trips below.
+      sid = this.takeSpare(acp, opts.model, !!opts.noMcp);
+      if (!sid) {
+        opts.onPhase?.("starting");
+        const s: any = await acp.request("session/new", { cwd: currentWorkspace(), mcpServers: opts.noMcp ? [] : mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
+        sid = s?.sessionId ?? s?.id ?? null;
+        if (!sid) return "";
+        if (opts.model) {
+          const pinned = await acp.request("session/set_config_option", { sessionId: sid, configId: "model", value: opts.model }, { timeoutMs: SESSION_MS, signal }).then(() => true, () => false);
+          if (!pinned && this.asksageLocked()) return ""; // CUI lockdown: never fall back to omp's default (direct) model
+        }
       }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-      this.utilSink = (t) => { arm(); text += t; };
+      this.utilSink = (t) => { arm(); if (!text) opts.onPhase?.("writing"); text += t; };
       arm();
       const stall = Promise.withResolvers<never>();
       onStall = stall.reject;
@@ -3116,7 +3186,8 @@ class Backend {
       // Chat preempts extraction here, but a chat turn whose end() never fires must not park us forever:
       // the deadline/cancel signal from complete() releases the wait.
       await whenIdleOrAborted(this.chatGate, signal);
-      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
+      opts.onPhase?.("starting");
+      const s: any = await this.acp!.request("session/new", { cwd: currentWorkspace(), mcpServers: opts.noMcp ? [] : mcpServersForAcp() }, { timeoutMs: SESSION_MS, signal });
       sid = s?.sessionId ?? s?.id ?? null;
       if (!sid) return "";
       if (opts.model) {
@@ -3125,7 +3196,7 @@ class Backend {
       }
       const IDLE = opts.idleMs ?? 60_000;
       const arm = () => { clearTimeout(idle); idle = setTimeout(() => onStall(new Error("stall")), IDLE); };
-      myListener = (e: ChatEvent) => { arm(); if (e.type === "token") text += e.text; };
+      myListener = (e: ChatEvent) => { arm(); if (e.type === "token") { if (!text) opts.onPhase?.("writing"); text += e.text; } };
       this.listener = myListener;
       arm();
       const stall = Promise.withResolvers<never>();

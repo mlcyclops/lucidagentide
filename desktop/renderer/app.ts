@@ -5386,7 +5386,14 @@ function syncImmersiveWithRole(role: UserRole | null): void {
 let askLucidPanel: AskLucidHandle | null = null;
 function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
-    ask: (text, history, extras) => bridge.askLucid(text, history, extras),
+    ask: (text, history, extras, onPhase) => bridge.askLucid(text, history, extras, onPhase),
+    warm: () => { void bridge.askLucidWarm(); },
+    // P-ASKLUCID.SPEED1: the waiting line and the answer name the model the way the picker does.
+    // The answer carries the bare id ("claude-haiku-4-5"), the phase the provider-prefixed one: match either.
+    modelName: (id) => {
+      const opt = state.config.find((c) => c.id === "model")?.options.find((o) => o.value === id || o.value.endsWith(`/${id}`));
+      return opt ? cleanModelName(opt.name) : modelLabel(id);
+    },
     screen: readScreenForLucid,
     shot: shotForLucid,
     recSignals: recSignalsForLucid,
@@ -5422,6 +5429,7 @@ let lastFleetLanes = 0;
 let lastOrbitGoal = false;
 let lastKnowledge = false;
 let lastAutoArchive = false;
+let autoArchiveKnown = false; // P-ASKLUCID.SPEED1: never tell Lucid a value the engine has not answered yet
 const FEATURE_SAMPLE_MS = 60_000;
 
 function readSeenFeatures(): string[] {
@@ -5453,8 +5461,11 @@ function featureRecsForLucid(): Rec[] {
  *  may propose changing, and the ids of the features this user has not used. The engine keeps only known
  *  keys, accepted values and catalog ids. */
 async function extrasForLucid(): Promise<AskExtrasView> {
-  const [arch, win] = await Promise.all([bridge.archivePolicy().catch(() => null), bridge.resultWindow().catch(() => null)]);
-  lastAutoArchive = !!arch?.policy.auto;
+  // P-ASKLUCID.SPEED1: these two engine reads are settings context, not the question: on a busy engine they took
+  // 3.6 s and the question waited for them. Each gets 1.2 s; a late one leaves its last known value (or none).
+  const within = <T,>(p: Promise<T>): Promise<T | null> => Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 1200))]);
+  const [arch, win] = await Promise.all([within(bridge.archivePolicy()), within(bridge.resultWindow())]);
+  if (arch) { lastAutoArchive = !!arch.policy.auto; autoArchiveKnown = true; }
   const prefs = seasonPrefs();
   const settings: Record<string, string> = {
     "season.follow": prefs.auto ? "on" : "off",
@@ -5462,7 +5473,7 @@ async function extrasForLucid(): Promise<AskExtrasView> {
     "theme": themePref() || "default",
     "mini.presence": readPresence(miniStore()),
     "suggest.enabled": suggestEnabled(miniStore()) ? "on" : "off",
-    "sessions.autoArchive": lastAutoArchive ? "on" : "off",
+    ...(autoArchiveKnown ? { "sessions.autoArchive": lastAutoArchive ? "on" : "off" } : {}),
   };
   if (win && (win.setting === "auto" || typeof win.setting === "number")) settings["toolOutput.window"] = String(win.setting);
   return { settings, unusedFeatures: unusedFeaturesForLucid().map((f) => f.id) };
@@ -5503,6 +5514,7 @@ async function applyAskSetting(key: AskSettingKey, value: string): Promise<AskAc
     const next = await bridge.archivePolicy({ ...cur.policy, auto: value === "on" }).catch(() => null);
     if (!next) return refused("The archive rule could not be saved.");
     lastAutoArchive = next.policy.auto;
+    autoArchiveKnown = true;
     return done;
   }
   const saved = await bridge.setResultWindow(value === "auto" ? "auto" : Number(value)).catch(() => null);

@@ -144,7 +144,7 @@ export function agentArt(st: ArtState, delay: number, cls = ""): string {
  *  shadow in --G grounds him. No defs, so no ids needed. */
 export function lucidFigureArt(st: ArtState, delay: number, cls = ""): string {
   const dl = Number.isFinite(delay) ? delay.toFixed(2) : "0";
-  return `<svg class="agr-art agr-lu agr-${st} agr-fig${cls ? ` ${cls}` : ""}" viewBox="0 0 40 40" style="--dl:${dl}s" aria-hidden="true" focusable="false">`
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="agr-art agr-lu agr-${st} agr-fig${cls ? ` ${cls}` : ""}" viewBox="0 0 40 40" style="--dl:${dl}s" aria-hidden="true" focusable="false">`
     + '<ellipse class="agr-fig-floor" cx="20" cy="37.6" rx="12.5" ry="1.9"/>'
     + figure(st)
     + "</svg>";

@@ -967,8 +967,12 @@ export interface LucidBridge {
   /** P-CTX.2b (ADR-0579): read / store the tool-result window choice (applies at the next agent start). */
   resultWindow(): Promise<ResultWindowView | null>;
   setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
-  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation. */
-  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation.
+   *  P-ASKLUCID.SPEED1: `onPhase` streams where the answer is (reading, scanning, asking + model, queued, starting,
+   *  writing) while it is made. */
+  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView, onPhase?: (phase: string, model?: string) => void): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.SPEED1: open a warm side-completion session for the next question (best effort). */
+  askLucidWarm(): Promise<unknown>;
   /** P-BUDDY.1 (ADR-0667): a buddy's short read of what its agent is doing, with up to 3 next-step ideas. Null = no answer. */
   buddySuggest(req: { surface: BuddySurface; laneId?: string; purpose?: "app" | "docs" | "analysis" | "other" | null }): Promise<BuddyReply | null>;
   /** P-ASKLUCID.9 (ADR-0600): the image models the engine's keys make usable, best first (or why none may be). */
@@ -1834,6 +1838,35 @@ async function getData(path: string): Promise<any> {
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
 }
+/** P-ASKLUCID.SPEED1: one Ask Lucid question as NDJSON: `phase` lines go to `onPhase`, the `reply` line is the
+ *  answer. A refusal before the stream (a bad question, a refused file) arrives as plain JSON and is returned as
+ *  is. Null when the engine cannot be reached or the stream ends without a reply. */
+async function askLucidStream(body: Record<string, unknown>, onPhase: (phase: string, model?: string) => void): Promise<AskReplyView | null> {
+  try {
+    const res = await fetch("/api/ask-lucid", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ ...body, stream: true }) });
+    if (!res.body || (res.headers.get("content-type") ?? "").includes("application/json")) return (await res.json())?.data ?? null;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let reply: AskReplyView | null = null;
+    const line = (s: string): void => {
+      if (!s.trim()) return;
+      let e: { type?: unknown; phase?: unknown; model?: unknown; data?: unknown };
+      try { e = JSON.parse(s); } catch { return; }
+      if (e.type === "phase" && typeof e.phase === "string") onPhase(e.phase, typeof e.model === "string" ? e.model : undefined);
+      else if (e.type === "reply" && e.data && typeof e.data === "object") reply = e.data as AskReplyView; // the engine's own AskReply
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) { line(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    line(buf);
+    return reply;
+  } catch { return null; }
+}
 /** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` (with `sessionId`,
  *  the session Main kept) and `heldBy` come only from the engine's 409 refusal; any other failure is a
  *  bare `ok: false`, which is NOT a completed switch (#460 case 4: the engine may still hold anything). */
@@ -2034,7 +2067,8 @@ export const bridge: LucidBridge = {
   codeGraphAgent: () => getData("/api/codegraph/agent"),
   resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
   setResultWindow: (setting) => post("/api/result-window", { setting }),
-  askLucid: (text, history, extras) => post("/api/ask-lucid", { text, history, ...(extras ?? {}) }), // P-ASKLUCID.1 (ADR-0581)
+  askLucid: (text, history, extras, onPhase) => (onPhase ? askLucidStream({ text, history, ...(extras ?? {}) }, onPhase) : post("/api/ask-lucid", { text, history, ...(extras ?? {}) })), // P-ASKLUCID.1 (ADR-0581)
+  askLucidWarm: () => post("/api/ask-lucid/warm", {}), // P-ASKLUCID.SPEED1
   buddySuggest: (req) => post("/api/buddy/suggest", req), // P-BUDDY.1 (ADR-0667)
   imageModels: () => getData("/api/image/models"), // P-ASKLUCID.9 (ADR-0600)
   imageEdit: (req) => post("/api/image/edit", req), // P-ASKLUCID.9
