@@ -6,15 +6,17 @@
 // P-BUDDY.1: real-browser proof of the floating Agent buddies (agent_buddy.ts), their ideas (POST /api/buddy/suggest,
 // agent_buddy_service.ts) and the Ask Lucid restyle, driven with real mouse input against an isolated QA engine.
 // In a wide (1600x1000) and a narrow (1100x800) window:
-//   1. Main's buddy sits on the upper-left corner of the composer, topmost at its center, and covers none of the
-//      composer's controls; it drifts a few pixels (and not at all under reduced motion) and has its color glow;
+//   1. Main's buddy (with its name under it, unframed, on one line) sits on the upper-left corner of the composer,
+//      topmost at its center, and covers none of the composer's controls; it holds still (P-BUDDY.2: no drift), has
+//      its color glow, and hovering it shows the app's hover helper (name, what it is doing, what a click does), not
+//      a browser tooltip;
 //   2. a real drag moves it, the spot persists across a reload, a double-click puts it back;
-//   3. its ideas bubble opens on a click (on screen, controls topmost, auditBoxes clean); with no conversation yet it
-//      says so (no model call), and Esc closes it;
+//   3. with no conversation yet there is nothing to suggest: a click pops nothing up, a chip says so;
 //   4. a Fleet lane in the workspace (its first turn is the scripted 'buddy-ideas' reply) gets its own buddy on the
 //      upper-left corner of its card's composer; after the turn ends the buddy fetches ideas on its own (the chip or
-//      badge shows); its bubble lists them; "Ask Lucid" opens the Ask Lucid fly-out prefilled with the idea, showing
-//      the boxless Lucid figure in the Agents style; "Run in parallel worktree" (wide) starts a worktree lane;
+//      badge shows); a click opens them (on screen, controls topmost, auditBoxes clean); "Ask Lucid" opens the Ask
+//      Lucid fly-out prefilled with the idea, showing the boxless Lucid figure in the Agents style; "Run in parallel
+//      worktree" (wide) starts a worktree lane;
 //   5. Agent Worlds shows a buddy for the lane's node;
 //   6. Settings > Floating Agents > Show floating Agents hides every buddy and brings them back.
 // The idea model is the QA engine's scripted fake agent: desktop/scripts/fleet_demo/scripts/09_buddy_ideas.json
@@ -156,12 +158,29 @@ export async function verifyBuddies(page) {
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false });
       await pause(800);
       await dismissToasts();
+      // The last size's lane steps left the Fleet dock floating over the chat; a user puts it away with its button.
+      if (await box("#fleetGrid")) { await clickReal("#ctFleet", `${label}: the Fleet button (close the dock)`); await pause(500); }
 
-      // 1. Main's buddy: where it sits, what it leaves alone, drift, glow
+      // 1. Main's buddy: where it sits (its name under it, both off the composer), what it leaves alone, no drift,
+      // the glow, and the app's own hover helper instead of a browser tooltip
       const mb = await topmost(MAIN, `${label}: Main's buddy`);
+      const mh = await box('.abd-host[data-where="main"]');
       const cw = await box(".composer-wrap");
       assert(cw, `${label}: no composer`);
-      assert(Math.abs(mb.left - cw.left) <= 28 && mb.bottom <= cw.top + 8 && mb.bottom >= cw.top - 30, `${label}: Main's buddy is not on the composer's upper-left corner (buddy ${JSON.stringify(mb)}, composer ${JSON.stringify(cw)})`);
+      assert(Math.abs(mh.left - cw.left) <= 28 && mh.bottom <= cw.top + 8 && mh.bottom >= cw.top - 30, `${label}: Main's buddy is not on the composer's upper-left corner (buddy ${JSON.stringify(mh)}, composer ${JSON.stringify(cw)})`);
+      const nameInfo = await page.$eval('.abd-host[data-where="main"] .abd-name', (n) => {
+        const r = n.getBoundingClientRect(), b = n.parentElement.querySelector(".abd").getBoundingClientRect(), cs = getComputedStyle(n);
+        return { text: n.textContent, top: r.top, btnBottom: b.bottom, h: r.height, lh: parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2, border: cs.borderTopStyle, bg: cs.backgroundColor, ws: cs.whiteSpace };
+      });
+      assert(nameInfo.text && nameInfo.top >= nameInfo.btnBottom - 1, `${label}: the Agent's name is not under the buddy (${JSON.stringify(nameInfo)})`);
+      assert(nameInfo.border === "none" && /rgba\(0, 0, 0, 0\)|transparent/.test(nameInfo.bg) && nameInfo.ws === "nowrap" && nameInfo.h <= nameInfo.lh * 1.5, `${label}: the name is framed or wraps (${JSON.stringify(nameInfo)})`);
+      assert(!(await page.$eval(MAIN, (n) => n.hasAttribute("title"))), `${label}: the buddy still has a browser tooltip`);
+      await page.mouse.move(mb.x, mb.y);
+      const tipText = await until(() => page.evaluate(() => { const t = document.querySelector("#tip.show"); return t ? t.innerText.replace(/\s+/g, " ") : ""; }), Boolean, 3000, `${label}: hovering the buddy shows no hover helper`);
+      assert(tipText.includes(nameInfo.text) && /Drag to move it/.test(tipText), `${label}: the hover helper says: ${tipText}`);
+      entry.tip = tipText;
+      await page.mouse.move(Math.round(size.width * 0.4), Math.round(size.height * 0.3));
+      await pause(300);
       const controls = await page.$$eval(".composer-wrap button, .composer-wrap textarea, #input", (ns) => ns.filter((n) => n.getBoundingClientRect().width > 0 && !n.closest("[hidden]")).map((n, i) => { n.dataset.qaCtl = String(i); return `[data-qa-ctl="${i}"]`; }));
       for (const c of controls) {
         const b = await box(c);
@@ -169,13 +188,9 @@ export async function verifyBuddies(page) {
         const under = await page.evaluate((x, y) => !!document.elementFromPoint(x, y)?.closest(".abd-host"), b.x, b.y);
         assert(!under, `${label}: Main's buddy covers the composer control ${c}`);
       }
-      const drift = await driftRange(MAIN);
-      assert((drift.x >= 0.5 || drift.y >= 0.5) && drift.x <= 5 && drift.y <= 5, `${label}: the drift is not a few pixels (${JSON.stringify(drift)})`);
-      await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
-      await pause(300);
-      const still = await driftRange(MAIN, 6, 1500);
-      assert(still.x < 0.01 && still.y < 0.01, `${label}: the buddy still drifts under reduced motion (${JSON.stringify(still)})`);
-      await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "no-preference" }]);
+      // P-BUDDY.2: the little ellipse drift is gone; the buddy holds still where it was put
+      const drift = await driftRange(MAIN, 10, 2500);
+      assert(drift.x < 0.01 && drift.y < 0.01, `${label}: the buddy still drifts (${JSON.stringify(drift)})`);
       const glow = await page.$eval(MAIN, (n) => getComputedStyle(n, "::before").backgroundImage);
       assert(/radial-gradient/.test(glow), `${label}: no glow behind the buddy (${glow})`);
       entry.main = { at: [Math.round(mb.left), Math.round(mb.top)], drift };
@@ -206,20 +221,14 @@ export async function verifyBuddies(page) {
       assert(Math.abs(home.left - mb.left) <= 6 && Math.abs(home.top - mb.top) <= 6, `${label}: a double-click did not put the buddy back (${JSON.stringify({ mb, home })})`);
       entry.drag = "moves with the pointer, persists across a reload, double-click resets";
 
-      // 3. Main's bubble with no conversation yet
+      // 3. Main with no conversation yet: nothing to suggest, so a click pops nothing up; a chip says so
       await clickReal(MAIN, `${label}: Main's buddy`);
-      await until(() => box(POP), Boolean, 3000, `${label}: the ideas bubble did not open`);
-      await until(() => page.$eval(POP, (n) => !/Thinking about/i.test(n.innerText)), Boolean, 30_000, `${label}: Main's bubble kept thinking`);
-      const mainText = await page.$eval(POP, (n) => n.innerText.replace(/\s+/g, " "));
-      assert(/Waiting for its first request|No ideas right now/i.test(mainText), `${label}: Main's bubble with no conversation says: ${mainText.slice(0, 200)}`);
-      assert(await onScreen(POP), `${label}: the bubble is not fully on screen`);
-      await allTopmost(POP, `${label} Main's bubble`);
-      await audit(POP, `${label} Main's bubble`);
-      await page.keyboard.press("Escape");
-      await pause(250);
-      assert(!(await box(POP)), `${label}: Esc did not close the bubble`);
-      assert(await page.evaluate((s) => document.activeElement === document.querySelector(s), MAIN), `${label}: focus did not return to the buddy`);
-      entry.mainBubble = mainText.slice(0, 80);
+      const chip = '.abd-host[data-where="main"] .abd-chip';
+      const said = await until(() => page.$eval(chip, (n) => (n.classList.contains("show") ? n.textContent : "")), (t) => /Nothing to suggest right now/.test(t ?? ""), 30_000, `${label}: the chip never said there is nothing to suggest`);
+      assert(!(await box(POP)), `${label}: the ideas bubble popped up with nothing to suggest`);
+      await pause(1200);
+      assert(!(await box(POP)), `${label}: the ideas bubble popped up late with nothing to suggest`);
+      entry.mainClick = `${said}; no popup`;
 
       // 4. a lane in the workspace: its buddy, auto ideas, the bubble, Ask Lucid, the worktree
       // The engine refuses new agents while the machine is under sustained CPU or memory pressure; wait it out.
@@ -243,7 +252,9 @@ export async function verifyBuddies(page) {
       await pause(400);
       const lb = await topmost(laneBuddy, `${label}: the lane's buddy`);
       const fc = await box(`${card} .fleet-compose`);
-      assert(fc && Math.abs(lb.left - fc.left) <= 28 && lb.bottom <= fc.top + 8 && lb.bottom >= fc.top - 30, `${label}: the lane's buddy is not on its composer's upper-left corner (buddy ${JSON.stringify(lb)}, composer ${JSON.stringify(fc)})`);
+      // The host (brick plus its name) is what sits on the corner; the brick is centered over the name.
+      const lh = await page.$eval(laneBuddy, (n) => { const r = n.closest(".abd-host").getBoundingClientRect(); return { left: r.left, bottom: r.bottom }; });
+      assert(fc && Math.abs(lh.left - fc.left) <= 28 && lh.bottom <= fc.top + 8 && lh.bottom >= fc.top - 30, `${label}: the lane's buddy is not on its composer's upper-left corner (buddy ${JSON.stringify(lb)}, composer ${JSON.stringify(fc)})`);
       // /api/fleet/prompt streams the turn as NDJSON: start it and read it to the end in the page, unawaited.
       await page.evaluate((id, t) => { void fetch("/api/fleet/prompt", { method: "POST", headers: { "content-type": "application/json", "x-lucid-token": t }, body: JSON.stringify({ laneId: id, text: "[script buddy-ideas] Say hello" }) }).then((r) => r.text()).catch(() => {}); }, laneId, token);
       await until(async () => (await lanes()).find((l) => l.id === laneId), (l) => l && l.turns >= 1 && !["working", "needs-approval", "starting"].includes(l.status), 60_000, `${label}: the lane's first turn did not end`);
@@ -369,6 +380,6 @@ if (import.meta.main || (typeof process !== "undefined" && process.argv[1]?.ends
     const page = (await browser.pages()).find((p) => p.url() === url);
     if (!page) throw new Error(`No existing QA page at ${url}`);
     console.log(JSON.stringify(await verifyBuddies(page), null, 2));
-    console.log("P-BUDDY.1 passed: Main's and each lane's buddy sit on their composer's corner without covering it, drift a few pixels with their glow, drag and persist, open an ideas bubble, fetch ideas after a turn from the smaller model, Ask Lucid flies out prefilled in the Agents style, an idea starts a worktree lane, Agent Worlds shows the lane's buddy, and the settings switch hides and restores them, wide and narrow.");
+    console.log("P-BUDDY.1 passed: Main's and each lane's buddy sit on their composer's corner with their name under them, hold still with their glow and a hover helper, drag and persist, pop ideas up only when there are some, fetch ideas after a turn from the smaller model, Ask Lucid flies out prefilled in the Agents style, an idea starts a worktree lane, Agent Worlds shows the lane's buddy, and the settings switch hides and restores them, wide and narrow.");
   } finally { await browser.disconnect(); }
 }

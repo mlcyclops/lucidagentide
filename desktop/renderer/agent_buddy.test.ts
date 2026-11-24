@@ -123,15 +123,29 @@ describe("isStale", () => {
   });
 });
 
-describe("driftDelay", () => {
-  it("is a stable negative phase within one drift", () => {
+describe("glowDelay", () => {
+  it("is a stable negative phase within one breath", () => {
     for (const k of ["main", "lane:a", "world:b", ""]) {
-      const v = driftDelay(k);
+      const v = glowDelay(k);
       expect(v).toBeLessThanOrEqual(0);
-      expect(v).toBeGreaterThan(-DRIFT_S);
-      expect(driftDelay(k)).toBe(v);
+      expect(v).toBeGreaterThan(-GLOW_S);
+      expect(glowDelay(k)).toBe(v);
     }
-    expect(driftDelay("lane:a")).not.toBe(driftDelay("lane:b"));
+    expect(glowDelay("lane:a")).not.toBe(glowDelay("lane:b"));
+  });
+});
+
+describe("buddyTip", () => {
+  const reply = (n: number, withheld = false) => ({ ok: true, doing: "x", withheld, ideas: Array.from({ length: n }, (_, i) => ({ id: `i${i + 1}`, title: "t", prompt: "p" })) });
+  it("says what the agent is doing, then whether ideas are waiting and what a click does", () => {
+    expect(buddyTip("Typing · Main composer", { reply: reply(2), loading: null })).toBe("Typing · Main composer. 2 ideas ready: click to see them. Drag to move it, double-click to put it back.");
+    expect(buddyTip("Meditating · idle", { reply: reply(1), loading: null })).toContain("1 idea ready: click to see it.");
+  });
+  it("never promises ideas it does not have", () => {
+    for (const s of [{ reply: null, loading: null }, { reply: reply(0), loading: null }, { reply: reply(3, true), loading: null }]) {
+      expect(buddyTip("Meditating · idle", s)).toContain("they only appear when one would help");
+    }
+    expect(buddyTip("Meditating · idle", { reply: reply(2), loading: Promise.resolve() })).toContain("Looking for ideas...");
   });
 });
 

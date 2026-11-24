@@ -57,7 +57,7 @@ export const BUDDY_SYSTEM = [
   "- Output ONLY strict JSON, nothing before or after it, in exactly this shape:",
   "{\"doing\": \"...\", \"ideas\": [{\"title\": \"...\", \"prompt\": \"...\"}]}",
   "- \"doing\": one short line, at most 140 characters, saying what the agent is doing now.",
-  "- \"ideas\": 1 to 3 concrete ideas. \"title\" is one line of at most 80 characters. \"prompt\" is the full task for the parallel agent, at most 600 characters, specific enough to run as is.",
+  "- \"ideas\": 0 to 3 concrete ideas. Include an idea only if it would clearly help right now; when nothing would, return an empty list. Never pad with generic advice. \"title\" is one line of at most 80 characters. \"prompt\" is the full task for the parallel agent, at most 600 characters, specific enough to run as is.",
   "- Never suggest redoing or editing the exact work the agent is in the middle of.",
   "- Write plain American English. Never use em dashes or en dashes; use commas, colons or periods.",
   "- Never ask for or repeat passwords, tokens or keys.",

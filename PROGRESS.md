@@ -6517,3 +6517,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** a lane turn whose tool title spans lines (a heredoc bash command) broke the `[ran: ...]` block the card strips line by line, so every later title showed as prose (and `$VAR` pairs rendered as math). The engine now writes each title on one line (`ranTitle`), and the card and the composer seed rebuild the block from the turn's own tool records, so turns recorded by older engines show chips too (`foldRanBlock`); regression tests in fleet_dock_model.test.ts and composer_target.test.ts.
 - **stubbed:** the remote PWA viewer (collab/pwa_view.ts) still strips line by line; new records are single-line, older ones may show the leftover lines there.
 - **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.
+## P-BUDDY.2: the buddy holds still, wears its name, explains itself on hover, pops ideas up only when there are some
+- **shipped (2026-11-23):** no more ellipse drift; the Agent's name under the brick (one unframed line); the app's hover helper replaces the browser tooltip (name, what it is doing, ideas waiting, click/drag/double-click); a click opens ideas only when there are some, else a chip says it is looking or that there is nothing to suggest; the idea model returns nothing rather than padding. ADR-0669, `make demo-P-BUDDY.1` updated.
+- **stubbed:** none.
+- **next:** draw starting lanes in Agent Worlds with a loading pose on the 3D character itself.

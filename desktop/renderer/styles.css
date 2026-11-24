@@ -3896,8 +3896,7 @@ body.lucid-capturing #toasts{visibility:hidden}
 .abd-host[hidden]{display:none}
 .abd-host[data-where="lane"]{z-index:5}
 .abd-host[data-where="world"]{z-index:4}
-.abd-drift{display:block;animation:abdDrift 8s linear var(--abd-ph,0s) infinite}
-.abd{position:relative;display:block;margin:0;padding:0;border:0;border-radius:7px;background:transparent;line-height:0;cursor:grab;
+.abd{position:relative;display:block;margin:0 auto;padding:0;border:0;border-radius:7px;background:transparent;line-height:0;cursor:grab;
   pointer-events:auto;touch-action:none;user-select:none;-webkit-user-select:none}
 .abd::before{content:"";position:absolute;inset:-7px -6px;border-radius:50%;pointer-events:none;opacity:.5;
   background:radial-gradient(closest-side,color-mix(in srgb,var(--G) 45%,transparent),transparent);animation:abdGlow 4.8s ease-in-out var(--abd-ph,0s) infinite}
@@ -3906,7 +3905,9 @@ body.lucid-capturing #toasts{visibility:hidden}
 .abd:hover::before,.abd[aria-expanded="true"]::before{opacity:.9}
 .abd:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .abd-dragging .abd{cursor:grabbing}
-.abd-dragging .abd-drift{animation-play-state:paused}
+/* P-BUDDY.2: the Agent's name under the brick, no frame (the rail's label type, shadowed to read over any surface) */
+.abd-name{display:block;max-width:96px;margin:2px auto 0;font-size:8px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;line-height:1.15;
+  text-align:center;color:var(--txt-2);text-shadow:0 0 3px var(--bg-0),0 0 6px var(--bg-0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
 .abd-badge{position:absolute;top:-5px;right:-6px;min-width:14px;height:14px;padding:0 3px;border-radius:7px;font-style:normal;font-size:9.5px;font-weight:700;
   line-height:14px;text-align:center;white-space:nowrap;color:#0a0e12;background:var(--G);box-shadow:0 0 0 1.5px var(--bg-1),0 0 6px var(--G)}
 .abd-badge[hidden]{display:none}
@@ -3914,12 +3915,10 @@ body.lucid-capturing #toasts{visibility:hidden}
   color:var(--txt);background:var(--bg-4);border:1px solid color-mix(in srgb,var(--G) 45%,var(--line));box-shadow:0 4px 10px -6px rgb(var(--sh-rgb) / .6);
   pointer-events:none;opacity:0;transform:translateY(2px);transition:opacity .25s var(--ease-out),transform .25s var(--ease-out)}
 .abd-chip.show{opacity:1;transform:none}
-@keyframes abdDrift{0%,100%{transform:translate(1.5px,0)}12.5%{transform:translate(1.06px,.71px)}25%{transform:translate(0,1px)}37.5%{transform:translate(-1.06px,.71px)}
-  50%{transform:translate(-1.5px,0)}62.5%{transform:translate(-1.06px,-.71px)}75%{transform:translate(0,-1px)}87.5%{transform:translate(1.06px,-.71px)}}
 @keyframes abdGlow{0%,100%{opacity:.4}50%{opacity:.75}}
-/* perf tier "minimal" (.abd-calm) and reduced motion: no drift, no breathing; the art's own loops stop via .agr-calm */
-.abd-calm .abd-drift,.abd-calm .abd::before{animation:none}
-@media (prefers-reduced-motion:reduce){.abd-drift,.abd::before{animation:none!important}.abd-chip{transition:none!important}}
+/* perf tier "minimal" (.abd-calm) and reduced motion: no breathing glow; the art's own loops stop via .agr-calm */
+.abd-calm .abd::before{animation:none}
+@media (prefers-reduced-motion:reduce){.abd::before{animation:none!important}.abd-chip{transition:none!important}}
 /* the ideas bubble (the rail module's shell) */
 .popover.abd-pop{width:300px}
 .abd-ideas{display:flex;flex-direction:column;gap:7px}

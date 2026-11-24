@@ -22,7 +22,8 @@ import { DRAG_SLOP, loopDelay, placeModule } from "./agents_rail.ts";
 import { esc } from "./format.ts";
 import { baseTier, pollDelay, type PerfTier } from "./perf_tier.ts";
 import type { BuddyIdea, BuddyReply, BuddySurface, FleetStatusView } from "./bridge.ts";
-import type { ToastOpts } from "./ui.ts";
+import { setTip, type ToastOpts } from "./ui.ts";
+import { tipValue } from "./tip_text.ts";
 
 export const BUDDY_POS_KEY = "lucid.buddies.v1";
 export const BUDDY_SETTINGS_KEY = "lucid.buddies.settings.v1";
@@ -32,8 +33,8 @@ export const STALE_MS = 120_000;
 export const AUTO_GAP_MS = 180_000;
 /** The "2 ideas" chip after an automatic fetch. */
 export const CHIP_MS = 8000;
-/** One turn of the ellipse drift (CSS abdDrift runs this long). */
-export const DRIFT_S = 8;
+/** One breath of the glow (CSS abdGlow runs this long). */
+export const GLOW_S = 4.8;
 const TICK_MS = 1000;
 const LANE_POLL_MS = 4000;
 
@@ -125,11 +126,21 @@ export function isStale(at: number, now: number, turnsAt: number, turns: number)
   return at <= 0 || now - at > STALE_MS || turns !== turnsAt;
 }
 
-/** A negative animation delay per buddy, so the drifts never move in step. */
-export function driftDelay(key: string): number {
+/** A negative animation delay per buddy, so the glows never breathe in step. */
+export function glowDelay(key: string): number {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 33 + key.charCodeAt(i)) >>> 0;
-  return -((h % (DRIFT_S * 100)) / 100);
+  return -((h % Math.round(GLOW_S * 100)) / 100);
+}
+
+/** The buddy's hover helper: what its agent is doing, then what its ideas are and what a click does. Ideas only ever
+ *  pop up when there are some: with none, a click asks quietly and says so in a chip. */
+export function buddyTip(doing: string, s: { reply: BuddyReply | null; loading: unknown }): string {
+  const n = s.reply && !s.reply.withheld ? s.reply.ideas.length : 0;
+  const ideas = s.loading ? "Looking for ideas..."
+    : n ? `${ideaCount(n)} ready: click to see ${n === 1 ? "it" : "them"}.`
+    : "Click to ask for ideas; they only appear when one would help.";
+  return `${doing}. ${ideas} Drag to move it, double-click to put it back.`;
 }
 
 export const ideaCount = (n: number): string => `${n} idea${n === 1 ? "" : "s"}`;
@@ -318,7 +329,8 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     const host = document.createElement("div");
     host.className = "abd-host";
     host.dataset.where = where;
-    host.innerHTML = `<span class="abd-drift" style="--abd-ph:${driftDelay(key).toFixed(2)}s"><button type="button" class="abd" aria-haspopup="dialog"></button></span><span class="abd-chip" aria-hidden="true"></span>`;
+    host.innerHTML = `<button type="button" class="abd" aria-haspopup="dialog" style="--abd-ph:${glowDelay(key).toFixed(2)}s"></button>`
+      + `<span class="abd-name" aria-hidden="true"></span><span class="abd-chip" aria-hidden="true"></span>`;
     const btn = host.querySelector(".abd") as HTMLButtonElement; // built just above
     btn.dataset.abdSurface = where;
     btn.dataset.abdKey = key;
@@ -356,8 +368,12 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     if (force || name !== b.name) {
       b.name = name;
       b.btn.setAttribute("aria-label", `${name}: ideas`);
-      b.btn.title = `${name}: ideas`;
+      const label = b.host.querySelector<HTMLElement>(".abd-name");
+      if (label) label.textContent = name;
     }
+    // The app's own tooltip (ui.ts setTip), not the browser's: who it is, what it is doing, and what a click does.
+    const tip = buddyTip(whereLine(b), ideasOf(b.agent));
+    if (b.btn.getAttribute("data-tip") !== tipValue(name, tip)) setTip(b.btn, name, tip, b.where === "main" ? "top" : undefined);
     const n = ideasOf(b.agent).unseen;
     b.badge.hidden = n <= 0;
     if (n > 0 && b.badge.textContent !== String(n)) b.badge.textContent = String(n);
@@ -377,7 +393,8 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     b.pos = p;
     b.host.style.setProperty("translate", `${Math.round(p.x)}px ${Math.round(p.y)}px`);
   }
-  const sizeOf = (b: Buddy): Size => ({ w: b.btn.offsetWidth || 32, h: b.btn.offsetHeight || 24 });
+  // The whole host: the brick and the name under it, so the default spot keeps the name off the composer too.
+  const sizeOf = (b: Buddy): Size => ({ w: b.host.offsetWidth || 32, h: b.host.offsetHeight || 36 });
 
   /** Main and lane buddies: the stored fraction of the canvas, else the default spot on the composer. */
   function layoutAnchored(b: Buddy): void {
@@ -492,9 +509,9 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     });
     b.btn.addEventListener("click", (e) => {
       if (suppressClick || e.detail > 1) return; // a drag's release, or a double-click's second click
-      if (cur === b) closePop(true); else openPop(b);
+      if (cur === b) closePop(true); else askBuddy(b);
     });
-    // The double-click's first click opened the bubble; the reset is the intent, so it closes again.
+    // The double-click's first click may have opened the bubble; the reset is the intent, so it closes again.
     b.btn.addEventListener("dblclick", () => { if (cur === b) closePop(false); resetSpot(b); });
     b.btn.addEventListener("keydown", (e) => { if (e.key === "Escape" && cur === b) { e.preventDefault(); closePop(true); } });
   }
@@ -527,14 +544,32 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     if (cur?.agent === agent) paintPop();
     return job;
   }
+  /** A short line in the chip beside a buddy; `ms` 0 keeps it until the next one. */
+  function note(b: Buddy, text: string, ms: number): void {
+    clearTimeout(b.chipTimer);
+    b.chip.textContent = text;
+    b.chip.classList.add("show");
+    if (ms > 0) b.chipTimer = window.setTimeout(() => b.chip.classList.remove("show"), ms);
+  }
   function showChip(agent: string, n: number): void {
-    for (const b of buddies.values()) {
-      if (b.agent !== agent || b.host.hidden) continue;
-      clearTimeout(b.chipTimer);
-      b.chip.textContent = ideaCount(n);
-      b.chip.classList.add("show");
-      b.chipTimer = window.setTimeout(() => b.chip.classList.remove("show"), CHIP_MS);
-    }
+    for (const b of buddies.values()) if (b.agent === agent && !b.host.hidden) note(b, ideaCount(n), CHIP_MS);
+  }
+  /** A click: the ideas pop up only when there are some. With none, the buddy asks quietly (a chip says so) and opens
+   *  them only if that fetch finds something worth suggesting. */
+  function askBuddy(b: Buddy): void {
+    const s = ideasOf(b.agent);
+    if (s.reply && !s.reply.withheld && s.reply.ideas.length) { openPop(b); return; }
+    // Asked a moment ago (same turn) and nothing came: say so again rather than ask the model again.
+    if (s.reply && !s.loading && !isStale(s.at, Date.now(), s.turnsAt, turnsOf(b.agent))) { note(b, "Nothing to suggest right now", 3200); return; }
+    note(b, "Looking for ideas...", 0);
+    paintBuddy(b);
+    void (s.loading ?? fetchIdeas(b.agent, false)).then(() => {
+      if (buddies.get(b.key) !== b) return;
+      const r = ideasOf(b.agent);
+      paintBuddy(b);
+      if (r.reply && !r.reply.withheld && r.reply.ideas.length) { b.chip.classList.remove("show"); if (!cur) openPop(b); return; }
+      note(b, r.reply?.withheld ? "Ideas withheld by the security scan" : r.error ? "Ideas are unavailable right now" : "Nothing to suggest right now", 3200);
+    });
   }
   function maybeAuto(agent: string): void {
     if (![...buddies.values()].some((b) => b.agent === agent)) return;
