@@ -171,7 +171,12 @@ export async function installPluginFromUrl(url: string, expectId: string, deps: 
     (deps.record ?? recordBlock)({ tool: "plugin_install", severity: "high", findings: gate, reason: `plugin "${expectId}" refused at the ${gate} gate: ${reason}` });
     return { ok: false, gate, reason, logPath: logPluginAttempt({ action: "install", source, expectId, ok: false, gate, reason, ms: Date.now() - startedAt }) };
   };
-  if (!PLUGIN_ID_RE.test(expectId)) return fail("manifest", "invalid plugin id");
+  // P-PLUGINS.ID1: a request without a valid id is a caller bug, not a package refused at a gate: nothing was
+  // downloaded, so it is refused and logged but never filed as a high Live block (eight such blocks, from a test
+  // script that sent `id` instead of `expectId`, read as failed purchases).
+  if (!PLUGIN_ID_RE.test(expectId)) {
+    return { ok: false, gate: "manifest", reason: "invalid plugin id", logPath: logPluginAttempt({ action: "install", source, expectId, ok: false, gate: "manifest", reason: "invalid plugin id", ms: Date.now() - startedAt }) };
+  }
   const problem = downloadUrlProblem(url);
   if (problem) return fail("download", problem);
   const host = extractHost(url) ?? "";

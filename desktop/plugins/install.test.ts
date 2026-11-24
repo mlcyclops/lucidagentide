@@ -180,6 +180,19 @@ describe("the download gate", () => {
     expect(log.trim().split("\n").length).toBe(3);
     expect(log).not.toContain("SECRET");
   });
+
+  // P-PLUGINS.ID1: a request with no valid id downloads nothing and files no Live block; a real gate refusal does.
+  test("a request without a valid plugin id is refused before any download and files no Live block", async () => {
+    let fetched = 0;
+    const fetchImpl = (async () => { fetched++; return new Response(buildServerFixture(KEY)); }) as unknown as typeof fetch;
+    const blocks: string[] = [];
+    const record = (b: { reason: string }) => { blocks.push(b.reason); };
+    expect(await installPluginFromUrl("https://cdn.example/p.zip", "", deps({ fetchImpl, record }))).toMatchObject({ ok: false, gate: "manifest", reason: "invalid plugin id" });
+    expect(fetched).toBe(0);
+    expect(blocks).toEqual([]);
+    expect(await installPluginFromUrl("http://cdn.example/p.zip", "fixture-server", deps({ fetchImpl, record }))).toMatchObject({ ok: false, gate: "download" });
+    expect(blocks).toHaveLength(1);
+  });
 });
 
 describe("install, update and uninstall", () => {

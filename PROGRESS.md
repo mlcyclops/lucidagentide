@@ -6537,3 +6537,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-23):** no git at open (repo chip and lanes read .git files; code activity remembered and counted only on a click of the lines tile); one watched index over the 19k-file session tree instead of three 15 s re-walks, a head-only Ask Lucid sweep, a persisted usage ledger and change-keyed obs/compaction reads; idle rail figures and chrome glows hold still, working figures stepped at 8 fps. Idle app about 25% -> 1.1% of the machine (engine 7.9% -> 0.7%, window 17.3% -> 0.4%). ADR-0672.
 - **stubbed:** none.
 - **next:** measure 4-5 real working lanes with subagents end to end, and cut omp's own boot time per lane.
+## P-PLUGINS.ID1: a malformed install request files no Live block; owners hold every store item
+- **shipped (2026-11-23):** an install request with no valid plugin id is refused and logged without a high Live block (the eight `plugin ""` blocks were a QA script's malformed calls, not purchases); the store gives owner accounts every item (add-on ADR-A156, deployed); every on-sale package passes the real install gates with zero blocks. ADR-0673.
+- **stubbed:** none.
+- **next:** a signed-in owner check in the running app (every card reads Install).
