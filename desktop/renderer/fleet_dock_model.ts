@@ -100,14 +100,45 @@ export const KEY_CHARS = 120;
 
 const RAN_LINE = /^\[ran: [^\n]*\]$/;
 const ERROR_TAIL = /\n?\[turn ended in error: [\s\S]*\]$/;
+/** How many `[ran: ...]` titles the engine keeps per turn (fleet_lanes.ts liveTools), and each title's length. */
+const RAN_TITLES_MAX = 40;
+const RAN_TITLE_CHARS = 160;
+
+/** A tool title as the engine writes it into a `[ran: ...]` line: ONE line (whitespace folded), clipped. */
+export function ranTitle(title: string): string {
+  return title.replace(/\s+/g, " ").trim().slice(0, RAN_TITLE_CHARS);
+}
+
+/** An assistant text whose leading `[ran: ...]` block has ONE line per call. Older engines wrote each title raw
+ *  (`slice(0, 160)`), so a heredoc command spanned lines and every reader that strips the block line by line stopped
+ *  there, leaving the rest of the block as prose (a wall of `[ran: ...]` text instead of chips). The block is rebuilt
+ *  from the turn's own tool records and, when the text starts with it, replaced by the folded form. Unchanged
+ *  otherwise (no records, or a text that does not start with them). */
+export function foldRanBlock(text: string, tools: readonly SeedTool[] | undefined): string {
+  const titled = (tools ?? []).filter((t) => t.detail).slice(0, RAN_TITLES_MAX);
+  if (!titled.length) return text;
+  const raw = `${titled.map((t) => `[ran: ${t.detail.slice(0, RAN_TITLE_CHARS)}]`).join("\n")}\n`;
+  // A turn with no prose was trimmed to end on its last title, without the newline.
+  const rest = text.startsWith(raw) ? text.slice(raw.length) : text === raw.slice(0, -1) ? "" : null;
+  if (rest === null) return text;
+  return `${titled.map((t) => `[ran: ${ranTitle(t.detail)}]`).join("\n")}\n${rest}`;
+}
+
+/** An assistant text without the engine's leading `[ran: ...]` lines, when the turn has tool records (the card draws
+ *  those as chips; without records the lines are the only trace and stay). */
+function stripRan(text: string, tools: readonly SeedTool[] | undefined): string {
+  if (!tools?.length) return text;
+  const lines = foldRanBlock(text, tools).split("\n");
+  let n = 0;
+  while (n < lines.length && RAN_LINE.test(lines[n]!)) n++;
+  return lines.slice(n).join("\n");
+}
 
 /** An assistant record's text as the card shows it: the engine prefixes the tool titles as `[ran: ...]` lines and
  *  appends `[turn ended in error: ...]` for its resume memory; the card draws both as chips and an error line. */
 export function seedText(r: SeedRecord): string {
   if (r.role !== "assistant") return r.text;
-  let lines = r.text.split("\n");
-  if (r.tools?.length) { let n = 0; while (n < lines.length && RAN_LINE.test(lines[n]!)) n++; lines = lines.slice(n); }
-  const text = lines.join("\n");
+  const text = stripRan(r.text, r.tools);
   return (r.error ? text.replace(ERROR_TAIL, "") : text).trim();
 }
 
@@ -133,9 +164,10 @@ export function turnKey(role: "user" | "assistant", text: string): string | unde
  *  Card turns after the anchor were not found: a keyed one exists only on the card (a refused prompt), an unkeyed one
  *  (a `partial` reply the card saw only part of, an error-only turn) stands for the next transcript record of its
  *  role, which is then skipped. Everything after that is new. */
-export function seedTail(local: readonly CardTurn[], seed: readonly { role: "user" | "assistant"; text: string }[]): number | null {
+export function seedTail(local: readonly CardTurn[], seed: readonly { role: "user" | "assistant"; text: string; tools?: SeedTool[] }[]): number | null {
   if (local.length === 0) return 0;
-  const keys = seed.map((r) => turnKey(r.role, r.text));
+  // A record's whole `[ran: ...]` block goes first (a multi-line title would leave fragments in its key).
+  const keys = seed.map((r) => turnKey(r.role, r.role === "assistant" ? stripRan(r.text, r.tools) : r.text));
   const own = local.map((t) => (t.partial ? undefined : turnKey(t.role, t.text)));
   // A short reply ("Done.") recurs: an occurrence counts only if the turn before it matches the card's turn before
   // (by key, or by role for an unkeyed one). The window's first record and the card's first turn have no "before".
