@@ -1,4 +1,6 @@
-// Contract API-1 (docs/api/contract.md) section 9: the API audit chains.
+// Contract API-1 (docs/api/contract.md) section 9: the API audit chains. The same machinery keeps the event chains of
+// revision 4 7.3 (`ChainKind::Events`: their own folder, labels, checkpoint label, record shape and 35-day retention;
+// `api_events.rs` checks and derives their records).
 //
 // Per org and source (9.1) three chains (9.3): `as_is` (label `lucid-api-audit-as-is-v1:<org>`), `pseudonymized`
 // (`lucid-api-audit-pseudo-v1:<org>`, identity fields as `p_` + 16 hex of HMAC-SHA-256(org pseudonym key, value) and
@@ -7,9 +9,12 @@
 // 8 MiB under `<state>/api-audit/<org>/<source>/<repr>-<6 digits>.jsonl`, a head file per chain
 // (`<repr>-head.json`: seq, hash, segment, the dropped front), a broken tail moved aside to `<repr>-torn-<t>.jsonl`
 // with the verified prefix kept, hash = SHA-256(lp(label, prev as 32 raw bytes, CE-1 canonical JSON of the entry
-// without `hash`)), the first prev 64 zeros. `source` is `console` or the relay id; on the console the chains a
-// relay ships (`api-audit`, `api-chains`) are kept under `<org>/<relay id>/` as received, after every entry is
-// checked in full: link and hash, org, the known fields only, `source`/`relay` naming that relay, pseudonyms only (or
+// without `hash`)), the first prev 64 zeros. `source` is `console`, the relay id, or (revision 5 12.1) a connector
+// id (`k_` and 16 hex), whose entries carry `"source": "connector", "connector": <id>` as a relay's carry
+// `"source": "relay", "relay": <id>`; on the console the chains a relay ships (`api-audit`, `api-chains`) or a
+// connector ships (`POST I/v1/connector/audit`) are kept under `<org>/<relay or connector id>/` as received, after
+// every entry is checked in full: link and hash, org, the known fields only, `source` and `relay` (or `connector`)
+// naming that source and no other, pseudonyms only (or
 // nothing) in identity fields of derived entries, `raw_seq` equal to `seq` and the same decision as the entry of
 // that seq already stored in the other representations, and every checkpoint's payload naming the heads before it,
 // signed by a checkpoint certificate stored for that relay and org (`add_keys`).
@@ -94,17 +99,37 @@ const PKEY_TTL: Duration = Duration::from_secs(10);
 const FREE_TTL: Duration = Duration::from_secs(1);
 
 /// Identity fields (the 1a3 table; the full registry is slice 1a4): pseudonymized or dropped.
-pub const IDENTITY_FIELDS: [&str; 7] = ["client", "act", "ip", "principal", "serial", "device", "node"];
-/// Every other field a caller may set; anything else is refused (fail closed).
-pub const PLAIN_FIELDS: [&str; 26] = [
+/// Revision 4 11 adds `reviewer` and `owner` (principals) and `reviewers` (a list of principals). Revision 5 12.2
+/// adds `person` (the person of a delegated token) and `actor` (an ID-JAG's `act.sub`, tag `client`).
+/// API-1d 11 adds `to` (the recipient node of a `spokes.mail` entry, tag `device`). Revision 5 12.2 adds `app` (an API
+/// app's principal, tag `principal`). API-1d 11 adds `spoke` (an `a2a.task`'s spoke node) and `approver` (an
+/// `a2a.approval`'s approving hub node), both tag `device`.
+pub const IDENTITY_FIELDS: [&str; 16] = ["client", "act", "ip", "principal", "serial", "device", "node", "reviewer", "owner", "reviewers", "person", "actor", "to", "app", "spoke", "approver"];
+/// Revision 4 11: the identity fields whose value is a list of 1 to `IDENTITY_LIST_MAX` strings (each pseudonymized
+/// on its own); every other identity is one string.
+pub const IDENTITY_LIST_FIELDS: [&str; 1] = ["reviewers"];
+pub const IDENTITY_LIST_MAX: usize = 16;
+/// Every other field a caller may set; anything else is refused (fail closed). Revision 4 11 adds the hold, export,
+/// directory and federation fields; `kid` (a checkpoint's, and `federation.token`'s key id) is a caller's field too.
+/// Revision 5 12.2 adds the delegated grant fields (`actor_profile` is an ID-JAG's `act.sub_profile`). API-1d 11 adds
+/// `bytes` (a `spokes.mail` entry's envelope size). Revision 5 12.1 and 12.2 add `connector` (a connector source's id),
+/// `conv` (a cid), `items` (a count), `tool` (an MCP tool name), `approval` (32 hex) and `age_s`. API-1d 11 adds the
+/// A2A fields `agent`, `skill`, `task` (A2A task id), `bytes_in`, `origin` (a push origin), `attempt` and
+/// `card_sha256` (`a2a.card.signed`).
+pub const PLAIN_FIELDS: [&str; 58] = [
     "rid", "source", "relay", "action", "scope", "route", "resource", "result", "check", "jti", "bytes_out", "count", "status", "code", "method", "map_seq", "map_hash", "tseq", "op", "kind", "aud",
-    "exp", "cnf", "auth", "until", "destination",
+    "exp", "cnf", "auth", "until", "destination", "kid", "hold", "on", "relay_hold", "job", "parts", "zip_bytes", "state", "provider", "person_source", "token_id", "error",
+    "matter", "grant", "idp", "family", "auth_time", "actor_profile", "bytes", "connector", "conv", "items", "tool", "approval", "age_s", "agent", "skill", "task", "bytes_in",
+    "origin", "attempt", "card_sha256",
 ];
+/// Revision 4 11 (revision 3 10.4 `free_text`): fields kept only in the `as_is` chain, dropped from the transformed
+/// representations (a subset of `PLAIN_FIELDS`).
+pub const FREE_TEXT_FIELDS: [&str; 1] = ["matter"];
 /// Actions only this file writes.
 const RESERVED_ACTIONS: [&str; 2] = ["checkpoint", "api.refusal.summary"];
 /// Fields this file writes: every entry's, a summary's bucket id, a checkpoint's.
 const CHAIN_FIELDS: [&str; 5] = ["seq", "ts", "org", "prev", "hash"];
-const OWN_FIELDS: [&str; 4] = ["bucket", "kid", "payload", "sig"];
+const OWN_FIELDS: [&str; 3] = ["bucket", "payload", "sig"];
 
 // ── representations, errors, hooks ─────────────────────────────────────────────────────────────────────────────
 
@@ -154,6 +179,57 @@ impl Repr {
     }
 }
 
+/// Which chains an `ApiAudit` keeps (the machinery is the same, the labels, folder, record shape and retention are
+/// not): the API audit of revision 3 9, or the event chains of revision 4 7.3 (`api_events`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainKind {
+    Audit,
+    Events,
+}
+
+impl ChainKind {
+    /// The folder under the state folder.
+    pub fn dir(self) -> &'static str {
+        match self {
+            ChainKind::Audit => AUDIT_DIR,
+            ChainKind::Events => crate::api_events::EVENTS_DIR,
+        }
+    }
+
+    /// The hash label of the org's chain in one representation.
+    pub fn label(self, repr: Repr, org: &str) -> String {
+        match self {
+            ChainKind::Audit => repr.label(org),
+            ChainKind::Events => crate::api_events::label(repr, org),
+        }
+    }
+
+    /// The label a checkpoint signature covers with its payload.
+    pub fn checkpoint_label(self) -> &'static str {
+        match self {
+            ChainKind::Audit => CHECKPOINT_LABEL,
+            ChainKind::Events => crate::api_events::CHECKPOINT_LABEL,
+        }
+    }
+
+    /// The bytes a checkpoint signature covers: lp(label, payload JSON).
+    pub fn signed_bytes(self, payload_json: &[u8]) -> Vec<u8> {
+        lp(&[self.checkpoint_label().as_bytes(), payload_json])
+    }
+
+    /// A stored or received entry is a checkpoint (`action` for audit, `type` for events).
+    fn is_checkpoint(self, o: &Map<String, Value>) -> bool {
+        let k = if self == ChainKind::Audit { "action" } else { "type" };
+        o.get(k).and_then(Value::as_str) == Some("checkpoint")
+    }
+
+    /// A checkpoint entry's kid, payload and sig (top level for audit, in `data` for events).
+    fn checkpoint_parts(self, o: &Map<String, Value>) -> Option<(&str, &str, &str)> {
+        let m = if self == ChainKind::Audit { o } else { o.get("data")?.as_object()? };
+        Some((m.get("kid")?.as_str()?, m.get("payload")?.as_str()?, m.get("sig")?.as_str()?))
+    }
+}
+
 /// `audit-unavailable` (answer 503) or `bad-request` (400).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuditError {
@@ -197,6 +273,18 @@ pub enum IngestError {
     Unavailable(String),
 }
 
+/// Revision 4 7.3: event seqs `first..=last` of one chain deleted before every destination could have read them,
+/// by retention (`reason` `retention`) or early for space (`space`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dropped {
+    pub org: String,
+    pub source: String,
+    pub repr: Repr,
+    pub first: u64,
+    pub last: u64,
+    pub reason: &'static str,
+}
+
 /// The org's audit checkpoint key (`api_checkpoint.rs`).
 pub trait CheckpointSigner: Send + Sync {
     /// The certified key's id, None while there is none.
@@ -225,9 +313,32 @@ pub fn org_ok(s: &str) -> bool {
     (1..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// `console` or a relay id: `[a-z0-9_-]{1,64}`.
+/// `console`, a relay id or a connector id: `[a-z0-9_-]{1,64}`.
 pub fn source_ok(s: &str) -> bool {
     (1..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+}
+
+/// How the entries of `source` name it (9.2, revision 5 12.1): the `source` word, and the field naming the id with the
+/// id: `console` alone; a connector (a `k_` id) `connector` and `("connector", id)`; anything else `relay` and
+/// `("relay", id)`.
+pub fn source_form(source: &str) -> (&'static str, Option<(&'static str, &str)>) {
+    if source == "console" {
+        ("console", None)
+    } else if source.starts_with("k_") {
+        ("connector", Some(("connector", source)))
+    } else {
+        ("relay", Some(("relay", source)))
+    }
+}
+
+/// The id field the other kind of source uses (`connector` for a relay, `relay` for a connector): never in an entry of
+/// a relay's or a connector's own chain.
+fn other_id_field(field: &str) -> &'static str {
+    if field == "relay" {
+        "connector"
+    } else {
+        "relay"
+    }
 }
 
 fn now_s() -> i64 {
@@ -282,8 +393,27 @@ pub fn parse_cursor(c: &str, org: &str, source: &str, repr: Repr) -> Option<u64>
     n.parse().ok()
 }
 
-/// A caller's entry: an object of known fields with string, integer or boolean values (identities strings only) and
-/// an action that is not reserved.
+/// The strings of an identity field's value: the one string, or each string of a list field's 1 to 16 strings; None
+/// for any other shape.
+fn identity_strings<'a>(k: &str, v: &'a Value) -> Option<Vec<&'a str>> {
+    match v {
+        Value::String(s) if !IDENTITY_LIST_FIELDS.contains(&k) => Some(vec![s.as_str()]),
+        Value::Array(a) if IDENTITY_LIST_FIELDS.contains(&k) && (1..=IDENTITY_LIST_MAX).contains(&a.len()) => a.iter().map(Value::as_str).collect(),
+        _ => None,
+    }
+}
+
+/// An identity value with each string pseudonymized under `key`.
+fn pseudonymized(k: &str, v: &Value, key: &[u8]) -> Value {
+    match identity_strings(k, v) {
+        Some(list) if v.is_array() => Value::from(list.into_iter().map(|s| pseudonym(key, s)).collect::<Vec<_>>()),
+        Some(list) => Value::from(pseudonym(key, list[0])),
+        None => Value::from(pseudonym(key, &v.as_str().map_or_else(|| v.to_string(), str::to_owned))),
+    }
+}
+
+/// A caller's entry: an object of known fields with string, integer or boolean values (identities strings only, a
+/// list field a list of strings) and an action that is not reserved.
 fn validate(entry: Value) -> Result<Map<String, Value>, AuditError> {
     let Value::Object(m) = entry else { return Err(AuditError::bad("an audit entry is a JSON object")) };
     for (k, v) in &m {
@@ -292,6 +422,7 @@ fn validate(entry: Value) -> Result<Map<String, Value>, AuditError> {
             return Err(AuditError::bad(format!("{k} is not an audit field")));
         }
         let ok = match v {
+            _ if ident => identity_strings(k, v).is_some(),
             Value::String(_) => true,
             Value::Bool(_) => !ident,
             Value::Number(n) => !ident && (n.as_u64().is_some_and(|u| u <= MAX_SAFE) || n.as_i64().is_some_and(|i| i.unsigned_abs() <= MAX_SAFE)),
@@ -316,10 +447,9 @@ fn derive(fields: &Map<String, Value>, repr: Repr, key: Option<&(u32, Vec<u8>)>)
     match (repr, key) {
         (Repr::AsIs, _) => return fields.clone(),
         (Repr::Pseudonymized, Some((pkv, k))) => {
-            for (f, v) in fields {
+            for (f, v) in fields.iter().filter(|(f, _)| !FREE_TEXT_FIELDS.contains(&f.as_str())) {
                 if ident(f.as_str()) {
-                    let text = v.as_str().map_or_else(|| v.to_string(), str::to_owned);
-                    out.insert(f.clone(), Value::from(pseudonym(k, &text)));
+                    out.insert(f.clone(), pseudonymized(f, v, k));
                 } else {
                     out.insert(f.clone(), v.clone());
                 }
@@ -327,7 +457,7 @@ fn derive(fields: &Map<String, Value>, repr: Repr, key: Option<&(u32, Vec<u8>)>)
             out.insert("pkv".into(), Value::from(*pkv));
         }
         (r, _) => {
-            for (f, v) in fields.iter().filter(|(f, _)| !ident(f.as_str())) {
+            for (f, v) in fields.iter().filter(|(f, _)| !ident(f.as_str()) && !FREE_TEXT_FIELDS.contains(&f.as_str())) {
                 out.insert(f.clone(), v.clone());
             }
             if r == Repr::Pseudonymized {
@@ -356,10 +486,11 @@ fn action_ok(a: &str) -> bool {
     (1..=64).contains(&a.len()) && a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
 }
 
-/// A received entry of a relay's chain in one representation, checked in full but for its link (`check_entry`): only
-/// known fields with scalar values; identities strings, pseudonyms in the pseudonymized form (none with `pkv` 0) and
-/// none in the removed form; an action; `source` `relay` and `relay` the relay's id; `raw_seq` its seq; a summary's
-/// bucket and a checkpoint's kid, payload and sig on those actions only.
+/// A received entry of a relay's (or a connector's) chain in one representation, checked in full but for its link
+/// (`check_entry`): only known fields with scalar values; identities strings, pseudonyms in the pseudonymized form
+/// (none with `pkv` 0) and none in the removed form; an action; `source` `relay` and `relay` the relay's id (a
+/// connector: `source` `connector` and `connector` its id, `source_form`) and no field naming the other kind of
+/// source; `raw_seq` its seq; a summary's bucket and a checkpoint's kid, payload and sig on those actions only.
 fn check_received(o: &Map<String, Value>, repr: Repr, relay: &str, seq: u64) -> Result<(), String> {
     let bad = |why: String| -> Result<(), String> { Err(format!("entry {seq}: {why}")) };
     for (k, v) in o {
@@ -375,6 +506,7 @@ fn check_received(o: &Map<String, Value>, repr: Repr, relay: &str, seq: u64) -> 
             return bad(format!("{k} is not an audit field"));
         }
         let scalar = match v {
+            _ if ident => identity_strings(k, v).is_some(),
             Value::String(_) => true,
             Value::Bool(_) => !ident,
             Value::Number(n) => !ident && (n.as_u64().is_some_and(|u| u <= MAX_SAFE) || n.as_i64().is_some_and(|i| i.unsigned_abs() <= MAX_SAFE)),
@@ -385,16 +517,19 @@ fn check_received(o: &Map<String, Value>, repr: Repr, relay: &str, seq: u64) -> 
         }
         match (ident, repr) {
             (true, Repr::Removed) => return bad(format!("the removed form keeps {k}")),
-            (true, Repr::Pseudonymized) if !v.as_str().is_some_and(is_pseudonym) => return bad(format!("{k} is not a pseudonym")),
+            (true, Repr::Pseudonymized) if !identity_strings(k, v).is_some_and(|l| l.into_iter().all(is_pseudonym)) => return bad(format!("{k} is not a pseudonym")),
             _ => {}
+        }
+        if repr != Repr::AsIs && FREE_TEXT_FIELDS.contains(&k) {
+            return bad(format!("a transformed form keeps the free text {k}"));
         }
     }
     let action = o.get("action").and_then(Value::as_str).unwrap_or_default();
     if !action_ok(action) {
         return bad("it has no action".into());
     }
-    if action != "checkpoint" && ["kid", "payload", "sig"].iter().any(|k| o.contains_key(*k)) {
-        return bad("only a checkpoint carries kid, payload and sig".into());
+    if action != "checkpoint" && ["payload", "sig"].iter().any(|k| o.contains_key(*k)) {
+        return bad("only a checkpoint carries payload and sig".into());
     }
     if action != "api.refusal.summary" && o.contains_key("bucket") {
         return bad("only a refusal summary carries a bucket".into());
@@ -402,8 +537,13 @@ fn check_received(o: &Map<String, Value>, repr: Repr, relay: &str, seq: u64) -> 
     if o.get("ts").and_then(Value::as_i64).is_none() {
         return bad("it has no ts".into());
     }
-    if o.get("source").and_then(Value::as_str) != Some("relay") || o.get("relay").and_then(Value::as_str) != Some(relay) {
-        return bad(format!("it does not name relay {relay}"));
+    let (src, named) = source_form(relay);
+    let (field, id) = named.unwrap_or(("relay", relay));
+    if o.get("source").and_then(Value::as_str) != Some(src) || o.get(field).and_then(Value::as_str) != Some(id) {
+        return bad(format!("it does not name {field} {relay}"));
+    }
+    if o.contains_key(other_id_field(field)) {
+        return bad(format!("it names a {} in a {field} chain", other_id_field(field)));
     }
     if repr != Repr::AsIs && o.get("raw_seq").and_then(Value::as_u64) != Some(seq) {
         return bad("its raw_seq is not its seq".into());
@@ -422,7 +562,7 @@ fn check_received(o: &Map<String, Value>, repr: Repr, relay: &str, seq: u64) -> 
 /// and, when the console holds the pseudonym key of that version, each pseudonym the HMAC of the as_is value.
 fn same_decision(a: &Map<String, Value>, b: &Map<String, Value>, key: Option<&(u32, Vec<u8>)>) -> bool {
     fn plain(m: &Map<String, Value>) -> BTreeMap<&String, &Value> {
-        let skip = |k: &str| IDENTITY_FIELDS.contains(&k) || matches!(k, "prev" | "hash" | "raw_seq" | "pkv");
+        let skip = |k: &str| IDENTITY_FIELDS.contains(&k) || FREE_TEXT_FIELDS.contains(&k) || matches!(k, "prev" | "hash" | "raw_seq" | "pkv");
         m.iter().filter(|(k, _)| !skip(k.as_str())).collect()
     }
     if plain(a) != plain(b) {
@@ -440,7 +580,7 @@ fn same_decision(a: &Map<String, Value>, b: &Map<String, Value>, key: Option<&(u
     };
     match (key, derived.get("pkv").and_then(Value::as_u64)) {
         (Some((v, k)), Some(p)) if p > 0 && p == u64::from(*v) => {
-            ids(raw).iter().all(|f| raw.get(f).and_then(Value::as_str).map(|s| Value::from(pseudonym(k, s))).as_ref() == derived.get(f))
+            ids(raw).iter().all(|f| raw.get(f).filter(|v| identity_strings(f, v).is_some()).map(|v| pseudonymized(f, v, k)).as_ref() == derived.get(f))
         }
         _ => true,
     }
@@ -449,9 +589,10 @@ fn same_decision(a: &Map<String, Value>, b: &Map<String, Value>, key: Option<&(u
 /// A received checkpoint: its payload is canonical JSON of this org, this relay, its ts and the heads before it (each
 /// at `seq - 1`, this chain's being its `prev`), and its signature verifies with the certificate stored for its kid
 /// (`add_keys`), in date at its ts.
-fn check_checkpoint(o: &Map<String, Value>, org: &str, relay: &str, repr: Repr, seq: u64, prev: &str, keys: &[Value]) -> Result<(), String> {
-    let s = |k: &str| o.get(k).and_then(Value::as_str);
-    let (Some(kid), Some(pj), Some(sig)) = (s("kid"), s("payload").and_then(unb64u), s("sig").and_then(unb64u)) else {
+#[allow(clippy::too_many_arguments)]
+fn check_checkpoint(kind: ChainKind, o: &Map<String, Value>, org: &str, relay: &str, repr: Repr, seq: u64, prev: &str, keys: &[Value]) -> Result<(), String> {
+    let parts = kind.checkpoint_parts(o);
+    let (Some(kid), Some(pj), Some(sig)) = (parts.map(|p| p.0), parts.and_then(|p| unb64u(p.1)), parts.and_then(|p| unb64u(p.2))) else {
         return Err(format!("checkpoint {seq} lacks its kid, payload or sig"));
     };
     let p = std::str::from_utf8(&pj).ok().and_then(parse_json).ok_or_else(|| format!("checkpoint {seq}: its payload does not read"))?;
@@ -475,7 +616,7 @@ fn check_checkpoint(o: &Map<String, Value>, org: &str, relay: &str, repr: Repr, 
     }
     let cert = keys.iter().filter(|k| k.get("kid").and_then(Value::as_str) == Some(kid)).find_map(crate::api_checkpoint::cert_der_of).ok_or_else(|| format!("checkpoint {seq}: no certificate is stored for {kid}"))?;
     let in_date = crate::meet_x509::Cert::from_der(&cert).zip(ts).is_some_and(|(c, t)| c.not_before <= t && t <= c.not_after);
-    if !in_date || !crate::api_checkpoint::verify(&cert, &checkpoint_signed_bytes(&pj), &sig) {
+    if !in_date || !crate::api_checkpoint::verify(&cert, &kind.signed_bytes(&pj), &sig) {
         return Err(format!("checkpoint {seq}: its signature does not verify with the certificate of {kid}"));
     }
     Ok(())
@@ -563,6 +704,7 @@ struct Seg {
 struct Chain {
     /// None: kept in memory (no state folder).
     dir: Option<PathBuf>,
+    kind: ChainKind,
     repr: Repr,
     org: String,
     label: String,
@@ -579,12 +721,13 @@ struct Chain {
 
 impl Chain {
     /// The chain in `dir`, verified; a broken tail is moved aside (`<repr>-torn-<t>.jsonl`), never fatal.
-    fn open(dir: Option<&Path>, repr: Repr, org: &str, segment_bytes: u64, t: i64, notes: &mut Vec<String>) -> Chain {
+    fn open(dir: Option<&Path>, kind: ChainKind, repr: Repr, org: &str, segment_bytes: u64, t: i64, notes: &mut Vec<String>) -> Chain {
         let mut c = Chain {
             dir: dir.map(Path::to_path_buf),
+            kind,
             repr,
             org: org.to_owned(),
-            label: repr.label(org),
+            label: kind.label(repr, org),
             segment_bytes,
             segs: Vec::new(),
             mem: Vec::new(),
@@ -633,7 +776,7 @@ impl Chain {
                         seg.last = seq;
                         seg.last_hash = prev.clone();
                         seg.last_ts = ts;
-                        if o.get("action").and_then(Value::as_str) == Some("checkpoint") {
+                        if kind.is_checkpoint(&o) {
                             c.last_checkpoint = Some((raw, ts));
                         }
                     }
@@ -717,7 +860,7 @@ impl Chain {
             s.last_hash = hash.clone();
             s.last_ts = ts;
         }
-        if e.get("action").and_then(Value::as_str) == Some("checkpoint") {
+        if self.kind.is_checkpoint(e) {
             self.last_checkpoint = Some((raw, ts));
         }
         self.seq = seq;
@@ -811,27 +954,55 @@ impl Chain {
 
     /// Retention: drop whole segments (never the newest) whose last entry is before `before` and, under a hold (the
     /// lowest seq of this chain not acknowledged), entirely below it.
-    fn retire(&mut self, before: i64, hold: Option<u64>) {
-        let Some(dir) = self.dir.clone() else { return };
-        let mut changed = false;
+    /// The seqs dropped, first to last (None: nothing).
+    fn retire(&mut self, before: i64, hold: Option<u64>) -> Option<(u64, u64)> {
+        let mut out: Option<(u64, u64)> = None;
         while self.segs.len() > 1 {
             let s = &self.segs[0];
             let empty = s.first > s.last;
             if !empty && (s.last_ts >= before || hold.is_some_and(|h| s.last >= h)) {
                 break;
             }
-            if std::fs::remove_file(dir.join(seg_name(self.repr, s.n))).is_err() && dir.join(seg_name(self.repr, s.n)).exists() {
-                break;
+            match self.drop_front() {
+                Some(Some((a, b))) => out = Some((out.map_or(a, |o| o.0), b)),
+                Some(None) => {}
+                None => break,
             }
-            if !empty {
-                self.dropped = Some((s.last, s.last_hash.clone()));
-            }
-            self.segs.remove(0);
-            changed = true;
         }
-        if changed {
-            self.write_head();
+        out
+    }
+
+    /// Revision 4 7.3 (events only): the oldest segment (never the newest) dropped at once, for space.
+    fn retire_oldest(&mut self) -> Option<(u64, u64)> {
+        if self.segs.len() > 1 {
+            self.drop_front().flatten()
+        } else {
+            None
         }
+    }
+
+    /// The first segment removed from disk and the head file: Some(its seqs, None when it was empty), None when the
+    /// file could not be removed (or there is no folder).
+    fn drop_front(&mut self) -> Option<Option<(u64, u64)>> {
+        let dir = self.dir.clone()?;
+        let s = self.segs.first()?;
+        let path = dir.join(seg_name(self.repr, s.n));
+        if std::fs::remove_file(&path).is_err() && path.exists() {
+            return None;
+        }
+        let empty = s.first > s.last;
+        let range = (!empty).then_some((s.first, s.last));
+        if !empty {
+            self.dropped = Some((s.last, s.last_hash.clone()));
+        }
+        self.segs.remove(0);
+        self.write_head();
+        Some(range)
+    }
+
+    /// The first seq still kept (the dropped front + 1).
+    fn first_kept(&self) -> u64 {
+        self.dropped.as_ref().map_or(1, |(s, _)| s + 1)
     }
 }
 
@@ -852,6 +1023,7 @@ struct Bucket {
 struct Set {
     org: String,
     dir: Option<PathBuf>,
+    kind: ChainKind,
     chains: [Chain; 3],
     txn: u64,
     /// `txn.jsonl` may hold a transaction not committed yet.
@@ -882,11 +1054,19 @@ impl Set {
             self.recover(notes)?;
         }
         let raw = self.chains[0].seq + 1;
-        let entries = [
-            self.chains[0].next(ts, fields, None)?,
-            self.chains[1].next(ts, &derive(fields, Repr::Pseudonymized, key), Some(raw))?,
-            self.chains[2].next(ts, &derive(fields, Repr::Removed, key), Some(raw))?,
-        ];
+        // events carry no raw_seq: every append writes all three, so their seqs are equal (revision 4 7.3)
+        let entries = match self.kind {
+            ChainKind::Audit => [
+                self.chains[0].next(ts, fields, None)?,
+                self.chains[1].next(ts, &derive(fields, Repr::Pseudonymized, key), Some(raw))?,
+                self.chains[2].next(ts, &derive(fields, Repr::Removed, key), Some(raw))?,
+            ],
+            ChainKind::Events => [
+                self.chains[0].next(ts, fields, None)?,
+                self.chains[1].next(ts, &crate::api_events::derive(fields, Repr::Pseudonymized, key), None)?,
+                self.chains[2].next(ts, &crate::api_events::derive(fields, Repr::Removed, key), None)?,
+            ],
+        };
         if let Some(dir) = &self.dir {
             let txn = self.txn + 1;
             let rec = json!({
@@ -1080,6 +1260,12 @@ fn wal_failed(e: impl std::fmt::Display) -> AuditError {
 /// it receives.
 pub struct ApiAudit {
     root: Option<PathBuf>,
+    kind: ChainKind,
+    /// Where the relays' checkpoint certificates are kept (`add_keys`): the audit folder for both kinds, since event
+    /// checkpoints are signed by the same per-org key (revision 4 7.3).
+    keys_root: Option<PathBuf>,
+    /// Revision 4 7.3: event seqs deleted by retention or for space, for the webhook slice to count and audit.
+    dropped: Mutex<Vec<Dropped>>,
     source: String,
     signer: Arc<dyn CheckpointSigner>,
     pseudonym: Arc<dyn PseudonymKeys>,
@@ -1099,17 +1285,32 @@ impl ApiAudit {
     /// source are verified, uncommitted transactions completed and recovered summary buckets flushed before this
     /// returns; on the console the relay chains received are opened too. `now` is unix seconds.
     pub fn open(state_dir: Option<&Path>, source: &str, signer: Arc<dyn CheckpointSigner>, pseudonym: Arc<dyn PseudonymKeys>, now: i64) -> ApiAudit {
-        ApiAudit::open_with(state_dir, source, signer, pseudonym, now, SEGMENT_BYTES)
+        ApiAudit::open_with(ChainKind::Audit, state_dir, source, signer, pseudonym, now, SEGMENT_BYTES)
     }
 
-    fn open_with(state_dir: Option<&Path>, source: &str, signer: Arc<dyn CheckpointSigner>, pseudonym: Arc<dyn PseudonymKeys>, now: i64, segment_bytes: u64) -> ApiAudit {
-        let root = state_dir.map(|d| d.join(AUDIT_DIR));
+    /// Revision 4 7.3: the event chains under `<state_dir>/api-events`, built as the audit chains (same checkpoint
+    /// key and pseudonym key), opened the same way. Entries are written only through `api_events`.
+    pub fn open_events(state_dir: Option<&Path>, source: &str, signer: Arc<dyn CheckpointSigner>, pseudonym: Arc<dyn PseudonymKeys>, now: i64) -> ApiAudit {
+        ApiAudit::open_with(ChainKind::Events, state_dir, source, signer, pseudonym, now, SEGMENT_BYTES)
+    }
+
+    /// `open_events` with small segments (tests of retention).
+    #[cfg(test)]
+    pub fn open_events_with(state_dir: Option<&Path>, source: &str, signer: Arc<dyn CheckpointSigner>, pseudonym: Arc<dyn PseudonymKeys>, now: i64, segment_bytes: u64) -> ApiAudit {
+        ApiAudit::open_with(ChainKind::Events, state_dir, source, signer, pseudonym, now, segment_bytes)
+    }
+
+    fn open_with(kind: ChainKind, state_dir: Option<&Path>, source: &str, signer: Arc<dyn CheckpointSigner>, pseudonym: Arc<dyn PseudonymKeys>, now: i64, segment_bytes: u64) -> ApiAudit {
+        let root = state_dir.map(|d| d.join(kind.dir()));
         if let Some(r) = &root {
             let _ = make_dir(r);
         }
         let free: FreeSpace = Arc::new(real_free);
         let a = ApiAudit {
             root,
+            kind,
+            keys_root: state_dir.map(|d| d.join(AUDIT_DIR)),
+            dropped: Mutex::new(Vec::new()),
             source: source.to_owned(),
             signer,
             pseudonym,
@@ -1217,11 +1418,12 @@ impl ApiAudit {
             let _ = make_dir(d);
         }
         let mut notes = Vec::new();
-        let chains = Repr::ALL.map(|r| Chain::open(dir.as_deref(), r, org, self.segment_bytes, now, &mut notes));
+        let chains = Repr::ALL.map(|r| Chain::open(dir.as_deref(), self.kind, r, org, self.segment_bytes, now, &mut notes));
         let (cp_seq, cp_ts) = chains[0].last_checkpoint.unwrap_or((0, 0));
         let mut s = Set {
             org: org.to_owned(),
             dir,
+            kind: self.kind,
             chains,
             txn: 0,
             pending: own,
@@ -1264,25 +1466,32 @@ impl ApiAudit {
         s
     }
 
-    /// A caller's entry checked, with `source` (and `relay` on a relay) set first.
+    /// A caller's entry checked, with `source` (and `relay` on a relay, `connector` on a connector, `source_form`) set
+    /// first; a relay's or a connector's entry naming the other kind of source is refused.
     fn fields(&self, entry: Value) -> Result<Map<String, Value>, AuditError> {
+        if self.kind != ChainKind::Audit {
+            return Err(AuditError::bad("events are appended through api_events"));
+        }
         let m = validate(entry)?;
-        let (src, relay) = if self.source == "console" { ("console", None) } else { ("relay", Some(self.source.as_str())) };
+        let (src, named) = source_form(&self.source);
         if m.get("source").is_some_and(|v| v.as_str() != Some(src)) {
             return Err(AuditError::bad(format!("source is {src} in this audit")));
         }
-        if let Some(r) = relay {
-            if m.get("relay").is_some_and(|v| v.as_str() != Some(r)) {
-                return Err(AuditError::bad(format!("relay is {r} in this audit")));
+        if let Some((field, id)) = named {
+            if m.get(field).is_some_and(|v| v.as_str() != Some(id)) {
+                return Err(AuditError::bad(format!("{field} is {id} in this audit")));
+            }
+            if m.contains_key(other_id_field(field)) {
+                return Err(AuditError::bad(format!("{} is not a field of this audit", other_id_field(field))));
             }
         }
         let mut out = Map::new();
         out.insert("source".into(), Value::from(src));
-        if let Some(r) = relay {
-            out.insert("relay".into(), Value::from(r));
+        if let Some((field, id)) = named {
+            out.insert(field.into(), Value::from(id));
         }
         for (k, v) in m {
-            if k != "source" && !(relay.is_some() && k == "relay") {
+            if k != "source" && named.is_none_or(|(field, _)| k != field) {
                 out.insert(k, v);
             }
         }
@@ -1298,6 +1507,25 @@ impl ApiAudit {
             return Err(AuditError::unavailable("the audit volume is below its reserved free space"));
         }
         self.append(org, &fields, now, 3)
+    }
+
+    /// Revision 4 7.3: one event (its fields checked by `api_events`), durable in all three chains before Ok (its seq,
+    /// the same in each). No free-space reserve applies: retention makes the room (`tick`).
+    pub(crate) fn append_event(&self, org: &str, fields: &Map<String, Value>, now: i64) -> Result<u64, AuditError> {
+        if self.kind != ChainKind::Events {
+            return Err(AuditError::bad("these are not event chains"));
+        }
+        self.append(org, fields, now, 3)
+    }
+
+    /// Which chains these are.
+    pub fn kind(&self) -> ChainKind {
+        self.kind
+    }
+
+    /// This source (`console` or the relay id).
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     fn append(&self, org: &str, fields: &Map<String, Value>, now: i64, appends: usize) -> Result<u64, AuditError> {
@@ -1370,6 +1598,9 @@ impl ApiAudit {
         let hold = self.hold.read().clone();
         let minute = now.div_euclid(60);
         let mut notes = Vec::new();
+        // revision 4 7.3: below 1 GiB free on the event volume, the oldest segments go early
+        let free = self.free.read().clone();
+        let low = self.kind == ChainKind::Events && self.root.as_deref().and_then(|r| free(r)).is_some_and(|b| b < crate::api_events::SPACE_FLOOR);
         for ((org, source), set) in all {
             let own = source == self.source;
             // the hook runs before the org's lock is taken
@@ -1388,11 +1619,39 @@ impl ApiAudit {
                     }
                 }
             }
-            for (c, h) in s.chains.iter_mut().zip(holds) {
-                c.retire(now - RETENTION_SECS, h);
+            match self.kind {
+                ChainKind::Audit => {
+                    for (c, h) in s.chains.iter_mut().zip(holds) {
+                        c.retire(now - RETENTION_SECS, h);
+                    }
+                }
+                // revision 4 7.3: a hard 35 days, and early for space; events never block deletion
+                ChainKind::Events => {
+                    let mut gone = Vec::new();
+                    for c in s.chains.iter_mut() {
+                        if let Some((first, last)) = c.retire(now - crate::api_events::RETENTION_SECS, None) {
+                            gone.push((c.repr, first, last, "retention"));
+                        }
+                        if low {
+                            if let Some((first, last)) = c.retire_oldest() {
+                                gone.push((c.repr, first, last, "space"));
+                            }
+                        }
+                    }
+                    let mut d = self.dropped.lock();
+                    for (repr, first, last, reason) in gone {
+                        notes.push(format!("api events {org} {source} {}: entries {first} to {last} deleted ({reason})", repr.as_str()));
+                        d.push(Dropped { org: org.clone(), source: source.clone(), repr, first, last, reason });
+                    }
+                }
             }
         }
         self.notes.lock().extend(notes);
+    }
+
+    /// Revision 4 7.3: the event ranges deleted since the last call (retention or space), oldest first.
+    pub fn take_dropped(&self) -> Vec<Dropped> {
+        std::mem::take(&mut *self.dropped.lock())
     }
 
     /// A checkpoint over the heads before it, in all three chains. Ok(false) while the signer has no certified key.
@@ -1404,18 +1663,23 @@ impl ApiAudit {
         });
         let pj = canonical_json(&payload).map_err(AuditError::unavailable)?;
         let Some(kid) = self.signer.kid(&s.org) else { return Ok(false) };
-        let Some(sig) = self.signer.sign(&s.org, &checkpoint_signed_bytes(&pj)) else { return Ok(false) };
-        let mut f = Map::new();
-        if self.source == "console" {
-            f.insert("source".into(), Value::from("console"));
-        } else {
-            f.insert("source".into(), Value::from("relay"));
-            f.insert("relay".into(), Value::from(self.source.as_str()));
-        }
-        f.insert("action".into(), Value::from("checkpoint"));
-        f.insert("kid".into(), Value::from(kid));
-        f.insert("payload".into(), Value::from(b64u(&pj)));
-        f.insert("sig".into(), Value::from(b64u(&sig)));
+        let Some(sig) = self.signer.sign(&s.org, &self.kind.signed_bytes(&pj)) else { return Ok(false) };
+        let f = match self.kind {
+            ChainKind::Audit => {
+                let mut f = Map::new();
+                let (src, named) = source_form(&self.source);
+                f.insert("source".into(), Value::from(src));
+                if let Some((field, id)) = named {
+                    f.insert(field.into(), Value::from(id));
+                }
+                f.insert("action".into(), Value::from("checkpoint"));
+                f.insert("kid".into(), Value::from(kid));
+                f.insert("payload".into(), Value::from(b64u(&pj)));
+                f.insert("sig".into(), Value::from(b64u(&sig)));
+                f
+            }
+            ChainKind::Events => crate::api_events::checkpoint_fields(&self.source, &kid, &b64u(&pj), &b64u(&sig)),
+        };
         s.commit(&f, key, now, 3, notes)?;
         s.cp_seq = s.chains[0].seq;
         s.cp_ts = now;
@@ -1461,7 +1725,7 @@ impl ApiAudit {
                 c
             })
             .collect();
-        if let Some(root) = &self.root {
+        if let Some(root) = &self.keys_root {
             for d in sub_dirs(&root.join(org)).into_iter().filter(|d| source_ok(d) && *d != self.source) {
                 out.extend(read_keys(&root.join(org).join(&d)));
             }
@@ -1475,7 +1739,7 @@ impl ApiAudit {
         if !org_ok(org) || !source_ok(relay) || relay == self.source {
             return Err(AuditError::bad("that is not an org and relay"));
         }
-        let Some(root) = &self.root else { return Ok(()) };
+        let Some(root) = &self.keys_root else { return Ok(()) };
         let v = crate::api_checkpoint::cert_value(Some(relay), cert_der, chain, None).ok_or_else(|| AuditError::bad("the certificate does not read"))?;
         let now = now_s();
         let dir = root.join(org).join(relay);
@@ -1513,12 +1777,29 @@ impl ApiAudit {
         }
     }
 
-    /// On the console (`api-audit`, 2.6): a page `first..=last` of a relay's chain for the org in one
-    /// representation, stored durably once every link verifies. A page starting past the stored head + 1 is a gap;
-    /// entries already stored must be the same ones.
+    /// Up to `limit` entries after `after` of the org's `source` chain in one representation (own or received).
+    pub fn range(&self, org: &str, source: &str, repr: Repr, after: u64, limit: usize) -> Vec<Value> {
+        match self.set(org, source, false, now_s()) {
+            Ok(Some(s)) => s.lock().chains[repr.index()].read(after, limit),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The first seq the org's `source` chain still keeps in one representation (1 when nothing was dropped).
+    pub fn first_kept(&self, org: &str, source: &str, repr: Repr) -> u64 {
+        match self.set(org, source, false, now_s()) {
+            Ok(Some(s)) => s.lock().chains[repr.index()].first_kept(),
+            _ => 1,
+        }
+    }
+
+    /// On the console (`api-audit`, 2.6; revision 5 2.8 `POST I/v1/connector/audit` with `source` the authenticated
+    /// connector id): a page `first..=last` of a relay's or a connector's chain for the org in one representation,
+    /// stored durably once every link verifies. A page starting past the stored head + 1 is a gap; entries already
+    /// stored must be the same ones.
     pub fn ingest(&self, org: &str, source: &str, repr: Repr, first: u64, last: u64, entries: &[Value]) -> Result<(), IngestError> {
         if source == self.source || source == "console" {
-            return Err(IngestError::Invalid("a relay chain is stored under its relay id".into()));
+            return Err(IngestError::Invalid("a received chain is stored under its relay or connector id".into()));
         }
         if first == 0 || last < first || entries.len() as u64 != last - first + 1 {
             return Err(IngestError::Invalid("first, last and the entries disagree".into()));
@@ -1529,7 +1810,7 @@ impl ApiAudit {
             Err(e) => return Err(IngestError::Invalid(e.message)),
         };
         let key = self.pseudonym_key(org);
-        let keys = self.root.as_ref().map(|r| read_keys(&r.join(org).join(source))).unwrap_or_default();
+        let keys = self.keys_root.as_ref().map(|r| read_keys(&r.join(org).join(source))).unwrap_or_default();
         let mut s = set.lock();
         let ri = repr.index();
         let head = s.chains[ri].seq;
@@ -1548,10 +1829,14 @@ impl ApiAudit {
         for (i, e) in entries.iter().enumerate().skip(skip) {
             let seq = first + i as u64;
             let o = e.as_object().ok_or_else(|| IngestError::Invalid(format!("entry {seq} is not an object")))?;
-            check_received(o, repr, source, seq).map_err(IngestError::Invalid)?;
+            match self.kind {
+                ChainKind::Audit => check_received(o, repr, source, seq),
+                ChainKind::Events => crate::api_events::check_received(o, repr, source, seq),
+            }
+            .map_err(IngestError::Invalid)?;
             let hash = check_entry(&s.chains[ri].label, org, o, seq, &prev).ok_or_else(|| IngestError::Invalid(format!("entry {seq} does not verify")))?;
-            if o.get("action").and_then(Value::as_str) == Some("checkpoint") {
-                check_checkpoint(o, org, source, repr, seq, &prev, &keys).map_err(IngestError::Invalid)?;
+            if self.kind.is_checkpoint(o) {
+                check_checkpoint(self.kind, o, org, source, repr, seq, &prev, &keys).map_err(IngestError::Invalid)?;
             }
             prev = hash;
             fresh.push(o.clone());
@@ -1563,7 +1848,11 @@ impl ApiAudit {
                     let Some(so) = st.as_object() else { continue };
                     let sq = so.get("seq").and_then(Value::as_u64).unwrap_or(0);
                     let Some(mine) = sq.checked_sub(lo).and_then(|i| fresh.get(i as usize)) else { continue };
-                    if !same_decision(mine, so, key.as_ref()) {
+                    let same = match self.kind {
+                        ChainKind::Audit => same_decision(mine, so, key.as_ref()),
+                        ChainKind::Events => crate::api_events::same_event(mine, so, (repr, other), key.as_ref()),
+                    };
+                    if !same {
                         return Err(IngestError::Invalid(format!("entry {sq} is not the decision its {} form records", other.as_str())));
                     }
                 }
@@ -1710,6 +1999,67 @@ mod tests {
         assert_eq!(heads(&b, "acme"), before);
         assert!(b.take_notes().is_empty());
         assert_eq!(b.orgs(), vec!["acme".to_owned()]);
+    }
+
+    #[test]
+    fn free_text_stays_in_the_as_is_chain_only() {
+        let dir = tests_dir("api-audit-free-text");
+        let a = console(&dir);
+        let e = json!({"action": "compliance.hold.requested", "result": "ok", "hold": "h_9f8e7d6c5b4a3921", "on": "people", "count": 2,
+                       "client": "c_1", "owner": "lee@acme.example", "reviewer": "rita@acme.example", "matter": "2026-114"});
+        a.record("acme", e, NOW).unwrap();
+        let as_is = &entries(&a, "acme", "console", Repr::AsIs)[0];
+        assert_eq!((as_is["matter"].as_str(), as_is["owner"].as_str()), (Some("2026-114"), Some("lee@acme.example")));
+        for r in [Repr::Pseudonymized, Repr::Removed] {
+            let e = &entries(&a, "acme", "console", r)[0];
+            assert!(e.get("matter").is_none(), "{r:?} drops the free text");
+            assert_eq!(e["hold"], "h_9f8e7d6c5b4a3921");
+            assert!(check_received(e.as_object().unwrap(), r, "r_01", 1).is_err_and(|w| !w.contains("matter")), "only the relay name fails");
+        }
+        let p = &entries(&a, "acme", "console", Repr::Pseudonymized)[0];
+        assert!(p["owner"].as_str().is_some_and(is_pseudonym) && p["reviewer"].as_str().is_some_and(is_pseudonym));
+        assert!(same_decision(as_is.as_object().unwrap(), p.as_object().unwrap(), Some(&(1, KEY.to_vec()))));
+        let mut kept = p.as_object().unwrap().clone();
+        kept.insert("matter".into(), json!("2026-114"));
+        kept.insert("source".into(), json!("relay"));
+        kept.insert("relay".into(), json!("r_01"));
+        assert!(check_received(&kept, Repr::Pseudonymized, "r_01", 1).unwrap_err().contains("free text"));
+        // a caller may set kid (federation.token); payload and sig stay a checkpoint's
+        assert!(validate(json!({"action": "federation.token", "result": "ok", "kid": "fk-1"})).is_ok());
+        assert!(validate(json!({"action": "federation.token", "result": "ok", "sig": "x"})).is_err());
+    }
+
+    #[test]
+    fn reviewers_is_a_list_of_principals_each_pseudonymized() {
+        let dir = tests_dir("api-audit-reviewers");
+        let a = console(&dir);
+        let e = json!({"action": "compliance.export.released", "result": "ok", "job": "j_7c6b5a4938271605", "reviewers": ["rita@acme.example", "sam@acme.example"]});
+        a.record("acme", e, NOW).unwrap();
+        let as_is = &entries(&a, "acme", "console", Repr::AsIs)[0];
+        assert_eq!(as_is["reviewers"], json!(["rita@acme.example", "sam@acme.example"]));
+        let p = &entries(&a, "acme", "console", Repr::Pseudonymized)[0];
+        let list = p["reviewers"].as_array().unwrap();
+        assert!(list.len() == 2 && list.iter().all(|x| x.as_str().is_some_and(is_pseudonym)) && list[0] != list[1]);
+        assert!(same_decision(as_is.as_object().unwrap(), p.as_object().unwrap(), Some(&(1, KEY.to_vec()))));
+        assert!(entries(&a, "acme", "console", Repr::Removed)[0].get("reviewers").is_none());
+        let mut swapped = p.as_object().unwrap().clone();
+        swapped.insert("reviewers".into(), json!([list[1], list[0]]));
+        assert!(!same_decision(as_is.as_object().unwrap(), &swapped, Some(&(1, KEY.to_vec()))), "order counts");
+        let mut raw = p.as_object().unwrap().clone();
+        raw.insert("source".into(), json!("relay"));
+        raw.insert("relay".into(), json!("r_01"));
+        assert!(check_received(&raw, Repr::Pseudonymized, "r_01", 1).is_ok());
+        raw.insert("reviewers".into(), json!(["rita@acme.example"]));
+        assert!(check_received(&raw, Repr::Pseudonymized, "r_01", 1).unwrap_err().contains("pseudonym"));
+        // a list only where the field is a list; at most 16; strings only
+        for bad in [json!({"action": "x", "reviewers": "rita@acme.example"}), json!({"action": "x", "reviewer": ["rita@acme.example"]}), json!({"action": "x", "reviewers": []}),
+                    json!({"action": "x", "reviewers": [1]}), json!({"action": "x", "reviewers": vec!["a@b"; 17]})] {
+            assert!(validate(bad.clone()).is_err(), "{bad}");
+        }
+        // the SIEM walk keeps the list, each pseudonymized
+        let rec = json!({"seq": 1, "ts": NOW, "org": "acme", "action": "compliance.export.released", "result": "ok", "job": "j_7c6b5a4938271605", "reviewers": ["rita@acme.example", "sam@acme.example"]});
+        let out = crate::api_catalog::transform_record("compliance.export.released", &rec, crate::api_catalog::Identities::Pseudonymized, Some((1, &KEY[..])), crate::api_catalog::Ceiling::Confidential).unwrap();
+        assert!(out["reviewers"].as_array().is_some_and(|l| l.len() == 2 && l.iter().all(|x| x.as_str().is_some_and(is_pseudonym))));
     }
 
     #[test]
@@ -2091,6 +2441,66 @@ mod tests {
         assert_eq!(c.head("acme", relay, Repr::Removed), r.head("acme", relay, Repr::Removed));
     }
 
+    /// Revision 5 12.1 and 12.2: a connector's entries and checkpoints name it as `source: connector, connector: <id>`
+    /// (its checkpoint payload as `source: <id>`), `app` is an identity, and the console stores the chain under the
+    /// connector's id, refusing an entry that names a relay or another connector; a relay's entry naming a connector is
+    /// refused at its writer.
+    #[test]
+    fn a_connector_chain_names_its_connector_and_ingests_under_its_id() {
+        let k = "k_7a1b2c3d4e5f6a7b";
+        let a = open_in(Some(&tests_dir("api-audit-connector")), k, Arc::new(TestSigner::default()), Some((1, KEY.to_vec())));
+        let mut e = call("c_1");
+        e["app"] = json!("helpdesk-api@apps.acme.example");
+        e["conv"] = json!("ch:0123456789abcdef");
+        e["items"] = json!(3);
+        a.record("acme", e, NOW).unwrap();
+        let mut other = call("c_1");
+        other["relay"] = json!("r_00000000000000aa");
+        assert_eq!(a.record("acme", other, NOW).unwrap_err().code, "bad-request");
+        let mut other = call("c_1");
+        other["connector"] = json!("k_0000000000000001");
+        assert_eq!(a.record("acme", other, NOW).unwrap_err().code, "bad-request");
+        a.tick(NOW + 400);
+        let es = a.since("acme", Repr::AsIs, 0, 10);
+        assert_eq!(es.len(), 2);
+        assert_eq!(es[1]["action"], "checkpoint");
+        for e in &es {
+            assert_eq!((e["source"].as_str(), e["connector"].as_str()), (Some("connector"), Some(k)));
+            assert!(e.get("relay").is_none());
+        }
+        let payload = unb64u(es[1]["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(parse_json(std::str::from_utf8(&payload).unwrap()).unwrap()["source"], k);
+        let first = |repr: Repr| a.since("acme", repr, 0, 1)[0].clone();
+        assert_eq!(first(Repr::Pseudonymized)["app"], json!(pseudonym(&KEY, "helpdesk-api@apps.acme.example")));
+        assert!(first(Repr::Removed).get("app").is_none());
+        let c = console(&tests_dir("api-audit-connector-console"));
+        let cases = [
+            forged(Repr::AsIs, &first(Repr::AsIs), |o| {
+                o.remove("connector");
+                o.insert("source".into(), json!("relay"));
+                o.insert("relay".into(), json!("r_00000000000000aa"));
+            }),
+            forged(Repr::AsIs, &first(Repr::AsIs), |o| {
+                o.insert("connector".into(), json!("k_0000000000000001"));
+            }),
+            forged(Repr::AsIs, &first(Repr::AsIs), |o| {
+                o.insert("relay".into(), json!("r_00000000000000aa"));
+            }),
+        ];
+        for (i, e) in cases.iter().enumerate() {
+            assert!(matches!(c.ingest("acme", k, Repr::AsIs, 1, 1, std::slice::from_ref(e)), Err(IngestError::Invalid(_))), "case {i}");
+        }
+        for repr in Repr::ALL {
+            c.ingest("acme", k, repr, 1, 1, &[first(repr)]).unwrap();
+        }
+        assert_eq!(c.head("acme", k, Repr::AsIs), (1, first(Repr::AsIs)["hash"].as_str().unwrap().to_owned()));
+        assert_eq!(entries(&c, "acme", k, Repr::AsIs)[0]["connector"], k);
+        let r = open_in(None, "r_00000000000000aa", Arc::new(NoSigner), Some((1, KEY.to_vec())));
+        let mut named = call("c_1");
+        named["connector"] = json!(k);
+        assert_eq!(r.record("acme", named, NOW).unwrap_err().code, "bad-request");
+    }
+
     #[test]
     fn entries_with_unknown_fields_are_refused() {
         let a = open_in(None, "console", Arc::new(NoSigner), None);
@@ -2130,7 +2540,7 @@ mod tests {
     #[test]
     fn retention_drops_old_segments_under_the_hold() {
         let dir = tests_dir("api-audit-retention");
-        let open = || ApiAudit::open_with(Some(&dir), "console", Arc::new(NoSigner), Arc::new(FixedKey(Some((1, KEY.to_vec())))), NOW, 300);
+        let open = || ApiAudit::open_with(ChainKind::Audit, Some(&dir), "console", Arc::new(NoSigner), Arc::new(FixedKey(Some((1, KEY.to_vec())))), NOW, 300);
         let a = open();
         for i in 0..5 {
             a.record("acme", call("c_1"), NOW + i).unwrap();

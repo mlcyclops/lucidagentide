@@ -65,13 +65,15 @@ pub fn preset_of(ai: &Value) -> &'static str {
     PRESETS.iter().find(|p| p.order == order.as_slice() && p.access == access).map_or(ADVANCED_ID, |p| p.id)
 }
 
-/// Every key of the `ai` object (1.2).
-pub const AI_KEYS: [&str; 17] = [
+/// Every key of the `ai` object (1.2), with `local_mcp` (API-1c 10.6, the Settings > AI Local MCP card).
+pub const AI_KEYS: [&str; 18] = [
     "v", "enabled", "who", "order", "classes", "cui_classes", "default_class", "frontier_classes", "redact_for_frontier", "frontier", "models",
-    "device_models", "embedding", "deadlines_ms", "budgets", "org_index", "map_sha256",
+    "device_models", "embedding", "deadlines_ms", "budgets", "org_index", "map_sha256", "local_mcp",
 ];
 /// Every key a console draft may give of the AI map (2); `v`, `org`, `seq` and `issued` are the console's.
 pub const MAP_DRAFT_KEYS: [&str; 4] = ["gateways", "channel_classes", "excluded_channels", "who_principals"];
+/// The optional AI map keys of r6 8.1, carried only when present (a map without them is byte-identical to before).
+pub const MAP_MCP_KEYS: [&str; 2] = ["mcp_servers", "mcp_cleared"];
 
 fn invalid(words: impl Into<String>) -> ApiError {
     ApiError::with("invalid", words)
@@ -130,10 +132,15 @@ pub fn map_of(org: &str, current: Option<&Value>, draft: &Value, t_ms: i64) -> R
         let empty = if k == "channel_classes" { json!({}) } else { json!([]) };
         map.insert(k.into(), current.and_then(|c| c.get(k)).cloned().unwrap_or(empty));
     }
+    for k in MAP_MCP_KEYS {
+        if let Some(v) = current.and_then(|c| c.get(k)) {
+            map.insert(k.into(), v.clone());
+        }
+    }
     if let Some(fields) = draft.get("map") {
         let fields = fields.as_object().ok_or_else(|| invalid("map is an object."))?;
         for (k, v) in fields {
-            if !MAP_DRAFT_KEYS.contains(&k.as_str()) {
+            if !MAP_DRAFT_KEYS.contains(&k.as_str()) && !MAP_MCP_KEYS.contains(&k.as_str()) {
                 return Err(ApiError::with("unknown-field", format!("Unknown field: map.{}.", crate::console_spokes::clean(k))));
             }
             map.insert(k.clone(), v.clone());
@@ -625,6 +632,15 @@ mod tests {
 
     fn ok_check(_: &Value, _: &Value) -> Result<(), String> {
         Ok(())
+    }
+
+    /// API-1c 10.6: the Local MCP card stages `ai.local_mcp` (the relay's `check_local_mcp` and gates judge it).
+    #[test]
+    fn the_local_mcp_card_stages_ai_local_mcp() {
+        let lm = json!({"enabled": true, "classes": ["internal"], "tools": ["search_messages"], "send": false});
+        let ai = ai_of(None, &json!({"preset": "advanced", "ai": {"local_mcp": lm.clone()}})).unwrap();
+        assert_eq!(ai["local_mcp"], lm);
+        assert!(ai_of(None, &json!({"ai": {"local_mcp_x": true}})).is_err());
     }
 
     #[test]

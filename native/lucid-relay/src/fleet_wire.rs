@@ -539,7 +539,9 @@ pub const OPS: &[OpSpec] = &[
     // API-1 2.6: the relay's api heads (asked first after `welcome`; an older relay answers fleet-op), the org api
     // map, its tightening journal and the pseudonym key.
     OpSpec { op: "api-heads", kind: Kind::Req, to: Some(Side::Relay), keys: &[], opt: &[] },
-    OpSpec { op: "api-map", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "map"], opt: &["base"] },
+    // API-1d 2.4: `trust` `{root, signer_policy, crl?}` only to a spokes relay, which holds no Meet org CA (the root
+    // and signer policy the console verified the map with; the spokes relay pins the root per bound org).
+    OpSpec { op: "api-map", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "map"], opt: &["base", "trust"] },
     OpSpec { op: "api-tighten", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "entry"], opt: &[] },
     OpSpec { op: "api-pseudonym-key", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "pkv", "key", "not_before"], opt: &[] },
     // API-1 2.6, 9.3, 12.2: the relay's audit chains shipped to the console (`api-audit`, acknowledged once durable),
@@ -557,6 +559,39 @@ pub const OPS: &[OpSpec] = &[
     // (`meet.api.sign` in the relay's request book), then polls the request; an older relay answers fleet-op.
     OpSpec { op: "api-sign-request", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "principal", "map", "map_sha256", "reason", "requested_by"], opt: &[] },
     OpSpec { op: "api-sign-status", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "request"], opt: &[] },
+    // API-1 revision 4 2.3: the map versions and features the relay takes; the one request allowed before the
+    // reconnect catch-up (read-only); an older relay answers fleet-op (map version 1, no features).
+    OpSpec { op: "api-features", kind: Kind::Req, to: Some(Side::Relay), keys: &[], opt: &[] },
+    // API-1 revision 4 2.5, 6.7: a relay reports a principal deprovisioned or active again (`api_people`).
+    OpSpec { op: "api-person", kind: Kind::Req, to: Some(Side::Console), keys: &["org", "principal", "state", "at", "provider", "source"], opt: &[] },
+    // API-1 revision 5 4.3: the console asks a relay for the newest SSO-signed person record (`api_subject`).
+    OpSpec { op: "api-subject", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "provider"], opt: &["sub", "principal"] },
+    // API-1 revision 4 13.1: the console asks a relay for its SSO services' directory status reports (`api_sso_status`).
+    OpSpec { op: "api-directory-status", kind: Kind::Req, to: Some(Side::Relay), keys: &["org"], opt: &[] },
+    // API-1 revision 5 6.1, 6.4: the console asks a relay for the org's current signed policy and the root-signed
+    // signer policy (read-only; the console verifies both under its Meet CA root).
+    OpSpec { op: "api-org-policy", kind: Kind::Req, to: Some(Side::Relay), keys: &["org"], opt: &[] },
+    // API-1 revision 4 2.5, 7.3: the relay's event chains, as `api-audit` and `api-chains` for its audit chains.
+    OpSpec { op: "api-events", kind: Kind::Req, to: Some(Side::Console), keys: &["org", "repr", "first", "last", "entries"], opt: &[] },
+    OpSpec { op: "api-event-chains", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "after"], opt: &[] },
+    // API-1 revision 4 2.5, 5.1, 5.2: one page of the relay's compliance metadata for an org; an API hold (the relay
+    // hold at once, the reviewer's ask on the archive relay) and its state.
+    OpSpec { op: "api-compliance-read", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "kind", "params", "after"], opt: &[] },
+    OpSpec { op: "api-hold", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "hold", "ask_reviewer"], opt: &[] },
+    OpSpec { op: "api-hold-status", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "hold"], opt: &[] },
+    // API-1 revision 4 2.5, 5.3: compliance exports. The console asks the archive relay for a job, its state and its
+    // cancellation; the archive relay sends the seal header, then each ciphertext part, to the console.
+    OpSpec { op: "api-export", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "job"], opt: &[] },
+    OpSpec { op: "api-export-status", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "job"], opt: &[] },
+    OpSpec { op: "api-export-cancel", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "job", "reason"], opt: &[] },
+    OpSpec { op: "api-export-seal", kind: Kind::Req, to: Some(Side::Console), keys: &["org", "job", "seal"], opt: &[] },
+    OpSpec { op: "api-export-part", kind: Kind::Req, to: Some(Side::Console), keys: &["org", "job", "n", "data", "sha256"], opt: &[] },
+    // API-1d 2.4: the orgs a spokes relay is bound to (sent first in every reconnect sync; a Meeting Hub relay answers
+    // 409 `not-spokes`; `generation` is the console's binding generation, an older one refused, and `release_roots` the
+    // orgs whose pinned Meet org CA root that generation releases), and a 6.2 view of a bound org from the spokes
+    // relay's own state (`spokes.read`).
+    OpSpec { op: "api-orgs", kind: Kind::Req, to: Some(Side::Relay), keys: &["orgs", "generation"], opt: &["release_roots"] },
+    OpSpec { op: "api-spokes", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "view", "query", "people"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
@@ -574,6 +609,12 @@ pub const API_FAILOVER_MAX: usize = 64 * 1024;
 /// whole frame limit.
 pub const API_SIGN_REQUEST_MAX: usize = TO_RELAY_MAX;
 
+/// API-1 revision 4 2.5: an `api-export-seal` frame (a seal header of at most 2 MiB).
+pub const API_EXPORT_SEAL_MAX: usize = 2 * 1024 * 1024;
+/// API-1 revision 4 2.5: an `api-export-part` frame (4 MiB of ciphertext in standard base64, with its keys); the
+/// console's WebSocket message cap, which only these two ops may use beyond `TO_CONSOLE_MAX`.
+pub const API_EXPORT_PART_MAX: usize = 6 * 1024 * 1024;
+
 /// API-1 2.6: the size limit of an op's whole request frame, below the side's frame limit (3.8).
 pub fn op_frame_max(op: &str) -> Option<usize> {
     match op {
@@ -588,6 +629,32 @@ pub fn op_frame_max(op: &str) -> Option<usize> {
         "api-synced" => Some(4 * 1024),
         "api-sign-request" => Some(API_SIGN_REQUEST_MAX),
         "api-sign-status" => Some(256),
+        // revision 4 2.5: 64 B in (the answer is at most 4 KiB)
+        "api-features" => Some(64),
+        // revision 4 2.5: 1 KiB
+        "api-person" => Some(1024),
+        // revision 5 4.3: 1 KiB in (the answer is at most 8 KiB, `api_subject::ANSWER_MAX`)
+        "api-subject" => Some(1024),
+        // revision 4 13.1: 256 B in (the answer is at most 16 reports of 48 KiB, `api_sso_status`)
+        "api-directory-status" => Some(256),
+        // revision 5 6.1: 256 B in (the answer is a signed policy of at most 64 KiB and the signer policy)
+        "api-org-policy" => Some(256),
+        // revision 4 2.5: as `api-audit` and `api-chains`
+        "api-events" => Some(API_AUDIT_MAX),
+        "api-event-chains" => Some(256),
+        // revision 4 2.5: 4 KiB in (1 MiB out), 32 KiB, 256 B
+        "api-compliance-read" => Some(4 * 1024),
+        "api-hold" => Some(32 * 1024),
+        "api-hold-status" => Some(256),
+        // revision 4 2.5: 64 KiB, 256 B, 1 KiB in; 2 MiB and 6 MiB to the console
+        "api-export" => Some(64 * 1024),
+        "api-export-status" => Some(256),
+        "api-export-cancel" => Some(1024),
+        "api-export-seal" => Some(API_EXPORT_SEAL_MAX),
+        "api-export-part" => Some(API_EXPORT_PART_MAX),
+        // API-1d 2.4: 2 KiB and 1 KiB in (the `api-spokes` answer is at most 1 MiB, the console's frame limit)
+        "api-orgs" => Some(2 * 1024),
+        "api-spokes" => Some(1024),
         _ => None,
     }
 }
@@ -638,8 +705,17 @@ fn event_values_ok(op: &str, body: &Map<String, Value>) -> bool {
     }
 }
 
-/// The receiving side's size limit (3.8).
+/// The receiving side's WebSocket message cap (3.8). On the console only `api-export-seal` and `api-export-part`
+/// (revision 4 2.5) may pass `TO_CONSOLE_MAX`; `parse_frame` holds every other frame to `frame_base`.
 pub fn frame_limit(at: Side) -> usize {
+    match at {
+        Side::Relay => TO_RELAY_MAX,
+        Side::Console => API_EXPORT_PART_MAX,
+    }
+}
+
+/// The receiving side's size limit for a frame whose op sets none (3.8).
+pub fn frame_base(at: Side) -> usize {
     match at {
         Side::Relay => TO_RELAY_MAX,
         Side::Console => TO_CONSOLE_MAX,
@@ -664,7 +740,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             if spec.kind != Kind::Req || spec.to.is_some_and(|s| s != at) {
                 return bad(id, "op");
             }
-            if op_frame_max(spec.op).is_some_and(|m| text.len() > m) {
+            if text.len() > op_frame_max(spec.op).unwrap_or(frame_base(at)) {
                 return bad(id, "size");
             }
             let Some(Value::Object(body)) = o.get("body") else { return bad(id, "body") };
@@ -674,6 +750,9 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             Ok(Frame::Req { id: id.unwrap_or_default(), op: spec.op, body: body.clone() })
         }
         Some("evt") => {
+            if text.len() > frame_base(at) {
+                return bad(None, "size");
+            }
             if !exact(&o, &["t", "op", "body"]) {
                 return bad(None, "keys");
             }
@@ -688,6 +767,9 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
             Ok(Frame::Evt { op: spec.op, body: body.clone() })
         }
         Some("res") => {
+            if text.len() > frame_base(at) {
+                return bad(None, "size");
+            }
             let Some(id) = id else { return bad(None, "keys") };
             match o.get("ok") {
                 Some(Value::Bool(true)) if exact(&o, &["t", "id", "ok", "body"]) => Ok(Frame::Res { id, answer: Ok(o["body"].clone()) }),
@@ -1221,6 +1303,56 @@ mod tests {
         assert_eq!(parse_frame(&req_text(1, "api-synced", json!({"acme": {"seq": 3, "tseq": 7}})), Side::Relay).err().unwrap().why, "body");
         let big: Map<String, Value> = (0..200).map(|i| (format!("org-{i:04}-{}", "x".repeat(10)), json!({"seq": 1, "tseq": 1}))).collect();
         assert_eq!(parse_frame(&req_text(1, "api-synced", json!({"orgs": big})), Side::Relay).err().unwrap().why, "size");
+    }
+
+    /// API-1d 2.4: `api-orgs` (2 KiB) and `api-spokes` (1 KiB) go console to relay; `api-map` may carry `trust`.
+    #[test]
+    fn api_spokes_ops_go_console_to_relay_within_their_limits() {
+        let orgs = json!({"orgs": ["acme", "globex"], "generation": 3});
+        assert!(matches!(parse_frame(&req_text(1, "api-orgs", orgs.clone()), Side::Relay), Ok(Frame::Req { op: "api-orgs", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-orgs", orgs), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-orgs", json!({})), Side::Relay).err().unwrap().why, "body");
+        // the binding generation is required; a root release is optional
+        assert_eq!(parse_frame(&req_text(1, "api-orgs", json!({"orgs": ["acme"]})), Side::Relay).err().unwrap().why, "body");
+        let released = json!({"orgs": ["acme"], "generation": 4, "release_roots": ["acme"]});
+        assert!(matches!(parse_frame(&req_text(1, "api-orgs", released), Side::Relay), Ok(Frame::Req { op: "api-orgs", .. })));
+        let many: Vec<String> = (0..64).map(|i| format!("org-{i:02}-{}", "x".repeat(26))).collect();
+        assert_eq!(parse_frame(&req_text(1, "api-orgs", json!({"orgs": many, "generation": 1})), Side::Relay).err().unwrap().why, "size");
+        let view = json!({"org": "acme", "view": "nodes", "query": "relay=r_21&limit=50", "people": false});
+        assert!(matches!(parse_frame(&req_text(1, "api-spokes", view.clone()), Side::Relay), Ok(Frame::Req { op: "api-spokes", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-spokes", view), Side::Console).err().unwrap().why, "op");
+        assert_eq!(parse_frame(&req_text(1, "api-spokes", json!({"org": "acme", "view": "nodes", "query": ""})), Side::Relay).err().unwrap().why, "body");
+        let long = json!({"org": "acme", "view": "nodes", "query": "q=".to_string() + &"x".repeat(1024), "people": true});
+        assert_eq!(parse_frame(&req_text(1, "api-spokes", long), Side::Relay).err().unwrap().why, "size");
+        let trusted = json!({"org": "acme", "map": {}, "trust": {"root": "-----BEGIN CERTIFICATE-----", "signer_policy": {}}});
+        assert!(matches!(parse_frame(&req_text(1, "api-map", trusted), Side::Relay), Ok(Frame::Req { op: "api-map", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-map", json!({"org": "acme", "map": {}, "roots": {}})), Side::Relay).err().unwrap().why, "body");
+    }
+
+    #[test]
+    fn export_parts_pass_the_console_cap_and_nothing_else_does() {
+        // revision 4 2.5: a 4 MiB part in base64 fits `api-export-part`; every other frame to the console keeps 1 MiB
+        let part = json!({"org": "acme", "job": "j_7c6b5a4938271605", "n": 0, "data": "A".repeat(4 * 1024 * 1024 / 3 * 4 + 32), "sha256": "a".repeat(64)});
+        assert!(matches!(parse_frame(&req_text(1, "api-export-part", part.clone()), Side::Console), Ok(Frame::Req { op: "api-export-part", .. })));
+        // the relay's own message cap refuses the full part before its op is read; a small part shows the direction
+        assert_eq!(parse_frame(&req_text(1, "api-export-part", part), Side::Relay).err().unwrap().why, "size");
+        let small = json!({"org": "acme", "job": "j_7c6b5a4938271605", "n": 0, "data": "AAAA", "sha256": "a".repeat(64)});
+        assert_eq!(parse_frame(&req_text(1, "api-export-part", small), Side::Relay).err().unwrap().why, "op");
+        let seal = json!({"org": "acme", "job": "j_7c6b5a4938271605", "seal": {"part_sha256": vec!["a".repeat(64); 12800]}});
+        assert!(parse_frame(&req_text(1, "api-export-seal", seal), Side::Console).is_ok());
+        let too_big = json!({"org": "acme", "job": "j_7c6b5a4938271605", "seal": {"x": "a".repeat(API_EXPORT_SEAL_MAX)}});
+        assert_eq!(parse_frame(&req_text(1, "api-export-seal", too_big), Side::Console).err().unwrap().why, "size");
+        assert_eq!(parse_frame(&req_text(1, "api-audit", json!({"org": "acme", "repr": "as_is", "first": 1, "last": 1, "entries": ["a".repeat(2 * 1024 * 1024)]})), Side::Console).err().unwrap().why, "size");
+        assert_eq!(parse_frame(&res_ok_text(1, json!({"x": "a".repeat(2 * 1024 * 1024)})), Side::Console).err().unwrap().why, "size");
+        assert_eq!(parse_frame(&evt_text("audit", json!({"entries": ["a".repeat(2 * 1024 * 1024)]})), Side::Console).err().unwrap().why, "size");
+        assert_eq!(frame_limit(Side::Console), API_EXPORT_PART_MAX);
+        assert_eq!(frame_base(Side::Console), TO_CONSOLE_MAX);
+        for (op, max) in [("api-export", 64 * 1024), ("api-export-status", 256), ("api-export-cancel", 1024)] {
+            assert_eq!(op_frame_max(op), Some(max), "{op}");
+        }
+        let status = json!({"org": "acme", "job": "j_7c6b5a4938271605"});
+        assert!(matches!(parse_frame(&req_text(1, "api-export-status", status.clone()), Side::Relay), Ok(Frame::Req { .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-export-status", status), Side::Console).err().unwrap().why, "op");
     }
 
     #[test]

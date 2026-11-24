@@ -7,6 +7,7 @@
 // signing key, and appends `Answer.event` (`api.token`, `api.revoke`, `api.refusal`) to the org's 9.4 audit chain
 // before it releases the answer (`api_resource::token_audited`; a revocation is audited inside its journal call).
 
+use crate::api_entra::{self as entra, EntraKeys};
 use crate::api_fetch::{check_url, FetchCache, Limits};
 use crate::api_map::{effective_end, ApiMapStore, TightenEntry, CEILINGS};
 use crate::api_token::{self as tok, Cnf, JtiCache, Lifetime, SubjectClaims, TokenError};
@@ -40,11 +41,14 @@ const AUTH_METHODS: [&str; 3] = ["tls_client_auth", "private_key_jwt", "client_s
 
 // ---- state --------------------------------------------------------------------------------------------------------
 
-/// One listener's issuer state (6.5): the client assertion and DPoP `jti` caches, the per-source request windows and
-/// the per-client issuance windows (a minute of instants; a day of per-minute counts).
+/// One listener's issuer state (6.5): the client assertion and DPoP `jti` caches, the Entra `uti` cache and tenant key
+/// sets (revision 4 4.1), the per-source request windows and the per-client issuance windows (a minute of instants; a
+/// day of per-minute counts).
 pub struct IssueState {
-    assertions: Mutex<JtiCache>,
-    dpop: Mutex<JtiCache>,
+    pub(crate) assertions: Mutex<JtiCache>,
+    pub(crate) dpop: Mutex<JtiCache>,
+    utis: Mutex<JtiCache>,
+    entra: EntraKeys,
     sources: Mutex<HashMap<String, VecDeque<i64>>>,
     issued: Mutex<HashMap<String, VecDeque<i64>>>,
     issued_daily: Mutex<HashMap<String, VecDeque<(i64, u64)>>>,
@@ -55,6 +59,8 @@ impl Default for IssueState {
         IssueState {
             assertions: Mutex::new(JtiCache::assertion()),
             dpop: Mutex::new(JtiCache::dpop()),
+            utis: Mutex::new(JtiCache::uti()),
+            entra: EntraKeys::default(),
             sources: Mutex::default(),
             issued: Mutex::default(),
             issued_daily: Mutex::default(),
@@ -80,7 +86,7 @@ impl IssueState {
     /// The client's issuance windows on this listener (API1-R20): `rate.per_minute_each` over the last minute, then
     /// `rate.per_day_each` over the last day (`rate`); a window map already full of live clients refuses a new one
     /// (`abuse`).
-    fn issue_ok(&self, org: &str, client: &str, per_minute: usize, per_day: u64, now: i64) -> Result<(), Refusal> {
+    pub(crate) fn issue_ok(&self, org: &str, client: &str, per_minute: usize, per_day: u64, now: i64) -> Result<(), Refusal> {
         let key = format!("{org} {client}");
         let refuse = |l: Limit| match l {
             Limit::Wait(s) => Refusal { retry: Some(s), ..no("rate", "This client asked for too many tokens; see Retry-After.") },
@@ -222,6 +228,9 @@ pub struct IssueCtx<'a> {
     /// 6.1 `license`: the listener's product license lets it serve (false refuses every token request, 403).
     pub licensed: bool,
     pub now: i64,
+    /// Revision 5 6: the console's person-delegated grants (`jwt-bearer`, `authorization_code`, `refresh_token`); None
+    /// at a relay-local issuer, which refuses them (`grant`).
+    pub delegated: Option<&'a crate::api_delegated::Delegated<'a>>,
 }
 
 /// The HTTP request as the endpoint sees it.
@@ -244,15 +253,34 @@ pub struct Answer {
 
 // ---- answers ------------------------------------------------------------------------------------------------------
 
-/// A refusal before it becomes an answer: the contract code, a sentence, `Retry-After` seconds.
-struct Refusal {
-    code: &'static str,
-    why: String,
-    retry: Option<i64>,
+/// A refusal before it becomes an answer: the contract code, a sentence, `Retry-After` seconds, and the failed step of
+/// an `entra_wif` authentication (revision 4 4.1: the audit names it), and an HTTP status other than the code's
+/// (`shape`) where the contract names one (revision 6 4.1: 400 `client-auth` for a spokes_hub client).
+pub(crate) struct Refusal {
+    pub(crate) code: &'static str,
+    pub(crate) why: String,
+    pub(crate) retry: Option<i64>,
+    pub(crate) step: Option<&'static str>,
+    pub(crate) status: Option<u16>,
 }
 
-fn no(code: &'static str, why: impl Into<String>) -> Refusal {
-    Refusal { code, why: why.into(), retry: None }
+pub(crate) fn no(code: &'static str, why: impl Into<String>) -> Refusal {
+    Refusal { code, why: why.into(), retry: None, step: None, status: None }
+}
+
+/// Revision 6 4.1: a spokes_hub client acts only through spokes relays (its node key signs each request) and never
+/// gets a token, whatever credential it presents: 400 `client-auth`, audited as every other refusal.
+pub(crate) fn not_spokes_hub(client: &Obj) -> Result<(), Refusal> {
+    if client.get("kind").and_then(Value::as_str) == Some("spokes_hub") {
+        return Err(Refusal { status: Some(400), ..no("client-auth", "A spokes_hub client gets no token; it acts only through spokes relays.") });
+    }
+    Ok(())
+}
+
+impl From<entra::Failed> for Refusal {
+    fn from(f: entra::Failed) -> Refusal {
+        Refusal { step: Some(f.step), ..no(f.code, sentence(&f.message)) }
+    }
 }
 
 /// "the key is unknown" as "The key is unknown."
@@ -272,24 +300,33 @@ impl From<TokenError> for Refusal {
     }
 }
 
+impl From<crate::api_delegated::Fail> for Refusal {
+    fn from(f: crate::api_delegated::Fail) -> Refusal {
+        no(f.code, f.why)
+    }
+}
+
 /// The HTTP status and RFC 6749 5.2 `error` (RFC 8707 `invalid_target`, RFC 9449 `invalid_dpop_proof`) of a code.
-fn shape(code: &str) -> (u16, &'static str) {
+pub(crate) fn shape(code: &str) -> (u16, &'static str) {
     match code {
         "abuse" | "rate" => (429, "invalid_request"),
-        "map-expired" | "client" | "client-auth" | "expired" => (401, "invalid_client"),
+        "map-expired" | "client" | "client-auth" | "expired" | "journal-unknown" => (401, "invalid_client"),
         "license" | "map-edition" | "api-off" | "suspended" | "owner" | "network" | "hours" | "mtls" => (403, "unauthorized_client"),
         "grant" => (400, "unsupported_grant_type"),
         "scope" => (400, "invalid_scope"),
         "target" => (400, "invalid_target"),
-        "subject" => (400, "invalid_grant"),
+        // revision 5 4.5
+        "subject" | "assertion" | "idp" | "consent" | "pkce" => (400, "invalid_grant"),
+        "person" => (403, "access_denied"),
+        "redirect" => (400, "invalid_request"),
         "dpop" | "dpop-replay" | "dpop-required" => (400, "invalid_dpop_proof"),
         "too-large" => (413, "invalid_request"),
-        "fetch" | "sign" | "journal" | "issuer-key-unlisted" | "audit-unavailable" => (503, "temporarily_unavailable"),
+        "fetch" | "sign" | "journal" | "issuer-key-unlisted" | "audit-unavailable" | "subject-unreachable" => (503, "temporarily_unavailable"),
         _ => (400, "invalid_request"),
     }
 }
 
-fn no_store() -> Vec<(&'static str, String)> {
+pub(crate) fn no_store() -> Vec<(&'static str, String)> {
     vec![("Cache-Control", "no-store".into()), ("Pragma", "no-cache".into())]
 }
 
@@ -327,10 +364,14 @@ pub fn document(body: Value) -> Answer {
 }
 
 /// The 6.1 token pipeline's map checks: `map-edition` while the pinned map is set aside for the license edition (13),
-/// `map-expired` without a pinned unexpired map, then `api-off`.
+/// `journal-unknown` while an unknown journal action holds the org closed (revision 4 2.3 item 6), `map-expired`
+/// without a pinned unexpired map, then `api-off`.
 pub fn closed(store: &ApiMapStore, org: &str, now: i64) -> Option<&'static str> {
     if store.is_set_aside(org) {
         return Some("map-edition");
+    }
+    if store.journal_unknown(org) {
+        return Some("journal-unknown");
     }
     if !store.get(org, "").is_some_and(|m| m.expires > now) {
         return Some("map-expired");
@@ -343,6 +384,7 @@ pub fn closed_why(code: &str) -> &'static str {
     match code {
         "api-off" => "The API is off for this organization.",
         "map-edition" => "The organization's api map exceeds what the license edition allows, or the edition is not known.",
+        "journal-unknown" => "This relay received a tightening it does not know, so it refuses this organization's API until the console syncs it again.",
         _ => "The organization has no unexpired api map.",
     }
 }
@@ -367,6 +409,14 @@ pub fn as_metadata(issuer: &str, token_endpoint: &str, revocation_endpoint: Opti
     v
 }
 
+/// The console issuer I's RFC 8414 metadata: 5.1 with the revision 5 4.4 additions (authorization endpoint, PKCE,
+/// the delegated grants, public clients, assertion algorithms, ID-JAG and CIMD). A relay-local issuer serves none.
+pub fn console_as_metadata(issuer: &str) -> Value {
+    let mut v = as_metadata(issuer, &format!("{issuer}/oauth/token"), Some(&format!("{issuer}/oauth/revoke")), &format!("{issuer}/jwks.json"));
+    crate::api_delegated::extend_as_metadata(&mut v, issuer);
+    v
+}
+
 /// RFC 9728 protected resource metadata.
 pub fn resource_metadata(resource: &str, authorization_servers: &[&str], scopes: &[&str]) -> Value {
     json!({"resource": resource, "authorization_servers": authorization_servers, "scopes_supported": scopes, "bearer_methods_supported": ["header"]})
@@ -387,7 +437,7 @@ pub fn ec_public_jwk(key: &EcdsaKeyPair, kid: &str) -> Value {
 // ---- request parsing ----------------------------------------------------------------------------------------------
 
 /// Form decoding: `+` is a space, `%XX` two hex digits, the result UTF-8.
-fn unescape(s: &str) -> Option<String> {
+pub(crate) fn unescape(s: &str) -> Option<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -408,7 +458,7 @@ fn unescape(s: &str) -> Option<String> {
 
 /// An `application/x-www-form-urlencoded` body (5.2): at most 16 KiB, UTF-8, strict escapes, no parameter twice
 /// (RFC 6749 3.2); a parameter without a value counts as absent.
-fn form_of(body: &[u8]) -> Result<HashMap<String, String>, Refusal> {
+pub(crate) fn form_of(body: &[u8]) -> Result<HashMap<String, String>, Refusal> {
     if body.len() > FORM_MAX {
         return Err(no("too-large", "The request body is larger than 16 KiB."));
     }
@@ -442,20 +492,20 @@ fn basic_of(header: &str) -> Option<(String, String)> {
     Some((unescape(id)?, unescape(secret)?))
 }
 
-fn kind_of(c: &Value) -> &str {
+pub(crate) fn kind_of(c: &Value) -> &str {
     c.get("type").and_then(Value::as_str).unwrap_or_default()
 }
 
-fn private_ok(c: &Value) -> bool {
+pub(crate) fn private_ok(c: &Value) -> bool {
     c.get("private_ok").and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn keys_of(doc: &Value) -> Vec<Value> {
+pub(crate) fn keys_of(doc: &Value) -> Vec<Value> {
     doc.get("keys").and_then(Value::as_array).cloned().unwrap_or_default()
 }
 
 /// A discovery or JWKS document under 8.1 (cached by the listener's `FetchCache`).
-fn fetch_doc(cache: &FetchCache, url: &str, private_ok: bool) -> Result<Value, Refusal> {
+pub(crate) fn fetch_doc(cache: &FetchCache, url: &str, private_ok: bool) -> Result<Value, Refusal> {
     let u = check_url(url).map_err(|e| no("fetch", format!("The configured URL cannot be fetched ({e}).")))?;
     cache.fetch_json_blocking(&u, private_ok, FETCH_MAX, Limits::default()).map_err(|e| no("fetch", format!("{} could not be fetched ({e}).", u.url)))
 }
@@ -514,7 +564,7 @@ fn relay_of(store: &ApiMapStore, org: &str, resource: &str) -> Option<String> {
 }
 
 /// The client's `relays` (less journaled drops, within every `client_limit`) include `relay`.
-fn relay_allowed(client: &Obj, active: &[TightenEntry], id: &str, relay: &str) -> bool {
+pub(crate) fn relay_allowed(client: &Obj, active: &[TightenEntry], id: &str, relay: &str) -> bool {
     tok::relay_reachable(client, active, id, relay)
 }
 
@@ -526,6 +576,7 @@ enum Method {
     Assertion,
     Secret,
     Subject,
+    Entra,
 }
 
 impl Method {
@@ -535,6 +586,7 @@ impl Method {
             Method::Assertion => "private_key_jwt",
             Method::Secret => "client_secret_basic",
             Method::Subject => "token_exchange",
+            Method::Entra => "entra_wif",
         }
     }
 }
@@ -544,8 +596,10 @@ struct Authed<'a> {
     client: &'a Obj,
     id: String,
     method: Method,
-    /// The end of the `private_key_jwt` key or `client_secret` used (5.3).
+    /// The end of the `private_key_jwt` key, `client_secret` or `entra_wif` credential used (5.3).
     key_end: Option<i64>,
+    /// The Entra assertion's `exp` (`entra_wif`; the token never outlives it, R4-16).
+    assertion_exp: Option<i64>,
     subject: Option<SubjectClaims>,
     /// `x5t#S256` and `notAfter` of a client certificate that matched an `mtls` credential.
     cert: Option<(String, i64)>,
@@ -555,6 +609,9 @@ struct Authed<'a> {
 /// org's map (`client`), and exactly one client authentication over its usable credentials (`client-auth`): the
 /// verified certificate matching an `mtls` credential, a `private_key_jwt` assertion, or a `client_secret` by HTTP
 /// Basic; a token exchange authenticates with its subject token alone (a matching certificate then only binds).
+/// Revision 4 4.1: an Entra assertion names its client by `client_id` alone (its `sub` is the Entra workload
+/// identity), so an assertion that is not the client's own (`iss` not the client id) for a client listing an
+/// `entra_wif` credential goes to `entra_wif_auth`, and nothing else may authenticate that request.
 fn authenticate<'a>(ctx: &IssueCtx<'a>, http: &TokenHttp, form: &HashMap<String, String>, exchange: bool, who: &mut Option<String>) -> Result<Authed<'a>, Refusal> {
     let s = |k: &str| form.get(k).map(String::as_str);
     let basic = match http.authorization {
@@ -570,6 +627,17 @@ fn authenticate<'a>(ctx: &IssueCtx<'a>, http: &TokenHttp, form: &HashMap<String,
     if form.contains_key("client_secret") {
         return Err(no("client-auth", "Send the client secret with HTTP Basic, not in the body."));
     }
+    if let (Some(a), Some(id)) = (assertion, s("client_id")) {
+        let own = tok::parse_jws(a).is_some_and(|j| j.claims.get("iss").and_then(Value::as_str) == Some(id));
+        if let Some(client) = tok::find_client(ctx.store, ctx.org, id).filter(|c| !own && entra::is_entra_client(c)) {
+            *who = Some(id.to_string());
+            if exchange || basic.is_some() {
+                return Err(no("client-auth", "An Entra client authenticates with its Entra assertion alone."));
+            }
+            let (key_end, exp) = entra_wif_auth(ctx, client, a, id)?;
+            return Ok(Authed { client, id: id.to_string(), method: Method::Entra, key_end: Some(key_end), assertion_exp: Some(exp), subject: None, cert: None });
+        }
+    }
     let asserted = assertion.and_then(tok::parse_jws).and_then(|j| j.claims.get("sub").and_then(Value::as_str).map(str::to_string));
     let mut named = [s("client_id").map(str::to_string), basic.as_ref().map(|b| b.0.clone()), asserted].into_iter().flatten();
     let Some(id) = named.next() else { return Err(no("request", "The request names no client (client_id).")) };
@@ -578,6 +646,7 @@ fn authenticate<'a>(ctx: &IssueCtx<'a>, http: &TokenHttp, form: &HashMap<String,
     }
     *who = Some(id.clone());
     let client = tok::find_client(ctx.store, ctx.org, &id).ok_or_else(|| no("client", "That client is not registered for this organization."))?;
+    not_spokes_hub(client)?;
     let creds = tok::usable_credentials(client, ctx.store.active(ctx.org));
     let cert = http.client_cert.filter(|c| c.authenticates(client, ctx.org, &creds));
     if let Some(c) = cert {
@@ -591,7 +660,7 @@ fn authenticate<'a>(ctx: &IssueCtx<'a>, http: &TokenHttp, form: &HashMap<String,
             return Err(no("client-auth", "A token exchange authenticates with its subject token only."));
         }
         let claims = exchange_subject(ctx, form, &creds)?;
-        return Ok(Authed { client, id, method: Method::Subject, key_end: None, subject: Some(claims), cert: bound });
+        return Ok(Authed { client, id, method: Method::Subject, key_end: None, assertion_exp: None, subject: Some(claims), cert: bound });
     }
     let (method, key_end) = match (bound.is_some(), assertion, &basic) {
         (true, None, None) => (Method::Mtls, None),
@@ -600,13 +669,13 @@ fn authenticate<'a>(ctx: &IssueCtx<'a>, http: &TokenHttp, form: &HashMap<String,
         (false, None, None) => return Err(no("client-auth", "The request carries no client authentication.")),
         _ => return Err(no("client-auth", "The request carries more than one client authentication.")),
     };
-    Ok(Authed { client, id, method, key_end, subject: None, cert: bound })
+    Ok(Authed { client, id, method, key_end, assertion_exp: None, subject: None, cert: bound })
 }
 
 /// `private_key_jwt`: an inline key named by the assertion's `kid`, else the keys of every live `jwks_uri` credential,
 /// fetched under 8.1 with the credential's `private_ok` (at most hourly through the listener's cache). A failed fetch
 /// with no verifying key answers `fetch` (503) rather than blaming the client.
-fn assertion_auth(ctx: &IssueCtx, assertion: &str, id: &str, creds: &[&Value]) -> Result<i64, Refusal> {
+pub(crate) fn assertion_auth(ctx: &IssueCtx, assertion: &str, id: &str, creds: &[&Value]) -> Result<i64, Refusal> {
     let kid = tok::parse_jws(assertion).and_then(|j| j.header.get("kid").and_then(Value::as_str).map(str::to_string));
     let inline = kid.is_some() && creds.iter().any(|c| kind_of(c) == "private_key_jwt" && c.get("jwk").is_some() && c.get("kid").and_then(Value::as_str) == kid.as_deref());
     let mut docs: Vec<(String, Vec<Value>)> = Vec::new();
@@ -630,6 +699,22 @@ fn assertion_auth(ctx: &IssueCtx, assertion: &str, id: &str, creds: &[&Value]) -
         (Err(e), Some(f)) if e.code == "client-auth" => Err(f),
         (Err(e), _) => Err(e.into()),
     }
+}
+
+/// Revision 4 4.1 `entra_wif` (stage (a) of ruling R4-D20), every failure 401 `client-auth` naming its step: only at
+/// the console issuer `I` (the stored audience; a relay-local issuer never takes an Entra assertion, section 15), then
+/// step 1 (`api_entra::credential`: usable, unexpired, a served cloud) and steps 2 to 5 (`api_entra::verify`) with this
+/// listener's Entra key sets and `uti` cache. Returns (the credential's `expires`, the assertion's `exp`).
+fn entra_wif_auth(ctx: &IssueCtx, client: &Obj, assertion: &str, id: &str) -> Result<(i64, i64), Refusal> {
+    let at_console = ctx.local_scopes.is_none()
+        && ctx.store.get(ctx.org, "").is_some_and(|m| m.map().get("issuer").and_then(|i| i.get("url")).and_then(Value::as_str) == Some(ctx.issuer));
+    if !at_console {
+        return Err(Refusal { step: Some("entra_wif.issuer"), ..no("client-auth", "Entra assertions are accepted only by the console issuer.") });
+    }
+    let creds = tok::usable_credentials(client, ctx.store.active(ctx.org));
+    let cr = entra::credential(&creds, ctx.now)?;
+    let v = entra::verify(assertion, id, cr, &ctx.state.entra, ctx.now, &ctx.state.utis)?;
+    Ok((v.expires, v.exp))
 }
 
 /// D11 `client_secret` by HTTP Basic: a usable secret credential whose hash matches, not past its `expires`.
@@ -690,17 +775,23 @@ fn exchange_subject(ctx: &IssueCtx, form: &HashMap<String, String>, creds: &[&Va
 }
 
 /// 6.1: the client active (`suspended`), its registration within its effective end with the `app` grace (`expired`),
-/// its owner an active person (`owner`).
-fn standing(ctx: &IssueCtx, client: &Obj, id: &str) -> Result<(), Refusal> {
-    let active = ctx.store.active(ctx.org);
+/// its owner an active person and not in this relay's own owner-inactive record (`owner`, revision 4 6.7).
+pub(crate) fn standing(ctx: &IssueCtx, client: &Obj, id: &str) -> Result<(), Refusal> {
+    standing_of(ctx.store, ctx.org, client, id, ctx.owner_active, ctx.now)
+}
+
+/// `standing` without an `IssueCtx` (revision 5 4.6: the Authorize pipeline runs the same client checks).
+pub(crate) fn standing_of(store: &ApiMapStore, org: &str, client: &Obj, id: &str, owner_active: &dyn Fn(&str) -> bool, now: i64) -> Result<(), Refusal> {
+    let active = store.active(org);
     if client.get("state").and_then(Value::as_str) != Some("active") || active.iter().any(|e| e.action == "client_suspend" && e.target.as_str() == Some(id)) {
         return Err(no("suspended", "That client is suspended."));
     }
-    let end = effective_end(client.get("expires").and_then(Value::as_i64).unwrap_or(i64::MIN), &[ctx.store.grace_hours(ctx.org, "app", ctx.now)]);
-    if ctx.now > end {
+    let end = effective_end(client.get("expires").and_then(Value::as_i64).unwrap_or(i64::MIN), &[store.grace_hours(org, "app", now)]);
+    if now > end {
         return Err(no("expired", "That client's registration has expired."));
     }
-    if !(ctx.owner_active)(client.get("owner").and_then(Value::as_str).unwrap_or_default()) {
+    let owner = client.get("owner").and_then(Value::as_str).unwrap_or_default();
+    if !owner_active(owner) || crate::api_scim::owner_inactive(org, owner) {
         return Err(no("owner", "That client's owner is not an active person of the organization."));
     }
     Ok(())
@@ -715,6 +806,8 @@ fn standing(ctx: &IssueCtx, client: &Obj, id: &str) -> Result<(), Refusal> {
 /// `hours`, `mtls`), the issuance rate (`rate`); then the scopes (`invalid_scope`), the resource (`invalid_target`),
 /// the sender constraint (mTLS `x5t#S256`; else a DPoP proof's `jkt`; a D11 secret client without DPoP gets an
 /// unbound 300 s token, inside its networks only; otherwise `dpop-required`), the 5.3 lifetime, and the token.
+/// Revision 4: an `entra_wif` client (4.1) gets an unbound `Bearer` token of at most 600 s, never past its assertion's
+/// `exp`; a client with a `directory` block (4.3) gets tokens for its SCIM resource S only, with `directory.*` scopes.
 pub fn token(ctx: &IssueCtx, http: &TokenHttp) -> Answer {
     let mut who = None;
     issue(ctx, http, &mut who).unwrap_or_else(|r| refused(ctx, http, who.as_deref(), r))
@@ -722,6 +815,12 @@ pub fn token(ctx: &IssueCtx, http: &TokenHttp) -> Answer {
 
 fn refused(ctx: &IssueCtx, http: &TokenHttp, client: Option<&str>, r: Refusal) -> Answer {
     let mut a = refusal(ctx.org, http.source, client, r.code, &r.why, r.retry);
+    if let (Some(step), Some((_, event))) = (r.step, a.event.as_mut()) {
+        event["step"] = json!(step);
+    }
+    if let Some(status) = r.status {
+        a.status = status;
+    }
     if a.status == 401 && http.authorization.is_some() {
         a.headers.push(("WWW-Authenticate", format!("Basic realm=\"{}\"", ctx.issuer)));
     }
@@ -746,12 +845,20 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
     let exchange = match form.get("grant_type").map(String::as_str) {
         Some(GRANT_CLIENT_CREDENTIALS) => false,
         Some(GRANT_TOKEN_EXCHANGE) => true,
+        // revision 5 6.4, 6.5 (`jwt-dpop` is refused there, O11)
+        Some(g @ (crate::api_delegated::GRANT_JWT_BEARER | crate::api_delegated::GRANT_JWT_DPOP | crate::api_delegated::GRANT_CODE | crate::api_delegated::GRANT_REFRESH)) => {
+            return crate::api_delegated::grant(ctx, http, &form, g, who);
+        }
         Some(_) => return Err(no("grant", "That grant_type is not supported.")),
         None => return Err(no("request", "The request carries no grant_type.")),
     };
     let auth = authenticate(ctx, http, &form, exchange, who)?;
     let (client, id) = (auth.client, auth.id.as_str());
     let active = ctx.store.active(ctx.org);
+    // revision 5 6.6: a delegated client's tokens always name a person, so it has no client grant
+    if crate::api_delegated::is_delegated(client) {
+        return Err(no("grant", "A delegated client gets tokens only through its delegated grants."));
+    }
     standing(ctx, client, id)?;
     // the map's networks and every `client_limit`'s (2.5)
     if !tok::source_allowed(client, active, id, http.source) {
@@ -765,9 +872,14 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
     }
     let rate = |k: &str| tok::rate_of(client, active, id, k);
     ctx.state.issue_ok(ctx.org, id, usize::try_from(rate("per_minute_each")).unwrap_or(usize::MAX), rate("per_day_each"), now)?;
+    // revision 4 4.3: a client with a `directory` block gets tokens for its SCIM resource S only, carrying only
+    // `directory.*` scopes
+    let directory = client.get("directory").and_then(|d| d.get("resource")).and_then(Value::as_str);
     // scopes: the client's less journaled drops, within the local issuer's
     let dropped: Vec<&str> = tok::client_entries(active, "client_drop_scope", id).map(|e| tok::target_field(e, "scope")).collect();
-    let grantable: Vec<&str> = tok::names(client, "scopes").filter(|s| !dropped.contains(s) && ctx.local_scopes.is_none_or(|l| l.iter().any(|x| x == s))).collect();
+    let grantable: Vec<&str> = tok::names(client, "scopes")
+        .filter(|s| !dropped.contains(s) && ctx.local_scopes.is_none_or(|l| l.iter().any(|x| x == s)) && (directory.is_none() || s.starts_with("directory.")))
+        .collect();
     let mut scopes: Vec<String> = match form.get("scope") {
         None => grantable.iter().map(|s| s.to_string()).collect(),
         Some(asked) => {
@@ -783,38 +895,61 @@ fn issue(ctx: &IssueCtx, http: &TokenHttp, who: &mut Option<String>) -> Result<A
     if scopes.is_empty() {
         return Err(no("scope", "This client holds no scope this issuer grants."));
     }
-    // the resource (RFC 8707): one this issuer mints for, and a relay (or the console) in the client's relays
-    let resource = match form.get("resource") {
-        Some(r) => r.as_str(),
-        None => ctx.resources.first().map_or(ctx.issuer, String::as_str),
+    // the resource (RFC 8707): a directory client's S (the default; anything else is `invalid_target`), else one this
+    // issuer mints for, and a relay (or the console) in the client's relays
+    // revision 5 4.4: M for reach R0, C or CM of a listed connector for reach R1 (absent `resource` is `target`), at
+    // the console only
+    let mut chosen: Option<String> = None;
+    if let (None, Some(d), Some(pinned)) = (directory, ctx.delegated, ctx.store.get(ctx.org, "")) {
+        let console = d.host.console_active(ctx.org);
+        if let crate::api_delegated::Resolved::Chosen(r, t) = crate::api_delegated::resolve_resource(pinned.map(), ctx.org, client, id, form.get("resource").map(String::as_str), &console)? {
+            if t == crate::api_delegated::Target::Mcp && !relay_allowed(client, active, id, "console") {
+                return Err(no("target", "This client may not reach that resource."));
+            }
+            chosen = Some(r);
+        }
+    }
+    let resource = match (&chosen, directory, form.get("resource")) {
+        (Some(r), _, _) => r.as_str(),
+        (None, Some(s), None) => s,
+        (None, Some(s), Some(r)) if r == s => s,
+        (None, Some(_), Some(_)) => return Err(no("target", "This client's tokens are for its SCIM resource only.")),
+        (None, None, Some(r)) => r.as_str(),
+        (None, None, None) => ctx.resources.first().map_or(ctx.issuer, String::as_str),
     };
-    if !ctx.resources.iter().any(|r| r == resource) {
-        return Err(no("target", "That resource is not served by this issuer."));
+    if directory.is_none() && chosen.is_none() {
+        if !ctx.resources.iter().any(|r| r == resource) {
+            return Err(no("target", "That resource is not served by this issuer."));
+        }
+        let Some(relay) = relay_of(ctx.store, ctx.org, resource) else { return Err(no("target", "That resource is not part of this organization.")) };
+        if !relay_allowed(client, active, id, &relay) {
+            return Err(no("target", "This client may not reach that resource."));
+        }
     }
-    let Some(relay) = relay_of(ctx.store, ctx.org, resource) else { return Err(no("target", "That resource is not part of this organization.")) };
-    if !relay_allowed(client, active, id, &relay) {
-        return Err(no("target", "This client may not reach that resource."));
-    }
-    // the sender constraint
-    let cnf = if let Some((x5t, _)) = &auth.cert {
+    // the sender constraint: none for `entra_wif` (revision 4 4.1: Entra presents no proof or certificate); a
+    // directory client's other tokens are bound (4.2), so the unbound D11 path is not open to them
+    let cnf = if auth.method == Method::Entra {
+        Cnf::None
+    } else if let Some((x5t, _)) = &auth.cert {
         Cnf::X5t(x5t.clone())
     } else if let Some(proof) = http.dpop {
         Cnf::Jkt(tok::verify_dpop(proof, "POST", ctx.token_endpoint, None, now, &mut ctx.state.dpop.lock(), id)?)
-    } else if auth.method == Method::Secret && tok::names(client, "networks").next().is_some() {
+    } else if auth.method == Method::Secret && directory.is_none() && tok::names(client, "networks").next().is_some() {
         Cnf::None
     } else {
         return Err(no("dpop-required", "This token request needs a DPoP proof."));
     };
-    // 5.3
+    // 5.3; an `entra_wif` token lives at most 600 s (ruling R4-D2) and never past the assertion's `exp` (R4-16)
     let Some(pinned) = ctx.store.get(ctx.org, "") else { return Err(no("map-expired", closed_why("map-expired"))) };
     let lifetime = Lifetime {
         iat: now,
-        unbound: cnf == Cnf::None,
+        unbound: cnf == Cnf::None && auth.method != Method::Entra,
         registration_end: client.get("expires").and_then(Value::as_i64).unwrap_or(i64::MIN),
         grace_hours: ctx.store.grace_hours(ctx.org, "app", now).unwrap_or(0),
         cert_end: auth.cert.as_ref().map(|c| c.1),
         key_end: auth.key_end,
         subject_exp: auth.subject.as_ref().map(|s| s.exp),
+        assertion_exp: auth.assertion_exp,
         map_expires: pinned.expires,
     };
     let exp = tok::token_exp(&lifetime);
@@ -910,6 +1045,7 @@ fn own_token(ctx: &IssueCtx, token: &str, client: &str) -> Option<(String, i64)>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_entra::testkey::Key;
     use crate::api_map::{api_map_hash, VerifiedApiMap};
     use aws_lc_rs::signature::ECDSA_P256_SHA256_FIXED_SIGNING;
     use std::cell::{Cell, RefCell};
@@ -1055,6 +1191,7 @@ mod tests {
             state: &fx.state,
             licensed: true,
             now: NOW,
+            delegated: None,
         }
     }
 
@@ -1128,6 +1265,42 @@ mod tests {
         let a = ask(&fx, &s2, &http(&body, Some(&p)));
         assert_eq!(code(&a), "ok", "{}", a.body);
         assert_eq!(a.body["expires_in"].as_i64(), Some(300), "the key's end bounds the token");
+    }
+
+    /// Revision 6 4.1: a spokes_hub client never gets a token, whatever it presents (here a valid assertion, a
+    /// secret and a matching certificate on a client a forged map gave those credentials): 400 `client-auth`, audited.
+    #[test]
+    fn a_spokes_hub_client_gets_no_token() {
+        let fx = fx();
+        let hub = |credentials: Value| {
+            let mut c = client_with(credentials);
+            c["kind"] = json!("spokes_hub");
+            c["reach"] = json!("R1");
+            c["scopes"] = json!(["spokes.tasks.submit"]);
+            c
+        };
+        let refused = |a: &Answer| {
+            assert_eq!((a.status, code(a).as_str(), a.body["error"].as_str()), (400, "client-auth", Some("invalid_client")), "{}", a.body);
+            assert!(a.body.get("access_token").is_none());
+            assert!(!a.headers.iter().any(|(k, _)| *k == "WWW-Authenticate"));
+            let (name, event) = a.event.clone().unwrap();
+            assert_eq!((name, event["code"].as_str(), event["client"].as_str()), ("api.refusal", Some("client-auth"), Some(CLIENT)));
+        };
+        let s = store_of(&map_with(&fx, hub(jwt_credential(&fx))), &[]);
+        let body = jwt_form(&fx, "h1", &[]);
+        let p = proof(&fx, "hp1");
+        refused(&ask(&fx, &s, &http(&body, Some(&p))));
+        let secret = "s3cret-for-the-hub";
+        let s = store_of(&map_with(&fx, hub(json!([{"type": "client_secret", "sha256": hex(&sha256(secret.as_bytes())), "hint": "lcs_ab12", "expires": NOW + DAY}]))), &[]);
+        let body = form(&[("grant_type", "client_credentials")]);
+        let auth = basic(CLIENT, secret);
+        refused(&ask(&fx, &s, &TokenHttp { authorization: Some(auth.as_str()), ..http(&body, None) }));
+        let s = store_of(&map_with(&fx, hub(json!([{"type": "mtls", "serial": "001A2B", "spki": "AB".repeat(32)}]))), &[]);
+        let body = form(&[("grant_type", "client_credentials"), ("client_id", CLIENT)]);
+        let c = cert();
+        let mut h = http(&body, None);
+        h.client_cert = Some(&c);
+        refused(&ask(&fx, &s, &h));
     }
 
     #[test]
@@ -1522,5 +1695,236 @@ mod tests {
         assert!(tok::parse_jwk(&jwk, tok::CLIENT_RSA_MIN_BITS).is_some());
         assert_eq!((jwk["kid"].as_str(), jwk["alg"].as_str()), (Some("k9"), Some("ES256")));
         assert_eq!(jwks(std::slice::from_ref(&jwk)), json!({"keys": [jwk]}));
+    }
+
+    // ---- revision 4 4.1 to 4.3: `entra_wif` and the directory audience ----------------------------------------------
+
+    const TENANT: &str = "ce5f061f-abe6-4e40-9615-301f87bcb7f0";
+    const AZP: &str = "cb1d50fe-8ed0-4944-9e7d-5981aad3bc4b";
+    const SCIM: &str = "https://sso.acme.example:8443/api/orgs/acme/scim/v2";
+
+    /// The fixture with an Entra tenant key set endpoint whose document the test sets, and its first key.
+    fn entra_fx() -> (Fx, Key, std::sync::Arc<parking_lot::Mutex<Value>>) {
+        let mut fx = fx();
+        let key = Key::new("entra-k1");
+        let doc = std::sync::Arc::new(parking_lot::Mutex::new(json!({"keys": [key.jwk()]})));
+        let served = doc.clone();
+        let fetcher = move |u: &crate::api_fetch::FetchUrl| -> Result<Value, crate::api_fetch::FetchError> {
+            assert_eq!(u.url, format!("https://login.microsoftonline.com/{TENANT}/discovery/v2.0/keys"));
+            Ok(served.lock().clone())
+        };
+        fx.state = IssueState { entra: EntraKeys::with_fetcher(Box::new(fetcher)), ..IssueState::default() };
+        (fx, key, doc)
+    }
+
+    fn entra_client() -> Value {
+        json!({"id": CLIENT, "name": "entra-scim", "principal": "entra-scim@apps.acme.example", "kind": "integration",
+               "owner": OWNER, "reach": "R0", "scopes": ["directory.read", "directory.write"], "ceiling": "confidential",
+               "relays": ["r_01"], "networks": ["20.190.128.0/18"], "mtls_required": false,
+               "rate": {"per_minute_each": 600, "per_day_each": 500000},
+               "credentials": [{"type": "entra_wif", "cloud": "public", "tenant": TENANT, "audience": ISSUER, "azp": AZP, "expires": NOW + 90 * DAY}],
+               "directory": {"provider": "entra", "resource": SCIM, "domains": ["acme.example"]},
+               "created": NOW - DAY, "expires": NOW + 10 * DAY, "state": "active"})
+    }
+
+    /// Claims of an Entra workload identity assertion made at `t`, valid for an hour.
+    fn entra_claims(uti: &str, t: i64) -> Value {
+        json!({"aud": ISSUER, "iss": format!("https://login.microsoftonline.com/{TENANT}/v2.0"), "iat": t - 30, "nbf": t - 30, "exp": t + 3570,
+               "azp": AZP, "azpacr": "2", "oid": "5a1b7c2d-0000-4000-8000-000000000001", "sub": "5a1b7c2d-0000-4000-8000-000000000001",
+               "tid": TENANT, "uti": uti, "ver": "2.0"})
+    }
+
+    fn entra_assertion(key: &Key, claims: &Value) -> String {
+        key.sign(&json!({"alg": "RS256", "kid": key.kid, "typ": "JWT"}), claims)
+    }
+
+    fn entra_form(assertion: &str, extra: &[(&str, &str)]) -> Vec<u8> {
+        let mut p = vec![("grant_type", "client_credentials"), ("client_id", CLIENT), ("client_assertion_type", ASSERTION_TYPE), ("client_assertion", assertion)];
+        p.extend_from_slice(extra);
+        form(&p)
+    }
+
+    /// A request from the `AzureActiveDirectory` service tag ranges.
+    fn from_azure(body: &[u8]) -> TokenHttp<'_> {
+        TokenHttp { form: body, authorization: None, dpop: None, client_cert: None, source: "20.190.129.10".parse().unwrap() }
+    }
+
+    /// (status, code, the failed step the audit names).
+    fn refused_at(a: &Answer) -> (u16, String, Option<String>) {
+        (a.status, code(a), a.event.as_ref().and_then(|(_, e)| e["step"].as_str().map(str::to_string)))
+    }
+
+    #[test]
+    fn entra_wif_gets_an_unbound_600_s_token_for_its_scim_resource_only() {
+        let (fx, key, _) = entra_fx();
+        let s = store_of(&map_with(&fx, entra_client()), &[]);
+        let assertion = entra_assertion(&key, &entra_claims("u-1", NOW));
+        let body = entra_form(&assertion, &[]);
+        let a = ask(&fx, &s, &from_azure(&body));
+        assert_eq!(code(&a), "ok", "{}", a.body);
+        assert_eq!(
+            (a.body["token_type"].as_str(), a.body["expires_in"].as_i64(), a.body["scope"].as_str()),
+            (Some("Bearer"), Some(600), Some("directory.read directory.write"))
+        );
+        assert!(a.body.get("issued_token_type").is_none());
+        let c = claims(&a);
+        assert_eq!((c["aud"].as_str(), c["iss"].as_str(), c.get("cnf")), (Some(SCIM), Some(ISSUER), None), "unbound, aud = S");
+        let (name, event) = a.event.clone().unwrap();
+        assert_eq!((name, event["auth"].as_str(), event["cnf"].as_str(), event["aud"].as_str()), ("api.token", Some("entra_wif"), Some("none"), Some(SCIM)));
+        assert!(!event.to_string().contains(&assertion), "the assertion is never in the audit event");
+        // 4.3: accepted only at S; refused at I and at every RR (aud)
+        let token_text = a.body["access_token"].as_str().unwrap();
+        let profile = tok::Profile::console(&s, ORG).unwrap();
+        let at = |resource: &str| tok::validate_access_token(token_text, &profile, resource, NOW + 1, &s, ORG, None, &owners, None, None, &mut JtiCache::dpop());
+        let g = at(SCIM).unwrap();
+        assert_eq!((g.client.as_str(), g.scopes.clone()), (CLIENT, vec!["directory.read".to_string(), "directory.write".to_string()]));
+        for r in [ISSUER, RR1, RR2] {
+            assert_eq!(at(r).unwrap_err().code, "token", "{r}");
+        }
+        // resource = S is the default and may be named; anything else is invalid_target
+        let body = entra_form(&entra_assertion(&key, &entra_claims("u-2", NOW)), &[("resource", SCIM)]);
+        assert_eq!(claims(&ask(&fx, &s, &from_azure(&body)))["aud"].as_str(), Some(SCIM));
+        for (uti, r) in [("u-3", ISSUER), ("u-4", RR1), ("u-5", "https://sso.acme.example:8443/api/orgs/zeta/scim/v2")] {
+            let body = entra_form(&entra_assertion(&key, &entra_claims(uti, NOW)), &[("resource", r)]);
+            let a = ask(&fx, &s, &from_azure(&body));
+            assert_eq!((a.status, a.body["error"].as_str(), code(&a).as_str()), (400, Some("invalid_target"), "target"), "{r}");
+        }
+        // a narrower directory scope, and nothing outside directory.*
+        let body = entra_form(&entra_assertion(&key, &entra_claims("u-6", NOW)), &[("scope", "directory.read")]);
+        assert_eq!(ask(&fx, &s, &from_azure(&body)).body["scope"].as_str(), Some("directory.read"));
+        let body = entra_form(&entra_assertion(&key, &entra_claims("u-7", NOW)), &[("scope", "monitor.read")]);
+        assert_eq!(code(&ask(&fx, &s, &from_azure(&body))), "scope");
+        // networks still apply
+        let body = entra_form(&entra_assertion(&key, &entra_claims("u-8", NOW)), &[]);
+        assert_eq!(code(&ask(&fx, &s, &http(&body, None))), "network");
+    }
+
+    #[test]
+    fn every_failing_entra_check_is_401_client_auth_naming_its_step() {
+        let (fx, key, _) = entra_fx();
+        let s = store_of(&map_with(&fx, entra_client()), &[]);
+        let run = |header: Value, claims: Value| {
+            let body = entra_form(&key.sign(&header, &claims), &[]);
+            ask(&fx, &s, &from_azure(&body))
+        };
+        let rs256 = || json!({"alg": "RS256", "kid": "entra-k1"});
+        let with = |k: &str, v: Value, uti: &str| {
+            let mut c = entra_claims(uti, NOW);
+            c[k] = v;
+            c
+        };
+        let cases = [
+            ("iss", run(rs256(), with("iss", json!(format!("https://login.microsoftonline.com/{AZP}/v2.0")), "f-1"))),
+            ("aud", run(rs256(), with("aud", json!(ENDPOINT), "f-2"))),
+            ("azp", run(rs256(), with("azp", json!(TENANT), "f-3"))),
+            ("tid", run(rs256(), with("tid", json!(AZP), "f-4"))),
+            ("alg", run(json!({"alg": "PS256", "kid": "entra-k1"}), entra_claims("f-5", NOW))),
+            ("exp", run(rs256(), with("exp", json!(NOW - 1), "f-6"))),
+            ("kid", run(json!({"alg": "RS256", "kid": "entra-unknown"}), entra_claims("f-7", NOW))),
+        ];
+        for (step, a) in cases {
+            assert_eq!(refused_at(&a), (401, "client-auth".to_string(), Some(format!("entra_wif.{step}"))), "{step}: {}", a.body);
+            assert_eq!(a.body["error"].as_str(), Some("invalid_client"));
+        }
+        // a replayed uti
+        let body = entra_form(&entra_assertion(&key, &entra_claims("f-8", NOW)), &[]);
+        assert_eq!(code(&ask(&fx, &s, &from_azure(&body))), "ok");
+        let a = ask(&fx, &s, &from_azure(&body));
+        assert_eq!(refused_at(&a), (401, "client-auth".to_string(), Some("entra_wif.uti".to_string())));
+        // HS256 with any secret
+        let hs = format!("{}.{}.{}", b64u(br#"{"alg":"HS256","kid":"entra-k1"}"#), b64u(entra_claims("f-9", NOW).to_string().as_bytes()), b64u(&[9u8; 32]));
+        let body = entra_form(&hs, &[]);
+        assert_eq!(refused_at(&ask(&fx, &s, &from_azure(&body))).2.as_deref(), Some("entra_wif.alg"));
+        // step 1: the credential dropped by the journal, expired, or of the US Government cloud (gate disabled)
+        let body = entra_form(&entra_assertion(&key, &entra_claims("f-10", NOW)), &[]);
+        let dropped = store_of(&map_with(&fx, entra_client()), &[entry("client_drop_credential", json!({"client": CLIENT, "type": "entra_wif"}))]);
+        assert_eq!(refused_at(&ask(&fx, &dropped, &from_azure(&body))).2.as_deref(), Some("entra_wif.credential"));
+        let mut c = entra_client();
+        c["credentials"][0]["expires"] = json!(NOW - 1);
+        let old = store_of(&map_with(&fx, c), &[]);
+        assert_eq!(refused_at(&ask(&fx, &old, &from_azure(&body))).2.as_deref(), Some("entra_wif.credential-expired"));
+        let mut c = entra_client();
+        c["credentials"][0]["cloud"] = json!("usgov");
+        let gov = store_of(&map_with(&fx, c), &[]);
+        assert_eq!(refused_at(&ask(&fx, &gov, &from_azure(&body))).2.as_deref(), Some("entra_wif.usgov-gate"));
+        // a relay-local issuer never takes an Entra assertion
+        let only: &[&'static str] = &["monitor.read"];
+        assert_eq!(refused_at(&issue_as(&fx, &s, &from_azure(&body), &owners, Some(only))).2.as_deref(), Some("entra_wif.issuer"));
+        // Basic credentials beside the assertion
+        let b = basic(CLIENT, SECRET);
+        let mut h = from_azure(&body);
+        h.authorization = Some(b.as_str());
+        assert_eq!(code(&ask(&fx, &s, &h)), "client-auth");
+        // after authentication, the pipeline's other checks as for every client
+        let a = issue_as(&fx, &s, &from_azure(&body), &|_: &str| false, None);
+        assert_eq!(code(&a), "owner");
+    }
+
+    #[test]
+    fn an_entra_token_never_outlives_its_assertion() {
+        let (fx, key, _) = entra_fx();
+        let s = store_of(&map_with(&fx, entra_client()), &[]);
+        let mut c = entra_claims("x-1", NOW);
+        c["exp"] = json!(NOW + 120);
+        let body = entra_form(&entra_assertion(&key, &c), &[]);
+        let a = ask(&fx, &s, &from_azure(&body));
+        assert_eq!(a.body["expires_in"].as_i64(), Some(120), "{}", a.body);
+        assert_eq!(claims(&a)["exp"].as_i64(), Some(NOW + 120));
+        // a long assertion: the 600 s cap
+        let body = entra_form(&entra_assertion(&key, &entra_claims("x-2", NOW)), &[]);
+        assert_eq!(ask(&fx, &s, &from_azure(&body)).body["expires_in"].as_i64(), Some(600));
+    }
+
+    #[test]
+    fn a_key_entra_removed_is_refused_after_the_next_daily_refresh() {
+        let (fx, key, doc) = entra_fx();
+        let s = store_of(&map_with(&fx, entra_client()), &[]);
+        let at = |t: i64, k: &Key, uti: &str| {
+            let body = entra_form(&entra_assertion(k, &entra_claims(uti, t)), &[]);
+            let mut ctx = ctx_of(&fx, &s, &owners, None);
+            ctx.now = t;
+            token(&ctx, &from_azure(&body))
+        };
+        assert_eq!(code(&at(NOW, &key, "r-1")), "ok");
+        let next = Key::new("entra-k2");
+        *doc.lock() = json!({"keys": [next.jwk()]});
+        assert_eq!(code(&at(NOW + 3600, &key, "r-2")), "ok", "cached until the daily refresh");
+        let a = at(NOW + DAY, &key, "r-3");
+        assert_eq!(refused_at(&a), (401, "client-auth".to_string(), Some("entra_wif.kid".to_string())));
+        assert_eq!(code(&at(NOW + DAY + 1, &next, "r-4")), "ok");
+    }
+
+    #[test]
+    fn sender_constrained_directory_clients_stay_bound_with_aud_s() {
+        let fx = fx();
+        let mut c = client_with(jwt_credential(&fx));
+        c["kind"] = json!("integration");
+        c["scopes"] = json!(["directory.read", "monitor.read"]);
+        c["directory"] = json!({"provider": "hr", "resource": SCIM, "domains": ["acme.example"]});
+        let s = store_of(&map_with(&fx, c), &[]);
+        let body = jwt_form(&fx, "s1", &[]);
+        let p = proof(&fx, "sp1");
+        let a = ask(&fx, &s, &http(&body, Some(&p)));
+        assert_eq!(code(&a), "ok", "{}", a.body);
+        assert_eq!((a.body["token_type"].as_str(), a.body["scope"].as_str()), (Some("DPoP"), Some("directory.read")), "directory.* only");
+        let c = claims(&a);
+        assert_eq!((c["aud"].as_str(), c["cnf"]["jkt"].is_string()), (Some(SCIM), true));
+        // a DPoP-bound directory token without its proof is refused at S; any aud but S is refused
+        let token_text = a.body["access_token"].as_str().unwrap();
+        let profile = tok::Profile::console(&s, ORG).unwrap();
+        assert_eq!(tok::validate_access_token(token_text, &profile, SCIM, NOW, &s, ORG, None, &owners, None, None, &mut JtiCache::dpop()).unwrap_err().code, "cnf");
+        assert_eq!(tok::validate_access_token(token_text, &profile, ISSUER, NOW, &s, ORG, None, &owners, None, None, &mut JtiCache::dpop()).unwrap_err().code, "token");
+        // no DPoP and no certificate: refused rather than unbound
+        let body = jwt_form(&fx, "s2", &[]);
+        assert_eq!(code(&ask(&fx, &s, &http(&body, None))), "dpop-required");
+        // its resource is S alone
+        let body = jwt_form(&fx, "s3", &[("resource", RR1)]);
+        let p = proof(&fx, "sp3");
+        assert_eq!(code(&ask(&fx, &s, &http(&body, Some(&p)))), "target");
+        // the relay-local issuer grants no directory.* scope (revision 4 section 15)
+        let body = jwt_form(&fx, "s4", &[]);
+        let p = proof(&fx, "sp4");
+        let only: &[&'static str] = &["monitor.read"];
+        assert_eq!(code(&issue_as(&fx, &s, &http(&body, Some(&p)), &owners, Some(only))), "scope");
     }
 }

@@ -13,11 +13,15 @@
 //               [--console-profile standard|high]   (high only for a government deployment; read only until the
 //                 console's first admin signs in, AC-1 3.3)
 //                 (or LUCID_RELAY_CONSOLE_SOURCES, _TRUSTED_FRONTS, _FIRST_ADMIN, _PROFILE; AC-1 3.1)
+//               [--api-listen <host:port>]   the API listener of its bound orgs (or LUCID_RELAY_API_LISTEN; needs
+//                 --state and the relay's own TLS certificate; API-1d 6.3, src/spokes_api.rs)
 //   lucid-relay --owner <spoke node id> ...   a spoke's LAN mailbox: carries mail to and from that spoke only, needs
 //               no license; with --state it keeps crl, lan-mailbox-seen.json and lan-mail/ as the spoke agent does.
 //   lucid-relay collab [--host=…] [--port=…] …   phase B, the core's collab broker (tools/relay/serve.ts; src/collab.rs).
 //   lucid-relay ai [serve | card-add | cards | bench | approve | usage | audit-verify] --config <file>   the
 //               organization's AI gateway (contract AI-1, slice AI-1d; src/ai_gateway.rs).
+//   lucid-relay connector [serve | keygen | install | apps | forget | audit-verify] --config <connector.json>   the
+//               organization's API connector (contract API-1 revision 5, slice API-1c2; src/connector.rs).
 //   lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] |
 //               reset --first-admin <email>   [--state <dir>]   with the relay stopped (console.lock): the Admin
 //               Console's book, offline (AC-1 3.2).
@@ -34,6 +38,7 @@
 //   lucid-relay console serve ... [--fleet-serve-dev]   a `dev-license` build hands out its own program too (AC-2b-D
 //               4.2; default off).
 
+mod a2a_card;
 mod ai_gateway;
 mod ai_gateway_admit;
 mod ai_gateway_ask;
@@ -41,34 +46,95 @@ mod ai_gateway_audit;
 mod ai_gateway_backend;
 mod ai_gateway_bench;
 mod ai_gateway_cards;
+mod ai_gateway_mcp;
+mod ai_gateway_mcp_client;
+mod ai_gateway_mcp_cred;
 mod ai_gateway_policy;
 mod ai_gateway_suite;
+mod ai_gateway_tools;
+mod ai_mcp;
 mod api_audit;
 mod api_catalog;
 mod api_checkpoint;
+mod api_cjournal;
+mod api_compliance;
+mod api_delegated;
+mod api_entra;
+mod api_event_outbox;
+mod api_event_watch;
+mod api_events;
 mod api_export;
 mod api_export_wire;
+mod api_exports;
 mod api_failover;
+mod api_features;
+mod api_federation;
 mod api_fetch;
+mod api_holds_relay;
+mod api_exports_relay;
+mod api_idempotency;
 mod api_issue;
 mod api_listener;
 mod api_map;
+mod api_people;
 mod api_resource;
+mod api_scim;
+mod api_spokes_cred;
+mod api_sso_status;
+mod api_subject;
 mod api_token;
+mod api_webhook;
+mod ce_device;
+#[cfg(test)]
+mod ce_device_docs;
+mod ce_device_files;
+mod ce_device_log;
+#[cfg(test)]
+mod ce_device_vectors;
 mod codec;
 mod collab;
 mod collab_auth;
 mod collab_presence;
+mod connector;
+mod connector_a2a;
+mod connector_a2a_push;
+#[cfg(test)]
+mod connector_a2a_tests;
+mod connector_a2a_wire;
+mod connector_api;
+mod connector_approvals;
+mod connector_device;
+#[cfg(test)]
+mod connector_e2e_tests;
+mod connector_enroll;
+mod connector_events;
+mod connector_mcp;
+mod connector_notice;
+mod connector_seal;
+mod connector_session;
+mod connector_spokes;
+mod connector_spokes_relay;
+#[cfg(test)]
+mod connector_spokes_tests;
+mod connector_spokes_wire;
+mod connector_store;
+mod connector_sync;
+mod connector_view;
 mod console;
+mod console_a2a;
 mod console_ai;
 mod console_api;
+mod console_api_1c;
+mod console_api_1d;
 mod console_api_ui;
 mod console_approvals;
 mod console_audit;
 mod console_auth;
+mod console_connector;
 mod console_fleet;
 mod console_limits;
 mod console_mail;
+mod console_mcp;
 mod console_mds;
 mod console_meet;
 mod console_password;
@@ -101,6 +167,9 @@ mod idp;
 mod idp_vectors;
 mod license;
 mod log;
+mod mcp;
+#[cfg(test)]
+mod mcp_e2e_tests;
 mod meet;
 mod meet_ca;
 mod meet_console;
@@ -119,8 +188,10 @@ mod meet_tls;
 mod meet_x509;
 mod otlp_proto;
 mod presence;
+mod prompt_fence;
 mod relay;
 mod server;
+mod spokes_api;
 mod store;
 #[cfg(test)]
 mod vectors;
@@ -136,7 +207,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-const FLAGS: [&str; 16] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "cert-store-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile", "with-console"];
+const FLAGS: [&str; 17] = ["root", "host", "port", "tls-cert", "tls-key", "state", "license", "sender-mib", "cert-store-mib", "owner", "console", "console-sources", "console-trusted-fronts", "console-first-admin", "console-profile", "with-console", "api-listen"];
 
 fn die(msg: &str) -> ! {
     eprintln!("lucid-relay: {msg}");
@@ -202,6 +273,8 @@ struct Config {
     /// --cert-store-mib or LUCID_RELAY_CERT_STORE_MIB, 16 to 256 (ID-1 5.5: lowered, never raised).
     cert_store_bytes: Option<i64>,
     owner: Option<String>,
+    /// API-1d 6.3: --api-listen or LUCID_RELAY_API_LISTEN, `host:port` of the spokes relay's API listener.
+    api_listen: Option<String>,
 }
 
 /// relay.ts relayServeConfig: flags first, then environment; an empty value is unset.
@@ -269,6 +342,18 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
             return Err("a LAN mailbox (--owner) carries no license: leave out --license and LUCID_RELAY_LICENSE".into());
         }
     }
+    // API-1d 6.3: the API listener of a spokes relay, `host:port` (as relay.json `api_listen` takes it), served with the
+    // relay's own certificate from its state folder; never on a LAN mailbox
+    let api_listen = match get("api-listen", &["LUCID_RELAY_API_LISTEN"]) {
+        None => None,
+        Some(v) => {
+            let listen = api_listener::listen_setting(Some(&serde_json::Value::String(v))).map_err(|_| "--api-listen (or LUCID_RELAY_API_LISTEN) must be host:port".to_string())?;
+            if owner.is_some() || cert.is_none() || get("state", &["LUCID_RELAY_STATE"]).is_none() {
+                return Err("the API listener (--api-listen or LUCID_RELAY_API_LISTEN) needs the relay's own TLS certificate and key and its state folder (--state), and is not for a LAN mailbox".into());
+            }
+            listen
+        }
+    };
     let tls = match (cert, key) {
         (Some(c), Some(k)) => Some((pem_or_file(&c)?, pem_or_file(&k)?)),
         _ => None,
@@ -286,6 +371,7 @@ fn relay_serve_config(flags: &HashMap<String, String>, env: impl Fn(&str) -> Opt
         sender_bytes: sender_text.map(|_| sender_mib as i64 * 1024 * 1024),
         cert_store_bytes,
         owner,
+        api_listen,
     })
 }
 
@@ -685,6 +771,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("ai") {
         ai_gateway::main(&args[1..]);
     }
+    // Contract API-1 revision 5 (slice API-1c2): the organization's API connector (src/connector.rs).
+    if args.first().map(String::as_str) == Some("connector") {
+        connector::main(&args[1..]);
+    }
     // The Admin Console's book, offline (console.lock refuses while a relay runs).
     if args.first().map(String::as_str) == Some("console") {
         console_cli(&args[1..]);
@@ -808,7 +898,7 @@ fn main() {
             hosts.extend(c.public_host.clone());
             console_fleet::start_with_console(Path::new(dir), license::Product::Spokes, &hosts, c.state.as_deref().map(Path::new), logger.clone()).unwrap_or_else(|e| die(&e));
         }
-        let _fleet_link = server::fleet_start(server::FleetStart { state_dir: c.state.as_deref().map(std::path::PathBuf::from), console: console_handle.clone(), relay: relay.clone(), logger: logger.clone() }).unwrap_or_else(|e| die(&e));
+        let _fleet_link = server::fleet_start(server::FleetStart { state_dir: c.state.as_deref().map(std::path::PathBuf::from), console: console_handle.clone(), relay: relay.clone(), logger: logger.clone(), api_listen: c.api_listen.clone(), tls: c.tls.clone() }).unwrap_or_else(|e| die(&e));
         let shown = if c.hostname.contains(':') { format!("[{}]", c.hostname) } else { c.hostname.clone() };
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);
@@ -858,6 +948,25 @@ mod tests {
         let c = relay_serve_config(&flags(&[("root", PEM), ("sender-mib", "4")]), env(&[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "8080"), ("LUCID_RELAY_PORT", "8443"), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com"), ("LUCID_RELAY_SENDER_MIB", "32")])).ok().unwrap();
         assert_eq!((c.hostname.as_str(), c.port, c.behind_tls, c.sender_bytes), ("0.0.0.0", 8443, true, Some(4 * 1024 * 1024)));
         assert_eq!(c.public_host.as_deref(), Some("relay.example.com"));
+    }
+
+    /// API-1d 6.3: `--api-listen` is `host:port`, needs the relay's own TLS certificate and its state folder, and is
+    /// never for a LAN mailbox.
+    #[test]
+    fn api_listen_needs_tls_and_state() {
+        let tls = [("root", PEM), ("tls-cert", PEM), ("tls-key", PEM)];
+        let with = |extra: &[(&str, &str)]| {
+            let mut f: Vec<(&str, &str)> = tls.to_vec();
+            f.extend_from_slice(extra);
+            relay_serve_config(&flags(&f), env(&[]))
+        };
+        assert_eq!(with(&[("state", "/srv/relay"), ("api-listen", "0.0.0.0:9443")]).ok().unwrap().api_listen.as_deref(), Some("0.0.0.0:9443"));
+        assert!(with(&[("state", "/srv/relay")]).ok().unwrap().api_listen.is_none());
+        assert!(with(&[("state", "/srv/relay"), ("api-listen", "9443")]).err().unwrap_or_default().contains("must be host:port"));
+        assert!(with(&[("api-listen", "0.0.0.0:9443")]).err().unwrap_or_default().contains("needs the relay's own TLS certificate"));
+        let behind = relay_serve_config(&flags(&[("root", PEM), ("state", "/srv/relay"), ("api-listen", "0.0.0.0:9443")]), env(&[("LUCID_RELAY_BEHIND_TLS", "1"), ("LUCID_RELAY_HOST", "0.0.0.0"), ("PORT", "8080"), ("LUCID_RELAY_PUBLIC_HOST", "relay.example.com")]));
+        assert!(behind.err().unwrap_or_default().contains("needs the relay's own TLS certificate"));
+        assert!(parse_args(&["--api-listen".to_string(), "0.0.0.0:9443".to_string()]).is_ok());
     }
 
     #[test]

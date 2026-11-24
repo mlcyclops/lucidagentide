@@ -817,6 +817,15 @@ pub struct Response {
 /// Err is the Python exception class name of the failure, or the message `check` gave.
 #[allow(clippy::too_many_arguments)]
 pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>) -> Result<Response, Result<String, String>> {
+    https_request_capped(cfg, host, port, timeout, method, path, headers, body, check, usize::MAX)
+}
+
+/// `https_request` reading at most `cap` answer bytes: past that, Err(Ok("reply too large")) (contract r6 7.2.3, the
+/// service hub's relays).
+#[allow(clippy::too_many_arguments)]
+pub fn https_request_capped(
+    cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>, cap: usize,
+) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
     let mut tcp = connect(host, port, timeout)?;
     let name = ServerName::try_from(host.to_string()).map_err(|_| Err("SSLError".to_string()))?;
@@ -826,14 +835,23 @@ pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f6
     }
     let peer = conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()).unwrap_or_default();
     check(&peer).map_err(Ok)?;
-    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body)
+    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body, cap)
 }
 
 /// One plain HTTP request on a fresh connection (a service on this machine); Err as https_request's.
 pub fn http_request(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
-    let tcp = connect(host, port, timeout)?;
-    exchange(tcp, host, port, method, path, headers, body)
+    http_request_capped(host, port, timeout, method, path, headers, body, usize::MAX)
 }
+
+/// `http_request` reading at most `cap` answer bytes, as `https_request_capped`.
+#[allow(clippy::too_many_arguments)]
+pub fn http_request_capped(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, cap: usize) -> Result<Response, Result<String, String>> {
+    let tcp = connect(host, port, timeout)?;
+    exchange(tcp, host, port, method, path, headers, body, cap)
+}
+
+/// The answer cap's refusal.
+const TOO_LARGE: &str = "reply too large";
 
 /// A TCP connection to the first address of `host` that answers, read and write bounded by `timeout`.
 fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<String, String>> {
@@ -853,8 +871,10 @@ fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<Stri
     Err(Err(last.map(|e| error_class(&e)).unwrap_or("gaierror").to_string()))
 }
 
-/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close).
-fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
+/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close), at most `cap`
+/// bytes of it: reading stops at `cap + 1` and answers Err(Ok(TOO_LARGE)).
+#[allow(clippy::too_many_arguments)]
+fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, cap: usize) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept-Encoding: identity\r\n");
     for (k, v) in headers {
@@ -904,17 +924,31 @@ fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str,
             if n == 0 {
                 break;
             }
-            let mut chunk = vec![0u8; n];
-            reader.read_exact(&mut chunk).map_err(io)?;
-            body.extend_from_slice(&chunk);
+            // Read through `take` so memory grows with the bytes that arrive, never with the size the server claims.
+            let want = n.min((cap - body.len()).saturating_add(1));
+            let got = (&mut reader).take(want as u64).read_to_end(&mut body).map_err(io)?;
+            if body.len() > cap {
+                return Err(Ok(TOO_LARGE.into()));
+            }
+            if got != n {
+                return Err(Err("IncompleteRead".into()));
+            }
             let mut crlf = String::new();
             reader.read_line(&mut crlf).map_err(io)?;
         }
     } else if let Some(n) = length {
-        body = vec![0u8; n];
-        reader.read_exact(&mut body).map_err(|_| Err("IncompleteRead".to_string()))?;
+        if n > cap {
+            return Err(Ok(TOO_LARGE.into()));
+        }
+        let got = (&mut reader).take(n as u64).read_to_end(&mut body).map_err(|_| Err("IncompleteRead".to_string()))?;
+        if got != n {
+            return Err(Err("IncompleteRead".into()));
+        }
     } else {
-        let _ = reader.read_to_end(&mut body);
+        let _ = (&mut reader).take(cap.saturating_add(1) as u64).read_to_end(&mut body);
+        if body.len() > cap {
+            return Err(Ok(TOO_LARGE.into()));
+        }
     }
     Ok(Response { status, body })
 }
@@ -1367,6 +1401,57 @@ mod tests {
 
     fn now() -> i64 {
         pj::now() as i64
+    }
+
+    /// A canned answer for `exchange`; what the client writes is dropped.
+    struct Canned(std::io::Cursor<Vec<u8>>);
+    impl Read for Canned {
+        fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+            self.0.read(b)
+        }
+    }
+    impl Write for Canned {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn answer(raw: &str) -> Result<Response, Result<String, String>> {
+        answer_capped(raw, usize::MAX)
+    }
+
+    fn answer_capped(raw: &str, cap: usize) -> Result<Response, Result<String, String>> {
+        exchange(Canned(std::io::Cursor::new(raw.as_bytes().to_vec())), "relay.test", 443, "GET", "/", &[], None, cap)
+    }
+
+    /// Contract r6 7.2.3 (the service hub's relays): with a cap, reading stops at cap + 1 bytes whatever the framing.
+    #[test]
+    fn a_capped_answer_stops_at_the_cap() {
+        let too_large = Some(Ok(TOO_LARGE.to_string()));
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef", 5).err(), too_large);
+        assert_eq!(answer_capped(&format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nab", usize::MAX / 2), 5).err(), too_large, "refused before any read");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n", 5).err(), too_large);
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffff\r\nabcdef", 5).err(), too_large);
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\n\r\nabcdef", 5).err(), too_large, "up to the close");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde", 5).unwrap().body, b"abcde");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n", 5).unwrap().body, b"abcde");
+        assert_eq!(answer_capped("HTTP/1.1 200 OK\r\n\r\nabcde", 5).unwrap().body, b"abcde");
+    }
+
+    /// A server that claims a huge length (plain or chunked) and then closes gets IncompleteRead, without the client
+    /// first allocating the size it claimed; honest answers still read whole.
+    #[test]
+    fn a_claimed_length_is_not_allocated_before_it_arrives() {
+        let huge = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\nabc", usize::MAX / 2);
+        assert_eq!(answer(&huge).err(), Some(Err("IncompleteRead".to_string())));
+        let chunk = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffff\r\nabc";
+        assert_eq!(answer(chunk).err(), Some(Err("IncompleteRead".to_string())));
+        assert_eq!(answer("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc").unwrap().body, b"abc");
+        let ok = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
+        assert_eq!(answer(ok).unwrap().body, b"abcde");
     }
 
     /// AC-2b-D 8.5 (H5) and 16.1 d-relay: the console's list, with a CRL number and an authority key identifier, is

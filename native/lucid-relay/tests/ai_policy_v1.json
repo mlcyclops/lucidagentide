@@ -247,7 +247,7 @@
    "tier": "org"
   }
  ],
- "ai_max_bytes": 25448,
+ "ai_max_bytes": 25886,
  "allowed": [
   {
    "expect": {
@@ -1227,6 +1227,525 @@
    }
   }
  ],
+ "api_gates": [
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "0.99.0",
+    "ios": "0.99.0"
+   },
+   "name": "api_app_with_new_clients",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "all",
+      "type": "api"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "API apps need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {
+    "hub": "0.99.0",
+    "ios": "0.98.0"
+   },
+   "name": "api_app_with_old_ios",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "all",
+      "type": "api"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "API apps need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {},
+   "name": "api_app_without_min_client",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "all",
+      "type": "api"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.98.0"
+   },
+   "name": "no_api_app_with_old_clients",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  }
+ ],
  "archive_holds": [],
  "editions": [
   {
@@ -2167,6 +2686,543 @@
     "seq": 7,
     "v": 1
    }
+  },
+  {
+   "expect": "ok",
+   "license": {
+    "edition": "enterprise"
+   },
+   "name": "enterprise_local_mcp",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "AI apps on people's computers (ai.local_mcp) need an enterprise license.",
+   "license": {
+    "edition": "standard"
+   },
+   "name": "standard_local_mcp",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "AI apps on people's computers (ai.local_mcp) need an enterprise license.",
+   "license": {
+    "edition": "standard"
+   },
+   "name": "standard_local_mcp_ai_disabled",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": false,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "license": {
+    "edition": "standard"
+   },
+   "name": "standard_local_mcp_off",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": false,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
   }
  ],
  "gates": [
@@ -2637,6 +3693,549 @@
    }
   }
  ],
+ "local_mcp_gates": [
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "0.99.0",
+    "ios": "0.99.0"
+   },
+   "name": "local_mcp_with_new_clients",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "AI apps on people's computers need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.99.0"
+   },
+   "name": "local_mcp_with_old_hub",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "AI apps on people's computers need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.98.0"
+   },
+   "name": "local_mcp_off_still_gated",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": false,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "expect": "ok",
+   "min_client": {
+    "hub": "0.98.0",
+    "ios": "0.98.0"
+   },
+   "name": "no_local_mcp_with_ai_clients",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  }
+ ],
  "maps": [
   {
    "expect": "ok",
@@ -2784,7 +4383,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEYCIQDJHPFOVn/62Dmz813J+CDYmx3ty0qxKUg3dalHnXJJgwIhAPqbAhqFCTJwZIUyqLbWWdp8pglVOv2YtOHOR0PrtX+v"
+    "sig": "MEUCIFj2pptyUPIx6TKKSAFdNmyK0i4qEISJTESQhUa9NMCIAiEAgh7wqyzbPJrv76kEWSdULbOjz49uxfr5HV5IJUwZ6sE="
    }
   },
   {
@@ -2933,7 +4532,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEYCIQCLrYynzARCY/CIQJIup/rnC7KbiSBOBE+NAlRIHsAxmQIhAMwUWWg4p62NN6sfMvNow+7gE5NZHMivWVK+Y3BXcDaz"
+    "sig": "MEQCIHVjrpy4pywg5iVpV/mvPWhpv8Vko//tv5iqwF6zrdzwAiAd7jO6sVhrUoDxsDAZ7rBdfBidVdI34Z63p5goLyJWiQ=="
    }
   },
   {
@@ -3082,7 +4681,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIEhuKA4p2CiQhn0hp69A5PCyFZhijn27C7ZloWFmHb7gAiEA3HCDrkrPT6eFals002dJM0N5OVI65UPltWAVgn0HsVc="
+    "sig": "MEUCIQCa8Y85R0xp0nmzcVlqrd5PLIVPuddIlxnwoW+oMFcJNwIgcm4VJuyi1X+NVSE6Fh1/O6BczUsNDKKFm5MdaQ4/jwY="
    }
   },
   {
@@ -3231,7 +4830,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIQCv9WEADxGKJMkQDpFWI2GNPZpH0vDMNpvOQgM+cG2XaAIgYNTvQAlKu+c1UYsKo9SyRa/WII/yUae+zty5SiTwNBs="
+    "sig": "MEUCIQCbpxnp5zCQo3X2f9u5z9kRdGLpQQE06VYETI+Yay3yeQIgT6awZ8HOPIxigBfjuGXihwKUcplG1g87RY45jOSLVH0="
    }
   },
   {
@@ -3380,7 +4979,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEYCIQCVidIWMjSm5zHHT2RdRGg4JgS/piUktWHZri/to+ICtgIhAMT+liozq/8IGUWFyQFXZhK1voOiDZ/MSyls2WQn106E"
+    "sig": "MEUCIExDHv2dvyP/S1d0IakgGb5kdk+CbAPkOfcUBKYAfMqEAiEAlUZlAKQ7nhysFWDow4F/PgxZv9vSfrl7OpGXWJUATmo="
    }
   },
   {
@@ -3529,7 +5128,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEQCIH8U4Fo3y0jlsO/AWzBuh4zi26WxG6o6MuY6WqrvLmhCAiBmx7DgLk6wpnxJMqnfmN2tjjGbh5mBE16TcJxIfUn8Yw=="
+    "sig": "MEUCIB09LKuoFNz1EZRD5FibIsIqoQNmh/+1RUODUJYo/dSCAiEAydT4d0d/UjnXYrsgOM1BSLRK7yAc9ZOVFE2N/j16Pak="
    }
   },
   {
@@ -7677,7 +9276,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEQCIB2os6xQgE3zMLsftaFP8WP/S0BaYPPsYD28hwomMgWzAiAPDNcWXLs5PC5D2rWe9c6GyKiHwX1jI/9rIMyvLnyn7A=="
+    "sig": "MEYCIQDKWsej0ZlMogxObKpDEXok2vEqCP8CykC9ph9UqIewcQIhAObauuGbUso2I7uxL+Y0RnGHfTQbmW7GhaGuFeGvssXZ"
    }
   },
   {
@@ -7827,7 +9426,7 @@
       "bob@beta.com"
      ]
     },
-    "sig": "MEQCIE6rGTbx/cm8hQVER+v+gFwykUBNqZ73t4afctHuE9ItAiBh6YfXbbJEIdB6G3R40HaRh8KfufN7yd5y4Q40djViKA=="
+    "sig": "MEUCIQD/t2w5/5HEKgszm3KeG1f0OfF9wEr52VdDfqNRBNCpgQIgElleDKHjLKx8c79dagj5HnBXSu5KSkJzbMXedlXx2ac="
    }
   },
   {
@@ -7977,7 +9576,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIQCsW36DiUopZixL3rDGskzMnUziWDGu0H7Zxss1auaQ3AIgJEd5//eiaRu2NJpQ0N3eGKFC0xmk19AMlMNZw+KMnjQ="
+    "sig": "MEUCIGm8tipt4PKDoulc5TGdd9Npbyc2BitjOvtc1S5Dz2shAiEAnMJ28DjKRAF0C8hNvxdwrliDr5LObqttIOxt+gkguWI="
    }
   },
   {
@@ -8118,7 +9717,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEQCIBS/axov1duIk/l/hjnd5nMJBGAUjTQhsQsnE0vRtfXOAiBLO1zs+KptsQ1tEj8ODwT/S27Yk4Z/1PfZER9Clyu3Rg=="
+    "sig": "MEUCIDR0hqBtLEnfm9GsYCTqZPPD/n3sOW0kYbPPCnhCy7B4AiEAksIPHBxc0njKOLk6ZDMrWpS0h+sGUtSMaoEAWFvurkA="
    }
   },
   {
@@ -8244,7 +9843,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIQCS3zh7cRoS9RRiudwYrI7P57QbDeGrBaSGKqGnKXUhzAIgeixCym6xSIUSj+YMo1wULnIohjJDhhB5lM83tPdBJc4="
+    "sig": "MEQCIHapfHGn1i2JvYeMWhPFiAg/nHt7xepeTZBXsqIKuUUDAiAFLW1rxh8dBYvaYmuup2WFWbkCtnbO4PXUnEwhgi9b2w=="
    }
   },
   {
@@ -8393,7 +9992,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIAXOfBb37vMgTdX80IsZZ1eLKN8pJvkluaWsbdltMiHaAiEAm19DVQbVf3b2fL7O8bvtC3NrtSr0er04OOt5rIymrFY="
+    "sig": "MEYCIQCgzx70Jo1D9gHG7yZp7yjOQJTqg7h2B6RBWr3fFn1QegIhAOlOwte/yF/d2pm045bKyPQ3dlZuI6y0tzbj2qERHdA+"
    }
   },
   {
@@ -8556,7 +10155,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEQCIGYcEJ2Yzc73Fp2Q5C0562ybdQhg1plCeUJIeG8TMy9aAiA0+k/snOzxFL3s8I/Ju4MgiTJcclUQ9bbjZzPymGysgA=="
+    "sig": "MEUCIQDB8e/FDXFgQXzb7p/4eUcBxDxe1AB7fQv5Ez72T3/CYAIgGqRsZYu63n2B2jOaiOrMUTvyQppwc9MaOWJi56IrsA4="
    }
   },
   {
@@ -8719,7 +10318,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEQCIEhy7EeKPc7jZSAD87w1gKOB7sZ4ZqhWBwEq7FhKQomEAiA/JXtM0Y1yPpMfPF2ssEyZjo3U3ACc/Q1xiI6rLehzxQ=="
+    "sig": "MEUCIEThTfHWGnHwp6XCYe5QhiDrm87Npa0rcTVA4l3hQTTFAiEAyEFwhgyAQgoFN9bLpxDW49Rk07lmKGlSHQJmnaSTd3w="
    }
   },
   {
@@ -8868,7 +10467,7 @@
       "ann@acme.com"
      ]
     },
-    "sig": "MEUCIA1zEanDLbdTjNRczHnEf6BTO+nSEo1H/AL68SRworVoAiEAvEmKX7jkT5nBYbcazKmxg4bru45Sa+nXdMADeaKzXAA="
+    "sig": "MEQCIDLun7LYijJBq2jaxd9vvCr+ZhjDPcuK9ckjkPlGU39TAiAFEfy6vLiQ6+vJUADsTzch2PgNb64RQZ8/7kFSvAQh+w=="
    }
   }
  ],
@@ -9201,6 +10800,28 @@
       "gggggggggggggggggggggggggggggggg",
       "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
      ],
+     "local_mcp": {
+      "classes": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       "cccccccccccccccccccccccccccccccc",
+       "dddddddddddddddddddddddddddddddd",
+       "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+       "ffffffffffffffffffffffffffffffff",
+       "gggggggggggggggggggggggggggggggg",
+       "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh"
+      ],
+      "enabled": true,
+      "send": true,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply",
+       "send_message"
+      ]
+     },
      "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
      "models": {
       "allowed": [
@@ -16912,6 +18533,2272 @@
   },
   {
    "enclave": false,
+   "expect": "ok",
+   "name": "local_mcp",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ok",
+   "name": "local_mcp_off_minimal",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "enabled": false,
+      "tools": [
+       "search"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ok",
+   "name": "local_mcp_send",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": true,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply",
+       "send_message"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ok",
+   "name": "local_mcp_no_classes",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp must be an object of enabled, classes, tools and send",
+   "name": "local_mcp_not_object",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": true,
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp must be an object of enabled, classes, tools and send",
+   "name": "local_mcp_unknown_field",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "http": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.enabled must be true or false",
+   "name": "local_mcp_enabled_missing",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.enabled must be true or false",
+   "name": "local_mcp_enabled_text",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": "yes",
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.classes must be classes and never CUI",
+   "name": "local_mcp_class_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "secret"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.classes must be classes and never CUI",
+   "name": "local_mcp_class_cui",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "cui"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.classes must be classes and never CUI",
+   "name": "local_mcp_class_twice",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "public"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.tools must name local MCP tools",
+   "name": "local_mcp_tools_missing",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.tools must name local MCP tools",
+   "name": "local_mcp_tools_empty",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": []
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.tools must name local MCP tools",
+   "name": "local_mcp_tool_unknown",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "delete_all"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.tools must name local MCP tools",
+   "name": "local_mcp_tool_twice",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": false,
+      "tools": [
+       "search",
+       "search"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.send needs send_message",
+   "name": "local_mcp_send_without_tool",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": true,
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ai.local_mcp.send needs send_message",
+   "name": "local_mcp_send_text",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "local_mcp": {
+      "classes": [
+       "public",
+       "internal"
+      ],
+      "enabled": true,
+      "send": "no",
+      "tools": [
+       "search",
+       "read_conversation",
+       "list_meetings",
+       "read_meeting_notes",
+       "draft_reply"
+      ]
+     },
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
    "expect": "retention.ai must be a whole number from 1 to 3650",
    "name": "retention_ai_0",
    "policy": {
@@ -17154,7 +21041,7 @@
   },
   {
    "enclave": false,
-   "expect": "an app's type must be bot, webhook, workflows or ai",
+   "expect": "an app's type must be bot, webhook, workflows, ai or api",
    "name": "app_type_unknown",
    "policy": {
     "admins": [
@@ -17241,6 +21128,398 @@
       "principal": "ai@apps.acme.com",
       "scope": "all",
       "type": "gateway"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "ok",
+   "name": "api_app",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "all",
+      "type": "api"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "an api app has no commands",
+   "name": "api_app_with_commands",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "commands": [
+       {
+        "name": "t"
+       }
+      ],
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "all",
+      "type": "api"
+     }
+    ],
+    "archive": {
+     "device": "e5e5e5e5e5e5e5e5",
+     "host": "archive.acme.internal",
+     "principal": "archive@apps.acme.com",
+     "since": 1794000000
+    },
+    "archive_reviewers": [
+     "rae@acme.com",
+     "rob@acme.com",
+     "rio@acme.com"
+    ],
+    "domains": [
+     "acme.com"
+    ],
+    "expires": 1796592000,
+    "issued": 1794000000,
+    "label": "Acme",
+    "org": "acme",
+    "retention": {
+     "ai": 365,
+     "canvas": 0,
+     "channel": 730,
+     "dm": 365,
+     "files": 365,
+     "group": 365
+    },
+    "seq": 7,
+    "v": 1
+   }
+  },
+  {
+   "enclave": false,
+   "expect": "webhook and workflows apps must have scope all",
+   "name": "api_app_mentions_scope",
+   "policy": {
+    "admins": [
+     "it@acme.com"
+    ],
+    "ai": {
+     "budgets": {
+      "frontier_usd_month": 2000,
+      "frontier_usd_user_day": 5
+     },
+     "classes": [
+      "public",
+      "internal",
+      "confidential",
+      "cui"
+     ],
+     "cui_classes": [
+      "cui"
+     ],
+     "deadlines_ms": {
+      "catch_up": 60000,
+      "search": 20000
+     },
+     "default_class": "internal",
+     "device_models": {
+      "allow_digests": [
+       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+     },
+     "embedding": {
+      "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dims": 768,
+      "model": "nomic-embed-text-v1.5"
+     },
+     "enabled": true,
+     "frontier": {
+      "access": "either",
+      "personal": {
+       "api_keys": true,
+       "classes": [
+        "public",
+        "internal"
+       ],
+       "oauth": true,
+       "plans": "business",
+       "providers": [
+        "anthropic",
+        "openai"
+       ]
+      }
+     },
+     "frontier_classes": [
+      "public",
+      "internal"
+     ],
+     "map_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+     "models": {
+      "allowed": [],
+      "asksageOnly": false,
+      "denied": [],
+      "lock": false
+     },
+     "order": [
+      "device",
+      "org",
+      "frontier"
+     ],
+     "org_index": false,
+     "redact_for_frontier": [
+      "internal"
+     ],
+     "v": 1,
+     "who": {
+      "groups": [
+       "8f2c41d7-e1"
+      ]
+     }
+    },
+    "apps": [
+     {
+      "device": "a1a1a1a1a1a1a1a1",
+      "host": "ai.acme.com",
+      "name": "AI gateway",
+      "principal": "ai@apps.acme.com",
+      "scope": "all",
+      "type": "ai"
+     },
+     {
+      "device": "a3a3a3a3a3a3a3a3",
+      "host": "connector.acme.com",
+      "name": "Helpdesk API",
+      "principal": "helpdesk-api@apps.acme.com",
+      "scope": "mentions",
+      "type": "api"
      }
     ],
     "archive": {
@@ -17525,7 +21804,7 @@
   }
  ],
  "recovery_code": [],
- "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhDCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABO3gF801oMWMkY4ZgzK5VCmNIJ4R\nEGS+UHutjOORJUfQdxwRiSNQ0Wewkw1Wiz/qOzU8XtRqjocVwdNVCsQqfOqjRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBR3\nb6WVmq17Tp3CElk+dFMP4rWQcDAKBggqhkjOPQQDAgNHADBEAiAmJlhv459wkZAd\n95HhfEGek/HfT3z7dH14hmkfl+W6GQIgNPAMwi4EXunbZ3JeP3SvZo1R2ZuoKK5D\nEHry4mj8uBg=\n-----END CERTIFICATE-----\n",
+ "root_pem": "-----BEGIN CERTIFICATE-----\nMIIBhTCCASugAwIBAgICEAAwCgYIKoZIzj0EAwIwKDEWMBQGA1UEAwwNTHVjaWQg\nTWVldCBDQTEOMAwGA1UECgwFTHVjaWQwHhcNMjUxMTA2MjEyMDAwWhcNMzExMTA1\nMjEyMDAwWjAoMRYwFAYDVQQDDA1MdWNpZCBNZWV0IENBMQ4wDAYDVQQKDAVMdWNp\nZDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLWl9+eDylzK//nfm71VKBuxClTp\nq7k+mwtLi1WCgUu2tbp5p05MUoPy5lYLvz4Xqe6kKpN6ys5tEwHReQxVJJ2jRTBD\nMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBSF\n2UNLQnYxp+S7vwCef73GnDz6fzAKBggqhkjOPQQDAgNIADBFAiBDKVqR/kA1I2RI\nvR8qVuBdOV7V64qNm+q8lR7+vNemVAIhAMG6I6ItAOWQDpAW2L3tLQgna2rHf+Fx\nOYuG7QcHUOxr\n-----END CERTIFICATE-----\n",
  "signer_policy": {
   "admins": [
    "ann@acme.com"
@@ -17548,7 +21827,7 @@
     "beta.com"
    ]
   },
-  "policy_sig": "MEYCIQCq2IDK1vQuMwhq1E6wesXISv3OoJyfUtVPZxyPm3HuxwIhAKX4XmKiseB8DWqQULakFRGTpUlQgxBvluQY/opYRgTP",
+  "policy_sig": "MEYCIQDe2D2rtToVfk1IGVwm4ufZxED37Iv8+tosp+c7DT36qAIhALmqanj+ipvqPDjd2ySMOKQ++a/qp2n4hKcTegYybp7a",
   "sso": {},
   "sso_services": [
    {

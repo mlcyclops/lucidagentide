@@ -76,6 +76,9 @@ mod pc_docs;
 // AI-1: who may use org AI, the personal-access audit and AI history (`ai:` conversations).
 #[path = "meet_ai.rs"]
 pub mod ai;
+// API-1 revision 4 5.1: the relay end of `api-compliance-read`.
+#[path = "meet_compliance.rs"]
+pub mod compliance;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
@@ -2065,9 +2068,17 @@ impl Hub {
         let _ = std::fs::rename(path, PathBuf::from(bad));
     }
 
-    /// Write state.json now (tmp file, then rename).
+    /// Write state.json now (tmp file, then rename); a failed write is logged and left to the upkeep's next save.
     pub fn save(&self) {
-        let Some(path) = self.path() else { return };
+        if let Err(e) = self.save_synced() {
+            log_warn(&e);
+        }
+    }
+
+    /// Write state.json now (tmp file synced, then renamed, then the folder synced). Err when it is not on disk: the
+    /// state stays dirty, so the upkeep writes it again. Without a state folder there is nothing to write (Ok).
+    pub fn save_synced(&self) -> Result<(), String> {
+        let Some(path) = self.path() else { return Ok(()) };
         let _g = self.save_lock.lock();
         let data = {
             let mut st = self.st.lock();
@@ -2093,12 +2104,19 @@ impl Hub {
             fh.flush()?;
             fh.sync_all()?;
             drop(fh);
-            std::fs::rename(&tmp, &path)
+            std::fs::rename(&tmp, &path)?;
+            #[cfg(unix)]
+            if let Some(d) = path.parent() {
+                if let Ok(d) = std::fs::File::open(d) {
+                    let _ = d.sync_all();
+                }
+            }
+            Ok(())
         })();
-        if let Err(e) = result {
-            log_warn(&format!("cannot write {}: {e}", path.display()));
+        result.map_err(|e| {
             self.st.lock().dirty = true;
-        }
+            format!("cannot write {}: {e}", path.display())
+        })
     }
 
     /// Background upkeep: the NT-1 ring timer and delayed pushes every NT_TICK s (at most 1 s late), reap every

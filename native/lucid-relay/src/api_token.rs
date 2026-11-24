@@ -24,6 +24,11 @@ pub const DPOP_WINDOW: i64 = 300;
 pub const ASSERTION_WINDOW: i64 = 600;
 /// Longest client assertion (`exp - iat`, 5.2).
 pub const ASSERTION_SPAN_MAX: i64 = 300;
+/// Longest Entra `entra_wif` assertion (`exp - iat`, revision 4 4.1).
+pub const ENTRA_SPAN_MAX: i64 = 7200;
+/// Entra `uti` uniqueness window (revision 4 4.1 step 5): `iat` at most 60 s ahead and `exp - iat` at most 7200, so an
+/// assertion held this long from its first use is held past its `exp`.
+pub const UTI_WINDOW: i64 = ENTRA_SPAN_MAX + SKEW;
 /// Access token lifetime (5.3), and the unbound D11 token's.
 pub const TOKEN_LIFE: i64 = 600;
 pub const UNBOUND_LIFE: i64 = 300;
@@ -307,6 +312,11 @@ impl JtiCache {
         JtiCache::new(ASSERTION_WINDOW)
     }
 
+    /// Entra assertion `uti` values (revision 4 4.1), each held for `UTI_WINDOW`.
+    pub fn uti() -> JtiCache {
+        JtiCache::new(UTI_WINDOW)
+    }
+
     fn with_limits(window: i64, listener_max: usize, client_max: usize) -> JtiCache {
         JtiCache { window, listener_max, client_max, seen: HashMap::new(), order: VecDeque::new(), per_client: HashMap::new() }
     }
@@ -396,6 +406,29 @@ fn admit_dpop(cache: &mut JtiCache, client: &str, jti: &str, now: i64) -> Result
         Ok(()) => Ok(()),
         Err(Refused::Replay) => fail("dpop-replay", "that DPoP proof was already used"),
         Err(Refused::Full) => fail("abuse", "too many DPoP proofs in the last 5 minutes"),
+    }
+}
+
+/// Revision 4 4.1 step 5: an Entra assertion's `uti` not seen for `client` before (held `UTI_WINDOW`, past the
+/// assertion's `exp`): a replay is `client-auth`, a full cache share `abuse`.
+pub fn admit_uti(cache: &mut JtiCache, client: &str, uti: &str, now: i64) -> Result<(), TokenError> {
+    match cache.admit(client, &format!("{client} {uti}"), now) {
+        Ok(()) => Ok(()),
+        Err(Refused::Replay) => fail("client-auth", "that Entra assertion was already used"),
+        Err(Refused::Full) => fail("abuse", "too many Entra assertions in the last two hours"),
+    }
+}
+
+/// Revision 5 6.4: an ID-JAG `jti` not seen for `idp` before (the cache's window outlasts every accepted `exp`). Err is
+/// `replay` or `full`.
+pub fn admit_jti(cache: &mut JtiCache, idp: &str, jti: &str, now: i64) -> Result<(), &'static str> {
+    if jti.is_empty() || jti.len() > JTI_MAX {
+        return Err("replay");
+    }
+    match cache.admit(idp, &format!("{idp} {jti}"), now) {
+        Ok(()) => Ok(()),
+        Err(Refused::Replay) => Err("replay"),
+        Err(Refused::Full) => Err("full"),
     }
 }
 
@@ -608,11 +641,13 @@ pub struct Lifetime {
     pub key_end: Option<i64>,
     /// The subject token's `exp` (token exchange).
     pub subject_exp: Option<i64>,
+    /// The Entra assertion's `exp` (`entra_wif`, revision 4 4.1, Rev4Review R4-16).
+    pub assertion_exp: Option<i64>,
     pub map_expires: i64,
 }
 
 /// 5.3 `exp`: the earliest of `iat + 600` (`iat + 300` unbound), the registration's and the certificate's effective
-/// ends, the key end, the subject token's `exp` and the map's `expires`.
+/// ends, the key end, the subject token's `exp`, the Entra assertion's `exp` and the map's `expires`.
 pub fn token_exp(l: &Lifetime) -> i64 {
     let grace = [Some(l.grace_hours)];
     let life = if l.unbound { UNBOUND_LIFE } else { TOKEN_LIFE };
@@ -622,6 +657,7 @@ pub fn token_exp(l: &Lifetime) -> i64 {
         l.cert_end.map(|c| effective_end(c, &grace)),
         l.key_end,
         l.subject_exp,
+        l.assertion_exp,
         Some(l.map_expires),
     ]
     .into_iter()
@@ -658,6 +694,57 @@ pub fn mint_access_token(
         Cnf::X5t(h) => claims["cnf"] = json!({"x5t#S256": h}),
         Cnf::Jkt(j) => claims["cnf"] = json!({"jkt": j}),
         Cnf::None => {}
+    }
+    let token = sign_es256(signing_key, &json!({"alg": "ES256", "typ": "at+jwt", "kid": kid}), &claims)?;
+    Ok(Minted { token, exp, jti })
+}
+
+/// What a delegated access token says beyond a client's (revision 5 6.6).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Delegation<'a> {
+    /// The person principal (`sub`).
+    pub person: &'a str,
+    /// `jwt_bearer`, `authorization_code` or `refresh_token`.
+    pub grant: &'a str,
+    /// The `idps[].id` of an EMA token.
+    pub idp: Option<&'a str>,
+    pub auth_time: i64,
+    /// `{"sub": <client id>}`, with the ID-JAG's actor nested as `act` when it named one (R5-21).
+    pub act: &'a Value,
+}
+
+/// Revision 5 6.6: a delegated `at+jwt` (always sender-constrained, O1): `sub` the person, `act.sub` the client, the
+/// grant, the EMA `idp` and the person's `auth_time`; the rest as `mint_access_token`.
+#[allow(clippy::too_many_arguments)]
+pub fn mint_delegated_token(
+    signing_key: &EcdsaKeyPair,
+    kid: &str,
+    issuer: &str,
+    aud: &str,
+    client_id: &str,
+    org: &str,
+    scopes: &[String],
+    reach: &str,
+    ceiling: &str,
+    map_seq: i64,
+    cnf: &Cnf,
+    d: &Delegation,
+    iat: i64,
+    exp: i64,
+) -> Result<Minted, TokenError> {
+    let cnf = match cnf {
+        Cnf::X5t(h) => json!({"x5t#S256": h}),
+        Cnf::Jkt(j) => json!({"jkt": j}),
+        Cnf::None => return fail("sign", "a delegated token is always bound"),
+    };
+    let mut raw = [0u8; 16];
+    SystemRandom::new().fill(&mut raw).map_err(|_| TokenError::new("sign", "no random bytes for the jti"))?;
+    let jti = b64u(&raw);
+    let mut claims = json!({"iss": issuer, "sub": d.person, "aud": aud, "client_id": client_id, "act": d.act, "org": org,
+                            "scope": scopes.join(" "), "reach": reach, "ceiling": ceiling, "map_seq": map_seq, "grant": d.grant,
+                            "auth_time": d.auth_time, "iat": iat, "nbf": iat, "exp": exp, "jti": jti, "cnf": cnf});
+    if let Some(idp) = d.idp {
+        claims["idp"] = json!(idp);
     }
     let token = sign_es256(signing_key, &json!({"alg": "ES256", "typ": "at+jwt", "kid": kid}), &claims)?;
     Ok(Minted { token, exp, jti })
@@ -703,6 +790,10 @@ pub struct Grant {
     pub relays: Vec<String>,
     pub jti: String,
     pub exp: i64,
+    /// Revision 5 6.6: the person of a delegated token (`sub`); None for every other token.
+    pub person: Option<String>,
+    /// Revision 5 6.6: a delegated token's `act` (`act.sub` the client id, the IdP's actor nested as `act.act`).
+    pub actor: Option<Value>,
 }
 
 /// The place of a ceiling in `CEILINGS` (lowest first).
@@ -775,7 +866,9 @@ pub(crate) fn target_field<'a>(e: &'a TightenEntry, k: &str) -> &'a str {
 /// then the intersection: the token's `reach` must equal the client's (`token`); scopes are the token's within the
 /// client's current scopes less journaled drops; the ceiling the lower of the token's, the client's and any journaled
 /// lowering; relays the client's less journaled drops (`*` expands to the map's relays and `console` when one applies).
-/// `dpop` is `(proof, htm, htu)` with `htu` the canonical origin plus the request path.
+/// `dpop` is `(proof, htm, htu)` with `htu` the canonical origin plus the request path. `policy` is the org's current
+/// verified policy (the console's `DelegatedState::verified_policy`, a connector's pinned policy): a delegated
+/// token's `sub` must be of its `domains` (`person`), and without an unexpired one a delegated token is `token`.
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn validate_access_token(
@@ -785,6 +878,7 @@ pub fn validate_access_token(
     now: i64,
     store: &ApiMapStore,
     org: &str,
+    policy: Option<&Obj>,
     owner_active: &dyn Fn(&str) -> bool,
     presented_cert_sha256: Option<&str>,
     dpop: Option<(&str, &str, &str)>,
@@ -838,11 +932,23 @@ pub fn validate_access_token(
         return fail("map-behind", format!("the access token is from map {map_seq}; this listener holds {}", pinned.seq));
     }
     // 5
-    if jws.claim_str("sub") != Some(client_id) {
+    let active = store.active(org);
+    let found = find_client(store, org, client_id);
+    let delegated = found.is_some_and(|c| c.get("kind").and_then(Value::as_str) == Some("agent_delegated"));
+    if !delegated && jws.claim_str("sub") != Some(client_id) {
         return Err(bad("the access token's sub is not its client_id"));
     }
-    let active = store.active(org);
-    let Some(client) = find_client(store, org, client_id) else { return fail("suspended", "that client is not registered") };
+    let Some(client) = found else { return fail("suspended", "that client is not registered") };
+    let (person, actor) = if delegated { delegated_subject(&jws, client, org, client_id)? } else { (None, None) };
+    if let Some(sub) = &person {
+        // revision 5 6.6: the person stays of one of the current policy's domains (a removed domain ends its tokens)
+        let Some(policy) = policy.filter(|p| !crate::meet_org_policy::expired(p, now as f64)) else {
+            return Err(bad("the organization's verified policy is not held here, so no delegated token is accepted"));
+        };
+        if !crate::meet_org_policy::covers(policy, sub) {
+            return fail("person", "that person is not of the organization's domains");
+        }
+    }
     let suspended = client.get("state").and_then(Value::as_str) != Some("active")
         || active.iter().any(|e| e.action == "client_suspend" && e.target.as_str() == Some(client_id));
     if suspended {
@@ -917,7 +1023,30 @@ pub fn validate_access_token(
     }
     relays.sort();
     relays.dedup();
-    Ok(Grant { client: client_id.to_string(), scopes, reach: reach.to_string(), ceiling: CEILINGS[effective].to_string(), relays, jti: jti.to_string(), exp })
+    Ok(Grant { client: client_id.to_string(), scopes, reach: reach.to_string(), ceiling: CEILINGS[effective].to_string(), relays, jti: jti.to_string(), exp, person, actor })
+}
+
+/// Revision 5 6.6, 5.4 step 5 for an `agent_delegated` client: `sub` a person principal (never the client id: `token`),
+/// `act.sub` the client id (`token`), `sub` not in the client's `delegation.denied` and under no active `person_revoke`
+/// of (`client_id` or `*`, `sub`) whatever the token's `iat` (`person`, R5-3). The console journal reaches this check
+/// through `api_delegated::person_revoked_now`, the process-wide copy of each org's active `person_revoke` entries the
+/// console (and a connector, from its sync) publishes, so no caller passes the console journal. Ok is (person, act).
+pub fn delegated_subject(jws: &Jws, client: &Obj, org: &str, client_id: &str) -> Result<(Option<String>, Option<Value>), TokenError> {
+    let bad = |m: &str| TokenError::new("token", m);
+    let Some(sub) = jws.claim_str("sub") else { return Err(bad("the access token lacks a claim")) };
+    let person_like = sub != client_id
+        && crate::meet_org_policy::split_principal(sub).is_ok()
+        && crate::meet_hub::pc::service_kind(sub).is_empty();
+    if !person_like {
+        return Err(bad("a delegated client's token must name a person as its sub"));
+    }
+    let act = jws.claims.get("act").filter(|a| a.get("sub").and_then(Value::as_str) == Some(client_id));
+    let Some(act) = act else { return Err(bad("the access token's act.sub is not its client_id")) };
+    let denied = client.get("delegation").and_then(|d| d.get("denied")).and_then(Value::as_array).into_iter().flatten().any(|p| p.as_str().is_some_and(|p| p.eq_ignore_ascii_case(sub)));
+    if denied || crate::api_delegated::person_revoked_now(org, client_id, sub) {
+        return fail("person", "that person no longer delegates to this client");
+    }
+    Ok((Some(sub.to_string()), Some(act.clone())))
 }
 
 #[cfg(test)]
@@ -1143,8 +1272,11 @@ mod tests {
         assert!(!verify_client_secret("lcs_other", &digest));
         assert!(!verify_client_secret(secret, &digest[..62]));
 
-        let l = Lifetime { iat: NOW, unbound: false, registration_end: NOW + DAY, grace_hours: 0, cert_end: None, key_end: None, subject_exp: None, map_expires: NOW + DAY };
+        let l = Lifetime { iat: NOW, unbound: false, registration_end: NOW + DAY, grace_hours: 0, cert_end: None, key_end: None, subject_exp: None, assertion_exp: None, map_expires: NOW + DAY };
         assert_eq!(token_exp(&l), NOW + 600);
+        // R4-16: never after the Entra assertion's exp
+        assert_eq!(token_exp(&Lifetime { assertion_exp: Some(NOW + 120), ..l }), NOW + 120);
+        assert_eq!(token_exp(&Lifetime { assertion_exp: Some(NOW + 7000), ..l }), NOW + 600);
         assert_eq!(token_exp(&Lifetime { unbound: true, ..l }), NOW + 300);
         // a registration that ended 7000 s ago, inside a 2 hour grace, ends the token at the grace end
         assert_eq!(token_exp(&Lifetime { registration_end: NOW - 7000, grace_hours: 2, ..l }), NOW + 200);
@@ -1199,7 +1331,7 @@ mod tests {
         let x5t = "q".repeat(43);
         let check = |s: &ApiMapStore, t: &str, cert: Option<&str>, dpop: Option<(&str, &str, &str)>| {
             let profile = Profile::console(s, ORG).unwrap();
-            validate_access_token(t, &profile, rr, NOW, s, ORG, &owners, cert, dpop, &mut JtiCache::dpop())
+            validate_access_token(t, &profile, rr, NOW, s, ORG, None, &owners, cert, dpop, &mut JtiCache::dpop())
         };
         let s = store_of(&m, 7, &[], &[], NOW);
         let t = mint(rr, 7, Cnf::X5t(x5t.clone()), NOW + 590);
@@ -1217,11 +1349,11 @@ mod tests {
         assert_eq!(code(check(&s, &tampered, Some(x5t.as_str()), None)), "token");
         // a local profile never takes a console token
         let local = Profile::Local { issuer: "https://relay1.acme.example:9443/api/orgs/acme/local", jwks: &[] };
-        assert_eq!(code(validate_access_token(&t.token, &local, rr, NOW, &s, ORG, &owners, Some(x5t.as_str()), None, &mut JtiCache::dpop())), "token");
+        assert_eq!(code(validate_access_token(&t.token, &local, rr, NOW, &s, ORG, None, &owners, Some(x5t.as_str()), None, &mut JtiCache::dpop())), "token");
         // the owner, the journal and the map
         let nobody = |_: &str| false;
         let profile = Profile::console(&s, ORG).unwrap();
-        assert_eq!(code(validate_access_token(&t.token, &profile, rr, NOW, &s, ORG, &nobody, Some(x5t.as_str()), None, &mut JtiCache::dpop())), "owner");
+        assert_eq!(code(validate_access_token(&t.token, &profile, rr, NOW, &s, ORG, None, &nobody, Some(x5t.as_str()), None, &mut JtiCache::dpop())), "owner");
         let s2 = store_of(&m, 7, &[entry("client_suspend", json!(CLIENT))], &[], NOW);
         assert_eq!(code(check(&s2, &t.token, Some(x5t.as_str()), None)), "suspended");
         let s2 = store_of(&m, 7, &[], &[t.jti.as_str()], NOW);
@@ -1254,8 +1386,8 @@ mod tests {
         assert_eq!(code(check(&s, &d.token, None, Some((wrong_ath.as_str(), "GET", htu)))), "dpop");
         let mut cache = JtiCache::dpop();
         let profile = Profile::console(&s, ORG).unwrap();
-        assert_eq!(code(validate_access_token(&d.token, &profile, rr, NOW, &s, ORG, &owners, None, Some((proof.as_str(), "GET", htu)), &mut cache)), "ok");
-        assert_eq!(code(validate_access_token(&d.token, &profile, rr, NOW, &s, ORG, &owners, None, Some((proof.as_str(), "GET", htu)), &mut cache)), "dpop-replay");
+        assert_eq!(code(validate_access_token(&d.token, &profile, rr, NOW, &s, ORG, None, &owners, None, Some((proof.as_str(), "GET", htu)), &mut cache)), "ok");
+        assert_eq!(code(validate_access_token(&d.token, &profile, rr, NOW, &s, ORG, None, &owners, None, Some((proof.as_str(), "GET", htu)), &mut cache)), "dpop-replay");
     }
 
     fn public(jwk: &Value) -> Value {
@@ -1315,7 +1447,7 @@ mod tests {
             let cert = Some(text(c, "cert_sha256")).filter(|h| !h.is_empty());
             let d = &c["dpop"];
             let dpop = d.as_object().map(|_| (text(d, "proof"), text(d, "htm"), text(d, "htu")));
-            let got = validate_access_token(text(c, "token"), &profile, text(c, "resource"), now, &st, org, &owner_active, cert, dpop, &mut JtiCache::dpop());
+            let got = validate_access_token(text(c, "token"), &profile, text(c, "resource"), now, &st, org, None, &owner_active, cert, dpop, &mut JtiCache::dpop());
             if let (Ok(g), Some(want)) = (&got, c["grant"].as_object()) {
                 let have = json!({"client": g.client, "scopes": g.scopes, "reach": g.reach, "ceiling": g.ceiling, "relays": g.relays});
                 if have != Value::Object(want.clone()) {
@@ -1361,6 +1493,7 @@ mod tests {
                 cert_end: c["cert_end"].as_i64(),
                 key_end: c["key_end"].as_i64(),
                 subject_exp: c["subject_exp"].as_i64(),
+                assertion_exp: None,
                 map_expires: c["map_expires"].as_i64().unwrap(),
             };
             let got = token_exp(&l);

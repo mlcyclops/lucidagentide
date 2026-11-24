@@ -791,6 +791,49 @@ fn settings_api_and_exports_render_and_a_secret_is_shown_once() {
     run_harness("api", path.to_str().unwrap());
 }
 
+#[test]
+fn api_r4_screens_render_and_a_v1_secret_leaves_no_trace() {
+    // API-1 revision 4 13.2 (slice 1b8) in the DOM double, from the answer shapes of GET settings/api, GET settings/exports,
+    // GET compliance/holds, GET compliance/exports and GET directory/status: the client editor's Compliance and
+    // Directory sections (recipient thumbprint, reviewers rule, Meet CA fingerprint, the three values to paste into
+    // Entra), the relay set with relay-outdated and Retire, webhook destinations (verification, paused, Resume, Replay
+    // from), webhook keys, the outbound identity, the prefer-federation advice, the Compliance page with its reviewer
+    // state and Cancel export, the Directory card, the new attention items, and a v1 secret shown once in its own dialog
+    // and gone from the page once it closes.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("admin_console_fleet_words_v1.json");
+    assert!(path.exists(), "{}: copy it from Meeting Hub tests/vectors after running its generator", path.display());
+    run_harness("api-r4", path.to_str().unwrap());
+}
+
+#[test]
+fn api_r5_screens_render_and_post_their_bodies() {
+    // API-1 revision 5 14.2 (slice 1c7) in the DOM double, from the answer shapes of the 1c7 contract (GET settings/api
+    // with connectors, connector_status, api_apps, ai_groups, idps, providers, api_return and person_revokes; GET
+    // settings/api/delegations; GET settings/api/approvals; GET meet/ai with ai.local_mcp): the two-person reasons, the
+    // content and delegated clients with their people, approvals and revokes, connectors with a stale and a never-synced
+    // one and their key stores, identity providers, the sign-in providers with api_return and Copy, and Settings > AI >
+    // Local MCP on an enterprise and a standard license. It checks the bodies of Add connector, Suspend, IdP Test, Set
+    // SSO URL, Revoke, Allow again, the client editor's Content and Delegation, and the Local MCP stage.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("admin_console_fleet_words_v1.json");
+    assert!(path.exists(), "{}: copy it from Meeting Hub tests/vectors after running its generator", path.display());
+    run_harness("api-r5", path.to_str().unwrap());
+}
+
+#[test]
+fn api_r6_screens_render_and_post_their_bodies() {
+    // API-1 revision 6 7.14 (slice 1d5) in the DOM double, from the answer shapes of the 1d5 contract (GET settings/api
+    // with a spokes_hub client and an agent client with a2a, card, card_check and handoff; GET settings/api/a2a (A2aView);
+    // GET settings/api/a2a/tasks (TaskView); GET settings/api/spokes (SpokesView)): the three tabs, the partner card check
+    // and hand-off with the R6-12 sentence, the agents with their card state, Copy card URL and the signed card, card keys
+    // (signed and staged), the root well-known card, the Tasks list and its filter, and Remote Spokes. It checks the
+    // bodies of Check now, Push off, the client editor's agent and service hub fields, Add agent, Change (refused on the
+    // page without a new version), Delete, Make a card key, Drop key, the root well-known choice, Bind, Unbind and Set
+    // root, and that nothing posts to the removed settings/api/spokes/relays.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("admin_console_fleet_words_v1.json");
+    assert!(path.exists(), "{}: copy it from Meeting Hub tests/vectors after running its generator", path.display());
+    run_harness("api-r6", path.to_str().unwrap());
+}
+
 /// The script harness: qr.js against the vector, and app.js in a small DOM double built from index.html.
 const HARNESS_JS: &str = r##""use strict";
 const fs = require("fs");
@@ -1607,6 +1650,18 @@ async function aiMain() {
       audit: { personal: { requests: 3, by_provider: { anthropic: { key: 1, oauth: 2 } }, plans: { anthropic: { business: 2, not_business: 0, unknown: 1 } }, tokens_in: 160, tokens_out: 26 },
         dropped: { count: 1, by_reason: { encoding: 1 }, latest: [{ rid: "d".repeat(32), ts: 5, reason: "encoding" }] }, other: 0, partial: false } },
     "GET meet/ai/archive": { ok: true, size: "small", archive: null, add: "Add an archive", notice: "No archive. AI history stays on each person's devices; a legal hold cannot retrieve it." },
+    // API-1d6 (r6 8.11): Tools (MCP), one gateway behind on the journal and one tool whose hash changed
+    "GET meet/ai/mcp": { ok: true, org: "acme", ceilings: ["public", "internal", "confidential", "cui"], minimums: { hub: "0.99.0", ios: "0.99.0" }, readers: null, head: 1,
+      servers: [{ id: "m_3f2e1d0c9b8a7f6e", name: "Jira (read)", url: "https://mcp.jira.acme.example/mcp", ceiling: "internal", private_ok: false, groups: ["eng"], activities: ["search"],
+        auth: { type: "oauth_private_key_jwt", scope: "issues:read", expires: 1763650000 }, tools: [{ name: "search_issues", effect: "read", schema_sha256: "a".repeat(64) }],
+        attest: { by: ["ann@acme.example", "carl@acme.example"], at: 1763200000, statement: "Every member of eng may read everything the issues:read credential of Jira (read) can read." },
+        max_calls: 4, args_max: 4096, result_max: 65536, risk: "The gateway calls Jira (read) with its own credential, not the person's." }],
+      gateways: [{ url: "https://ai-1.acme.example:8443", ack: 1, applied: true, waiting: 0,
+        state: { servers: [{ id: "m_3f2e1d0c9b8a7f6e", offered: true, credential: { state: "ready", kid: "g1" }, tools: [{ name: "search_issues", offered: true, why: "" }] }] } },
+        { url: "https://ai-2.acme.example:8443", ack: 0, applied: false, waiting: 1, state: null, error: "did not answer" }],
+      journal: [{ id: "g_acme_000001", tseq: 1, ts: 1763300000, action: "mcp_tool_off", target: { server: "m_3f2e1d0c9b8a7f6e", tool: "get_issue" }, state: "active" }],
+      warnings: [{ server: "m_3f2e1d0c9b8a7f6e", name: "Jira (read)", days: 4, ended: false, severity: "bad" }],
+      changed: [{ kind: "AiMcpToolChanged", gateway: "https://ai-1.acme.example:8443", server: "m_3f2e1d0c9b8a7f6e", name: "Jira (read)", tool: "search_issues", schema_sha256: "b".repeat(64) }] },
   };
   boot(base, { hash: "#/meet/ai" });
   for (let i = 0; i < 4; i++) await settle();
@@ -1618,6 +1673,14 @@ async function aiMain() {
     if (!text.includes(w)) fail("Settings > AI does not show " + JSON.stringify(w) + ":\n" + text);
   }
   if (text.includes("\u2014") || text.includes("\u2013")) fail("a long dash on Settings > AI");
+  // r6 8.11: Tools (MCP) shows each server with its attestation and risk, each gateway's state, the journal with the
+  // gateway that has not applied it, the credential warning and the changed tool
+  for (const w of ["Tools (MCP)", "Jira (read)", "Every member of eng may read everything the issues:read credential of Jira (read) can read.",
+    "The gateway calls Jira (read) with its own credential", "Offered", "Credential: Ready g1", "Did not answer: did not answer", "mcp_tool_off",
+    "Not yet applied: 1 changes wait.", "Not yet applied: https://ai-2.acme.example:8443", "The credential of Jira (read) ends in 4 days.",
+    "The tool search_issues of Jira (read) changed on https://ai-1.acme.example:8443.", "Approve the new hash", "Turn off all tools", "Add an MCP server"]) {
+    if (!text.includes(w)) fail("Tools (MCP) does not show " + JSON.stringify(w) + ":\n" + text);
+  }
   // Approve only after a pass: one Approve, on the passed card's row
   // the row menus of the table (the stacked phone cards repeat them)
   const approves = doc.querySelectorAll("td.actions button").filter((b) => b.textContent === "Approve");
@@ -1816,8 +1879,901 @@ async function apiMain(v) {
   console.log("api: API access, Explain, save, secret once and API destinations ok");
 }
 
+// ---- API-1 revision 4 13.2 (API-1b8): compliance, directory, webhooks, outbound identity, relay set, attention ----
+async function apiR4Main(v) {
+  const W = v.page;
+  const D = v.dialogs;
+  const r1 = "r_0000000000000001", r2 = "r_0000000000000002", r3 = "r_0000000000000003";
+  const t0 = 1763300000000;
+  const filled = (tpl, vals) => tpl.replace(/<([a-z][a-z ]*)>/g, (_, k) => String(vals[k]));
+  const I = "https:" + "//console.acme.example:7443/api/orgs/acme";
+  const scim = "https:" + "//sso.acme.example:8443/api/orgs/acme/scim/v2";
+  const jkt = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs";
+  const exportClient = { id: "c_1b2c3d4e5f607182", name: "ediscovery-export", principal: "ediscovery-export@apps.acme.example", kind: "compliance", reach: "R1",
+    owner: "lee@acme.example", scopes: ["compliance.export.request"], ceiling: "confidential", relays: ["*"], networks: ["10.40.0.0/23"], mtls_required: true,
+    rate: { per_minute_each: 60, per_day_each: 20000 }, created: 1763000000, expires: 1790000000, state: "active", shown_state: "owner-gone",
+    credentials: [{ type: "mtls", hint: "serial 0a1b2c3d" }],
+    compliance: { job_max_bytes: 5368709120, day_max_bytes: 21474836480, jobs_per_day: 5, recipient: { kid: "rcpt-2026-11", jkt } } };
+  const scimClient = { id: "c_2c3d4e5f60718293", name: "entra-scim", principal: "entra-scim@apps.acme.example", kind: "integration", reach: "R0", owner: "ann@acme.example",
+    scopes: ["directory.read", "directory.write"], ceiling: "confidential", relays: [r1], networks: ["20.190.128.0/18"], mtls_required: false,
+    rate: { per_minute_each: 600, per_day_each: 500000 }, created: 1763000000, expires: 1790000000, state: "active", shown_state: "active",
+    credentials: [{ type: "entra_wif", hint: "ce5f061f-abe6-4e40-9615-301f87bcb7f0", cloud: "public", tenant: "ce5f061f-abe6-4e40-9615-301f87bcb7f0", audience: I,
+      azp: "cb1d50fe-8ed0-4944-9e7d-5981aad3bc4b", expires: 1790000000 }],
+    directory: { provider: "entra", resource: scim, domains: ["acme.example"] } };
+  const map = { seq: 12, issued: 1763000000, expires: 1770000000, issuer_url: I, failover_after_s: 300, grace: { person: 0, app: 0, connector: 0, relay: 0 },
+    relay_origins: {}, clients: [exportClient, scimClient], scrape_tokens: [], webhook_keys: [], federation: null };
+  const apiView = { ok: true, meet_ca: { fingerprint: "ab".repeat(32) }, orgs: [
+    { org: "acme", edition: "enterprise", state: "on", map, draft: null, journal: { head: 0, entries: [] }, staged: null, signing: null,
+      relays: [{ id: r1, acked: 0, synced: true }, { id: r2, acked: 0, synced: true }], limits: { clients: 500, destinations: 32, scrape_tokens: 10 },
+      relay_set: [{ id: r1, connected: true, map: [1, 2], features: ["scim-check", "events", "compliance", "archive"], reported_at: 1763290000, lacks: [] },
+        { id: r3, connected: false, map: [1], features: [], reported_at: 1763000000, lacks: ["map-v2"] }] }] };
+  const hook = { id: "d_3d4e5f6071829304", name: "ServiceNow events", kind: "webhook", preset: "webhook", signals: ["events"], ceiling: "internal", identities: "pseudonymized",
+    failover: false, private_ok: false, endpoint: "https:" + "//acme.service-now.com/api/x_acme/lucid/events",
+    settings: { client: exportClient.id, types: ["hold.placed"], signing: "v2a", verification: "wev" }, queue: { max_bytes: 1073741824, max_age_s: 259200 }, source: "pinned",
+    credential: { type: "none", held: false }, tested: true, failover_records: [],
+    status: { state: "paused", backlog_bytes: 0, oldest_s: 0, last_success: 1763200000, last_error: "503 from the receiver",
+      events: { paused: true, retrying: false, cursor: "c_17", verification: "verified", signing: "v2a" } } };
+  const gcp = { id: "d_5f60718293041526", name: "Google logs", kind: "otlp", preset: "google_cloud", signals: ["logs"], ceiling: "internal", identities: "pseudonymized",
+    failover: false, private_ok: false, endpoint: "https:" + "//telemetry.googleapis.com", settings: {}, queue: { max_bytes: 1073741824, max_age_s: 259200 }, source: "pinned",
+    credential: { type: "gcp_service_account_key", held: true }, tested: true, failover_records: [], status: { state: "ok", backlog_bytes: 0, oldest_s: 0, last_success: 1763200000 } };
+  const exportsView = { ok: true, tokens: [], siem: null,
+    api: [{ org: "acme", staged: null, destinations: [hook, gcp], relays: [r1, r2], issuer_url: I, events_clients: [{ id: exportClient.id, name: exportClient.name }],
+      webhook_keys: [{ kid: "wk-2026-11", public: "whpk_" + "A".repeat(43) + "=", nbf: 1763000000, exp: 1790000000, dropped: false },
+        { kid: "wk-2025-11", public: "whpk_" + "B".repeat(43) + "=", nbf: 1731000000, exp: 1765000000, dropped: true }],
+      federation: { issuer: I + "/federation", keys: [{ kid: "fk-2026-11", nbf: 1763000000, exp: 1790000000, dropped: false }] }, federation_republish: ["fk-2025-11"] }],
+    presets: [{ id: "webhook", kind: "webhook", credential_types: ["none", "token", "mtls"], signals: ["events"] },
+      { id: "google_cloud", kind: "otlp", credential_types: ["gcp_service_account_key", "gcp_federated"], signals: ["metrics", "logs", "traces", "audit", "events"] }] };
+  const secret = "whsec_SECRETSECRETSECRETSECRETSECRETSECRET0123=";
+  const job = { job: "j_0123456789abcdef", client: exportClient.id, client_name: "ediscovery-export", owner: "lee@acme.example", matter: "Acme v. Widget", state: "waiting",
+    requested_at: 1763290000, reviewers: ["rev1@acme.example", "rev2@acme.example"], releases: 1, released_by: ["rev1@acme.example"], expires_waiting: 1763549200 };
+  const ready = { job: "j_fedcba9876543210", client: exportClient.id, client_name: "ediscovery-export", owner: "lee@acme.example", matter: "Acme v. Gadget", state: "ready",
+    requested_at: 1763100000, reviewers: ["rev1@acme.example", "rev2@acme.example"], releases: 2, released_by: ["rev1@acme.example", "rev2@acme.example"], released_at: 1763150000,
+    parts: 2, have: 2, zip_bytes: 6291456, ready_at: 1763160000, expires: 1763764800, expires_waiting: 1763359200 };
+  const answers = {
+    "GET me": {
+      ok: true, product: "fleet", profile: "standard", origin: "https://console.acme.example", relay: { host: "console.acme.example" }, sections: [],
+      idle: { minutes: 15, maxHours: 12 },
+      user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+        methods: { webauthn: [], password: false, totp: true }, mustSetPassword: false, sessions: 1, mail: [] },
+    },
+    "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [] },
+    "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 },
+      fleet: { relays: { total: 3, ok: 2, warn: 0, bad: 0, silent: 1, unconfirmed: 0 }, people: { online: 0 }, calls: { active: 0 }, kpis: {} },
+      attention: [{ kind: "relay-outdated", severity: "bad", args: { relay: r3, org: "acme", needs: "map-v2" }, go: "#/security/api" },
+        { kind: "api-owner-gone", severity: "bad", args: { principal: "lee@acme.example", org: "acme", n: 1 }, go: "#/security/api" },
+        { kind: "federation-jwks-republish", severity: "warn", args: { org: "acme", kid: "fk-2025-11" }, go: "#/security/exports" },
+        { kind: "webhook-paused", severity: "bad", args: { destination: "ServiceNow events", org: "acme" }, go: "#/security/exports" },
+        { kind: "webhook-key-dropped", severity: "warn", args: { org: "acme", kid: "wk-2025-11" }, go: "#/security/exports" },
+        { kind: "export-storage", severity: "bad", args: { org: "acme" }, go: "#/security/compliance" }] },
+    "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "done", license: "done", relay: "done" } },
+    "GET fleet/relays": { ok: true, total: 3, relays: [
+      { id: r1, name: "Dallas east", site: "us-east", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.6.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] },
+      { id: r2, name: "Hub west", site: "us-west", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.6.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] },
+      { id: r3, name: "Old relay", site: "us-east", product: "meet", state: "active", connected: false, lastContactAt: t0 - 86400000, version: "2.4.0", health: "silent", scopes: ["read-health"], readOnly: false, confirm: [] }] },
+    "GET settings/api": apiView,
+    "GET settings/exports": exportsView,
+    "GET settings/api/federation/documents": { ok: true, org: "acme", staged: null,
+      pinned: { issuer: I + "/federation", front_door: false, discovery_url: "https:" + "//id.acme.example/lucid/acme/.well-known/openid-configuration",
+        jwks_url: "https:" + "//id.acme.example/lucid/acme/jwks.json", discovery: { issuer: I + "/federation" }, jwks: { keys: [] } } },
+    "GET compliance/holds": { ok: true, org: "acme", partial: [r3], holds: [
+      { hold: "h_0123456789abcdef", on: "people", count: 2, principals: ["bob@acme.example", "carl@acme.example"], reason: "r", matter: "Acme v. Widget", placed_at: 1763200000,
+        by: { client: exportClient.id, owner: "lee@acme.example" }, relays: { [r1]: "placed" }, archive: "waiting", source: "api" },
+      { hold: "0123456789abcdef", on: "people", principals: ["dan@acme.example"], placed_at: 1763100000, by: { admin: "ann@acme.example" }, relays: { [r2]: "released" },
+        released_at: 1763250000, source: "console" }] },
+    "GET compliance/exports": { ok: true, org: "acme", jobs: [job, ready], storage: { free_bytes: 1073741824, low: true }, archive_relays: [r1] },
+    "POST compliance/exports/cancel": { ok: true, job: Object.assign({}, job, { state: "canceled", code: "admin" }) },
+    "GET directory/status": { ok: true, org: "acme", mode: "governed", governed: true, not_reported: [],
+      clients: [{ id: scimClient.id, name: "entra-scim", owner: "ann@acme.example", state: "active", scopes: scimClient.scopes, provider: "entra", resource: scim, domains: ["acme.example"],
+        requests: { last_request: 1763290000, ok: 12, refused: 2, ops: {}, refusals: { network: 2 } } }],
+      unattributed: { last_request: null, ok: 0, refused: 0, ops: {}, refusals: {} },
+      legacy: { tokens: [{ token_id: "t_legacy01", hint: "3f2a9c1d", provider: "okta", issued: 0, expires: 1767776000, pre_r4d3: true, no_address_list: true, ending: true,
+        last_request: 1763000000, ok: 3, refused: 0, ops: {}, refusals: {} }] },
+      pending: [{ group: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0", group_name: "Engineering", principal: "bob@acme.example", since: 1763280000, provider: "entra" }], pending_count: 1,
+      sso: [{ provider: "entra", relay: "r1", at: 1763290000, pending_count: 1 }, { provider: "okta", relay: "r1", at: 1763290000, pending_count: 0 }], sso_unanswered: [],
+      people: [{ principal: "lee@acme.example", state: "deprovisioned", at: 1763250000, provider: "entra", source: "scim" }] },
+    "GET fleet/people": { ok: true, total: 0, rows: [] },
+    "GET admins": { ok: true, people: [], waiting: [], invites: [] },
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+    "POST settings/exports/destinations/secret": { ok: true, secret, rotate_by: 1771000000 },
+  };
+  const confirmCode = async () => {
+    for (let i = 0; i < 4; i++) await settle();
+    if (!doc.getElementById("code-dlg").open) fail("no step-up code asked");
+    doc.getElementById("code-input").value = "123456";
+    doc.getElementById("code-go").click();
+    for (let i = 0; i < 6; i++) await settle();
+  };
+  const actionButtons = (label) => doc.querySelectorAll("td.actions button").filter((b) => b.textContent === label);
+  boot(answers, { hash: "#/overview" });
+  for (let i = 0; i < 4; i++) await settle();
+
+  // The attention items other lanes added, in the console's words with its own relay names.
+  const ov = view();
+  for (const [k, args] of [["relay-outdated", { relay: "Old relay", org: "acme", needs: "map-v2" }], ["api-owner-gone", { principal: "lee@acme.example", org: "acme", n: 1 }],
+    ["federation-jwks-republish", { org: "acme", kid: "fk-2025-11" }], ["webhook-paused", { destination: "ServiceNow events", org: "acme" }],
+    ["webhook-key-dropped", { org: "acme", kid: "wk-2025-11" }], ["export-storage", { org: "acme" }]]) {
+    const want = filled(W["attention." + k], args);
+    if (!ov.includes(want)) fail("the overview lacks the " + k + " item " + JSON.stringify(want) + ":\n" + ov);
+  }
+  if (!doc.querySelector('ul.attention a[href="#/security/compliance"]')) fail("the export-storage item does not link to the Compliance page");
+
+  // Settings > API access: Compliance and Directory sections, the relay set with what a relay lacks, and Retire.
+  await go("#/security/api");
+  const page = view();
+  inOrder(page, [W["api.title"], W["api.outdated"], W["api.clients"], "ediscovery-export", W["api.blocks"], W["api.meet-ca"], "ab".repeat(32), "ediscovery-export",
+    W["api.compliance"], W["api.cap-jobs"], "5", W["api.cap-job-bytes"], W["api.recipient"], "rcpt-2026-11", W["api.thumbprint"], jkt, W["api.compliance-rule"],
+    W["api.recipient-set"], W["api.recipient-drop"], W["api.caps-set"], "entra-scim", W["api.directory"], W["api.dir-provider"], "entra", W["api.dir-scim"], scim,
+    W["api.dir-tenant"], "ce5f061f-abe6-4e40-9615-301f87bcb7f0", W["api.dir-audience"], W["api.dir-azp"], "cb1d50fe-8ed0-4944-9e7d-5981aad3bc4b", W["api.dir-paste"],
+    W["api.dir-client-id"], scimClient.id, W["api.dir-token-url"], I + "/oauth/token", W["api.dir-scim"], scim, W["api.relay-set"], "Dallas east", W["api.lacks-none"],
+    "Old relay", "map-v2"], "API access revision 4");
+  if (page.includes("\u2014") || page.includes("\u2013")) fail("a long dash on API access");
+  const retire = actionButtons(W["api.retire"]);
+  if (retire.length !== 1) fail("Retire is offered " + retire.length + " times; only the disconnected relay that lacks map-v2 may offer it");
+  retire[0].click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== filled(D["api-retire"].title, { relay: "Old relay", org: "acme" })) fail("the retire dialog title");
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const retired = calls.find((c) => c.route === "POST settings/api/relays/retire");
+  if (!retired || retired.body.org !== "acme" || retired.body.relay !== r3 || !retired.body.stepup) fail("the retire body: " + JSON.stringify(retired && retired.body));
+
+  // Settings > Exports: the webhook with its verification and paused state, Resume, Replay from, the keys, the outbound
+  // identity with a dropped key to confirm, and the prefer-federation advice on a service account key.
+  await go("#/security/exports");
+  const ev = view();
+  inOrder(ev, [W["exports.destinations"], W["exports.col-events"], "ServiceNow events", "webhook (webhook)", W["exports.ev-paused"], "503 from the receiver",
+    W["exports.cred-none"], W["exports.ev-verified"], filled(W["exports.ev-at"], { cursor: "c_17" }), "Google logs", W["exports.cred-gcp"] + ": " + W["exports.cred-held"] + ". " + W["exports.prefer-federation"], W["webhooks.keys"],
+    filled(W["webhooks.keys-help"], { url: I + "/v1/webhooks/keys" }), W["webhooks.key-new"], "wk-2026-11", W["webhooks.in-force"], "wk-2025-11", W["webhooks.dropped"],
+    W["federation.title"], W["federation.help"], W["federation.set"], W["federation.key-new"], W["federation.download"], W["federation.issuer"], I + "/federation", "fk-2026-11",
+    filled(W["attention.federation-jwks-republish"], { org: "acme", kid: "fk-2025-11" }), W["federation.republished"]], "exports revision 4");
+  for (const w of [W["exports.verify"], W["exports.replay"], W["exports.resume"], W["exports.secret"], W["exports.send-test"]]) {
+    if (actionButtons(w).length !== 1) fail("the webhook does not offer " + w + " once");
+  }
+  if (actionButtons(W["webhooks.drop"]).filter((b) => b.closest("table")).length !== 2) fail("Drop is offered on the in-force webhook key and federation key only");
+  if (actionButtons(W["exports.dest-credential"]).length !== 1) fail("Set credential is offered on a webhook without a receiver credential");
+  const presetPick = doc.getElementById("view").querySelectorAll("select").find((s) => s.querySelectorAll("option").some((o) => o.textContent === "webhook (webhook)"));
+  if (!presetPick) fail("the kind and preset choice lacks the webhook preset");
+  // Download documents: where to publish them.
+  find("button", W["federation.download"]).click();
+  for (let i = 0; i < 4; i++) await settle();
+  if (!view().includes(filled(W["federation.publish"], { discovery: "https:" + "//id.acme.example/lucid/acme/.well-known/openid-configuration", jwks: "https:" + "//id.acme.example/lucid/acme/jwks.json" }))) {
+    fail("the documents do not say where to publish them:\n" + view());
+  }
+  // Replay from the feed position shown, with a step-up.
+  actionButtons(W["exports.replay"])[0].click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== filled(D["dest-replay"].title, { name: "ServiceNow events" })) fail("the replay dialog title");
+  if (doc.getElementById("confirm-fields").querySelector("input").value !== "c_17") fail("Replay from does not start at the delivered position");
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const replay = calls.find((c) => c.route === "POST settings/exports/destinations/replay");
+  if (!replay || replay.body.org !== "acme" || replay.body.id !== hook.id || replay.body.from !== "c_17" || !replay.body.stepup) fail("the replay body: " + JSON.stringify(replay && replay.body));
+  // Resume: no step-up.
+  actionButtons(W["exports.resume"])[0].click();
+  await settle();
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 6; i++) await settle();
+  const resumed = calls.find((c) => c.route === "POST settings/exports/destinations/resume");
+  if (!resumed || JSON.stringify(resumed.body) !== JSON.stringify({ org: "acme", id: hook.id })) fail("the resume body: " + JSON.stringify(resumed && resumed.body));
+
+  // A v1 secret: shown once in its own dialog, never on the page, and nowhere once the dialog closes.
+  actionButtons(W["exports.secret"])[0].click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== filled(D["dest-secret"].title, { name: "ServiceNow events" })) fail("the secret dialog title");
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const made = calls.find((c) => c.route === "POST settings/exports/destinations/secret");
+  if (!made || made.body.org !== "acme" || made.body.id !== hook.id || !made.body.stepup) fail("the v1 secret body: " + JSON.stringify(made && made.body));
+  const reveal = doc.querySelectorAll("dialog.reveal");
+  if (reveal.length !== 1 || !reveal[0].open) fail("the v1 secret is not shown in its own dialog");
+  inOrder(reveal[0].textContent, [filled(W["exports.secret-title"], { name: "ServiceNow events" }), hook.id, W["exports.secret-once"], "Rotate it by ", secret, W["api.close"]], "v1 secret dialog");
+  if (snapshot().split(secret).length !== 2) fail("the v1 secret is shown more than once");
+  if (doc.getElementById("view").textContent.includes(secret)) fail("the v1 secret is on the page itself");
+  if (doc.getElementById("confirm-fields").childNodes.length) fail("the closed confirmation keeps its fields");
+  reveal[0].querySelectorAll("button").find((b) => b.textContent === W["api.close"]).click();
+  await settle();
+  if (doc.querySelectorAll("dialog.reveal").length) fail("the v1 secret dialog stays after Close");
+  if (snapshot().includes(secret) || snapshot().includes("SECRETSECRET")) fail("the v1 secret stays in the page after its dialog closed");
+  await go("#/security/api");
+  await go("#/security/exports");
+  if (snapshot().includes("SECRETSECRET")) fail("the v1 secret came back with the page");
+
+  // Security and audit > Compliance: holds with relay and archive states, exports with the reviewer state, never
+  // content, and Cancel export with a reason.
+  await go("#/security/compliance");
+  const cv = view();
+  inOrder(cv, [W["compliance.title"], W["compliance.help"], W["compliance.storage-low"], W["compliance.holds"], filled(W["fleet.missing"], { names: "Old relay" }),
+    "h_0123456789abcdef", exportClient.id, "2", "Acme v. Widget", "Dallas east: " + W["compliance.relay-placed"], W["compliance.archive-waiting"],
+    "0123456789abcdef", "ann@acme.example", "Hub west: " + W["compliance.relay-released"], W["compliance.exports"], W["compliance.ask-reviewers"], W["api.compliance-rule"],
+    "j_0123456789abcdef", "ediscovery-export", "Acme v. Widget", W["compliance.job-waiting"], "rev1@acme.example, rev2@acme.example",
+    filled(W["compliance.released"], { n: 1 }), filled(W["compliance.released-by"], { reviewers: "rev1@acme.example" }), "j_fedcba9876543210", W["compliance.job-ready"],
+    filled(W["compliance.released"], { n: 2 }), "6 MiB"], "compliance");
+  if (cv.includes("\u2014") || cv.includes("\u2013")) fail("a long dash on Compliance");
+  if (actionButtons(W["compliance.cancel"]).length !== 2) fail("Cancel export is offered on the waiting and the ready job only");
+  actionButtons(W["compliance.cancel"])[0].click();
+  await settle();
+  if (doc.getElementById("confirm-title").textContent !== filled(D["compliance-cancel"].title, { job: "j_0123456789abcdef" })) fail("the cancel export dialog title");
+  doc.getElementById("confirm-fields").querySelector("textarea").value = "Matter settled";
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 6; i++) await settle();
+  const canceled = calls.find((c) => c.route === "POST compliance/exports/cancel");
+  if (!canceled || JSON.stringify(canceled.body) !== JSON.stringify({ org: "acme", job: "j_0123456789abcdef", reason: "Matter settled" })) fail("the cancel body: " + JSON.stringify(canceled && canceled.body));
+  const asked = calls.filter((c) => c.route === "GET compliance/exports").map((c) => c.url);
+  if (!asked.length || !asked.every((u) => u.endsWith("?org=acme"))) fail("the Compliance page did not ask for the organization's jobs: " + asked.join(", "));
+
+  // People > Directory: governed SCIM, its clients and refusals, a legacy token from before the upgrade with its end,
+  // a group confirmation waiting, and the owner who left with an API client.
+  await go("#/people");
+  const dv = view();
+  inOrder(dv, [W["directory.title"] + ": acme", W["directory.governed"], W["directory.clients"], W["directory.col-last"], "entra-scim", "entra", scim, "12",
+    filled(W["directory.refusals"], { list: "network 2" }), W["directory.tokens"], W["directory.pre-r4d3-help"], "t_legacy01", "3f2a9c1d", W["directory.pre-r4d3"],
+    W["directory.any-address"], W["directory.pending"], W["directory.pending-help"], "Engineering", "bob@acme.example", W["directory.owner-gone"], "lee@acme.example",
+    "ediscovery-export"], "directory card");
+  console.log("api-r4: attention, API access blocks and relay set, webhooks, keys, outbound identity, v1 secret once, Compliance and Directory ok");
+}
+
+// ---- API-1 revision 5 14.2 (API-1c7): connectors, identity providers (EMA), content and delegation, people, Local MCP ----
+async function apiR5Main(v) {
+  const W = v.page;
+  const D = v.dialogs;
+  const r1 = "r_0000000000000001";
+  const t0 = 1763300000000;
+  const filled = (tpl, vals) => tpl.replace(/<([a-z][a-z ]*)>/g, (_, k) => String(vals[k]));
+  const https = (rest) => "https:" + "//" + rest;
+  const I = https("console.acme.example:7443/api/orgs/acme");
+  const kHelp = "k_7a1b2c3d4e5f6a7b", kOld = "k_0f1e2d3c4b5a6978", kNew = "k_1234567890abcdef";
+  const helpApp = "helpdesk-api@apps.acme.example", oldApp = "archive-api@apps.acme.example", salesApp = "sales-api@apps.acme.example";
+  const cimdUrl = https("claude.ai/oauth/mcp-client.json");
+  const loopback = "http:" + "//127.0.0.1/callback";
+  const conn = (id, name, host, apps, networks, stale_s, shown_state) => ({ id, name, origin: https(host + ":9445"), apps, networks, stale_s, state: "active", shown_state,
+    suspended_by_journal: false });
+  const connectors = [conn(kHelp, "helpdesk", "connector.acme.example", [helpApp], ["10.40.0.0/16"], 60, "active"),
+    conn(kOld, "archive-bot", "connector2.acme.example", [oldApp], [], 120, "stale"), conn(kNew, "new-conn", "connector3.acme.example", [], [], 60, "never-synced")];
+  connectors[2].apps = ["new-api@apps.acme.example"];
+  const idps = [{ id: "okta", provider: "okta", issuer: https("acme.okta.com"), algs: ["RS256"], tenant: null, max_age_s: 300, auth_max_s: 43200, private_ok: false,
+    state: "active", shown_state: "active", last_test: 1763200000, keys: 2 }];
+  const ret = I + "/oauth/sso-return";
+  const providers = [{ id: "okta", kind: "okta", iss: https("acme.okta.com/oauth2/default"), sso_url: null, api_return: ret },
+    { id: "entra", kind: "entra", iss: https("login.microsoftonline.com/ce5f061f-abe6-4e40-9615-301f87bcb7f0/v2.0"), sso_url: https("sso.acme.example:8443"), api_return: ret }];
+  const base = { owner: "ann@acme.example", ceiling: "internal", relays: ["*"], networks: [], mtls_required: false, rate: { per_minute_each: 120, per_day_each: 20000 },
+    created: 1763000000, expires: 1790000000, state: "active", shown_state: "active" };
+  const ticket = Object.assign({}, base, { id: "c_3a4b5c6d7e8f9001", name: "ticket-bot", principal: "ticket-bot@apps.acme.example", kind: "app", reach: "R1",
+    scopes: ["content.read", "content.post"], connectors: [kHelp], apps: [helpApp], channels: ["ch:0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d"], confirm: [], mtls_required: true,
+    credentials: [{ type: "mtls", hint: "serial 0a1b2c3d" }] });
+  const claude = Object.assign({}, base, { id: "c_0b1c2d3e4f5a6b7c", name: "claude-ops", principal: "claude-ops@apps.acme.example", kind: "agent_delegated", reach: "R1",
+    scopes: ["content.read", "content.post"], connectors: [kHelp], apps: [helpApp], channels: ["*"], confirm: ["content.post"],
+    delegation: { groups: ["00g1a2b3c4"], principals: [], idps: ["okta"], consent_days: 7, denied: ["eve@acme.example"] }, redirect_uris: [loopback], loopback_ok: true,
+    credentials: [{ type: "cimd", hint: cimdUrl, expires: 1802776000 }] });
+  const map = { seq: 14, issued: 1763000000, expires: 1770000000, issuer_url: I, failover_after_s: 300, grace: { person: 0, app: 0, connector: 0, relay: 0 },
+    relay_origins: {}, clients: [ticket, claude], scrape_tokens: [], connectors, idps };
+  const reasons = ["Adds a connector, an app to a connector, wider connector networks or a longer stale time",
+    "Adds or widens a client that reads or posts conversations, or acts for people", "Adds or widens an identity provider for enterprise-managed sign-in"];
+  const staged = { id: "st_0123456789abcdef", org: "acme", by: "ann@acme.example", at: t0, expires_at: t0 + 7200000, base_seq: 14, changes: ["Add connector new-conn"],
+    two_person: true, two_person_reasons: reasons, tests_needed: [] };
+  const apiView = { ok: true, orgs: [{ org: "acme", edition: "enterprise", state: "on", map, draft: null, journal: { head: 0, entries: [] }, staged, signing: null,
+    relays: [{ id: r1, acked: 0, synced: true }], limits: { clients: 500, destinations: 32, scrape_tokens: 10 },
+    connector_status: {
+      [kHelp]: { sync_age_s: 12, conversations: 42, seal: "tpm2", features: ["content"], reported_at: 1763299990, stale: false },
+      [kOld]: { sync_age_s: 400, conversations: 7, seal: "linux_keyring", features: ["content"], reported_at: 1763299600, stale: true },
+      [kNew]: { sync_age_s: null, conversations: null, seal: null, features: [], reported_at: null, stale: true } },
+    api_apps: [{ principal: helpApp, name: "Helpdesk API" }, { principal: oldApp, name: "Archive API" }, { principal: salesApp, name: "Sales API" }], policy_known: true,
+    ai_groups: [{ id: "00g1a2b3c4", label: "Support" }], providers, api_return: ret,
+    person_revokes: [{ id: "t_acme_000021", client: claude.id, principal: "eve@acme.example", ts: 1763250000 },
+      { id: "t_acme_000022", client: "*", principal: "mallory@acme.example", ts: 1763260000 }] }] };
+  const answers = {
+    "GET me": {
+      ok: true, product: "fleet", profile: "standard", origin: "https://console.acme.example", relay: { host: "console.acme.example" }, sections: [],
+      idle: { minutes: 15, maxHours: 12 },
+      user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+        methods: { webauthn: [], password: false, totp: true }, mustSetPassword: false, sessions: 1, mail: [] },
+    },
+    "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [] },
+    "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 }, attention: [],
+      fleet: { relays: { total: 1, ok: 1, warn: 0, bad: 0, silent: 0, unconfirmed: 0 }, people: { online: 0 }, calls: { active: 0 }, kpis: {} } },
+    "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "done", license: "done", relay: "done" } },
+    "GET fleet/relays": { ok: true, total: 1, relays: [
+      { id: r1, name: "Dallas east", site: "us-east", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.7.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] }] },
+    "GET settings/api": apiView,
+    "GET settings/api/delegations": { ok: true, org: "acme", client: claude.id, revokes: [], people: [
+      { principal: "bob@acme.example", client: claude.id, client_name: "claude-ops", grant: "jwt_bearer", first_use: 1763200000, last_use: 1763290000, ends: null, revoked: false },
+      { principal: "dan@acme.example", client: claude.id, client_name: "claude-ops", grant: "authorization_code", first_use: 1763100000, last_use: 1763150000, ends: 1763700000, revoked: true }] },
+    "GET settings/api/approvals": { ok: true, org: "acme", approvals: [
+      { ts: 1763280000, connector: kHelp, client: claude.id, approval: "ap_0011223344556677", action: "content.approval.answered", result: "approved", app: helpApp }] },
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+    "POST settings/api/idps/test": { ok: true, issuer: https("acme.okta.com"), jwks_uri: https("acme.okta.com/oauth2/v1/keys"), keys: [{ kid: "okta-k1", alg: "RS256", kty: "RSA" }] },
+  };
+  const confirmCode = async () => {
+    for (let i = 0; i < 4; i++) await settle();
+    if (!doc.getElementById("code-dlg").open) fail("no step-up code asked");
+    doc.getElementById("code-input").value = "123456";
+    doc.getElementById("code-go").click();
+    for (let i = 0; i < 6; i++) await settle();
+  };
+  const field = (label) => {
+    const l = doc.getElementById("confirm-fields").querySelectorAll("label").find((x) => x.textContent === label);
+    if (!l) fail("the dialog has no field " + JSON.stringify(label));
+    return doc.getElementById(l.getAttribute("for"));
+  };
+  const title = () => doc.getElementById("confirm-title").textContent;
+  // A row action of the first table row that shows `has` and offers `label`.
+  const rowAction = (has, label) => {
+    for (const tr of doc.querySelectorAll("tr")) {
+      if (!tr.textContent.includes(has)) continue;
+      const b = tr.querySelectorAll("td.actions button").find((x) => x.textContent === label);
+      if (b) return b;
+    }
+    return fail("no row with " + has + " offers " + label);
+  };
+  const posted = (route) => {
+    const c = calls.filter((x) => x.route === route).pop();
+    if (!c) fail("nothing was posted to " + route);
+    if (!c.body.stepup) fail(route + " was posted without a step-up");
+    const b = Object.assign({}, c.body);
+    delete b.stepup;
+    return b;
+  };
+  const same = (route, want) => {
+    const got = posted(route);
+    if (JSON.stringify(got) !== JSON.stringify(want)) fail("the " + route + " body:\n" + JSON.stringify(got) + "\nwant\n" + JSON.stringify(want));
+  };
+  boot(answers, { hash: "#/security/api" });
+  for (let i = 0; i < 4; i++) await settle();
+
+  // The page: two-person reasons, the clients' kinds, content and delegation, people, approvals, revokes, connectors with a
+  // stale and a never-synced one and their key stores, identity providers, and the sign-in providers with api_return.
+  const page = view();
+  inOrder(page, [W["api.title"], W["api.staged"], W["api.two-person"], ...reasons, W["api.clients"], "ticket-bot", W["api.kind-app"], "claude-ops", W["api.kind-agent-delegated"],
+    W["api.content"], "ticket-bot", W["api.col-connectors"], "helpdesk", W["api.col-apps"], helpApp, W["api.f-channels"], "ch:0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d", W["api.f-confirm"],
+    W["api.approvals"], W["api.approvals-help"], "ap_0011223344556677", "content.approval.answered", "approved",
+    "claude-ops", W["api.channels-all"], W["api.delegation"], W["api.dlg-groups"], "00g1a2b3c4", W["api.dlg-denied"], "eve@acme.example", W["api.dlg-idps"], "okta",
+    W["api.dlg-consent"], "7", W["api.redirects"], loopback, W["api.loopback"], W["api.cimd"], cimdUrl, W["api.loopback-warn"],
+    W["api.people"], W["api.people-help"], "bob@acme.example", "jwt_bearer", "dan@acme.example", "authorization_code", W["api.revoked"], W["api.approvals"],
+    W["api.revokes"], W["api.revokes-help"], "eve@acme.example", "claude-ops", "mallory@acme.example", W["api.all-clients"]], "content, people and revokes");
+  inOrder(page, [W["api.connectors"], W["api.connectors-help"], W["api.conn-add"], "helpdesk", kHelp, https("connector.acme.example:9445"), "Helpdesk API", "42",
+    filled(W["api.sync-age"], { n: 12 }), W["api.shown-active"], "tpm2", "archive-bot", "Archive API", "7", filled(W["api.sync-age"], { n: 400 }), W["api.shown-stale"], "linux_keyring",
+    "new-conn", W["api.not-reported"], W["api.shown-never-synced"], W["api.shown-never-synced"], W["api.not-reported"],
+    W["api.idps"], W["api.idps-help"], "okta", https("acme.okta.com"), "RS256", "300", "43200", W["api.shown-active"], "2",
+    W["api.providers"], W["api.providers-help"], W["api.api-return"], ret, "okta", https("acme.okta.com/oauth2/default"), W["api.not-set"], "entra", https("sso.acme.example:8443")],
+    "connectors, identity providers and providers");
+  if (page.includes("\u2014") || page.includes("\u2013")) fail("a long dash on API access");
+  if (doc.querySelectorAll("tr").some((tr) => tr.textContent.includes("dan@acme.example") && tr.querySelectorAll("td.actions button").some((b) => b.textContent === W["api.revoke"]))) {
+    fail("Revoke is offered on a revoked delegation");
+  }
+
+  // Add connector: name, origin, apps picked from the org's api apps, networks and stale seconds, with a step-up.
+  find("button", W["api.conn-add"]).click();
+  await settle();
+  if (title() !== filled(D["api-connector"].title, { name: "" })) fail("the add connector dialog title: " + title());
+  const box = (text) => {
+    const l = doc.getElementById("confirm-fields").querySelectorAll("label").find((x) => x.textContent === text);
+    if (!l) fail("the dialog has no choice " + JSON.stringify(text));
+    return doc.getElementById(l.getAttribute("for"));
+  };
+  field(W["api.f-name"]).value = "sales";
+  field(W["api.f-conn-origin"]).value = https("connector4.acme.example:9445");
+  box("Sales API (" + salesApp + ")").checked = true;
+  field(W["api.f-networks"]).value = "10.50.0.0/16";
+  field(W["api.f-conn-stale"]).value = "90";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/connectors", { org: "acme", connector: { name: "sales", origin: https("connector4.acme.example:9445"), apps: [salesApp], networks: ["10.50.0.0/16"], stale_s: 90 } });
+
+  // Suspend the stale connector, with a reason and a step-up.
+  rowAction("archive-bot", W["api.suspend"]).click();
+  await settle();
+  if (title() !== filled(D["api-connector-suspend"].title, { name: "archive-bot" })) fail("the suspend connector dialog title: " + title());
+  doc.getElementById("confirm-fields").querySelector("textarea").value = "Host retired";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/connectors/suspend", { org: "acme", id: kOld, reason: "Host retired" });
+
+  // Test an identity provider: the issuer, the key set address and each key are shown; nothing else.
+  rowAction("RS256", W["api.idp-test"]).click();
+  await settle();
+  if (title() !== filled(D["api-idp-test"].title, { name: "okta" })) fail("the IdP test dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/idps/test", { org: "acme", id: "okta" });
+  for (let i = 0; i < 4; i++) await settle();
+  inOrder(view(), [W["api.idps"], W["api.idp-tested"] + ": okta", W["api.col-issuer"], https("acme.okta.com"), W["api.idp-jwks"], https("acme.okta.com/oauth2/v1/keys"),
+    W["api.col-kid"], "okta-k1", "RS256", "RSA"], "IdP test result");
+
+  // Add identity provider from the Okta provider: the issuer is prefilled with the org authorization server.
+  rowAction("oauth2/default", W["api.idp-add"]).click();
+  await settle();
+  if (field(W["api.f-issuer"]).value !== https("acme.okta.com")) fail("the issuer is not prefilled from the provider: " + field(W["api.f-issuer"]).value);
+  doc.getElementById("confirm").close();
+  await settle();
+
+  // Change an identity provider: the dialog says narrowing applies at once and widening needs a second admin.
+  rowAction("RS256", W["api.change"]).click();
+  await settle();
+  if (title() !== filled(D["api-idp-update"].title, { name: "okta" })) fail("the IdP change dialog title: " + title());
+  if (!doc.getElementById("confirm-body").textContent.includes(D["api-idp-update"].body)) fail("the IdP change dialog does not say what applies at once");
+  if (!box("RS256").checked || field(W["api.f-auth-max"]).value !== "43200") fail("the IdP change dialog is not prefilled");
+  box("PS256").checked = true;
+  field(W["api.f-tenant"]).value = "acme";
+  field(W["api.f-max-age"]).value = "120";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/idps/update", { org: "acme", id: "okta", idp: { algs: ["RS256", "PS256"], tenant: "acme", max_age_s: 120, auth_max_s: 43200, private_ok: false } });
+
+  // Set the SSO URL of a provider (step-up), and the api_return value has its Copy button.
+  rowAction("oauth2/default", W["api.sso-set"]).click();
+  await settle();
+  if (title() !== filled(D["api-sso-url"].title, { provider: "okta" })) fail("the SSO URL dialog title: " + title());
+  field(W["api.f-sso-url"]).value = https("sso.acme.example:8443");
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/sso-url", { org: "acme", provider: "okta", url: https("sso.acme.example:8443") });
+  const retLine = doc.querySelectorAll("dd").find((d) => d.textContent.includes(ret));
+  if (!retLine || !retLine.querySelectorAll("button").some((b) => b.textContent === "Copy")) fail("api_return has no Copy button");
+
+  // Revoke a person's delegation, and allow a revoked person again (two-person, staged).
+  rowAction("bob@acme.example", W["api.revoke"]).click();
+  await settle();
+  if (title() !== filled(D["api-delegation-revoke"].title, { principal: "bob@acme.example", name: "claude-ops" })) fail("the revoke dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/delegations/revoke", { org: "acme", client: claude.id, principal: "bob@acme.example" });
+  rowAction("mallory@acme.example", W["api.allow"]).click();
+  await settle();
+  if (title() !== filled(D["api-delegation-allow"].title, { principal: "mallory@acme.example", name: W["api.all-clients"] })) fail("the allow again dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/delegations/allow", { org: "acme", client: "*", principal: "mallory@acme.example" });
+  // Revoke for every client, offered only on an entry for one client.
+  if (doc.querySelectorAll("tr").some((tr) => tr.textContent.includes("mallory@acme.example") && tr.querySelectorAll("td.actions button").some((b) => b.textContent === W["api.revoke-all"]))) {
+    fail("Revoke for every client is offered on an entry that already covers every client");
+  }
+  rowAction("eve@acme.example", W["api.revoke-all"]).click();
+  await settle();
+  if (title() !== filled(D["api-delegation-revoke-all"].title, { principal: "eve@acme.example" })) fail("the revoke for every client dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/delegations/revoke", { org: "acme", client: "*", principal: "eve@acme.example" });
+  const asked = calls.filter((c) => c.route === "GET settings/api/delegations").map((c) => c.url);
+  if (!asked.length || !asked.every((u) => u.endsWith("?org=acme&client=" + claude.id))) fail("the people were not read per client: " + asked.join(", "));
+
+  // The client editor: Content and Delegation prefilled from the client, sent back with the 3.2 fields.
+  rowAction("claude-ops", W["api.edit"]).click();
+  await settle();
+  if (field(W["api.f-kind"]).value !== "agent_delegated") fail("the editor does not show the delegated kind");
+  if (!box("helpdesk").checked || !box("Support (00g1a2b3c4)").checked || !box("okta (" + https("acme.okta.com") + ")").checked) fail("the editor does not pick the client's connector, group and IdP");
+  if (field(W["api.f-cimd"]).value !== cimdUrl || field(W["api.f-loopback"]).value !== "yes" || field(W["api.f-confirm"]).value !== "yes") fail("the editor does not show the CIMD, loopback and confirm values");
+  if (!doc.getElementById("confirm-fields").textContent.includes(W["api.loopback-warn"])) fail("the loopback choice has no warning");
+  field(W["api.f-consent-days"]).value = "14";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const upd = posted("POST settings/api/clients/update");
+  const c = upd.client;
+  if (upd.id !== claude.id || c.kind !== "agent_delegated" || c.reach !== "R1" || JSON.stringify(c.connectors) !== JSON.stringify([kHelp]) || JSON.stringify(c.apps) !== JSON.stringify([helpApp])
+    || JSON.stringify(c.channels) !== "[\"*\"]" || JSON.stringify(c.confirm) !== "[\"content.post\"]" || c.loopback_ok !== true || "credentials" in c
+    || JSON.stringify(c.delegation) !== JSON.stringify({ groups: ["00g1a2b3c4"], principals: [], idps: ["okta"], consent_days: 14, denied: ["eve@acme.example"] })
+    || JSON.stringify(c.redirect_uris) !== JSON.stringify([loopback])) {
+    fail("the client update body: " + JSON.stringify(upd));
+  }
+  // Leaving a content kind removes what the new kind does not allow: the delegated client with CIMD becomes an R0 agent
+  // (nulls, and no credentials list: the console drops the cimd credential itself), and the app becomes a monitoring
+  // client.
+  const nulls = (body, keys) => keys.every((k) => k in body && body[k] === null);
+  rowAction("claude-ops", W["api.edit"]).click();
+  await settle();
+  field(W["api.f-kind"]).value = "agent";
+  field(W["api.f-scopes"]).value = "monitor.read";
+  box("helpdesk").checked = false;
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const toAgent = posted("POST settings/api/clients/update");
+  const a = toAgent.client;
+  if (toAgent.id !== claude.id || a.kind !== "agent" || a.reach !== "R0" || !nulls(a, ["connectors", "apps", "channels", "confirm", "delegation", "redirect_uris", "loopback_ok"])
+    || "credentials" in a) {
+    fail("the delegated client turned agent does not remove its content and delegation fields, or resends credentials: " + JSON.stringify(toAgent));
+  }
+  rowAction("ticket-bot", W["api.edit"]).click();
+  await settle();
+  field(W["api.f-kind"]).value = "monitoring";
+  field(W["api.f-scopes"]).value = "monitor.read";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const toMonitoring = posted("POST settings/api/clients/update");
+  const m = toMonitoring.client;
+  if (toMonitoring.id !== ticket.id || m.kind !== "monitoring" || m.reach !== "R0" || !nulls(m, ["connectors", "apps", "channels", "confirm"])
+    || "delegation" in m || "redirect_uris" in m || "loopback_ok" in m || "credentials" in m) {
+    fail("the app turned monitoring client does not remove its content fields: " + JSON.stringify(toMonitoring));
+  }
+
+  // Settings > AI > Local MCP on a Meeting Hub relay: shown as Enterprise only, staged with the AI settings.
+  const host = { host: "relay.acme.example", version: "0.99.0", uptimeSeconds: 100, fips: false };
+  const me = {
+    ok: true, product: "meet", profile: "standard", origin: "https://relay.acme.example", relay: host,
+    sections: ["overview", "meet", "approvals", "admins"], idle: { minutes: 15, maxHours: 12 },
+    user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+      methods: { webauthn: [], password: false, totp: true }, mustSetPassword: false, sessions: 1, mail: [] },
+  };
+  const aiView = (edition) => ({
+    ok: true, org: "acme", orgs: [{ id: "acme", label: "Acme" }], presets: [{ id: "device", label: "This computer only", order: ["device"], access: "none" }], default: "device",
+    advanced: "Advanced", preset: "device", map: { who_principals: [] }, staged: null, saving: [], waiting: [], gateways: [], edition, lacks: null, reviewers: [], consoleSpki: "a".repeat(64),
+    results: [], ai: { v: 1, enabled: true, who: { groups: ["g-1"] }, order: ["device"], frontier: { access: "none" }, classes: ["public", "internal", "confidential", "cui"],
+      cui_classes: ["cui"], local_mcp: { enabled: false, classes: [], tools: ["search"], send: false } },
+  });
+  const ai = (edition) => ({
+    "GET me": me, "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [] }, "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "meet", relay: host, cards: [], attention: [], approvals: { waiting: 0, mine: 0 }, requests: { waiting: 0 }, links: [], banners: [] },
+    "GET meet/ai": aiView(edition), "GET meet/ai/cards": { ok: true, cards: [], errors: [] }, "GET meet/ai/usage": { ok: true, requests: 0, refusals: {} },
+    "GET meet/ai/archive": { ok: true, size: "small", archive: null, add: "Add an archive", notice: "" },
+    "GET meet/ai/mcp": { ok: true, org: "acme", servers: [], gateways: [], journal: [] },
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+  });
+  boot(ai("enterprise"), { hash: "#/meet/ai" });
+  for (let i = 0; i < 4; i++) await settle();
+  inOrder(view(), [W["lmcp.title"], W["lmcp.enterprise"], W["lmcp.help"], W["lmcp.state"], W["lmcp.tools"], "search", W["lmcp.send"], W["lmcp.change"]], "Local MCP card");
+  find("button", W["lmcp.change"]).click();
+  await settle();
+  if (title() !== filled(D["local-mcp"].title, { org: "acme" })) fail("the Local MCP dialog title: " + title());
+  if (doc.getElementById("confirm-fields").querySelectorAll("label").some((l) => l.textContent === "cui")) fail("Local MCP offers a CUI class");
+  field(W["lmcp.f-enabled"]).value = "on";
+  box("internal").checked = true;
+  box("read_conversation").checked = true;
+  field(W["lmcp.f-send"]).value = "yes";
+  doc.getElementById("confirm-go").click();
+  for (let i = 0; i < 2; i++) await settle();
+  if (doc.getElementById("confirm-error").textContent !== W["lmcp.check"]) fail("Allow sending without send_message is not refused: " + doc.getElementById("confirm-error").textContent);
+  box("send_message").checked = true;
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST meet/ai/stage", { org: "acme", preset: "device", ai: { local_mcp: { enabled: true, classes: ["internal"], tools: ["search", "read_conversation", "send_message"], send: true } } });
+  boot(ai("standard"), { hash: "#/meet/ai" });
+  for (let i = 0; i < 4; i++) await settle();
+  if (!view().includes(W["lmcp.standard"])) fail("a standard license does not say Local MCP needs an enterprise license");
+  if (find("button", W["lmcp.change"])) fail("a standard license offers Change Local MCP");
+  console.log("api-r5: connectors, identity providers, SSO URL, content and delegation, people, revokes, approvals and Local MCP ok");
+}
+
+// ---- API-1 revision 6 7.14 (API-1d5): the Agents and Remote Spokes tabs, Tasks, the partner card check and hand-off ----
+async function apiR6Main(v) {
+  const W = v.page;
+  const D = v.dialogs;
+  const r1 = "r_0000000000000001";
+  const t0 = 1763300000000;
+  const filled = (tpl, vals) => tpl.replace(/<([a-z][a-z ]*)>/g, (_, k) => String(vals[k]));
+  const https = (rest) => "https:" + "//" + rest;
+  const I = https("console.acme.example:7443/api/orgs/acme");
+  const aId = "a_7c1d2e3f4a5b6c7d", idleId = "a_0123456789abcdef", kBuild = "k_1a2b3c4d5e6f7081";
+  const hubId = "c_9a8b7c6d5e4f3a2b", partnerId = "c_0b1c2d3e4f506172";
+  const node1 = "n_a1b2c3d4e5f60718293a4b5c6d7e8f90", node2 = "n_" + "b".repeat(32), hubNode = "n_5e6f708192a3b4c5d6e7f8091a2b3c4d";
+  const rootId = "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0", rootSpki = "cd".repeat(32);
+  const jwksUrl = I + "/a2a/jwks.json";
+  const base = { owner: "ann@acme.example", ceiling: "confidential", networks: [], mtls_required: false, rate: { per_minute_each: 60, per_day_each: 5000 },
+    created: 1763000000, expires: 1790000000, state: "active", shown_state: "active" };
+  const hub = Object.assign({}, base, { id: hubId, name: "build-hub", principal: "build-hub@apps.acme.example", kind: "spokes_hub", reach: "R1", scopes: ["spokes.tasks.submit"],
+    relays: ["r_21"], credentials: [{ type: "spokes_node", hint: hubNode, expires: 1802776000, key_store: "pkcs11" }], spokes: { targets: [node1] } });
+  const partnerCardUrl = https("ci.partner.example/.well-known/agent-card.json"), partnerJwks = https("ci.partner.example/jwks.json");
+  const partner = Object.assign({}, base, { id: partnerId, name: "partner-ci", principal: "partner-ci@apps.acme.example", kind: "agent", reach: "R1", scopes: ["spokes.tasks.submit"],
+    relays: ["console"], credentials: [{ type: "private_key_jwt", hint: "p1" }], connectors: [kBuild],
+    a2a: { agents: [aId], skills: ["*"], max_open_tasks: 8, push: { origins: [https("ci.partner.example")], private_cidrs: [] } },
+    card: { url: partnerCardUrl, jwks_uri: partnerJwks, private_cidrs: [] },
+    card_check: { state: "verified", checked_at: 1763280000, why: null, name: "Partner CI", provider: { organization: "Partner Inc", url: https("partner.example") }, version: "2.1.0",
+      interfaces: [{ url: https("ci.partner.example/a2a"), protocolBinding: "HTTP+JSON", protocolVersion: "1.0" }], kids: ["p-k1"] },
+    handoff: { jwks_url: jwksUrl, thumbprints: ["tp-active-1"] } });
+  const connectors = [{ id: kBuild, name: "build-conn", origin: https("conn.acme.example:8445"), apps: ["build-api@apps.acme.example"], networks: [], stale_s: 60, state: "active",
+    shown_state: "active", suspended_by_journal: false }];
+  const map = { seq: 14, issued: 1763000000, expires: 1770000000, issuer_url: I, failover_after_s: 300, grace: { person: 0, app: 0, connector: 0, relay: 0 },
+    relay_origins: {}, clients: [hub, partner], scrape_tokens: [], connectors, idps: [], a2a: { agents: [{ id: aId, name: "Acme Build Agent", connector: kBuild }] } };
+  const apiView = { ok: true, orgs: [{ org: "acme", edition: "enterprise", state: "on", map, draft: null, journal: { head: 0, entries: [] }, staged: null, signing: null,
+    relays: [{ id: r1, acked: 0, synced: true }], limits: { clients: 500, destinations: 32, scrape_tokens: 10 },
+    connector_status: { [kBuild]: { sync_age_s: 10, conversations: null, seal: "tpm2", features: ["a2a"], reported_at: 1763299990, stale: false } },
+    api_apps: [{ principal: "build-api@apps.acme.example", name: "Build API" }], policy_known: true, ai_groups: [], providers: [], api_return: null, person_revokes: [] }] };
+  const skill = { id: "build-and-test", name: "Build and test", description: "Builds the named branch and runs its tests.", tags: ["build", "test"],
+    examples: ["Build branch release/2.3"], targets: [node1], model: "anthropic/claude-sonnet-4-6", turns: "one", approve_within_s: 3600, idle_close_s: 3600, dropped: false };
+  const lint = { id: "lint", name: "Lint", description: "Runs the linter.", tags: ["lint"], examples: [], targets: [node1], model: null, turns: "one", approve_within_s: 600,
+    idle_close_s: null, dropped: true };
+  const signed = { name: "Acme Build Agent", description: "Runs build and test tasks.", version: "1.0.0",
+    supportedInterfaces: [{ url: https("conn.acme.example:8445/api/orgs/acme/a2a/" + aId), protocolBinding: "HTTP+JSON", protocolVersion: "1.0" }],
+    skills: [{ id: "build-and-test", name: "Build and test" }], signatures: [{ protected: "eyJhbGciOiJFUzI1NiJ9", signature: "c2lnbmF0dXJl" }] };
+  const cardUrl = I + "/a2a/agents/" + aId + "/agent-card.json";
+  const agent = { id: aId, name: "Acme Build Agent", description: "Runs build and test tasks.", version: "1.0.0", connector: kBuild, hub: hubId, streaming: true, push: true,
+    provider: { organization: "Acme Robotics", url: https("acme.example") }, documentation_url: null, skills: [skill, lint], off: false, card_url: cardUrl,
+    card: { state: "served", card: signed, etag: "\"" + "ab".repeat(32) + "\"", kids: ["a2a-k1"], signed_at: 1763290000, map_seq: 14 } };
+  const idle = { id: idleId, name: "Idle Agent", description: "Waits.", version: "0.1.0", connector: kBuild, hub: hubId, streaming: false, push: false, provider: null,
+    documentation_url: null, skills: [Object.assign({}, skill, { id: "check" })], off: false, card_url: I + "/a2a/agents/" + idleId + "/agent-card.json",
+    card: { state: "unsigned", card: null, etag: null, kids: [], signed_at: null, map_seq: 14 } };
+  const key = (kid, state, tp) => ({ kid, nbf: 1763000000, exp: 1790000000, state, sealed: true, thumbprint: tp });
+  const keys = [key("a2a-k1", "active", "tp-active-1"), key("a2a-k0", "expired", "tp-old-0")];
+  const wellKnownUrl = https("console.acme.example:7443/.well-known/agent-card.json");
+  const a2aView = { ok: true, org: "acme", issuer: I, agents_url: I + "/a2a/agents", jwks_url: jwksUrl, well_known: null, well_known_url: wellKnownUrl,
+    agents: [agent, idle], keys, connectors: { [kBuild]: { name: "build-conn", stale: false, shown_state: "active", a2a: true, enclave: false } },
+    hubs: [{ id: hubId, name: "build-hub" }], draft: { agents: [], keys: [keys[0], key("a2a-k2", "pending", "tp-new-2")], well_known: null } };
+  const tasks = { ok: true, org: "acme", tasks: [{ task: "t_0011223344556677", client: partnerId, client_name: "partner-ci", agent: aId, skill: "build-and-test", spoke: node1,
+    state: "working", created: 1763290000, updated: 1763291000, bytes_in: 120, bytes_out: 4096 }] };
+  const spokesView = { ok: true, org: "acme", console_root: { id: rootId }, map_root: { root: rootId, root_spki: rootSpki }, draft_root: null,
+    relays: [{ id: "r_21", name: "spokes-east", connected: true, bound: true, listed: true, staged: true, outdated: false },
+      { id: "r_22", name: "spokes-west", connected: false, bound: true, listed: false, staged: true, outdated: true }],
+    candidates: [{ id: "r_23", name: "spokes-north" }],
+    hubs: [{ id: hubId, name: "build-hub", principal: "build-hub@apps.acme.example", state: "active", ceiling: "confidential", targets: [node1], relays: ["r_21"],
+      credentials: [{ node: hubNode, serial: "0a1b2c", expires: 1802776000, key_store: "pkcs11" }], agent: aId }] };
+  const answers = {
+    "GET me": {
+      ok: true, product: "fleet", profile: "standard", origin: "https://console.acme.example", relay: { host: "console.acme.example" }, sections: [],
+      idle: { minutes: 15, maxHours: 12 },
+      user: { email: "ann@acme.example", role: "admin", rights: "admin", rightsWhy: null, state: "active", breakGlass: false,
+        methods: { webauthn: [], password: false, totp: true }, mustSetPassword: false, sessions: 1, mail: [] },
+    },
+    "GET settings": { ok: true, twoPerson: "off", profile: "standard", links: [] },
+    "GET banner": { ok: true, banner: null },
+    "GET overview": { ok: true, product: "fleet", cards: [], approvals: { waiting: 0, mine: 0 }, attention: [],
+      fleet: { relays: { total: 1, ok: 1, warn: 0, bad: 0, silent: 0, unconfirmed: 0 }, people: { online: 0 }, calls: { active: 0 }, kpis: {} } },
+    "GET setup": { ok: true, bootstrapped: true, profileFixed: null, pinned: false, steps: { signin: "done", email: "done", license: "done", relay: "done" } },
+    "GET fleet/relays": { ok: true, total: 1, relays: [
+      { id: r1, name: "Dallas east", site: "us-east", product: "meet", state: "active", connected: true, lastContactAt: t0, version: "2.7.0", health: "ok", scopes: ["read-health"], readOnly: false, confirm: [] }] },
+    "GET settings/api": apiView,
+    "GET settings/api/a2a": a2aView,
+    "GET settings/api/a2a/tasks": tasks,
+    "GET settings/api/spokes": spokesView,
+    "POST stepup/begin": { ok: true, ceremony: "c1", totp: true, publicKey: {} },
+    "POST settings/api/clients/card-check": { ok: true, card: partner.card_check },
+    "POST settings/api/a2a/keys": { ok: true, key: { kid: "a2a-k3" } },
+  };
+  const confirmCode = async () => {
+    for (let i = 0; i < 4; i++) await settle();
+    if (!doc.getElementById("code-dlg").open) fail("no step-up code asked");
+    doc.getElementById("code-input").value = "123456";
+    doc.getElementById("code-go").click();
+    for (let i = 0; i < 6; i++) await settle();
+  };
+  const go4 = async () => {
+    for (let i = 0; i < 4; i++) await settle();
+  };
+  const field = (label) => {
+    const l = doc.getElementById("confirm-fields").querySelectorAll("label").find((x) => x.textContent === label);
+    if (!l) fail("the dialog has no field " + JSON.stringify(label));
+    return doc.getElementById(l.getAttribute("for"));
+  };
+  const title = () => doc.getElementById("confirm-title").textContent;
+  const error = () => doc.getElementById("confirm-error").textContent;
+  const rowAction = (has, label) => {
+    for (const tr of doc.querySelectorAll("tr")) {
+      if (!tr.textContent.includes(has)) continue;
+      const b = tr.querySelectorAll("td.actions button").find((x) => x.textContent === label);
+      if (b) return b;
+    }
+    return fail("no row with " + has + " offers " + label);
+  };
+  const offers = (has, label) => doc.querySelectorAll("tr").some((tr) => tr.textContent.includes(has) && tr.querySelectorAll("td.actions button").some((b) => b.textContent === label));
+  const last = (route) => {
+    const c = calls.filter((x) => x.route === route).pop();
+    if (!c) fail("nothing was posted to " + route);
+    return c.body;
+  };
+  const same = (route, want) => {
+    const b = Object.assign({}, last(route));
+    if (!b.stepup) fail(route + " was posted without a step-up");
+    delete b.stepup;
+    if (JSON.stringify(b) !== JSON.stringify(want)) fail("the " + route + " body:\n" + JSON.stringify(b) + "\nwant\n" + JSON.stringify(want));
+  };
+  const plain = (route, want) => {
+    const b = last(route);
+    if (b.stepup) fail(route + " asked for a step-up");
+    if (JSON.stringify(b) !== JSON.stringify(want)) fail("the " + route + " body:\n" + JSON.stringify(b) + "\nwant\n" + JSON.stringify(want));
+  };
+  const noDash = (where) => {
+    if (view().includes("\u2014") || view().includes("\u2013")) fail("a long dash on " + where);
+  };
+  boot(answers, { hash: "#/security/api" });
+  await go4();
+
+  // Clients and settings: the tabs, the service hub kind, and the partner agent with its card check and the hand-off.
+  inOrder(view(), [W["api.title"], W["api.tab-general"], W["api.tab-agents"], W["api.tab-spokes"], W["api.clients"], "build-hub", W["api.kind-spokes-hub"], "partner-ci",
+    W["api.partners"], "partner-ci", W["api.f-a2a-agents"], aId, W["api.col-max-tasks"], "8", W["api.push-origins"], https("ci.partner.example"), partnerCardUrl, partnerJwks,
+    W["api.partner-card"], W["api.partner-verified"], W["api.col-checked"], "Partner CI", "Partner Inc", "2.1.0", "p-k1", W["api.partner-interfaces"], https("ci.partner.example/a2a"),
+    "HTTP+JSON", W["api.card-check"], W["api.push-off"], W["api.handoff"], W["api.handoff-help"], W["api.handoff-jwks"], jwksUrl, W["api.handoff-thumbprints"], "tp-active-1"], "partner agents");
+  const handoff = doc.querySelectorAll("dd").find((d) => d.textContent.includes(jwksUrl));
+  if (!handoff || !handoff.querySelectorAll("button").some((b) => b.textContent === "Copy")) fail("the hand-off key set address has no Copy button");
+  noDash("Clients and settings");
+
+  // Check now and Push off: at once, no step-up.
+  find("button", W["api.card-check"]).click();
+  await settle();
+  if (title() !== filled(D["api-card-check"].title, { name: "partner-ci" })) fail("the card check dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await go4();
+  plain("POST settings/api/clients/card-check", { org: "acme", id: partnerId });
+  find("button", W["api.push-off"]).click();
+  await settle();
+  if (title() !== filled(D["api-push-off"].title, { name: "partner-ci" })) fail("the push off dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await go4();
+  plain("POST settings/api/clients/push-off", { org: "acme", id: partnerId });
+
+  // The client editor of the agent: its a2a and card fields prefilled, narrowed, and the card's private networks added.
+  rowAction("partner-ci", W["api.edit"]).click();
+  await settle();
+  const box = (text) => {
+    const l = doc.getElementById("confirm-fields").querySelectorAll("label").find((x) => x.textContent === text);
+    if (!l) fail("the dialog has no choice " + JSON.stringify(text));
+    return doc.getElementById(l.getAttribute("for"));
+  };
+  if (!box("Acme Build Agent (" + aId + ")").checked || field(W["api.f-max-tasks"]).value !== "8" || field(W["api.f-a2a-skills"]).value !== "*"
+    || field(W["api.f-push-origins"]).value !== https("ci.partner.example") || field(W["api.f-card-url"]).value !== partnerCardUrl || field(W["api.f-card-jwks"]).value !== partnerJwks) {
+    fail("the agent client editor is not prefilled");
+  }
+  field(W["api.f-max-tasks"]).value = "4";
+  field(W["api.f-push-origins"]).value = "";
+  field(W["api.f-card-cidrs"]).value = "not a network";
+  doc.getElementById("confirm-go").click();
+  await go4();
+  if (error() !== W["api.check-a2a"]) fail("a bad private network is not refused: " + error());
+  field(W["api.f-card-cidrs"]).value = "10.9.0.0/24";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const upd = last("POST settings/api/clients/update");
+  const c = upd.client;
+  if (upd.id !== partnerId || c.kind !== "agent" || c.reach !== "R1" || JSON.stringify(c.connectors) !== JSON.stringify([kBuild])
+    || JSON.stringify(c.a2a) !== JSON.stringify({ agents: [aId], skills: ["*"], max_open_tasks: 4 })
+    || JSON.stringify(c.card) !== JSON.stringify({ url: partnerCardUrl, jwks_uri: partnerJwks, private_cidrs: ["10.9.0.0/24"] }) || "spokes" in c) {
+    fail("the agent client update body: " + JSON.stringify(upd));
+  }
+
+  // Add a service hub: refused without a node certificate, then sent with the pasted token and its key store.
+  find("button", W["api.client-add"]).click();
+  await settle();
+  field(W["api.f-name"]).value = "hub-two";
+  field(W["api.f-kind"]).value = "spokes_hub";
+  field(W["api.f-owner"]).value = "ann@acme.example";
+  field(W["api.f-scopes"]).value = "spokes.tasks.submit";
+  field(W["api.f-relays"]).value = "r_21";
+  field(W["api.f-targets"]).value = node2;
+  if (field(W["api.f-key-store"]).value !== "os_store") fail("the key store does not start at the operating system store");
+  doc.getElementById("confirm-go").click();
+  await go4();
+  if (error() !== W["api.check-spokes-hub"]) fail("a service hub without a certificate is not refused: " + error());
+  field(W["api.f-node-cert"]).value = "eyJub2RlIjoiY2VydCJ9";
+  field(W["api.f-key-store"]).value = "tpm";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const add = last("POST settings/api/clients").client;
+  if (add.kind !== "spokes_hub" || add.reach !== "R1" || add.mtls_required !== false || JSON.stringify(add.scopes) !== "[\"spokes.tasks.submit\"]"
+    || JSON.stringify(add.spokes) !== JSON.stringify({ targets: [node2] })
+    || JSON.stringify(add.credentials) !== JSON.stringify([{ type: "spokes_node", cert: "eyJub2RlIjoiY2VydCJ9", key_store: "tpm" }]) || "a2a" in add) {
+    fail("the service hub body: " + JSON.stringify(add));
+  }
+
+  // The Agents tab: agents, the card state, Copy card URL, the signed card, card keys (signed and staged), the root
+  // well-known card and the Tasks list.
+  await go("#/security/api?tab=agents");
+  inOrder(view(), [W["api.tab-agents"], W["api.agents"], W["api.agents-help"], W["api.agents-url"], I + "/a2a/agents", W["api.handoff-jwks"], jwksUrl,
+    W["api.a2a-second"], W["api.two-a2a-agent"], W["api.two-a2a-client"], W["api.two-a2a-private"], W["api.two-well-known"], W["api.agent-add"],
+    "Acme Build Agent", aId, "1.0.0", "build-conn", "build-hub", "build-and-test, lint", W["api.card-served"], "Idle Agent", W["api.card-unsigned"],
+    "Acme Build Agent", W["api.card-url"], cardUrl, W["api.card-copy-url"], W["api.card-served"], W["api.card-etag"], "ab".repeat(32), W["api.card-preview"], "\"signatures\"",
+    "Build and test", node1, "anthropic/claude-sonnet-4-6", "3600", "lint", W["api.skill-dropped"],
+    "Idle Agent", W["api.card-unsigned"], W["api.refusal-card-unsigned"],
+    W["api.card-keys"], W["api.card-keys-help"], W["api.card-key-new"], "a2a-k1", W["api.key-active"], "tp-active-1", "a2a-k0", W["api.key-expired"], "tp-old-0",
+    W["api.draft-keys"], "a2a-k2", W["api.key-pending"], "tp-new-2",
+    W["api.well-known"], wellKnownUrl, W["api.f-well-known"], W["api.well-known-none"], W["api.well-known-set"],
+    W["api.tasks"], W["api.tasks-help"], "t_0011223344556677", "partner-ci", "Acme Build Agent", "build-and-test", node1, "Working", "120", "4096"], "agents tab");
+  noDash("Agents");
+  if (!find("button", W["api.card-copy-url"])) fail("no Copy card URL control");
+  if (offers("a2a-k0", W["api.card-key-drop"])) fail("Drop key is offered on an ended key");
+  const firstTasks = calls.filter((x) => x.route === "GET settings/api/a2a/tasks").pop();
+  if (!firstTasks || !firstTasks.url.endsWith("?org=acme")) fail("the tasks were not read for the org: " + (firstTasks && firstTasks.url));
+
+  // Add agent: the skills editor is checked on the page, then the body has the contract's agent fields.
+  find("button", W["api.agent-add"]).click();
+  await settle();
+  if (title() !== filled(D["api-agent"].title, { name: "" })) fail("the add agent dialog title: " + title());
+  field(W["api.f-agent-name"]).value = "Release Agent";
+  field(W["api.f-description"]).value = "Ships releases.";
+  field(W["api.f-streaming"]).value = "yes";
+  field(W["api.f-skills"]).value = "[]";
+  doc.getElementById("confirm-go").click();
+  await go4();
+  if (error() !== W["api.check-skills"]) fail("an empty skills list is not refused: " + error());
+  const release = { id: "release", name: "Release", description: "Ships a release.", tags: ["release"], examples: [], targets: [node1], turns: "one", approve_within_s: 1800 };
+  field(W["api.f-skills"]).value = JSON.stringify([release]);
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/a2a/agents", { org: "acme", agent: { name: "Release Agent", description: "Ships releases.", version: "1.0.0", connector: kBuild, hub: hubId,
+    streaming: true, push: false, skills: [release] } });
+
+  // Change: the skills editor holds the skills not dropped; a card change without a new version is refused on the page.
+  rowAction(aId, W["api.change"]).click();
+  await settle();
+  if (title() !== filled(D["api-agent-update"].title, { name: "Acme Build Agent" })) fail("the change agent dialog title: " + title());
+  const shown = JSON.parse(field(W["api.f-skills"]).value);
+  if (shown.length !== 1 || shown[0].id !== "build-and-test" || "dropped" in shown[0] || field(W["api.f-version"]).value !== "1.0.0") fail("the change agent dialog is not prefilled: " + JSON.stringify(shown));
+  field(W["api.f-description"]).value = "Runs build and test tasks for partners.";
+  doc.getElementById("confirm-go").click();
+  await go4();
+  if (error() !== W["api.refusal-card-version"]) fail("a card change without a new version is not refused: " + error());
+  field(W["api.f-version"]).value = "1.1.0";
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  const kept = { id: skill.id, name: skill.name, description: skill.description, tags: skill.tags, examples: skill.examples, targets: skill.targets, model: skill.model,
+    turns: skill.turns, approve_within_s: skill.approve_within_s, idle_close_s: skill.idle_close_s };
+  same("POST settings/api/a2a/agents/update", { org: "acme", id: aId, agent: { name: "Acme Build Agent", description: "Runs build and test tasks for partners.", version: "1.1.0",
+    connector: kBuild, hub: hubId, provider: { organization: "Acme Robotics", url: https("acme.example") }, streaming: true, push: true, skills: [kept] } });
+
+  // Delete: a reason, at once.
+  rowAction(idleId, W["api.delete"]).click();
+  await settle();
+  if (title() !== filled(D["api-agent-delete"].title, { name: "Idle Agent" })) fail("the delete agent dialog title: " + title());
+  doc.getElementById("confirm-fields").querySelector("textarea").value = "Not used";
+  doc.getElementById("confirm-go").click();
+  await go4();
+  plain("POST settings/api/a2a/agents/delete", { org: "acme", id: idleId, reason: "Not used" });
+
+  // Make a card key (step-up) and Drop key (at once).
+  find("button", W["api.card-key-new"]).click();
+  await settle();
+  if (title() !== filled(D["api-a2a-key"].title, { org: "acme" })) fail("the card key dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/a2a/keys", { org: "acme" });
+  rowAction("tp-active-1", W["api.card-key-drop"]).click();
+  await settle();
+  if (title() !== filled(D["api-a2a-key-drop"].title, { kid: "a2a-k1" })) fail("the drop key dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await go4();
+  plain("POST settings/api/a2a/keys/drop", { org: "acme", kid: "a2a-k1" });
+
+  // The root well-known card: an agent, then none (null).
+  for (const pick of [aId, ""]) {
+    find("button", W["api.well-known-set"]).click();
+    await settle();
+    if (title() !== filled(D["api-well-known"].title, { org: "acme" })) fail("the well-known dialog title: " + title());
+    field(W["api.f-well-known"]).value = pick;
+    doc.getElementById("confirm-go").click();
+    await confirmCode();
+    same("POST settings/api/a2a/well-known", { org: "acme", agent: pick || null });
+  }
+
+  // The Tasks filter: picking an agent reads the tasks again with it.
+  const agentPick = doc.querySelectorAll("label").find((l) => l.textContent === W["api.col-agent"]);
+  if (!agentPick) fail("the Tasks list has no agent filter");
+  const sel = doc.getElementById(agentPick.getAttribute("for"));
+  sel.value = aId;
+  sel.dispatchEvent(new FEvent("change"));
+  await go4();
+  const filtered = calls.filter((x) => x.route === "GET settings/api/a2a/tasks").pop();
+  if (!filtered || !filtered.url.endsWith("?org=acme&agent=" + aId)) fail("the agent filter did not reach the tasks read: " + (filtered && filtered.url));
+
+  // The Remote Spokes tab: roots, the org's spokes relays, the candidates and the service hubs; Bind, Unbind, Set root.
+  await go("#/security/api?tab=spokes");
+  inOrder(view(), [W["api.tab-spokes"], W["api.spokes"], W["api.spokes-help"], W["api.console-root"], rootId, W["api.map-root"], rootId, rootSpki, W["api.root-set"],
+    W["api.bound-relays"], "spokes-east", "r_21", "spokes-west", "r_22", W["api.needs-update"], W["api.candidates"], "spokes-north", W["api.hubs"], "build-hub",
+    "build-hub@apps.acme.example", node1, hubNode, "0a1b2c", W["api.key-store-pkcs11"], aId], "Remote Spokes tab");
+  noDash("Remote Spokes");
+  if (offers("spokes-east", W["api.bind"])) fail("Bind is offered on a bound relay");
+  rowAction("spokes-north", W["api.bind"]).click();
+  await settle();
+  if (title() !== filled(D["api-spokes-bind"].title, { relay: "spokes-north", org: "acme" })) fail("the bind dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/spokes/bind", { org: "acme", relay: "r_23" });
+  rowAction("spokes-west", W["api.unbind"]).click();
+  await settle();
+  if (title() !== filled(D["api-spokes-unbind"].title, { relay: "spokes-west", org: "acme" })) fail("the unbind dialog title: " + title());
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/spokes/unbind", { org: "acme", relay: "r_22" });
+  find("button", W["api.root-set"]).click();
+  await settle();
+  if (title() !== filled(D["api-spokes-root"].title, { org: "acme" })) fail("the set root dialog title: " + title());
+  if (!doc.getElementById("confirm-body").textContent.includes(rootId)) fail("the set root dialog does not name the console's root");
+  doc.getElementById("confirm-go").click();
+  await confirmCode();
+  same("POST settings/api/spokes/root", { org: "acme" });
+  if (calls.some((x) => x.route === "POST settings/api/spokes/relays")) fail("the page posted to the removed settings/api/spokes/relays");
+  console.log("api-r6: tabs, partner card check and hand-off, agent and service hub clients, agents, cards, card keys, well-known, tasks and Remote Spokes ok");
+}
+
 if (mode === "dom") main().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "api") apiMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "api-r4") apiR4Main(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "api-r5") apiR5Main(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
+else if (mode === "api-r6") apiR6Main(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "ai") aiMain().then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else if (mode === "fleet") fleetMain(JSON.parse(fs.readFileSync(extra, "utf8"))).then(() => process.exit(0), (e) => fail(e && e.stack ? e.stack : String(e)));
 else fail("unknown mode " + mode);

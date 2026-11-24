@@ -1329,6 +1329,7 @@ fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>,
         all.retain(|(d, _)| *d != dir);
         all.push((dir.clone(), fleet.clone()));
     }
+    crate::fleet_agent::set_api_hooks(&dir, fleet.clone());
     crate::fleet_agent::set_meet_hooks(&dir, fleet);
     // API-1 12: the failover exporter (queues, `normal`/`failover` mode loop, this relay's spans and log events)
     crate::api_failover::start(&dir, Arc::new(MeetFailover { relay: Arc::downgrade(relay), dir: dir.clone() }), logger.clone())?;
@@ -1337,6 +1338,48 @@ fn fleet_start(relay: &Arc<Relay>) -> Result<Option<crate::server::FleetOpened>,
     let weak = Arc::downgrade(relay);
     let note = |n: &str| crate::console_meet::logger().security("api.audit.note", &crate::log::Fields::new().with("note", n), crate::log::Level::Warn);
     crate::api_resource::spawn_ticker("relay-api-audit", Box::new(move || weak.upgrade()?.api_audit()), Box::new(note))?;
+    // API-1 revision 4 7.3: the relay's event chains (checkpoints, 35-day retention)
+    let weak = Arc::downgrade(relay);
+    crate::api_events::spawn_ticker("relay-api-events", Box::new(move || weak.upgrade()?.api_events()), Box::new(note))?;
+    // API-1 revision 4 7.1: the call events raised under the hub's lock, appended about once a second for the orgs this
+    // relay serves with an api map. They pass through a durable outbox under the state folder and leave it only once
+    // the chains have appended them, so a closed chain, a failed write or a restart retries them.
+    let weak = Arc::downgrade(relay);
+    let mut outbox = crate::api_event_outbox::Outbox::open(&dir);
+    let failed = |org: &str, kind: &str, why: &str| {
+        let f = crate::log::Fields::new().with("org", org).with("type", kind).with("why", why);
+        crate::console_meet::logger().security("api.events.failed", &f, crate::log::Level::Error);
+    };
+    std::thread::Builder::new()
+        .name("relay-api-call-events".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let Some(r) = weak.upgrade() else { break };
+            let taken = r.hub.api_take_events();
+            if !taken.is_empty() {
+                match outbox.push(taken.into_iter().map(|(org, kind, data)| (org, kind.to_owned(), data))) {
+                    Ok(dropped) => dropped.iter().for_each(|(org, kind, _)| failed(org, kind, "the event outbox is full")),
+                    Err(e) => failed("", "", &e),
+                }
+            }
+            // no chains yet: the events wait in the outbox
+            if outbox.is_empty() || r.api_events().is_none() {
+                continue;
+            }
+            let served = r.hub.api_hello_heads();
+            let sent = outbox.deliver(&mut |org, kind, data| {
+                use crate::api_event_outbox::Delivery;
+                if served.get(org).is_none() || r.api_event(org, kind, data).is_some() {
+                    Delivery::Settled
+                } else {
+                    Delivery::Retry
+                }
+            });
+            if let Err(e) = sent {
+                failed("", "", &e);
+            }
+        })
+        .map_err(|e| e.to_string())?;
     if !s.with_console.trim().is_empty() {
         let hosts: Vec<String> = [s.host.clone(), s.turn_host_public.clone(), s.console_public.clone(), s.guest_public.clone()].into_iter().filter(|h| !h.is_empty()).collect();
         crate::console_fleet::start_with_console(Path::new(s.with_console.trim()), crate::license::Product::Meet, &hosts, Some(&dir), logger.clone())?;
@@ -1411,6 +1454,8 @@ pub struct MeetFleet {
     origin: Mutex<String>,
     /// API-1 9.1: this relay's own audit chains, opened once it has a relay id and a vault.
     audit: Mutex<Option<Arc<crate::api_audit::ApiAudit>>>,
+    /// API-1 revision 4 7.3: this relay's own event chains, opened as the audit chains are.
+    events: Mutex<Option<Arc<crate::api_events::EventLog>>>,
 }
 
 /// The link of each running Meeting Hub relay by state folder (one per process; tests run several).
@@ -1421,7 +1466,29 @@ pub const RELAY_FLEET_CA_HELD: &str = "The Admin Console at <origin> holds the C
 
 impl MeetFleet {
     pub fn new(relay: &Arc<Relay>) -> MeetFleet {
-        MeetFleet { relay: Arc::downgrade(relay), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()), audit: Mutex::new(None) }
+        MeetFleet { relay: Arc::downgrade(relay), ca_held: AtomicBool::new(false), origin: Mutex::new(String::new()), audit: Mutex::new(None), events: Mutex::new(None) }
+    }
+
+    /// API-1 revision 4 7.3: the relay's own event chains (source = its fleet relay id), with the checkpoint and
+    /// pseudonym keys its audit chains use, opened the first time they are asked for once the relay is enrolled.
+    fn events(&self, r: &Relay) -> Option<Arc<crate::api_events::EventLog>> {
+        let mut held = self.events.lock();
+        if let Some(e) = held.as_ref() {
+            return Some(e.clone());
+        }
+        let dir = Some(PathBuf::from(&r.settings.state_dir)).filter(|d| !d.as_os_str().is_empty())?;
+        let map = crate::fleet_agent::load_link_json(&dir).ok().flatten()?;
+        let relay_id = crate::fleet_agent::Link { map }.relay_id().to_string();
+        if relay_id.is_empty() {
+            return None;
+        }
+        let book = r.fleet.get().map(|f| f.book.clone()).or_else(|| r.admin_console.get().cloned())?;
+        let vault: Arc<dyn crate::fleet_ca::VaultLock> = book;
+        let signer = Arc::new(crate::api_checkpoint::RelayCheckpoints::new(&dir, vault.clone()));
+        let keys = Arc::new(crate::api_checkpoint::RelayPseudonymKeys::new(&dir, vault));
+        let events = Arc::new(crate::api_events::EventLog::open(Some(&dir), &relay_id, signer, keys, pj::now() as i64));
+        *held = Some(events.clone());
+        Some(events)
     }
 
     /// API-1 9.1: the relay's own audit chains (source = its fleet relay id), opened the first time they are asked for
@@ -1503,18 +1570,52 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
             r.pki_switched();
         }
     }
+}
 
+/// API-1d 2.4: the API ops of the link on a Meeting Hub relay (behavior unchanged from the API part of `MeetHooks`).
+impl crate::fleet_agent::ApiHooks for MeetFleet {
     fn api_heads(&self) -> Value {
         self.relay.upgrade().map(|r| r.hub.api_hello_heads()).unwrap_or_else(|| serde_json::json!({}))
     }
 
     fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
-        self.relay.upgrade().map(|r| r.hub.api_fleet_request(op, body))
+        self.relay.upgrade().map(|r| match op {
+            // API-1 revision 4 2.5, 5.1, 5.2
+            "api-compliance-read" | "api-hold" | "api-hold-status" => crate::api_holds_relay::request(&r, op, body),
+            // API-1 revision 4 2.5, 5.3
+            "api-export" | "api-export-status" | "api-export-cancel" => crate::api_exports_relay::request(&r, op, body),
+            // API-1 revision 4 13.1
+            "api-directory-status" => crate::api_sso_status::request(&r, body),
+            _ => {
+                let answer = r.hub.api_fleet_request(op, body);
+                // 5.3.3: a new pin or an applied journal entry reaches the org's archive (the lock is released here)
+                if answer.is_ok() && matches!(op, "api-map" | "api-tighten") {
+                    crate::api_exports_relay::state_changed(&r, body.get("org").and_then(Value::as_str).unwrap_or_default());
+                }
+                answer
+            }
+        })
+    }
+
+    /// API-1 revision 4 2.3 item 1: `archive_orgs` are the served orgs whose archive address this relay holds.
+    fn api_features(&self) -> Value {
+        crate::api_features::relay_answer(self.relay.upgrade().map(|r| crate::api_holds_relay::archive_orgs(&r)).unwrap_or_default())
     }
 
     fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
         let r = self.relay.upgrade()?;
         self.audit(&r)
+    }
+
+    fn api_events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        let r = self.relay.upgrade()?;
+        self.events(&r)
+    }
+
+    fn api_synced(&self, orgs: &[String]) {
+        if let Some(r) = self.relay.upgrade() {
+            r.hub.api_synced_clear(orgs);
+        }
     }
 }
 
@@ -1567,6 +1668,12 @@ impl crate::api_failover::RelaySide for MeetFailover {
         crate::api_export::parse_exposition(&crate::api_listener::own_exposition(&id, crate::license::Product::Meet, org, now))
     }
 
+    fn mode_changed(&self, org: &str, mode: &str) {
+        if let (Some(r), Some(id)) = (self.relay.upgrade(), self.relay_id()) {
+            r.api_event(org, "relay.mode.changed", serde_json::json!({ "relay": id, "mode": mode }));
+        }
+    }
+
     fn make_sink(&self, destination: &Value, credential: crate::api_export_wire::Credential) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
         if destination.get("kind").and_then(Value::as_str) == Some("syslog_cef") {
             let host = self.relay.upgrade().map(|r| r.settings.host.clone()).filter(|h| !h.is_empty()).unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_ascii_lowercase());
@@ -1591,6 +1698,32 @@ impl Relay {
         let dir = PathBuf::from(&self.settings.state_dir);
         let fleet = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| *d == dir).map(|(_, f)| f.clone())?;
         fleet.audit(self)
+    }
+
+    /// API-1 revision 4 7.3: this relay's own event chains; None until it is enrolled with a vault (`RR/v1/events`
+    /// then answers 503).
+    pub fn api_events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        if self.settings.state_dir.is_empty() {
+            return None;
+        }
+        let dir = PathBuf::from(&self.settings.state_dir);
+        let fleet = MEET_FLEETS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, _)| *d == dir).map(|(_, f)| f.clone())?;
+        fleet.events(self)
+    }
+
+    /// API-1 revision 4 7.1: one event of this relay (`kind` a registry name a relay emits, `data` its fields) for
+    /// `org`, durable in the relay's event chains before Some(seq). Events never refuse what the relay does: a failure
+    /// (or no chains yet) is the security line `api.events.failed` and None.
+    pub fn api_event(&self, org: &str, kind: &str, data: Value) -> Option<u64> {
+        let failed = |why: &str| {
+            let f = crate::log::Fields::new().with("org", org).with("type", kind).with("why", why);
+            crate::console_meet::logger().security("api.events.failed", &f, crate::log::Level::Error);
+        };
+        let Some(events) = self.api_events() else {
+            failed("the relay's event chains are not open");
+            return None;
+        };
+        events.emit(org, kind, data, pj::now() as i64).map_err(|e| failed(&e.message)).ok()
     }
 
     /// API-1 7.2 `v1/health`: the fleet channel to the console is welcomed and open now.

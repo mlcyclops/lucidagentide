@@ -4,7 +4,8 @@
 // for this relay's fleet id and a provisioned pseudonym key (11.4), it serves the relay-local issuer (5.6): its
 // RFC 8414 metadata, the protected resource metadata of RR, the local JWKS and `L/oauth/token`, which mints only the
 // four read scopes with `aud` = RR, and the 7.2 resource routes (`RR/v1/health`, `v1/audit`, `v1/audit/keys`,
-// `v1/metrics`, the last also through the 6.1 scrape pipeline) through `api_resource`, whose table the listener
+// `v1/metrics`, the last also through the 6.1 scrape pipeline; revision 4 7.3 adds `v1/events` with long poll and
+// `v1/events/keys`, served in both modes with console or relay-local tokens) through `api_resource`, whose table the listener
 // dispatches from. RR and L always come from the pinned map, never from the request's `Host`. Everything else answers
 // 404 `not-found`.
 //
@@ -97,6 +98,14 @@ pub trait Source: Send + Sync {
     fn console_connected(&self) -> bool;
     /// The product whose 9.1 keys `v1/metrics` reports.
     fn product(&self) -> Product;
+    /// Revision 4 7.3: this relay's own event chains; None before enrollment.
+    fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        None
+    }
+    /// API-1d 6.3: `RR/v1/spokes/<view>` for a spokes relay; None on a Meet relay (404).
+    fn spokes(&self, _org: &str, _view: &str, _query: &str, _people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        None
+    }
 }
 
 struct RelaySource {
@@ -145,6 +154,10 @@ impl Source for RelaySource {
     fn product(&self) -> Product {
         // the API listener is the Meeting Hub relay's
         Product::Meet
+    }
+
+    fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        self.relay.upgrade()?.api_events()
     }
 }
 
@@ -216,6 +229,18 @@ impl Data for Own<'_> {
 
     fn console(&self) -> Value {
         json!(if self.source.console_connected() { "connected" } else { "unreachable" })
+    }
+
+    fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        self.source.events()
+    }
+
+    /// API-1d 6.3: only this relay's own views.
+    fn spokes(&self, org: &str, relay: &str, view: &str, query: &str, people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        if relay != self.id {
+            return None;
+        }
+        self.source.spokes(org, view, query, people)
     }
 }
 
@@ -511,9 +536,48 @@ impl Api {
                     },
                 }
             }
-            RouteId::Health | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics => self.resource(&view, &m, req, rid, now),
+            RouteId::Health | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics | RouteId::Events | RouteId::EventKeys => self.resource(&view, &m, req, rid, now),
+            // API-1d 6.3: a spokes relay's own inventory (`Source::spokes`; 404 from the route on a Meet relay)
+            RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays if self.source.product() == Product::Spokes => self.resource(&view, &m, req, rid, now),
+            RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => not_found(),
             // front door routes: not served here
-            RouteId::AsMetadata | RouteId::Jwks | RouteId::OpenApi | RouteId::Token | RouteId::Revoke | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::TelemetryCatalog => not_found(),
+            RouteId::AsMetadata
+            | RouteId::Jwks
+            | RouteId::OpenApi
+            | RouteId::Token
+            | RouteId::Revoke
+            | RouteId::Capacity
+            | RouteId::FleetRelays
+            | RouteId::FleetRelay
+            | RouteId::TelemetryCatalog
+            | RouteId::FederationDiscovery
+            | RouteId::FederationJwks
+            | RouteId::WebhookKeys
+            | RouteId::EventTypes
+            | RouteId::ComplianceAttendance
+            | RouteId::ComplianceMeetings
+            | RouteId::ComplianceConversations
+            | RouteId::ComplianceFiles
+            | RouteId::ComplianceRetention
+            | RouteId::ComplianceHolds
+            | RouteId::ComplianceHold
+            | RouteId::ComplianceHoldPlace
+            | RouteId::ComplianceExportRequest
+            | RouteId::ComplianceExports
+            | RouteId::ComplianceExport
+            | RouteId::ComplianceExportSeal
+            | RouteId::ComplianceExportPart
+            | RouteId::ComplianceExportCancel
+            // revision 5: the Authorize pipeline and M are the console's
+            | RouteId::Authorize
+            | RouteId::SsoReturn
+            | RouteId::Consent
+            | RouteId::ConsentPost
+            | RouteId::McpMetadata
+            // API-1d 7.1.5: the Agent Cards are the console's
+            | RouteId::A2aAgents
+            | RouteId::A2aCard
+            | RouteId::A2aJwks => not_found(),
         }
     }
 
@@ -588,6 +652,8 @@ impl Api {
             state: &self.state,
             licensed: self.source.licensed(),
             now,
+            // revision 5 20: the relay-local issuer refuses every delegated grant
+            delegated: None,
         };
         let http = TokenHttp { form: req.form, authorization: req.authorization, dpop: req.dpop, client_cert: req.client_cert, source: req.source };
         let a = api_issue::token(&ctx, &http);
@@ -600,8 +666,9 @@ impl Api {
 
 struct Port {
     api: Api,
-    /// Where the client CA and the CRL in force are read for each presented certificate.
-    settings: crate::meet::Settings,
+    /// Where the client CA and the CRL in force are read for each presented certificate (a Meet relay). None on a
+    /// spokes relay (API-1d 6.3): no client certificate is taken there, so mTLS clients are not served.
+    settings: Option<crate::meet::Settings>,
     tls: Arc<ServerConfig>,
     open: Mutex<HashMap<String, usize>>,
     total: AtomicUsize,
@@ -617,10 +684,21 @@ pub fn start(relay: &Arc<Relay>) -> Result<(), String> {
     }
     let dir = PathBuf::from(&s.state_dir);
     let tls = crate::meet_tls::api_tls_config(s)?;
-    let listener = TcpListener::bind(listen.as_str()).map_err(|e| format!("cannot listen on {listen}: {e}"))?;
     let source = RelaySource { relay: Arc::downgrade(relay), dir: dir.clone() };
-    let api = Api::new(Box::new(source), &dir);
-    let port = Arc::new(Port { api, settings: s.clone(), tls, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: crate::meet_tls::RefusalLog::new() });
+    listen_on(Box::new(source), &dir, &listen, tls, Some(s.clone()))
+}
+
+/// API-1d 6.3: the API listener of a spokes relay (its `Source` with `product()` `Product::Spokes`), on `listen` with
+/// `tls`, which requests no client certificate: mTLS clients are not served on a spokes relay.
+pub fn start_spokes(source: Box<dyn Source>, dir: &Path, listen: &str, tls: Arc<ServerConfig>) -> Result<(), String> {
+    listen_on(source, dir, listen, tls, None)
+}
+
+/// The port of `start` and `start_spokes`: bound now, then served on its own thread.
+fn listen_on(source: Box<dyn Source>, dir: &Path, listen: &str, tls: Arc<ServerConfig>, settings: Option<crate::meet::Settings>) -> Result<(), String> {
+    let listener = TcpListener::bind(listen).map_err(|e| format!("cannot listen on {listen}: {e}"))?;
+    let api = Api::new(source, dir);
+    let port = Arc::new(Port { api, settings, tls, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: crate::meet_tls::RefusalLog::new() });
     std::thread::Builder::new()
         .name("relay-api-port".into())
         .spawn(move || {
@@ -686,12 +764,15 @@ fn serve(port: &Port, mut tcp: TcpStream, address: &str, ip: IpAddr) {
         }
     }
     // a presented certificate passed the client CA (and grace) in the handshake; it counts for the API only once a
-    // current CRL was checked for it, otherwise it is treated as not presented (mTLS fails `client-auth`)
+    // current CRL was checked for it, otherwise it is treated as not presented (mTLS fails `client-auth`); a spokes
+    // relay's port (no Meet settings) takes none
     let now = crate::meet_json::now() as i64;
-    let cert = conn
-        .peer_certificates()
-        .and_then(|c| c.split_first())
-        .filter(|(leaf, rest)| crate::meet_tls::api_cert_revocation_checked(&port.settings, leaf.as_ref(), rest, now))
+    let cert = port
+        .settings
+        .as_ref()
+        .and_then(|s| Some((s, conn.peer_certificates()?.split_first()?)))
+        .filter(|(s, (leaf, rest))| crate::meet_tls::api_cert_revocation_checked(s, leaf.as_ref(), rest, now))
+        .map(|(_, c)| c)
         .and_then(|(leaf, _)| ClientCert::of_leaf(leaf.as_ref(), true));
     let mut reader = BufReader::new(Tls::new(conn, tcp));
     loop {
@@ -1175,5 +1256,65 @@ mod tests {
         assert_eq!(kids[1], one.body["keys"][0]["kid"].as_str().unwrap());
         let three = api.answer(&get("/api/orgs/acme/local/jwks.json"), NOW + KEY_ROTATE_S + KEY_OVERLAP_S);
         assert_eq!(three.body["keys"].as_array().unwrap().len(), 1);
+    }
+
+    /// API-1d 6.3: a spokes relay's source (the test source as a spokes relay that answers its own views).
+    struct SpokesSource(TestSource);
+    impl Source for SpokesSource {
+        fn audit(&self) -> Option<Arc<dyn AuditLog>> {
+            self.0.audit()
+        }
+        fn console_connected(&self) -> bool {
+            self.0.console_connected()
+        }
+        fn product(&self) -> Product {
+            Product::Spokes
+        }
+        fn relay_id(&self) -> Option<String> {
+            self.0.relay_id()
+        }
+        fn snapshot(&self, org: &str) -> Option<ApiMapStore> {
+            self.0.snapshot(org)
+        }
+        fn owner_active(&self, p: &str) -> bool {
+            self.0.owner_active(p)
+        }
+        fn pseudonym_ready(&self, org: &str) -> bool {
+            self.0.pseudonym_ready(org)
+        }
+        fn vault(&self) -> Option<Arc<dyn VaultLock>> {
+            self.0.vault()
+        }
+        fn licensed(&self) -> bool {
+            self.0.licensed()
+        }
+        fn spokes(&self, _org: &str, view: &str, _query: &str, _people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+            Some(Ok(json!({ "view": view })))
+        }
+    }
+
+    #[test]
+    fn spokes_views_are_routes_of_a_spokes_relay_only() {
+        let dir = tmp();
+        // a Meet relay: 404 before any pipeline, nothing audited
+        let (api, _, audit) = api(dir.path());
+        for view in ["nodes", "counts", "seats", "relays"] {
+            let path = format!("/api/orgs/acme/v1/spokes/{view}");
+            let r = api.answer(&get(&path), NOW);
+            assert_eq!((r.status, r.body["code"].as_str()), (404, Some("not-found")), "{path}");
+        }
+        assert!(actions(&audit).is_empty());
+        // a spokes relay: the resource pipeline runs (no token: 401, audited as the relay's refusal)
+        let key = client_key();
+        let audit = Arc::new(ApiAudit::open(Some(dir.path().join("spokes-chains").as_path()), "r_01", Arc::new(NoSigner), Arc::new(Keys), NOW));
+        let inner = TestSource { store: store(&key, json!({"r_01": ORIGIN})), vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym: true, licensed: true, audit: audit.clone() };
+        let api = Api::new(Box::new(SpokesSource(inner)), dir.path());
+        let r = api.answer(&get("/api/orgs/acme/v1/spokes/nodes"), NOW);
+        assert_eq!((r.status, r.body["code"].as_str()), (401, Some("token")));
+        // the listener's data answers only this relay's own views
+        let source = SpokesSource(TestSource { store: store(&key, json!({})), vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym: true, licensed: true, audit });
+        let own = Own { id: "r_01", source: &source };
+        assert_eq!(own.spokes("acme", "r_01", "seats", "", false).and_then(Result::ok), Some(json!({"view": "seats"})));
+        assert!(own.spokes("acme", "r_02", "seats", "", false).is_none());
     }
 }

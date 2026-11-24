@@ -27,7 +27,9 @@ pub const SOURCE: &str = include_str!("../data/api_telemetry.json");
 pub const VERSION: u64 = 1;
 pub const TAGS: [&str; 7] = ["plain", "client", "principal", "device", "ip", "serial", "free_text"];
 pub const CLASSES: [&str; 4] = ["public", "internal", "confidential", "cui"];
-pub const KINDS: [&str; 4] = ["audit", "console_audit", "log", "span"];
+pub const KINDS: [&str; 5] = ["audit", "console_audit", "log", "span", "event"];
+/// Revision 4 7.1: where an event type is emitted.
+pub const EVENT_SOURCES: [&str; 3] = ["console", "relay", "connector"];
 
 /// A data class (6.4), ordered: a record is enqueued only at or below a destination's ceiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -113,7 +115,6 @@ impl Tag {
     }
 
     /// Pseudonymized or removed under 11.4.
-    #[cfg(test)]
     pub fn identity(self) -> bool {
         !matches!(self, Tag::Plain | Tag::FreeText)
     }
@@ -164,6 +165,8 @@ pub enum RecordKind {
     Log,
     /// The attributes of an API span.
     Span,
+    /// Revision 4 7.1: an event type of the event chains (`api_events`).
+    Event,
 }
 
 impl RecordKind {
@@ -173,6 +176,7 @@ impl RecordKind {
             "console_audit" => Some(RecordKind::ConsoleAudit),
             "log" => Some(RecordKind::Log),
             "span" => Some(RecordKind::Span),
+            "event" => Some(RecordKind::Event),
             _ => None,
         }
     }
@@ -194,9 +198,20 @@ pub struct RecordType {
     pub class: Ceiling,
     /// The class with identities pseudonymized or removed (and free text dropped).
     pub class_transformed: Ceiling,
-    /// The field whose value sets the severity (`result` or `level`); None for spans.
+    /// The field whose value sets the severity (`result` or `level`); None for spans and events.
     pub severity_from: Option<String>,
     pub fields: Vec<(String, Field)>,
+    /// Events (revision 4 7.1): the scope a client must hold to see the type; empty for other kinds.
+    pub scope: String,
+    /// Events: where the type is emitted (`EVENT_SOURCES`); empty for other kinds.
+    pub sources: Vec<String>,
+    /// Events: the plain field whose value is the CloudEvents `subject`, if any.
+    pub subject: Option<String>,
+    /// Revision 5 7.6: `"connector_only": true` on an event type only a connector emits (source exactly `connector`):
+    /// content events. No R0 path (the front door feed, webhooks, event subscriptions, export destinations) ever sees
+    /// such a type: `Catalog::event`, `record_type` and `record_type_of` skip it, so `transform_record` refuses it
+    /// (`Refused::Unknown`, reason `identity`).
+    pub connector_only: bool,
 }
 
 /// Why a record or series is not enqueued (11.5): `exports.refused` with reason `ceiling` or `identity`.
@@ -252,25 +267,39 @@ impl Catalog {
     }
 
     /// The record type of a name; where a name is both an audit action and a log event, the audit action
-    /// (`record_type_of` tells them apart by the record).
+    /// (`record_type_of` tells them apart by the record). Never a connector-only event type (revision 5 7.6).
     pub fn record_type(&self, name: &str) -> Option<&RecordType> {
-        let mut named = self.records.iter().filter(|r| r.name == name);
+        let mut named = self.records.iter().filter(|r| r.name == name && !r.connector_only);
         let first = named.next()?;
         Some(if first.kind == RecordKind::Log { named.next().unwrap_or(first) } else { first })
     }
 
     /// The record type of `record` named `name`: a log line (a string `event`) is a log event of that name; an entry
     /// with a string `action` is an audit or console audit action of that name; anything else a span. The name the
-    /// record carries must be `name`.
+    /// record carries must be `name`. Never a connector-only event type, so no destination receives one (revision 5
+    /// 7.6).
     pub fn record_type_of(&self, name: &str, record: &Value) -> Option<&RecordType> {
         let event = record.get("event").and_then(Value::as_str);
         let action = record.get("action").and_then(Value::as_str);
+        let kind = record.get("type").and_then(Value::as_str);
         let fits = |r: &&RecordType| match r.kind {
             RecordKind::Log => event == Some(name),
             RecordKind::Audit | RecordKind::ConsoleAudit => event.is_none() && action == Some(name),
-            RecordKind::Span => event.is_none() && action.is_none(),
+            RecordKind::Span => event.is_none() && action.is_none() && kind.is_none(),
+            RecordKind::Event => event.is_none() && action.is_none() && kind == Some(name),
         };
-        self.records.iter().filter(|r| r.name == name).find(fits)
+        self.records.iter().filter(|r| r.name == name && !r.connector_only).find(fits)
+    }
+
+    /// Revision 4 7.1: the event type of a name on the R0 paths (the front door feed, webhooks, event subscriptions);
+    /// a type absent from the registry is never emitted, and a connector-only type (revision 5 7.6) is absent here.
+    pub fn event(&self, name: &str) -> Option<&RecordType> {
+        self.events().find(|r| r.name == name)
+    }
+
+    /// Every event type of the R0 paths, in registry order (never a connector-only type).
+    pub fn events(&self) -> impl Iterator<Item = &RecordType> {
+        self.records.iter().filter(|r| r.kind == RecordKind::Event && !r.connector_only)
     }
 
     #[cfg(test)]
@@ -420,12 +449,75 @@ fn family_of(v: &Value) -> Result<Family, String> {
     Ok(Family { prom: prom.into(), otel: otel.into(), kind, unit: text(m, "unit", &what)?.into(), help: help.into(), labels, class: class(m, "class", &what)? })
 }
 
+/// Revision 4 7.1: an event type: `name`, `kind` `event`, `class`, `class_transformed`, `scope` (a map scope),
+/// `source` (1 to 3 unique `EVENT_SOURCES`), optional `subject` (a plain field), and `fields` (0 or more leaves; a type
+/// may carry no data). Revision 5 7.6: optional `connector_only` (absent or `true`), only on a type whose source is
+/// exactly `connector`, and never with `pack` (the packs read R0 paths only).
+fn event_of(m: &Map<String, Value>, name: &str, what: &str) -> Result<RecordType, String> {
+    keys(m, &["name", "kind", "class", "class_transformed", "scope", "source", "fields"], &["subject", "pack", "connector_only"], what)?;
+    let pack = pack_of(m, what)?;
+    let connector_only = match m.get("connector_only") {
+        None => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => return Err(format!("{what}: connector_only must be true when present")),
+    };
+    if connector_only && (pack || words(m.get("source")).as_deref() != Some(&["connector"][..])) {
+        return Err(format!("{what}: a connector-only type has source connector alone and no pack mark"));
+    }
+    if !record_name_ok(name) {
+        return Err(format!("{what}: malformed name"));
+    }
+    let (class_as_is, class_transformed) = (class(m, "class", what)?, class(m, "class_transformed", what)?);
+    if class_transformed > class_as_is {
+        return Err(format!("{what}: transforming never raises the class"));
+    }
+    let scope = text(m, "scope", what)?;
+    if !crate::api_map::MAP_SCOPES.iter().any(|(s, _, _)| *s == scope) {
+        return Err(format!("{what}: scope {scope} is not a map scope"));
+    }
+    let sources = words(m.get("source")).filter(|s| (1..=EVENT_SOURCES.len()).contains(&s.len())).ok_or_else(|| format!("{what}: source"))?;
+    for (i, s) in sources.iter().enumerate() {
+        if !EVENT_SOURCES.contains(s) || sources[..i].contains(s) {
+            return Err(format!("{what}: source {s}"));
+        }
+    }
+    let raw = obj(&m["fields"], &format!("{what} fields"))?;
+    let fields = if raw.is_empty() { Vec::new() } else { fields(&m["fields"], &format!("{what} fields"))? };
+    if fields.iter().any(|(_, f)| !matches!(f, Field::Leaf(_))) {
+        return Err(format!("{what}: event data fields are flat"));
+    }
+    let subject = match m.get("subject") {
+        None => None,
+        Some(Value::String(s)) if fields.iter().any(|(k, f)| k == s && *f == Field::Leaf(Tag::Plain)) => Some(s.clone()),
+        Some(_) => return Err(format!("{what}: subject must name a plain field")),
+    };
+    Ok(RecordType {
+        name: name.into(),
+        kind: RecordKind::Event,
+        class: class_as_is,
+        class_transformed,
+        severity_from: None,
+        fields,
+        scope: scope.into(),
+        sources: sources.into_iter().map(str::to_owned).collect(),
+        subject,
+        connector_only,
+    })
+}
+
 fn record_of(v: &Value) -> Result<RecordType, String> {
     let m = obj(v, "a record")?;
     let name = text(m, "name", "a record")?;
     let what = format!("record {name}");
-    keys(m, &["name", "kind", "class", "class_transformed", "fields"], &["severity_from"], &what)?;
+    if m.get("kind").and_then(Value::as_str) == Some("event") {
+        return event_of(m, name, &what);
+    }
+    keys(m, &["name", "kind", "class", "class_transformed", "fields"], &["severity_from", "pack"], &what)?;
     let kind = RecordKind::of(text(m, "kind", &what)?).ok_or_else(|| format!("{what}: kind"))?;
+    let pack = pack_of(m, &what)?;
+    if pack && !matches!(kind, RecordKind::Audit | RecordKind::ConsoleAudit) {
+        return Err(format!("{what}: pack is for audit actions and event types"));
+    }
     if !record_name_ok(name) {
         return Err(format!("{what}: malformed name"));
     }
@@ -439,7 +531,28 @@ fn record_of(v: &Value) -> Result<RecordType, String> {
         (RecordKind::Audit | RecordKind::ConsoleAudit, Some(Value::String(s))) if s == "result" => Some(s.clone()),
         _ => return Err(format!("{what}: severity_from")),
     };
-    Ok(RecordType { name: name.into(), kind, class: class_as_is, class_transformed, severity_from, fields: fields(&m["fields"], &format!("{what} fields"))? })
+    Ok(RecordType {
+        name: name.into(),
+        kind,
+        class: class_as_is,
+        class_transformed,
+        severity_from,
+        fields: fields(&m["fields"], &format!("{what} fields"))?,
+        scope: String::new(),
+        sources: Vec::new(),
+        subject: None,
+        connector_only: false,
+    })
+}
+
+/// Revision 4 14.1: `pack` is absent or `true`; any other value refuses the catalog. The mark is checked here and
+/// read only by the Meeting Hub's `tools/check_packs.py` (the Splunk and Sentinel packs must map the marked types).
+fn pack_of(m: &Map<String, Value>, what: &str) -> Result<bool, String> {
+    match m.get("pack") {
+        None => Ok(false),
+        Some(Value::Bool(true)) => Ok(true),
+        Some(_) => Err(format!("{what}: pack must be true when present")),
+    }
 }
 
 /// The catalog from its JSON text, or why it is refused.
@@ -563,6 +676,14 @@ impl Walk {
                         }
                     }
                 },
+                // revision 4 11: an identity list (`reviewers`), each string on its own
+                (Field::Leaf(tag), Value::Array(items)) if tag.identity() && crate::api_audit::IDENTITY_LIST_FIELDS.contains(&k.as_str()) && items.iter().all(Value::is_string) => {
+                    let list: Option<Vec<Value>> = items.iter().map(|x| identity_value(x, self.identities, key)).collect();
+                    if let Some(list) = list {
+                        self.pseudonymized |= self.identities == Identities::Pseudonymized;
+                        out.insert(k.clone(), Value::Array(list));
+                    }
+                }
                 _ if self.strict => return Err(Refused::Unknown),
                 _ => {}
             }
@@ -623,11 +744,12 @@ pub fn transform_labels(family: &Family, labels: &[(String, String)], identities
 /// (`as_is`); destinations apply `transform_labels`.
 pub mod counters {
     use parking_lot::Mutex;
+    use serde_json::{json, Map, Value};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::LazyLock;
 
     /// The 10.1 families, in exposition order.
-    pub const FAMILIES: [&str; 11] = [
+    pub const FAMILIES: [&str; 33] = [
         "lucid_api_requests_total",
         "lucid_api_refusals_total",
         "lucid_api_tokens_issued_total",
@@ -639,7 +761,57 @@ pub mod counters {
         "lucid_export_refused_total",
         "lucid_export_last_success_seconds",
         "lucid_relay_mode",
+        // revision 4 12
+        "lucid_events_total",
+        "lucid_scim_requests_total",
+        "lucid_federation_exchanges_total",
+        // API-1d 12
+        "lucid_spokes_service_mail_total",
+        // revision 4 12 (compliance)
+        "lucid_compliance_holds",
+        "lucid_compliance_exports",
+        "lucid_compliance_export_bytes_total",
+        // revision 5 13.1
+        "lucid_connector_requests_total",
+        "lucid_connector_sync_age_seconds",
+        "lucid_connector_conversations",
+        "lucid_connector_store_bytes",
+        "lucid_content_approvals_total",
+        "lucid_mcp_requests_total",
+        "lucid_api_delegated_tokens_total",
+        "lucid_local_mcp_calls_total",
+        // revision 6 12 (A2A; the card signings are the console's)
+        "lucid_a2a_requests_total",
+        "lucid_a2a_tasks_total",
+        "lucid_a2a_tasks_open",
+        "lucid_a2a_approvals_total",
+        "lucid_a2a_streams_open",
+        "lucid_a2a_push_total",
+        "lucid_a2a_cards_signed_total",
     ];
+    /// Revision 5 13.1: the families a connector reports in each `POST I/v1/connector/ack` as `"metrics"`, with the
+    /// labels a series carries there and whether the console adds the `connector` label (the connector's id). A family
+    /// without labels there is one number; the others are lists of `{"labels": {..}, "value": n}`. Counters are the
+    /// connector process's absolute cumulative values; the console keeps the latest ack's series per connector
+    /// (`connector_report`), and `lucid_connector_sync_age_seconds` is the time since that ack.
+    /// Revision 6 12 adds the A2A families of the connector's A2A server (gauges included).
+    pub const CONNECTOR_REPORTED: [(&str, &[&str], bool); 11] = [
+        ("lucid_connector_requests_total", &["result"], true),
+        ("lucid_connector_conversations", &[], true),
+        ("lucid_connector_store_bytes", &[], true),
+        ("lucid_content_approvals_total", &["result"], false),
+        ("lucid_mcp_requests_total", &["server", "kind", "result"], false),
+        ("lucid_a2a_requests_total", &["agent", "result"], false),
+        ("lucid_a2a_tasks_total", &["agent", "state"], false),
+        ("lucid_a2a_tasks_open", &["agent"], false),
+        ("lucid_a2a_approvals_total", &["result"], false),
+        ("lucid_a2a_streams_open", &[], false),
+        ("lucid_a2a_push_total", &["result"], false),
+    ];
+    /// The series of one family an ack lists at most.
+    pub const REPORTED_SERIES_MAX: usize = 32;
+    /// The longest label value an ack carries.
+    pub const REPORTED_LABEL_MAX: usize = 32;
     /// Series kept at most (a new series past it is not counted).
     pub const SERIES_MAX: usize = 10_000;
     /// `lucid_cert_grace_in_use`: a credential admitted inside a grace counts for an hour after its last use.
@@ -664,7 +836,13 @@ pub mod counters {
         /// (org, destination) to the last successful delivery (s).
         success: BTreeMap<(String, String), i64>,
         mode: Option<String>,
+        /// Revision 5 13.1: (org, connector) to its latest ack's time (s) and series.
+        reports: BTreeMap<(String, String), (i64, Vec<Reported>)>,
     }
+
+    /// One series of a connector's ack: the family, its labels in `CONNECTOR_REPORTED` order (without `connector`),
+    /// the value.
+    type Reported = (&'static str, Vec<(String, String)>, f64);
 
     static STATE: LazyLock<Mutex<State>> = LazyLock::new(Default::default);
 
@@ -701,6 +879,206 @@ pub mod counters {
     /// client is authenticated).
     pub fn api_request(org: &str, client: &str, result: &str) {
         add(org, "lucid_api_requests_total", &[("client", client), ("result", result)], 1);
+    }
+
+    /// Revision 4 12: an event appended to this source's own chains, by registry name.
+    pub fn event(org: &str, kind: &str) {
+        add(org, "lucid_events_total", &[("type", kind)], 1);
+    }
+
+    /// Revision 4 12: a relay `api-check` decision (`op` create, read, update or delete; `result` ok or refused).
+    pub fn scim_request(org: &str, op: &str, result: &str) {
+        add(org, "lucid_scim_requests_total", &[("op", op), ("result", result)], 1);
+    }
+
+    /// Revision 4 12: an outbound federation token exchange (`provider` entra or google; `result` ok or failed).
+    pub fn federation_exchange(org: &str, provider: &str, result: &str) {
+        add(org, "lucid_federation_exchanges_total", &[("provider", provider), ("result", result)], 1);
+    }
+
+    /// API-1d 12: a service hub request a spokes relay decided (`result` ok or refused; `client` empty until the
+    /// service hub is matched to its client).
+    pub fn spokes_service_mail(org: &str, client: &str, result: &str) {
+        add(org, "lucid_spokes_service_mail_total", &[("client", client), ("result", result)], 1);
+    }
+
+    /// Revision 4 12: the org's API and console legal holds in `state` (`placed` or `waiting_archive`).
+    pub fn set_compliance_holds(org: &str, state: &str, n: u64) {
+        set(org, "lucid_compliance_holds", &[("state", state)], n as f64);
+    }
+
+    /// Revision 4 12: the org's compliance export jobs in `state` (5.3.3).
+    pub fn set_compliance_exports(org: &str, state: &str, n: u64) {
+        set(org, "lucid_compliance_exports", &[("state", state)], n as f64);
+    }
+
+    /// Revision 4 12: a compliance export job of `client` reached `ready` with `bytes` in its package.
+    pub fn compliance_export_bytes(org: &str, client: &str, bytes: u64) {
+        add(org, "lucid_compliance_export_bytes_total", &[("client", client)], bytes);
+    }
+
+    /// Revision 5 13.1 (connector process): a content call the connector decided (`result` `ok`, `replayed` or
+    /// `refused`); reported to the console in its acks.
+    pub fn connector_request(org: &str, result: &str) {
+        add(org, "lucid_connector_requests_total", &[("result", result)], 1);
+    }
+
+    /// Revision 5 13.1 (connector process): a post approval `requested`, `approved`, `declined` or `expired`.
+    pub fn content_approval(org: &str, result: &str) {
+        add(org, "lucid_content_approvals_total", &[("result", result)], 1);
+    }
+
+    /// Revision 5 13.1: an MCP request at `server` (`console` or `connector`) of `kind` (`read`, `write`, `list`),
+    /// `result` `ok` or `refused`.
+    pub fn mcp_request(org: &str, server: &str, kind: &str, result: &str) {
+        add(org, "lucid_mcp_requests_total", &[("server", server), ("kind", kind), ("result", result)], 1);
+    }
+
+    /// Revision 5 13.1: a delegated token request at the console issuer (`grant` `jwt_bearer`, `authorization_code`
+    /// or `refresh_token`; `result` `ok` or `refused`).
+    pub fn delegated_token(org: &str, grant: &str, result: &str) {
+        add(org, "lucid_api_delegated_tokens_total", &[("grant", grant), ("result", result)], 1);
+    }
+
+    /// Revision 5 13.1 and 10.7: a Hub-local MCP call record received (`outcome` `answered`, `refused`, `declined`).
+    pub fn local_mcp_call(org: &str, outcome: &str) {
+        add(org, "lucid_local_mcp_calls_total", &[("outcome", outcome)], 1);
+    }
+
+    /// Revision 6 12 (connector process): an A2A call (`agent` the agent id, `none` before it is known; `result` `ok`
+    /// or `refused`).
+    pub fn a2a_request(org: &str, agent: &str, result: &str) {
+        add(org, "lucid_a2a_requests_total", &[("agent", agent), ("result", result)], 1);
+    }
+
+    /// Revision 6 12: a task entering `state` (the lower-case `TaskState` label).
+    pub fn a2a_task_state(org: &str, agent: &str, state: &str) {
+        add(org, "lucid_a2a_tasks_total", &[("agent", agent), ("state", state)], 1);
+    }
+
+    /// Revision 6 12: the agent's open (non-terminal) tasks.
+    pub fn set_a2a_tasks_open(org: &str, agent: &str, n: u64) {
+        set(org, "lucid_a2a_tasks_open", &[("agent", agent)], n as f64);
+    }
+
+    /// Revision 6 12: a start approval decided (`allowed`, `denied` or `expired`).
+    pub fn a2a_approval(org: &str, result: &str) {
+        add(org, "lucid_a2a_approvals_total", &[("result", result)], 1);
+    }
+
+    /// Revision 6 12: the open SSE streams.
+    pub fn set_a2a_streams_open(org: &str, n: u64) {
+        set(org, "lucid_a2a_streams_open", &[], n as f64);
+    }
+
+    /// Revision 6 12: a push attempt (`delivered`, `failed` or `dropped`).
+    pub fn a2a_push(org: &str, result: &str) {
+        add(org, "lucid_a2a_push_total", &[("result", result)], 1);
+    }
+
+    /// Revision 6 12 (console, slice 1d5): a card signing of `agent`.
+    pub fn a2a_card_signed(org: &str, agent: &str) {
+        add(org, "lucid_a2a_cards_signed_total", &[("agent", agent)], 1);
+    }
+
+    /// Revision 5 13.1 (connector process): the ack's `metrics` (`CONNECTOR_REPORTED`): `conversations` and
+    /// `store_bytes` as numbers, then this process's own series of the counted families for `org` (at most
+    /// `REPORTED_SERIES_MAX` each).
+    pub fn connector_metrics(org: &str, conversations: u64, store_bytes: u64) -> Value {
+        let mut out = Map::new();
+        out.insert("lucid_connector_conversations".into(), json!(conversations));
+        out.insert("lucid_connector_store_bytes".into(), json!(store_bytes));
+        let s = STATE.lock();
+        for (prom, names, _) in CONNECTOR_REPORTED.iter().filter(|(_, names, _)| !names.is_empty()) {
+            let series: Vec<Value> = s
+                .counts
+                .iter()
+                .filter(|((o, p, labels), _)| o == org && p == prom && labels.len() == names.len() && labels.iter().zip(names.iter()).all(|((k, _), n)| k == n))
+                // the console's own MCP series, when both run in one process (tests), are not the connector's
+                .filter(|((_, _, labels), _)| labels.iter().all(|(k, v)| *k != "server" || v == "connector"))
+                .take(REPORTED_SERIES_MAX)
+                .map(|((_, _, labels), n)| json!({"labels": labels.iter().map(|(k, v)| ((*k).to_owned(), json!(v))).collect::<Map<String, Value>>(), "value": n}))
+                .collect();
+            if !series.is_empty() {
+                out.insert((*prom).into(), Value::Array(series));
+            }
+        }
+        // revision 6 12: the A2A server's gauges (`lucid_a2a_tasks_open` per agent, `lucid_a2a_streams_open` one number)
+        let tasks_open: Vec<Value> = s
+            .gauges
+            .iter()
+            .filter(|((o, p, labels), _)| o == org && *p == "lucid_a2a_tasks_open" && labels.len() == 1 && labels[0].0 == "agent")
+            .take(REPORTED_SERIES_MAX)
+            .map(|((_, _, labels), v)| json!({"labels": {"agent": labels[0].1}, "value": v}))
+            .collect();
+        if !tasks_open.is_empty() {
+            out.insert("lucid_a2a_tasks_open".into(), Value::Array(tasks_open));
+        }
+        if let Some(v) = s.gauges.get(&(org.to_owned(), "lucid_a2a_streams_open", Vec::new())) {
+            out.insert("lucid_a2a_streams_open".into(), json!(v));
+        }
+        Value::Object(out)
+    }
+
+    /// A reported value: a finite number from 0 to 2^53.
+    fn reported_value(v: &Value) -> Option<f64> {
+        v.as_f64().filter(|x| x.is_finite() && (0.0..=9_007_199_254_740_992.0).contains(x))
+    }
+
+    /// A reported label value: 1 to `REPORTED_LABEL_MAX` of `a-z`, `0-9`, `_`, `-`.
+    fn reported_label(v: &Value) -> Option<String> {
+        v.as_str().filter(|s| (1..=REPORTED_LABEL_MAX).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')).map(str::to_owned)
+    }
+
+    /// The series of an ack's `metrics`, or why it is refused: an object of `CONNECTOR_REPORTED` families only, a
+    /// number for a family without labels, otherwise at most `REPORTED_SERIES_MAX` `{labels, value}` with exactly the
+    /// family's labels, no label set twice, and `server` `connector` for MCP requests.
+    fn reported(metrics: &Value) -> Result<Vec<Reported>, String> {
+        let m = metrics.as_object().ok_or("metrics is an object.")?;
+        let mut out = Vec::new();
+        for (prom, v) in m {
+            let Some((prom, names, _)) = CONNECTOR_REPORTED.iter().find(|(p, _, _)| *p == prom.as_str()) else {
+                return Err("metrics names only the families a connector reports.".into());
+            };
+            if names.is_empty() {
+                out.push((*prom, Vec::new(), reported_value(v).ok_or_else(|| format!("{prom} is a number from 0 to 2^53."))?));
+                continue;
+            }
+            let list = v.as_array().filter(|a| a.len() <= REPORTED_SERIES_MAX).ok_or_else(|| format!("{prom} lists at most {REPORTED_SERIES_MAX} series."))?;
+            let mut seen: Vec<Vec<(String, String)>> = Vec::new();
+            for s in list {
+                let bad = || format!("a series of {prom} is {{labels: {{{}}}, value}}.", names.join(", "));
+                let o = s.as_object().filter(|o| o.len() == 2).ok_or_else(bad)?;
+                let given = o.get("labels").and_then(Value::as_object).filter(|l| l.len() == names.len()).ok_or_else(bad)?;
+                let labels = names.iter().map(|n| given.get(*n).and_then(reported_label).map(|x| ((*n).to_owned(), x))).collect::<Option<Vec<_>>>().ok_or_else(bad)?;
+                let value = o.get("value").and_then(reported_value).ok_or_else(bad)?;
+                if labels.iter().any(|(k, x)| k == "server" && x != "connector") {
+                    return Err("a connector reports MCP requests of server connector only.".into());
+                }
+                if seen.contains(&labels) {
+                    return Err(format!("{prom} lists a label set twice."));
+                }
+                seen.push(labels.clone());
+                out.push((*prom, labels, value));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Revision 5 13.1 (console): whether an ack's `metrics` is one a connector may report (`Err` the 400 sentence).
+    pub fn check_connector_metrics(metrics: &Value) -> Result<(), String> {
+        reported(metrics).map(|_| ())
+    }
+
+    /// Revision 5 13.1 (console): the ack of `connector` at `at_s` replaces that connector's series (`metrics` as
+    /// `check_connector_metrics` takes it; anything else changes nothing).
+    pub fn connector_report(org: &str, connector: &str, metrics: &Value, at_s: i64) {
+        let Ok(series) = reported(metrics) else { return };
+        let s = &mut *STATE.lock();
+        let k = (org.to_owned(), connector.to_owned());
+        if s.reports.len() < SERIES_MAX || s.reports.contains_key(&k) {
+            s.reports.insert(k, (at_s, series));
+        }
     }
 
     /// A refusal by its check (6.2 code).
@@ -806,6 +1184,18 @@ pub mod counters {
             for (d, at) in last {
                 merged.insert(("lucid_export_last_success_seconds", vec![("destination".into(), d.to_owned())]), (now_s - at).max(0) as f64);
             }
+            // revision 5 13.1: each connector's latest ack, and the seconds since it
+            for ((o, connector), (at, series)) in &s.reports {
+                if !mine(o.as_str()) {
+                    continue;
+                }
+                merged.insert(("lucid_connector_sync_age_seconds", vec![("connector".into(), connector.clone())]), (now_s - at).max(0) as f64);
+                for (prom, labels, v) in series {
+                    let by_connector = CONNECTOR_REPORTED.iter().any(|(p, _, by)| p == prom && *by);
+                    let labels = if by_connector { std::iter::once(("connector".to_owned(), connector.clone())).chain(labels.iter().cloned()).collect() } else { labels.clone() };
+                    *merged.entry((*prom, labels)).or_insert(0.0) += *v;
+                }
+            }
             if let Some(m) = &s.mode {
                 for mode in ["normal", "failover"] {
                     merged.insert(("lucid_relay_mode", vec![("mode".into(), mode.into())]), f64::from(u8::from(m == mode)));
@@ -839,8 +1229,8 @@ mod tests {
     fn the_embedded_catalog_parses_strictly() {
         let c = cat();
         assert_eq!(c.json()["version"], 1);
-        assert_eq!(c.families().len(), 46);
-        assert_eq!(catalog().families().len(), 46, "the process catalog is the embedded one");
+        assert_eq!(c.families().len(), 68);
+        assert_eq!(catalog().families().len(), 68, "the process catalog is the embedded one");
         assert_eq!(c.resource_attributes(), ["service.name", "service.version", "service.instance.id", "lucid.org", "lucid.relay.id", "lucid.region", "deployment.environment"]);
         assert!(no_dashes(SOURCE));
         // each malformation refuses the whole catalog
@@ -906,7 +1296,7 @@ mod tests {
     #[test]
     fn the_families_of_10_1_are_listed_with_their_types_and_labels() {
         let c = cat();
-        let want: [(&str, MetricKind, &[(&str, Tag)]); 11] = [
+        let want: [(&str, MetricKind, &[(&str, Tag)]); 33] = [
             ("lucid_api_requests_total", MetricKind::Counter, &[("client", Tag::Client), ("result", Tag::Plain)]),
             ("lucid_api_refusals_total", MetricKind::Counter, &[("check", Tag::Plain)]),
             ("lucid_api_tokens_issued_total", MetricKind::Counter, &[("client", Tag::Client), ("issuer", Tag::Plain)]),
@@ -918,6 +1308,32 @@ mod tests {
             ("lucid_export_refused_total", MetricKind::Counter, &[("destination", Tag::Plain), ("reason", Tag::Plain)]),
             ("lucid_export_last_success_seconds", MetricKind::Gauge, &[("destination", Tag::Plain)]),
             ("lucid_relay_mode", MetricKind::Gauge, &[("mode", Tag::Plain)]),
+            ("lucid_events_total", MetricKind::Counter, &[("type", Tag::Plain)]),
+            ("lucid_scim_requests_total", MetricKind::Counter, &[("op", Tag::Plain), ("result", Tag::Plain)]),
+            ("lucid_federation_exchanges_total", MetricKind::Counter, &[("provider", Tag::Plain), ("result", Tag::Plain)]),
+            // API-1d 12
+            ("lucid_spokes_service_mail_total", MetricKind::Counter, &[("client", Tag::Client), ("result", Tag::Plain)]),
+            // revision 4 12 (compliance)
+            ("lucid_compliance_holds", MetricKind::Gauge, &[("state", Tag::Plain)]),
+            ("lucid_compliance_exports", MetricKind::Gauge, &[("state", Tag::Plain)]),
+            ("lucid_compliance_export_bytes_total", MetricKind::Counter, &[("client", Tag::Client)]),
+            // revision 5 13.1: `connector` is plain; no client, person or cid label
+            ("lucid_connector_requests_total", MetricKind::Counter, &[("connector", Tag::Plain), ("result", Tag::Plain)]),
+            ("lucid_connector_sync_age_seconds", MetricKind::Gauge, &[("connector", Tag::Plain)]),
+            ("lucid_connector_conversations", MetricKind::Gauge, &[("connector", Tag::Plain)]),
+            ("lucid_connector_store_bytes", MetricKind::Gauge, &[("connector", Tag::Plain)]),
+            ("lucid_content_approvals_total", MetricKind::Counter, &[("result", Tag::Plain)]),
+            ("lucid_mcp_requests_total", MetricKind::Counter, &[("server", Tag::Plain), ("kind", Tag::Plain), ("result", Tag::Plain)]),
+            ("lucid_api_delegated_tokens_total", MetricKind::Counter, &[("grant", Tag::Plain), ("result", Tag::Plain)]),
+            ("lucid_local_mcp_calls_total", MetricKind::Counter, &[("outcome", Tag::Plain)]),
+            // revision 6 12: `agent` is an admin-set id (plain)
+            ("lucid_a2a_requests_total", MetricKind::Counter, &[("agent", Tag::Plain), ("result", Tag::Plain)]),
+            ("lucid_a2a_tasks_total", MetricKind::Counter, &[("agent", Tag::Plain), ("state", Tag::Plain)]),
+            ("lucid_a2a_tasks_open", MetricKind::Gauge, &[("agent", Tag::Plain)]),
+            ("lucid_a2a_approvals_total", MetricKind::Counter, &[("result", Tag::Plain)]),
+            ("lucid_a2a_streams_open", MetricKind::Gauge, &[]),
+            ("lucid_a2a_push_total", MetricKind::Counter, &[("result", Tag::Plain)]),
+            ("lucid_a2a_cards_signed_total", MetricKind::Counter, &[("agent", Tag::Plain)]),
         ];
         assert_eq!(want.map(|w| w.0), counters::FAMILIES);
         for (i, (prom, kind, labels)) in want.iter().enumerate() {
@@ -983,6 +1399,111 @@ mod tests {
         }
     }
 
+    /// Revision 4 14.1: `"pack": true` marks the audit actions and event types the Splunk and Sentinel packs must map
+    /// (the Meeting Hub's `tools/check_packs.py` enforces the mapping); it is `true` or absent, and never on a log line
+    /// or a span.
+    #[test]
+    fn pack_marks_parse_on_audit_actions_and_event_types_only() {
+        cat();
+        let base: Value = serde_json::from_str(SOURCE).unwrap();
+        let marked: Vec<(&str, RecordKind)> = base["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r.get("pack").is_some())
+            .map(|r| (r["name"].as_str().unwrap(), RecordKind::of(r["kind"].as_str().unwrap()).unwrap()))
+            .collect();
+        for (name, kind) in [
+            ("api.token", RecordKind::Audit),
+            ("api.refusal", RecordKind::Audit),
+            ("api.tighten", RecordKind::Audit),
+            ("compliance.export.released", RecordKind::Audit),
+            ("directory.person", RecordKind::Audit),
+            ("hold.placed", RecordKind::Event),
+            ("api.disabled", RecordKind::Event),
+            ("person.deprovisioned", RecordKind::Event),
+        ] {
+            assert!(marked.contains(&(name, kind)), "{name} is marked for the packs");
+        }
+        assert!(marked.iter().all(|(_, k)| matches!(k, RecordKind::Audit | RecordKind::ConsoleAudit | RecordKind::Event)));
+        assert!(!marked.contains(&("api.refusal", RecordKind::Log)), "the log line of the same name is not marked");
+        assert!(!marked.iter().any(|(name, _)| *name == "relay.connected"));
+        let at = |name: &str, kind: &str| base["records"].as_array().unwrap().iter().position(|r| r["name"] == name && r["kind"] == kind).unwrap();
+        let broken = |f: &dyn Fn(&mut Value)| {
+            let mut v = base.clone();
+            f(&mut v);
+            parse(&v.to_string()).is_err()
+        };
+        let (token, held, log, span) = (at("api.token", "audit"), at("hold.placed", "event"), at("api.refusal", "log"), at("api.span", "span"));
+        assert!(broken(&|v| v["records"][token]["pack"] = json!(false)), "pack is true or absent");
+        assert!(broken(&|v| v["records"][held]["pack"] = json!("yes")));
+        assert!(broken(&|v| v["records"][log]["pack"] = json!(true)), "not on a log line");
+        assert!(broken(&|v| v["records"][span]["pack"] = json!(true)), "not on a span");
+        let mut v = base.clone();
+        v["records"][token].as_object_mut().unwrap().remove("pack");
+        assert!(parse(&v.to_string()).is_ok(), "pack may be absent");
+    }
+
+    /// Revision 4 14.1 (pack harness): the audit records of `tests/vectors/api_audit_v1.json` (Meeting Hub
+    /// `make_api_audit_v1.py`) are exactly what the audit chains write and the feed reads: the script recorded into
+    /// in-memory chains for the console and a relay gives the vector's pages in all three representations, and every
+    /// entry is a registry audit action.
+    #[test]
+    fn the_pack_audit_vector_is_what_the_audit_chains_write() {
+        use crate::api_audit::{ApiAudit, CheckpointSigner, PseudonymKeys, Repr};
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        struct NoSigner;
+        impl CheckpointSigner for NoSigner {
+            fn kid(&self, _: &str) -> Option<String> {
+                None
+            }
+            fn sign(&self, _: &str, _: &[u8]) -> Option<Vec<u8>> {
+                None
+            }
+            fn certs(&self, _: &str) -> Vec<Value> {
+                Vec::new()
+            }
+        }
+        struct Fixed(u32, Vec<u8>);
+        impl PseudonymKeys for Fixed {
+            fn current(&self, _: &str) -> Option<(u32, Vec<u8>)> {
+                Some((self.0, self.1.clone()))
+            }
+        }
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/api_audit_v1.json");
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e} (run tests/vectors/make_api_audit_v1.py in the Meeting Hub and copy it here)"));
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let org = v["org"].as_str().unwrap();
+        let hex_key = v["key"]["hex"].as_str().unwrap();
+        let key: Vec<u8> = (0..hex_key.len()).step_by(2).map(|i| u8::from_str_radix(&hex_key[i..i + 2], 16).unwrap()).collect();
+        let pkv = v["key"]["pkv"].as_u64().unwrap() as u32;
+        let mut chains: BTreeMap<String, ApiAudit> = BTreeMap::new();
+        for (i, step) in v["script"].as_array().unwrap().iter().enumerate() {
+            let source = step["source"].as_str().unwrap();
+            let ts = step["ts"].as_i64().unwrap();
+            let a = chains.entry(source.to_owned()).or_insert_with(|| ApiAudit::open(None, source, Arc::new(NoSigner), Arc::new(Fixed(pkv, key.clone())), ts));
+            a.record(org, step["entry"].clone(), ts).unwrap_or_else(|e| panic!("script step {i}: {}", e.message));
+        }
+        let feeds = v["feeds"].as_object().unwrap();
+        assert_eq!(feeds.keys().collect::<Vec<_>>(), chains.keys().collect::<Vec<_>>());
+        let c = cat();
+        for (source, a) in &chains {
+            for repr in Repr::ALL {
+                let page = a.read(org, source, repr, 0, 1000).unwrap();
+                assert_eq!(page, feeds[source][repr.as_str()], "{source} {}", repr.as_str());
+                for e in page["entries"].as_array().unwrap() {
+                    let action = e["action"].as_str().unwrap();
+                    let rt = c.record_type_of(action, e).unwrap_or_else(|| panic!("{action} is a registry audit action"));
+                    assert_eq!(rt.kind, RecordKind::Audit, "{action}");
+                    for k in e.as_object().unwrap().keys() {
+                        assert!(rt.fields.iter().any(|(f, _)| f == k), "{action}: {k} is a registry field");
+                    }
+                }
+            }
+        }
+    }
+
     fn fields_of(rt: &RecordType) -> Vec<(&str, Tag)> {
         rt.fields
             .iter()
@@ -1007,12 +1528,25 @@ mod tests {
         let actions = [
             "api.call", "api.token", "api.refusal", "api.refusal.summary", "cert.grace-used", "api.map.pinned", "api.map.conflict", "api.tighten", "api.journal.rebased",
             "exports.delivered", "exports.failed", "exports.refused", "relay.failover.on", "relay.failover.off", "checkpoint",
+            // revision 4 11
+            "compliance.hold.requested", "compliance.hold.placed", "compliance.hold.archive", "compliance.export.requested", "compliance.export.released",
+            "compliance.export.ready", "compliance.export.downloaded", "compliance.export.ended", "directory.person", "webhook.verified", "webhook.gone",
+            "federation.token", "federation.failed",
+            // revision 5 12.2
+            "api.authorize", "api.delegated", "api.refresh", "api.person.record",
+            // API-1d 11
+            "spokes.mail",
+            // revision 5 12.2 (the connector's chains)
+            "content.approval.requested", "content.approval.answered", "content.approval.posted", "content.approval.refused", "content.person.stopped",
+            "content.notice.skipped", "connector.stale.on", "connector.stale.off", "connector.store.purged",
+            // API-1d 11 (the connector's chains; `a2a.card.signed` the console's)
+            "a2a.task", "a2a.approval", "a2a.push", "a2a.card.signed",
         ];
         let audit: Vec<&RecordType> = c.records().iter().filter(|r| r.kind == RecordKind::Audit).collect();
         assert_eq!(audit.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), actions);
         let mut allowed: Vec<&str> = crate::api_audit::PLAIN_FIELDS.to_vec();
         allowed.extend(crate::api_audit::IDENTITY_FIELDS);
-        allowed.extend(["seq", "ts", "org", "prev", "hash", "bucket", "kid", "payload", "sig", "raw_seq", "pkv"]);
+        allowed.extend(["seq", "ts", "org", "prev", "hash", "bucket", "payload", "sig", "raw_seq", "pkv"]);
         allowed.sort_unstable();
         for r in &audit {
             let f = fields_of(r);
@@ -1037,7 +1571,7 @@ mod tests {
             }
         }
         // a record with an identity or free text field is confidential as is, internal transformed; others internal
-        for r in c.records() {
+        for r in c.records().iter().filter(|r| r.kind != RecordKind::Event) {
             let want = if sensitive(&r.fields) { Ceiling::Confidential } else { Ceiling::Internal };
             assert_eq!((r.class, r.class_transformed), (want, Ceiling::Internal), "{}", r.name);
         }
@@ -1165,6 +1699,194 @@ mod tests {
         assert_eq!(c.record_type_of("people.remove", &json!({"action": "people.remove"})).map(|r| r.kind), Some(RecordKind::ConsoleAudit));
         assert!(c.record_type_of("api.span", &json!({"action": "api.span"})).is_none());
         assert!(c.record_type_of("api.audit-failed", &json!({"action": "api.audit-failed"})).is_none(), "a log event is no audit action");
+        assert_eq!(c.record_type_of("checkpoint", &json!({"type": "checkpoint"})).map(|r| r.kind), Some(RecordKind::Event));
+        assert_eq!(c.record_type_of("checkpoint", &json!({"action": "checkpoint"})).map(|r| r.kind), Some(RecordKind::Audit));
+    }
+
+    /// Revision 4 7.1: every catalog type with its source, scope and class, and each tagged data field.
+    #[test]
+    fn the_registry_lists_every_event_type_of_7_1() {
+        let c = cat();
+        use Ceiling::{Confidential as C, Internal as I, Public as P};
+        let want: [(&str, &[&str], &str, Ceiling, &[(&str, Tag)]); 28] = [
+            ("relay.connected", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("version", Tag::Plain)]),
+            ("relay.disconnected", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("version", Tag::Plain)]),
+            ("relay.health.changed", &["console"], "monitor.read", I, &[("relay", Tag::Plain), ("from", Tag::Plain), ("to", Tag::Plain)]),
+            ("relay.mode.changed", &["relay"], "monitor.read", I, &[("relay", Tag::Plain), ("mode", Tag::Plain)]),
+            ("cert.expiring", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("kind", Tag::Plain), ("days_left", Tag::Plain)]),
+            ("license.expiring", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("days_left", Tag::Plain)]),
+            ("client.suspended", &["console"], "audit.read", C, &[("client", Tag::Client), ("reason", Tag::Plain), ("days_left", Tag::Plain)]),
+            ("client.expiring", &["console"], "audit.read", C, &[("client", Tag::Client), ("reason", Tag::Plain), ("days_left", Tag::Plain)]),
+            ("api.disabled", &["console"], "audit.read", I, &[]),
+            ("api.enabled", &["console"], "audit.read", I, &[]),
+            ("destination.paused", &["console"], "monitor.read", I, &[("destination", Tag::Plain), ("reason", Tag::Plain)]),
+            ("destination.resumed", &["console"], "monitor.read", I, &[("destination", Tag::Plain), ("reason", Tag::Plain)]),
+            ("meeting.started", &["relay"], "compliance.metadata.read", C, &[("room", Tag::Plain), ("meeting", Tag::Plain), ("title", Tag::FreeText), ("organizer", Tag::Principal)]),
+            ("meeting.ended", &["relay"], "compliance.metadata.read", C, &[("room", Tag::Plain), ("meeting", Tag::Plain), ("duration_s", Tag::Plain), ("people", Tag::Plain), ("guests", Tag::Plain)]),
+            ("member.joined", &["relay"], "compliance.metadata.read", C, &[("room", Tag::Plain), ("principal", Tag::Principal), ("guest", Tag::Device), ("role", Tag::Plain)]),
+            ("member.left", &["relay"], "compliance.metadata.read", C, &[("room", Tag::Plain), ("principal", Tag::Principal), ("guest", Tag::Device), ("role", Tag::Plain)]),
+            ("hold.placed", &["console"], "compliance.metadata.read", C, &[("hold", Tag::Plain), ("on", Tag::Plain), ("count", Tag::Plain), ("by", Tag::Principal)]),
+            ("hold.released", &["console"], "compliance.metadata.read", C, &[("hold", Tag::Plain), ("on", Tag::Plain), ("count", Tag::Plain), ("by", Tag::Principal)]),
+            ("export.requested", &["console"], "compliance.metadata.read", C, &[("job", Tag::Plain), ("client", Tag::Client), ("state", Tag::Plain), ("code", Tag::Plain)]),
+            ("export.released", &["console"], "compliance.metadata.read", C, &[("job", Tag::Plain), ("client", Tag::Client), ("state", Tag::Plain), ("code", Tag::Plain)]),
+            ("export.ready", &["console"], "compliance.metadata.read", C, &[("job", Tag::Plain), ("client", Tag::Client), ("state", Tag::Plain), ("code", Tag::Plain)]),
+            ("export.ended", &["console"], "compliance.metadata.read", C, &[("job", Tag::Plain), ("client", Tag::Client), ("state", Tag::Plain), ("code", Tag::Plain)]),
+            ("person.deprovisioned", &["console"], "directory.read", C, &[("principal", Tag::Principal), ("provider", Tag::Plain), ("source", Tag::Plain)]),
+            ("person.reactivated", &["console"], "directory.read", C, &[("principal", Tag::Principal), ("provider", Tag::Plain), ("source", Tag::Plain)]),
+            ("test.ping", &["console"], "events.subscribe", P, &[("destination", Tag::Plain)]),
+            ("checkpoint", &["console", "relay"], "events.subscribe", P, &[("kid", Tag::Plain), ("payload", Tag::Plain), ("sig", Tag::Plain)]),
+            // API-1d 6.4
+            ("spoke.offline", &["relay"], "spokes.read", I, &[("relay", Tag::Plain), ("node", Tag::Device), ("label", Tag::FreeText), ("last_poll_at", Tag::Plain)]),
+            ("spoke.online", &["relay"], "spokes.read", I, &[("relay", Tag::Plain), ("node", Tag::Device), ("label", Tag::FreeText), ("last_poll_at", Tag::Plain)]),
+        ];
+        let names: Vec<&str> = c.events().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, want.map(|w| w.0));
+        for (name, sources, scope, class, fields) in want {
+            let e = c.event(name).unwrap();
+            assert_eq!((e.sources.iter().map(String::as_str).collect::<Vec<_>>().as_slice(), e.scope.as_str(), e.class), (sources, scope, class), "{name}");
+            // 3.2: transformed representations are internal (public stays public)
+            assert_eq!(e.class_transformed, class.min(I), "{name}");
+            assert_eq!(fields_of(e), fields, "{name}");
+            assert!(e.subject.as_ref().is_none_or(|s| fields.iter().any(|(k, t)| k == s && *t == Tag::Plain)), "{name}");
+        }
+        // malformed event types refuse the catalog
+        let base: Value = serde_json::from_str(SOURCE).unwrap();
+        let at = base["records"].as_array().unwrap().iter().position(|r| r["kind"] == "event").unwrap();
+        let broken = |f: &dyn Fn(&mut Value)| {
+            let mut v = base.clone();
+            f(&mut v["records"][at]);
+            parse(&v.to_string()).is_err()
+        };
+        assert!(broken(&|r| r["scope"] = json!("nothing.read")));
+        assert!(broken(&|r| r["source"] = json!(["edge"])));
+        assert!(broken(&|r| r["source"] = json!(["console", "console"])));
+        assert!(broken(&|r| r["subject"] = json!("nothing")));
+        assert!(broken(&|r| r["fields"]["nested"] = json!({"a": "plain"})));
+        assert!(broken(&|r| r["severity_from"] = json!("result")));
+    }
+
+    /// Revision 5 7.6: the five content event types are registry rows marked `connector_only`, which no R0 path sees:
+    /// the feed and subscription lookup (`event`, `events`) skips them and `transform_record` refuses them for every
+    /// destination with reason `identity`.
+    #[test]
+    fn connector_only_content_events_never_reach_an_r0_path() {
+        let c = cat();
+        let content: Vec<&RecordType> = c.records().iter().filter(|r| r.connector_only).collect();
+        let names: Vec<&str> = content.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["message.created", "message.edited", "message.deleted", "conversation.added", "conversation.removed"]);
+        for r in &content {
+            let fields: &[(&str, Tag)] = if r.name.starts_with("message.") { &[("conv", Tag::Plain), ("message", Tag::Plain)] } else { &[("conv", Tag::Plain)] };
+            assert_eq!((r.kind, r.scope.as_str(), r.sources.as_slice()), (RecordKind::Event, "content.read", &["connector".to_string()][..]), "{}", r.name);
+            assert_eq!((r.class, r.class_transformed, r.subject.as_deref()), (Ceiling::Confidential, Ceiling::Internal, Some("conv")), "{}", r.name);
+            assert_eq!(fields_of(r), fields, "{}: ids only, never text", r.name);
+            assert!(c.event(&r.name).is_none() && catalog().event(&r.name).is_none(), "{} is not an R0 event type", r.name);
+            assert!(c.record_type(&r.name).is_none());
+            let record = json!({"type": r.name, "conv": "ch:0123456789abcdef", "message": "m1"});
+            assert!(c.record_type_of(&r.name, &record).is_none());
+            for ids in [Identities::AsIs, Identities::Pseudonymized, Identities::Removed] {
+                let refused = transform_record(&r.name, &record, ids, Some((1, KEY)), Ceiling::Cui);
+                assert_eq!(refused, Err(Refused::Unknown), "{}", r.name);
+                assert_eq!(refused.unwrap_err().reason(), "identity");
+            }
+        }
+        assert!(c.events().all(|e| !e.connector_only));
+        assert!(crate::api_events::FeedQuery::parse("types=message.created").is_err(), "a feed or subscription cannot ask for a content type");
+        assert!(crate::api_events::check_emit("console", "message.created", &json!({"conv": "ch:0123456789abcdef"})).is_err());
+        assert!(crate::api_events::check_emit("r_0123456789abcdef", "conversation.added", &json!({"conv": "ch:0123456789abcdef"})).is_err());
+        // the flag is true or absent, only with source connector alone, never with pack
+        let base: Value = serde_json::from_str(SOURCE).unwrap();
+        let at = base["records"].as_array().unwrap().iter().position(|r| r["name"] == "message.created").unwrap();
+        let broken = |f: &dyn Fn(&mut Value)| {
+            let mut v = base.clone();
+            f(&mut v["records"][at]);
+            parse(&v.to_string()).is_err()
+        };
+        assert!(broken(&|r| r["connector_only"] = json!(false)));
+        assert!(broken(&|r| r["connector_only"] = json!("yes")));
+        assert!(broken(&|r| r["source"] = json!(["connector", "relay"])));
+        assert!(broken(&|r| r["source"] = json!(["console"])));
+        assert!(broken(&|r| r["pack"] = json!(true)));
+        let audit = base["records"].as_array().unwrap().iter().position(|r| r["name"] == "api.call").unwrap();
+        let mut v = base.clone();
+        v["records"][audit]["connector_only"] = json!(true);
+        assert!(parse(&v.to_string()).is_err(), "never on an audit action");
+        // without the flag the type would be an ordinary event type
+        let mut v = base.clone();
+        v["records"][at].as_object_mut().unwrap().remove("connector_only");
+        assert!(parse(&v.to_string()).unwrap().event("message.created").is_some());
+    }
+
+    /// Revision 5 13.1: a connector's ack `metrics` become that connector's series at the console (counters absolute,
+    /// replaced by each ack), with `lucid_connector_sync_age_seconds` the time since the ack; malformed metrics refuse.
+    #[test]
+    fn a_connector_ack_replaces_its_series_and_sets_the_sync_age() {
+        let (org, k1, k2) = ("cat-test-connector", "k_00000000000000c1", "k_00000000000000c2");
+        let now = 1_800_000_000;
+        let find = |rows: &[counters::Row], prom: &str, labels: &[(&str, &str)]| {
+            rows.iter().find(|r| r.prom == prom && r.labels.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>() == labels).map(|r| r.value)
+        };
+        // the connector process side: its own counters, then the ack's metrics
+        let proc_org = "cat-test-connector-proc";
+        counters::connector_request(proc_org, "ok");
+        counters::connector_request(proc_org, "ok");
+        counters::connector_request(proc_org, "refused");
+        counters::content_approval(proc_org, "requested");
+        counters::mcp_request(proc_org, "connector", "write", "ok");
+        let m = counters::connector_metrics(proc_org, 4, 2048);
+        assert_eq!((m["lucid_connector_conversations"].as_u64(), m["lucid_connector_store_bytes"].as_u64()), (Some(4), Some(2048)));
+        assert_eq!(m["lucid_connector_requests_total"], json!([{"labels": {"result": "ok"}, "value": 2}, {"labels": {"result": "refused"}, "value": 1}]));
+        assert_eq!(m["lucid_mcp_requests_total"], json!([{"labels": {"server": "connector", "kind": "write", "result": "ok"}, "value": 1}]));
+        assert!(counters::check_connector_metrics(&m).is_ok(), "{m}");
+        // the console side
+        counters::connector_report(org, k1, &m, now - 20);
+        counters::connector_report(org, k2, &json!({"lucid_content_approvals_total": [{"labels": {"result": "requested"}, "value": 3}]}), now - 5);
+        let rows = counters::rows(Some(org), now);
+        assert_eq!(find(&rows, "lucid_connector_requests_total", &[("connector", k1), ("result", "ok")]), Some(2.0));
+        assert_eq!(find(&rows, "lucid_connector_conversations", &[("connector", k1)]), Some(4.0));
+        assert_eq!(find(&rows, "lucid_connector_store_bytes", &[("connector", k1)]), Some(2048.0));
+        assert_eq!(find(&rows, "lucid_content_approvals_total", &[("result", "requested")]), Some(4.0), "summed over the org's connectors");
+        assert_eq!(find(&rows, "lucid_mcp_requests_total", &[("server", "connector"), ("kind", "write"), ("result", "ok")]), Some(1.0));
+        assert_eq!(find(&rows, "lucid_connector_sync_age_seconds", &[("connector", k1)]), Some(20.0));
+        assert_eq!(find(&rows, "lucid_connector_sync_age_seconds", &[("connector", k2)]), Some(5.0));
+        assert_eq!(find(&counters::rows(Some(org), now + 60), "lucid_connector_sync_age_seconds", &[("connector", k1)]), Some(80.0), "measured at rows() time");
+        // the next ack replaces the connector's series
+        counters::connector_report(org, k1, &json!({"lucid_connector_store_bytes": 10}), now);
+        let rows = counters::rows(Some(org), now);
+        assert_eq!(find(&rows, "lucid_connector_store_bytes", &[("connector", k1)]), Some(10.0));
+        assert_eq!(find(&rows, "lucid_connector_requests_total", &[("connector", k1), ("result", "ok")]), None);
+        assert_eq!(find(&rows, "lucid_connector_sync_age_seconds", &[("connector", k1)]), Some(0.0));
+        assert!(counters::rows(Some("cat-test-other"), now).iter().all(|r| r.prom != "lucid_connector_sync_age_seconds"), "another org's connectors");
+        // bounded: known families, numbers, the family's labels only, small
+        let series = |n: usize| json!((0..n).map(|i| json!({"labels": {"result": format!("r{i}")}, "value": 1})).collect::<Vec<_>>());
+        for bad in [
+            json!([]),
+            json!({"lucid_api_requests_total": 1}),
+            json!({"lucid_connector_store_bytes": "big"}),
+            json!({"lucid_connector_store_bytes": -1}),
+            json!({"lucid_connector_requests_total": 3}),
+            json!({"lucid_connector_requests_total": [{"labels": {"client": "c_1"}, "value": 1}]}),
+            json!({"lucid_connector_requests_total": [{"labels": {"result": "ok", "client": "c_1"}, "value": 1}]}),
+            json!({"lucid_connector_requests_total": [{"labels": {"result": "OK"}, "value": 1}]}),
+            json!({"lucid_connector_requests_total": [{"labels": {"result": "ok"}, "value": 1}, {"labels": {"result": "ok"}, "value": 2}]}),
+            json!({"lucid_connector_requests_total": [{"labels": {"result": "ok"}, "value": 1, "extra": 1}]}),
+            json!({"lucid_mcp_requests_total": [{"labels": {"server": "console", "kind": "read", "result": "ok"}, "value": 1}]}),
+            json!({"lucid_connector_requests_total": series(counters::REPORTED_SERIES_MAX + 1)}),
+        ] {
+            assert!(counters::check_connector_metrics(&bad).is_err(), "{bad}");
+        }
+        assert!(counters::check_connector_metrics(&json!({})).is_ok());
+        assert!(counters::check_connector_metrics(&json!({"lucid_connector_requests_total": series(counters::REPORTED_SERIES_MAX)})).is_ok());
+        // a refused shape changes nothing
+        counters::connector_report(org, k1, &json!({"lucid_connector_store_bytes": "x"}), now + 1);
+        assert_eq!(find(&counters::rows(Some(org), now), "lucid_connector_store_bytes", &[("connector", k1)]), Some(10.0));
+        // the console-side counters of 13.1
+        counters::delegated_token(org, "jwt_bearer", "refused");
+        counters::local_mcp_call(org, "answered");
+        counters::mcp_request(org, "console", "list", "ok");
+        let rows = counters::rows(Some(org), now);
+        assert_eq!(find(&rows, "lucid_api_delegated_tokens_total", &[("grant", "jwt_bearer"), ("result", "refused")]), Some(1.0));
+        assert_eq!(find(&rows, "lucid_local_mcp_calls_total", &[("outcome", "answered")]), Some(1.0));
+        assert_eq!(find(&rows, "lucid_mcp_requests_total", &[("server", "console"), ("kind", "list"), ("result", "ok")]), Some(1.0));
     }
 
     #[test]
@@ -1184,6 +1906,8 @@ mod tests {
         counters::export_refused(a, "d_1", "ceiling", 0);
         counters::set_export_backlog_bytes(a, "d_1", 1024);
         counters::export_success(a, "d_1", now - 30);
+        // API-1d 12
+        counters::spokes_service_mail(a, "c_1", "refused");
         let find = |rows: &[counters::Row], prom: &str, labels: &[(&str, &str)]| {
             rows.iter().find(|r| r.prom == prom && r.labels.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>() == labels).map(|r| r.value)
         };
@@ -1197,6 +1921,7 @@ mod tests {
         assert_eq!(find(&ra, "lucid_export_refused_total", &[("destination", "d_1"), ("reason", "ceiling")]), None, "zero adds no series");
         assert_eq!(find(&ra, "lucid_export_backlog_bytes", &[("destination", "d_1")]), Some(1024.0));
         assert_eq!(find(&ra, "lucid_export_last_success_seconds", &[("destination", "d_1")]), Some(30.0));
+        assert_eq!(find(&ra, "lucid_spokes_service_mail_total", &[("client", "c_1"), ("result", "refused")]), Some(1.0));
         let rb = counters::rows(Some(b), now);
         assert_eq!(find(&rb, "lucid_api_requests_total", &[("client", "c_1"), ("result", "ok")]), Some(1.0));
         assert_eq!(find(&rb, "lucid_cert_grace_in_use", &[("kind", "app")]), Some(1.0), "02 is past the hour");

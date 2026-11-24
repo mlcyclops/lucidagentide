@@ -684,6 +684,8 @@ pub trait RelaySide: Send + Sync {
     fn now(&self) -> i64 {
         now_ms().div_euclid(1000)
     }
+    /// Revision 4 7.1: `relay.mode.changed` for the org (`mode` `normal` or `failover`) in the relay's event chains.
+    fn mode_changed(&self, _org: &str, _mode: &str) {}
 }
 
 /// One org in failover.
@@ -960,6 +962,7 @@ impl Failover {
         }
         self.core.on.lock().insert(org.to_string(), OrgMode { firsts, leaving: false });
         crate::api_catalog::counters::set_relay_mode("failover");
+        self.core.side.mode_changed(org, "failover");
         self.core.logger.security(ON, &Fields::new().with("org", org), Level::Warn);
         self.engine.refresh(now);
     }
@@ -999,6 +1002,7 @@ impl Failover {
         if none_left {
             crate::api_catalog::counters::set_relay_mode("normal");
         }
+        self.core.side.mode_changed(org, "normal");
         self.core.logger.security(OFF, &Fields::new().with("org", org), Level::Info);
     }
 }

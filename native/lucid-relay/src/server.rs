@@ -308,7 +308,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     // F2 (ADR-A100): a hub's license seat; only a licensed relay reads it.
     let seat = parts.headers.get(SEAT_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
     let request = Request { method: &method, pathname: &pathname, path: &path, authorization: &authorization, seat: seat.as_deref(), dialed: &dialed, body: &text, where_: &where_ };
-    let reply = relay.state.lock().serve(&request, t, host_ok);
+    let reply = relay.state.lock().serve_from(&request, Some(peer.ip()), t, host_ok);
     match reply {
         Ok(r) => to_response(r),
         Err(_) => internal_error(),
@@ -317,6 +317,12 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
 
 /// TLS for the relay's own certificate and key (PEM).
 pub fn tls_acceptor(cert_pem: &str, key_pem: &str) -> Result<TlsAcceptor, String> {
+    Ok(TlsAcceptor::from(tls_config(cert_pem, key_pem)?))
+}
+
+/// The server configuration of the relay's own certificate and key (PEM), no client certificates: the main port's,
+/// and the API listener's on a spokes relay (API-1d 6.3).
+pub fn tls_config(cert_pem: &str, key_pem: &str) -> Result<Arc<rustls::ServerConfig>, String> {
     let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>().map_err(|e| format!("the TLS certificate does not read: {e}"))?;
     if certs.is_empty() {
         return Err("the TLS certificate does not read: no CERTIFICATE block".into());
@@ -331,7 +337,7 @@ pub fn tls_acceptor(cert_pem: &str, key_pem: &str) -> Result<TlsAcceptor, String
         .with_single_cert(certs, key)
         .map_err(|e| format!("the TLS certificate and key do not fit: {e}"))?;
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-    Ok(TlsAcceptor::from(Arc::new(cfg)))
+    Ok(Arc::new(cfg))
 }
 
 #[cfg(feature = "fips")]
@@ -639,6 +645,10 @@ pub struct FleetStart {
     pub console: Option<Arc<Console>>,
     pub relay: Arc<Relay>,
     pub logger: Arc<Logger>,
+    /// API-1d 6.3: `--api-listen` or LUCID_RELAY_API_LISTEN, and the relay's own TLS certificate and key (PEM) the
+    /// listener serves with.
+    pub api_listen: Option<String>,
+    pub tls: Option<(String, String)>,
 }
 
 /// The running link: keep it for the process's life (it holds `fleet.lock`, the agent and the headless console).
@@ -702,6 +712,9 @@ pub fn fleet_open(o: FleetOpen) -> Result<FleetOpened, String> {
 /// learn the link (`/v1/console/where`, `/v1/console/requests`, the 3.9 endorsement routes). None without `--state`.
 pub fn fleet_start(cfg: FleetStart) -> Result<Option<Fleet>, String> {
     let Some(dir) = cfg.state_dir.clone() else { return Ok(None) };
+    // API-1d 2.4, 5.3, 6.3: the spokes relay's API side, registered before the agent dials (its first `api-orgs`)
+    let tls = cfg.tls.as_ref().map(|(cert, key)| tls_config(cert, key)).transpose()?;
+    let api = crate::spokes_api::start(crate::spokes_api::Start { dir: &dir, state: &cfg.relay.state, logger: cfg.logger.clone(), api_listen: cfg.api_listen.as_deref(), tls })?;
     let weak = Arc::downgrade(&cfg.relay.state);
     let attach = move |c: &Arc<Console>| c.attach(crate::console_spokes::section(weak.clone()));
     let opened = fleet_open(FleetOpen {
@@ -712,6 +725,10 @@ pub fn fleet_start(cfg: FleetStart) -> Result<Option<Fleet>, String> {
         proxy: std::env::var("LUCID_RELAY_FLEET_PROXY").ok().filter(|p| !p.is_empty()),
         attach: &attach,
     })?;
+    // API-1 9.1: the relay's chains seal their keys in the console book of the link
+    if let Some(book) = cfg.console.clone().or_else(|| opened.headless.clone()) {
+        api.set_vault(book);
+    }
     if let Some(agent) = &opened.agent {
         let book = cfg.console.clone().or_else(|| opened.headless.clone()).ok_or("no console for the fleet link")?;
         cfg.relay.state.lock().set_fleet(fleet_link(agent.clone(), book, &dir));

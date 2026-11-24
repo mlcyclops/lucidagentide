@@ -342,6 +342,17 @@ pub(crate) fn leaf_problem(d: &Delegation, c: &NodeCert, signed_in: bool) -> Opt
     if c.role == "hub" && !may("users") && !may("idp-renew") {
         return Some("this delegation may not certify hubs (no users power)".into());
     }
+    // API-1d 4.2 (identity.ts `leafProblem`): a service hub only from a users delegate whose limits allow hubs, and never
+    // with approve. Judged by the fail-closed rule of 5.2 (every `apps.` domain): a certificate verifier holds no
+    // relay directory, so both readers refuse the same certificates.
+    if is_service_hub(c, None) {
+        if !may("users") || l.roles.as_ref().is_some_and(|r| !r.iter().any(|x| x == "hub")) {
+            return Some("only a delegation with the users power and role hub may certify a service hub".into());
+        }
+        if c.scopes.iter().any(|s| s == "approve") {
+            return Some("a delegate never certifies a service hub with the approve scope".into());
+        }
+    }
     // ID-1 5.5: a users delegate never signs sign-in evidence, and the renewal authority signs nothing without it.
     if signed_in != may("idp-renew") {
         return Some("only the renewal authority (idp-renew) signs renewed sign-in certificates, and it signs nothing else".into());
@@ -1115,7 +1126,9 @@ fn origin_only(url: &str) -> Option<(&str, &str)> {
 }
 
 fn relay_entry_ok(v: &Value) -> bool {
-    let Some(e) = as_object(v).filter(|e| exact_keys(e, &["url", "region", "priority", "ca", "spki"], &["url", "region", "priority"])) else { return false };
+    // API-1d 5.8: optional `api`, only ever `true` (a spokes relay bound to the org that enforces 5.3); absent means not.
+    // 5.8 as amended (review W5b finding 7): optional `relay`, the relay's id (is_directory_relay_id), required with `api`.
+    let Some(e) = as_object(v).filter(|e| exact_keys(e, &["url", "region", "priority", "ca", "spki", "api", "relay"], &["url", "region", "priority"])) else { return false };
     let Some(url) = str_of(e.get("url")) else { return false };
     let Some((scheme, host)) = origin_only(url) else { return false };
     if scheme == "http" && !LOOPBACK_HOSTS.contains(&host) {
@@ -1134,7 +1147,39 @@ fn relay_entry_ok(v: &Value) -> bool {
             return false;
         }
     }
-    true
+    if e.get("api").is_some_and(|a| a != &Value::Bool(true)) {
+        return false;
+    }
+    match e.get("relay") {
+        None => e.get("api").is_none(),
+        Some(r) => r.as_str().is_some_and(is_directory_relay_id),
+    }
+}
+
+/// API-1d 5.8 as amended (identity.ts `RELAY_ID_RE`): a directory entry's `relay`, `r_` and 1 to 62 of A-Z, a-z,
+/// 0-9, `.`, `_` and `-`.
+fn is_directory_relay_id(s: &str) -> bool {
+    s.strip_prefix("r_").is_some_and(|t| (1..=62).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')))
+}
+
+/// API-1d 5.8 (identity.ts `orgDomainsProblem`): a directory's `org_domains` is 1 to MAX_ORG_DOMAINS distinct
+/// lower-case DNS names (DOMAIN_RE); None when it is not.
+fn org_domains_of(v: &Value) -> Option<Vec<String>> {
+    strings(Some(v)).filter(|d| (1..=MAX_ORG_DOMAINS).contains(&d.len()) && distinct(d) && d.iter().all(|x| is_domain(x)))
+}
+
+/// API-1d 5.2 (identity.ts `isServiceHubEmail`): an email is a service hub's (an app principal's) when its domain
+/// (after the last `@`, lower case) is `apps.<d>` for a `d` in `org_domains`, the held directory's `org_domains`.
+/// Without them (None: no held directory carries the field) every domain starting with `apps.` counts (fail closed).
+pub fn is_service_hub_email(email: &str, org_domains: Option<&[String]>) -> bool {
+    let domain = email[email.rfind('@').map_or(0, |i| i + 1)..].to_lowercase();
+    let Some(d) = domain.strip_prefix("apps.") else { return false };
+    org_domains.is_none_or(|list| list.iter().any(|x| x == d))
+}
+
+/// API-1d 5.2 (identity.ts `isServiceHub`): a hub certificate naming a user whose email is a service hub email.
+pub fn is_service_hub(cert: &NodeCert, org_domains: Option<&[String]>) -> bool {
+    cert.role == "hub" && cert.user.as_ref().is_some_and(|u| is_service_hub_email(&u.email, org_domains))
 }
 
 /// The newest relay directory seen.
@@ -1144,10 +1189,16 @@ pub struct DirectoryHolder {
     token: Option<String>,
     urls: Vec<String>,
     cert_grace_hours: i64,
+    /// API-1d 5.8: the held directory's `org_domains`; None when it carries none (the fail-closed rule of 5.2).
+    org_domains: Option<Vec<String>>,
+    /// API-1d 5.8: the urls of the held directory's entries marked `api: true`, in directory order.
+    api_relays: Vec<String>,
 }
 
 /// API-1 3.5 (D15): the most a relay directory's `cert_grace_hours` may give.
 pub const CERT_GRACE_MAX_HOURS: i64 = 168;
+/// API-1d 5.8 (identity.ts MAX_ORG_DOMAINS): the most domains a relay directory's `org_domains` lists.
+pub const MAX_ORG_DOMAINS: usize = 16;
 
 impl DirectoryHolder {
     /// API-1 3.5: the held directory's `cert_grace_hours` (0 when it carries none).
@@ -1168,6 +1219,18 @@ impl DirectoryHolder {
         &self.urls
     }
 
+    /// API-1d 5.2: the held directory's `org_domains`; None with none held or none set (the fail-closed rule).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn org_domains(&self) -> Option<Vec<String>> {
+        self.org_domains.clone()
+    }
+
+    /// API-1d 5.8: the urls of the held directory's relays marked `api: true`, in directory order.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn api_relays(&self) -> Vec<String> {
+        self.api_relays.clone()
+    }
+
     /// Take a directory only if this root signed it, it is in date, and it is not older than the one held.
     pub fn accept(&mut self, trust: &TrustStore, token: &str, now: i64) -> Result<bool, String> {
         let tv = Value::String(token.to_owned());
@@ -1175,12 +1238,20 @@ impl DirectoryHolder {
         let malformed = || Err("malformed relay directory".to_string());
         let keys = ["v", "typ", "root", "version", "relays", "iat", "exp"];
         // API-1 3.5: optional `cert_grace_hours`, an integer 1 to 168 (absent: 0)
-        let allowed = ["v", "typ", "root", "version", "relays", "iat", "exp", "cert_grace_hours"];
+        // API-1d 5.8: optional `org_domains`, 1 to 16 distinct lower-case DNS names (absent: the fail-closed rule)
+        let allowed = ["v", "typ", "root", "version", "relays", "iat", "exp", "cert_grace_hours", "org_domains"];
         let grace = match p.get("cert_grace_hours") {
             None => Some(0),
             Some(h) => is_int(Some(h)).filter(|h| (1..=CERT_GRACE_MAX_HOURS).contains(h)),
         };
         let Some(grace) = grace else { return malformed() };
+        let org_domains = match p.get("org_domains") {
+            None => None,
+            Some(d) => match org_domains_of(d) {
+                Some(list) => Some(list),
+                None => return malformed(),
+            },
+        };
         if !exact_keys(&p, &allowed, &keys) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-relay-directory") || str_of(p.get("root")) != Some(trust.root_id.as_str()) {
             return malformed();
         }
@@ -1191,6 +1262,11 @@ impl DirectoryHolder {
         let Some(relays) = p.get("relays").and_then(Value::as_array).filter(|r| (1..=MAX_DIRECTORY_RELAYS).contains(&r.len()) && r.iter().all(relay_entry_ok)) else {
             return malformed();
         };
+        // 5.8 as amended: two entries never name one relay id
+        let ids: Vec<&str> = relays.iter().filter_map(|r| str_of(r.get("relay"))).collect();
+        if ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id)) {
+            return malformed();
+        }
         if iat > now + CLOCK_SKEW_SEC {
             return Err("relay directory is not valid yet".into());
         }
@@ -1207,6 +1283,8 @@ impl DirectoryHolder {
         self.token = Some(token.to_owned());
         self.urls = relays.iter().filter_map(|r| str_of(r.get("url")).map(str::to_owned)).collect();
         self.cert_grace_hours = grace;
+        self.api_relays = relays.iter().filter(|r| r.get("api").is_some()).filter_map(|r| str_of(r.get("url")).map(str::to_owned)).collect();
+        self.org_domains = org_domains;
         Ok(true)
     }
 }
@@ -1320,6 +1398,147 @@ mod tests {
         }
         for bad in ["https://relay.example/", "https://Relay.example", "https://relay.example:443", "https://relay.example:08443", "https://010.0.0.5", "ftp://relay.example", "https://"] {
             assert!(origin_only(bad).is_none(), "{bad}");
+        }
+    }
+
+    mod spokes {
+        use super::super::*;
+        use serde_json::json;
+
+        /// API-1d 5.2 and 5.8: the add-on's shared vectors (test/vectors/spokes_directory_v1.json): each directory
+        /// accepted at `now` by a fresh holder trusting `root`, and the service hub rule for each email.
+        #[test]
+        fn api1d_directory_readers_match_the_addon_vectors() {
+            let file: Value = serde_json::from_str(include_str!("../tests/spokes_directory_v1.json")).unwrap();
+            let now = file["now"].as_i64().unwrap();
+            let root = import_public_spki(file["root"]["spki"].as_str().unwrap()).unwrap();
+            let trust = TrustStore::new(root);
+            assert_eq!(trust.root_id, file["root"]["id"].as_str().unwrap());
+            let dirs = file["directories"].as_array().unwrap();
+            assert!(!dirs.is_empty());
+            for d in dirs {
+                let (name, expect) = (d["name"].as_str().unwrap(), &d["expect"]);
+                let mut held = DirectoryHolder::default();
+                let got = held.accept(&trust, d["token"].as_str().unwrap(), now);
+                if expect["ok"] == json!(true) {
+                    assert_eq!(got, Ok(true), "{name}");
+                    let domains = serde_json::from_value::<Option<Vec<String>>>(expect["org_domains"].clone()).unwrap();
+                    assert_eq!(held.org_domains(), domains, "{name}");
+                    let api = serde_json::from_value::<Vec<String>>(expect["api_relays"].clone()).unwrap();
+                    assert_eq!(held.api_relays(), api, "{name}");
+                } else {
+                    assert_eq!(got, Err(expect["reason"].as_str().unwrap().to_owned()), "{name}");
+                    assert_eq!(held.version(), 0, "{name}");
+                    assert_eq!(held.org_domains(), None, "{name}");
+                    assert!(held.api_relays().is_empty(), "{name}");
+                }
+            }
+            let emails = file["emails"].as_array().unwrap();
+            assert!(!emails.is_empty());
+            for e in emails {
+                let email = e["email"].as_str().unwrap();
+                let domains = serde_json::from_value::<Option<Vec<String>>>(e["org_domains"].clone()).unwrap();
+                assert_eq!(is_service_hub_email(email, domains.as_deref()), e["service"].as_bool().unwrap(), "{email} under {}", e["org_domains"]);
+            }
+        }
+
+        /// API-1d 5.8: `relays[].api` is only ever `true`, and (as amended, review W5b finding 7) an api entry names
+        /// its relay id.
+        #[test]
+        fn api1d_a_relay_entry_marks_api_only_with_true() {
+            let entry = |api: Option<Value>, relay: Option<Value>| {
+                let mut e = json!({ "url": "https://relay.example", "region": "eu", "priority": 0 });
+                if let Some(a) = api {
+                    e["api"] = a;
+                }
+                if let Some(r) = relay {
+                    e["relay"] = r;
+                }
+                relay_entry_ok(&e)
+            };
+            assert!(entry(None, None));
+            assert!(entry(Some(json!(true)), Some(json!("r_21"))));
+            assert!(entry(None, Some(json!("r_spokes-us.1"))));
+            assert!(!entry(Some(json!(true)), None), "an api entry without its relay id");
+            for bad in [json!(false), json!(1), json!("true"), Value::Null, json!([true])] {
+                assert!(!entry(Some(bad.clone()), Some(json!("r_21"))), "{bad}");
+            }
+            let long = format!("r_{}", "a".repeat(63));
+            for bad in [json!("21"), json!("r_"), json!("r_a b"), json!("R_21"), json!(21), Value::Null, json!(long)] {
+                assert!(!entry(Some(json!(true)), Some(bad.clone())), "{bad}");
+            }
+            assert!(entry(Some(json!(true)), Some(json!(format!("r_{}", "a".repeat(62))))));
+        }
+
+        fn cert(role: &str, email: Option<&str>, scopes: &[&str]) -> NodeCert {
+            NodeCert {
+                serial: format!("{:032x}", 0x21),
+                node: format!("n_{:032x}", 0x22),
+                role: role.into(),
+                label: "Build hub".into(),
+                scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+                iat: 1_000,
+                exp: 1_000 + 86_400,
+                user: email.map(|e| UserClaim { id: user_id_of(e), email: e.into(), clearances: None }),
+                classification: None,
+                region: None,
+            }
+        }
+
+        fn delegation(may: &[&str], roles: Option<&[&str]>) -> Delegation {
+            Delegation {
+                serial: format!("{:032x}", 0x31),
+                id: format!("n_{:032x}", 0x32),
+                may: may.iter().map(|s| (*s).to_owned()).collect(),
+                limits: Limits {
+                    max_days: 30,
+                    roles: roles.map(|r| r.iter().map(|s| (*s).to_owned()).collect()),
+                    scopes: None,
+                    label_prefix: None,
+                    email_domains: None,
+                    users: None,
+                    classifications: None,
+                    regions: None,
+                },
+                iat: 0,
+                exp: 10 * 86_400,
+            }
+        }
+
+        /// API-1d 5.2: a service hub is a hub whose user email is at an `apps.` domain (fail closed without
+        /// `org_domains`, else `apps.<d>` for a listed `d`).
+        #[test]
+        fn api1d_a_service_hub_is_a_hub_with_an_app_principal() {
+            let domains = ["acme.example".to_owned()];
+            let domains = Some(&domains[..]);
+            assert!(is_service_hub(&cert("hub", Some("build@apps.acme.example"), &[]), None));
+            assert!(is_service_hub(&cert("hub", Some("build@apps.acme.example"), &[]), domains));
+            assert!(is_service_hub(&cert("hub", Some("build@apps.other.example"), &[]), None));
+            assert!(!is_service_hub(&cert("hub", Some("build@apps.other.example"), &[]), domains));
+            assert!(!is_service_hub(&cert("hub", Some("ann@acme.example"), &[]), None));
+            assert!(!is_service_hub(&cert("hub", None, &[]), None));
+            assert!(!is_service_hub(&cert("spoke", None, &[]), None));
+            assert!(is_service_hub_email("apps.acme.example", None), "no @: the whole value is the domain, as identity.ts reads it (fail closed)");
+            assert!(is_service_hub_email("x@y@APPS.acme.example", None));
+        }
+
+        /// API-1d 4.2: a delegate signs a service hub only with the users power and limits allowing role hub, never
+        /// with approve; a human hub is judged as before.
+        #[test]
+        fn api1d_a_delegate_signs_a_service_hub_only_with_users_and_role_hub() {
+            let service = cert("hub", Some("build@apps.acme.example"), &["recall", "drive"]);
+            let human = cert("hub", Some("ann@acme.example"), &["recall", "drive", "approve"]);
+            let need_users = Some("only a delegation with the users power and role hub may certify a service hub".to_owned());
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["hub"])), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users", "spokes"], Some(&["spoke", "hub"])), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["spoke"])), &service, false), need_users);
+            assert_eq!(leaf_problem(&delegation(&["idp-renew"], Some(&["hub"])), &service, false), need_users);
+            assert_eq!(leaf_problem(&delegation(&["spokes"], None), &service, false), Some("this delegation may not certify hubs (no users power)".to_owned()));
+            let approving = cert("hub", Some("build@apps.acme.example"), &["recall", "drive", "approve"]);
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &approving, false), Some("a delegate never certifies a service hub with the approve scope".to_owned()));
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &human, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["spoke"])), &human, false), Some("this delegation certifies only spoke".to_owned()));
         }
     }
 }

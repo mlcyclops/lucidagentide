@@ -56,6 +56,8 @@ pub enum Pipeline {
     Public,
     Token,
     Resource,
+    /// Revision 5 4.6: the browser routes of the authorization code path.
+    Authorize,
 }
 
 impl Pipeline {
@@ -64,6 +66,7 @@ impl Pipeline {
             Pipeline::Public => "public",
             Pipeline::Token => "token",
             Pipeline::Resource => "resource",
+            Pipeline::Authorize => "authorize",
         }
     }
 }
@@ -88,11 +91,51 @@ pub enum RouteId {
     AuditKeys,
     Metrics,
     TelemetryCatalog,
+    /// Revision 4 8.1: `I/federation` documents.
+    FederationDiscovery,
+    FederationJwks,
+    /// Revision 4 7.3: the event feed, its types and its checkpoint certificates.
+    Events,
+    EventTypes,
+    EventKeys,
+    /// Revision 4 7.3: the org's webhook public keys (public, front door only).
+    WebhookKeys,
+    /// Revision 4 5.1 and 5.2: the compliance routes (front door only).
+    ComplianceAttendance,
+    ComplianceMeetings,
+    ComplianceConversations,
+    ComplianceFiles,
+    ComplianceRetention,
+    ComplianceHolds,
+    ComplianceHold,
+    ComplianceHoldPlace,
+    /// Revision 4 5.3.7: compliance exports (reach R1, front door only).
+    ComplianceExportRequest,
+    ComplianceExports,
+    ComplianceExport,
+    ComplianceExportSeal,
+    ComplianceExportPart,
+    ComplianceExportCancel,
+    /// Revision 5 4.4, 4.6, 6.5: the Authorize pipeline (front door only) and the metadata of M.
+    Authorize,
+    SsoReturn,
+    Consent,
+    ConsentPost,
+    McpMetadata,
+    /// API-1d 6.1: the `spokes.read` inventory of spokes relays (front door, and a spokes relay's own listener).
+    SpokesNodes,
+    SpokesCounts,
+    SpokesSeats,
+    SpokesRelays,
+    /// API-1d 7.1.5: the org's Agent Cards and their key set (public, front door only).
+    A2aAgents,
+    A2aCard,
+    A2aJwks,
 }
 
 impl RouteId {
     #[cfg(test)]
-    pub const ALL: [RouteId; 17] = [
+    pub const ALL: [RouteId; 49] = [
         RouteId::AsMetadata,
         RouteId::LocalAsMetadata,
         RouteId::ResourceMetadata,
@@ -110,6 +153,38 @@ impl RouteId {
         RouteId::AuditKeys,
         RouteId::Metrics,
         RouteId::TelemetryCatalog,
+        RouteId::FederationDiscovery,
+        RouteId::FederationJwks,
+        RouteId::Events,
+        RouteId::EventTypes,
+        RouteId::EventKeys,
+        RouteId::WebhookKeys,
+        RouteId::ComplianceAttendance,
+        RouteId::ComplianceMeetings,
+        RouteId::ComplianceConversations,
+        RouteId::ComplianceFiles,
+        RouteId::ComplianceRetention,
+        RouteId::ComplianceHolds,
+        RouteId::ComplianceHold,
+        RouteId::ComplianceHoldPlace,
+        RouteId::ComplianceExportRequest,
+        RouteId::ComplianceExports,
+        RouteId::ComplianceExport,
+        RouteId::ComplianceExportSeal,
+        RouteId::ComplianceExportPart,
+        RouteId::ComplianceExportCancel,
+        RouteId::Authorize,
+        RouteId::SsoReturn,
+        RouteId::Consent,
+        RouteId::ConsentPost,
+        RouteId::McpMetadata,
+        RouteId::SpokesNodes,
+        RouteId::SpokesCounts,
+        RouteId::SpokesSeats,
+        RouteId::SpokesRelays,
+        RouteId::A2aAgents,
+        RouteId::A2aCard,
+        RouteId::A2aJwks,
     ];
 }
 
@@ -139,11 +214,17 @@ const fn r(id: RouteId, side: Side, method: &'static str, path: &'static str, pi
     ApiRoute { id, side, method, path, pipeline, scrape: false, scope, reach, class, request, response, summary }
 }
 
+/// Revision 4 9.1: a resource route of reach R1 (the compliance export routes).
+#[allow(clippy::too_many_arguments)]
+const fn r1(id: RouteId, method: &'static str, path: &'static str, scope: &'static str, class: &'static str, request: &'static str, response: &'static str, summary: &'static str) -> ApiRoute {
+    ApiRoute { reach: "R1", ..r(id, Side::FrontDoor, method, path, Pipeline::Resource, scope, class, request, response, summary) }
+}
+
 use Pipeline::{Public as PUB, Resource as RES, Token as TOK};
 use Side::{FrontDoor as F, Relay as R};
 
 /// Every org route of both listeners (7.1, 7.2).
-pub static ROUTES: [ApiRoute; 22] = [
+pub static ROUTES: [ApiRoute; 60] = [
     r(RouteId::AsMetadata, F, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the issuer I"),
     r(RouteId::ResourceMetadata, F, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource I"),
     r(RouteId::Jwks, F, "GET", "/api/orgs/{org}/jwks.json", PUB, "", "public", "", "Jwks", "The issuer keys of the org's api map"),
@@ -158,6 +239,41 @@ pub static ROUTES: [ApiRoute; 22] = [
     r(RouteId::AuditKeys, F, "GET", "/api/orgs/{org}/v1/audit/keys", RES, "audit.read", "internal", "", "AuditKeys", "Checkpoint certificates, current and retired"),
     r(RouteId::Metrics, F, "GET", "/api/orgs/{org}/v1/metrics", RES, "monitor.read", "internal", "", "Metrics", "The client's relays' exposition"),
     r(RouteId::TelemetryCatalog, F, "GET", "/api/orgs/{org}/v1/telemetry/catalog", RES, "monitor.read", "internal", "", "TelemetryCatalog", "The telemetry catalog and field registry (section 10)"),
+    r(RouteId::Events, F, "GET", "/api/orgs/{org}/v1/events", RES, "events.subscribe", "internal", "", "EventPage", "The org's event feed (revision 4 7.3), long poll with wait"),
+    r(RouteId::EventTypes, F, "GET", "/api/orgs/{org}/v1/events/types", RES, "events.subscribe", "internal", "", "EventTypes", "The event types of the registry the client may see"),
+    r(RouteId::EventKeys, F, "GET", "/api/orgs/{org}/v1/events/keys", RES, "events.subscribe", "internal", "", "AuditKeys", "Checkpoint certificates of the org's event chains, current and retired"),
+    r(RouteId::FederationDiscovery, F, "GET", "/api/orgs/{org}/federation/.well-known/openid-configuration", PUB, "", "public", "", "OpenIdConfiguration", "The outbound federation issuer's discovery document, when the issuer is I/federation (revision 4 8.1)"),
+    r(RouteId::FederationJwks, F, "GET", "/api/orgs/{org}/federation/jwks.json", PUB, "", "public", "", "Jwks", "The outbound federation keys, when the issuer is I/federation (revision 4 8.1)"),
+    r(RouteId::WebhookKeys, F, "GET", "/api/orgs/{org}/v1/webhooks/keys", PUB, "", "public", "", "WebhookKeys", "The org's webhook public keys that verify v2a signatures, dropped keys left out (revision 4 7.3, 7.4)"),
+    r(RouteId::ComplianceAttendance, F, "GET", "/api/orgs/{org}/v1/compliance/attendance", RES, "compliance.metadata.read", "confidential", "", "CompliancePage", "Call attendance sessions (revision 4 5.1)"),
+    r(RouteId::ComplianceMeetings, F, "GET", "/api/orgs/{org}/v1/compliance/meetings", RES, "compliance.metadata.read", "confidential", "", "CompliancePage", "Scheduled meetings, never their descriptions (revision 4 5.1)"),
+    r(RouteId::ComplianceConversations, F, "GET", "/api/orgs/{org}/v1/compliance/conversations", RES, "compliance.metadata.read", "confidential", "", "CompliancePage", "A person's conversations and member intervals (revision 4 5.1)"),
+    r(RouteId::ComplianceFiles, F, "GET", "/api/orgs/{org}/v1/compliance/files", RES, "compliance.metadata.read", "confidential", "", "CompliancePage", "File records of a conversation or room, never names or hashes (revision 4 5.1)"),
+    r(RouteId::ComplianceRetention, F, "GET", "/api/orgs/{org}/v1/compliance/retention", RES, "compliance.metadata.read", "confidential", "", "ComplianceRetention", "Retention, archive and legal hold settings (revision 4 5.1)"),
+    r(RouteId::ComplianceHolds, F, "GET", "/api/orgs/{org}/v1/compliance/holds", RES, "compliance.metadata.read", "confidential", "", "HoldList", "Holds placed through the API and the console (revision 4 5.2.4)"),
+    r(RouteId::ComplianceHold, F, "GET", "/api/orgs/{org}/v1/compliance/holds/{hold}", RES, "compliance.metadata.read", "confidential", "", "Hold", "One hold (revision 4 5.2.4)"),
+    r(RouteId::ComplianceHoldPlace, F, "POST", "/api/orgs/{org}/v1/compliance/holds", RES, "compliance.holds.write", "confidential", "HoldRequest", "HoldPlaced", "Place a legal hold on people (revision 4 5.2.2), with Idempotency-Key"),
+    r1(RouteId::ComplianceExportRequest, "POST", "/api/orgs/{org}/v1/compliance/exports", "compliance.export.request", "confidential", "ExportRequest", "ExportAccepted", "Request a compliance export, released by two archive reviewers (revision 4 5.3.2), with Idempotency-Key"),
+    r1(RouteId::ComplianceExports, "GET", "/api/orgs/{org}/v1/compliance/exports", "compliance.export.request", "confidential", "", "ExportList", "This client's export jobs, newest first (revision 4 5.3.7)"),
+    r1(RouteId::ComplianceExport, "GET", "/api/orgs/{org}/v1/compliance/exports/{job}", "compliance.export.request", "confidential", "", "Export", "One export job (revision 4 5.3.7)"),
+    r1(RouteId::ComplianceExportSeal, "GET", "/api/orgs/{org}/v1/compliance/exports/{job}/seal", "compliance.export.request", "confidential", "", "ExportSeal", "The seal header of a ready job (revision 4 5.3.6)"),
+    r1(RouteId::ComplianceExportPart, "GET", "/api/orgs/{org}/v1/compliance/exports/{job}/parts/{n}", "compliance.export.request", "confidential", "", "ExportPart", "One ciphertext part of a ready job (revision 4 5.3.6)"),
+    r1(RouteId::ComplianceExportCancel, "POST", "/api/orgs/{org}/v1/compliance/exports/{job}/cancel", "compliance.export.request", "confidential", "", "Export", "End a job that is not ready (revision 4 5.3.7)"),
+    // revision 5 4.4, 4.6, 6.5
+    r(RouteId::McpMetadata, F, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}/mcp", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the console MCP endpoint M"),
+    r(RouteId::Authorize, F, "GET", "/api/orgs/{org}/oauth/authorize", Pipeline::Authorize, "", "internal", "", "Html", "Authorization code with PKCE through the org's single sign-on (revision 5 6.5)"),
+    r(RouteId::SsoReturn, F, "POST", "/api/orgs/{org}/oauth/sso-return", Pipeline::Authorize, "", "internal", "SsoAttestation", "Html", "The single sign-on service's signed attestation (revision 5 6.5 step 3)"),
+    r(RouteId::Consent, F, "GET", "/api/orgs/{org}/oauth/consent", Pipeline::Authorize, "", "internal", "", "Html", "The consent page (revision 5 6.5 step 4)"),
+    r(RouteId::ConsentPost, F, "POST", "/api/orgs/{org}/oauth/consent", Pipeline::Authorize, "", "internal", "ConsentDecision", "Html", "Allow or deny (revision 5 6.5 steps 4 and 5)"),
+    // API-1d 6.1 and 6.2: `internal` rows (emails only for a client whose ceiling allows people)
+    r(RouteId::SpokesNodes, F, "GET", "/api/orgs/{org}/v1/spokes/nodes", RES, "spokes.read", "internal", "", "SpokesNodes", "The nodes of one spokes relay of the client (API-1d 6.1)"),
+    r(RouteId::SpokesCounts, F, "GET", "/api/orgs/{org}/v1/spokes/counts", RES, "spokes.read", "internal", "", "SpokesCounts", "Node counts of every spokes relay of the client (API-1d 6.1)"),
+    r(RouteId::SpokesSeats, F, "GET", "/api/orgs/{org}/v1/spokes/seats", RES, "spokes.read", "internal", "", "SpokesSeats", "License seats of one spokes relay of the client (API-1d 6.1)"),
+    r(RouteId::SpokesRelays, F, "GET", "/api/orgs/{org}/v1/spokes/relays", RES, "spokes.read", "internal", "", "SpokesRelays", "Directory, CRL and license of one spokes relay of the client (API-1d 6.1)"),
+    // API-1d 7.1.5: the org's signed Agent Cards (A2A 8.2 direct configuration) and the key set that verifies them
+    r(RouteId::A2aAgents, F, "GET", "/api/orgs/{org}/a2a/agents", PUB, "", "public", "", "AgentList", "The org's served agents and their card URLs (API-1d 7.1.5)"),
+    r(RouteId::A2aCard, F, "GET", "/api/orgs/{org}/a2a/agents/{agent}/agent-card.json", PUB, "", "public", "", "AgentCard", "One agent's signed A2A Agent Card, with ETag (API-1d 7.1)"),
+    r(RouteId::A2aJwks, F, "GET", "/api/orgs/{org}/a2a/jwks.json", PUB, "", "public", "", "Jwks", "The card keys inside their window and not dropped (API-1d 7.1.4)"),
     r(RouteId::LocalAsMetadata, R, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}/local", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the local issuer L"),
     r(RouteId::ResourceMetadata, R, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource RR"),
     r(RouteId::LocalJwks, R, "GET", "/api/orgs/{org}/local/jwks.json", PUB, "", "public", "", "Jwks", "The relay's local token keys for the org"),
@@ -165,7 +281,14 @@ pub static ROUTES: [ApiRoute; 22] = [
     r(RouteId::Health, R, "GET", "/api/orgs/{org}/v1/health", RES, "monitor.read", "internal", "", "Health", "This relay and its console link"),
     r(RouteId::Audit, R, "GET", "/api/orgs/{org}/v1/audit", RES, "audit.read", "internal", "", "AuditPage", "This relay's audit chain for the org"),
     r(RouteId::AuditKeys, R, "GET", "/api/orgs/{org}/v1/audit/keys", RES, "audit.read", "internal", "", "AuditKeys", "This relay's checkpoint certificates"),
+    r(RouteId::Events, R, "GET", "/api/orgs/{org}/v1/events", RES, "events.subscribe", "internal", "", "EventPage", "This relay's event chain for the org (revision 4 7.3), long poll with wait"),
+    r(RouteId::EventKeys, R, "GET", "/api/orgs/{org}/v1/events/keys", RES, "events.subscribe", "internal", "", "AuditKeys", "This relay's checkpoint certificates"),
     ApiRoute { scrape: true, ..r(RouteId::Metrics, R, "GET", "/api/orgs/{org}/v1/metrics", RES, "monitor.read", "internal", "", "Metrics", "This relay's exposition") },
+    // API-1d 6.3: a spokes relay's own inventory (404 on a Meet relay)
+    r(RouteId::SpokesNodes, R, "GET", "/api/orgs/{org}/v1/spokes/nodes", RES, "spokes.read", "internal", "", "SpokesNodes", "This spokes relay's nodes (API-1d 6.1)"),
+    r(RouteId::SpokesCounts, R, "GET", "/api/orgs/{org}/v1/spokes/counts", RES, "spokes.read", "internal", "", "SpokesCounts", "This spokes relay's node counts (API-1d 6.1)"),
+    r(RouteId::SpokesSeats, R, "GET", "/api/orgs/{org}/v1/spokes/seats", RES, "spokes.read", "internal", "", "SpokesSeats", "This spokes relay's license seats (API-1d 6.1)"),
+    r(RouteId::SpokesRelays, R, "GET", "/api/orgs/{org}/v1/spokes/relays", RES, "spokes.read", "internal", "", "SpokesRelays", "This spokes relay's directory, CRL and license (API-1d 6.1)"),
 ];
 
 /// The org namespace of a request path (`/api/orgs/<org>/...`, or a `.well-known` document of one), whether or not a
@@ -218,7 +341,11 @@ fn fit<'a>(pattern: &str, path: &'a str) -> Option<(&'a str, Option<&'a str>)> {
         match (p.next(), s.next()) {
             (None, None) => break,
             (Some("{org}"), Some(x)) if !x.is_empty() => org = Some(x),
-            (Some("{id}"), Some(x)) if !x.is_empty() => id = Some(x),
+            // `{id}` a relay id, `{hold}` a hold (revision 4 5.2.4), `{job}` an export job (5.3.7), `{agent}` an agent
+            // (API-1d 7.1.5): the path's one id
+            (Some("{id}" | "{hold}" | "{job}" | "{agent}"), Some(x)) if !x.is_empty() => id = Some(x),
+            // a part's `{n}`, read by its route from the path (`api_exports::part_of`)
+            (Some("{n}"), Some(x)) if !x.is_empty() => {}
             (Some(a), Some(b)) if a == b => {}
             _ => return None,
         }
@@ -243,19 +370,22 @@ pub struct Reply {
     pub body: Value,
     /// The bytes sent instead of `body`: an exposition, or `body` already serialized for its `api.call` entry.
     pub text: Option<String>,
+    /// Revision 4 5.3.7: binary bytes sent instead of `text` and `body` (an export part).
+    pub raw: Option<Vec<u8>>,
 }
 
 impl Reply {
     /// A JSON answer, never cached.
     pub fn json(status: u16, body: Value) -> Reply {
-        Reply { status, ctype: "application/json", headers: vec![("Cache-Control", "no-store".into())], body, text: None }
+        Reply { status, ctype: "application/json", headers: vec![("Cache-Control", "no-store".into())], body, text: None, raw: None }
     }
 
     /// The body as sent.
     pub fn bytes(&self) -> Vec<u8> {
-        match &self.text {
-            Some(t) => t.as_bytes().to_vec(),
-            None => serde_json::to_vec(&self.body).unwrap_or_default(),
+        match (&self.raw, &self.text) {
+            (Some(b), _) => b.clone(),
+            (None, Some(t)) => t.as_bytes().to_vec(),
+            (None, None) => serde_json::to_vec(&self.body).unwrap_or_default(),
         }
     }
 
@@ -263,7 +393,7 @@ impl Reply {
     pub fn of_answer(a: Answer) -> Reply {
         let problem = a.headers.iter().any(|(k, v)| k.eq_ignore_ascii_case("content-type") && v == "application/problem+json");
         let headers = a.headers.into_iter().filter(|(k, _)| !k.eq_ignore_ascii_case("content-type")).collect();
-        Reply { status: a.status, ctype: if problem { "application/problem+json" } else { "application/json" }, headers, body: a.body, text: None }
+        Reply { status: a.status, ctype: if problem { "application/problem+json" } else { "application/json" }, headers, body: a.body, text: None, raw: None }
     }
 }
 
@@ -273,7 +403,7 @@ pub fn problem(status: u16, code: &str, detail: &str) -> Reply {
         "ok": false, "code": code, "error": detail,
         "type": format!("https://lucid.emertins.com/problems/{code}"), "title": crate::meet::reason_phrase(status), "status": status, "detail": detail,
     });
-    Reply { status, ctype: "application/problem+json", headers: vec![("Cache-Control", "no-store".into())], body, text: None }
+    Reply { status, ctype: "application/problem+json", headers: vec![("Cache-Control", "no-store".into())], body, text: None, raw: None }
 }
 
 /// 9.4: the append failed; nothing else happens.
@@ -370,6 +500,22 @@ pub trait Data {
     fn exposition(&self, org: &str, ids: &[String], now: i64) -> String;
     /// `v1/health`'s `console`: `{"version", "fips"}` on the front door; `"connected"` or `"unreachable"` on a relay.
     fn console(&self) -> Value;
+    /// Revision 4 7.3: the event chains the listener serves (the console's feed on the front door, the relay's own
+    /// chain on a relay); None while there are none (`v1/events` answers 503).
+    fn events(&self) -> Option<std::sync::Arc<crate::api_events::EventLog>> {
+        None
+    }
+    /// Revision 4 5.1 and 5.2: the console's compliance desk (front door only; None elsewhere, 404).
+    fn compliance(&self) -> Option<std::sync::Arc<dyn crate::api_compliance::Desk>> {
+        None
+    }
+    /// API-1d 6.1: one 6.2 view (`nodes`, `counts`, `seats`, `relays`) of the spokes relay `relay` for the org, `query`
+    /// the route's query without `relay` (at most 512 bytes), `people` whether emails may be answered. The front door
+    /// asks the relay with `api-spokes`; a spokes relay's listener answers its own (`api_listener::Source::spokes`).
+    /// None: no such spokes relay here (404); Err: its refusal (a silent relay: 503 `relay-unreachable`).
+    fn spokes(&self, _org: &str, _relay: &str, _view: &str, _query: &str, _people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        None
+    }
 }
 
 /// One listener's limiter state (6.5) for the resource and scrape pipelines and its DPoP `jti` cache.
@@ -383,6 +529,8 @@ pub struct ResourceState {
     scrapes: Mutex<HashMap<String, i64>>,
     /// Access tokens handed to signature validation (the source limiter keeps a flood from reaching it).
     validations: AtomicUsize,
+    /// Revision 4 7.3: the long polls held on this listener, one per org and client.
+    held: crate::api_events::Holds,
 }
 
 impl Default for ResourceState {
@@ -396,6 +544,7 @@ impl Default for ResourceState {
             dpop: Mutex::new(JtiCache::dpop()),
             scrapes: Mutex::default(),
             validations: AtomicUsize::new(0),
+            held: crate::api_events::Holds::default(),
         }
     }
 }
@@ -461,6 +610,18 @@ pub struct Call<'a> {
     /// The audit `rid`.
     pub rid: &'a str,
 }
+
+/// Revision 4 4.5 and 5.2.2: the body of a route that takes one (a JSON object, or why it was not read:
+/// `too-large`, `request`) and its `Idempotency-Key` header, as the front door read them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Body {
+    pub json: Result<Value, &'static str>,
+    pub key: Option<String>,
+}
+
+/// An internal header a route sets on an `Idempotency-Key` replay: `finish` audits it `result: "replayed"` and
+/// drops it.
+const REPLAYED: &str = "x-lucid-replayed";
 
 /// `RateLimit-*` of this listener's per-minute window.
 #[derive(Clone, Copy, Debug)]
@@ -549,8 +710,14 @@ fn rate_headers(r: &mut Reply, rate: Option<Rate>) {
 /// 9.4: the refusal into the org's refusal summaries (key: the client once identified, else the source address),
 /// then its answer; 503 `audit-unavailable` when it cannot be recorded.
 fn refuse(site: &Site, call: &Call, who: Option<(&str, Option<&str>)>, n: No) -> Reply {
+    refuse_with(site, call, who, n, &Map::new())
+}
+
+/// `refuse` with `extra` fields in the entry (revision 5 12.2 `tool` and `person` of an MCP call).
+fn refuse_with(site: &Site, call: &Call, who: Option<(&str, Option<&str>)>, n: No, extra: &Map<String, Value>) -> Reply {
     let route = route_name(call);
     let mut e = entry_of(call, "api.refusal");
+    e.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     e.insert("result".into(), json!("refused"));
     e.insert("check".into(), json!(n.code));
     e.insert("status".into(), json!(n.status));
@@ -600,6 +767,8 @@ fn token_refusal(code: &str) -> (u16, &'static str) {
         "map-behind" => (401, "map-behind"),
         "suspended" => (403, "suspended"),
         "owner" => (403, "owner"),
+        // revision 5 6.6: a delegated token's person under `delegation.denied` or `person_revoke`
+        "person" => (403, "person"),
         "abuse" => (429, "abuse"),
         _ => (401, "token"),
     }
@@ -618,16 +787,17 @@ fn limit_of(query: &str) -> Result<usize, No> {
     }
 }
 
-/// The audit source a `v1/audit` request names: a relay listener's own id; on the front door `console` (the default)
-/// or `source=relay&relay=<id>`.
+/// The audit source a `v1/audit` request names: a relay listener's own id; on the front door `console` (the default),
+/// `source=relay&relay=<id>`, or (revision 5 12.1) `source=connector&connector=<k_id>`.
 fn audit_source(site: &Site, call: &Call) -> Result<String, No> {
     if site.side == Side::Relay {
         return Ok(site.relay.to_string());
     }
-    match (param(call.query, "source").unwrap_or("console"), param(call.query, "relay")) {
-        ("console", None) => Ok("console".into()),
-        ("relay", Some(id)) if relay_id_ok(id) => Ok(id.to_string()),
-        _ => Err(no(400, "bad-request", "source must be console, or relay with relay=<id>.")),
+    match (param(call.query, "source").unwrap_or("console"), param(call.query, "relay"), param(call.query, "connector")) {
+        ("console", None, None) => Ok("console".into()),
+        ("relay", Some(id), None) if relay_id_ok(id) => Ok(id.to_string()),
+        ("connector", None, Some(id)) if crate::connector::connector_id_ok(id) => Ok(id.to_string()),
+        _ => Err(no(400, "bad-request", "source must be console, relay with relay=<id>, or connector with connector=<id>.")),
     }
 }
 
@@ -636,14 +806,17 @@ fn relay_id_ok(id: &str) -> bool {
     id.len() == 18 && id.starts_with("r_") && id[2..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// 6.2 check 8's resource: the relay (or `console`) a call is about; None for a list, filtered later.
+/// 6.2 check 8's resource: the relay (or `console`) a call is about; None for a list, filtered later. A connector's
+/// chain is held by the console, so reading it is about `console` (revision 5 12.1).
 fn target_of(site: &Site, call: &Call) -> Option<String> {
     if site.side == Side::Relay {
         return Some(site.relay.to_string());
     }
     match call.route.id {
         RouteId::FleetRelay => call.id.map(str::to_string),
-        RouteId::Audit => audit_source(site, call).ok(),
+        RouteId::Audit => audit_source(site, call).ok().map(|s| if crate::connector::connector_id_ok(&s) { "console".to_string() } else { s }),
+        // API-1d 6.1: the one spokes relay a view is about (`counts` lists every one the client reaches)
+        RouteId::SpokesNodes | RouteId::SpokesSeats | RouteId::SpokesRelays => param(call.query, "relay").filter(|r| relay_id_ok(r)).map(str::to_string),
         _ => None,
     }
 }
@@ -662,10 +835,15 @@ fn openapi_answer(site: &Site, call: &Call) -> Reply {
 /// `X-Lucid-Request-Id`. The issuer routes stay with the listeners (`token_audited`). Each call is one span for the
 /// org's `traces` destinations (API-1 11, `api_export::api_span`; nothing without a console engine).
 pub fn answer(site: &Site, call: &Call) -> Reply {
+    answer_with(site, call, None)
+}
+
+/// `answer` for a route that takes a body (revision 4 5.2.2 `POST v1/compliance/holds`).
+pub fn answer_with(site: &Site, call: &Call, body: Option<&Body>) -> Reply {
     let start_ms = crate::codec::now_ms();
     let mut r = match (call.route.pipeline, call.route.id) {
         (Pipeline::Public, RouteId::OpenApi) => openapi_answer(site, call),
-        (Pipeline::Resource, _) => resource_answer(site, call),
+        (Pipeline::Resource, _) => resource_answer(site, call, body),
         _ => problem(404, "not-found", NOT_FOUND),
     };
     r.headers.push(("X-Lucid-Request-Id", call.rid.to_string()));
@@ -682,39 +860,57 @@ pub fn answer(site: &Site, call: &Call) -> Reply {
     r
 }
 
-fn resource_answer(site: &Site, call: &Call) -> Reply {
+fn resource_answer(site: &Site, call: &Call, body: Option<&Body>) -> Reply {
     let target = target_of(site, call);
     let ok = match authorize(site, call, target.as_deref()) {
         Ok(a) => a,
         Err(r) => return r,
     };
-    match serve(site, call, &ok) {
+    match serve(site, call, &ok, body) {
         Ok(reply) => finish(site, call, &ok, target.as_deref(), reply),
         Err(n) => refuse(site, call, Some((ok.client.as_str(), ok.jti.as_deref())), No { rate: ok.rate, ..n }),
     }
 }
 
+/// Revision 4 6.3: the relay's `api-check` runs checks 0 to 11 for a SCIM request on a route row of its own
+/// (`api_scim`, never in `ROUTES`), about this relay (check 8); refusals are audited before they are answered.
+pub(crate) fn scim_authorize(site: &Site, call: &Call) -> Result<Allowed, Reply> {
+    authorize(site, call, Some(site.relay))
+}
+
 /// 6.2 checks 0 to 11 in order (or the 6.1 scrape pipeline for a map-listed `lme_` token where the route allows it);
 /// every refusal is audited before it is answered.
 fn authorize(site: &Site, call: &Call, target: Option<&str>) -> Result<Allowed, Reply> {
-    let (org, now) = (call.org, site.now);
+    let scrape = charge(site, call)?;
+    checks(site, call, target, scrape, None)
+}
+
+/// 6.2 check 0, before any JWT or DPoP work: the source limiter (the scrape pipeline's for a map-listed `lme_`
+/// token where the route allows it); Ok says whether the scrape pipeline applies.
+fn charge(site: &Site, call: &Call) -> Result<bool, Reply> {
     let scrape = call.route.scrape && crate::fleet_export::bearer(call.authorization).is_some();
-    // 0: before any JWT or DPoP work
     let charged = if scrape {
-        site.state.public_ok(call.source, now)
+        site.state.public_ok(call.source, site.now)
     } else {
-        api_issue::take(&site.state.sources, &crate::console_source::source_key(call.source), RESOURCE_PER_MINUTE, now).map(|_| ()).map_err(wait_of)
+        api_issue::take(&site.state.sources, &crate::console_source::source_key(call.source), RESOURCE_PER_MINUTE, site.now).map(|_| ()).map_err(wait_of)
     };
-    if let Err(s) = charged {
-        return Err(refuse(site, call, None, no(429, "abuse", "Too many requests from this address; try again later.").retry(s)));
+    match charged {
+        Ok(()) => Ok(scrape),
+        Err(s) => Err(refuse(site, call, None, no(429, "abuse", "Too many requests from this address; try again later.").retry(s))),
     }
+}
+
+/// 6.2 checks 1 to 11 after `charge`. `policy`: the org's current verified policy, given only for M (revision 5
+/// 4.4), the one front door resource a delegated token may name.
+fn checks(site: &Site, call: &Call, target: Option<&str>, scrape: bool, policy: Option<&crate::meet_org_policy::Obj>) -> Result<Allowed, Reply> {
+    let (org, now) = (call.org, site.now);
     // 1
     if !site.licensed {
         return Err(refuse(site, call, None, no(403, "license", "This server is not serving under a license right now.")));
     }
     // 2
     if let Some(code) = api_issue::closed(site.store, org, now) {
-        let status = if code == "map-expired" { 401 } else { 403 };
+        let status = if matches!(code, "map-expired" | "journal-unknown") { 401 } else { 403 };
         return Err(refuse(site, call, None, no(status, code, api_issue::closed_why(code))));
     }
     if scrape {
@@ -733,11 +929,16 @@ fn authorize(site: &Site, call: &Call, target: Option<&str>) -> Result<Allowed, 
     let Some(profile) = profile else {
         return Err(refuse(site, call, None, no(401, "token", "The organization's api map names no issuer.")));
     };
-    let origin = site.resource.strip_suffix(&format!("/api/orgs/{org}")).unwrap_or(site.resource);
+    // the origin of I, RR or M (revision 5: M = I/mcp)
+    let origin = site.resource.split_once(&format!("/api/orgs/{org}")).map_or(site.resource, |(o, _)| o);
     let htu = format!("{origin}{}", call.path);
     let dpop = call.dpop.map(|p| (p, call.route.method, htu.as_str()));
     site.state.validations.fetch_add(1, Ordering::Relaxed);
-    let verdict = tok::validate_access_token(token, &profile, site.resource, now, site.store, org, site.owner_active, call.cert.map(|c| c.sha256_b64u.as_str()), dpop, &mut site.state.dpop.lock());
+    // check 4's owner: an active person, and not in this relay's own owner-inactive record (revision 4 6.7)
+    let owner_ok = |p: &str| (site.owner_active)(p) && !crate::api_scim::owner_inactive(org, p);
+    // no org policy for I and RR: they are never a delegated token's resource (M, C or CM, revision 5 4.4), so one is
+    // refused; M passes the console's verified policy
+    let verdict = tok::validate_access_token(token, &profile, site.resource, now, site.store, org, policy, &owner_ok, call.cert.map(|c| c.sha256_b64u.as_str()), dpop, &mut site.state.dpop.lock());
     let grant = match verdict {
         Ok(g) => g,
         Err(e) => {
@@ -850,23 +1051,35 @@ fn scrape_pipeline(site: &Site, call: &Call) -> Result<Allowed, Reply> {
 }
 
 /// 9.4: the allowed call (with the bytes it releases) is appended before the answer leaves; 503 otherwise.
-fn finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, mut reply: Reply) -> Reply {
+fn finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, reply: Reply) -> Reply {
+    finish_with(site, call, ok, target, reply, &Map::new())
+}
+
+/// `finish` with `extra` fields in the entry (revision 5 12.2 `tool` and `person` of an MCP call).
+fn finish_with(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, mut reply: Reply, extra: &Map<String, Value>) -> Reply {
     if !site.audit.allowed_ok() {
         counted(call.org, &ok.client, Some("audit-unavailable"));
         return audit_unavailable();
     }
-    let text = match reply.text.take() {
-        Some(t) => t,
-        None => serde_json::to_string(&reply.body).unwrap_or_default(),
+    // an export part's bytes are counted as they are; anything else is its text
+    let text = match (&reply.raw, reply.text.take()) {
+        (Some(_), _) => String::new(),
+        (None, Some(t)) => t,
+        (None, None) => serde_json::to_string(&reply.body).unwrap_or_default(),
     };
+    let bytes_out = reply.raw.as_ref().map_or(text.len(), Vec::len);
+    // revision 4 4.5: an `Idempotency-Key` replay is audited as such
+    let replayed = reply.headers.iter().any(|(k, _)| *k == REPLAYED);
+    reply.headers.retain(|(k, _)| *k != REPLAYED);
     let mut e = entry_of(call, "api.call");
+    e.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
     e.insert("client".into(), json!(ok.client));
     e.insert("scope".into(), json!(call.route.scope));
     e.insert("resource".into(), json!(target.unwrap_or(site.relay)));
-    e.insert("result".into(), json!("ok"));
+    e.insert("result".into(), json!(if replayed { "replayed" } else { "ok" }));
     e.insert("check".into(), json!("none"));
     e.insert("status".into(), json!(reply.status));
-    e.insert("bytes_out".into(), json!(text.len()));
+    e.insert("bytes_out".into(), json!(bytes_out));
     e.insert("count".into(), json!(1));
     if let Some(j) = &ok.jti {
         e.insert("jti".into(), json!(j));
@@ -876,7 +1089,9 @@ fn finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, mut repl
         return audit_unavailable();
     }
     counted(call.org, &ok.client, None);
-    reply.text = Some(text);
+    if reply.raw.is_none() {
+        reply.text = Some(text);
+    }
     rate_headers(&mut reply, ok.rate);
     reply
 }
@@ -896,7 +1111,7 @@ fn summary(r: &RelayInfo) -> Value {
     json!({"id": r.id, "name": r.name, "region": r.region, "version": r.version, "fips": r.fips, "license_state": r.license_state, "up": r.up})
 }
 
-fn serve(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
+fn serve(site: &Site, call: &Call, ok: &Allowed, body: Option<&Body>) -> Result<Reply, No> {
     let (org, now) = (call.org, site.now);
     let mine = || {
         let mut v: Vec<RelayInfo> = site.data.relays(org, now).into_iter().filter(|r| ok.reaches(&r.id)).collect();
@@ -973,10 +1188,205 @@ fn serve(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
             let mut ids: Vec<String> = site.data.ids(org).into_iter().filter(|id| ok.reaches(id)).collect();
             ids.sort();
             let text = site.data.exposition(org, &ids, now);
-            Ok(Reply { status: 200, ctype: crate::fleet_export::CONTENT_TYPE, headers: vec![("Cache-Control", "no-store".into())], body: Value::Null, text: Some(text) })
+            Ok(Reply { status: 200, ctype: crate::fleet_export::CONTENT_TYPE, headers: vec![("Cache-Control", "no-store".into())], body: Value::Null, text: Some(text), raw: None })
         }
         RouteId::TelemetryCatalog => Ok(Reply::json(200, crate::api_catalog::catalog().json().clone())),
+        RouteId::Events | RouteId::EventTypes => events_answer(site, call, ok),
+        RouteId::EventKeys => {
+            let events = site.data.events().ok_or_else(|| no(503, "audit-unavailable", AUDIT_WHY))?;
+            Ok(Reply::json(200, json!({ "keys": events.keys(org) })))
+        }
+        RouteId::ComplianceAttendance
+        | RouteId::ComplianceMeetings
+        | RouteId::ComplianceConversations
+        | RouteId::ComplianceFiles
+        | RouteId::ComplianceRetention
+        | RouteId::ComplianceHolds
+        | RouteId::ComplianceHold
+        | RouteId::ComplianceHoldPlace
+        | RouteId::ComplianceExportRequest
+        | RouteId::ComplianceExports
+        | RouteId::ComplianceExport
+        | RouteId::ComplianceExportSeal
+        | RouteId::ComplianceExportPart
+        | RouteId::ComplianceExportCancel => compliance_answer(site, call, ok, body),
+        RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => spokes_answer(site, call, ok),
         _ => Err(no(404, "not-found", NOT_FOUND)),
+    }
+}
+
+/// API-1d 6.1: the most of a route's query string forwarded to a spokes relay (`api-spokes` `query`).
+pub const SPOKES_QUERY_MAX: usize = 512;
+/// API-1d 6.1: how long a client waits before asking a silent spokes relay again.
+const SPOKES_RETRY_S: i64 = 30;
+
+/// API-1d 6.2: a node row, seat or uncounted entry keeps no `email` for a client whose ceiling does not allow people
+/// (the relay already leaves them out; this holds the line at the listener too).
+fn without_emails(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            o.remove("email");
+            o.values_mut().for_each(without_emails);
+        }
+        Value::Array(a) => a.iter_mut().for_each(without_emails),
+        _ => {}
+    }
+}
+
+/// API-1d 6.1: a spokes relay's refusal as the route's (a relay that does not answer, or answers with anything but
+/// `not-found` or `bad-request`, is `relay-unreachable` with `Retry-After: 30`).
+fn spokes_refusal(r: crate::fleet_wire::Refusal) -> No {
+    match r.code.as_str() {
+        "not-found" => no(404, "not-found", NOT_FOUND),
+        "bad-request" => no(400, "bad-request", api_issue::sentence(&r.error)),
+        _ => no(503, "relay-unreachable", "That spokes relay is not answering now; try again later.").retry(SPOKES_RETRY_S),
+    }
+}
+
+/// API-1d 6.1 and 6.2: `v1/spokes/{nodes,counts,seats,relays}`. The relay (`relay=`, required on the front door for
+/// every view but `counts`) must be in the client's `relays` (check 8, already passed for the one named) and in the
+/// pinned map's `spokes.relays`, else 404. `people` is the effective ceiling at or above `confidential`; without it no
+/// `email` is answered and `q` never matches one. `counts` asks every spokes relay the client reaches and answers
+/// `{"relays": [{"relay", "counts"} or {"relay", "error": "relay-unreachable"}]}`, 503 when none answered.
+fn spokes_answer(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
+    let (org, id) = (call.org, call.route.id);
+    let grant = ok.grant.as_ref().ok_or_else(|| no(403, "scope", "This route needs an access token."))?;
+    let people = tok::rank(&grant.ceiling).unwrap_or(0) >= tok::rank("confidential").unwrap_or(usize::MAX);
+    let bound: Vec<String> = site
+        .store
+        .get(org, "")
+        .and_then(|m| m.map().get("spokes").and_then(|s| s.get("relays")).and_then(Value::as_array).cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(str::to_string))
+        .collect();
+    let served = |r: &str| bound.iter().any(|b| b == r) && ok.reaches(r);
+    // the query the relay reads: everything but `relay`
+    let query: String = call.query.split('&').filter(|p| !p.is_empty() && p.split_once('=').map_or(*p, |(k, _)| k) != "relay").collect::<Vec<_>>().join("&");
+    if query.len() > SPOKES_QUERY_MAX {
+        return Err(no(400, "bad-request", "The query is longer than 512 bytes."));
+    }
+    let view = match id {
+        RouteId::SpokesNodes => "nodes",
+        RouteId::SpokesCounts => "counts",
+        RouteId::SpokesSeats => "seats",
+        _ => "relays",
+    };
+    let named = param(call.query, "relay");
+    let ask = |relay: &str| site.data.spokes(org, relay, view, &query, people);
+    if id == RouteId::SpokesCounts {
+        let relays: Vec<String> = match site.side {
+            Side::Relay => vec![site.relay.to_string()],
+            Side::FrontDoor => bound.clone(),
+        };
+        let mut rows = Vec::new();
+        let mut answered = false;
+        for relay in relays.iter().map(String::as_str).filter(|r| served(*r) && named.is_none_or(|n| n == *r)) {
+            match ask(relay) {
+                None => continue,
+                Some(Ok(counts)) => {
+                    answered = true;
+                    rows.push(json!({ "relay": relay, "counts": counts }));
+                }
+                Some(Err(_)) => rows.push(json!({ "relay": relay, "error": "relay-unreachable" })),
+            }
+        }
+        if !answered && !rows.is_empty() {
+            return Err(spokes_refusal(crate::fleet_wire::Refusal::new(503, "relay-unreachable", "")));
+        }
+        return Ok(Reply::json(200, json!({ "relays": rows })));
+    }
+    let relay = match (site.side, named) {
+        (Side::Relay, None) => site.relay,
+        (Side::Relay, Some(r)) if r == site.relay => site.relay,
+        (Side::Relay, Some(_)) => return Err(no(404, "not-found", NOT_FOUND)),
+        (Side::FrontDoor, Some(r)) if relay_id_ok(r) => r,
+        (Side::FrontDoor, _) => return Err(no(400, "bad-request", "relay must be the id of a spokes relay (r_ and 16 hex).")),
+    };
+    if !served(relay) {
+        return Err(no(404, "not-found", NOT_FOUND));
+    }
+    match ask(relay) {
+        None => Err(no(404, "not-found", NOT_FOUND)),
+        Some(Err(r)) => Err(spokes_refusal(r)),
+        Some(Ok(mut body)) => {
+            if !people {
+                without_emails(&mut body);
+            }
+            Ok(Reply::json(200, body))
+        }
+    }
+}
+
+/// Revision 4 5.1 and 5.2: the compliance routes on the front door (`api_compliance`).
+fn compliance_answer(site: &Site, call: &Call, ok: &Allowed, body: Option<&Body>) -> Result<Reply, No> {
+    let desk = site.data.compliance().filter(|_| site.side == Side::FrontDoor).ok_or_else(|| no(404, "not-found", NOT_FOUND))?;
+    let reach = ok.grant.as_ref().map(|g| g.relays.clone()).unwrap_or_default();
+    let route_name = route_name(call);
+    let req = crate::api_compliance::Req {
+        org: call.org,
+        route: call.route.id,
+        route_name: &route_name,
+        id: call.id,
+        // revision 4 5.3.7: a part route's `{n}`, its path's last segment
+        n: (call.route.id == RouteId::ComplianceExportPart).then(|| call.path.rsplit('/').next().unwrap_or_default()),
+        query: call.query,
+        client: &ok.client,
+        reach: &reach,
+        entry: tok::find_client(site.store, call.org, &ok.client),
+        body,
+        rid: call.rid,
+        now: site.now,
+    };
+    match crate::api_compliance::serve(&*desk, &req) {
+        // revision 4 5.3.7: an export part, `application/octet-stream` with its `ETag`
+        Ok(crate::api_compliance::Answer { status, bytes: Some(b), etag, .. }) => {
+            let mut headers = vec![("Cache-Control", "no-store".to_string())];
+            if let Some(t) = etag {
+                headers.push(("ETag", t));
+            }
+            Ok(Reply { status, ctype: "application/octet-stream", headers, body: Value::Null, text: None, raw: Some(b) })
+        }
+        Ok(a) => {
+            let mut r = Reply::json(a.status, a.body);
+            if a.replayed {
+                r.headers.push((REPLAYED, "true".into()));
+            }
+            Ok(r)
+        }
+        Err(x) => {
+            let n = no(x.status, x.code, x.why);
+            Err(match x.retry {
+                Some(s) => n.retry(s),
+                None => n,
+            })
+        }
+    }
+}
+
+/// Revision 4 7.3 `v1/events` and `v1/events/types`: what the client's grant effectively holds selects the types
+/// (scopes), sources (relays, `console` for the console's events) and classes (ceiling, in the representation 6.4
+/// selects); a long poll is held at most once per org and client on this listener (429 `abuse` for a second).
+fn events_answer(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
+    use crate::api_events::{EventLog, FeedError, FeedQuery, Viewer};
+    let events = site.data.events().ok_or_else(|| no(503, "audit-unavailable", AUDIT_WHY))?;
+    let grant = ok.grant.as_ref().ok_or_else(|| no(403, "scope", "This route needs an access token."))?;
+    let ceiling = crate::api_catalog::Ceiling::of(&grant.ceiling).ok_or_else(|| no(403, "ceiling", "The client's ceiling is not readable."))?;
+    let reaches = |r: &str| ok.reaches(r);
+    let q = FeedQuery::parse(call.query).map_err(|why| no(400, "bad-request", why))?;
+    let viewer = Viewer { scopes: &grant.scopes, reaches: &reaches, ceiling, repr: ok.repr, types: q.types.clone() };
+    if call.route.id == RouteId::EventTypes {
+        return Ok(Reply::json(200, json!({ "types": EventLog::types(&viewer) })));
+    }
+    let _held = match q.wait {
+        0 => None,
+        _ => Some(site.state.held.hold(format!("{} {}", call.org, ok.client)).ok_or_else(|| no(429, "abuse", "This client already waits on the event feed here.").retry(1))?),
+    };
+    match events.page(call.org, &q, &viewer) {
+        Ok(page) => Ok(Reply::json(200, page)),
+        Err(FeedError::Cursor) => Err(no(400, "cursor", "after is not a cursor of this feed.")),
+        Err(FeedError::Gone) => Err(no(410, "cursor-gone", "That cursor is older than the event retention; start again without after.")),
+        Err(FeedError::Unavailable) => Err(no(503, "audit-unavailable", AUDIT_WHY)),
     }
 }
 
@@ -1032,6 +1442,15 @@ pub fn token_audited(audit: &dyn AuditLog, org: &str, route: &str, rid: &str, so
             put(&mut e, "act", ev.get("subject_sub"));
             audit.record(org, Value::Object(e), now).map(|_| ())
         }
+        // revision 5 12.2: a delegated token, with its person, grant, EMA IdP and actor
+        "api.delegated" => {
+            e.insert("action".into(), json!("api.delegated"));
+            e.insert("result".into(), json!("ok"));
+            for k in ["client", "person", "grant", "idp", "jti", "scope", "resource", "aud", "exp", "cnf", "auth", "map_seq", "auth_time", "actor", "actor_profile", "family"] {
+                put(&mut e, k, ev.get(k));
+            }
+            audit.record(org, Value::Object(e), now).map(|_| ())
+        }
         "api.revoke" if ev.get("jti").is_some() => Ok(()),
         "api.revoke" => {
             e.insert("action".into(), json!("api.token"));
@@ -1047,6 +1466,8 @@ pub fn token_audited(audit: &dyn AuditLog, org: &str, route: &str, rid: &str, so
             e.insert("status".into(), json!(a.status));
             e.insert("count".into(), json!(1));
             put(&mut e, "client", ev.get("client"));
+            // revision 4 4.1: the failed `entra_wif` step (`entra_wif.<step>`) as the entry's `code`
+            put(&mut e, "code", ev.get("step"));
             let key = s("client").map_or_else(|| format!("ip:{}", crate::console_source::source_key(source)), str::to_string);
             audit.refusal(org, &key, &code, route, Value::Object(e), now)
         }
@@ -1059,7 +1480,7 @@ pub fn token_audited(audit: &dyn AuditLog, org: &str, route: &str, rid: &str, so
             let issuer = if route.contains("/local/") { "relay" } else { "console" };
             crate::api_catalog::counters::api_token_issued(org, client, issuer);
         }
-        (Ok(()), "api.revoke") => counted(org, client, None),
+        (Ok(()), "api.revoke" | "api.delegated") => counted(org, client, None),
         (Ok(()), _) => counted(org, "", Some(s("code").unwrap_or("request"))),
         (Err(_), _) => counted(org, "", Some("audit-unavailable")),
     }
@@ -1071,6 +1492,45 @@ pub fn token_audited(audit: &dyn AuditLog, org: &str, route: &str, rid: &str, so
             r
         }
     }
+}
+
+// ── the console MCP on this pipeline (revision 5 8.2, 9.1; slice 1c5) ──────────────────────────────────────────
+
+/// 8.2 step 1: the source limiter of an MCP request (`call.route` an MCP row of `console_mcp`, never a scrape row).
+pub(crate) fn mcp_charge(site: &Site, call: &Call) -> Result<(), Reply> {
+    charge(site, call).map(|_| ())
+}
+
+/// 8.2 step 4: checks 1 to 11 for the scope of `call.route` (the MCP row of the tool, or of a scope the token holds
+/// for a list), before the body is read. `policy`: the org's current verified policy (delegated tokens at M).
+pub(crate) fn mcp_checks(site: &Site, call: &Call, policy: Option<&crate::meet_org_policy::Obj>) -> Result<Allowed, Reply> {
+    checks(site, call, None, false, policy)
+}
+
+/// An MCP decision refused after the source limiter (a header, body or tool check), in the org's refusal summaries
+/// with `extra` (`tool`, `person`) before its answer; the caller shapes the answer (a JSON-RPC error or a tool
+/// error) when the Reply is not 503 `audit-unavailable`.
+pub(crate) fn mcp_refuse(site: &Site, call: &Call, ok: Option<&Allowed>, status: u16, code: &'static str, why: &str, extra: &Map<String, Value>) -> Reply {
+    let who = ok.map(|a| (a.client.as_str(), a.jti.as_deref()));
+    refuse_with(site, call, who, no(status, code, why), extra)
+}
+
+/// 8.2 step 6: the one route handler of a tool (`call.route` its row of `ROUTES`): check 8 for the relay the call
+/// names, then the route. Err is the route's refusal (status, code, sentence) for a tool error.
+pub(crate) fn mcp_serve(site: &Site, call: &Call, ok: &Allowed) -> Result<(Reply, Option<String>), (u16, &'static str, String)> {
+    let target = target_of(site, call);
+    if target.as_deref().is_some_and(|t| !ok.reaches(t)) {
+        return Err((404, "not-found", NOT_FOUND.to_string()));
+    }
+    match serve(site, call, ok, None) {
+        Ok(r) => Ok((r, target)),
+        Err(n) => Err((n.status, n.code, n.why)),
+    }
+}
+
+/// 9.4 for an MCP call: one `api.call` entry (route M, `extra` with `tool`) before the answer `reply`.
+pub(crate) fn mcp_finish(site: &Site, call: &Call, ok: &Allowed, target: Option<&str>, reply: Reply, extra: &Map<String, Value>) -> Reply {
+    finish_with(site, call, ok, target, reply, extra)
 }
 
 // ── OpenAPI (7.4) ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1085,6 +1545,85 @@ fn page_params(audit: bool, front: bool) -> Vec<Value> {
         p.push(json!({"name": "relay", "in": "query", "required": false, "schema": {"type": "string", "pattern": "^r_[0-9a-f]{16}$"}}));
     }
     p
+}
+
+/// Revision 4 5.1 and 5.2: the parameters of the compliance routes.
+fn compliance_params(id: RouteId) -> Vec<Value> {
+    let q = |name: &str, required: bool, schema: Value, description: &str| json!({"name": name, "in": "query", "required": required, "schema": schema, "description": description});
+    let principal = || json!({"type": "string", "maxLength": 320});
+    let window = || {
+        vec![
+            q("from", false, json!({"type": "integer"}), "Unix seconds; default 30 days before to."),
+            q("to", false, json!({"type": "integer"}), "Unix seconds; default now; to - from is at most 400 days."),
+        ]
+    };
+    let page = || {
+        vec![
+            q("after", false, json!({"type": "string"}), "The opaque cursor of the previous page's next."),
+            q("limit", false, json!({"type": "integer", "minimum": 1, "maximum": 500, "default": 100}), "Items per page."),
+        ]
+    };
+    let mut out = Vec::new();
+    match id {
+        RouteId::ComplianceAttendance => {
+            out.extend(window());
+            out.extend(page());
+            out.push(q("person", false, principal(), "Sessions this principal took part in."));
+            out.push(q("room", false, json!({"type": "string"}), "One room."));
+        }
+        RouteId::ComplianceMeetings => {
+            out.extend(window());
+            out.extend(page());
+            out.push(q("organizer", false, principal(), "Meetings this principal organizes."));
+            out.push(q("person", false, principal(), "Meetings this principal organizes or attends."));
+        }
+        RouteId::ComplianceConversations => {
+            out.extend(window());
+            out.extend(page());
+            out.push(q("person", true, principal(), "Conversations this principal is or was a member of."));
+        }
+        RouteId::ComplianceFiles => {
+            out.extend(window());
+            out.extend(page());
+            out.push(q("cid", false, json!({"type": "string"}), "A conversation (ch:<id> or dm:<64 hex>); one of cid or room."));
+            out.push(q("room", false, json!({"type": "string"}), "A room; one of cid or room."));
+        }
+        RouteId::ComplianceHolds => out.extend(page()),
+        RouteId::ComplianceHold => out.push(json!({"name": "hold", "in": "path", "required": true, "schema": {"type": "string"}, "description": "h_ and 16 hex (an API hold), or a console hold's 16 hex."})),
+        RouteId::ComplianceHoldPlace | RouteId::ComplianceExportRequest => out.push(json!({"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string"},
+                                                        "description": "A Structured Field String of 16 to 64 of [A-Za-z0-9_-] (draft-ietf-httpapi-idempotency-key-header-09)."})),
+        // revision 4 5.3.7
+        RouteId::ComplianceExports => out.extend(page()),
+        RouteId::ComplianceExport | RouteId::ComplianceExportSeal | RouteId::ComplianceExportPart | RouteId::ComplianceExportCancel => {
+            out.push(json!({"name": "job", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^j_[0-9a-f]{16}$"}, "description": "The export job."}));
+            if id == RouteId::ComplianceExportPart {
+                out.push(json!({"name": "n", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 0, "maximum": 12799}, "description": "The part, from 0."}));
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// API-1d 6.1: the parameters of the `spokes.read` routes (`relay` required on the front door but for `counts`).
+fn spokes_params(id: RouteId, side: Side) -> Vec<Value> {
+    let q = |name: &str, required: bool, schema: Value, description: &str| json!({"name": name, "in": "query", "required": required, "schema": schema, "description": description});
+    let relay = |required: bool| q("relay", required, json!({"type": "string", "pattern": "^r_[0-9a-f]{16}$"}), "A spokes relay of the client and of the map's spokes.relays.");
+    let mut out = Vec::new();
+    match id {
+        RouteId::SpokesNodes => {
+            out.push(relay(side == Side::FrontDoor));
+            out.push(q("role", false, json!({"enum": ["hub", "spoke"]}), "Only nodes of this role."));
+            out.push(q("state", false, json!({"enum": ["ok", "silent", "expiring", "expired", "revoked", "blocked"]}), "Only nodes in this state."));
+            out.push(q("q", false, json!({"type": "string", "minLength": 1, "maxLength": 100}), "Matches node ids and labels; emails only for a client whose ceiling allows people."));
+            out.push(q("limit", false, json!({"type": "integer", "minimum": 1, "maximum": 500, "default": 100}), "Nodes per page."));
+            out.push(q("after", false, json!({"type": "string", "pattern": "^n_[0-9a-f]{32}$"}), "The node id the previous page ended with."));
+        }
+        RouteId::SpokesSeats | RouteId::SpokesRelays => out.push(relay(side == Side::FrontDoor)),
+        RouteId::SpokesCounts => out.push(relay(false)),
+        _ => {}
+    }
+    out
 }
 
 /// 7.4: the OpenAPI 3.1 document of the listener's org routes, generated from `ROUTES` (server: the listener's
@@ -1110,24 +1649,47 @@ pub fn openapi(side: Side, org: &str, resource: &str) -> Value {
             op.insert("x-lucid-scope".into(), json!(r.scope));
             op.insert("x-lucid-reach".into(), json!(r.reach));
         }
+        // revision 5 8.3: the console MCP tool that calls this route (1a 7.4's `tool` column)
+        if let Some(tool) = crate::console_mcp::tool_of(side, r.id) {
+            op.insert("x-mcp-tool".into(), json!(tool));
+        }
         let mut params = Vec::new();
         if r.path.contains("{id}") {
             params.push(json!({"name": "id", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^r_[0-9a-f]{16}$"}}));
         }
-        if matches!(r.id, RouteId::FleetRelays | RouteId::Audit) {
+        if r.path.contains("{agent}") {
+            params.push(json!({"name": "agent", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^a_[0-9a-f]{16}$"}}));
+        }
+        if matches!(r.id, RouteId::FleetRelays | RouteId::Audit | RouteId::Events) {
             params.extend(page_params(r.id == RouteId::Audit, side == Side::FrontDoor));
         }
+        if r.id == RouteId::Events {
+            params.push(json!({"name": "wait", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 0, "maximum": crate::api_events::WAIT_MAX, "default": 0},
+                               "description": "Seconds to hold the request when nothing is new (long poll); one held request per client."}));
+            params.push(json!({"name": "types", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Event types of the registry, separated by commas."}));
+            params.push(json!({"name": "stubs", "in": "query", "required": false, "schema": {"type": "boolean", "default": true}, "description": "false leaves out the stubs of entries the client may not see."}));
+        }
+        params.extend(compliance_params(r.id));
+        params.extend(spokes_params(r.id, side));
         if !params.is_empty() {
             op.insert("parameters".into(), json!(params));
         }
         if !r.request.is_empty() {
-            op.insert("requestBody".into(), json!({"required": true, "content": {"application/x-www-form-urlencoded": {"schema": {"$ref": format!("#/components/schemas/{}", r.request)}}}}));
+            // revision 4: the compliance POST routes take JSON
+            let form = if matches!(r.request, "HoldRequest" | "ExportRequest") { "application/json" } else { "application/x-www-form-urlencoded" };
+            op.insert("requestBody".into(), json!({"required": true, "content": {form: {"schema": {"$ref": format!("#/components/schemas/{}", r.request)}}}}));
         }
-        let ctype = if r.id == RouteId::Metrics { crate::fleet_export::CONTENT_TYPE } else { "application/json" };
+        let ctype = match r.id {
+            RouteId::Metrics => crate::fleet_export::CONTENT_TYPE,
+            RouteId::ComplianceExportPart => "application/octet-stream",
+            RouteId::Authorize | RouteId::SsoReturn | RouteId::Consent | RouteId::ConsentPost => "text/html",
+            _ => "application/json",
+        };
+        let status = if matches!(r.id, RouteId::ComplianceHoldPlace | RouteId::ComplianceExportRequest) { "202" } else { "200" };
         op.insert(
             "responses".into(),
             json!({
-                "200": {"description": "OK", "content": {ctype: {"schema": {"$ref": format!("#/components/schemas/{}", r.response)}}}},
+                status: {"description": "OK", "content": {ctype: {"schema": {"$ref": format!("#/components/schemas/{}", r.response)}}}},
                 "default": {"description": "A refusal (RFC 9457)", "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}},
             }),
         );
@@ -1177,6 +1739,9 @@ pub fn schemas() -> Map<String, Value> {
             "properties": {"resource": string, "authorization_servers": {"type": "array", "items": string},
                            "scopes_supported": {"type": "array", "items": string}, "bearer_methods_supported": {"type": "array", "items": string}}},
         "Jwks": {"type": "object", "required": ["keys"], "properties": {"keys": {"type": "array", "items": {"type": "object"}}}},
+        "OpenIdConfiguration": {"type": "object", "required": ["issuer", "jwks_uri", "response_types_supported", "subject_types_supported", "id_token_signing_alg_values_supported"],
+            "properties": {"issuer": string, "jwks_uri": string, "response_types_supported": {"type": "array", "items": string},
+                           "subject_types_supported": {"type": "array", "items": string}, "id_token_signing_alg_values_supported": {"type": "array", "items": string}}},
         "OpenApi": {"type": "object", "required": ["openapi", "info", "paths"]},
         "TokenRequest": {"type": "object", "required": ["grant_type"],
             "properties": {"grant_type": {"enum": ["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]},
@@ -1205,9 +1770,102 @@ pub fn schemas() -> Map<String, Value> {
         "AuditKeys": {"type": "object", "required": ["keys"], "properties": {"keys": {"type": "array", "items": {"type": "object"}}}},
         "Metrics": {"type": "string", "contentMediaType": crate::fleet_export::CONTENT_TYPE},
     });
+    // revision 4 5.1 and 5.2
+    let relays_list = json!({"type": "array", "items": {"type": "string"}});
+    v["CompliancePage"] = json!({"type": "object", "required": ["items"],
+        "properties": {"items": {"type": "array", "items": {"type": "object", "required": ["relay"], "properties": {"relay": {"type": "string"}, "owner": {"const": "outside"}}}},
+                       "partial": relays_list, "next": {"type": "string"}, "kept_days": {"type": "object", "additionalProperties": {"type": "integer"}}}});
+    v["ComplianceRetention"] = json!({"type": "object", "required": ["policy_seq", "retention", "archive", "legal_holds", "holds_active"],
+        "properties": {"policy_seq": {"type": "integer"}, "retention": {"type": "object", "additionalProperties": {"type": "number"}},
+                       "archive": {"type": "object", "required": ["present", "reviewers"], "properties": {"present": {"type": "boolean"}, "reviewers": {"type": "integer"}}},
+                       "legal_holds": {"type": "object", "additionalProperties": {"type": "boolean"}}, "holds_active": {"type": "integer"}, "partial": relays_list}});
+    let states = json!({"type": "object", "additionalProperties": {"enum": ["placed", "pending", "off", "released"]}});
+    let archive = json!({"enum": ["waiting", "placed", "declined", "failed", "none"]});
+    v["Hold"] = json!({"type": "object", "required": ["hold", "on", "count", "principals", "reason", "placed_at", "by", "relays"],
+        "properties": {"hold": {"type": "string"}, "on": {"const": "people"}, "count": {"type": "integer"}, "principals": {"type": "array", "items": {"type": "string"}},
+                       "reason": {"type": "string"}, "matter": {"type": "string"}, "placed_at": {"type": "integer"}, "released_at": {"type": "integer"},
+                       "by": {"type": "object", "properties": {"client": {"type": "string"}, "owner": {"type": "string"}, "admin": {"type": "string"}}},
+                       "relays": states, "archive": archive}});
+    v["HoldList"] = json!({"type": "object", "required": ["holds"],
+        "properties": {"holds": {"type": "array", "items": {"$ref": "#/components/schemas/Hold"}}, "next": {"type": "string"}, "partial": relays_list}});
+    v["HoldRequest"] = json!({"type": "object", "required": ["on", "principals", "reason"], "additionalProperties": false,
+        "properties": {"on": {"const": "people"}, "principals": {"type": "array", "minItems": 1, "maxItems": 200, "uniqueItems": true, "items": {"type": "string"}},
+                       "reason": {"type": "string", "minLength": 1, "maxLength": 500}, "matter": {"type": "string", "minLength": 1, "maxLength": 128},
+                       "reviewer": {"type": "string"}}});
+    v["HoldPlaced"] = json!({"type": "object", "required": ["hold", "state", "relays"],
+        "properties": {"hold": {"type": "string"}, "relays": states, "notice": {"type": "string"},
+                       "state": {"type": "object", "required": ["relay", "archive"], "properties": {"relay": {"enum": ["placed", "pending"]}, "archive": archive}}}});
+    // revision 4 5.3
+    let export_scope = json!({"type": "object", "required": ["from", "to", "kinds"], "additionalProperties": false,
+        "properties": {"people": {"type": "array", "maxItems": 200, "uniqueItems": true, "items": {"type": "string"}},
+                       "cids": {"type": "array", "maxItems": 200, "uniqueItems": true, "items": {"type": "string"}},
+                       "from": {"type": "integer"}, "to": {"type": "integer"},
+                       "kinds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["chat", "file", "ai"]}},
+                       "query": {"type": "string", "maxLength": 256}}});
+    let export_states = json!({"enum": ["waiting", "released", "building", "transferring", "ready", "expired", "canceled", "refused", "failed"]});
+    v["ExportRequest"] = json!({"type": "object", "required": ["matter", "reason", "scope", "reviewers"], "additionalProperties": false,
+        "properties": {"matter": {"type": "string", "minLength": 1, "maxLength": 128}, "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+                       "scope": export_scope, "reviewers": {"type": "array", "minItems": 2, "maxItems": 5, "uniqueItems": true, "items": {"type": "string"}}}});
+    v["ExportAccepted"] = json!({"type": "object", "required": ["job", "state", "reviewers_needed", "expires_waiting"],
+        "properties": {"job": {"type": "string"}, "state": {"const": "waiting"}, "reviewers_needed": {"const": 2}, "expires_waiting": {"type": "integer"}}});
+    v["Export"] = json!({"type": "object", "required": ["job", "state", "matter", "requested_at", "releases", "reviewers"],
+        "properties": {"job": {"type": "string"}, "state": export_states, "matter": {"type": "string"}, "requested_at": {"type": "integer"},
+                       "releases": {"type": "integer"}, "reviewers": {"type": "array", "items": {"type": "string"}},
+                       "preview": {"type": "object", "description": "After release only (revision 4 5.3.3)",
+                                   "properties": {"messages": {"type": "integer"}, "files": {"type": "integer"}, "ai": {"type": "integer"}, "bytes": {"type": "integer"}, "over_limit": {"type": "boolean"}}},
+                       "parts": {"type": "integer"}, "zip_bytes": {"type": "integer"}, "expires": {"type": "integer"}, "code": {"type": "string"}}});
+    v["ExportList"] = json!({"type": "object", "required": ["jobs"],
+        "properties": {"jobs": {"type": "array", "items": {"$ref": "#/components/schemas/Export"}}, "next": {"type": "string"}}});
+    v["ExportSeal"] = json!({"type": "object", "description": "The archive-signed seal header (revision 4 5.3.6)",
+        "required": ["v", "org", "job", "client", "made", "parts", "part_bytes", "zip_bytes", "zip_sha256", "part_sha256", "wrap", "recipient", "release", "excluded_ceiling", "cert", "sig"]});
+    v["ExportPart"] = json!({"type": "string", "contentMediaType": "application/octet-stream", "description": "One AES-256-GCM part with its tag (revision 4 5.3.6)"});
     v["TelemetryCatalog"] = json!({"type": "object", "required": ["version", "resource_attributes", "families", "records"],
         "properties": {"version": {"const": crate::api_catalog::VERSION}, "resource_attributes": {"type": "array", "items": {"type": "object"}},
                        "families": {"type": "array", "items": {"type": "object"}}, "records": {"type": "array", "items": {"type": "object"}}}});
+    // revision 4 7.2, 7.3
+    let event = json!({"type": "object", "description": "A CloudEvents 1.0 event (revision 4 7.2)",
+        "required": ["specversion", "id", "source", "type", "time", "lucidorg", "lucidseq", "lucidchain", "lucidprev", "lucidhash"]});
+    let stub = json!({"type": "object", "description": "A chain entry the client may not see (revision 4 7.3)",
+        "required": ["lucidseq", "lucidchain", "lucidprev", "lucidhash", "stub"], "properties": {"stub": {"const": true}}});
+    v["EventPage"] = json!({"type": "object", "required": ["events", "next", "repr"],
+        "properties": {"events": {"type": "array", "items": {"oneOf": [event, stub]}}, "next": {"type": "string"}, "repr": {"enum": crate::api_map::IDENTITIES}}});
+    v["EventTypes"] = json!({"type": "object", "required": ["types"], "properties": {"types": {"type": "array", "items": {"type": "object"}}}});
+    // revision 4 7.3, 7.4
+    v["WebhookKeys"] = json!({"type": "object", "required": ["keys"], "properties": {"keys": {"type": "array", "items": {"type": "object", "required": ["kid", "public", "nbf", "exp"],
+        "properties": {"kid": {"type": "string"}, "public": {"type": "string", "pattern": "^whpk_"}, "nbf": {"type": "integer"}, "exp": {"type": "integer"}}}}}});
+    // revision 5 6.5: the Authorize pipeline's browser pages and forms
+    v["Html"] = json!({"type": "string", "contentMediaType": "text/html", "description": "A page, or a redirect (302 or 303 with Location)"});
+    v["SsoAttestation"] = json!({"type": "object", "required": ["att"], "properties": {"att": {"type": "string", "description": "base64url of {att, sig, cert_pem} (revision 5 6.5 step 2)"}}});
+    v["ConsentDecision"] = json!({"type": "object", "required": ["req", "csrf", "decision"],
+        "properties": {"req": {"type": "string"}, "csrf": {"type": "string"}, "decision": {"enum": ["allow", "deny"]}}});
+    // API-1d 6.1 (`email` only for a client whose ceiling allows people)
+    let int = json!({"type": "integer"});
+    v["SpokesNodes"] = json!({"type": "object", "required": ["nodes"],
+        "properties": {"nodes": {"type": "array", "items": {"type": "object", "required": ["node", "role", "state"],
+            "properties": {"node": {"type": "string"}, "role": {"enum": ["hub", "spoke"]}, "label": {"type": "string"}, "email": {"type": "string"},
+                           "serial": {"type": "string"}, "exp": int, "lastSeenAt": int, "lastPollAt": int, "revoked": {"type": "boolean"},
+                           "blocked": {"type": "boolean"}, "state": {"type": "string"}, "mailbox": int, "service": {"type": "boolean"}}}},
+                       "next": {"type": "string"}}});
+    v["SpokesCounts"] = json!({"type": "object", "required": ["relays"],
+        "properties": {"relays": {"type": "array", "items": {"type": "object", "required": ["relay"],
+            "properties": {"relay": {"type": "string"}, "counts": {"type": "object"}, "error": {"const": "relay-unreachable"}}}}}});
+    v["SpokesSeats"] = json!({"type": "object", "required": ["users", "used", "seats", "uncounted"],
+        "properties": {"users": int, "used": int,
+                       "seats": {"type": "array", "items": {"type": "object", "properties": {"user": {"type": "string"}, "email": {"type": "string"}, "since": int, "certificates": int, "exp": int}}},
+                       "uncounted": {"type": "array", "items": {"type": "object", "properties": {"node": {"type": "string"}, "email": {"type": "string"}, "at": int}}}}});
+    v["SpokesRelays"] = json!({"type": "object", "required": ["state", "daysLeft", "edition"],
+        "properties": {"directory": {"type": "object"}, "crl": {"type": "object"}, "state": {"type": "string"}, "daysLeft": int, "edition": {"type": "string"}}});
+    // API-1d 7.1.5 (the card is the A2A 1.0 AgentCard object, signed per A2A 8.4)
+    v["AgentList"] = json!({"type": "object", "required": ["agents"],
+        "properties": {"agents": {"type": "array", "items": {"type": "object", "required": ["id", "name", "card"],
+            "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "card": {"type": "string", "format": "uri"}}}}}});
+    v["AgentCard"] = json!({"type": "object", "description": "An A2A 1.0 AgentCard with its signatures (A2A 4.4.1, 8.4)",
+        "required": ["name", "description", "supportedInterfaces", "version", "capabilities", "defaultInputModes", "defaultOutputModes", "skills", "signatures"],
+        "properties": {"signatures": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["protected", "signature"],
+            "properties": {"protected": {"type": "string"}, "signature": {"type": "string"}}}}}});
+    if let Some(grants) = v.pointer_mut("/TokenRequest/properties/grant_type/enum").and_then(Value::as_array_mut) {
+        grants.extend([json!(crate::api_delegated::GRANT_CODE), json!(crate::api_delegated::GRANT_REFRESH), json!(crate::api_delegated::GRANT_JWT_BEARER)]);
+    }
     match v {
         Value::Object(m) => m,
         _ => Map::new(),
@@ -1591,6 +2249,32 @@ mod tests {
         assert_eq!(code(&bad), (400, "bad-request".into()));
     }
 
+    /// Revision 5 12.1: `source=connector&connector=<k_id>` reads the connector's chain the console received, and check
+    /// 8 judges it as `console` (the chain's holder).
+    #[test]
+    fn a_connector_chain_is_read_by_its_id() {
+        let mut c = client();
+        c["relays"] = json!(["console"]);
+        let env = Env::new(c);
+        let k = "k_7a1b2c3d4e5f6a7b";
+        let connector = ApiAudit::open(None, k, Arc::new(NoSigner), Arc::new(Keys), NOW);
+        connector.record(ORG, json!({"action": "connector.stale.on", "result": "ok", "age_s": 61}), NOW).unwrap();
+        for repr in Repr::ALL {
+            env.audit.ingest(ORG, k, repr, 1, 1, &connector.since(ORG, repr, 0, 10)).unwrap();
+        }
+        let t = env.token(&["audit.read"]);
+        let r = env.at(Side::FrontDoor, "/api/orgs/acme/v1/audit", &format!("source=connector&connector={k}"), Some(&t), IpAddr::from(IP), NOW);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.body["chain"]["source"], k);
+        assert_eq!((r.body["entries"][0]["source"].as_str(), r.body["entries"][0]["connector"].as_str()), (Some("connector"), Some(k)));
+        let calls: Vec<Value> = env.entries(Repr::AsIs).into_iter().filter(|e| e["action"] == "api.call").collect();
+        assert_eq!(calls.last().map(|e| e["resource"].clone()), Some(json!("console")));
+        for query in ["source=connector&connector=r_00000000000000aa", "source=connector", "source=relay&connector=k_7a1b2c3d4e5f6a7b"] {
+            let bad = env.at(Side::FrontDoor, "/api/orgs/acme/v1/audit", query, Some(&t), IpAddr::from(IP), NOW);
+            assert_eq!(code(&bad), (400, "bad-request".into()), "{query}");
+        }
+    }
+
     #[test]
     fn an_audit_failure_answers_503_and_no_data() {
         let mut env = Env::new(client());
@@ -1695,7 +2379,9 @@ mod tests {
             assert!(std::ptr::eq(m.route, r), "{} {} dispatches to its own row", r.method, r.path);
             assert!(CEILINGS.contains(&r.class), "{:?} class", r.id);
             if r.pipeline == Pipeline::Resource {
-                assert!(SCOPES.contains(&r.scope) && r.reach == "R0", "{:?} scope and reach", r.id);
+                // revision 4 3.1: R1 only for compliance.export.request, on the front door
+                let reach_ok = r.reach == "R0" || (r.reach == "R1" && r.scope == "compliance.export.request" && r.side == Side::FrontDoor);
+                assert!(SCOPES.contains(&r.scope) && reach_ok, "{:?} scope and reach", r.id);
             } else {
                 assert!(r.scope.is_empty() && r.reach.is_empty(), "{:?}", r.id);
             }
@@ -1712,7 +2398,7 @@ mod tests {
                 assert_eq!(op["x-lucid-pipeline"], r.pipeline.as_str(), "{:?}", r.id);
                 assert_eq!(op["x-lucid-class"], r.class);
                 if r.pipeline == Pipeline::Resource {
-                    assert_eq!((op["x-lucid-scope"].as_str(), op["x-lucid-reach"].as_str()), (Some(r.scope), Some("R0")));
+                    assert_eq!((op["x-lucid-scope"].as_str(), op["x-lucid-reach"].as_str()), (Some(r.scope), Some(r.reach)));
                 }
             }
         }
@@ -1724,6 +2410,71 @@ mod tests {
         assert!(route_of(Side::Relay, "GET", "/api/orgs/acme/v1/openapi.json").is_none());
         assert!(route_of(Side::FrontDoor, "POST", HEALTH).is_none());
         assert!(route_of(Side::FrontDoor, "GET", "/api/orgs//v1/health").is_none());
+    }
+
+    /// The test fleet with the console's event chains.
+    struct FleetEvents(Arc<crate::api_events::EventLog>);
+    impl Data for FleetEvents {
+        fn relays(&self, org: &str, now: i64) -> Vec<RelayInfo> {
+            Fleet.relays(org, now)
+        }
+        fn ids(&self, org: &str) -> Vec<String> {
+            Fleet.ids(org)
+        }
+        fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+            Fleet.exposition(org, ids, now)
+        }
+        fn console(&self) -> Value {
+            Fleet.console()
+        }
+        fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn the_event_feed_needs_its_scope_and_selects_by_the_grant() {
+        let mut c = client();
+        c["scopes"] = json!(["monitor.read", "fleet.read", "audit.read", "events.subscribe"]);
+        let env = Env::new(c);
+        let dir = tmp();
+        let log = Arc::new(crate::api_events::EventLog::open(Some(dir.path()), "console", Arc::new(NoSigner), Arc::new(Keys), NOW));
+        log.emit(ORG, "relay.connected", json!({"relay": R1, "version": "1"}), NOW).unwrap();
+        log.emit(ORG, "api.disabled", Value::Null, NOW).unwrap();
+        let data = FleetEvents(log);
+        let get = |path: &str, query: &str, auth: &str| {
+            let m = route_of(Side::FrontDoor, "GET", path).expect("a table route");
+            let owner = |_: &str| true;
+            let site = Site { side: Side::FrontDoor, relay: "console", resource: I, local: None, store: &env.store, owner_active: &owner, licensed: true, audit: &env.audit, state: &env.state, data: &data, now: NOW };
+            let id = rid();
+            let call = Call { org: m.org, route: m.route, id: m.id, path, query, authorization: Some(auth), dpop: None, cert: None, source: IpAddr::from(IP), rid: &id };
+            answer(&site, &call)
+        };
+        let t = env.mint(&["events.subscribe", "fleet.read"], "R0", "internal", 1, I, NOW, NOW + 600);
+        let r = get("/api/orgs/acme/v1/events", "", &t);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let events = r.body["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["type"], "com.emertins.lucid.relay.connected");
+        assert_eq!(events[1]["stub"], true, "api.disabled needs audit.read");
+        assert_eq!(r.body["repr"], "pseudonymized");
+        assert!(r.body["next"].is_string());
+        // the scope, the types the client may see, a foreign cursor, the keys
+        let without = env.mint(&["fleet.read"], "R0", "internal", 1, I, NOW, NOW + 600);
+        assert_eq!(code(&get("/api/orgs/acme/v1/events", "", &without)), (403, "scope".into()));
+        let types = get("/api/orgs/acme/v1/events/types", "", &t);
+        let names: Vec<&str> = types.body["types"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"relay.connected") && names.contains(&"checkpoint") && !names.contains(&"api.disabled"), "{names:?}");
+        assert_eq!(code(&get("/api/orgs/acme/v1/events", "after=nope", &t)), (400, "cursor".into()));
+        assert_eq!(code(&get("/api/orgs/acme/v1/events", "types=nothing", &t)), (400, "bad-request".into()));
+        assert_eq!(get("/api/orgs/acme/v1/events/keys", "", &t).status, 200);
+        // one held long poll per client on this listener
+        let held = env.state.held.hold(format!("{ORG} {CLIENT}"));
+        assert!(held.is_some());
+        assert_eq!(code(&get("/api/orgs/acme/v1/events", "wait=1", &t)), (429, "abuse".into()));
+        drop(held);
+        // every decision is audited
+        assert!(env.entries(Repr::AsIs).iter().any(|e| e["action"] == "api.call" && e["route"] == "GET /api/orgs/acme/v1/events"));
     }
 
     #[test]
@@ -1745,5 +2496,144 @@ mod tests {
         let r = charged(Err(0), problem(404, "not-found", NOT_FOUND));
         assert_eq!((r.status, r.body["code"].as_str(), header(&r, "Retry-After")), (429, Some("abuse"), Some("1")));
         assert_eq!(charged(Ok(()), problem(404, "not-found", NOT_FOUND)).status, 404);
+    }
+
+    /// API-1d 6.1: spokes relays as the front door reaches them: R1 answers (with emails, which the listener must drop
+    /// for a client without people), R2 is silent. Each ask is kept as (relay, view, query, people).
+    #[derive(Default)]
+    struct SpokesFleet(Mutex<Vec<(String, String, String, bool)>>);
+    impl Data for SpokesFleet {
+        fn relays(&self, org: &str, now: i64) -> Vec<RelayInfo> {
+            Fleet.relays(org, now)
+        }
+        fn ids(&self, org: &str) -> Vec<String> {
+            Fleet.ids(org)
+        }
+        fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+            Fleet.exposition(org, ids, now)
+        }
+        fn console(&self) -> Value {
+            Fleet.console()
+        }
+        fn spokes(&self, _org: &str, relay: &str, view: &str, query: &str, people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+            self.0.lock().push((relay.to_string(), view.to_string(), query.to_string(), people));
+            match relay {
+                R1 => {
+                    // as the relay's `node_filter`: `q` matches an email only with people
+                    let q = query.split('&').find_map(|p| p.strip_prefix("q=")).unwrap_or("");
+                    let rows: Vec<Value> = [json!({"node": "n_0000000000000000000000000000000a", "role": "hub", "label": "Build hub", "email": "ann@acme.example", "state": "ok", "mailbox": 0, "service": false})]
+                        .into_iter()
+                        .filter(|r| q.is_empty() || r["label"].as_str().unwrap().contains(q) || (people && r["email"].as_str().unwrap().contains(q)))
+                        .collect();
+                    Some(Ok(match view {
+                        "nodes" => json!({ "nodes": rows }),
+                        "counts" => json!({"hubs": 1, "spokes": 2, "online": 3}),
+                        "seats" => json!({"users": 5, "used": 1, "seats": [{"user": "u_1", "email": "ann@acme.example", "since": 1, "certificates": 1, "exp": 2}], "uncounted": [{"node": "n_1", "email": "bo@acme.example", "at": 3}]}),
+                        _ => json!({"state": "ok", "daysLeft": 40, "edition": "enterprise"}),
+                    }))
+                }
+                R2 => Some(Err(crate::fleet_wire::Refusal::new(503, "relay-unreachable", "The relay did not answer."))),
+                _ => None,
+            }
+        }
+    }
+
+    const R3: &str = "r_00000000000000c3";
+
+    /// An env whose pinned map (seq 2) binds R1, R2 and R3 is not bound; the client holds `spokes.read`.
+    fn spokes_env(ceiling: &str, relays: Value) -> Env {
+        let mut c = client();
+        c["scopes"] = json!(["monitor.read", "spokes.read"]);
+        c["ceiling"] = json!(ceiling);
+        c["relays"] = relays;
+        let mut env = Env::new(c);
+        let mut map = Value::Object(env.store.get(ORG, "").unwrap().map().clone());
+        map["seq"] = json!(2);
+        map["spokes"] = json!({"root": "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0", "root_spki": "ab".repeat(32), "relays": [R1, R2]});
+        let hash = crate::api_map::api_map_hash(&map);
+        let wire = json!({ "map": map }).as_object().unwrap().clone();
+        env.store.pin(VerifiedApiMap { wire, org: ORG.into(), seq: 2, expires: MAP_EXPIRES, hash, signer: "root".into() }).unwrap();
+        env
+    }
+
+    fn spokes_get(env: &Env, data: &dyn Data, side: Side, path: &str, query: &str, auth: &str) -> Reply {
+        let m = route_of(side, "GET", path).expect("a table route");
+        let owner = |_: &str| true;
+        let (relay, resource, local) = match side {
+            Side::FrontDoor => ("console", I, None),
+            Side::Relay => (R1, RR, Some((format!("{RR}/local"), Vec::new()))),
+        };
+        let local_ref = local.as_ref().map(|(l, k): &(String, Vec<Value>)| (l.as_str(), k.as_slice()));
+        let site = Site { side, relay, resource, local: local_ref, store: &env.store, owner_active: &owner, licensed: true, audit: &env.audit, state: &env.state, data, now: NOW };
+        let id = rid();
+        let call = Call { org: m.org, route: m.route, id: m.id, path, query, authorization: Some(auth), dpop: None, cert: None, source: IpAddr::from(IP), rid: &id };
+        answer(&site, &call)
+    }
+
+    #[test]
+    fn spokes_read_serves_bound_relays_of_the_client_without_emails_for_internal_clients() {
+        const NODES: &str = "/api/orgs/acme/v1/spokes/nodes";
+        let env = spokes_env("internal", json!(["*"]));
+        let data = SpokesFleet::default();
+        let t = env.mint(&["spokes.read"], "R0", "internal", 2, I, NOW, NOW + 600);
+        // an internal client: rows without email, the relay told people = false, `relay` not forwarded
+        let r = spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}&role=hub&q=Build"), &t);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.body["nodes"].as_array().unwrap().len(), 1);
+        assert!(!r.body.to_string().contains("email"), "{}", r.body);
+        assert_eq!(data.0.lock().last().cloned().unwrap(), (R1.to_string(), "nodes".to_string(), "role=hub&q=Build".to_string(), false));
+        // q never matches an email for it
+        let r = spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}&q=acme.example"), &t);
+        assert_eq!(r.body["nodes"], json!([]));
+        // seats keep no email either
+        let seats = spokes_get(&env, &data, Side::FrontDoor, "/api/orgs/acme/v1/spokes/seats", &format!("relay={R1}"), &t);
+        assert_eq!(seats.status, 200);
+        assert!(!seats.body.to_string().contains("@acme.example"), "{}", seats.body);
+        // a relay outside the map's spokes.relays, a missing relay, a silent relay
+        assert_eq!(code(&spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R3}"), &t)), (404, "not-found".into()));
+        assert_eq!(code(&spokes_get(&env, &data, Side::FrontDoor, NODES, "", &t)), (400, "bad-request".into()));
+        let silent = spokes_get(&env, &data, Side::FrontDoor, "/api/orgs/acme/v1/spokes/relays", &format!("relay={R2}"), &t);
+        assert_eq!((code(&silent), header(&silent, "Retry-After")), ((503, "relay-unreachable".into()), Some("30")));
+        // counts: every bound relay of the client, a silent one marked
+        let counts = spokes_get(&env, &data, Side::FrontDoor, "/api/orgs/acme/v1/spokes/counts", "", &t);
+        assert_eq!(counts.status, 200, "{}", counts.body);
+        assert_eq!(counts.body["relays"], json!([{"relay": R1, "counts": {"hubs": 1, "spokes": 2, "online": 3}}, {"relay": R2, "error": "relay-unreachable"}]));
+        // the scope is needed; a public ceiling is refused
+        let other = env.mint(&["monitor.read"], "R0", "internal", 2, I, NOW, NOW + 600);
+        assert_eq!(code(&spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}"), &other)), (403, "scope".into()));
+        let public = env.mint(&["spokes.read"], "R0", "public", 2, I, NOW, NOW + 600);
+        assert_eq!(code(&spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}"), &public)), (403, "ceiling".into()));
+        // every decision is audited
+        assert!(env.entries(Repr::AsIs).iter().any(|e| e["action"] == "api.call" && e["route"] == "GET /api/orgs/acme/v1/spokes/nodes" && e["resource"] == R1));
+    }
+
+    #[test]
+    fn spokes_read_is_404_for_a_relay_outside_the_clients_relays_and_shows_emails_only_with_people() {
+        const NODES: &str = "/api/orgs/acme/v1/spokes/nodes";
+        let data = SpokesFleet::default();
+        // check 8: R1 is bound but not the client's
+        let env = spokes_env("confidential", json!([R2]));
+        let t = env.mint(&["spokes.read"], "R0", "confidential", 2, I, NOW, NOW + 600);
+        assert_eq!(code(&spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}"), &t)), (404, "not-found".into()));
+        // counts asks only the client's R2, which is silent, so none answered: 503, and R1 was never asked
+        data.0.lock().clear();
+        let counts = spokes_get(&env, &data, Side::FrontDoor, "/api/orgs/acme/v1/spokes/counts", "", &t);
+        assert_eq!(code(&counts), (503, "relay-unreachable".into()));
+        assert_eq!(data.0.lock().iter().map(|(r, ..)| r.as_str()).collect::<Vec<_>>(), [R2]);
+        // a confidential client sees emails and q matches them
+        let env = spokes_env("confidential", json!(["*"]));
+        let t = env.mint(&["spokes.read"], "R0", "confidential", 2, I, NOW, NOW + 600);
+        let r = spokes_get(&env, &data, Side::FrontDoor, NODES, &format!("relay={R1}&q=acme.example"), &t);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.body["nodes"][0]["email"], "ann@acme.example");
+        assert!(data.0.lock().last().unwrap().3, "people");
+        // the relay listener answers its own views (no relay parameter, or its own id; any other is 404)
+        let rt = env.mint(&["spokes.read"], "R0", "confidential", 2, RR, NOW, NOW + 600);
+        assert_eq!(spokes_get(&env, &data, Side::Relay, NODES, "", &rt).status, 200);
+        assert_eq!(code(&spokes_get(&env, &data, Side::Relay, NODES, &format!("relay={R2}"), &rt)), (404, "not-found".into()));
+        let counts = spokes_get(&env, &data, Side::Relay, "/api/orgs/acme/v1/spokes/counts", "", &rt);
+        assert_eq!(counts.body["relays"], json!([{"relay": R1, "counts": {"hubs": 1, "spokes": 2, "online": 3}}]));
+        // a Meet relay's listener (no spokes source) answers 404
+        assert_eq!(code(&spokes_get(&env, &Fleet, Side::Relay, "/api/orgs/acme/v1/spokes/seats", "", &rt)), (404, "not-found".into()));
     }
 }

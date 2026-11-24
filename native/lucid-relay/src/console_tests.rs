@@ -4451,8 +4451,23 @@ fn a_newer_crl_on_the_relay_signs_out_the_admins_its_hubs_invited() {
 #[test]
 fn api_access_and_destination_routes_keep_their_roles_step_ups_and_actions() {
     use Role::{Admin as A, Viewer as V};
-    let table: [(&str, &str, Role, bool, &str); 26] = [
+    let table: [(&str, &str, Role, bool, &str); 40] = [
         ("POST", "settings/api/signing/cancel", A, false, "api.signing.cancel"),
+        // API-1d 5.1, 7.14 (slice 1d5)
+        ("GET", "settings/api/spokes", V, false, ""),
+        ("POST", "settings/api/spokes/bind", A, true, "api.spokes.bind"),
+        ("POST", "settings/api/spokes/unbind", A, true, "api.spokes.unbind"),
+        ("POST", "settings/api/spokes/root", A, true, "api.spokes.root"),
+        ("GET", "settings/api/a2a", V, false, ""),
+        ("POST", "settings/api/a2a/agents", A, true, "api.a2a.agent.stage"),
+        ("POST", "settings/api/a2a/agents/update", A, true, "api.a2a.agent.update"),
+        ("POST", "settings/api/a2a/agents/delete", A, false, "api.a2a.agent.delete"),
+        ("POST", "settings/api/a2a/keys", A, true, "api.a2a.key"),
+        ("POST", "settings/api/a2a/keys/drop", A, false, "api.a2a.key-drop"),
+        ("POST", "settings/api/a2a/well-known", A, true, "api.a2a.well-known"),
+        ("GET", "settings/api/a2a/tasks", V, false, ""),
+        ("POST", "settings/api/clients/push-off", A, false, "api.client.push-off"),
+        ("POST", "settings/api/clients/card-check", A, false, "api.client.card-check"),
         ("GET", "settings/api", V, false, ""),
         ("POST", "settings/api/clients", A, true, "api.client.stage"),
         ("POST", "settings/api/clients/update", A, true, "api.client.update"),
@@ -4488,6 +4503,8 @@ fn api_access_and_destination_routes_keep_their_roles_step_ups_and_actions() {
             assert!(spec.keys.contains(&"org"), "{path}");
         }
     }
+    // API-1d 7.14: `spokes/relays` is replaced by `bind` and `unbind`
+    assert!(crate::console_fleet::fleet_route("POST", "settings/api/spokes/relays").is_none());
     // the existing exports read stays an admin's
     assert_eq!(crate::console_fleet::fleet_route("GET", "settings/exports").unwrap().0.role, Role::Admin);
 }

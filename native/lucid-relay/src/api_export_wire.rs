@@ -1,7 +1,10 @@
 // Export wire (API contract 11): the destination presets of 11.1, the bodies of 11.2 (OTLP/HTTP protobuf through
 // `otlp_proto`, Splunk HEC events with indexer acknowledgment, Azure Monitor Logs Ingestion rows for `LucidAudit_CL`),
 // and Lucid authenticating to the tool with the credentials of 11.3 (vendor tokens, mutual TLS, Entra certificate
-// client credentials, a Google service account JWT grant, IAM Roles Anywhere then SigV4).
+// client credentials, a Google service account JWT grant, IAM Roles Anywhere then SigV4), and the federated
+// credentials of revision 4 section 8 (`entra_federated`: Entra client credentials with a Lucid subject token as the
+// client assertion; `gcp_federated`: Google STS token exchange, then service account impersonation when named). The
+// subject token comes from a `SubjectSigner` (the console's, `api_federation`); relays never hold one (R4-D11).
 //
 // Every connection follows 8.1: `api_fetch::check_url`, DNS resolved per connection, every address checked with the
 // destination's `private_ok` (token endpoints never allow private addresses), the connection made to a checked address
@@ -11,6 +14,11 @@
 //
 // Bodies are sent uncompressed (no gzip crate; the contract notes it). `syslog_cef` is not built here: the engine calls
 // `fleet_syslog::cef_sink` for that kind (today's wire, unchanged).
+//
+// Revision 4 7.4: a `webhook` destination is not a `Sink`: `hook_post` makes its `HookPost`, which sends one signed
+// request (headers made by `api_webhook`) under the same 8.1 rules with a 30 s whole-request bound, presents the
+// receiver credential (`Authorization: Bearer` for a token, the client certificate for mtls), and hands back the
+// status with `Retry-After` and `webhook-challenge-response`, which the engine interprets.
 //
 // `Sink::deliver` blocks: every request of every destination runs on one shared export runtime (4 workers) with at
 // most 64 requests in flight, and the calling thread waits for its answer, so callers use their own worker threads.
@@ -31,6 +39,7 @@ use serde_json::{json, Map, Value};
 
 use crate::api_fetch::{self, FetchUrl, Host};
 use crate::codec::{b64u, hex, iso_time, now_ms, sha256};
+use crate::console_source::Cidr;
 use crate::meet_json::{b64, civil, days_from_civil};
 use crate::otlp_proto;
 
@@ -48,8 +57,19 @@ const JWT_BEARER_GRANT: &str = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 /// Cloud Monitoring, Cloud Logging and Cloud Trace writes (the Telemetry API OTLP endpoints take the same scopes).
 const GCP_SCOPE: &str = "https://www.googleapis.com/auth/monitoring.write https://www.googleapis.com/auth/logging.write https://www.googleapis.com/auth/trace.append";
+/// Revision 4 8.3: Google STS token exchange of a Lucid subject token, and the IAM Credentials API for impersonation.
+const GOOGLE_STS_URL: &str = "https://sts.googleapis.com/v1/token";
+const IAM_CREDENTIALS_URL: &str = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/";
+const TOKEN_EXCHANGE_GRANT: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
+const JWT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
+const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+/// Revision 4 8.3: a federated cloud token is used until 60 s before it expires.
+const FEDERATED_MARGIN: i64 = 60;
 /// IAM Roles Anywhere session length asked for.
 const SESSION_SECONDS: i64 = 3600;
+/// Revision 4 7.4: a webhook request (connect, send, answer) is bounded to 30 s as a whole.
+const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOGS_API_VERSION: &str = "2023-01-01";
 const DEFAULT_STREAM: &str = "Custom-LucidAudit_CL";
 /// The Logs Ingestion API takes at most 1 MB a call.
@@ -63,13 +83,16 @@ const ACK_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ── Interface ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The signals of 11.1. Audit travels as OTLP logs, HEC events or `LucidAudit_CL` rows.
+/// The signals of 11.1. Audit travels as OTLP logs, HEC events or `LucidAudit_CL` rows; revision 4 7.5 `events` as
+/// OTLP logs (`Body` the CloudEvent), HEC events of sourcetype `lucid:events` (`event` the CloudEvent) or
+/// `LucidEvents_CL` rows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Signal {
     Metrics,
     Logs,
     Traces,
     Audit,
+    Events,
 }
 
 impl Signal {
@@ -79,6 +102,7 @@ impl Signal {
             Signal::Logs => "logs",
             Signal::Traces => "traces",
             Signal::Audit => "audit",
+            Signal::Events => "events",
         }
     }
 }
@@ -91,6 +115,8 @@ impl Signal {
 ///   "lucid.seq", "lucid.chain", "lucid.event_id", ..}}`
 /// - span: `{"trace_id" (32 hex), "span_id" (16 hex), "parent_span_id"?, "name", "kind"?, "start_ms", "end_ms",
 ///   "status": "ok"|"error"|"unset", "status_message"?, "attributes": {..}}`
+/// - event (revision 4 7.5): a log record whose `event` is the registry name and `body` the CloudEvent, attributes
+///   `lucid.event_id`, `lucid.chain`, `lucid.seq` and `event.name`.
 #[derive(Clone, Debug)]
 pub struct Batch {
     pub signal: Signal,
@@ -104,7 +130,31 @@ impl Batch {
     }
 }
 
-/// A destination credential (11.3), unsealed by the engine from `secret:<destination id>`.
+/// A Lucid subject token (revision 4 8.2), minted for one exchange: never stored, never logged.
+pub struct Subject {
+    pub token: String,
+    /// The federation key that signed it.
+    pub kid: String,
+    /// Unix seconds no cloud token got with it is used past: the map's `expires` and the key's `exp`, the earlier.
+    pub until: i64,
+}
+
+/// Where federated credentials get their subject tokens (revision 4 8.2, 8.3): the console's org federation keys.
+pub trait SubjectSigner: Send + Sync {
+    /// A fresh subject token with `aud` at `now` (unix seconds). Err (`federation`) when no listed, live, undropped key
+    /// with its sealed private part can sign.
+    fn subject(&self, aud: &str, now: i64) -> Result<Subject, SinkError>;
+    /// Whether a cloud token got with the key `kid` may still be used: the key is still listed and live in the pinned
+    /// map and has no `federation_drop_key`.
+    fn usable(&self, kid: &str, now: i64) -> bool;
+    /// One exchange succeeded (`federation.token`; never a token value). `provider` is `entra` or `google`.
+    fn exchanged(&self, provider: &str, kid: &str, exp: i64);
+    /// One exchange failed (`federation.failed`): the HTTP status (0 without an answer) and the provider's error code.
+    fn failed(&self, provider: &str, status: u16, error: &str);
+}
+
+/// A destination credential (11.3), unsealed by the engine from `secret:<destination id>`; the federated ones of
+/// revision 4 section 8 carry only the map's public fields and the console's signer (nothing sealed per destination).
 #[derive(Clone)]
 pub enum Credential {
     None,
@@ -113,6 +163,8 @@ pub enum Credential {
     EntraCertificate { tenant: String, client_id: String, cloud: String, cert_pem: String, key_pem: String },
     AwsRolesAnywhere { trust_anchor_arn: String, profile_arn: String, role_arn: String, region: String, cert_pem: String, key_pem: String },
     GcpServiceAccountKey(String),
+    EntraFederated { tenant: String, client_id: String, cloud: String, audience: String, signer: Arc<dyn SubjectSigner> },
+    GcpFederated { audience: String, token_audience: String, service_account: Option<String>, signer: Arc<dyn SubjectSigner> },
 }
 
 impl Credential {
@@ -125,6 +177,8 @@ impl Credential {
             Credential::EntraCertificate { .. } => "entra_certificate",
             Credential::AwsRolesAnywhere { .. } => "aws_roles_anywhere",
             Credential::GcpServiceAccountKey(_) => "gcp_service_account_key",
+            Credential::EntraFederated { .. } => "entra_federated",
+            Credential::GcpFederated { .. } => "gcp_federated",
         }
     }
 }
@@ -141,6 +195,12 @@ impl std::fmt::Debug for Credential {
                 f,
                 "Credential::AwsRolesAnywhere {{ trust_anchor_arn: {trust_anchor_arn:?}, profile_arn: {profile_arn:?}, role_arn: {role_arn:?}, region: {region:?}, key: <sealed> }}"
             ),
+            Credential::EntraFederated { tenant, client_id, cloud, audience, .. } => {
+                write!(f, "Credential::EntraFederated {{ tenant: {tenant:?}, client_id: {client_id:?}, cloud: {cloud:?}, audience: {audience:?} }}")
+            }
+            Credential::GcpFederated { audience, token_audience, service_account, .. } => {
+                write!(f, "Credential::GcpFederated {{ audience: {audience:?}, token_audience: {token_audience:?}, service_account: {service_account:?} }}")
+            }
             other => write!(f, "Credential::{} {{ <sealed> }}", other.type_name()),
         }
     }
@@ -174,6 +234,22 @@ impl std::fmt::Display for SinkError {
 /// A delivery target. `deliver` returns only once the tool accepted the batch (HEC: indexer-acknowledged).
 pub trait Sink: Send + Sync {
     fn deliver(&self, batch: &Batch) -> Result<(), SinkError>;
+}
+
+/// What a webhook receiver answered (revision 4 7.4): its status, `Retry-After` in seconds when it gave one as a
+/// number, and `webhook-challenge-response` when present. The body is read to at most 64 KiB and discarded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HookAnswer {
+    pub status: u16,
+    pub retry_after: Option<i64>,
+    pub challenge_response: Option<String>,
+}
+
+/// One webhook endpoint: `post` sends one request with the given headers and body and answers whatever status came
+/// back (redirects are never followed); Err is a request that got no answer (DNS, an address 8.1 refuses, connect,
+/// TLS, timeout).
+pub trait HookPost: Send + Sync {
+    fn post(&self, headers: &[(String, String)], body: &[u8]) -> Result<HookAnswer, SinkError>;
 }
 
 // ── Presets (11.1, 11.3) ────────────────────────────────────────────────────────────────────────────────────
@@ -212,7 +288,8 @@ pub struct Preset {
 const STD_PATHS: [&str; 3] = ["/v1/metrics", "/v1/logs", "/v1/traces"];
 const NO_PATHS: [&str; 3] = ["", "", ""];
 const TOKEN: &[&str] = &["token"];
-const ENTRA: &[&str] = &["entra_certificate"];
+const ENTRA: &[&str] = &["entra_certificate", "entra_federated"];
+const GCP: &[&str] = &["gcp_service_account_key", "gcp_federated"];
 
 const fn otlp(name: &'static str, temporality: &'static str, credentials: &'static [&'static str], token: Option<TokenStyle>, paths: [&'static str; 3], cloud: &'static str) -> Preset {
     Preset { name, kind: "otlp", temporality, credentials, token, paths, cloud }
@@ -237,7 +314,7 @@ pub static PRESETS: [Preset; 19] = [
     otlp("sumo_logic", "cumulative", TOKEN, Some(TokenStyle::Path), STD_PATHS, ""),
     otlp("cloudwatch", "cumulative", &["aws_roles_anywhere"], None, STD_PATHS, "public"),
     otlp("cloudwatch_gov", "cumulative", &["aws_roles_anywhere"], None, STD_PATHS, "usgov"),
-    otlp("google_cloud", "cumulative", &["gcp_service_account_key"], None, STD_PATHS, ""),
+    otlp("google_cloud", "cumulative", GCP, None, STD_PATHS, ""),
     otlp("otlp_generic", "cumulative", &["mtls", "none"], None, STD_PATHS, ""),
     Preset { name: "splunk_hec", kind: "splunk_hec", temporality: "cumulative", credentials: TOKEN, token: header("Authorization", "Splunk "), paths: NO_PATHS, cloud: "" },
     Preset { name: "splunk_cloud_gov", kind: "splunk_hec", temporality: "cumulative", credentials: TOKEN, token: header("Authorization", "Splunk "), paths: NO_PATHS, cloud: "" },
@@ -259,8 +336,8 @@ pub fn sink_for(destination: &Value, credential: Credential) -> Result<Box<dyn S
         Credential::Mtls { cert_pem, key_pem, ca_pem } => tls_mtls(cert_pem, key_pem, ca_pem.as_deref())?,
         _ => tls_default()?,
     };
-    let net: Arc<dyn Transport> = Arc::new(NetTransport { tls, private_ok, total: EXPORT_TIMEOUT });
-    let idp: Arc<dyn Transport> = Arc::new(NetTransport { tls: tls_default()?, private_ok: false, total: TOKEN_TIMEOUT });
+    let net: Arc<dyn Transport> = Arc::new(NetTransport { tls, private_ok, total: EXPORT_TIMEOUT, within: Vec::new() });
+    let idp: Arc<dyn Transport> = Arc::new(NetTransport { tls: tls_default()?, private_ok: false, total: TOKEN_TIMEOUT, within: Vec::new() });
     build(destination, credential, net, idp)
 }
 
@@ -272,7 +349,7 @@ fn build(dest: &Value, credential: Credential, net: Arc<dyn Transport>, idp: Arc
         return Err(SinkError::fatal("config", format!("the preset {name} does not take a {} credential", credential.type_name())));
     }
     match &credential {
-        Credential::EntraCertificate { cloud, .. } if cloud != p.cloud => {
+        Credential::EntraCertificate { cloud, .. } | Credential::EntraFederated { cloud, .. } if cloud != p.cloud => {
             return Err(SinkError::fatal("config", format!("the preset {name} needs an Entra credential of cloud {}", p.cloud)));
         }
         Credential::AwsRolesAnywhere { region, .. } if region.starts_with("us-gov-") != (p.cloud == "usgov") => {
@@ -285,6 +362,61 @@ fn build(dest: &Value, credential: Credential, net: Arc<dyn Transport>, idp: Arc
         "splunk_hec" => Ok(Box::new(HecSink::new(dest, credential, net)?)),
         "azure_logs" => Ok(Box::new(AzureLogsSink::new(dest, credential, net, idp)?)),
         _ => Err(SinkError::fatal("config", "syslog_cef destinations are delivered by fleet_syslog::cef_sink")),
+    }
+}
+
+/// Revision 4 7.4: the endpoint of a `webhook` destination entry with its receiver credential (`none`, a `token` sent
+/// as `Authorization: Bearer`, or `mtls`). Refuses (not retryable) another kind, another credential type, and an
+/// endpoint 8.1 refuses.
+pub fn hook_post(destination: &Value, credential: Credential) -> Result<Arc<dyn HookPost>, SinkError> {
+    let private_ok = destination.get("private_ok").and_then(Value::as_bool).unwrap_or(false);
+    let tls = match &credential {
+        Credential::Mtls { cert_pem, key_pem, ca_pem } => tls_mtls(cert_pem, key_pem, ca_pem.as_deref())?,
+        _ => tls_default()?,
+    };
+    hook_with(destination, credential, Arc::new(NetTransport { tls, private_ok, total: WEBHOOK_TIMEOUT, within: Vec::new() }))
+}
+
+/// Revision 6 7.10: an A2A push endpoint (`destination` a `webhook` entry with `private_ok` false, `credential` `none` or
+/// the partner's Bearer `token`): a private address is allowed only inside `within` (the client's `push.private_cidrs`;
+/// the partner controls the host's DNS), the whole request bounded by `total`, web PKI with the name check.
+pub fn hook_post_within(destination: &Value, credential: Credential, within: Vec<Cidr>, total: Duration) -> Result<Arc<dyn HookPost>, SinkError> {
+    hook_with(destination, credential, Arc::new(NetTransport { tls: tls_default()?, private_ok: false, total, within }))
+}
+
+fn hook_with(dest: &Value, credential: Credential, net: Arc<dyn Transport>) -> Result<Arc<dyn HookPost>, SinkError> {
+    if dest.get("kind").and_then(Value::as_str) != Some("webhook") {
+        return Err(SinkError::fatal("config", "only a webhook destination posts webhooks"));
+    }
+    let url = dest.get("endpoint").and_then(Value::as_str).ok_or_else(|| SinkError::fatal("config", "the webhook has no endpoint"))?;
+    checked(url)?;
+    let authorization = match credential {
+        Credential::None | Credential::Mtls { .. } => None,
+        Credential::Token(t) => {
+            header_safe(&t, "token")?;
+            Some(format!("Bearer {t}"))
+        }
+        other => return Err(SinkError::fatal("config", format!("a webhook does not take a {} credential", other.type_name()))),
+    };
+    Ok(Arc::new(HookSink { url: url.to_owned(), authorization, net }))
+}
+
+struct HookSink {
+    url: String,
+    authorization: Option<String>,
+    net: Arc<dyn Transport>,
+}
+
+impl HookPost for HookSink {
+    fn post(&self, headers: &[(String, String)], body: &[u8]) -> Result<HookAnswer, SinkError> {
+        let mut req = Request { method: "POST", url: self.url.clone(), headers: headers.to_vec(), body: Bytes::copy_from_slice(body) };
+        if let Some(a) = &self.authorization {
+            req.headers.push(("Authorization".into(), a.clone()));
+        }
+        let r = self.net.send(&req)?;
+        let header = |n: &str| r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.trim().to_owned());
+        let retry_after = header("retry-after").and_then(|v| v.parse::<i64>().ok()).filter(|s| *s >= 0);
+        Ok(HookAnswer { status: r.status, retry_after, challenge_response: header("webhook-challenge-response") })
     }
 }
 
@@ -313,7 +445,12 @@ impl Request {
 struct Response {
     status: u16,
     body: Vec<u8>,
+    /// Only the answer headers a caller reads (`ANSWER_HEADERS`), lowercase names.
+    headers: Vec<(String, String)>,
 }
+
+/// The answer headers kept: a webhook's `Retry-After` and its endpoint verification response (revision 4 7.4).
+const ANSWER_HEADERS: [&str; 2] = ["retry-after", "webhook-challenge-response"];
 
 /// One request and its whole (capped) answer.
 trait Transport: Send + Sync {
@@ -325,14 +462,17 @@ struct NetTransport {
     tls: Arc<ClientConfig>,
     private_ok: bool,
     total: Duration,
+    /// Revision 6 7.10: with `private_ok` false, a private address (one `private_ok` would allow) is allowed only
+    /// inside one of these.
+    within: Vec<Cidr>,
 }
 
 impl Transport for NetTransport {
     fn send(&self, req: &Request) -> Result<Response, SinkError> {
         let url = api_fetch::check_url(&req.url).map_err(|e| SinkError::fatal("config", format!("the URL is refused ({e})")))?;
-        let (tls, private_ok, total, req) = (self.tls.clone(), self.private_ok, self.total, req.clone());
+        let (tls, private_ok, total, req, within) = (self.tls.clone(), self.private_ok, self.total, req.clone(), self.within.clone());
         pooled(async move {
-            tokio::time::timeout(total, exchange(&url, &req, tls, private_ok))
+            tokio::time::timeout(total, exchange(&url, &req, tls, private_ok, &within))
                 .await
                 .unwrap_or_else(|_| Err(SinkError::retry("timeout", format!("no answer within {} seconds", total.as_secs()))))
         })
@@ -390,7 +530,7 @@ fn checked(url: &str) -> Result<FetchUrl, SinkError> {
     api_fetch::check_url(url).map_err(|e| SinkError::fatal("config", format!("the URL {url} is refused ({e})")))
 }
 
-async fn exchange(url: &FetchUrl, req: &Request, tls: Arc<ClientConfig>, private_ok: bool) -> Result<Response, SinkError> {
+async fn exchange(url: &FetchUrl, req: &Request, tls: Arc<ClientConfig>, private_ok: bool, within: &[Cidr]) -> Result<Response, SinkError> {
     let addrs: Vec<SocketAddr> = match &url.host {
         Host::Ip(ip) => vec![SocketAddr::new(*ip, url.port)],
         Host::Name(n) => tokio::time::timeout(DNS_TIMEOUT, tokio::net::lookup_host((n.as_str(), url.port)))
@@ -402,7 +542,8 @@ async fn exchange(url: &FetchUrl, req: &Request, tls: Arc<ClientConfig>, private
     if addrs.is_empty() {
         return Err(SinkError::retry("dns", "the host resolved to no address"));
     }
-    if let Some(bad) = addrs.iter().find(|a| !api_fetch::address_allowed(a.ip(), private_ok)) {
+    let allowed = |ip: std::net::IpAddr| api_fetch::address_allowed(ip, private_ok) || (api_fetch::address_allowed(ip, true) && within.iter().any(|c| c.contains(ip)));
+    if let Some(bad) = addrs.iter().find(|a| !allowed(a.ip())) {
         return Err(SinkError::fatal("address", format!("the address {} is not allowed (contract 8.1)", bad.ip())));
     }
     let mut last = SinkError::retry("connect", "no address answered");
@@ -427,17 +568,19 @@ async fn exchange(url: &FetchUrl, req: &Request, tls: Arc<ClientConfig>, private
     tokio::spawn(async move {
         let _ = conn.await;
     });
-    let mut b = hyper::Request::builder()
-        .method(req.method)
-        .uri(url.path.as_str())
-        .header(hyper::header::HOST, authority(url))
-        .header(hyper::header::USER_AGENT, "lucid-relay");
+    let mut b = hyper::Request::builder().method(req.method).uri(url.path.as_str()).header(hyper::header::HOST, authority(url));
+    // a webhook names its own (`Lucid/<version>`, revision 4 7.4)
+    if !req.headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("user-agent")) {
+        b = b.header(hyper::header::USER_AGENT, "lucid-relay");
+    }
     for (k, v) in &req.headers {
         b = b.header(k.as_str(), v.as_str());
     }
     let r = b.body(Full::new(req.body.clone())).map_err(|e| SinkError::fatal("config", format!("the request does not build ({e})")))?;
     let resp = send.send_request(r).await.map_err(|e| SinkError::retry("connect", format!("the request failed ({e})")))?;
     let status = resp.status().as_u16();
+    let headers: Vec<(String, String)> =
+        ANSWER_HEADERS.iter().filter_map(|n| resp.headers().get(*n).and_then(|v| v.to_str().ok()).map(|v| ((*n).to_owned(), v.to_owned()))).collect();
     let mut body = resp.into_body();
     let mut buf = Vec::new();
     while let Some(frame) = body.frame().await {
@@ -450,7 +593,7 @@ async fn exchange(url: &FetchUrl, req: &Request, tls: Arc<ClientConfig>, private
             }
         }
     }
-    Ok(Response { status, body: buf })
+    Ok(Response { status, body: buf, headers })
 }
 
 fn tls_default() -> Result<Arc<ClientConfig>, SinkError> {
@@ -741,21 +884,125 @@ fn oauth_token(idp: &dyn Transport, url: &str, body: Vec<u8>, now: i64) -> Resul
     Ok((token.to_owned(), now + life))
 }
 
-/// Entra ID client credentials with a certificate assertion (Azure Monitor, Sentinel).
+/// The provider's error code of a failed federated exchange (8.3 `federation.failed`): the OAuth `error` string, or
+/// a Google API error's `error.status`, else `fallback`; letters, digits, `_`, `-` and `.` only, at most 64.
+fn provider_error(body: &[u8], fallback: &str) -> String {
+    let v: Option<Value> = serde_json::from_slice(body).ok();
+    let code = match v.as_ref().and_then(|v| v.get("error")) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(o)) => o.get("status").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        _ => String::new(),
+    };
+    let clean: String = code.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')).take(64).collect();
+    if clean.is_empty() {
+        fallback.to_owned()
+    } else {
+        clean
+    }
+}
+
+/// A failed federated token request: the error, the HTTP status (0 without an answer) and the provider's error code.
+type FedFailure = (SinkError, u16, String);
+
+/// One token request of a federated exchange (8.3). The answer's `access_token` and `expires_in` (OAuth and Google
+/// STS) or `accessToken` and `expireTime` (IAM Credentials API).
+fn federated_token(idp: &dyn Transport, req: &Request, now: i64, what: &str) -> Result<(String, i64), FedFailure> {
+    let r = idp.send(req).map_err(|e| {
+        let code = e.code.to_owned();
+        (e, 0, code)
+    })?;
+    if let Err(mut e) = check_status(r.status, &r.body, what) {
+        if e.code == "rejected" {
+            // invalid_grant, invalid_client, unauthorized_client: the federation trust, not the batch
+            e.code = "auth";
+        }
+        let code = provider_error(&r.body, e.code);
+        return Err((e, r.status, code));
+    }
+    let no = |m: String| (SinkError::retry("token", m), r.status, "token".to_owned());
+    let v: Value = serde_json::from_slice(&r.body).map_err(|_| no(format!("{what} answered no JSON")))?;
+    let token = v.get("access_token").or_else(|| v.get("accessToken")).and_then(Value::as_str).filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_graphic()));
+    let token = token.ok_or_else(|| no(format!("{what} answered no access token")))?;
+    let exp = match (v.get("expires_in"), v.get("expireTime").and_then(Value::as_str)) {
+        (Some(Value::Number(n)), _) => n.as_i64().map(|l| now + l),
+        (Some(Value::String(s)), _) => s.parse::<i64>().ok().map(|l| now + l),
+        (_, Some(t)) => parse_iso_utc(t),
+        _ => None,
+    }
+    .unwrap_or(now + 3600);
+    Ok((token.to_owned(), exp))
+}
+
+/// One federated cloud token (8.3): (token, used until, the signing key's kid, the token's own expiry). It is used
+/// until 60 s before it expires and never past the subject's `until` (the map's `expires`, the key's `exp`), and is
+/// dropped at once when its key may no longer sign (`federation_drop_key`, or gone from the pinned map).
+#[derive(Default)]
+struct FedCache(Mutex<Option<(String, i64, String, i64)>>);
+
+impl FedCache {
+    /// The cached token, else a subject token from `signer` exchanged by `exchange` (each exchange reported to the
+    /// signer for its audit, without token values). Ok is (token, its expiry).
+    fn get(&self, signer: &dyn SubjectSigner, provider: &str, aud: &str, fresh: bool, exchange: impl FnOnce(&str, i64) -> Result<(String, i64), FedFailure>) -> Result<(String, i64), SinkError> {
+        let now = now_ms().div_euclid(1000);
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if !fresh {
+            if let Some((t, until, kid, exp)) = &*g {
+                if now < *until && signer.usable(kid, now) {
+                    return Ok((t.clone(), *exp));
+                }
+            }
+        }
+        *g = None;
+        let s = match signer.subject(aud, now) {
+            Ok(s) => s,
+            Err(e) => {
+                signer.failed(provider, 0, e.code);
+                return Err(e);
+            }
+        };
+        match exchange(&s.token, now) {
+            Ok((t, exp)) => {
+                signer.exchanged(provider, &s.kid, exp);
+                *g = Some((t.clone(), (exp - FEDERATED_MARGIN).min(s.until), s.kid, exp));
+                Ok((t, exp))
+            }
+            Err((e, status, code)) => {
+                signer.failed(provider, status, &code);
+                Err(e)
+            }
+        }
+    }
+}
+
+/// How the Entra client credentials request proves the client.
+enum EntraProof {
+    /// 11.3 `entra_certificate`: an assertion signed by the certificate's key.
+    Certificate { key: SigningKey, x5t: String },
+    /// Revision 4 8.3 `entra_federated`: the Lucid subject token (`aud` = the credential's `audience`) is the assertion.
+    Federated { audience: String, signer: Arc<dyn SubjectSigner>, cache: FedCache },
+}
+
+/// Entra ID client credentials with a certificate assertion or a Lucid subject token (Azure Monitor, Sentinel).
 struct EntraAuth {
     tenant: String,
     client_id: String,
     gov: bool,
-    key: SigningKey,
-    x5t: String,
+    proof: EntraProof,
     idp: Arc<dyn Transport>,
     cache: TokenCache,
 }
 
 impl EntraAuth {
     fn new(credential: &Credential, idp: Arc<dyn Transport>) -> Result<EntraAuth, SinkError> {
-        let Credential::EntraCertificate { tenant, client_id, cloud, cert_pem, key_pem } = credential else {
-            return Err(SinkError::fatal("config", "an Entra certificate credential is needed"));
+        let (tenant, client_id, cloud, proof) = match credential {
+            Credential::EntraCertificate { tenant, client_id, cloud, cert_pem, key_pem } => (tenant, client_id, cloud, EntraProof::Certificate { key: SigningKey::from_pem(key_pem)?, x5t: b64u(&sha256(&cert_der(cert_pem)?)) }),
+            Credential::EntraFederated { tenant, client_id, cloud, audience, signer } => {
+                if audience.is_empty() || audience.len() > 600 || !audience.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+                    return Err(SinkError::fatal("config", "the federated credential's audience must be 1 to 600 printable characters"));
+                }
+                (tenant, client_id, cloud, EntraProof::Federated { audience: audience.clone(), signer: signer.clone(), cache: FedCache::default() })
+            }
+            _ => return Err(SinkError::fatal("config", "an Entra certificate or federated credential is needed")),
         };
         ascii_id(tenant, "tenant")?;
         ascii_id(client_id, "client id")?;
@@ -764,7 +1011,7 @@ impl EntraAuth {
             "usgov" => true,
             _ => return Err(SinkError::fatal("config", "the Entra cloud must be public or usgov")),
         };
-        Ok(EntraAuth { tenant: tenant.clone(), client_id: client_id.clone(), gov, key: SigningKey::from_pem(key_pem)?, x5t: b64u(&sha256(&cert_der(cert_pem)?)), idp, cache: TokenCache::default() })
+        Ok(EntraAuth { tenant: tenant.clone(), client_id: client_id.clone(), gov, proof, idp, cache: TokenCache::default() })
     }
 
     fn token_url(&self) -> String {
@@ -781,25 +1028,117 @@ impl EntraAuth {
 
     /// Header {alg, typ, x5t#S256 (SHA-256 of the certificate DER)}; claims {aud (the token endpoint), iss = sub =
     /// client id, jti, nbf, iat, exp (5 minutes)}.
-    fn assertion(&self, now: i64) -> Result<String, SinkError> {
-        let header = json!({"alg": self.key.jwt_alg(), "typ": "JWT", "x5t#S256": self.x5t});
+    fn assertion(&self, key: &SigningKey, x5t: &str, now: i64) -> Result<String, SinkError> {
+        let header = json!({"alg": key.jwt_alg(), "typ": "JWT", "x5t#S256": x5t});
         let claims = json!({"aud": self.token_url(), "iss": self.client_id, "sub": self.client_id, "jti": uuid(), "nbf": now, "iat": now, "exp": now + ASSERTION_SECONDS});
-        jwt(&self.key, &header, &claims)
+        jwt(key, &header, &claims)
+    }
+
+    /// The client credentials form with `assertion` as the client assertion.
+    fn token_form(&self, assertion: &str) -> Vec<u8> {
+        form(&[
+            ("client_id", self.client_id.as_str()),
+            ("scope", self.scope()),
+            ("grant_type", "client_credentials"),
+            ("client_assertion_type", ASSERTION_TYPE),
+            ("client_assertion", assertion),
+        ])
+    }
+
+    /// `entra_federated`: the access token got with a subject token, and its expiry (unix seconds).
+    fn federated(&self, fresh: bool) -> Result<(String, i64), SinkError> {
+        let EntraProof::Federated { audience, signer, cache } = &self.proof else {
+            return Err(SinkError::fatal("config", "an Entra federated credential is needed"));
+        };
+        cache.get(&**signer, "entra", audience, fresh, |subject, now| {
+            let req = Request::post(self.token_url(), "application/x-www-form-urlencoded", self.token_form(subject));
+            federated_token(&*self.idp, &req, now, "the Entra token endpoint")
+        })
     }
 
     fn bearer(&self, fresh: bool) -> Result<String, SinkError> {
-        let now = now_ms().div_euclid(1000);
-        self.cache.get(fresh, now, || {
-            let a = self.assertion(now)?;
-            let body = form(&[
-                ("client_id", self.client_id.as_str()),
-                ("scope", self.scope()),
-                ("grant_type", "client_credentials"),
-                ("client_assertion_type", ASSERTION_TYPE),
-                ("client_assertion", a.as_str()),
-            ]);
-            oauth_token(&*self.idp, &self.token_url(), body, now)
+        match &self.proof {
+            EntraProof::Certificate { key, x5t } => {
+                let now = now_ms().div_euclid(1000);
+                self.cache.get(fresh, now, || {
+                    let a = self.assertion(key, x5t, now)?;
+                    oauth_token(&*self.idp, &self.token_url(), self.token_form(&a), now)
+                })
+            }
+            EntraProof::Federated { .. } => self.federated(fresh).map(|(t, _)| t),
+        }
+    }
+}
+
+/// Revision 4 8.3 `gcp_federated`: the Lucid subject token exchanged at Google STS for a federated access token, then
+/// (with `service_account`) that token exchanged for the service account's own (IAM Credentials API).
+struct GcpFederatedAuth {
+    audience: String,
+    token_audience: String,
+    service_account: Option<String>,
+    /// For `gcp.project_id`: the service account's project id, else the provider's project number.
+    project: Option<String>,
+    signer: Arc<dyn SubjectSigner>,
+    idp: Arc<dyn Transport>,
+    cache: FedCache,
+}
+
+impl GcpFederatedAuth {
+    fn new(credential: &Credential, idp: Arc<dyn Transport>) -> Result<GcpFederatedAuth, SinkError> {
+        let Credential::GcpFederated { audience, token_audience, service_account, signer } = credential else {
+            return Err(SinkError::fatal("config", "a Google federated credential is needed"));
+        };
+        let number = audience.strip_prefix("//iam.googleapis.com/projects/").and_then(|r| r.split_once("/locations/global/workloadIdentityPools/")).map(|(n, _)| n);
+        let number = number.filter(|n| (1..=20).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit())).ok_or_else(|| SinkError::fatal("config", "the federated credential's audience is not a workload identity provider"))?;
+        header_safe(audience, "audience")?;
+        if token_audience.is_empty() || token_audience.len() > 600 {
+            return Err(SinkError::fatal("config", "the federated credential's token_audience must be 1 to 600 characters"));
+        }
+        header_safe(token_audience, "token_audience")?;
+        let mut project = Some(number.to_owned());
+        if let Some(sa) = service_account {
+            let (_, domain) = sa.split_once('@').filter(|(l, d)| !l.is_empty() && !d.is_empty()).ok_or_else(|| SinkError::fatal("config", "the service account is not an email address"))?;
+            header_safe(sa, "service account")?;
+            if let Some(p) = domain.strip_suffix(".iam.gserviceaccount.com").filter(|p| ascii_id(p, "project id").is_ok()) {
+                project = Some(p.to_owned());
+            }
+        }
+        Ok(GcpFederatedAuth { audience: audience.clone(), token_audience: token_audience.clone(), service_account: service_account.clone(), project, signer: signer.clone(), idp, cache: FedCache::default() })
+    }
+
+    /// The access token and its expiry (unix seconds).
+    fn token(&self, fresh: bool) -> Result<(String, i64), SinkError> {
+        self.cache.get(&*self.signer, "google", &self.token_audience, fresh, |subject, now| {
+            let body = json!({
+                "grantType": TOKEN_EXCHANGE_GRANT, "audience": self.audience, "scope": CLOUD_PLATFORM_SCOPE,
+                "requestedTokenType": ACCESS_TOKEN_TYPE, "subjectToken": subject, "subjectTokenType": JWT_TOKEN_TYPE,
+            });
+            let federated = federated_token(&*self.idp, &Request::post(GOOGLE_STS_URL, "application/json", body.to_string()), now, "Google STS")?;
+            let Some(sa) = &self.service_account else { return Ok(federated) };
+            let scopes: Vec<&str> = GCP_SCOPE.split(' ').collect();
+            let mut req = Request::post(format!("{IAM_CREDENTIALS_URL}{}:generateAccessToken", pct(sa)), "application/json", json!({"scope": scopes, "lifetime": "3600s"}).to_string());
+            req.headers.push(("Authorization".into(), format!("Bearer {}", federated.0)));
+            federated_token(&*self.idp, &req, now, "the IAM Credentials API")
         })
+    }
+
+    fn bearer(&self, fresh: bool) -> Result<String, SinkError> {
+        self.token(fresh).map(|(t, _)| t)
+    }
+}
+
+/// Revision 4 13.1 `federation-test`: one fresh token exchange with a federated credential; Ok is the provider
+/// (`entra` or `google`) and the cloud token's expiry (unix seconds). The token itself goes nowhere.
+pub fn federation_test(credential: &Credential) -> Result<(&'static str, i64), SinkError> {
+    let idp: Arc<dyn Transport> = Arc::new(NetTransport { tls: tls_default()?, private_ok: false, total: TOKEN_TIMEOUT, within: Vec::new() });
+    federation_check(credential, idp)
+}
+
+fn federation_check(credential: &Credential, idp: Arc<dyn Transport>) -> Result<(&'static str, i64), SinkError> {
+    match credential {
+        Credential::EntraFederated { .. } => EntraAuth::new(credential, idp)?.federated(true).map(|(_, exp)| ("entra", exp)),
+        Credential::GcpFederated { .. } => GcpFederatedAuth::new(credential, idp)?.token(true).map(|(_, exp)| ("google", exp)),
+        _ => Err(SinkError::fatal("config", "only a federated credential has a token exchange to test")),
     }
 }
 
@@ -1001,6 +1340,7 @@ enum Auth {
     Static,
     Entra(EntraAuth),
     Gcp(GcpAuth),
+    GcpFederated(GcpFederatedAuth),
     Aws(AwsAuth),
 }
 
@@ -1013,6 +1353,10 @@ impl Auth {
                 Ok(())
             }
             Auth::Gcp(g) => {
+                req.headers.push(("Authorization".into(), format!("Bearer {}", g.bearer(fresh)?)));
+                Ok(())
+            }
+            Auth::GcpFederated(g) => {
                 req.headers.push(("Authorization".into(), format!("Bearer {}", g.bearer(fresh)?)));
                 Ok(())
             }
@@ -1113,7 +1457,12 @@ impl OtlpSink {
                 }
                 Auth::Static
             }
-            c @ Credential::EntraCertificate { .. } => Auth::Entra(EntraAuth::new(&c, idp)?),
+            c @ (Credential::EntraCertificate { .. } | Credential::EntraFederated { .. }) => Auth::Entra(EntraAuth::new(&c, idp)?),
+            c @ Credential::GcpFederated { .. } => {
+                let g = GcpFederatedAuth::new(&c, idp)?;
+                gcp_project = g.project.clone();
+                Auth::GcpFederated(g)
+            }
             c @ Credential::AwsRolesAnywhere { .. } => Auth::Aws(AwsAuth::new(&c, idp)?),
             Credential::GcpServiceAccountKey(k) => {
                 let g = GcpAuth::new(&k, idp)?;
@@ -1131,7 +1480,8 @@ impl Sink for OtlpSink {
     fn deliver(&self, batch: &Batch) -> Result<(), SinkError> {
         let (i, aws_service) = match batch.signal {
             Signal::Metrics => (0, "monitoring"),
-            Signal::Logs | Signal::Audit => (1, "logs"),
+            // revision 4 7.5: events are log records whose Body is the CloudEvent
+            Signal::Logs | Signal::Audit | Signal::Events => (1, "logs"),
             Signal::Traces => (2, "xray"),
         };
         let url = self.endpoints[i].as_deref().ok_or_else(|| SinkError::fatal("config", format!("the destination has no {} endpoint", batch.signal.name())))?;
@@ -1211,12 +1561,14 @@ impl HecSink {
     }
 
     /// One 11.2 event: `{"time" (seconds), "host" (console or relay id), "source": "lucid", "sourcetype", "index"?,
-    /// "fields": {"lucid_org", "lucid_relay", "lucid_event_id"}, "event": <record>}`.
+    /// "fields": {"lucid_org", "lucid_relay", "lucid_event_id"}, "event": <record>}`; for revision 4 7.5 events the
+    /// sourcetype is `lucid:events` (the fourth) and `event` the CloudEvent itself.
     fn write_event(&self, out: &mut Vec<u8>, batch: &Batch, rec: &Value) -> Result<(), SinkError> {
         let t_ms = rec.get("t_ms").and_then(Value::as_i64).ok_or_else(|| SinkError::fatal("record", "a record lacks its t_ms"))?;
         let event = rec.get("event").and_then(Value::as_str).unwrap_or_default();
         let sourcetype = match batch.signal {
             Signal::Audit => &self.sourcetypes[0],
+            Signal::Events => &self.sourcetypes[3],
             _ if event.starts_with("api.") => &self.sourcetypes[2],
             _ => &self.sourcetypes[1],
         };
@@ -1244,7 +1596,11 @@ impl HecSink {
         let head = serde_json::to_vec(&Value::Object(head)).map_err(|e| SinkError::fatal("record", e.to_string()))?;
         out.extend_from_slice(&head[..head.len() - 1]);
         out.extend_from_slice(b",\"event\":");
-        serde_json::to_writer(&mut *out, rec).map_err(|e| SinkError::fatal("record", e.to_string()))?;
+        let body = match batch.signal {
+            Signal::Events => rec.get("body").ok_or_else(|| SinkError::fatal("record", "an event record lacks its CloudEvent"))?,
+            _ => rec,
+        };
+        serde_json::to_writer(&mut *out, body).map_err(|e| SinkError::fatal("record", e.to_string()))?;
         out.extend_from_slice(b"}\n");
         Ok(())
     }
@@ -1274,8 +1630,8 @@ impl HecSink {
 
 impl Sink for HecSink {
     fn deliver(&self, batch: &Batch) -> Result<(), SinkError> {
-        if !matches!(batch.signal, Signal::Logs | Signal::Audit) {
-            return Err(SinkError::fatal("signal", "Splunk HEC carries logs and audit only"));
+        if !matches!(batch.signal, Signal::Logs | Signal::Audit | Signal::Events) {
+            return Err(SinkError::fatal("signal", "Splunk HEC carries logs, audit and events only"));
         }
         let mut body = Vec::with_capacity(batch.records.len() * 512);
         for rec in &batch.records {
@@ -1295,8 +1651,44 @@ impl Sink for HecSink {
 
 struct AzureLogsSink {
     url: String,
+    /// Revision 4 7.5: the `events_stream` (`LucidEvents_CL`) URL, when the destination carries events.
+    events_url: Option<String>,
     auth: Auth,
     net: Arc<dyn Transport>,
+}
+
+/// One `LucidEvents_CL` row (revision 4 7.5) of an event record: `TimeGenerated`, `Org`, `Relay` (`console` for the
+/// console's events), `Chain`, `Seq`, `EventId`, `EventName` (the registry name; Log Analytics reserves `Type`),
+/// `Subject`, `Source`, `Data` (dynamic). Absent values are left out.
+fn azure_event_row(rec: &Value) -> Result<Value, SinkError> {
+    let t_ms = rec.get("t_ms").and_then(Value::as_i64).ok_or_else(|| SinkError::fatal("record", "a record lacks its t_ms"))?;
+    let ce = rec.get("body").and_then(Value::as_object).ok_or_else(|| SinkError::fatal("record", "an event record lacks its CloudEvent"))?;
+    let c = |k: &str| ce.get(k).filter(|v| !v.is_null()).cloned();
+    let org = ce.get("lucidorg").and_then(Value::as_str).unwrap_or_default();
+    let source = ce.get("source").and_then(Value::as_str).unwrap_or_default();
+    let relay = match source.strip_prefix(&format!("/api/orgs/{org}/")) {
+        Some("console") => Some("console"),
+        Some(r) => r.strip_prefix("relays/"),
+        None => None,
+    };
+    let mut row = Map::new();
+    row.insert("TimeGenerated".into(), iso_time(t_ms).into());
+    for (col, v) in [
+        ("Org", c("lucidorg")),
+        ("Relay", relay.map(Value::from)),
+        ("Chain", c("lucidchain")),
+        ("Seq", c("lucidseq")),
+        ("EventId", c("id")),
+        ("EventName", rec.get("event").filter(|v| v.is_string()).cloned()),
+        ("Subject", c("subject")),
+        ("Source", c("source")),
+        ("Data", c("data")),
+    ] {
+        if let Some(v) = v {
+            row.insert(col.into(), v);
+        }
+    }
+    Ok(Value::Object(row))
 }
 
 /// Body fields that have their own `LucidAudit_CL` column (the rest goes to `Detail`).
@@ -1371,21 +1763,26 @@ impl AzureLogsSink {
         let s = |k: &str| dest.pointer(&format!("/settings/{k}")).and_then(Value::as_str).filter(|x| !x.is_empty());
         let dce = s("dce").ok_or_else(|| SinkError::fatal("config", "the destination has no dce"))?.trim_end_matches('/');
         let dcr = s("dcr_immutable_id").ok_or_else(|| SinkError::fatal("config", "the destination has no dcr_immutable_id"))?;
-        let stream = s("stream").unwrap_or(DEFAULT_STREAM);
-        let url = format!("{dce}/dataCollectionRules/{}/streams/{}?api-version={LOGS_API_VERSION}", pct(dcr), pct(stream));
+        let stream_url = |stream: &str| format!("{dce}/dataCollectionRules/{}/streams/{}?api-version={LOGS_API_VERSION}", pct(dcr), pct(stream));
+        let url = stream_url(s("stream").unwrap_or(DEFAULT_STREAM));
         checked(&url)?;
-        Ok(AzureLogsSink { url, auth: Auth::Entra(EntraAuth::new(&credential, idp)?), net })
+        let events_url = s("events_stream").map(stream_url);
+        Ok(AzureLogsSink { url, events_url, auth: Auth::Entra(EntraAuth::new(&credential, idp)?), net })
     }
 }
 
 impl Sink for AzureLogsSink {
     fn deliver(&self, batch: &Batch) -> Result<(), SinkError> {
-        if !matches!(batch.signal, Signal::Logs | Signal::Audit) {
-            return Err(SinkError::fatal("signal", "the Logs Ingestion API carries logs and audit only"));
-        }
-        let rows = batch.records.iter().map(|r| azure_row(batch, r)).collect::<Result<Vec<_>, _>>()?;
+        let (url, rows) = match batch.signal {
+            Signal::Logs | Signal::Audit => (self.url.as_str(), batch.records.iter().map(|r| azure_row(batch, r)).collect::<Result<Vec<_>, _>>()?),
+            Signal::Events => {
+                let url = self.events_url.as_deref().ok_or_else(|| SinkError::fatal("config", "the destination has no events_stream"))?;
+                (url, batch.records.iter().map(azure_event_row).collect::<Result<Vec<_>, _>>()?)
+            }
+            _ => return Err(SinkError::fatal("signal", "the Logs Ingestion API carries logs, audit and events only")),
+        };
         for body in azure_bodies(&rows, AZURE_CALL_MAX)? {
-            self.auth.send(&*self.net, &Request::post(self.url.as_str(), "application/json", body), "", "the Logs Ingestion API")?;
+            self.auth.send(&*self.net, &Request::post(url, "application/json", body), "", "the Logs Ingestion API")?;
         }
         Ok(())
     }
@@ -1426,7 +1823,7 @@ mod tests {
     }
 
     fn answer(status: u16, body: &str) -> Response {
-        Response { status, body: body.as_bytes().to_vec() }
+        Response { status, body: body.as_bytes().to_vec(), headers: Vec::new() }
     }
 
     fn pem(label: &str, der: &[u8]) -> String {
@@ -1562,10 +1959,10 @@ mod tests {
             assert!(preset(name).unwrap().token.is_some(), "{name}");
         }
         for name in ["azure_monitor", "azure_monitor_gov", "sentinel", "sentinel_gov"] {
-            assert_eq!(preset(name).unwrap().credentials, &["entra_certificate"]);
+            assert_eq!(preset(name).unwrap().credentials, &["entra_certificate", "entra_federated"]);
         }
         assert_eq!(preset("cloudwatch_gov").unwrap().credentials, &["aws_roles_anywhere"]);
-        assert_eq!(preset("google_cloud").unwrap().credentials, &["gcp_service_account_key"]);
+        assert_eq!(preset("google_cloud").unwrap().credentials, &["gcp_service_account_key", "gcp_federated"]);
         assert!(preset("otlp_generic").unwrap().credentials.contains(&"mtls"));
         assert!(preset("syslog_cef").unwrap().credentials.contains(&"mtls"));
         assert_eq!(preset("azure_monitor").unwrap().temporality, "delta");
@@ -1639,7 +2036,7 @@ mod tests {
 
     #[test]
     fn net_transport_refuses_loopback_before_connecting() {
-        let t = NetTransport { tls: tls_default().unwrap(), private_ok: true, total: Duration::from_secs(5) };
+        let t = NetTransport { tls: tls_default().unwrap(), private_ok: true, total: Duration::from_secs(5), within: Vec::new() };
         let e = t.send(&Request::post("https://127.0.0.1:9/v1/logs", "application/x-protobuf", Vec::new())).unwrap_err();
         assert_eq!((e.retryable, e.code), (false, "address"));
         let e = t.send(&Request::post("http://example.com/v1/logs", "application/x-protobuf", Vec::new())).unwrap_err();
@@ -2021,5 +2418,324 @@ mod tests {
         let text = format!("{c:?} {:?} {:?}", Credential::Token("s3cr3t".into()), Credential::GcpServiceAccountKey("{\"private_key\":\"k\"}".into()));
         assert!(!text.contains("PRIVATE KEY") && !text.contains("s3cr3t") && !text.contains("private_key"));
         assert!(text.contains("contoso.onmicrosoft.com"));
+    }
+
+    // ── revision 4 7.4, 7.5: events on HEC, Logs Ingestion and OTLP; the webhook request ──
+
+    fn event_record() -> Value {
+        let ce = json!({"specversion": "1.0", "id": "lucid-api-events-pseudo-v1:acme/relays/r_01:12", "source": "/api/orgs/acme/relays/r_01",
+            "type": "com.emertins.lucid.relay.mode.changed", "time": "2026-11-18T11:08:43Z", "subject": "r_01",
+            "dataschema": "https://lucid.emertins.com/schemas/events/relay.mode.changed/1", "datacontenttype": "application/json",
+            "lucidorg": "acme", "lucidseq": 12, "lucidchain": "lucid-api-events-pseudo-v1:acme/r_01", "lucidprev": "00", "lucidhash": "11",
+            "data": {"relay": "r_01", "mode": "failover"}});
+        json!({"t_ms": 1_795_000_123_000i64, "severity": 9, "event": "relay.mode.changed", "body": ce,
+            "attributes": {"lucid.event_id": ce["id"], "lucid.chain": ce["lucidchain"], "lucid.seq": 12, "event.name": "relay.mode.changed"}})
+    }
+
+    #[test]
+    fn events_ride_hec_otlp_and_logs_ingestion() {
+        let rec = event_record();
+        // HEC: sourcetype lucid:events, `event` the CloudEvent, `fields.lucid_event_id` its id
+        let (s, net) = hec(|r| answer(200, if r.url.contains("/event") { r#"{"ackId":3}"# } else { r#"{"acks":{"3":true}}"# }), json!({"endpoint": "https://hec.example.com"}));
+        s.deliver(&batch(Signal::Events, vec![rec.clone()])).unwrap();
+        let line: Value = serde_json::from_slice(&net.seen()[0].body).unwrap();
+        assert_eq!(line["sourcetype"], "lucid:events");
+        assert_eq!(line["event"], rec["body"]);
+        assert_eq!(line["fields"]["lucid_event_id"], "lucid-api-events-pseudo-v1:acme/relays/r_01:12");
+        // OTLP: a log record on the logs endpoint, Body the CloudEvent
+        let net = Fake::new(|_| answer(200, ""));
+        let sink = build(&dest("otlp", "otlp_generic", json!({"endpoint": "https://collector.example"})), Credential::None, net.clone(), net.clone()).unwrap();
+        sink.deliver(&batch(Signal::Events, vec![rec.clone()])).unwrap();
+        let r = net.seen().pop().unwrap();
+        assert_eq!(r.url, "https://collector.example/v1/logs");
+        assert_eq!(&r.body[..], &otlp_proto::logs_request(&resource(), "1.2.3", &[rec.clone()]).unwrap()[..]);
+        // Logs Ingestion: a LucidEvents_CL row on events_stream
+        let row = azure_event_row(&rec).unwrap();
+        assert_eq!(row["Org"], "acme");
+        assert_eq!(row["Relay"], "r_01");
+        assert_eq!(row["Chain"], "lucid-api-events-pseudo-v1:acme/r_01");
+        assert_eq!(row["Seq"], 12);
+        assert_eq!(row["EventId"], "lucid-api-events-pseudo-v1:acme/relays/r_01:12");
+        assert_eq!(row["EventName"], "relay.mode.changed");
+        assert!(row.get("Type").is_none(), "Log Analytics reserves the column name Type");
+        assert_eq!(row["Subject"], "r_01");
+        assert_eq!(row["Source"], "/api/orgs/acme/relays/r_01");
+        assert_eq!(row["Data"], json!({"relay": "r_01", "mode": "failover"}));
+        assert!(row.get("TimeGenerated").is_some());
+        let mut console = rec.clone();
+        console["body"]["source"] = json!("/api/orgs/acme/console");
+        console["body"].as_object_mut().unwrap().remove("subject");
+        let row = azure_event_row(&console).unwrap();
+        assert_eq!(row["Relay"], "console");
+        assert!(row.get("Subject").is_none(), "absent, never null");
+        let (cred, _, _) = entra("public");
+        let settings = json!({"settings": {"dce": "https://lucid-dcr.eastus-1.ingest.monitor.azure.com", "dcr_immutable_id": "dcr-0000",
+                                           "stream": "Custom-LucidAudit_CL", "events_stream": "Custom-LucidEvents_CL", "events_client": "c_0a1b2c3d4e5f6071"}});
+        let s = AzureLogsSink::new(&dest("azure_logs", "sentinel", settings), cred, net.clone(), net.clone()).unwrap();
+        assert_eq!(s.events_url.as_deref(), Some("https://lucid-dcr.eastus-1.ingest.monitor.azure.com/dataCollectionRules/dcr-0000/streams/Custom-LucidEvents_CL?api-version=2023-01-01"));
+        let (cred, _, _) = entra("public");
+        let s = AzureLogsSink::new(&dest("azure_logs", "sentinel", json!({"settings": {"dce": "https://d.example.com", "dcr_immutable_id": "dcr-1"}})), cred, net.clone(), net).unwrap();
+        assert_eq!(s.deliver(&batch(Signal::Events, vec![rec])).unwrap_err().code, "config", "events need events_stream");
+    }
+
+    fn hook_dest(endpoint: &str) -> Value {
+        json!({"id": "d_3d4e5f6071829304", "kind": "webhook", "preset": "webhook", "signals": ["events"], "endpoint": endpoint, "private_ok": false,
+               "settings": {"client": "c_0a1b2c3d4e5f6071", "types": [], "signing": "v2a", "verification": "wev"}})
+    }
+
+    #[test]
+    fn webhook_post_carries_the_receiver_credential_and_reads_its_answer() {
+        let net = Fake::new(|_| Response { status: 503, body: b"busy".to_vec(), headers: vec![("retry-after".into(), " 7 ".into()), ("webhook-challenge-response".into(), "v2a,abc".into())] });
+        let h = hook_with(&hook_dest("https://hooks.acme.example/lucid"), Credential::Token("rcv-token".into()), net.clone()).unwrap();
+        let a = h.post(&[("webhook-id".into(), "e_1".into()), ("User-Agent".into(), "Lucid/1.2.3".into())], b"{}").unwrap();
+        assert_eq!(a, HookAnswer { status: 503, retry_after: Some(7), challenge_response: Some("v2a,abc".into()) });
+        let r = net.seen().pop().unwrap();
+        assert_eq!((r.method, r.url.as_str()), ("POST", "https://hooks.acme.example/lucid"));
+        assert_eq!(r.header("authorization"), Some("Bearer rcv-token"));
+        assert_eq!(r.header("webhook-id"), Some("e_1"));
+        assert_eq!(&r.body[..], b"{}");
+        // a redirect is an answer like any other: the engine counts it a failure and never follows it
+        let net = Fake::new(|_| Response { status: 302, body: Vec::new(), headers: vec![("retry-after".into(), "soon".into())] });
+        let h = hook_with(&hook_dest("https://hooks.acme.example/lucid"), Credential::None, net.clone()).unwrap();
+        assert_eq!(h.post(&[], b"{}").unwrap(), HookAnswer { status: 302, retry_after: None, challenge_response: None });
+        assert_eq!(net.seen().len(), 1);
+        assert!(net.seen()[0].header("authorization").is_none());
+    }
+
+    #[test]
+    fn webhook_post_refuses_what_contract_8_1_refuses() {
+        // the cloud metadata address is never reached, whatever the map says
+        let e = hook_post(&hook_dest("https://169.254.169.254/latest"), Credential::None).unwrap().post(&[], b"{}").unwrap_err();
+        assert_eq!(e.code, "address");
+        assert!(hook_post(&hook_dest("http://hooks.acme.example/lucid"), Credential::None).is_err(), "https only");
+        assert!(hook_post(&hook_dest("https://user@hooks.acme.example/lucid"), Credential::None).is_err(), "no userinfo");
+        let net = Fake::new(|_| answer(200, ""));
+        assert!(hook_with(&dest("otlp", "otlp_generic", json!({"endpoint": "https://c.example"})), Credential::None, net.clone()).is_err(), "only webhooks");
+        assert!(hook_with(&hook_dest("https://hooks.acme.example/lucid"), Credential::GcpServiceAccountKey("{}".into()), net).is_err());
+    }
+
+    // ── revision 4 section 8: federated credentials against local fakes of Entra, Google STS and IAM Credentials ──
+
+    /// A signer standing in for the console's: numbered subject tokens of key `fk-1`, a switch for `usable`, and a log
+    /// of what the exchanges reported.
+    struct FakeSigner {
+        until: i64,
+        refuse: bool,
+        usable: Mutex<bool>,
+        auds: Mutex<Vec<String>>,
+        log: Mutex<Vec<String>>,
+    }
+
+    impl FakeSigner {
+        fn new(until: i64, refuse: bool) -> Arc<FakeSigner> {
+            Arc::new(FakeSigner { until, refuse, usable: Mutex::new(true), auds: Mutex::new(Vec::new()), log: Mutex::new(Vec::new()) })
+        }
+
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl SubjectSigner for FakeSigner {
+        fn subject(&self, aud: &str, _now: i64) -> Result<Subject, SinkError> {
+            if self.refuse {
+                return Err(SinkError::fatal("federation", "no federation key may sign"));
+            }
+            let mut a = self.auds.lock().unwrap();
+            a.push(aud.to_owned());
+            Ok(Subject { token: format!("subject-{}", a.len()), kid: "fk-1".into(), until: self.until })
+        }
+
+        fn usable(&self, kid: &str, _now: i64) -> bool {
+            kid == "fk-1" && *self.usable.lock().unwrap()
+        }
+
+        fn exchanged(&self, provider: &str, kid: &str, exp: i64) {
+            self.log.lock().unwrap().push(format!("token {provider} {kid} {}", exp > 0));
+        }
+
+        fn failed(&self, provider: &str, status: u16, error: &str) {
+            self.log.lock().unwrap().push(format!("failed {provider} {status} {error}"));
+        }
+    }
+
+    fn entra_fed(cloud: &str, signer: Arc<FakeSigner>) -> Credential {
+        Credential::EntraFederated { tenant: "ce5f061f-abe6-4e40-9615-301f87bcb7f0".into(), client_id: "cb1d50fe-8ed0-4944-9e7d-5981aad3bc4b".into(), cloud: cloud.into(), audience: "api://AzureADTokenExchange".into(), signer }
+    }
+
+    const POOL: &str = "//iam.googleapis.com/projects/123456789012/locations/global/workloadIdentityPools/lucid/providers/acme";
+
+    fn gcp_fed(service_account: Option<&str>, signer: Arc<FakeSigner>) -> Credential {
+        Credential::GcpFederated { audience: POOL.into(), token_audience: format!("https:{POOL}"), service_account: service_account.map(str::to_owned), signer }
+    }
+
+    fn sentinel() -> Value {
+        dest("azure_logs", "sentinel", json!({"settings": {"dce": "https://lucid-abcd.eastus-1.ingest.monitor.azure.com", "dcr_immutable_id": "dcr-0123456789abcdef0123456789abcdef"}}))
+    }
+
+    #[test]
+    fn entra_federated_sends_the_subject_token_as_the_client_assertion_and_caches() {
+        let signer = FakeSigner::new(i64::MAX, false);
+        let mut issued = 0;
+        let idp = Fake::new(move |_| {
+            issued += 1;
+            answer(200, &format!(r#"{{"token_type":"Bearer","expires_in":3599,"access_token":"fed{issued}"}}"#))
+        });
+        let net = Fake::new(|_| answer(204, ""));
+        let sink = build(&sentinel(), entra_fed("public", signer.clone()), net.clone(), idp.clone()).unwrap();
+        sink.deliver(&batch(Signal::Audit, vec![audit_record()])).unwrap();
+        sink.deliver(&batch(Signal::Audit, vec![audit_record()])).unwrap();
+        let toks = idp.seen();
+        assert_eq!(toks.len(), 1, "the cloud token is cached");
+        assert_eq!(toks[0].url, "https://login.microsoftonline.com/ce5f061f-abe6-4e40-9615-301f87bcb7f0/oauth2/v2.0/token");
+        let f = form_of(&toks[0].body);
+        assert_eq!(get(&f, "grant_type"), "client_credentials");
+        assert_eq!(get(&f, "client_id"), "cb1d50fe-8ed0-4944-9e7d-5981aad3bc4b");
+        assert_eq!(get(&f, "scope"), "https://monitor.azure.com/.default");
+        assert_eq!(get(&f, "client_assertion_type"), "urn:ietf:params:oauth:client-assertion-type:jwt-bearer");
+        assert_eq!(get(&f, "client_assertion"), "subject-1");
+        assert_eq!(*signer.auds.lock().unwrap(), ["api://AzureADTokenExchange"]);
+        assert_eq!(signer.log(), ["token entra fk-1 true"]);
+        assert!(net.seen().iter().all(|r| r.header("authorization") == Some("Bearer fed1")));
+        // federation_drop_key: the cached token stops at once and a new subject token is minted
+        *signer.usable.lock().unwrap() = false;
+        sink.deliver(&batch(Signal::Audit, vec![audit_record()])).unwrap();
+        assert_eq!(idp.seen().len(), 2);
+        assert_eq!(get(&form_of(&idp.seen()[1].body), "client_assertion"), "subject-2");
+        assert_eq!(net.seen()[2].header("authorization"), Some("Bearer fed2"));
+    }
+
+    #[test]
+    fn entra_federated_cache_ends_60_s_early_and_at_the_subject_until() {
+        // expires_in 60: used until 60 s before, so never reused
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|_| answer(200, r#"{"access_token":"x","expires_in":60}"#));
+        let e = EntraAuth::new(&entra_fed("usgov", signer.clone()), idp.clone()).unwrap();
+        e.bearer(false).unwrap();
+        e.bearer(false).unwrap();
+        assert_eq!(idp.seen().len(), 2);
+        assert_eq!(idp.seen()[0].url, "https://login.microsoftonline.us/ce5f061f-abe6-4e40-9615-301f87bcb7f0/oauth2/v2.0/token");
+        assert_eq!(get(&form_of(&idp.seen()[0].body), "scope"), "https://monitor.azure.us/.default");
+        // the map's expires (or the key's exp) already passed: never cached past it
+        let signer = FakeSigner::new(0, false);
+        let idp = Fake::new(|_| answer(200, r#"{"access_token":"x","expires_in":3600}"#));
+        let e = EntraAuth::new(&entra_fed("public", signer), idp.clone()).unwrap();
+        e.bearer(false).unwrap();
+        e.bearer(false).unwrap();
+        assert_eq!(idp.seen().len(), 2);
+        // the other cloud's preset refuses the credential
+        let net = Fake::new(|_| answer(204, ""));
+        let err = build(&sentinel(), entra_fed("usgov", FakeSigner::new(i64::MAX, false)), net.clone(), net).err().unwrap();
+        assert_eq!((err.retryable, err.code), (false, "config"));
+    }
+
+    #[test]
+    fn federated_failures_report_status_and_provider_code_only() {
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|_| answer(400, r#"{"error":"invalid_client","error_description":"AADSTS700213: No matching federated identity record found for presented assertion subject 'lucid:acme:console'."}"#));
+        let err = EntraAuth::new(&entra_fed("public", signer.clone()), idp).unwrap().bearer(false).unwrap_err();
+        assert_eq!((err.retryable, err.code), (false, "auth"));
+        assert_eq!(signer.log(), ["failed entra 400 invalid_client"]);
+        // a provider outage retries (11.6)
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|_| answer(503, "busy"));
+        let err = GcpFederatedAuth::new(&gcp_fed(None, signer.clone()), idp).unwrap().bearer(false).unwrap_err();
+        assert!(err.retryable);
+        assert_eq!(signer.log(), ["failed google 503 status"]);
+        // impersonation refused: the Google API error status
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|r| {
+            if r.url == GOOGLE_STS_URL {
+                answer(200, r#"{"access_token":"sts","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":3600}"#)
+            } else {
+                answer(403, r#"{"error":{"code":403,"message":"Permission 'iam.serviceAccounts.getAccessToken' denied","status":"PERMISSION_DENIED"}}"#)
+            }
+        });
+        let err = GcpFederatedAuth::new(&gcp_fed(Some("lucid@acme-prod.iam.gserviceaccount.com"), signer.clone()), idp).unwrap().bearer(false).unwrap_err();
+        assert_eq!(err.code, "auth");
+        assert_eq!(signer.log(), ["failed google 403 PERMISSION_DENIED"]);
+        // no key may sign: nothing is sent
+        let signer = FakeSigner::new(i64::MAX, true);
+        let idp = Fake::new(|_| answer(200, "{}"));
+        let err = EntraAuth::new(&entra_fed("public", signer.clone()), idp.clone()).unwrap().bearer(false).unwrap_err();
+        assert_eq!(err.code, "federation");
+        assert!(idp.seen().is_empty());
+        assert_eq!(signer.log(), ["failed entra 0 federation"]);
+        assert_eq!(provider_error(b"not json", "auth"), "auth");
+        assert_eq!(provider_error(br#"{"error":"bad\r\ncode <x>"}"#, "auth"), "badcodex");
+    }
+
+    #[test]
+    fn gcp_federated_exchanges_at_sts_then_impersonates() {
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|r| {
+            if r.url == GOOGLE_STS_URL {
+                answer(200, r#"{"access_token":"sts-token","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":3599}"#)
+            } else {
+                answer(200, r#"{"accessToken":"sa-token","expireTime":"2099-01-01T00:00:00Z"}"#)
+            }
+        });
+        let net = Fake::new(|_| answer(200, ""));
+        let d = dest("otlp", "google_cloud", json!({"endpoint": "https://telemetry.googleapis.com"}));
+        let sink = build(&d, gcp_fed(Some("lucid@acme-prod.iam.gserviceaccount.com"), signer.clone()), net.clone(), idp.clone()).unwrap();
+        sink.deliver(&batch(Signal::Logs, vec![audit_record()])).unwrap();
+        sink.deliver(&batch(Signal::Logs, vec![audit_record()])).unwrap();
+        let seen = idp.seen();
+        assert_eq!(seen.len(), 2, "one exchange, then cached");
+        let sts = &seen[0];
+        assert_eq!((sts.url.as_str(), sts.header("content-type"), sts.header("authorization")), (GOOGLE_STS_URL, Some("application/json"), None));
+        let body: Value = serde_json::from_slice(&sts.body).unwrap();
+        assert_eq!(
+            body,
+            json!({"grantType": "urn:ietf:params:oauth:grant-type:token-exchange", "audience": POOL, "scope": "https://www.googleapis.com/auth/cloud-platform",
+                   "requestedTokenType": "urn:ietf:params:oauth:token-type:access_token", "subjectToken": "subject-1",
+                   "subjectTokenType": "urn:ietf:params:oauth:token-type:jwt"})
+        );
+        assert_eq!(*signer.auds.lock().unwrap(), [format!("https:{POOL}")]);
+        let iam = &seen[1];
+        assert_eq!(iam.url, "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/lucid%40acme-prod.iam.gserviceaccount.com:generateAccessToken");
+        assert_eq!(iam.header("authorization"), Some("Bearer sts-token"));
+        let body: Value = serde_json::from_slice(&iam.body).unwrap();
+        assert_eq!(body["lifetime"], "3600s");
+        assert_eq!(body["scope"].as_array().unwrap().len(), 3);
+        let r = &net.seen()[0];
+        assert_eq!((r.url.as_str(), r.header("authorization")), ("https://telemetry.googleapis.com/v1/logs", Some("Bearer sa-token")));
+        assert!(r.body.windows(b"acme-prod".len()).any(|w| w == b"acme-prod"), "gcp.project_id from the service account");
+        assert_eq!(signer.log(), ["token google fk-1 true"]);
+    }
+
+    #[test]
+    fn gcp_federated_without_service_account_uses_the_federated_token() {
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|_| answer(200, r#"{"access_token":"sts-token","token_type":"Bearer","expires_in":"3599"}"#));
+        let net = Fake::new(|_| answer(200, ""));
+        let d = dest("otlp", "google_cloud", json!({"endpoint": "https://telemetry.googleapis.com"}));
+        let sink = build(&d, gcp_fed(None, signer), net.clone(), idp.clone()).unwrap();
+        sink.deliver(&batch(Signal::Logs, vec![audit_record()])).unwrap();
+        assert_eq!(idp.seen().len(), 1);
+        let r = &net.seen()[0];
+        assert_eq!(r.header("authorization"), Some("Bearer sts-token"));
+        assert!(r.body.windows(b"123456789012".len()).any(|w| w == b"123456789012"), "gcp.project_id is the provider's project number");
+        // a credential whose audience is no workload identity provider is refused
+        let bad = Credential::GcpFederated { audience: "//iam.googleapis.com/projects/x".into(), token_audience: "t".into(), service_account: None, signer: FakeSigner::new(i64::MAX, false) };
+        assert_eq!(build(&d, bad, net.clone(), idp).err().map(|e| e.code), Some("config"));
+    }
+
+    #[test]
+    fn federation_test_is_one_fresh_exchange_and_returns_no_token() {
+        let signer = FakeSigner::new(i64::MAX, false);
+        let idp = Fake::new(|_| answer(200, r#"{"access_token":"never-shown","expires_in":3600}"#));
+        let cred = entra_fed("public", signer.clone());
+        let (provider, exp) = federation_check(&cred, idp.clone()).unwrap();
+        assert_eq!(provider, "entra");
+        assert!(exp > now_ms() / 1000);
+        federation_check(&cred, idp.clone()).unwrap();
+        assert_eq!(idp.seen().len(), 2, "always fresh");
+        let (provider, _) = federation_check(&gcp_fed(None, signer), idp).unwrap();
+        assert_eq!(provider, "google");
+        let (token, _, _) = entra("public");
+        assert_eq!(federation_check(&token, Fake::new(|_| answer(200, ""))).err().map(|e| e.code), Some("config"));
+        let text = format!("{cred:?}");
+        assert!(text.contains("api://AzureADTokenExchange") && !text.contains("subject"));
     }
 }

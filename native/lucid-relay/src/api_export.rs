@@ -38,10 +38,26 @@
 // Audit records are 10.3 log records: `lucid.chain` is the representation's label with the source appended
 // (`lucid-api-audit-as-is-v1:acme/console`), because each source has its own chain and seq; `lucid.event_id` is
 // `<lucid.chain>:<seq>`.
+//
+// Events (revision 4 7.4, 7.5): the `events` signal of an `otlp`, `splunk_hec` or `azure_logs` destination and the
+// one signal of a `webhook` have no queue of their own: the event chains are the queue, and the destination keeps only
+// its acknowledged feed cursor and retry state (`exports/<org>/<id>/events.json`). Each delivery reads the page after
+// the cursor through its named client's grant as it is now (`Host::event_view`: effective scopes, relays, ceiling;
+// none while the client is suspended or expired or the API is off, which pauses the destination), the lower of the
+// two ceilings, `types`, and the representation `identities` selects, so a tightening applies to the very next read;
+// one event per request for a webhook, in feed order, one request in flight. A new destination starts at the feed's
+// end. A webhook is delivered only once its endpoint passed verification for its URL and scheme
+// (`exports/<org>/webhooks.json`) unless its map entry says `verification: none`. Its outcomes follow 7.4
+// (`api_webhook::outcome`): 410 journals `destination_suspend`, `Retry-After` is honored up to 300 s, anything else
+// backs off as 11.6; when the event at the cursor has failed for `queue.max_age_s` the destination pauses (never
+// drops) until Resume. A cursor older than the 35-day retention is counted and audited (`exports.failed`, with the
+// ranges `EventLog::take_dropped` reported) and delivery goes on from the oldest event kept.
 
-use crate::api_audit::Repr;
+use crate::api_audit::{Dropped, Repr};
 use crate::api_catalog::{self as catalog, Ceiling, Identities, MetricKind};
-use crate::api_export_wire::{Batch, Credential, Signal, Sink, SinkError};
+use crate::api_events::FeedError;
+use crate::api_export_wire::{Batch, Credential, HookPost, Signal, Sink, SinkError};
+use crate::api_webhook::{self as webhook, EventView, Material, Outcome};
 use crate::api_map::{Edition, TightenEntry};
 use crate::codec::{hex, now_ms, sha256, stringify};
 use crate::log::{Fields, Level, Logger};
@@ -68,8 +84,18 @@ pub const INTAKE_MAX: usize = 4096;
 pub const METRICS_INTAKE: usize = 64;
 /// 11.3: "rotate by" 90 days after a token or service account key is entered.
 pub const ROTATE_DAYS: i64 = 90;
-/// Every signal, in queue index order.
+/// Every queued signal, in queue index order.
 pub const SIGNALS: [Signal; 4] = [Signal::Audit, Signal::Logs, Signal::Traces, Signal::Metrics];
+/// Every signal a destination may carry: the queued ones and revision 4's `events`, which has no queue.
+pub const ALL_SIGNALS: [Signal; 5] = [Signal::Audit, Signal::Logs, Signal::Traces, Signal::Metrics, Signal::Events];
+/// Revision 4 7.5: events per batch to a destination other than a webhook (16 KiB each at most, so about 1 MiB).
+const EVENT_BATCH: usize = 64;
+/// Revision 4 7.3: event ranges retention or space deleted, remembered for the `exports.failed` entry of each events
+/// destination that had not read them (the newest kept).
+const DROPPED_KEPT: usize = 1024;
+const EVENTS_FILE: &str = "events.json";
+/// Per org: the verified webhook endpoints (`{id: {endpoint, signing, at}}`).
+const WEBHOOKS_FILE: &str = "webhooks.json";
 const SEGMENT_BYTES: u64 = 8 << 20;
 const AUDIT_PAGE: usize = 1000;
 /// Pages pulled per source in one pull, so one busy chain does not hold the others back.
@@ -87,12 +113,14 @@ const SPAN_TYPE: &str = "api.span";
 /// (org, destination id).
 type Key = (String, String);
 
+/// The queue index of a queued signal; `events` (4) has no queue and indexes only `wanted`.
 fn idx(s: Signal) -> usize {
     match s {
         Signal::Audit => 0,
         Signal::Logs => 1,
         Signal::Traces => 2,
         Signal::Metrics => 3,
+        Signal::Events => 4,
     }
 }
 
@@ -103,6 +131,53 @@ fn text<'a>(v: &'a Value, k: &str) -> &'a str {
 /// A path part that came from a signed map (an org id or a destination id): letters, digits, `-` and `_` only.
 fn part_ok(s: &str) -> bool {
     (1..=64).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+// ── events (revision 4 7.4, 7.5) ─────────────────────────────────────────────────────────────────────────────────
+
+/// What one look at a destination's events came to.
+enum EvDone {
+    /// Nothing due or nothing new.
+    Idle,
+    /// An attempt was made, or the cursor moved.
+    Tried,
+    /// A webhook answered 410 (its local stop is already durable): its suspension is journaled once the send lock is
+    /// let go.
+    Gone,
+    /// A 410 whose suspension the journal did not take yet: tried again, nothing is sent.
+    Rejournal,
+}
+
+/// 2.2: the client whose grant selects a destination's events: `settings.client` (webhook) or
+/// `settings.events_client` (the other kinds).
+fn events_client(entry: &Value) -> &str {
+    let s = |k: &str| entry.get("settings").and_then(|x| x.get(k)).and_then(Value::as_str);
+    s("client").or_else(|| s("events_client")).unwrap_or_default()
+}
+
+/// A webhook's `settings.types` (empty: every type the client may see).
+fn event_types(entry: &Value) -> Option<Vec<String>> {
+    let t: Vec<String> = entry.pointer("/settings/types").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+    (!t.is_empty()).then_some(t)
+}
+
+/// A webhook's `settings.signing` (`v2a` when absent: the default of R4-D9).
+fn signing_of(entry: &Value) -> &str {
+    entry.pointer("/settings/signing").and_then(Value::as_str).unwrap_or(webhook::V2A)
+}
+
+/// 13.2: a `test.ping` goes to the destination it names only; every other event to every destination selecting it.
+fn for_destination(ce: &Value, id: &str) -> bool {
+    text(ce, "type") != format!("{}test.ping", crate::api_events::TYPE_PREFIX) || ce.pointer("/data/destination").and_then(Value::as_str) == Some(id)
+}
+
+/// 7.5: an event as a record of a destination other than a webhook: a log record whose `event` is the registry
+/// name and `body` the CloudEvent, with `lucid.event_id`, `lucid.chain`, `lucid.seq` and `event.name`.
+fn event_record(ce: &Value) -> Value {
+    let name = text(ce, "type").strip_prefix(crate::api_events::TYPE_PREFIX).unwrap_or_default();
+    let t_ms = crate::meet_json::from_iso(text(ce, "time")).map_or(0, |s| (s * 1000.0).round() as i64);
+    json!({"t_ms": t_ms, "severity": 9, "event": name, "body": ce,
+           "attributes": {"lucid.event_id": ce.get("id"), "lucid.chain": ce.get("lucidchain"), "lucid.seq": ce.get("lucidseq"), "event.name": name}})
 }
 
 // ── credentials (11.3) ───────────────────────────────────────────────────────────────────────────────────────────
@@ -122,6 +197,8 @@ pub fn credential_type(c: &Credential) -> Option<&'static str> {
         Credential::EntraCertificate { .. } => Some("entra_certificate"),
         Credential::AwsRolesAnywhere { .. } => Some("aws_roles_anywhere"),
         Credential::GcpServiceAccountKey(_) => Some("gcp_service_account_key"),
+        Credential::EntraFederated { .. } => Some("entra_federated"),
+        Credential::GcpFederated { .. } => Some("gcp_federated"),
     }
 }
 
@@ -136,6 +213,10 @@ pub fn credential_fits(destination: &Value, c: &Credential) -> bool {
         Credential::EntraCertificate { tenant, client_id, cloud, .. } => same("tenant", tenant) && same("client_id", client_id) && same("cloud", cloud),
         Credential::AwsRolesAnywhere { trust_anchor_arn, profile_arn, role_arn, region, .. } => {
             same("trust_anchor_arn", trust_anchor_arn) && same("profile_arn", profile_arn) && same("role_arn", role_arn) && same("region", region)
+        }
+        Credential::EntraFederated { tenant, client_id, cloud, audience, .. } => same("tenant", tenant) && same("client_id", client_id) && same("cloud", cloud) && same("audience", audience),
+        Credential::GcpFederated { audience, token_audience, service_account, .. } => {
+            same("audience", audience) && same("token_audience", token_audience) && want.get("service_account").and_then(Value::as_str) == service_account.as_deref()
         }
         _ => true,
     }
@@ -161,10 +242,20 @@ pub fn credential_json(c: &Credential) -> Value {
             "region": region, "cert_pem": cert_pem, "key_pem": key_pem,
         }),
         Credential::GcpServiceAccountKey(k) => json!({"type": "gcp_service_account_key", "key": k}),
+        // revision 4 8: public fields only; nothing of a federated credential is sealed
+        Credential::EntraFederated { tenant, client_id, cloud, audience, .. } => json!({"type": "entra_federated", "tenant": tenant, "client_id": client_id, "cloud": cloud, "audience": audience}),
+        Credential::GcpFederated { audience, token_audience, service_account, .. } => {
+            let mut v = json!({"type": "gcp_federated", "audience": audience, "token_audience": token_audience});
+            if let Some(sa) = service_account {
+                v["service_account"] = json!(sa);
+            }
+            v
+        }
     }
 }
 
-/// `credential_json` read back.
+/// `credential_json` read back. Federated types never read back: their signer is the console's (`api_federation`),
+/// so a sealed value or a relay never yields one (revision 4 R4-D11).
 pub fn credential_of(v: &Value) -> Option<Credential> {
     let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
     Some(match v.get("type")?.as_str()? {
@@ -294,7 +385,7 @@ pub fn effective(org: &str, d: &Value, active: &[TightenEntry], edition: Option<
     if entries.iter().any(|e| e.action == "destination_delete") {
         return None;
     }
-    let mut signals: Vec<Signal> = SIGNALS.iter().copied().filter(|s| d.get("signals").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(s.name())))).collect();
+    let mut signals: Vec<Signal> = ALL_SIGNALS.iter().copied().filter(|s| d.get("signals").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(s.name())))).collect();
     let mut ceiling = Ceiling::of(text(d, "ceiling"))?;
     let mut identities = Identities::of(text(d, "identities"))?;
     let mut suspended = false;
@@ -324,8 +415,10 @@ pub fn effective(org: &str, d: &Value, active: &[TightenEntry], edition: Option<
             if identities == Identities::Pseudonymized {
                 identities = Identities::Removed;
             }
+            // revision 4 16: no events signal on push destinations, no webhooks
+            signals.retain(|s| *s != Signal::Events);
             match kind.as_str() {
-                "splunk_hec" | "azure_logs" => Some(format!("The standard edition does not include {kind} destinations.")),
+                "splunk_hec" | "azure_logs" | "webhook" => Some(format!("The standard edition does not include {kind} destinations.")),
                 "otlp" if otlp_before > 0 => Some("The standard edition allows one otlp destination.".to_string()),
                 _ => None,
             }
@@ -402,6 +495,39 @@ pub trait Host: Send + Sync {
     /// destination as the map and the journal make it.
     fn failover_gate(&self, _org: &str, _entry: &Value, _now: i64) -> Option<Gate> {
         None
+    }
+    /// Revision 4 7.4 selection: what the destination's named client may read of the events feed now (`now` unix
+    /// seconds); None pauses its events (suspended, expired, without `events.subscribe`, `api_off`). A relay's
+    /// failover exporter has none: events leave only from the console (15).
+    fn event_view(&self, _org: &str, _client: &str, _now: i64) -> Option<EventView> {
+        None
+    }
+    /// One page of the org's feed (`api_webhook::page`): `{events, next}`.
+    fn events_page(&self, _org: &str, _after: Option<&str>, _limit: usize, _view: &EventView, _repr: Repr, _types: Option<Vec<String>>) -> Result<Value, FeedError> {
+        Err(FeedError::Unavailable)
+    }
+    /// The feed cursor after the org's newest event (where a new events destination starts).
+    fn events_tail(&self, _org: &str) -> Option<String> {
+        None
+    }
+    /// Event ranges retention or space deleted since the last call (`EventLog::take_dropped`).
+    fn events_dropped(&self) -> Vec<Dropped> {
+        Vec::new()
+    }
+    /// Append one console event (`destination.paused`, `destination.resumed`); a failure is the host's to log.
+    fn emit_event(&self, _org: &str, _kind: &str, _data: Value, _now: i64) {}
+    /// Revision 4 7.4 (410): journal `destination_suspend` for the destination at once. Called with no engine lock
+    /// held (the journal's hook refreshes the engine).
+    fn suspend_destination(&self, _org: &str, _id: &str, _now: i64) -> Result<(), String> {
+        Err("This exporter cannot journal a suspension.".into())
+    }
+    /// The keys and secrets that sign a webhook (`staged`: a draft's `webhook_keys` for a staged one).
+    fn webhook_material(&self, _org: &str, _id: &str, _staged: Option<&Value>, _now: i64) -> Material {
+        Material::default()
+    }
+    /// The endpoint of a webhook entry with its receiver credential.
+    fn make_hook(&self, destination: &Value, credential: Credential) -> Result<Arc<dyn HookPost>, SinkError> {
+        crate::api_export_wire::hook_post(destination, credential)
     }
 }
 
@@ -763,6 +889,45 @@ struct SigState {
     attempt: u32,
 }
 
+/// Revision 4 7.4: the events signal has no queue: the acknowledged feed cursor and the retry state (`events.json`).
+#[derive(Clone, Default)]
+struct EvState {
+    /// The feed position after the last event the destination acknowledged; None: from the oldest event kept.
+    cursor: Option<String>,
+    /// The cursor was set (a new events destination starts at the feed's end, not 35 days back).
+    started: bool,
+    try_: SigState,
+    /// When the event at the cursor first failed (ms): after `queue.max_age_s` of it delivery pauses.
+    failing_since: Option<i64>,
+    /// Paused after `queue.max_age_s` of retries; resumes from the same cursor on the admin's Resume.
+    paused: bool,
+    /// 7.4: the endpoint answered 410 and the journal has not taken its `destination_suspend` yet. Flushed before
+    /// anything else happens, read at start: nothing is sent while it holds, whatever the map and journal say, and
+    /// the suspension is journaled again until it lands (then it clears, the journal being the record).
+    gone: bool,
+    /// The last acknowledged delivery (ms; 0 since start): ranges deleted after it are this destination's loss.
+    last_ok: i64,
+    /// Why nothing is sent now (an unverified endpoint, a client that may not read), shown by `status`.
+    blocked: Option<&'static str>,
+}
+
+impl EvState {
+    fn of(v: &Value) -> EvState {
+        EvState {
+            cursor: v.get("cursor").and_then(Value::as_str).map(str::to_owned),
+            started: v.get("started").and_then(Value::as_bool).unwrap_or(false),
+            failing_since: v.get("failing_since").and_then(Value::as_i64),
+            paused: v.get("paused").and_then(Value::as_bool).unwrap_or(false),
+            gone: v.get("gone").and_then(Value::as_bool).unwrap_or(false),
+            ..EvState::default()
+        }
+    }
+
+    fn json(&self) -> Value {
+        json!({"cursor": self.cursor, "started": self.started, "failing_since": self.failing_since, "paused": self.paused, "gone": self.gone})
+    }
+}
+
 struct Queues {
     q: [Queue; 4],
     s: [SigState; 4],
@@ -771,6 +936,8 @@ struct Queues {
     epoch: u64,
     /// Audit: source -> the last seq taken from its chain (enqueued or refused).
     cursors: BTreeMap<String, u64>,
+    /// Revision 4: the events signal.
+    ev: EvState,
     /// The destination was deleted: nothing more is written.
     gone: bool,
     /// Audit is over its limits: nothing more is pulled (`ExportAuditBacklog`).
@@ -869,6 +1036,8 @@ struct DestRt {
     gen: AtomicU64,
     rr: AtomicUsize,
     sink: Mutex<Option<(u64, Arc<dyn Sink>)>>,
+    /// A webhook's endpoint, made again when `gen` moves.
+    hook: Mutex<Option<(u64, Arc<dyn HookPost>)>>,
 }
 
 impl DestRt {
@@ -882,11 +1051,13 @@ impl DestRt {
             let c = cursors.entry(s).or_insert(0);
             *c = (*c).max(seq);
         }
+        let ev = read_json(&dir.join(EVENTS_FILE)).map(|v| EvState::of(&v)).unwrap_or_default();
         let queues = Queues {
             q,
             s: Default::default(),
             epoch: 0,
             cursors,
+            ev,
             gone: false,
             paused: false,
             failed: false,
@@ -909,6 +1080,7 @@ impl DestRt {
             gen: AtomicU64::new(0),
             rr: AtomicUsize::new(0),
             sink: Mutex::new(None),
+            hook: Mutex::new(None),
         }
     }
 
@@ -931,6 +1103,14 @@ impl DestRt {
     fn save_cursors(&self, cursors: &BTreeMap<String, u64>) -> Result<(), String> {
         crate::store::make_dir(&self.dir).map_err(|e| e.to_string())?;
         crate::fleet_local::write_durable(&self.dir.join(CURSORS_FILE), stringify(&json!(cursors)).as_bytes())
+    }
+
+    /// `events.json`, flushed; a failure is the destination's last error (the cursor is moved again next time).
+    fn save_ev(&self, q: &mut Queues) {
+        let r = crate::store::make_dir(&self.dir).map_err(|e| e.to_string()).and_then(|_| crate::fleet_local::write_durable(&self.dir.join(EVENTS_FILE), stringify(&q.ev.json()).as_bytes()));
+        if let Err(e) = r {
+            q.last_error = Some(format!("The events cursor could not be written ({e})."));
+        }
     }
 }
 
@@ -965,8 +1145,8 @@ pub struct ExportEngine {
     threads: bool,
     me: Weak<ExportEngine>,
     dests: Mutex<BTreeMap<Key, Arc<DestRt>>>,
-    /// org -> signals some live destination carries (read on call paths).
-    wanted: Mutex<HashMap<String, [bool; 4]>>,
+    /// org -> signals some live destination carries (read on call paths), by `idx`.
+    wanted: Mutex<HashMap<String, [bool; 5]>>,
     intake: Mutex<Intake>,
     intake_cv: Condvar,
     metrics_evicted: AtomicU64,
@@ -976,6 +1156,10 @@ pub struct ExportEngine {
     prev: Mutex<HashMap<(Key, String), f64>>,
     /// (org, destination, reason, minute) -> refused records, written as `exports.refused` once the minute ends.
     refused: Mutex<BTreeMap<(String, String, &'static str, i64), u64>>,
+    /// Revision 4 7.4: org -> destination -> its verified endpoint `{endpoint, signing, at}` (`<org>/webhooks.json`).
+    verified: Mutex<BTreeMap<String, Map<String, Value>>>,
+    /// Revision 4 7.3: (when it was learned, ms; the range) of event ranges deleted unread by some destination.
+    dropped: Mutex<VecDeque<(i64, Dropped)>>,
 }
 
 impl Drop for ExportEngine {
@@ -1112,12 +1296,17 @@ impl ExportEngine {
             keys: Mutex::new(HashMap::new()),
             prev: Mutex::new(HashMap::new()),
             refused: Mutex::new(BTreeMap::new()),
+            verified: Mutex::new(BTreeMap::new()),
+            dropped: Mutex::new(VecDeque::new()),
         });
         let _ = crate::store::make_dir(&e.dir);
         let subdirs = |d: &Path| -> Vec<(String, PathBuf)> {
             std::fs::read_dir(d).into_iter().flatten().flatten().filter(|x| x.path().is_dir()).filter_map(|x| Some((x.file_name().to_str().filter(|n| part_ok(n))?.to_string(), x.path()))).collect()
         };
         for (org, org_dir) in subdirs(&e.dir) {
+            if let Some(Value::Object(v)) = read_json(&org_dir.join(WEBHOOKS_FILE)) {
+                e.verified.lock().insert(org.clone(), v);
+            }
             for (id, path) in subdirs(&org_dir) {
                 let Some(meta) = read_json(&path.join(META_FILE)) else { continue };
                 let Some(mut dest) = effective(&org, &meta["entry"], &[], Some(Edition::Enterprise), 0) else { continue };
@@ -1161,7 +1350,7 @@ impl ExportEngine {
     }
 
     fn update_wanted(&self) {
-        let mut w: HashMap<String, [bool; 4]> = HashMap::new();
+        let mut w: HashMap<String, [bool; 5]> = HashMap::new();
         for rt in self.snapshot() {
             let c = rt.cfg.lock().clone();
             if !c.suspended && c.refused.is_none() {
@@ -1327,6 +1516,8 @@ impl ExportEngine {
         rt.cv.notify_all();
         self.dests.lock().remove(&rt.key());
         *rt.sink.lock() = None;
+        *rt.hook.lock() = None;
+        self.set_verified(&rt.org, &rt.id, None);
         let removed = std::fs::remove_dir_all(&rt.dir).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) });
         if let Some(parent) = rt.dir.parent() {
             sync_dir(parent);
@@ -1389,6 +1580,7 @@ impl ExportEngine {
             let mut q = rt.q.lock();
             q.failed = false;
             q.s = Default::default();
+            q.ev.try_ = SigState::default();
         }
         rt.cv.notify_all();
     }
@@ -1749,6 +1941,9 @@ impl ExportEngine {
         } else {
             self.logger.ops("exports.audit-backlog-cleared", &f, Level::Info);
         }
+        // revision 4 7.1
+        let kind = if on { "destination.paused" } else { "destination.resumed" };
+        self.host.emit_event(&cfg.org, kind, json!({"destination": cfg.id, "reason": "audit-backlog"}), now_ms().div_euclid(1000));
     }
 
     /// 9.4, 9.5: the lowest seq of the org's `source` chain in `repr` that an audit destination has not
@@ -1793,16 +1988,39 @@ impl ExportEngine {
     // ── delivery ──
 
     /// One batch of one signal of one destination, if any is due, under the destination's send lock. True when it
-    /// tried.
+    /// tried. A webhook's 410 journals its suspension once the send lock is let go (the journal's hook refreshes the
+    /// engine, which takes that lock).
     fn deliver_once(&self, rt: &DestRt, now: i64) -> bool {
-        let _send = rt.send.lock();
+        let (tried, gone) = {
+            let _send = rt.send.lock();
+            self.deliver_locked(rt, now)
+        };
+        if let Some((cfg, first)) = gone {
+            self.ev_gone(rt, &cfg, first, now);
+        }
+        tried
+    }
+
+    /// The bool beside the config: true for the 410 itself, false for a journal attempt again.
+    fn deliver_locked(&self, rt: &DestRt, now: i64) -> (bool, Option<(Dest, bool)>) {
         let (cfg, epoch) = rt.snap();
         if !cfg.live(now) {
-            return false;
+            return (false, None);
         }
         let start = rt.rr.fetch_add(1, Ordering::Relaxed);
-        for k in 0..SIGNALS.len() {
-            let sig = SIGNALS[(start + k) % SIGNALS.len()];
+        // the queued signals, and events (no queue) as the last slot of the rotation
+        let slots = SIGNALS.len() + 1;
+        for k in 0..slots {
+            let slot = (start + k) % slots;
+            if slot == SIGNALS.len() {
+                match self.deliver_events(rt, &cfg, epoch, now) {
+                    EvDone::Idle => continue,
+                    EvDone::Tried => return (true, None),
+                    EvDone::Gone => return (true, Some((cfg, true))),
+                    EvDone::Rejournal => return (true, Some((cfg, false))),
+                }
+            }
+            let sig = SIGNALS[slot];
             let i = idx(sig);
             let batch = {
                 let q = rt.q.lock();
@@ -1817,7 +2035,7 @@ impl ExportEngine {
                 Err(e) => {
                     let err = SinkError { retryable: true, code: "queue", message: format!("The export queue could not be read ({e}).") };
                     self.failure(rt, &cfg, sig, &err, now);
-                    return true;
+                    return (true, None);
                 }
             };
             let last_n = batch.last().map_or(0, |b| b.0);
@@ -1825,21 +2043,468 @@ impl ExportEngine {
                 Ok(s) => s,
                 Err(e) => {
                     self.failure(rt, &cfg, sig, &e, now);
-                    return true;
+                    return (true, None);
                 }
             };
             // right before the send: the config generation and the map's expiry
             if rt.q.lock().epoch != epoch || !cfg.live(now) {
-                return true;
+                return (true, None);
             }
             let b = Batch { signal: sig, resource: self.host.resource(&cfg.org), records: batch.into_iter().map(|(_, r)| r).collect() };
             match sink.deliver(&b) {
                 Ok(()) => self.success(rt, &cfg, epoch, sig, last_n, now),
                 Err(e) => self.failure(rt, &cfg, sig, &e, now),
             }
+            return (true, None);
+        }
+        (false, None)
+    }
+
+    // ── events (revision 4 7.4, 7.5) ──
+
+    /// The events signal of one destination, under its send lock: one page of the feed after its acknowledged cursor
+    /// (one event for a webhook, up to `EVENT_BATCH` otherwise) as its named client's grant selects it now, in the
+    /// destination's representation and ceiling, sent; the cursor moves only once the receiver accepted.
+    fn deliver_events(&self, rt: &DestRt, cfg: &Dest, epoch: u64, now: i64) -> EvDone {
+        if !cfg.carries(Signal::Events) {
+            return EvDone::Idle;
+        }
+        let (cursor, started) = {
+            let q = rt.q.lock();
+            if q.gone || q.epoch != epoch || q.ev.try_.next_try > now {
+                return EvDone::Idle;
+            }
+            // 7.4: after a 410 nothing more is sent; only the suspension is journaled again
+            if q.ev.gone {
+                return EvDone::Rejournal;
+            }
+            if q.ev.paused {
+                return EvDone::Idle;
+            }
+            (q.ev.cursor.clone(), q.ev.started)
+        };
+        // a new destination starts at the feed's end as first seen, before it is verified or may read: what follows
+        // its creation is kept for it, nothing older
+        let cursor = if started {
+            cursor
+        } else {
+            let Some(tail) = self.host.events_tail(&cfg.org) else { return EvDone::Idle };
+            let mut q = rt.q.lock();
+            if q.gone || q.epoch != epoch {
+                return EvDone::Idle;
+            }
+            q.ev.cursor = Some(tail.clone());
+            q.ev.started = true;
+            rt.save_ev(&mut q);
+            Some(tail)
+        };
+        let webhook = cfg.kind == "webhook";
+        if webhook && !self.is_verified(&cfg.org, &cfg.entry) {
+            self.ev_blocked(rt, Some("The webhook endpoint is not verified, so nothing is delivered. Verify it."));
+            return EvDone::Idle;
+        }
+        let Some(view) = self.host.event_view(&cfg.org, events_client(&cfg.entry), now.div_euclid(1000)) else {
+            self.ev_blocked(rt, Some("The destination's client may not read events now (suspended, expired, without events.subscribe, or the API is off)."));
+            return EvDone::Idle;
+        };
+        self.ev_blocked(rt, None);
+        let view = EventView { ceiling: view.ceiling.min(cfg.ceiling), ..view };
+        let limit = if webhook { 1 } else { EVENT_BATCH };
+        let page = match self.host.events_page(&cfg.org, cursor.as_deref(), limit, &view, repr_of(cfg.identities), event_types(&cfg.entry)) {
+            Ok(p) => p,
+            Err(FeedError::Unavailable) => {
+                self.ev_failure(rt, cfg, "unavailable", "The event chains cannot be read now.", None, now);
+                return EvDone::Tried;
+            }
+            Err(e) => {
+                self.ev_lost(rt, cfg, epoch, e, now);
+                return EvDone::Tried;
+            }
+        };
+        let next = page.get("next").and_then(Value::as_str).map(str::to_owned);
+        // a `test.ping` is for the destination it names only
+        let events: Vec<&Value> = page.get("events").and_then(Value::as_array).into_iter().flatten().filter(|ce| for_destination(ce, &cfg.id)).collect();
+        if events.is_empty() {
+            if next.is_some() && next != cursor {
+                self.ev_advance(rt, cfg, epoch, next, false, now);
+                return EvDone::Tried;
+            }
+            return EvDone::Idle;
+        }
+        // right before the send: the config generation and the map's expiry
+        if rt.q.lock().epoch != epoch || !cfg.live(now) {
+            return EvDone::Tried;
+        }
+        if webhook {
+            return self.post_event(rt, cfg, epoch, events[0], next, now);
+        }
+        let sink = match self.sink(rt, cfg) {
+            Ok(s) => s,
+            Err(e) => {
+                self.ev_failure(rt, cfg, e.code, &e.message, None, now);
+                return EvDone::Tried;
+            }
+        };
+        let b = Batch { signal: Signal::Events, resource: self.host.resource(&cfg.org), records: events.into_iter().map(event_record).collect() };
+        match sink.deliver(&b) {
+            Ok(()) => self.ev_advance(rt, cfg, epoch, next, true, now),
+            Err(e) => self.ev_failure(rt, cfg, e.code, &e.message, (!e.retryable).then_some(BACKOFF_MAX_MS / 1000), now),
+        }
+        EvDone::Tried
+    }
+
+    /// One webhook request (7.4): the CloudEvent minified as the body, signed for this destination.
+    fn post_event(&self, rt: &DestRt, cfg: &Dest, epoch: u64, ce: &Value, next: Option<String>, now: i64) -> EvDone {
+        let body = match serde_json::to_vec(ce) {
+            Ok(b) => b,
+            Err(e) => {
+                self.ev_failure(rt, cfg, "record", &format!("The event does not serialize ({e})."), None, now);
+                return EvDone::Tried;
+            }
+        };
+        let msg_id = webhook::webhook_id(text(ce, "id"));
+        let ts = now.div_euclid(1000);
+        let material = self.host.webhook_material(&cfg.org, &cfg.id, None, ts);
+        let headers = match webhook::signed_headers(signing_of(&cfg.entry), &cfg.id, &msg_id, ts, &body, &material, webhook::CONTENT_TYPE) {
+            Ok(h) => h,
+            Err(why) => {
+                self.ev_failure(rt, cfg, "signing", why, None, now);
+                return EvDone::Tried;
+            }
+        };
+        let hook = match self.hook(rt, cfg) {
+            Ok(h) => h,
+            Err(e) => {
+                self.ev_failure(rt, cfg, e.code, &e.message, None, now);
+                return EvDone::Tried;
+            }
+        };
+        match webhook::outcome(&hook.post(&headers, &body)) {
+            Outcome::Delivered => self.ev_advance(rt, cfg, epoch, next, true, now),
+            Outcome::Gone => {
+                // nothing more leaves, now or after a restart, before the journaled suspension lands (`ev_gone`,
+                // after the send lock): the local stop is flushed first
+                rt.cfg.lock().suspended = true;
+                let mut q = rt.q.lock();
+                q.epoch += 1;
+                q.ev.gone = true;
+                rt.save_ev(&mut q);
+                return EvDone::Gone;
+            }
+            Outcome::Retry { after_s, code, why } => self.ev_failure(rt, cfg, code, &why, after_s, now),
+        }
+        EvDone::Tried
+    }
+
+    fn hook(&self, rt: &DestRt, cfg: &Dest) -> Result<Arc<dyn HookPost>, SinkError> {
+        let gen = rt.gen.load(Ordering::Relaxed);
+        if let Some((g, h)) = rt.hook.lock().as_ref() {
+            if *g == gen {
+                return Ok(h.clone());
+            }
+        }
+        let cred = self.hook_credential(&cfg.org, &cfg.entry).map_err(|m| SinkError { retryable: false, code: "credential", message: m })?;
+        let h = self.host.make_hook(&cfg.entry, cred)?;
+        *rt.hook.lock() = Some((gen, h.clone()));
+        Ok(h)
+    }
+
+    /// 2.2: a webhook's receiver credential: none, or the sealed token or mTLS pair.
+    fn hook_credential(&self, org: &str, entry: &Value) -> Result<Credential, String> {
+        match entry.pointer("/credential/type").and_then(Value::as_str) {
+            None | Some("none") => Ok(Credential::None),
+            Some(_) => self.host.credential(org, text(entry, "id")).ok_or_else(|| "The receiver credential for this webhook is not stored yet.".to_owned()),
+        }
+    }
+
+    fn ev_blocked(&self, rt: &DestRt, why: Option<&'static str>) {
+        rt.q.lock().ev.blocked = why;
+    }
+
+    /// The cursor moved (`delivered`: the receiver accepted, so the retry state ends too); flushed.
+    fn ev_advance(&self, rt: &DestRt, cfg: &Dest, epoch: u64, next: Option<String>, delivered: bool, now: i64) {
+        let mut q = rt.q.lock();
+        if q.gone || q.epoch != epoch {
+            return;
+        }
+        if next.is_some() {
+            q.ev.cursor = next;
+        }
+        if delivered {
+            q.ev.try_ = SigState::default();
+            q.ev.failing_since = None;
+            q.ev.last_ok = now;
+            q.failed = false;
+            q.last_success = Some(now / 1000);
+        }
+        rt.save_ev(&mut q);
+        drop(q);
+        if delivered {
+            catalog::counters::export_success(&cfg.org, &cfg.id, now / 1000);
+        }
+    }
+
+    /// A failed attempt: retried after `after_s` (a receiver's `Retry-After`, at most 300 s) or the 11.6 backoff; once
+    /// the event at the cursor has failed for `queue.max_age_s`, delivery pauses (never drops): `destination.paused`
+    /// and the attention item `webhook-paused`, until the admin's Resume.
+    fn ev_failure(&self, rt: &DestRt, cfg: &Dest, code: &'static str, why: &str, after_s: Option<i64>, now: i64) {
+        catalog::counters::export_failures(&cfg.org, &cfg.id, code, 1);
+        let paused = {
+            let mut q = rt.q.lock();
+            if q.gone {
+                return;
+            }
+            q.failures += 1;
+            q.ev.try_.attempt = q.ev.try_.attempt.saturating_add(1);
+            let wait = after_s.map_or_else(|| backoff(q.ev.try_.attempt), |s| s.clamp(1, webhook::RETRY_AFTER_MAX) * 1000);
+            q.ev.try_.next_try = now + wait;
+            q.last_error = Some(why.to_owned());
+            let first = q.ev.failing_since.is_none();
+            let since = *q.ev.failing_since.get_or_insert(now);
+            let pause = now - since > cfg.max_age_s.saturating_mul(1000) && !q.ev.paused;
+            if pause {
+                q.ev.paused = true;
+            }
+            if first || pause {
+                rt.save_ev(&mut q);
+            }
+            pause
+        };
+        let f = Fields::new().with("org", cfg.org.as_str()).with("destination", cfg.id.as_str()).with("signal", "events").with("code", code);
+        if paused {
+            self.logger.security("exports.events-paused", &f.with("why", why), Level::Error);
+            self.host.emit_event(&cfg.org, "destination.paused", json!({"destination": cfg.id, "reason": "retry-limit"}), now / 1000);
+        } else {
+            self.logger.ops("exports.retrying", &f, Level::Warn);
+        }
+    }
+
+    /// 7.4 (410 Gone): `destination_suspend` journaled at once (a tightening); on the 410 itself (`first`)
+    /// `webhook.gone` audited and `destination.paused` appended. Called after the send lock is let go, with the local
+    /// stop (`EvState::gone`) already flushed. Once the journal takes the suspension the local stop clears (the
+    /// journal is the record from then on); while it does not, the journal is tried again after the longest backoff
+    /// (and at once after a restart), and nothing is sent meanwhile.
+    fn ev_gone(&self, rt: &DestRt, cfg: &Dest, first: bool, now: i64) {
+        let s = now / 1000;
+        let f = Fields::new().with("org", cfg.org.as_str()).with("destination", cfg.id.as_str());
+        match self.host.suspend_destination(&cfg.org, &cfg.id, s) {
+            Ok(()) => {
+                // the journal's own refresh suspends it too; until then it stays stopped here
+                rt.cfg.lock().suspended = true;
+                {
+                    let mut q = rt.q.lock();
+                    q.epoch += 1;
+                    q.ev.gone = false;
+                    q.ev.try_ = SigState::default();
+                    rt.save_ev(&mut q);
+                }
+                self.logger.security("exports.webhook-gone", &f, Level::Error);
+            }
+            Err(why) => {
+                {
+                    let mut q = rt.q.lock();
+                    q.ev.try_.next_try = now + BACKOFF_MAX_MS;
+                    q.last_error = Some(format!("The endpoint answered 410 Gone and the suspension could not be journaled yet ({why}); nothing is sent to it."));
+                }
+                self.logger.security("exports.webhook-gone-unjournaled", &f.with("why", why), Level::Error);
+            }
+        }
+        if first {
+            self.host.audit_record(&cfg.org, json!({"action": "webhook.gone", "result": "failed", "destination": cfg.id, "resource": cfg.id, "status": 410}), s);
+            self.host.emit_event(&cfg.org, "destination.paused", json!({"destination": cfg.id, "reason": "gone"}), s);
+        }
+    }
+
+    /// 7.4: the cursor is older than retention (or the feed no longer knows it): what was deleted unread is counted
+    /// (`lucid_export_failures_total{reason="retention"}` or `"space"`) and audited `exports.failed` with the seq
+    /// ranges, and delivery resumes at the first event still kept.
+    fn ev_lost(&self, rt: &DestRt, cfg: &Dest, epoch: u64, err: FeedError, now: i64) {
+        let repr = repr_of(cfg.identities);
+        let since = rt.q.lock().ev.last_ok;
+        let ranges: Vec<Dropped> = self.dropped.lock().iter().filter(|(at, d)| d.org == cfg.org && d.repr == repr && *at >= since).map(|(_, d)| d.clone()).collect();
+        let count: u64 = ranges.iter().map(|d| d.last.saturating_sub(d.first) + 1).sum();
+        let reason = if ranges.iter().any(|d| d.reason == "space") { "space" } else { "retention" };
+        let mut what = if ranges.is_empty() {
+            match err {
+                FeedError::Cursor => "events: the feed no longer knows this destination's position".to_owned(),
+                _ => "events: the deleted range is not known (the console restarted since)".to_owned(),
+            }
+        } else {
+            format!("events {}", ranges.iter().map(|d| format!("{} {}-{}", d.source, d.first, d.last)).collect::<Vec<_>>().join(", "))
+        };
+        if what.len() > 512 {
+            let cut = (0..=509).rev().find(|i| what.is_char_boundary(*i)).unwrap_or(0);
+            what.truncate(cut);
+            what.push_str("...");
+        }
+        {
+            let mut q = rt.q.lock();
+            if q.gone || q.epoch != epoch {
+                return;
+            }
+            q.ev.cursor = None;
+            q.ev.started = true;
+            q.ev.try_ = SigState::default();
+            q.ev.failing_since = None;
+            rt.save_ev(&mut q);
+        }
+        catalog::counters::export_failures(&cfg.org, &cfg.id, reason, count);
+        let f = Fields::new().with("org", cfg.org.as_str()).with("destination", cfg.id.as_str()).with("reason", reason).with("count", count);
+        self.logger.security("exports.events-lost", &f, Level::Error);
+        let entry = json!({"action": "exports.failed", "result": "failed", "destination": cfg.id, "resource": what, "code": reason, "count": count, "check": "events"});
+        self.host.audit_record(&cfg.org, entry, now / 1000);
+    }
+
+    // ── webhook verification, test, replay, resume (13.1) ──
+
+    fn set_verified(&self, org: &str, id: &str, record: Option<Value>) {
+        let mut all = self.verified.lock();
+        let m = all.entry(org.to_owned()).or_default();
+        let changed = match record {
+            Some(r) => m.insert(id.to_owned(), r.clone()) != Some(r),
+            None => m.remove(id).is_some(),
+        };
+        if !changed {
+            return;
+        }
+        let body = stringify(&Value::Object(m.clone()));
+        drop(all);
+        let dir = self.dir.join(org);
+        let r = crate::store::make_dir(&dir).map_err(|e| e.to_string()).and_then(|_| crate::fleet_local::write_durable(&dir.join(WEBHOOKS_FILE), body.as_bytes()));
+        if let Err(e) = r {
+            self.logger.ops("exports.webhook-verification-unsaved", &Fields::new().with("org", org).with("destination", id).with("why", e), Level::Error);
+        }
+    }
+
+    /// 7.4: whether a webhook entry may be delivered to: `verification: none` (a two-person save), or its endpoint
+    /// passed verification with its signing scheme (a new or changed URL, or another scheme, starts unverified).
+    fn is_verified(&self, org: &str, entry: &Value) -> bool {
+        if entry.pointer("/settings/verification").and_then(Value::as_str) == Some("none") {
             return true;
         }
-        false
+        let all = self.verified.lock();
+        all.get(org).and_then(|m| m.get(text(entry, "id"))).is_some_and(|r| text(r, "endpoint") == text(entry, "endpoint") && text(r, "signing") == signing_of(entry))
+    }
+
+    /// 13.1 `destinations/verify`: endpoint verification of a webhook entry (pinned, or staged with the draft's
+    /// `webhook_keys` as `staged_keys`): one signed challenge; a pass records the endpoint as verified for its URL and
+    /// scheme, a failure records it unverified. `webhook.verified` is audited either way. Err is why it did not pass.
+    pub fn verify_webhook(&self, org: &str, entry: &Value, staged_keys: Option<&Value>, now: i64) -> Result<(), String> {
+        let id = text(entry, "id");
+        if text(entry, "kind") != "webhook" || !part_ok(org) || !part_ok(id) {
+            return Err("Only a webhook destination is verified.".into());
+        }
+        let s = now.div_euclid(1000);
+        let material = self.host.webhook_material(org, id, staged_keys, s);
+        let signing = signing_of(entry);
+        let ch = webhook::challenge(signing, id, &material, s)?;
+        let hook = self.host.make_hook(entry, self.hook_credential(org, entry)?).map_err(|e| e.message)?;
+        let answer = hook.post(&ch.headers, &ch.body);
+        let passed = matches!(&answer, Ok(a) if webhook::challenge_ok(a, &ch.expected));
+        let record = passed.then(|| json!({"endpoint": text(entry, "endpoint"), "signing": signing, "at": s}));
+        self.set_verified(org, id, record);
+        self.host.audit_record(org, json!({"action": "webhook.verified", "result": if passed { "ok" } else { "failed" }, "destination": id, "resource": id}), s);
+        self.logger.ops("exports.webhook-verified", &Fields::new().with("org", org).with("destination", id).with("passed", passed), Level::Info);
+        if let Some(rt) = self.dests.lock().get(&(org.to_owned(), id.to_owned())) {
+            rt.cv.notify_all();
+        }
+        match answer {
+            _ if passed => Ok(()),
+            Ok(a) if !(200..300).contains(&a.status) => Err(format!("The endpoint answered {}.", a.status)),
+            Ok(_) => Err("The endpoint did not answer the challenge with the expected webhook-challenge-response.".into()),
+            Err(e) => Err(format!("The endpoint could not be reached: {}.", e.message.trim_end_matches('.'))),
+        }
+    }
+
+    /// 13.2 "Send a test": one `test.ping` CloudEvent (just appended by the console) to a webhook entry, pinned or
+    /// staged, signed as a delivery; only to a verified endpoint (or `verification: none`). Err is why it failed.
+    pub fn send_ping(&self, org: &str, entry: &Value, staged_keys: Option<&Value>, ce: &Value, now: i64) -> Result<(), String> {
+        let id = text(entry, "id");
+        if text(entry, "kind") != "webhook" {
+            return Err("Only a webhook destination takes a test.ping.".into());
+        }
+        if !self.is_verified(org, entry) {
+            return Err("Verify the endpoint first: nothing is sent to an unverified webhook.".into());
+        }
+        let s = now.div_euclid(1000);
+        let body = serde_json::to_vec(ce).map_err(|e| e.to_string())?;
+        let material = self.host.webhook_material(org, id, staged_keys, s);
+        let headers = webhook::signed_headers(signing_of(entry), id, &webhook::webhook_id(text(ce, "id")), s, &body, &material, webhook::CONTENT_TYPE)?;
+        let hook = self.host.make_hook(entry, self.hook_credential(org, entry)?).map_err(|e| e.message)?;
+        // one request in flight per destination: a pinned webhook's delivery finishes first
+        let rt = self.dests.lock().get(&(org.to_owned(), id.to_owned())).cloned();
+        let _send = rt.as_ref().map(|rt| rt.send.lock());
+        match webhook::outcome(&hook.post(&headers, &body)) {
+            Outcome::Delivered => Ok(()),
+            Outcome::Gone => Err("The endpoint answered 410 Gone.".into()),
+            Outcome::Retry { why, .. } => Err(why),
+        }
+    }
+
+    /// 13.1 `destinations/replay {from}`: the destination re-delivers from a feed cursor (`None`: from the oldest event
+    /// kept), after any delivery in flight; receivers drop duplicates by `webhook-id`, which a replay repeats. Err
+    /// when the destination carries no events or the cursor is not one of the org's feed (or is past retention).
+    pub fn replay_events(&self, org: &str, id: &str, from: Option<&str>, now: i64) -> Result<(), String> {
+        let rt = self.dests.lock().get(&(org.to_owned(), id.to_owned())).cloned().ok_or_else(|| "That destination is not in the organization's pinned api map.".to_owned())?;
+        if !rt.cfg.lock().carries(Signal::Events) {
+            return Err("That destination does not carry events.".into());
+        }
+        if let Some(c) = from {
+            let none = EventView { scopes: Vec::new(), ceiling: Ceiling::Public, reaches: Arc::new(|_: &str| false) };
+            match self.host.events_page(org, Some(c), 1, &none, Repr::Removed, None) {
+                Ok(_) => {}
+                Err(FeedError::Gone) => return Err("That position is older than the 35-day event retention.".into()),
+                Err(FeedError::Cursor) => return Err("from is not a position of this organization's event feed.".into()),
+                Err(FeedError::Unavailable) => return Err("The event chains cannot be read now.".into()),
+            }
+        }
+        {
+            let _send = rt.send.lock();
+            let mut q = rt.q.lock();
+            q.ev.cursor = from.map(str::to_owned);
+            q.ev.started = true;
+            q.ev.try_ = SigState::default();
+            q.ev.failing_since = None;
+            rt.save_ev(&mut q);
+        }
+        rt.cv.notify_all();
+        self.logger.ops("exports.events-replay", &Fields::new().with("org", org).with("destination", id).with("at", now / 1000), Level::Info);
+        Ok(())
+    }
+
+    /// 7.4 "Resume": an events destination paused after `queue.max_age_s` goes on from the same cursor;
+    /// `destination.resumed`. Ok(false) when it was not paused.
+    pub fn resume_events(&self, org: &str, id: &str, now: i64) -> Result<bool, String> {
+        let rt = self.dests.lock().get(&(org.to_owned(), id.to_owned())).cloned().ok_or_else(|| "That destination is not in the organization's pinned api map.".to_owned())?;
+        let was = {
+            let mut q = rt.q.lock();
+            let was = q.ev.paused;
+            if was {
+                q.ev.paused = false;
+                q.ev.try_ = SigState::default();
+                q.ev.failing_since = None;
+                rt.save_ev(&mut q);
+            }
+            was
+        };
+        if was {
+            rt.cv.notify_all();
+            self.logger.ops("exports.events-resumed", &Fields::new().with("org", org).with("destination", id), Level::Info);
+            self.host.emit_event(org, "destination.resumed", json!({"destination": id, "reason": "admin"}), now / 1000);
+        }
+        Ok(was)
+    }
+
+    /// The destinations whose events are paused (the attention item `webhook-paused`): (org, id, name).
+    pub fn events_paused(&self) -> Vec<(String, String, String)> {
+        self.snapshot()
+            .into_iter()
+            .filter(|rt| rt.q.lock().ev.paused)
+            .map(|rt| {
+                let c = rt.cfg.lock();
+                (c.org.clone(), c.id.clone(), c.name.clone())
+            })
+            .collect()
     }
 
     fn sink(&self, rt: &DestRt, cfg: &Dest) -> Result<Arc<dyn Sink>, SinkError> {
@@ -1933,6 +2598,15 @@ impl ExportEngine {
             self.logger.ops("exports.metrics-intake-full", &Fields::new().with("dropped", evicted), Level::Warn);
         }
         self.flush_refused(now);
+        // revision 4 7.3: ranges deleted by retention or for space, for the destinations that never read them
+        let gone = self.host.events_dropped();
+        if !gone.is_empty() {
+            let mut d = self.dropped.lock();
+            d.extend(gone.into_iter().map(|x| (now, x)));
+            while d.len() > DROPPED_KEPT {
+                d.pop_front();
+            }
+        }
     }
 
     /// 11.7 per destination (all orgs with None): state (`ok`, `retrying`, `paused`, `failed`, `suspended`), backlog
@@ -1946,13 +2620,13 @@ impl ExportEngine {
             }
             let c = rt.cfg.lock().clone();
             let q = rt.q.lock();
-            let state = if c.suspended || c.expired(now) {
+            let state = if c.suspended || c.expired(now) || q.ev.gone {
                 "suspended"
             } else if c.refused.is_some() || q.failed {
                 "failed"
-            } else if q.paused {
+            } else if q.paused || q.ev.paused || (c.carries(Signal::Events) && q.ev.blocked.is_some()) {
                 "paused"
-            } else if q.s.iter().any(|s| s.attempt > 0) {
+            } else if q.s.iter().any(|s| s.attempt > 0) || q.ev.try_.attempt > 0 {
                 "retrying"
             } else {
                 "ok"
@@ -1969,6 +2643,22 @@ impl ExportEngine {
             }
             if let Some(e) = c.refused.as_ref().or(q.last_error.as_ref()) {
                 v["last_error"] = json!(e);
+            }
+            // revision 4 7.4: the events signal (a webhook adds its verification state)
+            if c.carries(Signal::Events) {
+                v["events"] = json!({"paused": q.ev.paused, "retrying": q.ev.try_.attempt > 0, "cursor": q.ev.cursor});
+                if let Some(b) = q.ev.blocked {
+                    v["events"]["blocked"] = json!(b);
+                }
+                if c.kind == "webhook" {
+                    let verification = match c.entry.pointer("/settings/verification").and_then(Value::as_str) {
+                        Some("none") => "none",
+                        _ if self.is_verified(&c.org, &c.entry) => "verified",
+                        _ => "unverified",
+                    };
+                    v["events"]["verification"] = json!(verification);
+                    v["events"]["signing"] = json!(signing_of(&c.entry));
+                }
             }
             out.push(v);
         }

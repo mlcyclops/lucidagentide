@@ -146,10 +146,27 @@ pub trait Desk: Send + Sync {
     fn api_document(&self, _org: &str, _doc: ApiDoc, _source: IpAddr, _now: i64) -> Option<Answer> {
         None
     }
+    /// API-1d 7.1.5: a card route (or the root well-known card) at `now` (seconds): the org it concerns and its
+    /// answer, None for an unknown org or no root card (404). A signing is in the org's chain before the card is
+    /// answered (`console_a2a::publish`). Blocking: the audit append fsyncs.
+    fn api_a2a(&self, _what: crate::console_a2a::Publish<'_>, _if_none_match: Option<&str>, _source: IpAddr, _now: i64) -> Option<(String, Reply)> {
+        None
+    }
     /// API-1 5.2 (`revoke` false) and 5.5 at `now` (seconds); None for an unknown org (404). `body_refused` is the
     /// port's verdict on a body it could not take. The decision is in the org's audit chain under `rid` before the
     /// answer is returned (9.4). Blocking: a JWKS or discovery fetch may run, and the audit append fsyncs.
     fn api_token(&self, _org: &str, _revoke: bool, _http: &TokenHttp, _body_refused: Option<&'static str>, _rid: &str, _now: i64) -> Option<Answer> {
+        None
+    }
+    /// API-1 revision 5 4.6, 6.5: the Authorize pipeline route `route` of `org` at `now` (seconds); None for an unknown
+    /// org (404). Every decision is in the org's chain before the answer. Blocking: a CIMD fetch and audit fsyncs.
+    fn api_authorize(&self, _org: &str, _route: crate::api_delegated::AuthzRoute, _http: &crate::api_delegated::AuthzHttp, _now: i64) -> Option<api_resource::Reply> {
+        None
+    }
+    /// API-1 revision 5 2.8, 4.6: a Connector pipeline route of `req.org` at `now_ms`; None for an org the console
+    /// holds no map for (404). Every decision is in the org's chain before the answer. Blocking: `sync` long-polls up to
+    /// its `wait`, audit appends and journal writes fsync.
+    fn api_connector(&self, _req: &crate::console_connector::Request, _now_ms: i64) -> Option<api_resource::Reply> {
         None
     }
     /// API-1 9: the console's API audit chains (source `console`).
@@ -157,8 +174,18 @@ pub trait Desk: Send + Sync {
         None
     }
     /// API-1 7.1: the OpenAPI document and the resource routes of `call.org` at `now` (seconds), audited; None for an
-    /// unknown org (404). Blocking: the audit append fsyncs.
-    fn api_resource(&self, _call: &api_resource::Call, _now: i64) -> Option<api_resource::Reply> {
+    /// unknown org (404). Blocking: the audit append fsyncs. `body`: a route's body (revision 4 5.2.2).
+    fn api_resource(&self, _call: &api_resource::Call, _body: Option<&api_resource::Body>, _now: i64) -> Option<api_resource::Reply> {
+        None
+    }
+    /// API-1 revision 5 8.2, 9.1: the console MCP (M) of `http.org` at `now` (seconds) on its request line and headers
+    /// (checks 0 to 11 before the body is read); None for an unknown org (404). Blocking: audit appends fsync.
+    fn api_mcp_head(&self, _http: &crate::console_mcp::Http, _now: i64) -> Option<crate::console_mcp::Step> {
+        None
+    }
+    /// API-1 revision 5 8.2: the console MCP request `pass` once its body is read (at most 64 KiB); None for an org
+    /// the console no longer holds a map for (404). Blocking: the route and the audit append.
+    fn api_mcp_body(&self, _pass: crate::console_mcp::Pass, _body: Result<&[u8], &'static str>, _now: i64) -> Option<api_resource::Reply> {
         None
     }
     /// API-1 9.1: the console holds an api map for `org` (pinned or set aside), so its decisions go to its chain.
@@ -172,6 +199,20 @@ pub trait Desk: Send + Sync {
     }
     /// API-1 2.6 `api-audit` from a connected relay: its chain entries for one org, durable before Ok.
     fn api_audit_in(&self, _relay: &str, _body: &Value) -> Result<Value, Refusal> {
+        Err(Refusal::of("fleet-op"))
+    }
+    /// API-1 revision 4 2.5 `api-events` from a connected relay: its event chain entries for one org, durable and in
+    /// the feed index before Ok.
+    fn api_events_in(&self, _relay: &str, _body: &Value) -> Result<Value, Refusal> {
+        Err(Refusal::of("fleet-op"))
+    }
+    /// API-1 revision 4 2.5, 6.7 `api-person` from a connected relay: applied (`api_people`) before Ok.
+    fn api_person_in(&self, _relay: &str, _body: &Value, _t: i64) -> Result<Value, Refusal> {
+        Err(Refusal::of("fleet-op"))
+    }
+    /// API-1 revision 4 2.5, 5.3.3 step 7 `api-export-seal` and `api-export-part` from the job's archive relay:
+    /// checked against the job and fsynced before Ok.
+    fn api_export_in(&self, _relay: &str, _op: &str, _body: &Value, _t: i64) -> Result<Value, Refusal> {
         Err(Refusal::of("fleet-op"))
     }
     /// API-1 3.3, 3.4: a certificate admitted inside a grace, recorded as `cert.grace-used` in the chain of each org
@@ -294,6 +335,11 @@ impl Desk for FleetDesk {
         self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
         self.fleet.api.api_document(org, doc, source, now)
     }
+    fn api_a2a(&self, what: crate::console_a2a::Publish<'_>, if_none_match: Option<&str>, source: IpAddr, now: i64) -> Option<(String, Reply)> {
+        self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
+        let audit = self.fleet.api_audit();
+        crate::console_a2a::publish(&self.fleet.api, Some(&*audit), what, if_none_match, source, now)
+    }
     fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, rid: &str, now: i64) -> Option<Answer> {
         self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
         // API-1 4.3: the owner is active unless the console's people data marks them inactive for the org
@@ -309,7 +355,9 @@ impl Desk for FleetDesk {
             audit.record(org, e, now).map(|_| ()).map_err(|e| e.message)
         };
         let known = self.fleet.api.org_snapshot(org).is_some();
-        let a = self.fleet.api.api_token(self.fleet.api_link(), org, revoke, http, body_refused, &owner_active, licensed, &revoked, now)?;
+        // revision 5 6: the delegated grants
+        let host = DelegatedConsole { desk: self, now };
+        let a = self.fleet.api.api_token(self.fleet.api_link(), org, revoke, http, body_refused, &owner_active, licensed, &revoked, Some(&host), now)?;
         if !known {
             // 9.1: a decision that concerns no org (the source limiter before the org resolved) is a security line
             if let Some((name, fields)) = &a.event {
@@ -323,10 +371,22 @@ impl Desk for FleetDesk {
         }
         Some(api_resource::token_audited(&*audit, org, &route, rid, http.source, a, now))
     }
+    fn api_authorize(&self, org: &str, route: crate::api_delegated::AuthzRoute, http: &crate::api_delegated::AuthzHttp, now: i64) -> Option<Reply> {
+        self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
+        let people = self.fleet.people();
+        let owner_active = |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(org, p));
+        let host = DelegatedConsole { desk: self, now };
+        self.fleet.api.api_authorize(org, route, http, &owner_active, self.licensed(now), &host, now)
+    }
     fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
         Some(self.fleet.api_audit())
     }
-    fn api_resource(&self, call: &api_resource::Call, now: i64) -> Option<Reply> {
+    fn api_connector(&self, req: &crate::console_connector::Request, now_ms: i64) -> Option<Reply> {
+        self.fleet.api.set_edition(self.fleet.api_edition(now_ms));
+        let source_ok = |ip: IpAddr, now: i64| self.fleet.api_state.public_ok(ip, now);
+        crate::console_connector::Door { api: &self.fleet.api, source_ok: &source_ok }.answer(req, now_ms)
+    }
+    fn api_resource(&self, call: &api_resource::Call, body: Option<&api_resource::Body>, now: i64) -> Option<Reply> {
         self.fleet.api.set_edition(self.fleet.api_edition(now.saturating_mul(1000)));
         let org = call.org;
         let store = self.fleet.api.org_snapshot(org)?;
@@ -353,10 +413,29 @@ impl Desk for FleetDesk {
             data: &data,
             now,
         };
-        Some(api_resource::answer(&site, call))
+        Some(api_resource::answer_with(&site, call, body))
+    }
+    fn api_mcp_head(&self, http: &crate::console_mcp::Http, now: i64) -> Option<crate::console_mcp::Step> {
+        let host = DelegatedConsole { desk: self, now };
+        let role = |email: &str| crate::api_delegated::DelegatedHost::console_role(&host, email);
+        let policy = self.fleet.api.verified_policy(http.org, now);
+        self.mcp_site(http.org, now, |site| crate::console_mcp::head(site, http, policy.as_ref(), &role))
+    }
+    fn api_mcp_body(&self, pass: crate::console_mcp::Pass, body: Result<&[u8], &'static str>, now: i64) -> Option<Reply> {
+        let org = pass.org().to_string();
+        self.mcp_site(&org, now, move |site| crate::console_mcp::body(site, pass, body))
     }
     fn api_audit_in(&self, relay: &str, body: &Value) -> Result<Value, Refusal> {
         self.fleet.api.audit_in(relay, body)
+    }
+    fn api_events_in(&self, relay: &str, body: &Value) -> Result<Value, Refusal> {
+        self.fleet.api.events_in(relay, body)
+    }
+    fn api_person_in(&self, relay: &str, body: &Value, t: i64) -> Result<Value, Refusal> {
+        crate::api_people::person_in(&self.fleet, relay, body, t.div_euclid(1000))
+    }
+    fn api_export_in(&self, relay: &str, op: &str, body: &Value, t: i64) -> Result<Value, Refusal> {
+        crate::api_exports::fleet_in(&*self.fleet.compliance_desk(), relay, op, body, t.div_euclid(1000))
     }
     fn api_known(&self, org: &str) -> bool {
         self.fleet.api.org_snapshot(org).is_some()
@@ -383,11 +462,79 @@ impl Desk for FleetDesk {
     }
 }
 
+/// API-1 revision 5 6: the fleet console as the delegated grants and the Authorize pipeline see it.
+struct DelegatedConsole<'a> {
+    desk: &'a FleetDesk,
+    now: i64,
+}
+
+impl crate::api_delegated::DelegatedHost for DelegatedConsole<'_> {
+    fn api_subject(&self, org: &str, request: &Value) -> Result<Value, String> {
+        self.desk.fleet.api.api_subject(self.desk.fleet.api_link(), org, request)
+    }
+    fn root(&self) -> Option<crate::api_delegated::Root> {
+        let (der, crl) = self.desk.fleet.meet_root()?;
+        crate::api_delegated::Root::of(&der, crl.as_deref())
+    }
+    fn providers(&self, org: &str) -> Vec<crate::meet_org_policy::IdentityProvider> {
+        self.desk.fleet.api.identity_providers(org)
+    }
+    fn org_policy(&self, org: &str, root: &crate::api_delegated::Root, now: i64) -> Result<Option<crate::meet_org_policy::Obj>, String> {
+        self.desk.fleet.api.api_org_policy(self.desk.fleet.api_link(), org, root, now)
+    }
+    fn console_role(&self, email: &str) -> Option<String> {
+        let inner = self.desk.console.inner.lock();
+        let p = inner.book.people.get(&email.trim().to_lowercase())?;
+        (p.state == crate::console_auth::PersonState::Active).then(|| p.role.as_str().to_string())
+    }
+    fn console_active(&self, org: &str) -> Vec<crate::api_cjournal::ConsoleEntry> {
+        self.desk.fleet.api.console_active(org)
+    }
+    fn sso_url(&self, org: &str, provider: &str) -> Option<String> {
+        self.desk.fleet.api.sso_url(org, provider)
+    }
+    fn audit(&self, org: &str, entry: Value) -> Result<(), String> {
+        self.desk.fleet.api_audit().record(org, entry, self.now).map(|_| ()).map_err(|e| e.message)
+    }
+    fn mail_notice(&self, to: &str, args: &[(&str, String)]) -> bool {
+        self.desk.console.mailer.enqueue_taken("fleet.mail.delegation", to, args)
+    }
+}
+
 impl FleetDesk {
     /// API-1 6.1 and 6.2 `license`: the console serves while its service state is not stopped (on, grace or upgrade
     /// period; the fleet section holds no product license and reports on).
     fn licensed(&self, now: i64) -> bool {
         self.console.license_view(now.saturating_mul(1000)).service.state != crate::console::ServiceState::Stopped
+    }
+
+    /// API-1 revision 5 8.2: `f` on the front door's site for M of `org` (`resource` M, the console MCP's own
+    /// audience), None for an unknown org. Check 1 (`license`) also needs the `enterprise` edition: MCP is enterprise
+    /// (r5 15, D8).
+    fn mcp_site<R>(&self, org: &str, now: i64, f: impl FnOnce(&api_resource::Site) -> R) -> Option<R> {
+        let edition = self.fleet.api_edition(now.saturating_mul(1000));
+        self.fleet.api.set_edition(edition);
+        let store = self.fleet.api.org_snapshot(org)?;
+        let issuer = store.get(org, "").and_then(|m| Some(m.map().get("issuer")?.get("url")?.as_str()?.to_string())).unwrap_or_default();
+        let m = crate::api_delegated::mcp_resource(&issuer);
+        let people = self.fleet.people();
+        let owner_active = |p: &str| !people.as_ref().is_some_and(|x| x.person_inactive(org, p));
+        let audit = self.fleet.api_audit();
+        let data = self.fleet.api_data();
+        let site = api_resource::Site {
+            side: ApiSide::FrontDoor,
+            relay: "console",
+            resource: &m,
+            local: None,
+            store: &store,
+            owner_active: &owner_active,
+            licensed: self.licensed(now) && edition == Some(crate::api_map::Edition::Enterprise),
+            audit: &*audit,
+            state: &self.fleet.api_state,
+            data: &data,
+            now,
+        };
+        Some(f(&site))
     }
 }
 
@@ -714,6 +861,20 @@ impl PortState {
         reply_response(r, &rid)
     }
 
+    /// API-1d 7.1.5 on the front door at `now` (seconds), blocking: a card route under `route` (`GET <path>` with the
+    /// org filled in), or 404 `not-found` for an unknown org or no root card. A refusal of a known org (the source
+    /// limiter, no card served, `card-unsigned`) is in its audit chain first (9.4); 200 and 304 are answered as they
+    /// are.
+    pub fn api_a2a_answer(&self, what: crate::console_a2a::Publish<'_>, route: &str, if_none_match: Option<&str>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let Some((org, mut r)) = self.desk.api_a2a(what, if_none_match, ip, now) else { return reply_response(api_not_found(), &rid) };
+        if !matches!(r.status, 200 | 304) {
+            let audit = self.desk.api_audit();
+            r = api_resource::public_refused(audit.as_deref().map(|a| a as &dyn api_resource::AuditLog), &org, route, &rid, ip, r, now);
+        }
+        reply_response(r, &rid)
+    }
+
     /// API-1 5.2 and 5.5 on the front door at `now` (seconds), blocking: the issuer's answer once its decision is in
     /// the org's audit chain, or 404 `not-found` for an unknown org. `form` is the body or why it was not taken
     /// (`too-large`, `request`).
@@ -726,6 +887,22 @@ impl PortState {
         let http = TokenHttp { form: body, authorization, dpop, client_cert: cert, source: ip };
         let rid = api_resource::rid();
         let r = self.desk.api_token(org, revoke, &http, refused, &rid, now).map_or_else(api_not_found, Reply::of_answer);
+        reply_response(r, &rid)
+    }
+
+    /// API-1 revision 5 4.6 on the front door at `now` (seconds), blocking: the Authorize pipeline's answer (a page or a
+    /// redirect, never cached or framed), or 404 `not-found` for an unknown org. `form` is a POST body or why it was
+    /// not taken.
+    #[allow(clippy::too_many_arguments)]
+    pub fn api_authorize_answer(&self, org: &str, route: crate::api_delegated::AuthzRoute, query: &str, form: Result<Vec<u8>, &'static str>, cookie: Option<&str>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let Ok(body) = form else {
+            let mut r = api_resource::problem(400, "request", "The request body is not a form of at most 16 KiB.");
+            r.headers.extend(crate::api_delegated::authz_headers("frame-ancestors 'none'").into_iter().filter(|(k, _)| *k != "Cache-Control"));
+            return reply_response(r, &rid);
+        };
+        let http = crate::api_delegated::AuthzHttp { query, form: &body, cookie, source: ip };
+        let r = self.desk.api_authorize(org, route, &http, now).unwrap_or_else(api_not_found);
         reply_response(r, &rid)
     }
 
@@ -749,13 +926,47 @@ impl PortState {
         reply_response(r, &rid)
     }
 
+    /// API-1 revision 5 2.8, 4.6 on the front door, blocking: a Connector pipeline route (`console_connector`) with the
+    /// connection's API client certificate and the body as read (None for `sync`), or, for an org the console holds no
+    /// map for, the unrouted answer.
+    pub fn api_connector_answer(&self, org: &str, route: crate::console_connector::Route, query: &str, body: Option<Result<Value, &'static str>>, cert: Option<&ClientCert>, ip: IpAddr) -> Response<Full<Bytes>> {
+        let rid = api_resource::rid();
+        let req = crate::console_connector::Request { org, route, query, body, cert, source: ip, rid: &rid };
+        match self.desk.api_connector(&req, now_ms()) {
+            Some(r) => reply_response(r, &rid),
+            None => self.api_unrouted(org, route.method(), ip, now_ms().div_euclid(1000)),
+        }
+    }
+
+    /// API-1 revision 5 8.2 on the front door at `now` (seconds), blocking: a console MCP request's line and headers
+    /// through checks 0 to 11 (the body is not read yet); Ok is what reading the body continues with.
+    pub fn api_mcp_head(&self, org: &str, head: &crate::mcp::Head, cert: Option<&ClientCert>, ip: IpAddr, now: i64) -> Result<Box<crate::console_mcp::Pass>, Response<Full<Bytes>>> {
+        let rid = api_resource::rid();
+        let http = crate::console_mcp::Http { org, head, cert, source: ip, rid: &rid };
+        match self.desk.api_mcp_head(&http, now) {
+            Some(crate::console_mcp::Step::Done(r)) => Err(reply_response(r, &rid)),
+            Some(crate::console_mcp::Step::Read(p)) => Ok(p),
+            None => Err(self.api_unrouted(org, &head.http, ip, now)),
+        }
+    }
+
+    /// API-1 revision 5 8.2, blocking: a console MCP request once its body is read (at most 64 KiB).
+    pub fn api_mcp_body(&self, pass: Box<crate::console_mcp::Pass>, body: Result<&[u8], &'static str>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+        let (rid, org) = (pass.rid().to_string(), pass.org().to_string());
+        match self.desk.api_mcp_body(*pass, body, now) {
+            Some(r) => reply_response(r, &rid),
+            None => self.api_unrouted(&org, "POST", ip, now),
+        }
+    }
+
     /// API-1 7.1 on the front door at `now` (seconds), blocking: the OpenAPI document and the resource routes, or 404
     /// `not-found` for an unknown org.
+    /// `body`: the body a route takes (revision 4 5.2.2).
     #[allow(clippy::too_many_arguments)]
-    pub fn api_resource_answer(&self, m: &api_resource::Matched, path: &str, query: &str, authorization: Option<&str>, dpop: Option<&str>, cert: Option<&ClientCert>, ip: IpAddr, now: i64) -> Response<Full<Bytes>> {
+    pub fn api_resource_answer_with(&self, m: &api_resource::Matched, path: &str, query: &str, authorization: Option<&str>, dpop: Option<&str>, cert: Option<&ClientCert>, ip: IpAddr, body: Option<&api_resource::Body>, now: i64) -> Response<Full<Bytes>> {
         let rid = api_resource::rid();
         let call = api_resource::Call { org: m.org, route: m.route, id: m.id, path, query, authorization, dpop, cert, source: ip, rid: &rid };
-        let r = self.desk.api_resource(&call, now).unwrap_or_else(api_not_found);
+        let r = self.desk.api_resource(&call, body, now).unwrap_or_else(api_not_found);
         reply_response(r, &rid)
     }
 
@@ -1157,6 +1368,38 @@ impl PortState {
                             Err(r) => w::res_err_text(id, &r),
                         });
                     }
+                    Ok(Frame::Req { id, op: "api-events", body }) => {
+                        // API-1 revision 4 2.5, 7.3: a relay's event chain entries for one org, as `api-audit`
+                        let state = self.clone();
+                        let r = relay.clone();
+                        let answer = tokio::task::spawn_blocking(move || state.desk.api_events_in(&r, &Value::Object(body))).await.unwrap_or_else(|_| Err(Refusal::of("fleet-op")));
+                        chan.send(match answer {
+                            Ok(b) => w::res_ok_text(id, b),
+                            Err(r) => w::res_err_text(id, &r),
+                        });
+                    }
+                    Ok(Frame::Req { id, op: "api-person", body }) => {
+                        // API-1 revision 4 2.5, 6.7: a principal's state from a relay; fsynced, journaled and audited
+                        // before the answer
+                        let state = self.clone();
+                        let r = relay.clone();
+                        let answer = tokio::task::spawn_blocking(move || state.desk.api_person_in(&r, &Value::Object(body), t)).await.unwrap_or_else(|_| Err(Refusal::of("fleet-op")));
+                        chan.send(match answer {
+                            Ok(b) => w::res_ok_text(id, b),
+                            Err(r) => w::res_err_text(id, &r),
+                        });
+                    }
+                    Ok(Frame::Req { id, op: op @ ("api-export-seal" | "api-export-part"), body }) => {
+                        // API-1 revision 4 2.5, 5.3.3 step 7: an export's seal, then each ciphertext part, from the
+                        // job's archive relay; checked against the job and fsynced before the answer
+                        let state = self.clone();
+                        let r = relay.clone();
+                        let answer = tokio::task::spawn_blocking(move || state.desk.api_export_in(&r, op, &Value::Object(body), t)).await.unwrap_or_else(|_| Err(Refusal::of("fleet-op")));
+                        chan.send(match answer {
+                            Ok(b) => w::res_ok_text(id, b),
+                            Err(r) => w::res_err_text(id, &r),
+                        });
+                    }
                     Ok(Frame::Req { id, .. }) => {
                         chan.send(w::res_err_text(id, &Refusal::of("fleet-op")));
                     }
@@ -1389,6 +1632,9 @@ fn api_not_found() -> Reply {
     api_resource::problem(404, "not-found", w::NOT_FOUND)
 }
 
+/// API-1d 7.1.5 (A2A 8.2): the root well-known Agent Card path.
+pub const WELL_KNOWN_CARD: &str = "/.well-known/agent-card.json";
+
 /// An API answer as an HTTP response, with its `X-Lucid-Request-Id` (8.2).
 fn reply_response(r: Reply, rid: &str) -> Response<Full<Bytes>> {
     let body = r.bytes();
@@ -1420,16 +1666,66 @@ async fn read_form(req: Request<Incoming>) -> Result<Vec<u8>, &'static str> {
 /// thread (a JWKS or discovery fetch may run; audit appends fsync).
 async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
     let now = now_ms().div_euclid(1000);
+    // API-1d 7.1.5: the Agent Cards (a signing appends to the org's chain, so blocking)
+    if matches!(m.route.id, RouteId::A2aAgents | RouteId::A2aCard | RouteId::A2aJwks) {
+        let (id, org, agent) = (m.route.id, m.org.to_owned(), m.id.unwrap_or_default().to_owned());
+        let route = format!("{} {}", m.route.method, m.route.path.replace("{org}", m.org));
+        let inm = req.headers().get(hyper::header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let failed = || reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid());
+        return tokio::task::spawn_blocking(move || {
+            let what = match id {
+                RouteId::A2aAgents => crate::console_a2a::Publish::Agents(&org),
+                RouteId::A2aCard => crate::console_a2a::Publish::Card(&org, &agent),
+                _ => crate::console_a2a::Publish::Jwks(&org),
+            };
+            state.api_a2a_answer(what, &route, inm.as_deref(), ip, now)
+        })
+        .await
+        .unwrap_or_else(|_| failed());
+    }
     let doc = match m.route.id {
         RouteId::AsMetadata => Some(ApiDoc::AuthorizationServer),
         RouteId::ResourceMetadata => Some(ApiDoc::ProtectedResource),
         RouteId::Jwks => Some(ApiDoc::Jwks),
+        RouteId::FederationDiscovery => Some(ApiDoc::FederationDiscovery),
+        RouteId::FederationJwks => Some(ApiDoc::FederationJwks),
+        // revision 4 7.3
+        RouteId::WebhookKeys => Some(ApiDoc::WebhookKeys),
         RouteId::Token | RouteId::Revoke | RouteId::OpenApi | RouteId::Health | RouteId::Capacity | RouteId::FleetRelays | RouteId::FleetRelay | RouteId::Audit | RouteId::AuditKeys | RouteId::Metrics | RouteId::TelemetryCatalog => None,
+        // revision 4 7.3 (a long poll holds its blocking thread up to 25 s)
+        RouteId::Events | RouteId::EventTypes | RouteId::EventKeys => None,
+        // revision 4 5.1, 5.2
+        RouteId::ComplianceAttendance | RouteId::ComplianceMeetings | RouteId::ComplianceConversations | RouteId::ComplianceFiles | RouteId::ComplianceRetention | RouteId::ComplianceHolds | RouteId::ComplianceHold | RouteId::ComplianceHoldPlace => None,
+        // revision 4 5.3.7
+        RouteId::ComplianceExportRequest | RouteId::ComplianceExports | RouteId::ComplianceExport | RouteId::ComplianceExportSeal | RouteId::ComplianceExportPart | RouteId::ComplianceExportCancel => None,
         // the relay listener's own routes
         RouteId::LocalAsMetadata | RouteId::LocalJwks | RouteId::LocalToken => return reply_response(api_not_found(), &api_resource::rid()),
+        // revision 5 4.4: the metadata of M
+        RouteId::McpMetadata => Some(ApiDoc::McpResource),
+        // revision 5 4.6: the Authorize pipeline
+        RouteId::Authorize | RouteId::SsoReturn | RouteId::Consent | RouteId::ConsentPost => None,
+        // API-1d 6.1: `api-spokes` to a spokes relay may wait up to its call timeout on the blocking thread
+        RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => None,
+        // API-1d 7.1.5: answered above
+        RouteId::A2aAgents | RouteId::A2aCard | RouteId::A2aJwks => None,
     };
     if let Some(doc) = doc {
         return state.api_doc(&m, doc, ip, now);
+    }
+    let route = match m.route.id {
+        RouteId::Authorize => Some(crate::api_delegated::AuthzRoute::Authorize),
+        RouteId::SsoReturn => Some(crate::api_delegated::AuthzRoute::SsoReturn),
+        RouteId::Consent => Some(crate::api_delegated::AuthzRoute::Consent),
+        RouteId::ConsentPost => Some(crate::api_delegated::AuthzRoute::ConsentPost),
+        _ => None,
+    };
+    if let Some(route) = route {
+        let org = m.org.to_owned();
+        let query = req.uri().query().unwrap_or_default().to_owned();
+        let cookie = req.headers().get("cookie").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let form = if req.method() == hyper::Method::POST { read_form(req).await } else { Ok(Vec::new()) };
+        let failed = || reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid());
+        return tokio::task::spawn_blocking(move || state.api_authorize_answer(&org, route, &query, form, cookie.as_deref(), ip, now)).await.unwrap_or_else(|_| failed());
     }
     let (authorization, dpop) = {
         let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
@@ -1447,12 +1743,79 @@ async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: P
     }
     let (path, query) = (req.uri().path().to_owned(), req.uri().query().unwrap_or_default().to_owned());
     let method = m.route.method;
+    // revision 4 5.2.2: the hold request's JSON body (at most 32 KiB) and its `Idempotency-Key`
+    let body = match m.route.id {
+        RouteId::ComplianceHoldPlace => {
+            let key = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned);
+            Some(api_resource::Body { json: read_api_json(req, crate::api_compliance::HOLD_BODY_MAX).await, key })
+        }
+        // revision 4 5.3.2: the export request's JSON body (at most 64 KiB) and its `Idempotency-Key`
+        RouteId::ComplianceExportRequest => {
+            let key = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned);
+            Some(api_resource::Body { json: read_api_json(req, crate::api_exports::REQUEST_MAX).await, key })
+        }
+        _ => None,
+    };
     tokio::task::spawn_blocking(move || match api_resource::route_of(ApiSide::FrontDoor, method, &path) {
-        Some(m) => state.api_resource_answer(&m, &path, &query, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, now),
+        Some(m) => state.api_resource_answer_with(&m, &path, &query, authorization.as_deref(), dpop.as_deref(), cert.as_ref(), ip, body.as_ref(), now),
         None => reply_response(api_not_found(), &api_resource::rid()),
     })
     .await
     .unwrap_or_else(|_| failed())
+}
+
+/// API-1 revision 5 2.8, 4.6: a Connector pipeline route. Its body (a JSON object of at most the route's limit; none
+/// for `sync`) is read here, then the pipeline and the long poll of `sync` (up to 30 s) run on a blocking thread.
+async fn connector_answer(state: Arc<PortState>, org: String, route: crate::console_connector::Route, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
+    let query = req.uri().query().unwrap_or_default().to_owned();
+    let body = match route.body_max() {
+        0 => None,
+        max => Some(read_api_json(req, max).await),
+    };
+    let cert = match peer {
+        Peer::ApiClient { cert } => Some(cert),
+        _ => None,
+    };
+    tokio::task::spawn_blocking(move || state.api_connector_answer(&org, route, &query, body, cert.as_ref(), ip))
+        .await
+        .unwrap_or_else(|_| reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid()))
+}
+
+/// API-1 revision 5 8.2: the console MCP (M). Its request line and headers go through checks 0 to 11 on a blocking
+/// thread first; only a request that passed has its body read (at most 64 KiB), then the tool runs, also blocking.
+async fn mcp_answer(state: Arc<PortState>, org: String, peer: Peer, ip: IpAddr, req: Request<Incoming>) -> Response<Full<Bytes>> {
+    let head = {
+        let path = req.uri().path().to_owned();
+        let header = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        crate::mcp::Head::of(req.method().as_str(), &path, &header)
+    };
+    let cert = match peer {
+        Peer::ApiClient { cert } => Some(cert),
+        _ => None,
+    };
+    let failed = || reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid());
+    let now = now_ms().div_euclid(1000);
+    let s = state.clone();
+    let pass = match tokio::task::spawn_blocking(move || s.api_mcp_head(&org, &head, cert.as_ref(), ip, now)).await {
+        Ok(Ok(p)) => p,
+        Ok(Err(r)) => return r,
+        Err(_) => return failed(),
+    };
+    let body = match tokio::time::timeout(w::UPGRADE_WAIT, Limited::new(req.into_body(), crate::mcp::BODY_MAX).collect()).await {
+        Ok(Ok(c)) => Ok(c.to_bytes().to_vec()),
+        Ok(Err(e)) if e.is::<http_body_util::LengthLimitError>() => Err("too-large"),
+        _ => Err("request"),
+    };
+    tokio::task::spawn_blocking(move || state.api_mcp_body(pass, body.as_deref().map_err(|e| *e), ip, now)).await.unwrap_or_else(|_| failed())
+}
+
+/// Revision 4: a resource route's JSON object body of at most `max` bytes; Err is the reason (`too-large`, `request`).
+async fn read_api_json(req: Request<Incoming>, max: usize) -> Result<Value, &'static str> {
+    match tokio::time::timeout(w::UPGRADE_WAIT, Limited::new(req.into_body(), max).collect()).await {
+        Ok(Ok(c)) => std::str::from_utf8(&c.to_bytes()).ok().and_then(parse_json).filter(Value::is_object).ok_or("request"),
+        Ok(Err(e)) if e.is::<http_body_util::LengthLimitError>() => Err("too-large"),
+        _ => Err("request"),
+    }
 }
 
 async fn read_body(req: Request<Incoming>) -> Option<Value> {
@@ -1495,8 +1858,23 @@ async fn handle_api(state: Arc<PortState>, peer: Peer, presented: Option<Vec<u8>
             Err(_) => refused(&Refusal::of("recovery-refused")),
         };
     }
+    if let Some((org, route)) = crate::console_connector::route_of(&method, &path) {
+        return connector_answer(state, org.to_owned(), route, peer, ip, req).await;
+    }
+    // revision 5 8.2: M, any method (anything but POST answers 405 after the source limiter)
+    if let Some(org) = crate::mcp::endpoint_org(&path).map(str::to_owned) {
+        return mcp_answer(state, org, peer, ip, req).await;
+    }
     if let Some(m) = api_resource::route_of(ApiSide::FrontDoor, &method, &path) {
         return api_answer(state, m, peer, ip, req).await;
+    }
+    // API-1d 7.1.5: the root well-known card, outside every org namespace (opt-in, one org per console)
+    if method == "GET" && path == WELL_KNOWN_CARD {
+        let now = t.div_euclid(1000);
+        let inm = req.headers().get(hyper::header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        return tokio::task::spawn_blocking(move || state.api_a2a_answer(crate::console_a2a::Publish::WellKnown, &format!("GET {WELL_KNOWN_CARD}"), inm.as_deref(), ip, now))
+            .await
+            .unwrap_or_else(|_| reply_response(api_resource::problem(503, "unavailable", "The request failed; try again."), &api_resource::rid()));
     }
     if let Some(org) = api_resource::org_of(&path).map(str::to_owned) {
         // an org namespace, but no route of the table: limited and audited like the routes (blocking: an fsync)
@@ -2418,8 +2796,13 @@ pub(crate) mod tests {
         fn api_document(&self, org: &str, doc: ApiDoc, source: IpAddr, now: i64) -> Option<Answer> {
             self.api.lock().clone()?.api_document(org, doc, source, now)
         }
+        fn api_a2a(&self, what: crate::console_a2a::Publish<'_>, if_none_match: Option<&str>, source: IpAddr, now: i64) -> Option<(String, Reply)> {
+            let api = self.api.lock().clone()?;
+            let audit = self.audit.lock().clone();
+            crate::console_a2a::publish(&api, audit.as_deref(), what, if_none_match, source, now)
+        }
         fn api_token(&self, org: &str, revoke: bool, http: &TokenHttp, body_refused: Option<&'static str>, _rid: &str, now: i64) -> Option<Answer> {
-            self.api.lock().clone()?.api_token(None, org, revoke, http, body_refused, &|_: &str| true, true, &|_: &str, _: &str, _: i64| Ok(()), now)
+            self.api.lock().clone()?.api_token(None, org, revoke, http, body_refused, &|_: &str| true, true, &|_: &str, _: &str, _: i64| Ok(()), None, now)
         }
         fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
             self.audit.lock().clone()
@@ -3062,6 +3445,11 @@ pub(crate) mod tests {
         assert_eq!(id("GET", "/api/orgs/acme/v1/audit"), acme(RouteId::Audit));
         assert_eq!(id("GET", "/api/orgs/acme/v1/audit/keys"), acme(RouteId::AuditKeys));
         assert_eq!(id("GET", "/api/orgs/acme/v1/metrics"), acme(RouteId::Metrics));
+        // API-1d 7.1.5
+        assert_eq!(id("GET", "/api/orgs/acme/a2a/agents"), acme(RouteId::A2aAgents));
+        assert_eq!(id("GET", "/api/orgs/acme/a2a/agents/a_7c1d2e3f4a5b6c7d/agent-card.json"), Some((RouteId::A2aCard, "acme".into(), Some("a_7c1d2e3f4a5b6c7d".into()))));
+        assert_eq!(id("GET", "/api/orgs/acme/a2a/jwks.json"), acme(RouteId::A2aJwks));
+        assert_eq!(id("GET", WELL_KNOWN_CARD), None, "the root card is outside the org namespace");
         assert_eq!(id("GET", "/api/orgs/acme/oauth/token"), None);
         assert_eq!(id("POST", "/api/orgs/acme/jwks.json"), None);
         assert_eq!(id("GET", "/.well-known/oauth-authorization-server/api/orgs/acme/local"), None);
@@ -3076,6 +3464,10 @@ pub(crate) mod tests {
             ApiDoc::AuthorizationServer => format!("/.well-known/oauth-authorization-server/api/orgs/{org}"),
             ApiDoc::ProtectedResource => format!("/.well-known/oauth-protected-resource/api/orgs/{org}"),
             ApiDoc::Jwks => format!("/api/orgs/{org}/jwks.json"),
+            ApiDoc::FederationDiscovery => format!("/api/orgs/{org}/federation/.well-known/openid-configuration"),
+            ApiDoc::FederationJwks => format!("/api/orgs/{org}/federation/jwks.json"),
+            ApiDoc::WebhookKeys => format!("/api/orgs/{org}/v1/webhooks/keys"),
+            ApiDoc::McpResource => format!("/.well-known/oauth-protected-resource/api/orgs/{org}/mcp"),
         };
         (path, doc)
     }
@@ -3126,7 +3518,7 @@ pub(crate) mod tests {
             // the resource routes and the OpenAPI document of an unknown org
             for path in ["/api/orgs/nope/v1/health", "/api/orgs/nope/v1/openapi.json"] {
                 let m = api_resource::route_of(ApiSide::FrontDoor, "GET", path).unwrap();
-                let (status, _, body) = api_json(state.api_resource_answer(&m, path, "", None, None, None, ip(1), now)).await;
+                let (status, _, body) = api_json(state.api_resource_answer_with(&m, path, "", None, None, None, ip(1), None, now)).await;
                 assert_eq!((status, body["code"].as_str()), (404, Some("not-found")));
             }
             for revoke in [false, true] {
@@ -3148,7 +3540,15 @@ pub(crate) mod tests {
         let (status, ctype, body) = api_json(doc_at(&state, "acme", ApiDoc::AuthorizationServer, ip(1), now)).await;
         assert_eq!((status, ctype.as_str()), (200, "application/json"));
         assert_eq!((body["issuer"].as_str(), body["token_endpoint"].clone(), body["revocation_endpoint"].clone(), body["jwks_uri"].clone()), (Some(i), json!(format!("{i}/oauth/token")), json!(format!("{i}/oauth/revoke")), json!(format!("{i}/jwks.json"))));
-        assert_eq!(body["grant_types_supported"], json!(["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]));
+        // revision 5 4.4: the console issuer always adds the delegated grants, whatever the pinned map enables
+        let grants = [
+            "client_credentials",
+            "urn:ietf:params:oauth:grant-type:token-exchange",
+            "authorization_code",
+            "refresh_token",
+            "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        ];
+        assert_eq!(body["grant_types_supported"], json!(grants));
         let (_, _, body) = api_json(doc_at(&state, "acme", ApiDoc::ProtectedResource, ip(1), now)).await;
         assert_eq!((body["resource"].as_str(), body["authorization_servers"].clone()), (Some(i), json!([i])));
         let (_, _, body) = api_json(doc_at(&state, "acme", ApiDoc::Jwks, ip(1), now)).await;
@@ -3202,6 +3602,38 @@ pub(crate) mod tests {
         *desk.audit.lock() = None;
         let (status, _, body) = api_json(state.api_unrouted("acme", "GET", ip(5), now)).await;
         assert_eq!((status, body["code"].as_str()), (503, Some("audit-unavailable")));
+    }
+
+    #[tokio::test]
+    async fn agent_card_routes_answer_404_until_a_card_is_served_and_audit_refusals() {
+        use crate::console_a2a::Publish;
+        let (state, desk, _) = test_port("api-a2a");
+        let now = now_ms() / 1000;
+        // no console, no map: 404 outside every chain, the root card too
+        let (status, _, body) = api_json(state.api_a2a_answer(Publish::WellKnown, &format!("GET {WELL_KNOWN_CARD}"), None, ip(6), now)).await;
+        assert_eq!((status, body["code"].as_str()), (404, Some("not-found")));
+        *desk.api.lock() = Some(api_with_map(now));
+        let audit = chains("api-a2a", now);
+        *desk.audit.lock() = Some(audit.clone());
+        assert_eq!(state.api_a2a_answer(Publish::Card("nope", "a_7c1d2e3f4a5b6c7d"), "GET /api/orgs/nope/a2a/agents/{agent}/agent-card.json", None, ip(6), now).status().as_u16(), 404);
+        // a known org whose map names no agent: 404, in its chain
+        let route = "GET /api/orgs/acme/a2a/agents/{agent}/agent-card.json";
+        let r = state.api_a2a_answer(Publish::Card("acme", "a_7c1d2e3f4a5b6c7d"), route, None, ip(6), now);
+        assert!(r.headers().contains_key("X-Lucid-Request-Id"));
+        let (status, ctype, body) = api_json(r).await;
+        assert_eq!((status, ctype.as_str(), body["code"].as_str()), (404, "application/problem+json", Some("not-found")));
+        audit.tick(now + 120);
+        let page = audit.read("acme", "console", crate::api_audit::Repr::AsIs, 0, 1000).unwrap();
+        assert!(page["entries"].as_array().unwrap().iter().any(|e| e["check"] == "not-found" && e["route"] == route), "{page}");
+        // the agent list and key set of a pinned map without `a2a` are empty documents, cacheable for five minutes
+        let r = state.api_a2a_answer(Publish::Jwks("acme"), "GET /api/orgs/acme/a2a/jwks.json", None, ip(6), now);
+        assert_eq!(r.headers().get(CACHE_CONTROL).and_then(|v| v.to_str().ok()), Some("max-age=300"));
+        let (status, _, body) = api_json(r).await;
+        assert_eq!((status, body), (200, json!({"keys": []})));
+        let (status, _, body) = api_json(state.api_a2a_answer(Publish::Agents("acme"), "GET /api/orgs/acme/a2a/agents", None, ip(6), now)).await;
+        assert_eq!((status, body), (200, json!({"agents": []})));
+        // no map names a root card
+        assert_eq!(state.api_a2a_answer(Publish::WellKnown, &format!("GET {WELL_KNOWN_CARD}"), None, ip(6), now).status().as_u16(), 404);
     }
 
     #[test]

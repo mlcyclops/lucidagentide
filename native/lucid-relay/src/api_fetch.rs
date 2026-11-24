@@ -229,8 +229,9 @@ fn tls_config() -> Result<Arc<ClientConfig>, FetchError> {
     CFG.clone().map_err(|e| FetchError::new("tls", e))
 }
 
-/// Resolve the URL host; every address must be allowed.
-async fn resolve(url: &FetchUrl, private_ok: bool, limits: &Limits) -> Result<Vec<SocketAddr>, FetchError> {
+/// Resolve the URL host; every address must be allowed (with `private_ok` false, a private address only inside one of
+/// `within`, API-1d 7.13).
+async fn resolve(url: &FetchUrl, private_ok: bool, within: &[crate::console_source::Cidr], limits: &Limits) -> Result<Vec<SocketAddr>, FetchError> {
     let addrs: Vec<SocketAddr> = match &url.host {
         Host::Ip(ip) => vec![SocketAddr::new(*ip, url.port)],
         Host::Name(n) => tokio::time::timeout(limits.dns, tokio::net::lookup_host((n.as_str(), url.port)))
@@ -242,14 +243,15 @@ async fn resolve(url: &FetchUrl, private_ok: bool, limits: &Limits) -> Result<Ve
     if addrs.is_empty() {
         return Err(FetchError::new("dns", "host resolved to no address"));
     }
-    if let Some(bad) = addrs.iter().find(|a| !address_allowed(a.ip(), private_ok)) {
+    let allowed = |ip: IpAddr| address_allowed(ip, private_ok) || (address_allowed(ip, true) && within.iter().any(|c| c.contains(ip)));
+    if let Some(bad) = addrs.iter().find(|a| !allowed(a.ip())) {
         return Err(FetchError::new("address", format!("address {} is not allowed", bad.ip())));
     }
     Ok(addrs)
 }
 
-async fn fetch_inner(url: &FetchUrl, private_ok: bool, max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
-    let addrs = resolve(url, private_ok, &limits).await?;
+async fn fetch_inner(url: &FetchUrl, private_ok: bool, within: &[crate::console_source::Cidr], max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
+    let addrs = resolve(url, private_ok, within, &limits).await?;
     let tls = tls_config()?;
     let mut last = FetchError::new("connect", "no address");
     let mut tcp = None;
@@ -308,7 +310,7 @@ async fn fetch_inner(url: &FetchUrl, private_ok: bool, max_bytes: usize, limits:
 
 /// GET a JSON document under the section 8.1 rules.
 pub async fn fetch_json(url: &FetchUrl, private_ok: bool, max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
-    tokio::time::timeout(limits.total, fetch_inner(url, private_ok, max_bytes, limits)).await.map_err(|_| FetchError::new("timeout", "fetch timed out"))?
+    tokio::time::timeout(limits.total, fetch_inner(url, private_ok, &[], max_bytes, limits)).await.map_err(|_| FetchError::new("timeout", "fetch timed out"))?
 }
 
 /// `fetch_json` for sync callers: runs on its own thread and runtime, so it is safe inside or outside a runtime.
@@ -319,6 +321,22 @@ pub fn fetch_json_blocking(url: &FetchUrl, private_ok: bool, max_bytes: usize, l
         .spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| FetchError::new("connect", e.to_string()))?;
             rt.block_on(fetch_json(&url, private_ok, max_bytes, limits))
+        })
+        .map_err(|e| FetchError::new("connect", e.to_string()))?
+        .join()
+        .unwrap_or_else(|_| Err(FetchError::new("connect", "fetch thread panicked")))
+}
+
+/// API-1d 7.13: `fetch_json_blocking` with private addresses refused except inside one of `within` (a partner card
+/// under the client's `card.private_cidrs`: the partner, not the admin, controls the host's DNS). TLS name check
+/// always on, redirects never followed.
+pub fn fetch_json_within_blocking(url: &FetchUrl, within: &[crate::console_source::Cidr], max_bytes: usize, limits: Limits) -> Result<serde_json::Value, FetchError> {
+    let (url, within) = (url.clone(), within.to_vec());
+    std::thread::Builder::new()
+        .name("relay-fetch".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| FetchError::new("connect", e.to_string()))?;
+            rt.block_on(async { tokio::time::timeout(limits.total, fetch_inner(&url, false, &within, max_bytes, limits)).await.map_err(|_| FetchError::new("timeout", "fetch timed out"))? })
         })
         .map_err(|e| FetchError::new("connect", e.to_string()))?
         .join()

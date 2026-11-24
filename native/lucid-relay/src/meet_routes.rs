@@ -230,7 +230,7 @@ fn get_route(path: &str) -> Option<Route> {
         // AI-1 6.4 and 7.6: who may use org AI, and AI history
         "/v1/ai/allowed" => |c: &mut Ctx| {
             let who = c.who(false)?;
-            c.relay.hub.ai_allowed(&who, &c.q("principal", ""))
+            c.relay.hub.ai_allowed(&who, &c.q("principal", ""), c.q("groups", "") == "1")
         },
         "/v1/ai/history" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -694,6 +694,16 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.ai_groups_post(&who, &b)
         },
+        // API-1 revision 5 4.3: SSO-signed person records
+        "/v1/sso/c/persons" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_subject::BODY_MAX)?);
+            crate::api_subject::persons_post(&c.relay.hub, &who, &b)
+        },
+        // API-1 revision 4 13.1: the SSO service's directory status, for the console's `directory/status`
+        "/v1/sso/c/directory-status" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_sso_status::BODY_MAX)?);
+            crate::api_sso_status::post(c.relay, &who, &b)
+        },
         "/v1/ai/audit" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.ai_audit_post(&who, &b)
@@ -789,6 +799,11 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/sso/c/unsuspend" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.pc_sso_suspend(&who, &b, true)
+        },
+        // API-1 revision 4 6.3: the relay decides and audits every SCIM request of the org's SSO service
+        "/v1/sso/c/api-check" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_scim::BODY_MAX)?);
+            crate::api_scim::api_check(c.relay, &who, &b)
         },
         "/v1/sso/c/status" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::STATUS_BODY_MAX)?);

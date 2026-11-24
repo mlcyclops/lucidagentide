@@ -120,10 +120,8 @@ pub struct Pair {
     pub policy: Obj,
     pub policy_seq: i64,
     pub expires: i64,
-    pub domains: Vec<String>,
     pub ai: Ai,
     pub map: AiMap,
-    pub map_hash: String,
     /// The wires as fetched (kept on disk and re-verified at start): `{"policy": {signed}, "map": {signed},
     /// "signer_policy": {...}}`.
     pub wires: Value,
@@ -131,16 +129,14 @@ pub struct Pair {
 
 impl Pair {
     /// A pair from objects that were already verified (tests build pairs from unsigned objects this way).
-    pub fn from_parts(policy_hash: &str, policy: Obj, map: &Value, map_hash: &str, wires: Value) -> Result<Pair, String> {
+    pub fn from_parts(policy_hash: &str, policy: Obj, map: &Value, wires: Value) -> Result<Pair, String> {
         let ai = Ai::read(&policy)?;
         Ok(Pair {
             policy_hash: policy_hash.to_string(),
             policy_seq: policy.get("seq").and_then(Value::as_i64).unwrap_or(0),
             expires: policy.get("expires").and_then(Value::as_i64).unwrap_or(0),
-            domains: strings(policy.get("domains")),
             ai,
             map: AiMap::read(map),
-            map_hash: map_hash.to_string(),
             policy,
             wires,
         })
@@ -189,7 +185,7 @@ pub fn verify_pair(wires: &Value, trust: &Trust, org: &str, me: (&str, &str), no
     let m = op::verify_ai_map(&wires["map"], root, signer_policy, root_crl, trust.previous_serial, now, Some(&pol.policy)).map_err(|e| format!("the AI map does not verify: {e}"))?;
     op::check_ai_map_named(&pol.policy, &m.hash).map_err(|e| format!("the AI map is not the one the policy names: {e}"))?;
     let map = m.wire.get("map").cloned().unwrap_or(Value::Null);
-    let pair = Pair::from_parts(&pol.hash, pol.policy, &map, &m.hash, wires.clone())?;
+    let pair = Pair::from_parts(&pol.hash, pol.policy, &map, wires.clone())?;
     if !pair.lists_gateway(me.0, me.1) {
         return Err("this gateway is not in the organization's AI map".into());
     }
@@ -338,7 +334,7 @@ pub(crate) mod testpairs {
 
     pub fn pair(hash: &str, policy: Obj, map: Value) -> Pair {
         let wires = json!({"policy": policy.clone(), "map": map.clone()});
-        Pair::from_parts(hash, policy, &map, &"cd".repeat(32), wires).unwrap()
+        Pair::from_parts(hash, policy, &map, wires).unwrap()
     }
 }
 

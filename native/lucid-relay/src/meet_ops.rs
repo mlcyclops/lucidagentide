@@ -1202,10 +1202,14 @@ impl Relay {
     /// AI-1 1.3 and 1.5: `ai_gate` (the relay's minimum app versions) and `ai_edition_gate` (the license edition) of a
     /// policy about to be signed; 409 with their words (as `notify_gate`).
     pub fn pc_ai_gates(&self, policy: Option<&Value>) -> R<()> {
-        crate::meet_org_policy::ai_gate(policy, &self.minimums(&self.release())).map_err(E::Conflict)?;
+        let minimums = self.minimums(&self.release());
+        crate::meet_org_policy::ai_gate(policy, &minimums).map_err(E::Conflict)?;
         if let Some(p) = policy.and_then(Value::as_object) {
             crate::meet_org_policy::ai_edition_gate(p, self.hub.ai_edition().as_deref()).map_err(E::Conflict)?;
         }
+        // API-1c 2.3 and 10.6: `api` apps and `ai.local_mcp` wait for the API-1c release
+        crate::meet_org_policy::api_app_gate(policy, &minimums).map_err(E::Conflict)?;
+        crate::meet_org_policy::local_mcp_gate(policy, &minimums).map_err(E::Conflict)?;
         Ok(())
     }
 
@@ -1361,25 +1365,38 @@ impl Relay {
                 payload.insert(key.into(), v.clone());
             }
         }
+        // API-1 revision 4 6.7: the relay-local owner-inactive record (flushed before the answer) and the `api-person`
+        // record the console is owed
+        let api_dir = crate::api_scim::state_dir(&self.settings.state_dir);
+        let source = crate::api_scim::person_source(body.get("source"));
         if lift {
             self.pc_call("sso_suspend", &payload)?;
             let why = if body.get("sso_attestation").is_some_and(|v| !v.is_null()) { "reactivated" } else { "stopped" };
             let lifted = self.hub.pc_unsuspend(&principal, why);
+            crate::api_scim::on_lift(api_dir.as_deref(), &org, &principal, at, &provider, source)?;
             return Ok(obj([("ok", Value::Bool(true)), ("state", Value::from("lifted")), ("lifted", Value::Bool(lifted))]));
         }
         let held = self.hub.pc_is_suspended(&principal);
         let dropped = self.hub.pc_suspend(who, &principal, &org, &provider, at);
+        crate::api_scim::on_suspend(api_dir.as_deref(), &org, &principal, at, &provider, source)?;
         match self.pc_call("sso_suspend", &payload) {
             Ok(_) => {}
             // still suspended here; the service sends it again
-            Err(e @ E::Unavailable(_)) => return Err(e),
+            Err(e @ E::Unavailable(_)) => {
+                crate::api_scim::on_person(api_dir.as_deref(), &org, &principal, true, at, &provider, source)?;
+                return Err(e);
+            }
             Err(e) => {
                 if !held {
                     self.hub.pc_unsuspend(&principal, "refused by the certificate server");
+                    crate::api_scim::on_suspend_undone(api_dir.as_deref(), &org, &principal);
                 }
                 return Err(e);
             }
         }
+        crate::api_scim::on_person(api_dir.as_deref(), &org, &principal, true, at, &provider, source)?;
+        // API-1 revision 4 5.3.3: an inactive owner reaches the org's archive
+        crate::api_exports_relay::state_changed_here(self, &org);
         Ok(obj([("ok", Value::Bool(true)), ("state", Value::from("suspended")), ("dropped", Value::from(dropped))]))
     }
 

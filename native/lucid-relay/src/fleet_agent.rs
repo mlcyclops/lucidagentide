@@ -14,6 +14,9 @@
 // relay admins, ceremony B fingerprints and, under C-prime, the console-offered key; the relay applies the handoff
 // before its listeners (`apply_before_listeners`), drawing its Meeting Hub keys and requests itself; the channel
 // carries `meet-cert` renewals, `meet-crl` and `meet-crl-get` (9.3) through f-relay's `MeetHooks`.
+//
+// API-1d 2.4: every `api-*` op goes to the product-neutral `ApiHooks` of the state folder, which a Meeting Hub relay
+// (meet.rs) and a spokes relay (spokes_api.rs) register; only a spokes relay answers `api-orgs` and `api-spokes`.
 
 use crate::codec::{b64u, hex, now_ms, parse_json, sha256, stringify, unb64u};
 use crate::console::Console;
@@ -2638,7 +2641,13 @@ pub trait MeetHooks: Send + Sync {
     fn ca_held(&self) -> bool;
     /// A renewal switched `pki/current`: reload the TLS configuration and the signer client (8.4).
     fn pki_switched(&self);
-    /// API-1 2.5 `api-heads`: `{org: {seq, tseq}}` for every org the relay serves.
+}
+
+/// What the agent asks of a relay of either product for the API ops (API-1d 2.4: the API methods of `MeetHooks`
+/// moved here). Meeting Hub relays implement it in meet.rs, spokes relays in spokes_api.rs; each registers it with
+/// `set_api_hooks`. A relay without hooks answers every `api-*` op `fleet-op`.
+pub trait ApiHooks: Send + Sync {
+    /// API-1 2.5 `api-heads`: `{org: {seq, tseq}}` for every org the relay serves (a spokes relay: its bound orgs).
     fn api_heads(&self) -> Value {
         json!({})
     }
@@ -2649,6 +2658,24 @@ pub trait MeetHooks: Send + Sync {
     /// API-1 9.1: this relay's own audit chains (source = its relay id); None while it has no relay id or vault.
     fn api_audit(&self) -> Option<Arc<crate::api_audit::ApiAudit>> {
         None
+    }
+    /// API-1 revision 4 7.3: this relay's own event chains (shipped with `api-events`, backfilled with
+    /// `api-event-chains`); None while it has no relay id or vault.
+    fn api_events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        None
+    }
+    /// API-1 revision 4 2.3 item 1 `api-features`: the map versions and features this build takes, and the served
+    /// orgs whose archive address this relay holds (the archive slice reports them).
+    fn api_features(&self) -> Value {
+        crate::api_features::relay_answer(Vec::new())
+    }
+    /// API-1 revision 4 2.3 item 6: the console's reconnect catch-up completed (`api-synced` accepted) for these orgs,
+    /// so an org held closed by an unknown journal action serves again.
+    fn api_synced(&self, _orgs: &[String]) {}
+    /// API-1d 2.4: a spokes relay, which answers `api-orgs` and `api-spokes` (a Meeting Hub relay answers them 409
+    /// `not-spokes` and 404 `not-found`) and never takes `api-sign-request` or `api-sign-status`.
+    fn spokes(&self) -> bool {
+        false
     }
 }
 
@@ -2827,7 +2854,15 @@ fn audit_unavailable() -> Refusal {
 
 /// The acknowledged seqs (`API_SHIPPED_FILE`); empty when none was written yet.
 pub fn api_shipped_load(dir: &Path) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>> {
-    let v = parse_json(&std::fs::read_to_string(dir.join(API_SHIPPED_FILE)).unwrap_or_default()).unwrap_or(Value::Null);
+    api_shipped_load_in(dir, API_SHIPPED_FILE)
+}
+
+/// What the console acknowledged of this relay's own event chains (revision 4 7.3), as `API_SHIPPED_FILE`.
+pub const API_EVENTS_SHIPPED_FILE: &str = "api-events-shipped.json";
+
+/// The acknowledged seqs kept in `file` (`API_SHIPPED_FILE` or `API_EVENTS_SHIPPED_FILE`).
+pub fn api_shipped_load_in(dir: &Path, file: &str) -> std::collections::BTreeMap<String, std::collections::BTreeMap<String, u64>> {
+    let v = parse_json(&std::fs::read_to_string(dir.join(file)).unwrap_or_default()).unwrap_or(Value::Null);
     v.as_object()
         .into_iter()
         .flatten()
@@ -2835,11 +2870,12 @@ pub fn api_shipped_load(dir: &Path) -> std::collections::BTreeMap<String, std::c
         .collect()
 }
 
-/// Keep on disk that the console holds `org`'s `repr` chain of this relay up to `last`.
-pub fn api_shipped_set(dir: &Path, org: &str, repr: &str, last: u64) -> Result<(), String> {
-    let mut all = api_shipped_load(dir);
+/// Keep on disk, in `file` (`API_SHIPPED_FILE` or `API_EVENTS_SHIPPED_FILE`), that the console holds `org`'s `repr`
+/// chain of this relay up to `last`.
+pub fn api_shipped_set_in(dir: &Path, file: &str, org: &str, repr: &str, last: u64) -> Result<(), String> {
+    let mut all = api_shipped_load_in(dir, file);
     all.entry(org.to_string()).or_default().insert(repr.to_string(), last);
-    crate::fleet_local::write_durable(&dir.join(API_SHIPPED_FILE), stringify(&json!(all)).as_bytes()).map_err(|e| e.to_string())
+    crate::fleet_local::write_durable(&dir.join(file), stringify(&json!(all)).as_bytes()).map_err(|e| e.to_string())
 }
 
 /// One `api-audit` request: entries `first..=last` of one org's chain in one representation.
@@ -2852,6 +2888,10 @@ pub struct ApiBatch {
     pub first: u64,
     pub last: u64,
     pub body: Value,
+    /// `api-audit`, or `api-events` for the event chains (revision 4 2.5).
+    pub op: &'static str,
+    /// Where the acknowledged seqs of these chains are kept.
+    pub shipped: &'static str,
 }
 
 /// Up to `limit` entries from `entries` that fit in `budget` bytes of JSON (each with its comma); true when some were
@@ -2892,7 +2932,11 @@ pub fn api_next_batch(audit: &crate::api_audit::ApiAudit, shipped: &std::collect
             let seq = |e: Option<&Value>| e.and_then(|e| e.get("seq")).and_then(Value::as_u64);
             let (Some(first), Some(last)) = (seq(entries.first()), seq(entries.last())) else { continue };
             let body = json!({ "org": org, "repr": repr.as_str(), "first": first, "last": last, "entries": entries });
-            return Some(ApiBatch { org, repr, first, last, body });
+            let (op, shipped) = match audit.kind() {
+                crate::api_audit::ChainKind::Audit => ("api-audit", API_SHIPPED_FILE),
+                crate::api_audit::ChainKind::Events => ("api-events", API_EVENTS_SHIPPED_FILE),
+            };
+            return Some(ApiBatch { org, repr, first, last, body, op, shipped });
         }
     }
     None
@@ -2921,7 +2965,7 @@ pub fn api_ship_answer(dir: &Path, batch: &ApiBatch, answer: Result<Value, Refus
     match answer {
         Ok(b) if b.get("ok") == Some(&Value::Bool(true)) => {
             let last = b.get("last").and_then(Value::as_u64).filter(|l| *l <= own_head).unwrap_or(batch.last).max(batch.last);
-            match api_shipped_set(dir, &batch.org, repr, last) {
+            match api_shipped_set_in(dir, batch.shipped, &batch.org, repr, last) {
                 Ok(()) => ShipStep::Acked,
                 Err(why) => {
                     logger.security("api.audit.ship-unsaved", &Fields::new().with("org", batch.org.as_str()).with("repr", repr).with("why", why), Level::Error);
@@ -2935,7 +2979,7 @@ pub fn api_ship_answer(dir: &Path, batch: &ApiBatch, answer: Result<Value, Refus
                 logger.security("api.audit.console-ahead", &Fields::new().with("org", batch.org.as_str()).with("repr", repr).with("expected", expected).with("head", own_head), Level::Error);
                 return ShipStep::Skip("console-ahead".into());
             }
-            match api_shipped_set(dir, &batch.org, repr, expected - 1) {
+            match api_shipped_set_in(dir, batch.shipped, &batch.org, repr, expected - 1) {
                 Ok(()) => ShipStep::Resend,
                 Err(_) => ShipStep::Retry,
             }
@@ -3101,18 +3145,60 @@ fn meet_hooks(dir: &Path) -> Option<Arc<dyn MeetHooks>> {
     MEET_HOOKS.lock().get(dir).cloned()
 }
 
-/// API-1 9.1: the audit chains of the Meeting Hub relay of this state folder (its hooks' `api_audit`).
+/// API-1 revision 4 6.7: the state folders of this process's Meeting Hub relays (where `api_scim` keeps their
+/// owner-inactive records).
+pub fn meet_state_dirs() -> Vec<PathBuf> {
+    MEET_HOOKS.lock().keys().cloned().collect()
+}
+
+static API_HOOKS: LazyLock<Mutex<HashMap<PathBuf, Arc<dyn ApiHooks>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// API-1d 2.4: register the API hooks of a state folder (a Meeting Hub or a spokes relay; before or after the agent
+/// starts).
+pub fn set_api_hooks(state_dir: &Path, hooks: Arc<dyn ApiHooks>) {
+    API_HOOKS.lock().insert(state_dir.to_path_buf(), hooks);
+}
+
+fn api_hooks(dir: &Path) -> Option<Arc<dyn ApiHooks>> {
+    API_HOOKS.lock().get(dir).cloned()
+}
+
+/// API-1 9.1: the audit chains of the relay of this state folder (its API hooks' `api_audit`).
 pub fn api_audit_of(dir: &Path) -> Option<Arc<crate::api_audit::ApiAudit>> {
-    meet_hooks(dir)?.api_audit()
+    api_hooks(dir)?.api_audit()
 }
 
 /// Requests a High relay that holds a console's CA still answers (8.7): `nonce`, `meet-crl-get` and reading calls.
 fn write_frame(op: &str, body: &Map<String, Value>) -> bool {
     match op {
-        "nonce" | "meet-crl-get" | "api-heads" | "api-chains" | "api-sign-status" => false,
+        "nonce" | "meet-crl-get" | "api-heads" | "api-features" | "api-chains" | "api-event-chains" | "api-sign-status" | "api-compliance-read" | "api-hold-status" | "api-subject" | "api-org-policy" | "api-export-status" | "api-spokes" | "api-directory-status" => false,
         "call" => body.get("method").and_then(Value::as_str) != Some("GET"),
         _ => true,
     }
+}
+
+// ── API-1 revision 4 5.3.3 step 7: requests of the relay's own to its console (`console_call`) ──────────────
+
+/// One `console_call`: the op, its body, and where its answer goes.
+type ConsoleAsk = (String, Value, std::sync::mpsc::Sender<Result<Value, Refusal>>);
+
+/// The connected loop's queue of `console_call` requests; None while the channel is down.
+static CONSOLE_CALLS: Mutex<Option<mpsc::UnboundedSender<ConsoleAsk>>> = Mutex::new(None);
+
+fn console_offline() -> Refusal {
+    Refusal::new(503, "fleet-offline", "The relay is not connected to its console.")
+}
+
+/// A request of this relay's own to the console over the connected channel, answered as the console answers it
+/// (blocking; never call it on the channel's task). 503 `fleet-offline` when the channel is down, goes down before
+/// the answer, or the console does not answer within `timeout`.
+pub fn console_call(op: &str, body: Value, timeout: Duration) -> Result<Value, Refusal> {
+    let (back, answer) = std::sync::mpsc::channel();
+    let sent = CONSOLE_CALLS.lock().as_ref().is_some_and(|q| q.send((op.to_owned(), body, back)).is_ok());
+    if !sent {
+        return Err(console_offline());
+    }
+    answer.recv_timeout(timeout).unwrap_or_else(|_| Err(console_offline()))
 }
 
 // ── trust-ca and trusted time commands (F17, F21) ───────────────────────────────────────────────────────────
@@ -3790,6 +3876,11 @@ impl Agent {
         (self.product == Product::Meet).then(|| meet_hooks(&self.dir)).flatten()
     }
 
+    /// The API hooks of this relay (API-1d 2.4: a Meeting Hub relay's, or a spokes relay's once it registered them).
+    fn api(&self) -> Option<Arc<dyn ApiHooks>> {
+        api_hooks(&self.dir).filter(|h| h.spokes() == (self.product == Product::Spokes))
+    }
+
     /// `meet-crl-get` (9.3): the relay's `crl-root.pem`, or null.
     fn crl_root(&self) -> Value {
         std::fs::read_to_string(self.dir.join(CRL_ROOT)).map_or(Value::Null, Value::from)
@@ -3943,9 +4034,18 @@ impl Agent {
         // catch-up went quiet; batches are read from disk off this task and sent one at a time
         let mut ship = Ship::default();
         let (built_tx, mut built_rx) = mpsc::unbounded_channel::<Option<ApiBatch>>();
+        // API-1 revision 4 2.5, 7.3: this relay's own event chains (`api-events`), shipped the same way
+        let mut evship = Ship::default();
+        let (ev_built_tx, mut ev_built_rx) = mpsc::unbounded_channel::<Option<ApiBatch>>();
         let mut ship_tick = tokio::time::interval(API_SHIP_EVERY);
+        // API-1 revision 4 2.5, 6.7: the queued `api-person` records, in order, once reconnect sync ended
+        let mut people = crate::api_scim::PeopleShip::default();
         self.api_sync.reset();
         self.up.store(true, Ordering::SeqCst);
+        // API-1 revision 4 5.3.3 step 7: `console_call` requests, and where each sent one's answer goes
+        let (calls_tx, mut calls_rx) = mpsc::unbounded_channel::<ConsoleAsk>();
+        *CONSOLE_CALLS.lock() = Some(calls_tx.clone());
+        let mut calls: HashMap<u32, std::sync::mpsc::Sender<Result<Value, Refusal>>> = HashMap::new();
         let mut end = End::Closed(Duration::ZERO);
         let _ = leaf;
         loop {
@@ -3955,7 +4055,7 @@ impl Agent {
                         ship.in_flight = None;
                     }
                     if ship.due() {
-                        if let Some(h) = self.meet() {
+                        if let Some(h) = self.api() {
                             ship.building = true;
                             let (dir, skip, done) = (self.dir.clone(), ship.skip.clone(), built_tx.clone());
                             tokio::task::spawn_blocking(move || {
@@ -3963,6 +4063,26 @@ impl Agent {
                                 let _ = done.send(batch);
                             });
                         }
+                    }
+                    if evship.in_flight.as_ref().is_some_and(|(_, _, at)| at.elapsed() > w::CALL_TIMEOUT) {
+                        evship.in_flight = None;
+                    }
+                    if evship.due() {
+                        if let Some(h) = self.api() {
+                            evship.building = true;
+                            let (dir, skip, done) = (self.dir.clone(), evship.skip.clone(), ev_built_tx.clone());
+                            tokio::task::spawn_blocking(move || {
+                                let batch = h.api_events().and_then(|e| api_next_batch(e.chains(), &api_shipped_load_in(&dir, API_EVENTS_SHIPPED_FILE), &skip));
+                                let _ = done.send(batch);
+                            });
+                        }
+                    }
+                    if let Some((org, line, body)) = people.next(&self.dir, self.api_sync.caught_up(), w::CALL_TIMEOUT) {
+                        let id = self.req_id.fetch_add(1, Ordering::SeqCst).max(1);
+                        if !tx.text(w::req_text(id, "api-person", body)).await {
+                            break;
+                        }
+                        people.sent(id, org, line);
                     }
                 }
                 built = built_rx.recv() => {
@@ -3973,6 +4093,16 @@ impl Agent {
                             break;
                         }
                         ship.in_flight = Some((id, b, Instant::now()));
+                    }
+                }
+                built = ev_built_rx.recv() => {
+                    evship.building = false;
+                    if let Some(Some(b)) = built {
+                        let id = self.req_id.fetch_add(1, Ordering::SeqCst).max(1);
+                        if !tx.text(w::req_text(id, b.op, b.body.clone())).await {
+                            break;
+                        }
+                        evship.in_flight = Some((id, b, Instant::now()));
                     }
                 }
                 _ = ping.tick() => {
@@ -4067,6 +4197,16 @@ impl Agent {
                         }
                     }
                 }
+                c = calls_rx.recv() => {
+                    if let Some((op, body, back)) = c {
+                        let id = self.req_id.fetch_add(1, Ordering::SeqCst).max(1);
+                        if !tx.text(w::req_text(id, &op, body)).await {
+                            let _ = back.send(Err(console_offline()));
+                            break;
+                        }
+                        calls.insert(id, back);
+                    }
+                }
                 _ = self.wake.notified() => {
                     if !self.link().is_some_and(|l| l.usable() && l.relay_id() == link.relay_id()) {
                         tx.close(1000).await;
@@ -4095,16 +4235,18 @@ impl Agent {
                             Ok(Frame::Req { id, op, body }) if op.starts_with("api-") => {
                                 // API-1 2.6: answered only after the store (or the sealed key) is on disk
                                 ship.last_api = Some(Instant::now());
+                                evship.last_api = ship.last_api;
                                 if op == "api-heads" {
                                     ship.asked = true;
+                                    evship.asked = true;
                                     // a new catch-up: not caught up until its `api-synced`
                                     self.api_sync.reset();
                                 }
                                 let (sync, chan) = (self.api_sync.clone(), self.api_sync.chan.load(Ordering::SeqCst));
-                                let (hooks, console, dir, ans) = (self.meet(), self.console.clone(), self.dir.clone(), ans_tx.clone());
+                                let (hooks, console, dir, ans) = (self.api(), self.console.clone(), self.dir.clone(), ans_tx.clone());
                                 tokio::task::spawn_blocking(move || {
                                     let body = Value::Object(body);
-                                    let served = |h: &Arc<dyn MeetHooks>| -> Result<(), Refusal> {
+                                    let served = |h: &Arc<dyn ApiHooks>| -> Result<(), Refusal> {
                                         let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
                                         match h.api_heads().get(org) {
                                             Some(_) => Ok(()),
@@ -4113,18 +4255,49 @@ impl Agent {
                                     };
                                     let answer = match (op, hooks) {
                                         ("api-heads", Some(h)) => Ok(h.api_heads()),
+                                        // API-1 revision 4 2.3 item 1: read-only, allowed before the catch-up, ends nothing
+                                        ("api-features", Some(h)) => Ok(h.api_features()),
                                         // API-1 2.5, 12.2: the console's catch-up fully succeeded; checked against what is on disk
-                                        ("api-synced", Some(h)) => api_synced_answer(&h.api_heads(), &body).inspect(|_| sync.set(chan)),
+                                        ("api-synced", Some(h)) => api_synced_answer(&h.api_heads(), &body).inspect(|_| {
+                                            sync.set(chan);
+                                            let orgs: Vec<String> = body.get("orgs").and_then(Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+                                            h.api_synced(&orgs);
+                                        }),
                                         ("api-pseudonym-key", Some(h)) => served(&h).and_then(|_| api_pseudonym_key_store(&dir, &*console, &body)),
                                         // API-1 9.3, 12.2: the relay's chains and its checkpoint certificates
                                         ("api-chains", Some(h)) => served(&h).and_then(|_| h.api_audit().ok_or_else(audit_unavailable)).and_then(|a| api_chains_answer(&a, &body)),
+                                        // API-1 revision 4 2.5, 7.3: the same for the relay's event chains
+                                        ("api-event-chains", Some(h)) => served(&h).and_then(|_| h.api_events().ok_or_else(audit_unavailable)).and_then(|e| api_chains_answer(e.chains(), &body)),
                                         ("api-checkpoint-csr", Some(h)) => served(&h).and_then(|_| api_checkpoint_csr_answer(&dir, &*console, &body, now_ms() / 1000)),
                                         ("api-checkpoint-cert", Some(h)) => served(&h).and_then(|_| api_checkpoint_cert_answer(&dir, &*console, &body)),
                                         // API-1 12.3: failover credentials, and their retirement before a tightening is acknowledged
                                         ("api-failover", Some(h)) => served(&h).and_then(|_| api_failover_answer(&dir, &*console, &body, now_ms() / 1000)),
+                                        // API-1d 2.4, 5.1: the bound orgs of a spokes relay, applied (an unbinding drops the org
+                                        // at once) with no journal entry or map between; a Meeting Hub relay serves its
+                                        // `organizations` and binds nothing
+                                        ("api-orgs", Some(h)) if h.spokes() => {
+                                            let _one = API_JOURNAL_LOCK.lock();
+                                            h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))
+                                        }
+                                        ("api-orgs", Some(_)) => Err(Refusal::new(409, "not-spokes", "This relay is not a Remote Spokes relay.")),
+                                        // API-1d 2.4, 6.1: a 6.2 view of a bound org from the spokes relay's own state
+                                        ("api-spokes", Some(h)) if h.spokes() => h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op"))),
+                                        ("api-spokes", Some(_)) => Err(Refusal::new(404, "not-found", "not found")),
+                                        // the request book of a spokes relay holds no `meet.api.sign` requests
+                                        ("api-sign-request" | "api-sign-status", Some(h)) if h.spokes() => Err(Refusal::of("fleet-op")),
                                         // API-1 2.3 (slice 1a6): the console's `meet.api.sign` request in this relay's book
                                         ("api-sign-request", Some(h)) => served(&h).and_then(|_| crate::console_meet::api_sign_request(&console, &body, now_ms()).map_err(Refusal::from)),
                                         ("api-sign-status", Some(h)) => served(&h).map(|_| crate::console_meet::api_sign_status(&console, &body, now_ms())),
+                                        // API-1 revision 4 2.5, 5.1, 5.2: compliance reads and API holds (meet.rs `api_request`)
+                                        ("api-compliance-read" | "api-hold" | "api-hold-status", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
+                                        // API-1 revision 4 2.5, 5.3: exports on the archive relay (meet.rs `api_request`)
+                                        ("api-export" | "api-export-status" | "api-export-cancel", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
+                                        // API-1 revision 5 4.3: read-only, the hub's `api_subject::api_subject` (meet_parity_c `api_fleet_request`)
+                                        ("api-subject", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
+                                        // API-1 revision 4 13.1: read-only, the SSO services' directory status (meet.rs `api_request`)
+                                        ("api-directory-status", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
+                                        // API-1 revision 5 6.1: read-only, the hub's org policy (meet_parity_c `api_fleet_request`)
+                                        ("api-org-policy", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
                                         ("api-tighten" | "api-map", Some(h)) => {
                                             // check, retire and apply with no other journal entry or map between them
                                             let _one = API_JOURNAL_LOCK.lock();
@@ -4170,7 +4343,7 @@ impl Agent {
                             }
                             Ok(Frame::Res { id, answer }) if ship.in_flight.as_ref().is_some_and(|(sid, _, _)| *sid == id) => {
                                 if let Some((_, b, _)) = ship.in_flight.take() {
-                                    let own = self.meet().and_then(|h| h.api_audit()).map_or(0, |a| a.head(&b.org, link.relay_id(), b.repr).0);
+                                    let own = self.api().and_then(|h| h.api_audit()).map_or(0, |a| a.head(&b.org, link.relay_id(), b.repr).0);
                                     match api_ship_answer(&self.dir, &b, answer, own, &self.logger) {
                                         ShipStep::Acked | ShipStep::Resend => ship_tick.reset_immediately(),
                                         ShipStep::Retry => {}
@@ -4184,12 +4357,41 @@ impl Agent {
                                     }
                                 }
                             }
+                            Ok(Frame::Res { id, answer }) if evship.in_flight.as_ref().is_some_and(|(sid, _, _)| *sid == id) => {
+                                if let Some((_, b, _)) = evship.in_flight.take() {
+                                    let own = self.api().and_then(|h| h.api_events()).map_or(0, |e| e.head(&b.org, link.relay_id(), b.repr).0);
+                                    match api_ship_answer(&self.dir, &b, answer, own, &self.logger) {
+                                        ShipStep::Acked | ShipStep::Resend => ship_tick.reset_immediately(),
+                                        ShipStep::Retry => {}
+                                        ShipStep::Skip(_) => {
+                                            evship.skip.insert((b.org, b.repr));
+                                        }
+                                        // a revision 3 console: no event chains until reconnect
+                                        ShipStep::Off => evship.off = true,
+                                    }
+                                }
+                            }
+                            Ok(Frame::Res { id, answer }) if people.owns(id) => {
+                                use crate::api_scim::PersonStep;
+                                match people.answered(&self.dir, answer) {
+                                    PersonStep::Acked => ship_tick.reset_immediately(),
+                                    PersonStep::Retry => {}
+                                    PersonStep::Dropped(code) => self.logger.security("api.person.dropped", &Fields::new().with("code", code), Level::Warn),
+                                    PersonStep::Off => self.logger.ops("api.person.console-without-op", &Fields::new(), Level::Info),
+                                }
+                            }
                             Ok(Frame::Res { id, answer }) if meet_renewing.as_ref().is_some_and(|(rid, _)| *rid == id) => {
                                 if let Some((_, r)) = meet_renewing.take() {
                                     match self.meet_renewed(r, answer) {
                                         Ok(()) => self.logger.ops("fleet.meet-cert-renewed", &Fields::new(), Level::Info),
                                         Err(why) => self.logger.ops("fleet.meet-cert-failed", &Fields::new().with("why", why), Level::Warn),
                                     }
+                                }
+                            }
+                            Ok(Frame::Res { id, answer }) if calls.contains_key(&id) => {
+                                // API-1 revision 4 5.3.3 step 7: the answer to a `console_call`
+                                if let Some(back) = calls.remove(&id) {
+                                    let _ = back.send(answer);
                                 }
                             }
                             Ok(Frame::Evt { op: "meet-crl", body }) => {
@@ -4276,6 +4478,20 @@ impl Agent {
             }
         }
         self.up.store(false, Ordering::SeqCst);
+        // `console_call`: no new requests on this channel, and the waiting callers learn it is down
+        {
+            let mut slot = CONSOLE_CALLS.lock();
+            if slot.as_ref().is_some_and(|q| q.same_channel(&calls_tx)) {
+                *slot = None;
+            }
+        }
+        calls_rx.close();
+        while let Ok((_, _, back)) = calls_rx.try_recv() {
+            let _ = back.send(Err(console_offline()));
+        }
+        for (_, back) in calls.drain() {
+            let _ = back.send(Err(console_offline()));
+        }
         self.api_sync.reset();
         *self.events_rx.lock() = Some(events_rx);
         self.persist_clock(link.relay_id());
@@ -4838,7 +5054,9 @@ mod tests {
         }
     }
 
-    /// 3.6 and 3.8 on the real channel: a binary frame closes it with 1003, a frame over 1 MiB with 1009.
+    /// 3.6 and 3.8 on the real channel: a binary frame closes it with 1003, a frame over the console's message cap with
+    /// 1009. Revision 4 2.5 raised that cap to 6 MiB for the export ops; a frame between 1 MiB and the cap is refused
+    /// by `parse_frame` ("size") without closing the channel.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn binary_and_oversized_frames_close_the_channel() {
         use futures_util::{SinkExt, StreamExt};
@@ -4847,7 +5065,7 @@ mod tests {
         let url = listen(&state).await;
         let (id, key, cert) = port::enrolled(&state, &desk);
         let ca = state.ca.lock().issuing_cert().unwrap().cert.clone();
-        let big = w::evt_text("audit", json!({ "entries": ["a".repeat(w::TO_CONSOLE_MAX + 10)] }));
+        let big = w::evt_text("audit", json!({ "entries": ["a".repeat(w::frame_limit(Side::Console) + 10)] }));
         for (msg, code) in [(Message::binary(vec![1u8, 2]), w::CLOSE_BINARY), (Message::text(big), w::CLOSE_TOO_BIG)] {
             let Ok(Wire::Ws(mut ws)) = upgrade_with(&url, &ca, &cert, key.pkcs8()).await else { panic!("no channel") };
             ws.send(Message::text(hello_text(&id))).await.unwrap();

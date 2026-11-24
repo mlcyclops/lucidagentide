@@ -178,6 +178,10 @@ pub trait PeopleHost: Send + Sync {
     fn mail(&self, kind: &str, to: &str, args: &[(&str, String)]) {
         crate::console_mail::send(kind, to, args);
     }
+    /// API-1 revision 4 6.7: the console's `api-people` record for (`org`, `principal`) says `deprovisioned`.
+    fn api_deprovisioned(&self, _org: &str, _principal: &str) -> bool {
+        false
+    }
 }
 
 // ── The cache (11.1, A1-M5) ──────────────────────────────────────────────────────────────────────────────────────
@@ -804,10 +808,13 @@ impl People {
         self.cache.lock().observe(&views);
     }
 
-    /// API-1 4.3, the 1a2 rule until SCIM (API-1b): true only when the console's people data (the cached Meeting Hub
-    /// rows of every relay) marks `principal` revoked, removed or blocked for `org`. A principal the console knows
-    /// nothing about counts as active.
+    /// API-1 4.3 as revision 4 6.7 revises it: true when the console's `api-people` record says `deprovisioned`, or
+    /// when the console's people data (the cached Meeting Hub rows of every relay) marks `principal` revoked, removed
+    /// or blocked for `org`. A principal the console knows nothing about counts as active.
     pub fn person_inactive(&self, org: &str, principal: &str) -> bool {
+        if self.host.api_deprovisioned(org, principal) {
+            return true;
+        }
         let want = principal.trim().to_lowercase();
         let c = self.cache.lock();
         c.entries.values().flat_map(|e| e.data.rows.iter()).any(|r| {

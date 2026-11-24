@@ -8,6 +8,8 @@
 
 use crate::codec::{b64u, hex, sha256_hex, str_of, stringify, unb64u};
 use crate::console::{ApiError, Console, Done, LicenseState, LicenseView, Need, Out, ProductSection, Role, RouteSpec, SectionAnswer, SectionCall};
+use crate::console_api_1c as api_1c;
+use crate::console_api_1d as api_1d;
 use crate::console_api_ui as api_ui;
 use crate::console_audit::Record;
 use crate::console_auth::{clean, hint_of, random_bytes, reason_of, FleetCeremony, FleetKind, PersonRole, Who};
@@ -918,7 +920,7 @@ const fn g(path: &'static str, role: Role) -> RouteSpec {
 /// The fleet routes of 5.3. Rows with a fleet step-up (4.6) list `stepup` among their keys and verify it in their
 /// handler; rows with an AC-1 step-up have `stepup: true`. `fleet/relays/<id>` and its proxy `.../p/<path>` are
 /// matched by prefix (PROXY_GET, PROXY_POST, RELAY_DETAIL).
-pub static FLEET_ROUTES: [RouteSpec; 73] = [
+pub static FLEET_ROUTES: [RouteSpec; 124] = [
     g("fleet/relays", Role::Viewer),
     r("POST", "fleet/enroll", Role::Admin, "fleet.enroll.code", "name", true, &["product", "name", "site", "scopes", "replaces", "env", "deploy"]),
     // AC-2b-D 9.1
@@ -986,6 +988,51 @@ pub static FLEET_ROUTES: [RouteSpec; 73] = [
     r("POST", "settings/api/discard", Role::Admin, "api.discard", "org", false, &["org"]),
     r("POST", "settings/api/save", Role::Admin, "meet.api.save", "org", false, &["org", "stage", "reason", "relay"]),
     r("POST", "settings/api/signing/cancel", Role::Admin, "api.signing.cancel", "org", false, &["org"]),
+    // API-1 revision 4 2.3 item 2: retire a relay from an org's relay set
+    r("POST", "settings/api/relays/retire", Role::Admin, "api.relay.retire", "org", true, &["org", "relay"]),
+    // API-1d 5.1, 7.14 (slice 1d5): Remote Spokes (bind, unbind, root) and Agents (cards, keys, tasks)
+    g("settings/api/spokes", Role::Viewer),
+    r("POST", "settings/api/spokes/bind", Role::Admin, "api.spokes.bind", "org", true, &["org", "relay"]),
+    r("POST", "settings/api/spokes/unbind", Role::Admin, "api.spokes.unbind", "org", true, &["org", "relay"]),
+    r("POST", "settings/api/spokes/root", Role::Admin, "api.spokes.root", "org", true, &["org"]),
+    g("settings/api/a2a", Role::Viewer),
+    r("POST", "settings/api/a2a/agents", Role::Admin, "api.a2a.agent.stage", "org", true, &["org", "agent"]),
+    r("POST", "settings/api/a2a/agents/update", Role::Admin, "api.a2a.agent.update", "org", true, &["org", "id", "agent"]),
+    r("POST", "settings/api/a2a/agents/delete", Role::Admin, "api.a2a.agent.delete", "org", false, &["org", "id", "reason"]),
+    r("POST", "settings/api/a2a/keys", Role::Admin, "api.a2a.key", "org", true, &["org"]),
+    r("POST", "settings/api/a2a/keys/drop", Role::Admin, "api.a2a.key-drop", "org", false, &["org", "kid"]),
+    r("POST", "settings/api/a2a/well-known", Role::Admin, "api.a2a.well-known", "org", true, &["org", "agent"]),
+    g("settings/api/a2a/tasks", Role::Viewer),
+    r("POST", "settings/api/clients/push-off", Role::Admin, "api.client.push-off", "org", false, &["org", "id"]),
+    r("POST", "settings/api/clients/card-check", Role::Admin, "api.client.card-check", "org", false, &["org", "id"]),
+    // API-1 revision 5 14.1 (slice 1c7): connectors, identity providers (EMA), the SSO URL, delegations, approvals
+    g("settings/api/connectors", Role::Viewer),
+    r("POST", "settings/api/connectors", Role::Admin, "api.connector.stage", "org", true, &["org", "connector"]),
+    r("POST", "settings/api/connectors/update", Role::Admin, "api.connector.update", "org", true, &["org", "id", "connector"]),
+    r("POST", "settings/api/connectors/suspend", Role::Admin, "api.connector.suspend", "org", true, &["org", "id", "reason"]),
+    r("POST", "settings/api/connectors/resume", Role::Admin, "api.connector.resume", "org", true, &["org", "id"]),
+    r("POST", "settings/api/connectors/delete", Role::Admin, "api.connector.delete", "org", true, &["org", "id", "reason"]),
+    g("settings/api/idps", Role::Viewer),
+    r("POST", "settings/api/idps", Role::Admin, "api.idp.stage", "org", true, &["org", "idp"]),
+    r("POST", "settings/api/idps/update", Role::Admin, "api.idp.update", "org", true, &["org", "id", "idp"]),
+    r("POST", "settings/api/idps/test", Role::Admin, "api.idp.test", "org", true, &["org", "issuer", "private_ok", "id"]),
+    r("POST", "settings/api/idps/suspend", Role::Admin, "api.idp.suspend", "org", true, &["org", "id", "reason"]),
+    r("POST", "settings/api/idps/resume", Role::Admin, "api.idp.resume", "org", true, &["org", "id"]),
+    r("POST", "settings/api/sso-url", Role::Admin, "api.sso-url", "org", true, &["org", "provider", "url"]),
+    g("settings/api/delegations", Role::Viewer),
+    r("POST", "settings/api/delegations/revoke", Role::Admin, "api.delegation.revoke", "org", true, &["org", "client", "principal"]),
+    r("POST", "settings/api/delegations/allow", Role::Admin, "api.delegation.allow", "org", true, &["org", "client", "principal"]),
+    g("settings/api/approvals", Role::Viewer),
+    // API-1 revision 4 13.1: the org's SCIM governance, clients, legacy decisions and person records
+    g("directory/status", Role::Viewer),
+    // API-1 revision 4 13.1, 13.2: the Compliance page (holds and export jobs, never content) and the client editor's
+    // compliance section (recipient key and caps)
+    g("compliance/holds", Role::Viewer),
+    g("compliance/exports", Role::Viewer),
+    r("POST", "compliance/exports/cancel", Role::Admin, "compliance.export.cancel", "org", false, &["org", "job", "reason"]),
+    r("POST", "settings/api/clients/recipient", Role::Admin, "api.client.recipient", "org", true, &["org", "id", "jwk", "pem"]),
+    r("POST", "settings/api/clients/caps", Role::Admin, "api.client.caps", "org", true, &["org", "id", "caps"]),
+    r("POST", "settings/api/clients/recipient/drop", Role::Admin, "api.client.recipient-drop", "org", false, &["org", "id"]),
     // API-1 7.3, 11, 12.3: export destinations, their credentials and failover credentials
     r("POST", "settings/exports/destinations", Role::Admin, "exports.destination.stage", "org", true, &["org", "destination", "from_siem"]),
     r("POST", "settings/exports/destinations/update", Role::Admin, "exports.destination.update", "org", true, &["org", "id", "destination"]),
@@ -995,6 +1042,20 @@ pub static FLEET_ROUTES: [RouteSpec; 73] = [
     r("POST", "settings/exports/destinations/failover/csr", Role::Admin, "exports.failover.csr", "org", false, &["org", "id", "relay"]),
     r("POST", "settings/exports/destinations/failover/install", Role::Admin, "exports.failover.install", "org", true, &["org", "id", "relay", "material"]),
     r("POST", "settings/exports/destinations/failover/delete", Role::Admin, "exports.failover.delete", "org", false, &["org", "id", "relay"]),
+    // API-1 revision 4 8, 13.1: outbound federation (issuer, keys, documents, one test exchange)
+    r("POST", "settings/api/federation", Role::Admin, "api.federation.issuer", "org", true, &["org", "issuer"]),
+    r("POST", "settings/api/federation/key", Role::Admin, "api.federation.key", "org", true, &["org"]),
+    r("POST", "settings/api/federation/key/drop", Role::Admin, "api.federation.key-drop", "org", false, &["org", "kid"]),
+    r("POST", "settings/api/federation/republished", Role::Admin, "api.federation.republished", "org", false, &["org", "kid"]),
+    g("settings/api/federation/documents", Role::Viewer),
+    r("POST", "settings/exports/destinations/federation-test", Role::Admin, "exports.destination.federation-test", "org", false, &["org", "id"]),
+    // API-1 revision 4 7.4, 13.1: webhook keys, endpoint verification, v1 secrets, replay and resume
+    r("POST", "settings/api/webhook-keys", Role::Admin, "api.webhook-key", "org", true, &["org"]),
+    r("POST", "settings/api/webhook-keys/drop", Role::Admin, "api.webhook-key-drop", "org", false, &["org", "kid"]),
+    r("POST", "settings/exports/destinations/verify", Role::Admin, "exports.destination.verify", "org", false, &["org", "id"]),
+    r("POST", "settings/exports/destinations/secret", Role::Admin, "exports.destination.secret", "org", true, &["org", "id"]),
+    r("POST", "settings/exports/destinations/replay", Role::Admin, "exports.destination.replay", "org", true, &["org", "id", "from"]),
+    r("POST", "settings/exports/destinations/resume", Role::Admin, "exports.destination.resume", "org", false, &["org", "id"]),
 ];
 
 /// `GET fleet/relays/<id>` (matched by prefix).
@@ -1116,6 +1177,7 @@ impl Fleet {
         let meet = with_vault(console, |v| crate::meet_ca::MeetCa::open(&state_dir, &*v));
         let api = Arc::new(crate::console_api::ConsoleApi::open(Some(&state_dir), logger.clone(), Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console)))));
         let mut issue: Option<crate::api_checkpoint::IssueFn> = None;
+        let mut events: Option<Arc<crate::api_events::EventLog>> = None;
         // API-1 2.3: saves whose signing the console still polls
         let signings = crate::console_api_ui::signings_load(&state_dir);
         let fleet = Arc::new_cyclic(|weak: &Weak<Fleet>| {
@@ -1132,9 +1194,11 @@ impl Fleet {
                 Ok((issued.der, vec![ca.ca_der().to_vec()]))
             });
             issue = Some(issuer.clone());
-            let signer = crate::api_checkpoint::ConsoleCheckpoints::new(&state_dir, Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console))), issuer);
+            let signer = Arc::new(crate::api_checkpoint::ConsoleCheckpoints::new(&state_dir, Arc::new(crate::console_api::ConsoleVault(Arc::downgrade(console))), issuer));
             let pseudonym = Arc::new(crate::console_api::ConsolePseudonymKeys(Arc::downgrade(&api)));
-            let api_audit = Arc::new(crate::api_audit::ApiAudit::open(Some(state_dir.as_path()), "console", Arc::new(signer), pseudonym, t.div_euclid(1000)));
+            let api_audit = Arc::new(crate::api_audit::ApiAudit::open(Some(state_dir.as_path()), "console", signer.clone(), pseudonym.clone(), t.div_euclid(1000)));
+            // API-1 revision 4 7.3: the event chains, checkpointed by the same key, and the feed index
+            events = Some(Arc::new(crate::api_events::EventLog::open(Some(state_dir.as_path()), "console", signer, pseudonym, t.div_euclid(1000))));
             // API-1 11: its threads find no fleet until this returns, and every destination loads suspended until the
             // first `refresh` below
             let export_host = Arc::new(ExportHost { fleet: weak.clone(), logger: logger.clone(), host: console.cfg.host.clone() });
@@ -1173,6 +1237,21 @@ impl Fleet {
         }
         for n in fleet.api_audit.take_notes() {
             logger.security("api.audit.note", &Fields::new().with("note", n), Level::Warn);
+        }
+        // API-1 revision 4 7.3: the event chains (relay chains received through `api-events`), the feed index, and
+        // their checkpoints and 35-day retention every 10 s
+        if let Some(e) = events {
+            for n in e.take_notes() {
+                logger.security("api.events.note", &Fields::new().with("note", n), Level::Warn);
+            }
+            api.set_events(e);
+            let w = Arc::downgrade(&api);
+            let notes = logger.clone();
+            crate::api_events::spawn_ticker(
+                "console-api-events",
+                Box::new(move || w.upgrade().and_then(|a| a.events())),
+                Box::new(move |n: &str| notes.security("api.events.note", &Fields::new().with("note", n), Level::Warn)),
+            )?;
         }
         // API-1 9.4, 11: the chains keep every entry an audit destination has not acknowledged (set before the
         // retention ticker starts); maps, tightenings, the edition and credentials reach the exports at once; API
@@ -1623,7 +1702,21 @@ impl Fleet {
             ("POST", "settings/exports/token/revoke") => c.exports_token_revoke(r.params),
             ("POST", "settings/exports/siem") => c.exports_siem(r.who()?, r.params, t),
             ("POST", "settings/exports/siem/test") => c.exports_siem_test(r.who()?, t),
+            ("GET", "settings/api/federation/documents") => plain(self.api_federation_documents(&crate::console::query_pairs(r.query), t)?),
+            // API-1 revision 5 14.1 (slice 1c7)
+            ("GET", "settings/api/connectors") => plain(self.api_connectors_get(&crate::console::query_pairs(r.query), t)?),
+            ("GET", "settings/api/idps") => plain(self.api_idps_get(&crate::console::query_pairs(r.query))?),
+            ("GET", "settings/api/delegations") => plain(self.api_delegations_get(&crate::console::query_pairs(r.query), t)?),
+            ("GET", "settings/api/approvals") => plain(self.api_approvals_get(&crate::console::query_pairs(r.query))?),
+            // API-1d 7.14 (slice 1d5)
+            ("GET", "settings/api/a2a") => plain(self.api_a2a_get(c, &crate::console::query_pairs(r.query), t)?),
+            ("GET", "settings/api/a2a/tasks") => plain(self.api_a2a_tasks_get(&crate::console::query_pairs(r.query))?),
+            ("GET", "settings/api/spokes") => plain(self.api_spokes_get(&crate::console::query_pairs(r.query), t)?),
             (_, p) if p == "settings/api" || p.starts_with("settings/api/") || p.starts_with("settings/exports/destinations") => self.api_route(c, spec, r),
+            ("GET", "directory/status") => plain(crate::api_people::directory_status(self, &crate::console::query_pairs(r.query))?),
+            ("GET", "compliance/holds") => plain(self.compliance_holds(&crate::console::query_pairs(r.query))?),
+            ("GET", "compliance/exports") => plain(self.compliance_exports(&crate::console::query_pairs(r.query))?),
+            ("POST", "compliance/exports/cancel") => self.compliance_export_cancel(r),
             ("GET", "setup") => Ok(Done::plain(c.setup_view(r.who))),
             ("POST", "setup/start") => c.setup_start(r.source, r.params, t),
             ("POST", "setup/step") => c.setup_step(r.params),
@@ -3198,6 +3291,7 @@ impl Fleet {
         // API-1 2.5: `api-heads`, then the pseudonym key, maps and journal entries the relay lacks go before any other
         // request (only when this console holds any api state; an older relay is marked as having no api).
         self.api.on_welcomed(relay);
+        self.relay_event(relay, "relay.connected", t);
         if self.api.needs_sync(relay) {
             if let (Some(link), Some(me)) = (self.link.get().cloned(), c.fleet()) {
                 let relay = relay.to_owned();
@@ -3376,10 +3470,66 @@ impl Fleet {
 
     /// The channel closed: the last contact stays as it was.
     pub fn on_closed(&self, relay: &str, t: i64) {
-        let mut reg = self.registry.lock();
-        if let Some(r) = reg.relays.get_mut(relay).filter(|r| r.state.live()) {
-            r.last_contact_at = Some(t);
-            let _ = self.save_registry(&reg);
+        {
+            let mut reg = self.registry.lock();
+            if let Some(r) = reg.relays.get_mut(relay).filter(|r| r.state.live()) {
+                r.last_contact_at = Some(t);
+                let _ = self.save_registry(&reg);
+            }
+        }
+        self.relay_event(relay, "relay.disconnected", t);
+    }
+
+    /// API-1 revision 4 7.1: the watched events of every org with a pinned map at `t` (ms): the 8.2 health of its
+    /// relays, their 5.3 expiry rows (`management` reported as kind `mgmt`) and its clients' registration ends
+    /// (`api_event_watch`).
+    fn events_watch(&self, t: i64) {
+        use crate::api_event_watch::{OrgFacts, RelayFacts};
+        let Some(events) = self.api.events() else { return };
+        let now = t.div_euclid(1000);
+        let orgs: Vec<OrgFacts> = self
+            .api
+            .orgs()
+            .into_iter()
+            .map(|org| {
+                let relays = self.api.relays_of(&org);
+                let clients = self.api.org_snapshot(&org).map(|s| s.clients(&org).to_vec()).unwrap_or_default();
+                OrgFacts { org, relays, clients }
+            })
+            .collect();
+        if orgs.is_empty() {
+            return;
+        }
+        let rows = self.expiry(t);
+        let recs: Vec<RelayRecord> = self.registry.lock().relays.values().filter(|r| r.state.live()).cloned().collect();
+        let relays: Vec<RelayFacts> = recs
+            .iter()
+            .map(|rec| {
+                let expiry = rows["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|x| x["relay"].as_str() == Some(rec.id.as_str()))
+                    .filter_map(|x| {
+                        let kind = match x["kind"].as_str()? {
+                            "management" => "mgmt",
+                            k => k,
+                        };
+                        Some((kind.to_owned(), x["daysLeft"].as_i64()?))
+                    })
+                    .collect();
+                RelayFacts { id: rec.id.clone(), health: self.health(rec, self.connected(&rec.id), t).to_owned(), expiry }
+            })
+            .collect();
+        events.watch().pass(&orgs, &relays, now, &|org: &str, kind: &str, data: Value| self.api.emit_event(org, kind, data, now).is_some());
+    }
+
+    /// API-1 revision 4 7.1: `relay.connected` or `relay.disconnected` (`t` ms) in each org whose pinned map lists the
+    /// relay in `relay_origins`.
+    fn relay_event(&self, relay: &str, kind: &str, t: i64) {
+        let version = self.registry.lock().relays.get(relay).map(|r| r.version.clone()).unwrap_or_default();
+        for org in self.api.orgs().into_iter().filter(|o| self.api.relays_of(o).iter().any(|r| r == relay)) {
+            self.api.emit_event(&org, kind, json!({ "relay": relay, "version": version }), t.div_euclid(1000));
         }
     }
 
@@ -3395,9 +3545,15 @@ impl Fleet {
             // API-1 2.5, 12.2: a catch-up that failed (or whose `api-synced` was refused) is tried again
             self.api.sync_tick(link.clone(), t.div_euclid(1000));
             self.api.audit_tick(link, t.div_euclid(1000));
+            // API-1 revision 4 5.2.3: API holds to relays that lack them, reviewer asks and archive outcomes
+            crate::api_compliance::tick(self.compliance_desk(), t.div_euclid(1000));
         }
         // API-1 2.3 (slice 1a6): saves waiting for their device's signature, on their own thread
         self.api_signing_tick(t);
+        // API-1d 7.1, 7.13: card re-signing state and partner cards older than 24 hours fetched again
+        crate::console_a2a::tick(&self.api, Some(&*self.api_audit), t.div_euclid(1000));
+        // API-1 revision 4 7.1: health changes and expiries as events
+        self.events_watch(t);
         // API-1 11: maps that expired this minute stop their org's exports; metrics snapshots, queue ages, refusal
         // summaries
         self.export.refresh(t.div_euclid(1000));
@@ -3628,6 +3784,38 @@ impl Fleet {
                 Some(d) => out.push(item("failover-credential-expiring", "warn", args(Some(d)), "#/security/exports".into())),
                 None => out.push(item("failover-credential-expired", "bad", args(None), "#/security/exports".into())),
             }
+        }
+        // API-1 revision 4 2.3 item 3: a relay of an org's set that lacks what the org's pinned map needs
+        for (org, relay, needs) in self.api.outdated() {
+            let name = names.get(&relay).cloned().unwrap_or_else(|| relay.clone());
+            out.push(item("relay-outdated", "bad", json!({ "relay": clean(&name), "org": org, "needs": needs.join(", ") }), "#/security/api".into()));
+        }
+        // API-1 revision 4 5.3.8 `ExportStorageLow`: an org that uses exports while the console's free space is below
+        // the margin a package needs
+        for org in crate::api_exports::storage_low(&*self.compliance_desk(), &self.api.known_orgs()) {
+            out.push(item("export-storage", "bad", json!({ "org": org }), "#/security/compliance".into()));
+        }
+        // API-1 revision 4 2.4: a dropped federation key until an admin confirms the hosted key sets no longer list it
+        for (org, kid) in crate::api_federation::republish_attention(&self.api, &self.state_dir) {
+            out.push(item("federation-jwks-republish", "warn", json!({ "org": org, "kid": kid }), "#/security/exports".into()));
+        }
+        // API-1 revision 4 7.4: events delivery paused after queue.max_age_s of retries (Resume goes on, nothing dropped)
+        for (org, _, name) in self.export.events_paused() {
+            out.push(item("webhook-paused", "bad", json!({ "destination": clean(&name), "org": org }), "#/security/exports".into()));
+        }
+        // API-1 revision 4 2.4: a dropped webhook key, until receivers are told and a saved map no longer lists it
+        for (org, kid) in crate::api_webhook::dropped_attention(&self.api) {
+            out.push(item("webhook-key-dropped", "warn", json!({ "org": org, "kid": kid }), "#/security/exports".into()));
+        }
+        // API-1 revision 4 6.7 `ApiOwnerGone`: a deprovisioned owner whose clients the pinned map still lists
+        for (org, principal, clients) in crate::api_people::owner_gone(self) {
+            out.push(item("api-owner-gone", "bad", json!({ "principal": clean(&principal), "org": org, "n": clients.len() }), "#/security/api".into()));
+        }
+        // API-1d 7.1.2, 7.13: an org's agents without a usable card key, a partner card that failed its check
+        for (kind, args) in crate::console_a2a::attention(&self.api, t.div_euclid(1000)) {
+            let severity = if kind == "a2a-card-key-missing" { "bad" } else { "warn" };
+            let args: Map<String, Value> = args.as_object().into_iter().flatten().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.clone(), |s| json!(clean(s))))).collect();
+            out.push(item(kind, severity, Value::Object(args), "#/security/api".into()));
         }
         for v in c.settings_now().tokens.iter().filter_map(crate::fleet_export::TokenRecord::from_json) {
             let days = (v.expires - t).div_euclid(86_400_000);
@@ -4044,6 +4232,14 @@ impl Fleet {
         let g = self.meet.lock();
         let m = g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok)?;
         Some((m.ca_der().to_vec(), m.crl()?.0))
+    }
+
+    /// API-1 revision 5 4.3, 6.5: the org Meet CA certificate (DER) whenever the CA is held and usable, with its newest
+    /// CRL (PEM) when it has signed one (SSO person records, attestations and the org policy are checked under it).
+    pub fn meet_root(&self) -> Option<(Vec<u8>, Option<String>)> {
+        let g = self.meet.lock();
+        let m = g.as_ref().filter(|m| m.state() == crate::meet_ca::CaState::Ok)?;
+        Some((m.ca_der().to_vec(), m.crl().map(|c| c.0)))
     }
 
     /// The fleet link, for the API front door's journal deliveries (API-1 5.5).
@@ -5169,6 +5365,11 @@ impl crate::fleet_people::PeopleHost for PeopleBridge {
         })
     }
 
+    fn api_deprovisioned(&self, org: &str, principal: &str) -> bool {
+        // API-1 revision 4 6.7: a console that is stopping refuses the owner (fail closed)
+        self.fleet().is_none_or(|f| crate::api_people::deprovisioned(&f.state_dir, org, principal))
+    }
+
     fn call<'a>(&'a self, relay: &'a str, body: Value) -> crate::fleet_people::BoxFut<'a, Result<Value, ApiError>> {
         let fleet = self.fleet();
         let relay = relay.to_owned();
@@ -5820,28 +6021,73 @@ impl Fleet {
 
     /// I of 5.1 for an org without a map yet: the front door's first name (else the console's host) and port.
     fn api_issuer_url(&self, c: &Console, org: &str) -> String {
+        format!("{}/api/orgs/{org}", self.api_front_origin(c))
+    }
+
+    /// The front door's origin: its first name (else the console's host) and port.
+    fn api_front_origin(&self, c: &Console) -> String {
         let host = self.cfg.fleet_names.first().filter(|h| !h.is_empty()).cloned().unwrap_or_else(|| c.cfg.host.clone());
         let port = if self.cfg.fleet_port == 0 { 7443 } else { self.cfg.fleet_port };
-        format!("https://{host}:{port}/api/orgs/{org}")
+        format!("https://{host}:{port}")
     }
 
     /// The map a save of `d` asks a device to sign, checked as relays check it (2.2, 13).
     fn api_final(&self, c: &Console, d: &api_ui::Draft, active: &[crate::api_map::TightenEntry], t: i64) -> Result<Value, ApiError> {
         let now = t.div_euclid(1000);
         let jwk = self.api.issuer_public_jwk(&d.org).map_err(|e| ApiError::with("invalid", api_sentence(&e)))?;
-        let kept: Vec<String> = self.api.journal_newest(&d.org, usize::MAX).iter().filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_owned)).collect();
-        let map = api_ui::final_map(d, &self.api_issuer_url(c, &d.org), &jwk, active, &kept, now);
+        let mut kept: Vec<String> = self.api.journal_newest(&d.org, usize::MAX).iter().filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_owned)).collect();
+        kept.extend(self.api.console_ids(&d.org));
+        let console = self.api.console_active(&d.org);
+        let map = api_ui::final_map(d, &self.api_issuer_url(c, &d.org), &jwk, active, &console, &kept, now);
         let edition = self.api_edition(t).unwrap_or(crate::api_map::Edition::Enterprise);
         crate::api_map::check_api_map(&map, now, None, edition, &BTreeMap::new()).map_err(|e| ApiError::with("invalid", api_sentence(&e.message)))?;
+        // API-1d 2.2 `well-known-taken` and 7.1.3 `card-version`, at every stage and again at save
+        let others: Vec<Value> = self.api.known_orgs().into_iter().filter(|o| *o != d.org).filter_map(|o| self.api.pinned(&o).0).collect();
+        api_1d::a2a_problem(self.api.pinned(&d.org).0.as_ref(), &map, &d.org, &others)?;
+        // API-1 revision 4 2.3 item 3: staged and saved only while every relay of the org takes what the map needs
+        self.api.gate(&d.org, &crate::api_features::map_needs(&map)).map_err(|e| ApiError::with("relay-outdated", api_sentence(&e.message)))?;
         Ok(map)
     }
 
     /// Journal tightenings at once (2.5), each flushed and sent before the route answers; one already in force is
-    /// not journaled again.
+    /// not journaled again. A console journal action (`api_cjournal::ACTIONS`, revision 4 2.3 item 4 and revision 5
+    /// 4.2) goes to the console journal (`ConsoleApi::append_console`): `person_revoke` also ends the person's refresh
+    /// families (`ConsoleApi::person_revoke`), and `client_drop_delegation` brings its R5-6 `person_revoke` entries
+    /// (`ConsoleApi::drop_delegation`, each counted).
     fn api_journal(&self, org: &str, entries: &[api_ui::Tighten], t: i64) -> Result<usize, ApiError> {
         let now = t.div_euclid(1000);
+        let failed = |x: crate::api_map::ApiMapError| ApiError::with("invalid", api_sentence(&x.message));
         let mut n = 0;
         for e in entries {
+            if crate::api_cjournal::ACTIONS.iter().any(|(a, _)| *a == e.action) {
+                let console = self.api.console_active(org);
+                let field = |k: &str| e.target.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+                match e.action {
+                    "person_revoke" => {
+                        if crate::api_cjournal::person_revoked(&console, &field("client"), &field("principal")) {
+                            continue;
+                        }
+                        self.api.person_revoke(org, &field("client"), &field("principal"), now).map_err(failed)?;
+                        n += 1;
+                    }
+                    "client_drop_delegation" => {
+                        if console.iter().any(|a| a.action == e.action && a.target == e.target) {
+                            continue;
+                        }
+                        let what = ["group", "principal", "idp"].into_iter().find(|w| e.target.get(*w).is_some()).unwrap_or("group");
+                        let revoked = self.api.drop_delegation(org, &field("client"), what, &field(what), now).map_err(failed)?;
+                        n += 1 + revoked.len();
+                    }
+                    _ => {
+                        if console.iter().any(|a| a.action == e.action && a.target == e.target) {
+                            continue;
+                        }
+                        self.api.append_console(org, e.action, e.target.clone(), now).map_err(failed)?;
+                        n += 1;
+                    }
+                }
+                continue;
+            }
             let held = self.api.journal_active(org).iter().any(|a| a.action == e.action && a.target == e.target);
             if held {
                 continue;
@@ -5878,13 +6124,87 @@ impl Fleet {
                 Ok(Done::ok(Out::ok(json!({ "ok": true, "staged": null })), Some(org), Value::Null))
             }
             "settings/api/save" => self.api_save(c, who, &org, p, t),
+            "settings/api/relays/retire" => {
+                let relay = str_of(p.get("relay")).filter(|r| !r.is_empty() && r.len() <= 64).ok_or_else(|| ApiError::with("invalid", "relay is a relay id."))?.to_owned();
+                match self.api.retire_relay(&org, &relay) {
+                    Ok(true) => Ok(Done::ok(Out::ok(json!({ "ok": true, "relay": relay })), Some(org), json!({ "relay": relay }))),
+                    Ok(false) => Err(ApiError::with("stale", "Nothing was changed: that relay is not in this organization's relay set.")),
+                    Err(e) if e.code == "relay-connected" => Err(ApiError::with("stale", "Nothing was changed: that relay is connected and still serves this organization.")),
+                    Err(e) => Err(ApiError::with("write-failed", api_sentence(&e.message))),
+                }
+            }
+            // API-1d 5.1: the relay staged into (or out of) `spokes.relays`, then the bound list recorded and `api-orgs`
+            // sent at once (`ConsoleApi::spokes_bind`)
+            "settings/api/spokes/bind" | "settings/api/spokes/unbind" => {
+                let relay = str_of(p.get("relay")).filter(|r| crate::fleet_metrics::relay_id_ok(r)).ok_or_else(|| ApiError::with("invalid", "relay is a relay id."))?.to_owned();
+                let bound = spec.path == "settings/api/spokes/bind";
+                if !self.registry.lock().relays.get(&relay).is_some_and(|r| r.state.live() && r.product == Product::Spokes) {
+                    return Err(ApiError::with("invalid", "That relay is not a Remote Spokes relay of this console."));
+                }
+                // the draft as it was, kept again when the bind fails so the draft never lists a relay that is not bound
+                let before = self.api_drafts.lock().get(&org, t).cloned();
+                let done = self.api_stage(c, who, spec.path, &org, p, t)?;
+                if let Err(e) = self.api.spokes_bind(self.link.get().cloned(), &relay, &org, bound, t.div_euclid(1000)) {
+                    let mut drafts = self.api_drafts.lock();
+                    match before {
+                        Some(d) => {
+                            drafts.put(d, t);
+                        }
+                        None => {
+                            drafts.discard(&org);
+                        }
+                    }
+                    let code = if e.code == crate::api_features::OUTDATED { "relay-outdated" } else { "write-failed" };
+                    return Err(ApiError::with(code, api_sentence(&e.message)));
+                }
+                Ok(done)
+            }
             "settings/api/signing/cancel" => self.api_signing_cancel(&org, t),
             "settings/api/clients/revoke-tokens" => self.api_revoke_tokens(&org, p, t),
+            // API-1 revision 4 13.1 (`clients/recipient` and `clients/caps` stage in `api_stage`)
+            "settings/api/clients/recipient/drop" => self.api_recipient_drop(&org, p, t),
             "settings/exports/destinations/test" => self.api_dest_test(c, who, &org, p, t),
             "settings/exports/destinations/credential" => self.api_dest_credential(&org, p, t),
             "settings/exports/destinations/failover/csr" | "settings/exports/destinations/failover/install" | "settings/exports/destinations/failover/delete" => self.api_failover(spec.path, &org, p, t),
+            "settings/api/federation/key/drop" => self.api_federation_drop(&org, p, t),
+            "settings/api/federation/republished" => self.api_federation_republished(&org, p),
+            "settings/exports/destinations/federation-test" => self.api_federation_test(c, who, &org, p, t),
+            // API-1 revision 4 7.4, 13.1 (`settings/api/webhook-keys` stages in `api_stage`)
+            "settings/api/webhook-keys/drop" => self.api_webhook_key_drop(&org, p, t),
+            "settings/exports/destinations/verify" => self.api_webhook_verify(c, who, &org, p, t),
+            "settings/exports/destinations/secret" => self.api_webhook_secret(c, who, &org, p, t),
+            "settings/exports/destinations/replay" => self.api_webhook_replay(&org, p, t),
+            "settings/exports/destinations/resume" => self.api_webhook_resume(&org, p, t),
+            // API-1 revision 5 14.1 (the connector, idp and delegation routes stage in `api_stage`)
+            "settings/api/idps/test" => self.api_idp_test(&org, p, t),
+            "settings/api/sso-url" => self.api_sso_url(&org, p),
+            // API-1d 7.14 (the agent, key, well-known, root and push-off routes stage in `api_stage`)
+            "settings/api/a2a/keys/drop" => self.api_a2a_key_drop(&org, p, t),
+            "settings/api/clients/card-check" => {
+                let id = str_of(p.get("id")).filter(|i| api_1c::client_id_ok(i)).ok_or_else(|| ApiError::with("invalid", api_1c::BAD_CLIENT))?.to_owned();
+                let card = crate::console_a2a::card_check(&self.api, &org, &id, t.div_euclid(1000))?;
+                let detail = json!({ "id": id, "state": card.get("state") });
+                Ok(Done::ok(Out::ok(json!({ "ok": true, "card": card })), Some(org), detail))
+            }
             path => self.api_stage(c, who, path, &org, p, t),
         }
+    }
+
+    /// API-1d 4.2: the staged client's pasted service hub certificates checked and turned into `spokes_node`
+    /// credentials (`api_ui::spokes_credentials`) against this console's Remote Spokes root (`fleet.spokesRoot`) and
+    /// the CRL the org's spokes relays hold now, asked only when a certificate was pasted.
+    fn api_spokes_credentials(&self, d: &mut api_ui::Draft, org: &str, id: &str, held: &[Value], now: i64) -> Result<(), ApiError> {
+        let trust = if api_ui::pastes_spokes_cert(d, id) {
+            let root = self.book.lock().spokes_root.as_ref().and_then(|r| str_of(r.get("pem")).map(str::to_owned));
+            let root = root.ok_or_else(|| ApiError::with("invalid", "Set the Remote Spokes root of this console first."))?;
+            let link = self.link.get().cloned();
+            let crls = self.api.spokes_crls(link.as_deref(), org);
+            let trust = crate::api_spokes_cred::console_trust(&root, &crls).map_err(|why| ApiError::with("relay-offline", format!("The service hub certificate cannot be checked: {why}.")))?;
+            Some(trust)
+        } else {
+            None
+        };
+        api_ui::spokes_credentials(d, id, held, trust.as_ref(), now)
     }
 
     /// A staging route: the org's draft (a new one on the pinned map), the route's change, the map checked as relays
@@ -5903,14 +6223,39 @@ impl Fleet {
         let none = Value::Null;
         let mut shown = Map::new();
         let mut detail = json!({});
+        // revision 4 2.4: a `client_lower_caps` target, journaled at once in the console journal
+        let mut lower_caps: Option<Value> = None;
         let journal: Vec<api_ui::Tighten> = match path {
+            // API-1 revision 4 13.1: the export recipient key (two-person, 13.3), from a JWK or a PEM
+            "settings/api/clients/recipient" => {
+                let (kid, jwk, jkt) = api_ui::recipient_of(p.get("jwk"), str_of(p.get("pem")))?;
+                if crate::api_cjournal::recipient_dropped(&self.api.console_active(org), &id, &kid) {
+                    return Err(ApiError::with("invalid", api_ui::RECIPIENT_WAS_DROPPED));
+                }
+                api_ui::set_recipient(&mut d, &id, &kid, jwk)?;
+                detail["kid"] = json!(kid);
+                detail["jkt"] = json!(jkt);
+                shown.insert("recipient".into(), json!({ "kid": kid, "jkt": jkt }));
+                Vec::new()
+            }
+            "settings/api/clients/caps" => {
+                lower_caps = api_ui::set_caps(&mut d, &id, p.get("caps").unwrap_or(&none), pinned.as_ref())?;
+                detail["caps"] = p.get("caps").cloned().unwrap_or(Value::Null);
+                Vec::new()
+            }
             "settings/api/clients" => {
                 let cid = api_ui::new_id("c_", &random8()?);
                 api_ui::add_client(&mut d, p.get("client").unwrap_or(&none), cid.clone(), now)?;
+                self.api_spokes_credentials(&mut d, org, &cid, &[], now)?;
                 detail["client"] = json!(cid);
                 Vec::new()
             }
-            "settings/api/clients/update" => api_ui::update_client(&mut d, &id, p.get("client").unwrap_or(&none), pinned.as_ref(), now)?,
+            "settings/api/clients/update" => {
+                let held = api_ui::client_credentials(&d, &id);
+                let journal = api_ui::update_client(&mut d, &id, p.get("client").unwrap_or(&none), pinned.as_ref(), now)?;
+                self.api_spokes_credentials(&mut d, org, &id, &held, now)?;
+                journal
+            }
             "settings/api/clients/suspend" => {
                 detail["reason"] = json!(reason_of(p.get("reason"))?);
                 api_ui::suspend_client(&mut d, &id, pinned.as_ref())?
@@ -5960,6 +6305,56 @@ impl Fleet {
                 api_ui::set_relay_origin(&mut d, str_of(p.get("relay")).unwrap_or(""), str_of(p.get("origin")).unwrap_or("").trim())?;
                 Vec::new()
             }
+            // API-1d 5.1 (`api_route` checks the relay first and records the binding after)
+            "settings/api/spokes/bind" | "settings/api/spokes/unbind" => {
+                let (relay, bound) = (str_of(p.get("relay")).unwrap_or(""), path == "settings/api/spokes/bind");
+                let root = self.spokes_root_pin();
+                api_ui::stage_spokes_relay(&mut d, relay, bound, root.as_ref().map(|(id, spki)| (id.as_str(), spki.as_str())))?;
+                detail["relay"] = json!(relay);
+                detail["bound"] = json!(bound);
+                Vec::new()
+            }
+            // API-1d 7.14: `spokes.root` from the console's Remote Spokes root, unless a connected bound relay holds
+            // another
+            "settings/api/spokes/root" => {
+                let root = self.spokes_root_pin();
+                let reported = self.spokes_reported_roots(org);
+                api_1d::stage_spokes_root(&mut d, root.as_ref().map(|(id, spki)| (id.as_str(), spki.as_str())), &reported)?;
+                detail["root"] = d.map["spokes"]["root"].clone();
+                Vec::new()
+            }
+            // API-1d 7.14: agents (the `a_` id drawn here), card keys (drawn and sealed by `console_a2a`), the root
+            // well-known card, a client's pushes turned off; `agent_drop_skill`, `agent_off` and `push_off` are
+            // journaled at once below
+            "settings/api/a2a/agents" => {
+                let aid = api_ui::new_id("a_", &random8()?);
+                api_1d::add_agent(&mut d, p.get("agent").unwrap_or(&none), aid.clone())?;
+                detail["agent"] = json!(aid);
+                shown.insert("agent".into(), json!(aid));
+                Vec::new()
+            }
+            "settings/api/a2a/agents/update" => api_1d::update_agent(&mut d, &id, p.get("agent").unwrap_or(&none), pinned.as_ref())?,
+            "settings/api/a2a/agents/delete" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_1d::delete_agent(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/a2a/keys" => {
+                let key = crate::console_a2a::stage_new_key(&mut d, &*self.api.vault(), org, now)?;
+                detail["kid"] = key["kid"].clone();
+                shown.insert("key".into(), key);
+                Vec::new()
+            }
+            "settings/api/a2a/well-known" => {
+                let agent = match p.get("agent") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(a)) if api_1d::agent_id_ok(a) => Some(a.as_str()),
+                    Some(_) => return Err(ApiError::with("invalid", "agent is an agent id or null.")),
+                };
+                api_1d::set_well_known(&mut d, agent)?;
+                detail["agent"] = json!(agent);
+                Vec::new()
+            }
+            "settings/api/clients/push-off" => api_1d::push_off(&mut d, &id, pinned.as_ref())?,
             "settings/exports/destinations" if p.get("from_siem") == Some(&Value::Bool(true)) => {
                 let did = api_ui::new_id("d_", &random8()?);
                 self.api_from_siem(c, &mut d, org, &did, t)?;
@@ -5977,13 +6372,97 @@ impl Fleet {
                 detail["reason"] = json!(reason_of(p.get("reason"))?);
                 api_ui::delete_destination(&mut d, &id, pinned.as_ref())?
             }
+            // API-1 revision 4 8.1: the federation issuer (default I/federation) and keys, drawn and sealed here
+            "settings/api/federation" => {
+                let i = d.map.pointer("/issuer/url").and_then(Value::as_str).filter(|u| !u.is_empty()).map_or_else(|| self.api_issuer_url(c, org), str::to_owned);
+                let default_issuer = format!("{}{}", i.trim_end_matches('/'), crate::api_federation::FRONT_DOOR_PATH);
+                if let Some(jwk) = crate::api_federation::stage_issuer(&mut d, &*self.api.vault(), org, str_of(p.get("issuer")), &default_issuer, now)? {
+                    detail["kid"] = jwk["kid"].clone();
+                    shown.insert("key".into(), jwk);
+                }
+                detail["issuer"] = d.map["federation"]["issuer"].clone();
+                Vec::new()
+            }
+            "settings/api/federation/key" => {
+                let jwk = crate::api_federation::stage_new_key(&mut d, &*self.api.vault(), org, now)?;
+                detail["kid"] = jwk["kid"].clone();
+                shown.insert("key".into(), jwk);
+                Vec::new()
+            }
+            // API-1 revision 4 7.4: an Ed25519 webhook key drawn and sealed here, its public part staged
+            "settings/api/webhook-keys" => {
+                let key = crate::api_webhook::stage_new_key(&mut d, &*self.api.vault(), org, now)?;
+                detail["kid"] = key["kid"].clone();
+                shown.insert("key".into(), key);
+                Vec::new()
+            }
+            // API-1 revision 4 7.4 (R4-D9): a webhook moved to v1 with a new secret, shown once (two-person save)
+            "settings/exports/destinations/secret" => {
+                let secret = crate::api_webhook::stage_secret(&mut d, &*self.api.vault(), org, &id, now)?;
+                shown.insert("secret".into(), json!(secret));
+                if let Some(r) = crate::api_webhook::secret_rotate_by(&*self.api.vault(), org, &id) {
+                    shown.insert("rotate_by".into(), json!(r));
+                }
+                Vec::new()
+            }
+            // API-1 revision 5 14.1 (slice 1c7): connectors (the `k_` id drawn here), idps and delegations; the
+            // narrowings, suspensions and revocations are journaled at once below (`api_journal`)
+            "settings/api/connectors" => {
+                let kid = api_ui::new_id("k_", &random8()?);
+                api_1c::add_connector(&mut d, p.get("connector").unwrap_or(&none), kid.clone())?;
+                detail["connector"] = json!(kid);
+                shown.insert("connector".into(), json!(kid));
+                Vec::new()
+            }
+            "settings/api/connectors/update" => api_1c::update_connector(&mut d, &id, p.get("connector").unwrap_or(&none), pinned.as_ref())?,
+            "settings/api/connectors/suspend" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_1c::suspend_connector(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/connectors/resume" => {
+                api_1c::resume_connector(&mut d, &id, &self.api.console_active(org))?;
+                Vec::new()
+            }
+            "settings/api/connectors/delete" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_1c::delete_connector(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/idps" => {
+                api_1c::add_idp(&mut d, p.get("idp").unwrap_or(&none), &self.api.identity_providers(org))?;
+                Vec::new()
+            }
+            "settings/api/idps/update" => api_1c::update_idp(&mut d, &id, p.get("idp").unwrap_or(&none), pinned.as_ref())?,
+            "settings/api/idps/suspend" => {
+                detail["reason"] = json!(reason_of(p.get("reason"))?);
+                api_1c::suspend_idp(&mut d, &id, pinned.as_ref())?
+            }
+            "settings/api/idps/resume" => {
+                api_1c::resume_idp(&mut d, &id, &self.api.console_active(org))?;
+                Vec::new()
+            }
+            "settings/api/delegations/revoke" => {
+                let (client, principal) = (str_of(p.get("client")).unwrap_or(""), str_of(p.get("principal")).unwrap_or(""));
+                detail["client"] = json!(client);
+                api_1c::revoke_delegation(&mut d, client, principal)?
+            }
+            "settings/api/delegations/allow" => {
+                let (client, principal) = (str_of(p.get("client")).unwrap_or(""), str_of(p.get("principal")).unwrap_or(""));
+                detail["client"] = json!(client);
+                api_1c::allow_delegation(&mut d, client, principal, &self.api.console_active(org))?;
+                Vec::new()
+            }
             _ => return Err(ApiError::of("not-found")),
         };
-        if journal.is_empty() {
+        if journal.is_empty() && lower_caps.is_none() {
             // a widening (or a staged change) must make a map relays accept
             self.api_final(c, &d, &active, t)?;
         }
         let journaled = self.api_journal(org, &journal, t)?;
+        if path == "settings/api/clients/caps" {
+            let entry = journal_lower_caps(&self.api, org, lower_caps, now)?;
+            detail["entry"] = entry.clone();
+            shown.insert("journaled".into(), entry);
+        }
         let view = d.view(&self.api.journal_active(org));
         detail["stage"] = json!(d.id);
         detail["change"] = json!(d.changes.last());
@@ -6245,6 +6724,8 @@ impl Fleet {
             (ca.ca_der().to_vec(), ca.crl().map(|x| x.0))
         };
         let root = crate::meet_x509::Cert::from_der(&root_der).ok_or(api_ui::NO_CA)?;
+        // API-1d 2.4: spokes relays get this root (and CRL) as the `trust` of each map they are sent
+        self.api.save_map_trust(org, &root_der, crl_pem.as_deref());
         let crl = crl_pem.and_then(|p| crate::der::pem_blocks(&p, "X509 CRL").into_iter().next()).and_then(|der| crate::meet_x509::Crl::from_der(&der));
         let trust = crate::api_map::ApiTrust { root: &root, signer_policy, root_crl: crl.as_ref(), previous_serial: "" };
         self.api_publish_trusted(org, map_sha256, signed, &trust, self.api_edition(t), t)
@@ -6312,20 +6793,61 @@ impl Fleet {
                 let owner = self.api_owner(&org);
                 let draft = self.api_drafts.lock().get(&org, t).cloned();
                 let entries: Vec<Value> = self.api.journal_newest(&org, api_ui::JOURNAL_SHOWN);
+                let console = self.api.console_active(&org);
+                // revision 5 14.1, 14.2 (slice 1c7): connectors with their sync status, idps with their last test, the
+                // policy's api apps and ai groups, the registry providers, api_return and the standing person revokes
+                let status = self.api_connector_status(&org, &[pinned.as_ref(), draft.as_ref().map(|d| &d.map)], now);
+                let last_test = |issuer: &str| self.api.idp_last_test(&org, issuer);
+                let view_of = |m: &Value, seq: i64| {
+                    let mut v = api_ui::map_view(m, seq, &active, &console, &owner, now);
+                    api_1c::map_view_1c(&mut v, m, &status, &console, &last_test);
+                    // API-1d 7.14: partner card checks and the card key hand-off of `agent` clients
+                    self.api_client_a2a(&org, &mut v, now);
+                    v
+                };
+                let policy = self.api.verified_policy(&org, now);
+                let api_return = api_1c::api_return(pinned.as_ref().and_then(|m| m.pointer("/issuer/url")).and_then(Value::as_str));
                 json!({
                     "org": org, "edition": edition.map(crate::api_map::Edition::as_str),
                     "state": api_ui::org_state(pinned.as_ref(), aside, &active, now),
-                    "map": pinned.as_ref().map(|m| api_ui::map_view(m, seq, &active, &owner, now)),
+                    "map": pinned.as_ref().map(|m| view_of(m, seq)),
                     "journal": { "head": self.api.journal_head(&org), "entries": entries },
                     "relays": self.api.relays_view(&org),
+                    "relay_set": self.api_relay_set(&org, pinned.as_ref()),
                     "staged": draft.as_ref().map(|d| d.view(&active)),
-                    "draft": draft.as_ref().map(|d| api_ui::map_view(&d.map, d.base_seq + 1, &active, &owner, now)),
+                    "draft": draft.as_ref().map(|d| view_of(&d.map, d.base_seq + 1)),
                     "signing": signings.get(&org).map(api_ui::Signing::view),
                     "limits": api_ui::limits(edition),
+                    "connector_status": status,
+                    "api_apps": api_1c::api_apps(policy.as_ref()), "policy_known": policy.is_some(),
+                    "ai_groups": api_1c::ai_groups(policy.as_ref()),
+                    "providers": self.api_providers(&org, &api_return), "api_return": api_return,
+                    "person_revokes": api_1c::revoke_views(&console, "*"),
                 })
             })
             .collect();
-        json!({ "ok": true, "orgs": list })
+        // revision 4 13.2: the Meet CA root compliance tools pin (lowercase hex SHA-256 of its DER)
+        let meet_ca = self.meet.lock().as_ref().map(|ca| json!({ "fingerprint": crate::codec::sha256_hex(ca.ca_der()) }));
+        json!({ "ok": true, "orgs": list, "meet_ca": meet_ca })
+    }
+
+    /// Revision 4 2.3 item 2 (the relay-outdated and Retire screens): each relay of the org's set with its latest
+    /// `api-features` answer (`map: []`, `features: []`, `reported_at: null` before one) and the needs of the pinned
+    /// map it does not report (`lacks`).
+    fn api_relay_set(&self, org: &str, pinned: Option<&Value>) -> Vec<Value> {
+        let needs = pinned.map(crate::api_features::map_needs).unwrap_or_default();
+        self.api
+            .relay_set(org)
+            .into_iter()
+            .map(|(id, report)| {
+                let lacks: Vec<&str> = needs.iter().copied().filter(|n| !report.as_ref().is_some_and(|r| r.has(n))).collect();
+                let connected = self.connected(&id);
+                match report {
+                    Some(r) => json!({ "id": id, "connected": connected, "map": r.map, "features": r.features, "reported_at": r.at, "lacks": lacks }),
+                    None => json!({ "id": id, "connected": connected, "map": [], "features": [], "reported_at": null, "lacks": lacks }),
+                }
+            })
+            .collect()
     }
 
     /// The `api` and `presets` keys of `GET settings/exports` (7.3, 11.7, 12.3): per org its destinations (the
@@ -6336,6 +6858,7 @@ impl Fleet {
         let mut orgs: std::collections::BTreeSet<String> = self.api.known_orgs().into_iter().collect();
         orgs.extend(self.api_drafts.lock().orgs(t));
         let active_of = |org: &str| self.api.journal_active(org);
+        let republish = crate::api_federation::republish_attention(&self.api, &self.state_dir);
         let list: Vec<Value> = orgs
             .into_iter()
             .map(|org| {
@@ -6359,10 +6882,28 @@ impl Fleet {
                             .filter(|r| r.destination == id)
                             .map(|r| json!({ "relay": r.relay, "type": r.kind, "public_id": r.public_id, "not_before": r.not_before, "expires": r.expires, "state": r.state, "note": r.note }))
                             .collect();
-                        api_ui::destination_view(x, source, self.api.has_destination_credential(&org, id), self.api.destination_credential_rotate_by(&org, id), st, !needed.iter().any(|n| n == id), failover)
+                        let mut v = api_ui::destination_view(x, source, self.api.has_destination_credential(&org, id), self.api.destination_credential_rotate_by(&org, id), st, !needed.iter().any(|n| n == id), failover);
+                        // API-1 revision 4 7.4: a webhook's v1 secret and its 90-day "rotate by"
+                        if let Some(r) = crate::api_webhook::secret_rotate_by(&*self.api.vault(), &org, id) {
+                            v["whsec_rotate_by"] = json!(r);
+                        }
+                        v
                     })
                     .collect();
-                json!({ "org": org, "staged": draft.as_ref().map(|d| d.view(&active_of(&org))), "destinations": destinations, "relays": self.api.relays_of(&org) })
+                // revision 4 7.4, 8, 13.2: the webhook keys, outbound identity and events clients of the map shown (the
+                // draft's when staged), the issuer url (`<I>/v1/webhooks/keys`) and the dropped federation keys an admin
+                // has yet to confirm as gone from the hosted key sets
+                let shown_map = draft.as_ref().map(|d| &d.map).or(pinned.as_ref());
+                let console = self.api.console_active(&org);
+                let issuer_url = pinned.as_ref().and_then(|m| m.pointer("/issuer/url")).and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_owned).or_else(|| self.console().ok().map(|c| self.api_issuer_url(&c, &org)));
+                let to_confirm: Vec<&String> = republish.iter().filter(|(o, _)| *o == org).map(|(_, kid)| kid).collect();
+                json!({
+                    "org": org, "staged": draft.as_ref().map(|d| d.view(&active_of(&org))), "destinations": destinations, "relays": self.api.relays_of(&org),
+                    "webhook_keys": shown_map.map_or_else(|| json!([]), |m| api_ui::webhook_keys_view(m, &console)),
+                    "federation": shown_map.map_or(Value::Null, |m| api_ui::federation_view(m, &console)),
+                    "events_clients": shown_map.map_or_else(|| json!([]), api_ui::events_clients),
+                    "issuer_url": issuer_url, "federation_republish": to_confirm,
+                })
             })
             .collect();
         (Value::Array(list), api_ui::presets_view())
@@ -6438,9 +6979,20 @@ impl Fleet {
         c.limit(crate::console_limits::Limit::EmailTest, &format!("exports-test|{}", who.email), t)?;
         let (pinned, _, _) = self.api.pinned(org);
         let draft = self.api_drafts.lock().get(org, t).cloned();
-        let (x, _) = api_ui::destination_of(draft.as_ref(), pinned.as_ref(), &id).ok_or_else(|| ApiError::with("not-found", api_ui::NO_DESTINATION))?;
+        let (x, staged) = api_ui::destination_of(draft.as_ref(), pinned.as_ref(), &id).ok_or_else(|| ApiError::with("not-found", api_ui::NO_DESTINATION))?;
+        // revision 4 13.2: a webhook's test is a `test.ping` event
+        if str_of(x.get("kind")) == Some("webhook") {
+            return self.api_webhook_test(org, &x, staged, draft.as_ref(), t);
+        }
         let rid = hex(&random8()?);
-        let sent = match self.api.destination_credential(org, &id) {
+        // revision 4 8: a federated credential signs with the draft's federation block when the destination is staged
+        let held = if crate::api_federation::is_federated(&x) {
+            let fed = draft.as_ref().filter(|_| staged).and_then(|d| d.map.get("federation")).filter(|f| f.is_object());
+            crate::api_federation::credential_for(&self.api, org, &x, fed, self.federation_audit(c.logger.clone()))
+        } else {
+            self.api.destination_credential(org, &id)
+        };
+        let sent = match held {
             None => Err("This destination holds no credential yet. Enter it first.".to_owned()),
             Some(credential) => export_sink(&x, credential, &c.cfg.host).and_then(|s| s.deliver(&api_ui::test_batch(&x, org, &rid, t))).map_err(|e| api_sentence(&e.message)),
         };
@@ -6500,6 +7052,634 @@ impl Fleet {
     }
 }
 
+// ── API-1 revision 5 14.1 (slice 1c7): connectors, identity providers, the SSO URL, delegations, approvals ─────────
+
+/// The org of a revision 5 14.1 GET (`?org=`).
+fn query_org(q: &[(String, String)]) -> Result<String, ApiError> {
+    q.iter().find(|(k, _)| k == "org").map(|(_, v)| v.as_str()).filter(|o| crate::api_audit::org_ok(o)).map(str::to_owned).ok_or_else(|| ApiError::with("invalid", "org is an organization id."))
+}
+
+fn query_of<'a>(q: &'a [(String, String)], k: &str) -> Option<&'a str> {
+    q.iter().find(|(x, _)| x == k).map(|(_, v)| v.as_str())
+}
+
+/// The connectors of a map.
+fn map_connectors(m: Option<&Value>) -> impl Iterator<Item = &Value> {
+    m.and_then(|m| m.get("connectors")).and_then(Value::as_array).into_iter().flatten()
+}
+
+impl Fleet {
+    /// 14.1 `connector_status`: per connector of `maps` (the pinned and the staged map), its status from its latest
+    /// acknowledgment (`console_connector::latest_ack`).
+    fn api_connector_status(&self, org: &str, maps: &[Option<&Value>], now: i64) -> Map<String, Value> {
+        let mut out = Map::new();
+        for k in maps.iter().flat_map(|m| map_connectors(*m)) {
+            let Some(id) = str_of(k.get("id")).filter(|id| !out.contains_key(*id)) else { continue };
+            let ack = self.api.state_dir().and_then(|dir| crate::console_connector::latest_ack(dir, org, id));
+            let stale_s = k.get("stale_s").and_then(Value::as_i64).unwrap_or(api_1c::STALE_DEFAULT);
+            out.insert(id.to_owned(), api_1c::connector_status(ack.as_ref(), stale_s, now));
+        }
+        out
+    }
+
+    /// The org's registry providers (signer policy v3) as ProviderViews.
+    fn api_providers(&self, org: &str, api_return: &Value) -> Vec<Value> {
+        self.api.identity_providers(org).iter().map(|p| api_1c::provider_view(p, self.api.sso_url(org, &p.id), api_return)).collect()
+    }
+
+    /// `GET settings/api/connectors?org=` (14.1): the pinned map's connectors, each with its sync status (age,
+    /// conversations count, key store, features).
+    fn api_connectors_get(&self, q: &[(String, String)], t: i64) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let (pinned, _, _) = self.api.pinned(&org);
+        let status = self.api_connector_status(&org, &[pinned.as_ref()], t.div_euclid(1000));
+        let console = self.api.console_active(&org);
+        let connectors: Vec<Value> = map_connectors(pinned.as_ref()).map(|k| api_1c::connector_with_status(k, status.get(str_of(k.get("id")).unwrap_or("")), &console)).collect();
+        Ok(json!({ "ok": true, "org": org, "connectors": connectors }))
+    }
+
+    /// `GET settings/api/idps?org=` (14.1): the pinned map's idps with their last test, the org's registry providers
+    /// with their SSO URLs, and `api_return`.
+    fn api_idps_get(&self, q: &[(String, String)]) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let (pinned, _, _) = self.api.pinned(&org);
+        let console = self.api.console_active(&org);
+        let idps: Vec<Value> = pinned
+            .as_ref()
+            .and_then(|m| m.get("idps"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|i| api_1c::idp_view(i, &console, self.api.idp_last_test(&org, str_of(i.get("issuer")).unwrap_or(""))))
+            .collect();
+        let api_return = api_1c::api_return(pinned.as_ref().and_then(|m| m.pointer("/issuer/url")).and_then(Value::as_str));
+        Ok(json!({ "ok": true, "org": org, "idps": idps, "providers": self.api_providers(&org, &api_return), "api_return": api_return }))
+    }
+
+    /// `GET settings/api/delegations?org=&client=` (14.1): the people with a delegated token of the client (`*`: of
+    /// any) in the last 24 hours or a live refresh family, and the active `person_revoke` entries.
+    fn api_delegations_get(&self, q: &[(String, String)], t: i64) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let client = query_of(q, "client").filter(|c| !c.is_empty()).unwrap_or("*").to_owned();
+        if client != "*" && !api_1c::client_id_ok(&client) {
+            return Err(ApiError::with("invalid", api_1c::BAD_CLIENT));
+        }
+        let uses = self.api.delegation_uses(&org, (client != "*").then_some(client.as_str()), t.div_euclid(1000)).map_err(|why| ApiError::with("write-failed", api_sentence(&why)))?;
+        let (pinned, _, _) = self.api.pinned(&org);
+        let console = self.api.console_active(&org);
+        let name = |id: &str| pinned.as_ref().and_then(|m| api_ui::find(m, "clients", id)).and_then(|c| str_of(c.get("name"))).unwrap_or(id).to_owned();
+        let people: Vec<Value> = uses.iter().map(|u| api_1c::delegation_view(u, &name(&u.client), crate::api_cjournal::person_revoked(&console, &u.client, &u.person))).collect();
+        Ok(json!({ "ok": true, "org": org, "client": client, "people": people, "revokes": api_1c::revoke_views(&console, &client) }))
+    }
+
+    /// `GET settings/api/approvals?org=&client=` (14.1): the approval metadata of the pinned connectors' audit chains
+    /// held by the console (`content.approval.*`, `content.person.stopped`), of the client when given, newest first,
+    /// at most 200; never text.
+    fn api_approvals_get(&self, q: &[(String, String)]) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let client = query_of(q, "client").filter(|c| !c.is_empty() && *c != "*");
+        let (pinned, _, _) = self.api.pinned(&org);
+        let mut list: Vec<Value> = Vec::new();
+        if let Some((audit, _)) = self.api.audit_parts() {
+            for id in map_connectors(pinned.as_ref()).filter_map(|k| str_of(k.get("id"))) {
+                let (mut after, _) = audit.head(&org, id, crate::api_audit::Repr::AsIs);
+                let mut found = 0;
+                for _ in 0..LIVE_TOKEN_PAGES {
+                    if after == 0 || found >= api_1c::APPROVALS_MAX {
+                        break;
+                    }
+                    after = after.saturating_sub(1000);
+                    for e in audit.range(&org, id, crate::api_audit::Repr::AsIs, after, 1000) {
+                        if let Some(v) = api_1c::approval_view(id, &e).filter(|v| client.is_none_or(|c| str_of(v.get("client")) == Some(c))) {
+                            list.push(v);
+                            found += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(json!({ "ok": true, "org": org, "approvals": api_1c::newest_approvals(list) }))
+    }
+
+    // ── API-1d 7.14 (slice 1d5): Agents and Remote Spokes ──
+
+    /// The console's Remote Spokes root (`fleet.spokesRoot`): its node id and the SHA-256 hex of its public key.
+    fn spokes_root_pin(&self) -> Option<(String, String)> {
+        self.book.lock().spokes_root.as_ref().and_then(|r| {
+            let der = crate::der::pem_blocks(str_of(r.get("pem"))?, "PUBLIC KEY").into_iter().next()?;
+            Some((str_of(r.get("id"))?.to_owned(), crate::codec::sha256_hex(&der)))
+        })
+    }
+
+    /// The live Remote Spokes relays of this console, `(id, name)`.
+    fn spokes_relays_live(&self) -> Vec<(String, String)> {
+        self.registry.lock().relays.values().filter(|r| r.state.live() && r.product == Product::Spokes).map(|r| (r.id.clone(), r.name.clone())).collect()
+    }
+
+    /// The roots the connected spokes relays bound to `org` hold: the `root` claim of each root-signed CRL they report
+    /// (the 6.2 `relays` view, `ConsoleApi::spokes_crls`).
+    fn spokes_reported_roots(&self, org: &str) -> Vec<String> {
+        let link = self.link.get().cloned();
+        self.api
+            .spokes_crls(link.as_deref(), org)
+            .iter()
+            .filter_map(|token| crate::identity::peek_compact(token).and_then(|p| p.get("root").and_then(Value::as_str).map(str::to_owned)))
+            .collect()
+    }
+
+    /// `GET settings/api/a2a?org=` (7.14): A2aView.
+    fn api_a2a_get(&self, c: &Console, q: &[(String, String)], t: i64) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let now = t.div_euclid(1000);
+        let (pinned, _, _) = self.api.pinned(&org);
+        let draft = self.api_drafts.lock().get(&org, t).cloned();
+        let console = self.api.console_active(&org);
+        let issuer = pinned.as_ref().and_then(|m| m.pointer("/issuer/url")).and_then(Value::as_str).filter(|u| !u.is_empty());
+        let agents: Vec<Value> = pinned
+            .as_ref()
+            .and_then(|m| m.pointer("/a2a/agents"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|a| {
+                let id = str_of(a.get("id")).unwrap_or("");
+                let card = crate::console_a2a::card_view(&self.api, Some(&*self.api_audit), &org, id, now);
+                api_1d::agent_view(a, &console, issuer.map(|i| crate::a2a_card::card_url(i, id)), Some(card))
+            })
+            .collect();
+        let keys = pinned.as_ref().map(|m| crate::console_a2a::key_views(&self.api, &org, m, now)).unwrap_or_default();
+        let status = self.api_connector_status(&org, &[pinned.as_ref()], now);
+        let connectors: Map<String, Value> = map_connectors(pinned.as_ref())
+            .filter_map(|k| {
+                let id = str_of(k.get("id"))?;
+                Some((id.to_owned(), api_1d::connector_a2a(k, status.get(id), &console)))
+            })
+            .collect();
+        let draft = draft.as_ref().map(|d| api_1d::draft_a2a(&d.map, &console, crate::console_a2a::key_views(&self.api, &org, &d.map, now)));
+        Ok(api_1d::a2a_view(&org, pinned.as_ref(), &self.api_front_origin(c), api_1d::A2aParts { agents, keys, connectors, draft }))
+    }
+
+    /// `GET settings/api/a2a/tasks?org=&agent=&client=&state=` (7.14): the TaskViews folded from the `a2a.task`
+    /// entries of the pinned connectors' audit chains held by the console, filtered, newest first, at most 200.
+    fn api_a2a_tasks_get(&self, q: &[(String, String)]) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let opt = |k: &str| query_of(q, k).filter(|v| !v.is_empty());
+        let f = api_1d::TaskFilter { agent: opt("agent"), client: opt("client"), state: opt("state") };
+        if f.state.is_some_and(|s| !api_1d::TASK_STATES.contains(&s)) {
+            return Err(ApiError::with("invalid", format!("state is one of {}.", api_1d::TASK_STATES.join(", "))));
+        }
+        let (pinned, _, _) = self.api.pinned(&org);
+        let mut entries: Vec<Value> = Vec::new();
+        if let Some((audit, _)) = self.api.audit_parts() {
+            for id in map_connectors(pinned.as_ref()).filter_map(|k| str_of(k.get("id"))) {
+                let (mut after, _) = audit.head(&org, id, crate::api_audit::Repr::AsIs);
+                let mut pages: Vec<Vec<Value>> = Vec::new();
+                for _ in 0..LIVE_TOKEN_PAGES {
+                    if after == 0 {
+                        break;
+                    }
+                    after = after.saturating_sub(1000);
+                    pages.push(audit.range(&org, id, crate::api_audit::Repr::AsIs, after, 1000));
+                }
+                // oldest first, as the fold reads them
+                entries.extend(pages.into_iter().rev().flatten());
+            }
+        }
+        let name = |id: &str| pinned.as_ref().and_then(|m| api_ui::find(m, "clients", id)).and_then(|c| str_of(c.get("name"))).map(str::to_owned);
+        Ok(json!({ "ok": true, "org": org, "tasks": api_1d::task_views(&entries, &name, &f) }))
+    }
+
+    /// `GET settings/api/spokes?org=` (7.14): SpokesView.
+    fn api_spokes_get(&self, q: &[(String, String)], t: i64) -> Result<Value, ApiError> {
+        let org = query_org(q)?;
+        let (pinned, _, _) = self.api.pinned(&org);
+        let draft = self.api_drafts.lock().get(&org, t).cloned();
+        let draft_map = draft.as_ref().map(|d| &d.map);
+        let live = self.spokes_relays_live();
+        let bound: Vec<String> = live.iter().map(|(id, _)| id.clone()).filter(|id| self.api.spokes_bound(id).iter().any(|o| *o == org)).collect();
+        let outdated: Vec<String> = self.api.outdated().into_iter().filter(|(o, _, _)| *o == org).map(|(_, r, _)| r).collect();
+        let names: HashMap<String, String> = self.registry.lock().relays.values().map(|r| (r.id.clone(), r.name.clone())).collect();
+        let lists = |m: Option<&Value>, id: &str| m.and_then(|m| m.pointer("/spokes/relays")).and_then(Value::as_array).is_some_and(|l| l.iter().any(|r| r.as_str() == Some(id)));
+        let relays: Vec<Value> = api_1d::spokes_relay_ids(&bound, pinned.as_ref(), draft_map)
+            .into_iter()
+            .map(|id| {
+                json!({ "id": id, "name": names.get(&id).cloned().unwrap_or_else(|| id.clone()), "connected": self.connected(&id), "bound": bound.contains(&id),
+                        "listed": lists(pinned.as_ref(), &id), "staged": lists(draft_map, &id), "outdated": outdated.contains(&id) })
+            })
+            .collect();
+        let candidates: Vec<Value> = live.iter().filter(|(id, _)| !bound.contains(id)).map(|(id, name)| json!({ "id": id, "name": name })).collect();
+        let console_root = self.book.lock().spokes_root.as_ref().and_then(|r| str_of(r.get("id")).map(str::to_owned));
+        Ok(api_1d::spokes_view(&org, console_root.as_deref(), pinned.as_ref(), draft_map, relays, candidates))
+    }
+
+    /// `POST settings/api/a2a/keys/drop {org, kid}` (7.1.4): `a2a_key_drop` at once (a tightening, never refused for
+    /// the draft), and the key out of the org's draft when it is staged there (`console_a2a::drop_key`).
+    fn api_a2a_key_drop(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let kid = str_of(p.get("kid")).filter(|k| (1..=64).contains(&k.len())).ok_or_else(|| ApiError::with("invalid", "kid is a card key id."))?.to_owned();
+        let mut drafts = self.api_drafts.lock();
+        let mut draft = drafts.get(org, t).cloned();
+        let (entry, changed) = crate::console_a2a::drop_key(&self.api, draft.as_mut(), org, &kid, t.div_euclid(1000))?;
+        if let (true, Some(d)) = (changed, draft) {
+            drafts.put(d, t);
+        }
+        let journaled = entry.get("id").cloned().unwrap_or(Value::Null);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "kid": kid, "journaled": journaled })), Some(org.to_owned()), json!({ "kid": kid, "journaled": journaled })))
+    }
+
+    /// API-1d 7.14: an `agent` client with `a2a` in a map view gains `card_check` (its PartnerCardView) and `handoff`
+    /// (the org's JWKS address and the thumbprints of its current card keys, 7.1.2 R6-12).
+    fn api_client_a2a(&self, org: &str, view: &mut Value, now: i64) {
+        let mut handoff: Option<Value> = None;
+        for c in view.get_mut("clients").and_then(Value::as_array_mut).into_iter().flatten() {
+            if str_of(c.get("kind")) != Some("agent") || !c.get("a2a").is_some_and(Value::is_object) {
+                continue;
+            }
+            let id = str_of(c.get("id")).unwrap_or("").to_owned();
+            c["card_check"] = crate::console_a2a::partner_card_view(&self.api, org, &id);
+            c["handoff"] = handoff
+                .get_or_insert_with(|| {
+                    let (pinned, _, _) = self.api.pinned(org);
+                    let issuer = pinned.as_ref().and_then(|m| m.pointer("/issuer/url")).and_then(Value::as_str);
+                    let jwks: Vec<Value> = pinned.as_ref().and_then(|m| m.pointer("/a2a/jwks")).and_then(Value::as_array).cloned().unwrap_or_default();
+                    let kids: Vec<String> = self.api.a2a_keys(org, now).into_iter().map(|(kid, _)| kid).collect();
+                    api_1d::handoff(issuer, &jwks, &kids)
+                })
+                .clone();
+        }
+    }
+
+    /// `POST settings/api/idps/test {issuer, private_ok}` or `{id}` (a staged or pinned idp): its discovery and JWKS
+    /// under 1a 8.1 (`ConsoleApi::idp_test`); the answer shows the issuer, `jwks_uri` and each key's kid, alg and
+    /// kty; only the test time and key count are kept (memory).
+    fn api_idp_test(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let (issuer, private_ok) = match str_of(p.get("id")).filter(|i| !i.is_empty()) {
+            Some(id) => {
+                let (pinned, _, _) = self.api.pinned(org);
+                let draft = self.api_drafts.lock().get(org, t).cloned();
+                let staged = draft.as_ref().and_then(|d| api_ui::find(&d.map, "idps", id)).cloned();
+                let i = staged.or_else(|| pinned.as_ref().and_then(|m| api_ui::find(m, "idps", id)).cloned()).ok_or_else(|| ApiError::with("not-found", api_1c::NO_IDP))?;
+                (str_of(i.get("issuer")).unwrap_or("").to_owned(), i.get("private_ok") == Some(&Value::Bool(true)))
+            }
+            None => (str_of(p.get("issuer")).unwrap_or("").trim().to_owned(), p.get("private_ok") == Some(&Value::Bool(true))),
+        };
+        if !issuer.starts_with("https://") || issuer.len() > 1024 {
+            return Err(ApiError::with("invalid", "issuer is the identity provider's https:// issuer."));
+        }
+        let (answer, keys) = match self.api.idp_test(&issuer, private_ok) {
+            Ok((jwks_uri, keys)) => {
+                self.api.idp_tested(org, &issuer, t.div_euclid(1000), keys.len());
+                (api_1c::idp_test_view(&issuer, &jwks_uri, &keys), Some(keys.len()))
+            }
+            Err(why) => (json!({ "ok": false, "issuer": issuer, "error": api_sentence(&why) }), None),
+        };
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "issuer": issuer, "private_ok": private_ok, "passed": keys.is_some(), "keys": keys })))
+    }
+
+    /// `POST settings/api/sso-url {provider, url}` (6.5 step 2): the SSO service's public URL for a registry provider
+    /// of the org (`url: null` removes it), kept by `ConsoleApi::set_sso_url`.
+    fn api_sso_url(&self, org: &str, p: &Value) -> Result<Done, ApiError> {
+        let provider = str_of(p.get("provider")).unwrap_or("").to_owned();
+        if !self.api.identity_providers(org).iter().any(|x| x.id == provider) {
+            return Err(ApiError::with("invalid", api_1c::NO_PROVIDER));
+        }
+        let url = match p.get("url") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(u)) => Some(u.trim()),
+            Some(_) => return Err(ApiError::with("invalid", "url is the SSO service's https:// URL, or null to remove it.")),
+        };
+        self.api.set_sso_url(org, &provider, url).map_err(|why| ApiError::with("invalid", api_sentence(&why)))?;
+        let sso_url = self.api.sso_url(org, &provider);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "provider": provider, "sso_url": sso_url })), Some(org.to_owned()), json!({ "provider": provider, "sso_url": sso_url })))
+    }
+}
+
+// ── API-1 revision 4 8, 13.1: outbound federation (the logic is `api_federation`) ─────────────────────────────
+
+impl Fleet {
+    /// `federation.token` and `federation.failed` (revision 4 11) into the org's console chain; never a token value.
+    fn federation_audit(&self, logger: Arc<crate::log::Logger>) -> crate::api_federation::AuditFn {
+        let audit = self.api_audit.clone();
+        Arc::new(move |org: &str, entry: Value| crate::fleet_agent::api_record(Some(&*audit), vec![(org.to_owned(), entry)], &logger, crate::codec::now_ms().div_euclid(1000)))
+    }
+
+    /// `GET settings/api/federation/documents?org=`: the discovery document and JWKS to publish, pinned and staged.
+    fn api_federation_documents(&self, q: &[(String, String)], t: i64) -> Result<Value, ApiError> {
+        let org = q.iter().find(|(k, _)| k == "org").map(|(_, v)| v.as_str()).filter(|o| crate::api_audit::org_ok(o)).ok_or_else(|| ApiError::with("invalid", "org is an organization id."))?;
+        let draft = self.api_drafts.lock().get(org, t).cloned();
+        Ok(crate::api_federation::documents_view(&self.api, draft.as_ref(), org))
+    }
+
+    /// `POST settings/api/federation/key/drop {org, kid}`: `federation_drop_key` at once (a tightening, never refused
+    /// for the draft), and the key out of the org's draft when it is staged there.
+    fn api_federation_drop(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let kid = str_of(p.get("kid")).filter(|k| (1..=64).contains(&k.len())).ok_or_else(|| ApiError::with("invalid", "kid is a federation key id."))?.to_owned();
+        let mut drafts = self.api_drafts.lock();
+        let mut draft = drafts.get(org, t).cloned();
+        let (entry, changed) = crate::api_federation::drop_key(&self.api, draft.as_mut(), org, &kid, t.div_euclid(1000))?;
+        if let (true, Some(d)) = (changed, draft) {
+            drafts.put(d, t);
+        }
+        let journaled = entry.get("id").cloned().unwrap_or(Value::Null);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "kid": kid, "journaled": journaled })), Some(org.to_owned()), json!({ "kid": kid, "journaled": journaled })))
+    }
+
+    /// `POST settings/api/federation/republished {org, kid}`: ends the `federation-jwks-republish` item of that key.
+    fn api_federation_republished(&self, org: &str, p: &Value) -> Result<Done, ApiError> {
+        let kid = str_of(p.get("kid")).filter(|k| (1..=64).contains(&k.len())).ok_or_else(|| ApiError::with("invalid", "kid is a federation key id."))?.to_owned();
+        crate::api_federation::confirm_republished(&self.api, &self.state_dir, org, &kid)?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "kid": kid })), Some(org.to_owned()), json!({ "kid": kid })))
+    }
+
+    /// `POST settings/exports/destinations/federation-test {org, id}`: one token exchange for the destination as
+    /// staged (with the draft's federation block) or pinned; the result only, never a token.
+    fn api_federation_test(&self, c: &Console, who: &Who, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        c.limit(crate::console_limits::Limit::EmailTest, &format!("exports-test|{}", who.email), t)?;
+        let (pinned, _, _) = self.api.pinned(org);
+        let draft = self.api_drafts.lock().get(org, t).cloned();
+        let (x, staged) = api_ui::destination_of(draft.as_ref(), pinned.as_ref(), &id).ok_or_else(|| ApiError::with("not-found", api_ui::NO_DESTINATION))?;
+        if !crate::api_federation::is_federated(&x) {
+            return Err(ApiError::with("invalid", "That destination does not use a federated credential."));
+        }
+        let fed = draft.as_ref().filter(|_| staged).and_then(|d| d.map.get("federation")).filter(|f| f.is_object());
+        let credential = crate::api_federation::credential_for(&self.api, org, &x, fed, self.federation_audit(c.logger.clone())).ok_or_else(|| ApiError::with("invalid", "The federated credential does not read."))?;
+        let answer = match crate::api_export_wire::federation_test(&credential) {
+            Ok((provider, exp)) => json!({ "ok": true, "provider": provider, "exp": exp }),
+            Err(e) => json!({ "ok": false, "error": api_sentence(&e.message) }),
+        };
+        let passed = answer["ok"] == json!(true);
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "passed": passed })))
+    }
+}
+
+// ── API-1 revision 4 7.4, 13.1: webhooks (the logic is `api_webhook` and the export engine) ─────────────────────
+
+impl Fleet {
+    /// The webhook entry a route names, as staged (with the draft's `webhook_keys`) or pinned.
+    fn webhook_of(&self, org: &str, id: &str, t: i64) -> Result<(Value, Option<Value>), ApiError> {
+        let (pinned, _, _) = self.api.pinned(org);
+        let draft = self.api_drafts.lock().get(org, t).cloned();
+        let (x, staged) = api_ui::destination_of(draft.as_ref(), pinned.as_ref(), id).ok_or_else(|| ApiError::with("not-found", api_ui::NO_DESTINATION))?;
+        if str_of(x.get("kind")) != Some("webhook") {
+            return Err(ApiError::with("invalid", "That destination is not a webhook."));
+        }
+        let keys = draft.as_ref().filter(|_| staged).and_then(|d| d.map.get("webhook_keys").cloned());
+        Ok((x, keys))
+    }
+
+    /// `POST settings/exports/destinations/verify {org, id}`: endpoint verification now (7.4), of the webhook as
+    /// staged or pinned; `webhook.verified` is audited by the engine.
+    fn api_webhook_verify(&self, c: &Console, who: &Who, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        c.limit(crate::console_limits::Limit::EmailTest, &format!("exports-test|{}", who.email), t)?;
+        let (x, keys) = self.webhook_of(org, &id, t)?;
+        let answer = match self.export.verify_webhook(org, &x, keys.as_ref(), t) {
+            Ok(()) => json!({ "ok": true, "verification": "verified" }),
+            Err(why) => json!({ "ok": false, "verification": "unverified", "error": api_sentence(&why) }),
+        };
+        let passed = answer["ok"] == json!(true);
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "passed": passed })))
+    }
+
+    /// 13.2 "Send a test" of a webhook: a `test.ping` naming it is appended to the org's event chains (no other
+    /// destination takes it) and sent at once, signed, to the endpoint as staged or pinned; only a verified endpoint
+    /// (or `verification: none`) gets it. A pass clears the draft's test need.
+    fn api_webhook_test(&self, org: &str, x: &Value, staged: bool, draft: Option<&api_ui::Draft>, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(x.get("id")).unwrap_or("").to_owned();
+        let keys = draft.filter(|_| staged).and_then(|d| d.map.get("webhook_keys").cloned());
+        let events = self.api.events().ok_or_else(|| ApiError::with("write-failed", "The console's event chains are not open."))?;
+        let seq = self.api.emit_event(org, "test.ping", json!({ "destination": id }), t.div_euclid(1000)).ok_or_else(|| ApiError::with("write-failed", "The test event could not be recorded."))?;
+        let identities = crate::api_catalog::Identities::of(str_of(x.get("identities")).unwrap_or("removed")).unwrap_or(crate::api_catalog::Identities::Removed);
+        let ce = crate::api_webhook::ping_event(&events, org, seq, crate::api_export::repr_of(identities)).ok_or_else(|| ApiError::with("write-failed", "The test event could not be read back."))?;
+        let sent = self.export.send_ping(org, x, keys.as_ref(), &ce, t);
+        let answer = match &sent {
+            Ok(()) => {
+                self.api_drafts.lock().tested(org, &id);
+                json!({ "ok": true })
+            }
+            Err(why) => json!({ "ok": false, "error": api_sentence(why) }),
+        };
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "passed": sent.is_ok() })))
+    }
+
+    /// `POST settings/exports/destinations/secret {org, id}`: a webhook already signed `v1` gets a new secret at once
+    /// (the old one signs too for `SECRET_OVERLAP_S`); one not yet `v1` is staged to it (two-person, 13.3). The secret
+    /// is in this answer only.
+    fn api_webhook_secret(&self, c: &Console, who: &Who, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let (x, _) = self.webhook_of(org, &id, t)?;
+        if x.pointer("/settings/signing").and_then(Value::as_str) != Some(crate::api_webhook::V1) {
+            return self.api_stage(c, who, "settings/exports/destinations/secret", org, p, t);
+        }
+        let vault = self.api.vault();
+        let secret = crate::api_webhook::new_secret(&*vault, org, &id, t.div_euclid(1000)).map_err(|e| ApiError::with("seal-provider-needed", e))?;
+        let mut answer = json!({ "ok": true, "secret": secret });
+        if let Some(r) = crate::api_webhook::secret_rotate_by(&*vault, org, &id) {
+            answer["rotate_by"] = json!(r);
+        }
+        Ok(Done::ok(Out::ok(answer), Some(org.to_owned()), json!({ "destination": id, "rotated": true })))
+    }
+
+    /// `POST settings/exports/destinations/replay {org, id, from}`: re-deliver from a feed cursor (`from` empty or
+    /// `oldest`: from the oldest event kept).
+    fn api_webhook_replay(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let from = str_of(p.get("from")).map(str::trim).filter(|f| !f.is_empty() && *f != "oldest");
+        if from.is_some_and(|f| f.len() > 512) {
+            return Err(ApiError::with("invalid", "from is a position of the event feed."));
+        }
+        self.export.replay_events(org, &id, from, t).map_err(|e| ApiError::with("invalid", api_sentence(&e)))?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true })), Some(org.to_owned()), json!({ "destination": id, "from": from.unwrap_or("oldest") })))
+    }
+
+    /// `POST settings/exports/destinations/resume {org, id}` (7.4): events delivery paused after `queue.max_age_s`
+    /// goes on from the same cursor.
+    fn api_webhook_resume(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        match self.export.resume_events(org, &id, t) {
+            Ok(true) => Ok(Done::ok(Out::ok(json!({ "ok": true })), Some(org.to_owned()), json!({ "destination": id }))),
+            Ok(false) => Err(ApiError::with("stale", "Nothing was changed: that destination's events are not paused.")),
+            Err(e) => Err(ApiError::with("not-found", api_sentence(&e))),
+        }
+    }
+
+    /// `POST settings/api/webhook-keys/drop {org, kid}` (2.4): `webhook_key_drop` at once (a tightening, never refused
+    /// for the draft), and the key out of the org's draft when it is staged there.
+    fn api_webhook_key_drop(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let kid = str_of(p.get("kid")).filter(|k| (1..=64).contains(&k.len())).ok_or_else(|| ApiError::with("invalid", "kid is a webhook key id."))?.to_owned();
+        let mut drafts = self.api_drafts.lock();
+        let mut draft = drafts.get(org, t).cloned();
+        let (entry, changed) = crate::api_webhook::drop_key(&self.api, draft.as_mut(), org, &kid, t.div_euclid(1000))?;
+        if let (true, Some(d)) = (changed, draft) {
+            drafts.put(d, t);
+        }
+        let journaled = entry.get("id").cloned().unwrap_or(Value::Null);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "kid": kid, "journaled": journaled })), Some(org.to_owned()), json!({ "kid": kid, "journaled": journaled })))
+    }
+}
+
+// ── API-1 revision 4 13.1, 13.2: compliance clients and the Compliance page ─────────────────────────────────────
+
+/// Revision 4 2.4 `client_lower_caps` from `settings/api/clients/caps`: the lowered caps journaled at once in the
+/// console journal (flushed before Ok; a tightening, never refused for the draft), unless the same entry is in force
+/// already. Ok is the entry id, or null when nothing was journaled.
+fn journal_lower_caps(api: &crate::console_api::ConsoleApi, org: &str, target: Option<Value>, now: i64) -> Result<Value, ApiError> {
+    let Some(target) = target else { return Ok(Value::Null) };
+    if api.console_active(org).iter().any(|e| e.action == "client_lower_caps" && e.target == target) {
+        return Ok(Value::Null);
+    }
+    let e = api.append_console(org, "client_lower_caps", target, now).map_err(|x| ApiError::with("invalid", api_sentence(&x.message)))?;
+    Ok(e.get("id").cloned().unwrap_or(Value::Null))
+}
+
+/// Revision 4 2.4 `POST settings/api/clients/recipient/drop {org, id}`: `client_drop_recipient` for the pinned
+/// client's recipient kid at once (flushed before Ok: new jobs are refused, open ones canceled), and that recipient
+/// leaves the client in the org's draft when it is staged there. Ok is the kid, the journal entry and whether the
+/// draft changed.
+fn drop_recipient(api: &crate::console_api::ConsoleApi, draft: Option<&mut api_ui::Draft>, org: &str, client: &str, now: i64) -> Result<(String, Value, bool), ApiError> {
+    let (pinned, _, _) = api.pinned(org);
+    let kid = api_ui::recipient_kid(pinned.as_ref(), client).ok_or_else(|| ApiError::with("not-found", api_ui::NO_RECIPIENT))?;
+    if crate::api_cjournal::recipient_dropped(&api.console_active(org), client, &kid) {
+        return Err(ApiError::with("stale", api_ui::RECIPIENT_DROPPED));
+    }
+    let entry = api.append_console(org, "client_drop_recipient", json!({ "client": client, "kid": kid }), now).map_err(|e| ApiError::with("write-failed", api_sentence(&e.message)))?;
+    let changed = draft.is_some_and(|d| api_ui::drop_recipient(d, client, &kid));
+    Ok((kid, entry, changed))
+}
+
+/// The `org` of a Compliance page read (`?org=`, nothing else).
+fn compliance_org(q: &[(String, String)]) -> Result<String, ApiError> {
+    if let Some((k, _)) = q.iter().find(|(k, _)| k != "org") {
+        return Err(ApiError::with("invalid", format!("Unknown filter: {k}.")));
+    }
+    q.iter().find(|(k, _)| k == "org").map(|(_, v)| v.clone()).filter(|o| crate::api_audit::org_ok(o)).ok_or_else(|| ApiError::with("invalid", "org is an organization id."))
+}
+
+impl Fleet {
+    /// `POST settings/api/clients/recipient/drop {org, id}`.
+    fn api_recipient_drop(&self, org: &str, p: &Value, t: i64) -> Result<Done, ApiError> {
+        let id = str_of(p.get("id")).unwrap_or("").to_owned();
+        let mut drafts = self.api_drafts.lock();
+        let mut draft = drafts.get(org, t).cloned();
+        let (kid, entry, changed) = drop_recipient(&self.api, draft.as_mut(), org, &id, t.div_euclid(1000))?;
+        if let (true, Some(d)) = (changed, draft) {
+            drafts.put(d, t);
+        }
+        let journaled = entry.get("id").cloned().unwrap_or(Value::Null);
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "kid": kid, "journaled": journaled })), Some(org.to_owned()), json!({ "client": id, "kid": kid, "journaled": journaled })))
+    }
+
+    /// `GET compliance/holds?org=` (13.2): the org's API holds and the console-placed holds every relay of its set
+    /// reports, oldest first, with the relays that did not answer.
+    fn compliance_holds(&self, q: &[(String, String)]) -> Result<Value, ApiError> {
+        let org = compliance_org(q)?;
+        let (holds, partial) = crate::api_compliance::org_holds(&*self.compliance_desk(), &org);
+        Ok(json!({ "ok": true, "org": org, "holds": holds, "partial": partial }))
+    }
+
+    /// `GET compliance/exports?org=` (13.2): the org's export jobs, newest first, the console's free space and the
+    /// org's archive relays; never content.
+    fn compliance_exports(&self, q: &[(String, String)]) -> Result<Value, ApiError> {
+        let org = compliance_org(q)?;
+        Ok(crate::api_exports::console_view(&*self.compliance_desk(), &org))
+    }
+
+    /// `POST compliance/exports/cancel {org, job, reason}` (13.1): an open or ready job ends `canceled` with code
+    /// `admin` at once (a tightening).
+    fn compliance_export_cancel(&self, r: &FleetReq) -> Result<Done, ApiError> {
+        let org = api_org(r.params)?;
+        let reason = reason_of(r.params.get("reason"))?;
+        let job = str_of(r.params.get("job")).unwrap_or("").to_owned();
+        let row = crate::api_exports::console_cancel(&*self.compliance_desk(), &org, &job, &reason, r.t.div_euclid(1000))?;
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "job": row })), Some(org), json!({ "job": job, "reason": reason })))
+    }
+}
+
+#[cfg(test)]
+mod compliance_client_tests {
+    //! API-1 revision 4 2.4, 13.1: what the recipient drop and caps routes journal in the console journal.
+    use super::*;
+
+    const ORG: &str = "acme";
+    const CLIENT: &str = "c_1b2c3d4e5f607182";
+
+    /// A console holding acme's pinned map with the export client of 2.1.
+    fn console_with_export_client(now: i64) -> Arc<crate::console_api::ConsoleApi> {
+        let logger = Arc::new(crate::log::Logger::capture("console", Box::new(|_, _| {})));
+        let vault: Arc<dyn crate::fleet_ca::VaultLock> = Arc::new(parking_lot::Mutex::new(crate::fleet_ca::MemVault::default()));
+        let api = Arc::new(crate::console_api::ConsoleApi::open(None, logger, vault));
+        let client = json!({"id": CLIENT, "name": "ediscovery-export", "kind": "compliance", "owner": "lee@acme.example", "reach": "R1",
+            "scopes": ["compliance.export.request"], "ceiling": "confidential", "relays": ["*"], "networks": [], "state": "active", "expires": now + 86_400,
+            "compliance": {"recipient": {"kid": "rcpt-2026-11", "jwk": {"kty": "EC", "crv": "P-256", "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"}},
+                           "job_max_bytes": 5368709120i64, "day_max_bytes": 21474836480i64, "jobs_per_day": 5}});
+        let m = json!({"v": 2, "org": ORG, "seq": 1, "issued": now - 10, "expires": now + 30 * 86_400, "issuer": {"url": "https://console.acme.example:7443/api/orgs/acme", "jwks": []},
+                       "grace": {"person": 0, "app": 0, "connector": 0, "relay": 0}, "failover_after_s": 300, "folded": [], "cleared": [],
+                       "relay_origins": {}, "clients": [client], "destinations": []});
+        let wire = json!({"map": m, "sig": "", "chain": []});
+        let vm = crate::api_map::VerifiedApiMap { org: ORG.into(), seq: 1, expires: now + 30 * 86_400, hash: crate::api_map::api_map_hash(&wire["map"]), signer: "root".into(), wire: wire.as_object().unwrap().clone() };
+        api.publish_verified(None, vm, now).unwrap();
+        api
+    }
+
+    fn draft_on(api: &crate::console_api::ConsoleApi, now: i64) -> (api_ui::Draft, Value) {
+        let (pinned, seq, _) = api.pinned(ORG);
+        let pinned = pinned.unwrap();
+        let d = api_ui::Draft::new(&api_ui::Ctx { org: ORG, by: "ann@acme.example", pinned: Some(&pinned), pinned_seq: seq }, "st_1".into(), now * 1000);
+        (d, pinned)
+    }
+
+    #[test]
+    fn lowered_caps_are_journaled_once_in_the_console_journal() {
+        let now = crate::codec::now_ms() / 1000;
+        let api = console_with_export_client(now);
+        let (mut d, pinned) = draft_on(&api, now);
+        // jobs_per_day lowered, day_max_bytes raised: only the lowering is journaled; both are staged
+        let target = api_ui::set_caps(&mut d, CLIENT, &json!({"jobs_per_day": 2, "day_max_bytes": 32212254720i64}), Some(&pinned)).unwrap();
+        let id = journal_lower_caps(&api, ORG, target.clone(), now).unwrap();
+        assert!(id.as_str().unwrap().starts_with("k_acme_"), "{id}");
+        let active = api.console_active(ORG);
+        assert_eq!(active.len(), 1);
+        assert_eq!((active[0].action.as_str(), &active[0].target), ("client_lower_caps", &json!({"client": CLIENT, "jobs_per_day": 2})));
+        assert_eq!(crate::api_cjournal::caps(Some(&pinned), &active, CLIENT).get("jobs_per_day"), Some(&2), "in effect at once");
+        assert_eq!(d.map["clients"][0]["compliance"]["day_max_bytes"], json!(32212254720i64));
+        // the same lowering again, or none: nothing journaled
+        assert_eq!(journal_lower_caps(&api, ORG, target, now).unwrap(), Value::Null);
+        assert_eq!(journal_lower_caps(&api, ORG, None, now).unwrap(), Value::Null);
+        assert_eq!(api.console_active(ORG).len(), 1);
+    }
+
+    #[test]
+    fn a_recipient_drop_is_journaled_at_once_and_leaves_the_draft() {
+        let now = crate::codec::now_ms() / 1000;
+        let api = console_with_export_client(now);
+        let (mut d, _) = draft_on(&api, now);
+        let (kid, entry, changed) = drop_recipient(&api, Some(&mut d), ORG, CLIENT, now).unwrap();
+        assert_eq!((kid.as_str(), changed), ("rcpt-2026-11", true));
+        assert!(entry["id"].as_str().unwrap().starts_with("k_acme_"));
+        assert_eq!((entry["action"].as_str(), entry["target"].clone()), (Some("client_drop_recipient"), json!({"client": CLIENT, "kid": "rcpt-2026-11"})));
+        assert!(crate::api_cjournal::recipient_dropped(&api.console_active(ORG), CLIENT, "rcpt-2026-11"));
+        assert!(d.map["clients"][0]["compliance"].get("recipient").is_none(), "the recipient left the draft");
+        assert_eq!(drop_recipient(&api, None, ORG, CLIENT, now).err().map(|e| e.code), Some("stale"));
+        assert_eq!(drop_recipient(&api, None, ORG, "c_0000000000000000", now).err().map(|e| e.code), Some("not-found"));
+        assert_eq!(api.console_active(ORG).len(), 1);
+    }
+
+    #[test]
+    fn the_compliance_routes_are_rows_with_their_roles() {
+        for (m, p, admin) in [("GET", "compliance/holds", false), ("GET", "compliance/exports", false), ("POST", "compliance/exports/cancel", true),
+                              ("POST", "settings/api/clients/recipient", true), ("POST", "settings/api/clients/caps", true), ("POST", "settings/api/clients/recipient/drop", true)] {
+            let (s, at) = fleet_route(m, p).unwrap_or_else(|| panic!("{m} {p}"));
+            assert!(at.is_none());
+            assert_eq!(matches!(s.role, Role::Admin), admin, "{p}");
+        }
+        assert!(fleet_route("POST", "settings/api/clients/recipient").unwrap().0.stepup);
+        assert!(!fleet_route("POST", "settings/api/clients/recipient/drop").unwrap().0.stepup);
+        assert_eq!(compliance_org(&[("org".into(), "acme".into())]).unwrap(), "acme");
+        assert_eq!(compliance_org(&[("org".into(), "acme".into()), ("client".into(), "x".into())]).err().map(|e| e.code), Some("invalid"));
+        assert_eq!(compliance_org(&[]).err().map(|e| e.code), Some("invalid"));
+    }
+}
+
 // ── API-1 7.1: the front door's view of an org's relays ────────────────────────────────────────────────────────
 
 /// The org's relays as the front door's resource routes report them: the relays that serve the org
@@ -6550,12 +7730,22 @@ impl crate::api_export::Host for ExportHost {
     }
 
     fn credential(&self, org: &str, id: &str) -> Option<crate::api_export_wire::Credential> {
-        self.fleet.upgrade()?.api.destination_credential(org, id)
+        let f = self.fleet.upgrade()?;
+        // revision 4 8: a federated credential is the pinned entry's public fields and the console's signer (R4-D11)
+        let entry = f.api.pinned(org).0.and_then(|m| m.get("destinations")?.as_array()?.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(id)).cloned());
+        if let Some(d) = entry.filter(crate::api_federation::is_federated) {
+            return crate::api_federation::credential_for(&f.api, org, &d, None, f.federation_audit(self.logger.clone()));
+        }
+        f.api.destination_credential(org, id)
     }
 
     fn delete_credential(&self, org: &str, id: &str) {
         if let Some(f) = self.fleet.upgrade() {
             f.api.delete_destination_credential(org, id);
+            // revision 4 7.4: a webhook's v1 secret goes with it
+            if let Err(e) = crate::api_webhook::delete_secret(&*f.api.vault(), org, id) {
+                self.logger.ops("exports.credential-not-removed", &Fields::new().with("org", org).with("destination", id).with("why", e), Level::Error);
+            }
         }
     }
 
@@ -6610,6 +7800,43 @@ impl crate::api_export::Host for ExportHost {
 
     fn make_sink(&self, destination: &Value, credential: crate::api_export_wire::Credential) -> Result<Box<dyn crate::api_export_wire::Sink>, crate::api_export_wire::SinkError> {
         export_sink(destination, credential, &self.host)
+    }
+
+    // API-1 revision 4 7.4, 7.5: events destinations and webhooks
+
+    fn event_view(&self, org: &str, client: &str, now: i64) -> Option<crate::api_webhook::EventView> {
+        let f = self.fleet.upgrade()?;
+        let store = f.api.org_snapshot(org)?;
+        crate::api_webhook::client_view(&store, org, client, now, &f.api_owner(org))
+    }
+
+    fn events_page(&self, org: &str, after: Option<&str>, limit: usize, view: &crate::api_webhook::EventView, repr: crate::api_audit::Repr, types: Option<Vec<String>>) -> Result<Value, crate::api_events::FeedError> {
+        let events = self.fleet.upgrade().and_then(|f| f.api.events()).ok_or(crate::api_events::FeedError::Unavailable)?;
+        crate::api_webhook::page(&events, org, after, limit, view, repr, types)
+    }
+
+    fn events_tail(&self, org: &str) -> Option<String> {
+        let events = self.fleet.upgrade()?.api.events()?;
+        crate::api_webhook::tail(&events, org)
+    }
+
+    fn events_dropped(&self) -> Vec<crate::api_audit::Dropped> {
+        self.fleet.upgrade().and_then(|f| f.api.events()).map(|e| e.take_dropped()).unwrap_or_default()
+    }
+
+    fn emit_event(&self, org: &str, kind: &str, data: Value, now: i64) {
+        if let Some(f) = self.fleet.upgrade() {
+            f.api.emit_event(org, kind, data, now);
+        }
+    }
+
+    fn suspend_destination(&self, org: &str, id: &str, now: i64) -> Result<(), String> {
+        let f = self.fleet.upgrade().ok_or_else(|| "the console is stopping".to_owned())?;
+        f.api.append(f.link.get().cloned(), org, "destination_suspend", json!(id), None, now).map(|_| ()).map_err(|e| e.message)
+    }
+
+    fn webhook_material(&self, org: &str, id: &str, staged: Option<&Value>, now: i64) -> crate::api_webhook::Material {
+        self.fleet.upgrade().map(|f| crate::api_webhook::console_material(&f.api, org, id, staged, now)).unwrap_or_default()
     }
 }
 
@@ -6682,6 +7909,27 @@ impl crate::api_resource::Data for FleetData<'_> {
 
     fn console(&self) -> Value {
         json!({"version": env!("CARGO_PKG_VERSION"), "fips": cfg!(feature = "fips")})
+    }
+
+    fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        self.fleet.api.events()
+    }
+
+    fn compliance(&self) -> Option<Arc<dyn crate::api_compliance::Desk>> {
+        Some(self.fleet.compliance_desk())
+    }
+
+    /// API-1d 6.1: `api-spokes` to a spokes relay bound to the org (`ConsoleApi::spokes_view`).
+    fn spokes(&self, org: &str, relay: &str, view: &str, query: &str, people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        let link = self.fleet.link.get().cloned();
+        self.fleet.api.spokes_view(link.as_deref(), org, relay, view, query, people)
+    }
+}
+
+impl Fleet {
+    /// API-1 revision 4 5.1, 5.2: what the compliance routes and their minute reach of this console.
+    pub fn compliance_desk(&self) -> Arc<dyn crate::api_compliance::Desk> {
+        Arc::new(crate::api_compliance::ConsoleDesk { api: self.api.clone(), link: self.link.get().cloned(), dir: Some(self.state_dir.clone()), audit: self.api_audit.clone(), people: self.people() })
     }
 }
 
@@ -7351,7 +8599,8 @@ mod tests {
         let tightens = h.sent("api-tighten");
         assert_eq!((tightens[0]["entry"]["tseq"].as_u64(), tightens[1]["entry"]["tseq"].as_u64()), (Some(1), Some(2)));
         let ops: Vec<String> = h.link.sent.lock().iter().filter(|(r, _, _)| *r == relay).map(|(_, o, _)| o.clone()).collect();
-        assert_eq!(&ops[..3], ["api-heads", "api-tighten", "api-tighten"], "{ops:?}");
+        // revision 4 2.3 item 1: api-features is the one request before the catch-up
+        assert_eq!(&ops[..4], ["api-heads", "api-features", "api-tighten", "api-tighten"], "{ops:?}");
         assert!(wait_for(|| h.f.api.acked(&relay, "acme") == 2));
         let _ = t;
     }
@@ -8102,7 +9351,7 @@ mod tests {
                             "days": 300});
         api_ui::add_client(&mut d, &client, CLIENT.into(), now).unwrap();
         let jwk = json!({"kty": "EC", "crv": "P-256", "kid": "i-seed", "x": "A".repeat(43), "y": "B".repeat(43), "use": "sig", "alg": "ES256"});
-        let m = api_ui::final_map(&d, "https://console.example.org:7443/api/orgs/acme", &jwk, &[], &[], now);
+        let m = api_ui::final_map(&d, "https://console.example.org:7443/api/orgs/acme", &jwk, &[], &[], &[], now);
         let wire = json!({"map": m.clone(), "sig": "", "chain": []});
         let vm = crate::api_map::VerifiedApiMap { org: "acme".into(), seq, expires: m["expires"].as_i64().unwrap(), hash: crate::api_map::api_map_hash(&m), signer: "root".into(), wire: wire.as_object().unwrap().clone() };
         h.f.api.publish_verified(None, vm, now).unwrap();
@@ -8150,6 +9399,40 @@ mod tests {
         assert!(s >= 400 && stringify(&v).contains(api_ui::STAGE_MOVED), "{v}");
         assert!(h.f.api_drafts.lock().get("acme", crate::codec::now_ms()).is_none(), "the stale draft is dropped");
         assert!(h.sent("api-sign-request").is_empty(), "no device was asked");
+    }
+
+    #[test]
+    fn api_a_failed_spokes_bind_leaves_the_draft_as_it_was() {
+        let mut h = boot("api-bind-fail");
+        pin_api_map(&h, 1);
+        let relay = h.seed(Product::Spokes);
+        // the console's Remote Spokes root, which a first bind stages
+        let spki = p256().spki();
+        h.f.book.lock().spokes_root = Some(json!({ "pem": pem_of("PUBLIC KEY", &spki), "id": crate::identity::node_id_of(&spki) }));
+        // a draft held before the bind
+        let (s, v) = h.post("/console/api/settings/api/clients/suspend", json!({"org": "acme", "id": CLIENT, "reason": "Leaked key"}));
+        assert_eq!(s, 200, "{v}");
+        let t = crate::codec::now_ms();
+        let before = h.f.api_drafts.lock().get("acme", t).cloned().unwrap();
+        // the relay already serves the most organizations it can, so recording one more fails
+        for i in 0..64 {
+            h.f.api.spokes_bind(None, &relay, &format!("org{i:02}"), true, t / 1000).unwrap();
+        }
+        let params = json!({"org": "acme", "relay": relay});
+        let mut body = params.clone();
+        body["stepup"] = h.stepup("api.spokes.bind", "acme", &params);
+        let (s, v) = h.post("/console/api/settings/api/spokes/bind", body);
+        assert!(s >= 400 && v["code"] == "write-failed", "{v}");
+        let after = h.f.api_drafts.lock().get("acme", crate::codec::now_ms()).cloned().unwrap();
+        assert_eq!(after.map, before.map, "the relay is not staged");
+        assert_eq!((after.id, after.changes), (before.id, before.changes));
+        // with no draft held before, a failed bind leaves none
+        assert!(h.f.api_drafts.lock().discard("acme"));
+        let mut body = params.clone();
+        body["stepup"] = h.stepup("api.spokes.bind", "acme", &params);
+        let (s, v) = h.post("/console/api/settings/api/spokes/bind", body);
+        assert!(s >= 400 && v["code"] == "write-failed", "{v}");
+        assert!(h.f.api_drafts.lock().get("acme", crate::codec::now_ms()).is_none());
     }
 
     #[test]

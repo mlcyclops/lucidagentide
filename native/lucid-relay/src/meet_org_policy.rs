@@ -34,7 +34,11 @@ const SIGNED_MAX: usize = 64 * 1024; // the whole signed object
 pub const RELAY_MAX: usize = 64; // org policies one relay holds
 const RETENTION_KINDS: &[&str] = &["dm", "group", "channel", "files", "canvas", "ai"];
 const RETENTION_MAX: i64 = 3650;
-const APP_TYPES: &[&str] = &["bot", "webhook", "workflows", "ai"];
+const APP_TYPES: &[&str] = &["bot", "webhook", "workflows", "ai", "api"];
+/// API-1c 2.3: an every-message app the org's connector runs.
+pub const API_APP_TYPE: &str = "api";
+pub const APP_TYPE_WORDS: &str = "an app's type must be bot, webhook, workflows, ai or api";
+pub const API_APP_COMMANDS: &str = "an api app has no commands";
 const SCOPES: &[&str] = &["mentions", "all"];
 const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
@@ -1192,7 +1196,10 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
         text(&a["name"], "an app's name", LABEL_MAX)?;
         let kind = a["type"].as_str();
         if !kind.is_some_and(|t| APP_TYPES.contains(&t)) {
-            return Err(bad("an app's type must be bot, webhook, workflows or ai"));
+            return Err(bad(APP_TYPE_WORDS));
+        }
+        if kind == Some(API_APP_TYPE) && a.contains_key("commands") {
+            return Err(bad(API_APP_COMMANDS)); // API-1c 2.3
         }
         if !a["scope"].as_str().is_some_and(|s| SCOPES.contains(&s)) {
             return Err(bad("an app's scope must be mentions or all"));
@@ -1343,8 +1350,23 @@ pub fn watch(policy: Option<&Obj>) -> &'static str {
 const AI_KEYS: &[&str] = &[
     "v", "enabled", "who", "order", "classes", "cui_classes", "default_class", "frontier_classes",
     "redact_for_frontier", "frontier", "models", "device_models", "embedding", "deadlines_ms", "budgets", "org_index",
-    "map_sha256",
+    "map_sha256", "local_mcp",
 ];
+/// API-1c 10.6: the fields of `ai.local_mcp` and the Hub-local MCP tools it may name.
+const AI_LOCAL_MCP_KEYS: &[&str] = &["enabled", "classes", "tools", "send"];
+pub const LOCAL_MCP_TOOLS: &[&str] =
+    &["search", "read_conversation", "list_meetings", "read_meeting_notes", "draft_reply", "send_message"];
+pub const AI_LOCAL_MCP: &str = "ai.local_mcp must be an object of enabled, classes, tools and send";
+pub const AI_LOCAL_MCP_ENABLED: &str = "ai.local_mcp.enabled must be true or false";
+pub const AI_LOCAL_MCP_CLASSES: &str = "ai.local_mcp.classes must be classes and never CUI";
+pub const AI_LOCAL_MCP_TOOLS: &str = "ai.local_mcp.tools must name local MCP tools";
+pub const AI_LOCAL_MCP_SEND: &str = "ai.local_mcp.send needs send_message";
+pub const AI_LOCAL_MCP_STANDARD: &str = "AI apps on people's computers (ai.local_mcp) need an enterprise license.";
+/// The API-1c release of the Hub and the iPhone (`api` apps and `ai.local_mcp`).
+const API_1C_CLIENTS: [(&str, &str); 2] = [("hub", "0.99.0"), ("ios", "0.99.0")];
+pub const API_APP_TOO_SOON: &str =
+    "API apps need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.";
+pub const LOCAL_MCP_TOO_SOON: &str = "AI apps on people's computers need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.";
 const AI_ROUTES: &[&str] = &["device", "org", "frontier"];
 const AI_ACCESS: &[&str] = &["org", "personal", "either", "none"];
 const AI_PLANS: &[&str] = &["business", "any"];
@@ -1514,6 +1536,9 @@ pub fn check_ai(ai: &Value, terms: &SignerTerms) -> Result<(), PolicyError> {
     if !a.get("map_sha256").and_then(Value::as_str).is_some_and(|h| !h.ends_with('\n') && hex_ok(h, 64, 64)) {
         return Err(bad("ai.map_sha256 must name the AI map"));
     }
+    if let Some(lm) = a.get("local_mcp") {
+        check_local_mcp(lm, &classes, &cui)?;
+    }
     // cross-field rules
     let frontier_in_order = order.contains(&"frontier");
     if frontier_in_order != (access != "none") {
@@ -1527,6 +1552,51 @@ pub fn check_ai(ai: &Value, terms: &SignerTerms) -> Result<(), PolicyError> {
     }
     if asksage_only && f.contains_key("personal") && personal_providers != ["asksage"] {
         return Err(bad(AI_ASKSAGE));
+    }
+    Ok(())
+}
+
+/// API-1c 10.6: `ai.local_mcp` against the `ai` key's `classes` and `cui_classes`. `enabled` and `tools` are required;
+/// `classes` defaults to none and `send` to false. Each row of the table with its own words, in its order.
+pub fn check_local_mcp(lm: &Value, classes: &[&str], cui: &[&str]) -> Result<(), PolicyError> {
+    let o = lm.as_object().filter(|o| o.keys().all(|k| AI_LOCAL_MCP_KEYS.contains(&k.as_str()))).ok_or_else(|| bad(AI_LOCAL_MCP))?;
+    ai_bool(o.get("enabled"), AI_LOCAL_MCP_ENABLED)?;
+    if let Some(c) = o.get("classes") {
+        let ok = |x: &Value| x.as_str().is_some_and(|s| classes.contains(&s) && !cui.contains(&s));
+        ai_strs(Some(c), 0, AI_CLASSES_MAX, ok).ok_or_else(|| bad(AI_LOCAL_MCP_CLASSES))?;
+    }
+    let tools = ai_strs(o.get("tools"), 1, LOCAL_MCP_TOOLS.len(), |x| x.as_str().is_some_and(|s| LOCAL_MCP_TOOLS.contains(&s)))
+        .ok_or_else(|| bad(AI_LOCAL_MCP_TOOLS))?;
+    let send = match o.get("send") {
+        None => false,
+        v => ai_bool(v, AI_LOCAL_MCP_SEND)?,
+    };
+    if send && !tools.contains(&"send_message") {
+        return Err(bad(AI_LOCAL_MCP_SEND));
+    }
+    Ok(())
+}
+
+/// The policy lists an app of type `api`.
+pub fn has_api_app(policy: &Obj) -> bool {
+    policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| a.get("type").and_then(Value::as_str) == Some(API_APP_TYPE))
+}
+
+/// api_app_gate (API-1c 2.3): a policy with an `api` app is taken only once the relay's minimums reach the API-1c
+/// release of both the Hub and the iPhone (an older app refuses the whole policy for the unknown type).
+pub fn api_app_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    if policy.and_then(Value::as_object).is_some_and(has_api_app) && !version_ready(&API_1C_CLIENTS, minimums) {
+        return Err(API_APP_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// local_mcp_gate (API-1c 10.6): a policy whose `ai` key has `local_mcp` is taken only once the relay's minimums reach
+/// the API-1c release (an older app refuses an `ai` key with an unknown field).
+pub fn local_mcp_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let wants = policy.and_then(|p| p.get("ai")).and_then(Value::as_object).is_some_and(|a| a.contains_key("local_mcp"));
+    if wants && !version_ready(&API_1C_CLIENTS, minimums) {
+        return Err(LOCAL_MCP_TOO_SOON.into());
     }
     Ok(())
 }
@@ -1550,8 +1620,13 @@ pub fn ai_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
 
 /// ai_edition_gate (1.5): with `ai.enabled` true, a big organization (`enterprise`) needs the archive and at least 3
 /// archive reviewers; a small one (`standard`) with an archive needs at least one reviewer. Any edition other than
-/// `standard`, and no license at all (`None`), is big.
+/// `standard`, and no license at all (`None`), is big. API-1c 10.6 (decision O6): `ai.local_mcp.enabled` true is
+/// refused on `standard`, whatever `ai.enabled` says.
 pub fn ai_edition_gate(policy: &Obj, edition: Option<&str>) -> Result<(), String> {
+    let local_mcp_on = policy.get("ai").and_then(|a| a.get("local_mcp")).and_then(|l| l.get("enabled")).and_then(Value::as_bool) == Some(true);
+    if edition == Some("standard") && local_mcp_on {
+        return Err(AI_LOCAL_MCP_STANDARD.into());
+    }
     let enabled = policy.get("ai").and_then(|a| a.get("enabled")).and_then(Value::as_bool) == Some(true);
     if !enabled {
         return Ok(());
@@ -1571,7 +1646,7 @@ pub fn ai_edition_gate(policy: &Obj, edition: Option<&str>) -> Result<(), String
 const AI_MAP_LABEL: &str = "lucid-meet-org-ai-v1";
 /// The whole signed AI map.
 const AI_MAP_MAX: usize = 256 * 1024;
-const AI_MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "gateways", "channel_classes", "excluded_channels", "who_principals"];
+const AI_MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "gateways", "channel_classes", "excluded_channels", "who_principals", "mcp_servers", "mcp_cleared"];
 const AI_MAP_REQUIRED: &[&str] = &["v", "org", "seq", "issued"];
 const AI_GATEWAY_KEYS: &[&str] = &["url", "principal", "device", "spki", "region"];
 const AI_GATEWAY_REQUIRED: &[&str] = &["url", "principal", "device", "spki"];
@@ -1704,6 +1779,8 @@ pub fn check_ai_map(ai_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyEr
         .ok_or_else(|| bad(AI_MAP_EXCLUDED))?;
     let person = |v: &Value| split_value(v).is_ok_and(|(_, d)| !d.starts_with(APPS_PREFIX));
     let who = ai_strs(Some(m.get("who_principals").unwrap_or(&empty_list)), 0, AI_PEOPLE_MAX, person).ok_or_else(|| bad(AI_MAP_WHO))?;
+    // API-1 r6 8.1: the gateway MCP allow list (optional keys, readers first)
+    crate::ai_mcp::check_mcp_shape(m).map_err(|e| bad(&e))?;
     let Some(policy) = policy else { return Ok(()) };
     if policy.get("org").and_then(Value::as_str) != Some(org) {
         return Err(bad(AI_MAP_ORG));
@@ -1730,6 +1807,7 @@ pub fn check_ai_map(ai_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyEr
     if who.iter().any(|p| !p.split_once('@').is_some_and(|(_, d)| domains.contains(&d))) {
         return Err(bad(AI_MAP_WHO));
     }
+    crate::ai_mcp::check_mcp_policy(m, policy).map_err(|e| bad(&e))?;
     Ok(())
 }
 
@@ -3748,6 +3826,14 @@ mod tests {
             assert_eq!(got, c["expect"].as_str().unwrap(), "editions/{}", c["name"]);
             seen += 1;
         }
+        // API-1c 2.3 and 10.6
+        for (key, gate) in [("api_gates", api_app_gate as fn(Option<&Value>, &Obj) -> Result<(), String>), ("local_mcp_gates", local_mcp_gate)] {
+            for c in doc[key].as_array().unwrap() {
+                let got = verdict(gate(Some(&c["policy"]), c["min_client"].as_object().unwrap()));
+                assert_eq!(got, c["expect"].as_str().unwrap(), "{key}/{}", c["name"]);
+                seen += 1;
+            }
+        }
         for c in doc["maps"].as_array().unwrap() {
             let policy = c["policy"].as_object().unwrap();
             let label = pj::s(policy, "label");
@@ -3795,6 +3881,62 @@ mod tests {
         }
         assert!(seen > 50, "only {seen} cases");
         assert!(doc["ai_max_bytes"].as_u64().unwrap() < 32 * 1024);
+    }
+
+    #[test]
+    fn api_apps_and_local_mcp_follow_api_1c() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let terms = SignerTerms { enclave: false, ..signer_terms(doc["signer_policy"].as_object().unwrap()).unwrap() };
+        let full = doc["policies"].as_array().unwrap().iter().find(|c| c["name"] == "full").unwrap()["policy"].clone();
+        let api_app = json!({"principal": "helpdesk-api@apps.acme.com", "device": "a3a3a3a3a3a3a3a3", "name": "Helpdesk API",
+                             "type": "api", "scope": "all", "host": "connector.acme.com"});
+        let with = |app: Value| {
+            let mut p = full.clone();
+            p["apps"].as_array_mut().unwrap().push(app);
+            p
+        };
+        // 2.3: the type, no commands, scope all
+        assert_eq!(verdict(check_policy(&with(api_app.clone()), &terms)), "ok");
+        let mut cmds = api_app.clone();
+        cmds["commands"] = json!([]);
+        assert_eq!(verdict(check_policy(&with(cmds), &terms)), API_APP_COMMANDS);
+        let mut rest = api_app.clone();
+        rest["type"] = json!("rest");
+        assert_eq!(verdict(check_policy(&with(rest), &terms)), APP_TYPE_WORDS);
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let p = with(api_app);
+        assert!(has_api_app(p.as_object().unwrap()) && !has_api_app(full.as_object().unwrap()));
+        assert_eq!(api_app_gate(Some(&p), &mins(json!({"hub": "0.99.0", "ios": "0.98.1"}))).unwrap_err(), API_APP_TOO_SOON);
+        assert!(api_app_gate(Some(&p), &mins(json!({"hub": "0.99.0", "ios": "0.99.0"}))).is_ok());
+        assert!(api_app_gate(Some(&full), &mins(json!({}))).is_ok());
+        // 10.6: ai.local_mcp rows, gate and edition
+        let lm = json!({"enabled": true, "classes": ["public", "internal"], "tools": ["search", "draft_reply"], "send": false});
+        let with_lm = |v: Value| {
+            let mut p = full.clone();
+            p["ai"]["local_mcp"] = v;
+            p
+        };
+        let good = with_lm(lm.clone());
+        assert_eq!(verdict(check_policy(&good, &terms)), "ok");
+        for (bad_lm, words) in [
+            (json!(true), AI_LOCAL_MCP),
+            (json!({"enabled": true, "tools": ["search"], "http": true}), AI_LOCAL_MCP),
+            (json!({"tools": ["search"]}), AI_LOCAL_MCP_ENABLED),
+            (json!({"enabled": true, "tools": ["search"], "classes": ["cui"]}), AI_LOCAL_MCP_CLASSES),
+            (json!({"enabled": true, "tools": ["search"], "classes": ["secret"]}), AI_LOCAL_MCP_CLASSES),
+            (json!({"enabled": true, "tools": []}), AI_LOCAL_MCP_TOOLS),
+            (json!({"enabled": true, "tools": ["search", "search"]}), AI_LOCAL_MCP_TOOLS),
+            (json!({"enabled": true, "tools": ["search"], "send": true}), AI_LOCAL_MCP_SEND),
+            (json!({"enabled": true, "tools": ["send_message"], "send": "no"}), AI_LOCAL_MCP_SEND),
+        ] {
+            assert_eq!(verdict(check_policy(&with_lm(bad_lm.clone()), &terms)), words, "{bad_lm}");
+        }
+        assert_eq!(verdict(check_policy(&with_lm(json!({"enabled": true, "tools": ["send_message"], "send": true})), &terms)), "ok");
+        assert_eq!(local_mcp_gate(Some(&good), &mins(json!({"hub": "0.98.1", "ios": "0.99.0"}))).unwrap_err(), LOCAL_MCP_TOO_SOON);
+        assert!(local_mcp_gate(Some(&good), &mins(json!({"hub": "0.99.0", "ios": "0.99.0"}))).is_ok());
+        assert!(local_mcp_gate(Some(&full), &mins(json!({}))).is_ok());
+        assert_eq!(ai_edition_gate(good.as_object().unwrap(), Some("standard")).unwrap_err(), AI_LOCAL_MCP_STANDARD);
+        assert!(ai_edition_gate(good.as_object().unwrap(), Some("enterprise")).is_ok());
     }
 
     #[test]

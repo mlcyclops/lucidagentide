@@ -140,8 +140,9 @@ pub const MAIL_WORDS: [(&str, &str, &str); 14] = [
     ),
 ];
 
-/// The AC-2a 13.5 license reminder mails a fleet console sends its own admins per relay (revision 3.4).
-pub const FLEET_MAIL_WORDS: [(&str, &str, &str); 3] = [
+/// The AC-2a 13.5 mails of a fleet console: the license reminders it sends its own admins per relay (revision 3.4)
+/// and the delegation notice of API-1 revision 5 6.3 (`fleet.mail.delegation`, to the person).
+pub const FLEET_MAIL_WORDS: [(&str, &str, &str); 4] = [
     (
         "fleet.mail.license-reminder",
         "The <product> license of <relay> ends in <days> days",
@@ -156,6 +157,11 @@ pub const FLEET_MAIL_WORDS: [(&str, &str, &str); 3] = [
         "fleet.mail.license-stopped",
         "<relay> stopped: no active license",
         "<relay> stopped serving people because it has no active <product> license.\nThe Admin Console can still reach it. Install a license from the License page and it starts again.",
+    ),
+    (
+        "fleet.mail.delegation",
+        "<client> can now act for you in the Lucid Admin Console",
+        "<client> can now read Lucid Admin Console data as you, with these scopes: <scopes>.\nIt started on <date and time>.\nIf you did not expect this, tell an admin of the console. They can stop <client> from acting for you.",
     ),
 ];
 
@@ -1631,30 +1637,44 @@ impl Mailer {
         self.enqueue_as(kind, to, args, false);
     }
 
+    /// `enqueue` that says whether the mail was taken into the queue of a running sender: false while mail is off,
+    /// when the sender's thread never started or this mailer is closing, and when the address or arguments cannot be
+    /// mailed (API-1 r5 6.3: a delegation notice counts as sent only once taken).
+    pub fn enqueue_taken(&self, kind: &str, to: &str, args: &[(&str, String)]) -> bool {
+        self.sending() && self.enqueue_as(kind, to, args, false)
+    }
+
+    /// A sender worker runs: its thread started and this mailer is not closed.
+    fn sending(&self) -> bool {
+        self.handle.is_some() && !self.inner.closed.load(Ordering::SeqCst)
+    }
+
     /// `enqueue` in the license reminder class (R42-3, R7-L2): bounded and coalescing, never evicting other mail.
     pub fn enqueue_reminder(&self, kind: &str, to: &str, args: &[(&str, String)]) {
         self.enqueue_as(kind, to, args, true);
     }
 
-    fn enqueue_as(&self, kind: &str, to: &str, args: &[(&str, String)], reminder: bool) {
+    fn enqueue_as(&self, kind: &str, to: &str, args: &[(&str, String)], reminder: bool) -> bool {
         if self.inner.cfg.lock().mode == Mode::Off {
-            return;
+            return false;
         }
         #[cfg(test)]
         {
             let mut c = self.inner.capture.lock();
             if c.on {
                 c.mails.push((kind.to_owned(), to.to_owned(), owned_args(args)));
-                return;
+                return true;
             }
         }
         let refused = |why: &str| {
             let fields = Fields::new().with("kind", kind).with("attempt", 0u64).with("final", true).with("reason", why);
             self.inner.logger.security("console.mail-failed", &fields, Level::Warn);
+            false
         };
         let Ok(to) = parse_mailbox(to) else { return refused("the address cannot be mailed") };
         let Some((subject, body)) = render(kind, &self.host, &self.console_url, args) else { return refused("the message could not be built") };
         self.inner.push(Job { kind: kind.to_owned(), to, subject, body, attempts: 0, due: Instant::now(), reminder });
+        true
     }
 
     /// Blocking send through `cfg` now (the test mail, the staged save): Ok, or Err(the server's answer, cleaned,
@@ -2730,6 +2750,27 @@ mod tests {
         m.enqueue("mail.reseated", "erin@acme.example", &[]);
         wait_until("a delivery", || !m.failing());
         assert_eq!(seen.lock().mails.len(), 3);
+    }
+
+    /// API-1 r5 6.3 (review P2): `enqueue_taken` is true only when a running sender took the mail, so a delegation
+    /// notice is never marked sent by a mailer that cannot send it.
+    #[test]
+    fn enqueue_taken_needs_mail_on_and_a_running_sender() {
+        let (m, _) = mailer();
+        let args = [("client", "claude-ops".to_owned()), ("scopes", "monitor.read".to_owned()), ("date and time", "2026-11-24 10:00 UTC".to_owned())];
+        assert!(!m.enqueue_taken("fleet.mail.delegation", "ann@acme.example", &args), "mail is off");
+        m.configure(smtp_cfg("mail-taken.test", 25, SmtpTls::StartTls, None));
+        m.capture();
+        assert!(m.enqueue_taken("fleet.mail.delegation", "ann@acme.example", &args), "mail on and a sender running");
+        assert_eq!(m.captured().len(), 1);
+        // a mailer whose sender thread never started takes nothing
+        let dead = Mailer { host: HOST.into(), console_url: CONSOLE.into(), inner: m.inner.clone(), handle: None };
+        assert!(!dead.enqueue_taken("fleet.mail.delegation", "ann@acme.example", &args));
+        assert_eq!(m.captured().len(), 1);
+        // nor one that is closing (dropping a mailer closes its sender)
+        drop(dead);
+        assert!(!m.enqueue_taken("fleet.mail.delegation", "ann@acme.example", &args));
+        assert_eq!(m.captured().len(), 1);
     }
 
     #[test]

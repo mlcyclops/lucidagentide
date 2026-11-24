@@ -20,6 +20,11 @@ const AUDIT_MAX: usize = 10000;
 const AUDIT_PAGE: usize = 1000;
 const AUDIT_PERSONAL: [&str; 11] = ["v", "rid", "ts", "provider", "method", "plan", "class", "model", "tokens_in", "tokens_out", "tier"];
 const AUDIT_DROPPED: [&str; 5] = ["v", "rid", "ts", "event", "reason"];
+/// API-1c 10.7: a Hub-local MCP call's record (plus `code` when not answered).
+const LOCAL_MCP_KEYS: [&str; 10] = ["v", "rid", "ts", "event", "client", "program", "tool", "class", "items", "outcome"];
+const LOCAL_MCP_OUTCOMES: [&str; 3] = ["answered", "refused", "declined"];
+const LOCAL_MCP_SHAPE: &str =
+    "a local_mcp audit record is {v, rid, ts, event, client, program: {sha256, signer, id}, tool, class, items, outcome, code?}";
 const AUDIT_METHODS: [&str; 2] = ["key", "oauth"];
 const AUDIT_PLANS: [&str; 3] = ["business", "not_business", "unknown"];
 const AUDIT_TEXT_MAX: usize = 128;
@@ -47,12 +52,55 @@ fn same_keys(o: &Obj, keys: &[&str]) -> bool {
     o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k))
 }
 
+/// _ai_local_mcp_record (API-1c 10.7): one Hub-local MCP call, `{v, rid, ts, event: "local_mcp", client, program:
+/// {sha256, signer, id}, tool, class, items, outcome, code?}`, `code` exactly when `outcome` is not `answered`. No
+/// content and no query text.
+fn local_mcp_record(rec: Obj, rid_ok: bool, ts_ok: bool, items_ok: bool) -> R<Obj> {
+    let text = |v: Option<&Value>, lo: usize, hi: usize| {
+        v.and_then(Value::as_str).is_some_and(|t| (lo..=hi).contains(&t.chars().count()) && (t.is_empty() || pj::printable(t)))
+    };
+    let outcome = rec.get("outcome").and_then(Value::as_str).unwrap_or("");
+    let answered = outcome == "answered";
+    let keys_ok = if answered {
+        same_keys(&rec, &LOCAL_MCP_KEYS)
+    } else {
+        rec.len() == LOCAL_MCP_KEYS.len() + 1 && rec.contains_key("code") && LOCAL_MCP_KEYS.iter().all(|k| rec.contains_key(*k))
+    };
+    let program_ok = rec.get("program").and_then(Value::as_object).is_some_and(|p| {
+        same_keys(p, &["sha256", "signer", "id"])
+            && p.get("sha256").and_then(Value::as_str).is_some_and(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+            && text(p.get("signer"), 1, AUDIT_TEXT_MAX)
+            && text(p.get("id"), 0, AUDIT_TEXT_MAX)
+    });
+    let code_ok = answered
+        || rec.get("code").and_then(Value::as_str).is_some_and(|c| (1..=32).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'));
+    let ok = keys_ok
+        && pj::as_int(rec.get("v")) == Some(1)
+        && rid_ok
+        && ts_ok
+        && items_ok
+        && text(rec.get("client"), 1, 64)
+        && program_ok
+        && rec.get("tool").and_then(Value::as_str).is_some_and(|t| op::LOCAL_MCP_TOOLS.contains(&t))
+        && text(rec.get("class"), 1, AUDIT_TEXT_MAX)
+        && LOCAL_MCP_OUTCOMES.contains(&outcome)
+        && code_ok;
+    if !ok {
+        return bad(LOCAL_MCP_SHAPE);
+    }
+    Ok(rec)
+}
+
 /// _ai_audit_record: a checked 6.6 record (no content), without `session`: a personal-access request, or a dropped
 /// history record (`event` `ai_history_dropped`).
 fn audit_record(body: &Obj) -> R<Obj> {
     let rec: Obj = body.iter().filter(|(k, _)| k.as_str() != "session").map(|(k, v)| (k.clone(), v.clone())).collect();
     let whole = |v: Option<&Value>| pj::as_int(v).is_some_and(|n| (0..=MAX).contains(&n));
     let rid_ok = rec.get("rid").and_then(Value::as_str).is_some_and(|r| r.len() == 32 && r.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+    if rec.get("event").and_then(Value::as_str) == Some("local_mcp") {
+        let (ts_ok, items_ok) = (whole(rec.get("ts")), whole(rec.get("items")));
+        return local_mcp_record(rec, rid_ok, ts_ok, items_ok);
+    }
     let dropped = same_keys(&rec, &AUDIT_DROPPED);
     if !(dropped || same_keys(&rec, &AUDIT_PERSONAL)) || pj::as_int(rec.get("v")) != Some(1) || !rid_ok || !whole(rec.get("ts")) {
         return bad(AI_AUDIT_SHAPE);
@@ -126,8 +174,14 @@ impl State {
 
     /// _ai_app_of: `who` is an `ai` app (principal and device) of `policy`, with that org only.
     pub(crate) fn ai_app_of(who: &Identity, policy: Option<&Obj>) -> bool {
+        Self::app_of(who, policy, &["ai"])
+    }
+
+    /// `who` is an app of one of `types` (principal and device) of `policy`, with that org only (API-1c 2.5: the
+    /// org's `api` apps read `GET /v1/org/ai` too).
+    pub(crate) fn app_of(who: &Identity, policy: Option<&Obj>, types: &[&str]) -> bool {
         let Some(policy) = policy else { return false };
-        who.kind == "app" && who.orgs.len() == 1 && policy.get("org").and_then(Value::as_str) == Some(who.orgs[0].as_str()) && pc::ai_app_of(policy, who)
+        who.kind == "app" && who.orgs.len() == 1 && policy.get("org").and_then(Value::as_str) == Some(who.orgs[0].as_str()) && pc::app_of_types(policy, who, types)
     }
 
     /// _ai_is_ai_app: a current policy names `principal` as an app of type `ai`.
@@ -332,7 +386,10 @@ impl Hub {
 
     /// `GET /v1/ai/allowed` (a person, about themselves) or `?principal=` (an `ai` app, only for principals its own
     /// org's policy covers; 404 otherwise) -> `{allowed, read_at}`, computed now from the current policy and AI map.
-    pub fn ai_allowed(&self, who: &Identity, principal: &str) -> R<Obj> {
+    /// API-1 r6 8.6: the app form with `groups` (`groups=1`) adds `groups`, the person's fresh listed groups among
+    /// the current policy's `ai.who.groups` (the gateway's MCP allow list is per group).
+    pub fn ai_allowed(&self, who: &Identity, principal: &str, groups: bool) -> R<Obj> {
+        let with_groups = groups && !principal.is_empty();
         let asked = if principal.is_empty() { String::new() } else { m::principal(Some(&Value::from(principal))) };
         let mut st = self.st.lock();
         let current = st.pc_current();
@@ -348,7 +405,13 @@ impl Hub {
             }
             (who.principal.clone(), pc::covering(&current, &who.principal).cloned())
         };
-        let Some(policy) = policy else { return Ok(obj([("allowed", Value::Bool(false)), ("read_at", Value::from(0))])) };
+        let Some(policy) = policy else {
+            let mut out = obj([("allowed", Value::Bool(false)), ("read_at", Value::from(0))]);
+            if with_groups {
+                out.insert("groups".into(), Value::Array(Vec::new()));
+            }
+            return Ok(out);
+        };
         let org = pj::text_of(&policy, "org");
         let record = st.ext.get("ai").and_then(|a| a.get("groups")).and_then(|g| g.get(&org)).and_then(|g| g.get(&asked)).and_then(Value::as_object).map(|r| op::AiGroupRecord {
             principal: asked.clone(),
@@ -357,8 +420,20 @@ impl Hub {
         });
         let named = named_hash(Some(&policy));
         let map = st.ai_maps().and_then(|m| m.get(&org, &named)).and_then(|v| v.wire.get("map")).and_then(Value::as_object).cloned();
-        let (allowed, read_at) = op::ai_allowed(&asked, Some(&policy), map.as_ref(), record.as_ref(), pj::now(), op::AI_GROUPS_FRESH_S);
-        Ok(obj([("allowed", Value::Bool(allowed)), ("read_at", Value::from(read_at))]))
+        let now = pj::now();
+        let (allowed, read_at) = op::ai_allowed(&asked, Some(&policy), map.as_ref(), record.as_ref(), now, op::AI_GROUPS_FRESH_S);
+        let mut out = obj([("allowed", Value::Bool(allowed)), ("read_at", Value::from(read_at))]);
+        if with_groups {
+            let who_groups: Vec<&str> = policy.get("ai").and_then(|a| a.get("who")).and_then(|w| w.get("groups")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+            let mut listed: Vec<String> = record
+                .as_ref()
+                .filter(|r| now - r.read_at as f64 <= op::AI_GROUPS_FRESH_S as f64)
+                .map(|r| r.listed.iter().filter(|g| who_groups.contains(&g.as_str())).cloned().collect())
+                .unwrap_or_default();
+            listed.sort();
+            out.insert("groups".into(), Value::Array(listed.into_iter().map(Value::from).collect()));
+        }
+        Ok(out)
     }
 
     /// `POST /v1/ai/audit`: a device's 6.6 record (no content), kept in state.json (at most AUDIT_MAX, the oldest go)
@@ -378,6 +453,12 @@ impl Hub {
         }
         st.dirty = true;
         drop(st);
+        // API-1c 13.1: `lucid_local_mcp_calls_total{outcome}`, in the person's org
+        if rec.get("event").and_then(Value::as_str) == Some("local_mcp") {
+            for org in &who.orgs {
+                crate::api_catalog::counters::local_mcp_call(org, &pj::s(&rec, "outcome"));
+            }
+        }
         let kind = rec.get("event").or_else(|| rec.get("provider"));
         log_info(&format!("ai_audit principal={} rid={} kind={}", who.principal, pj::s(&rec, "rid"), kv_of(kind)));
         Ok(obj([("ok", Value::Bool(true))]))
@@ -587,6 +668,33 @@ mod tests {
             json!({"v": true, "rid": "0".repeat(32), "ts": 5, "event": "ai_history_dropped", "reason": "x"}),
         ] {
             assert_eq!(audit_record(broken.as_object().unwrap()).unwrap_err().message(), AI_AUDIT_SHAPE, "{broken}");
+        }
+    }
+
+    #[test]
+    fn local_mcp_records_name_the_program_and_never_the_content() {
+        let program = json!({"sha256": "b".repeat(64), "signer": "Anthropic, PBC", "id": ""});
+        let answered = json!({"v": 1, "rid": "c".repeat(32), "ts": 5, "event": "local_mcp", "client": "Claude",
+            "program": program.clone(), "tool": "search", "class": "internal", "items": 3, "outcome": "answered"});
+        let mut with_session = answered.as_object().unwrap().clone();
+        with_session.insert("session".into(), json!("s"));
+        let rec = audit_record(&with_session).unwrap();
+        assert!(!rec.contains_key("session"));
+        let refused = json!({"v": 1, "rid": "c".repeat(32), "ts": 5, "event": "local_mcp", "client": "Claude",
+            "program": program.clone(), "tool": "send_message", "class": "unknown", "items": 0, "outcome": "declined", "code": "not-sent"});
+        assert!(audit_record(refused.as_object().unwrap()).is_ok());
+        let mut broken = Vec::new();
+        for (key, value) in [("query", json!("what did we decide")), ("tool", json!("delete_all")), ("outcome", json!("maybe")),
+            ("code", json!("off")), ("program", json!({"sha256": "b".repeat(64), "signer": "x", "id": "", "path": "C:/x.exe"}))] {
+            let mut r = answered.as_object().unwrap().clone();
+            r.insert(key.into(), value);
+            broken.push(r);
+        }
+        let no_code = json!({"v": 1, "rid": "c".repeat(32), "ts": 5, "event": "local_mcp", "client": "Claude",
+            "program": program, "tool": "send_message", "class": "unknown", "items": 0, "outcome": "declined"});
+        broken.push(no_code.as_object().unwrap().clone());
+        for b in broken {
+            assert_eq!(audit_record(&b).unwrap_err().message(), LOCAL_MCP_SHAPE, "{b:?}");
         }
     }
 }

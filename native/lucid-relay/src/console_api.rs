@@ -13,6 +13,9 @@
 
 use crate::api_audit::{ApiAudit, IngestError, Repr};
 use crate::api_checkpoint::IssueFn;
+use crate::api_cjournal::{ConsoleEntry, ConsoleJournals};
+use crate::api_features::{RelaySets, Report};
+use crate::api_idempotency::IdemStore;
 use crate::api_fetch::FetchCache;
 use crate::api_issue::{self, Answer, IssueCtx, IssueState, TokenHttp};
 use crate::api_map::{check_tighten, AcceptOutcome, ApiMapError, ApiMapStore, ApiTrust, Edition, VerifiedApiMap};
@@ -56,6 +59,14 @@ pub enum ApiDoc {
     ProtectedResource,
     /// `I/jwks.json`: the map's `issuer.jwks`.
     Jwks,
+    /// Revision 4 8.1 `I/federation/.well-known/openid-configuration`, only when `federation.issuer` is `I/federation`.
+    FederationDiscovery,
+    /// Revision 4 8.1 `I/federation/jwks.json`, the same rule; dropped keys left out.
+    FederationJwks,
+    /// Revision 4 7.3 `I/v1/webhooks/keys`: the map's `webhook_keys`, dropped keys left out.
+    WebhookKeys,
+    /// Revision 5 4.4: RFC 9728 `/.well-known/oauth-protected-resource/api/orgs/<org>/mcp` (resource M).
+    McpResource,
 }
 
 /// The sealed name of an org's issuer signing key (PKCS#8).
@@ -119,6 +130,10 @@ struct Inner {
     /// (relay, org) whose `api-chains` backfill stopped after `PAGES_MAX` pages with more left. The position is the
     /// console's stored heads of that relay's chains (on disk), so only the pair is kept; `audit_tick` resumes it.
     backfill: std::collections::BTreeSet<(String, String)>,
+    /// Revision 4 7.3: (relay, org) whose `api-event-chains` backfill has more left, as `backfill`.
+    ev_backfill: std::collections::BTreeSet<(String, String)>,
+    /// Relays that answered `fleet-op` to `api-event-chains` (revision 3): no event backfill until they reconnect.
+    no_events: std::collections::HashSet<String>,
     /// Relays whose audit work runs on a thread now.
     audit_busy: std::collections::HashSet<String>,
     /// 13: the license edition the maps were last held to (`set_edition`); None until first read.
@@ -128,6 +143,13 @@ struct Inner {
     unsynced: std::collections::HashSet<String>,
     /// Relays a `sync_tick` thread works on now.
     sync_busy: std::collections::HashSet<String>,
+    /// Revision 4 2.3 item 2: every relay that ever reported each org, with its latest `api-features` answer.
+    sets: RelaySets,
+    /// Revision 4 2.3 item 4: the console journals (console-only and connector-relevant actions).
+    cj: ConsoleJournals,
+    /// Revision 4 2.3 item 5: (relay, org) whose pinned map the relay cannot take (it lacks a need of the map); its
+    /// catch-up holds it to the seq it has.
+    withheld: std::collections::HashSet<(String, String)>,
 }
 
 /// The console's api maps, journals and pseudonym keys, and their delivery to the relays (2.4, 2.5, 2.6).
@@ -143,12 +165,67 @@ pub struct ConsoleApi {
     fetch: FetchCache,
     /// 9: the console's API audit chains and the issuer of relay checkpoint certificates (`set_audit`, at start).
     audit: std::sync::OnceLock<(Arc<ApiAudit>, IssueFn)>,
+    /// Revision 4 7.3: the console's event chains and feed index (`set_events`, at start).
+    events: std::sync::OnceLock<Arc<crate::api_events::EventLog>>,
     /// 11: told when the destinations may have changed (None: a map, a tightening or the edition; Some((org, id)):
     /// that destination's credential), so the export engine applies it at once (`set_export_hook`, at start).
     export_hook: std::sync::OnceLock<ExportHook>,
     /// 12.3: the failover credential records, (org, destination, relay) -> record, kept in `FAILOVER_FILE`.
     failover: Mutex<BTreeMap<(String, String, String), FailoverRecord>>,
+    /// Revision 4 4.5: the front door's `Idempotency-Key` store.
+    idem: IdemStore,
+    /// Revision 5 6: the delegated grants' state (waiting sign-ins, codes, person records, refresh families).
+    delegated: crate::api_delegated::DelegatedState,
+    /// Revision 5 6.5 step 2: per org and registry provider, the SSO service's public URL (`api-sso-urls.json`).
+    sso_urls: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    /// Revision 5 14.1: (org, issuer) -> the last IdP test's time and key count (memory only).
+    idp_tests: Mutex<BTreeMap<(String, String), (i64, usize)>>,
+    /// API-1d 2.4, 5.1: spokes relay -> its bound record (`api-spokes-bound.json`).
+    spokes: Mutex<BTreeMap<String, SpokesBound>>,
+    /// API-1d 7.1, 7.13: the signed Agent Cards served now and the partner card checks (`console_a2a`).
+    pub(crate) a2a: crate::console_a2a::A2aState,
 }
+
+/// API-1d 2.4, 5.1: the console's record of one spokes relay: the orgs bound to it, the binding generation of that list
+/// (raised by every change and never lowered, so the relay refuses a replayed older list), and the orgs whose pinned
+/// Meet org CA root this generation releases (kept until the relay acknowledges the generation that carries them).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SpokesBound {
+    orgs: Vec<String>,
+    generation: u64,
+    release_roots: Vec<String>,
+}
+
+impl SpokesBound {
+    fn of(v: &Value) -> SpokesBound {
+        let ids = |k: &str| -> Vec<String> { v.get(k).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).filter(|o| org_ok(o)).map(str::to_string).collect() };
+        SpokesBound { orgs: ids("orgs"), generation: v.get("generation").and_then(Value::as_u64).unwrap_or(0), release_roots: ids("release_roots") }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({ "orgs": self.orgs, "generation": self.generation, "release_roots": self.release_roots })
+    }
+
+    /// The `api-orgs` body: the list under its generation, with `release_roots` when there are any.
+    fn body(&self) -> Value {
+        let mut body = json!({ "orgs": self.orgs, "generation": self.generation });
+        if !self.release_roots.is_empty() {
+            body["release_roots"] = json!(self.release_roots);
+        }
+        body
+    }
+}
+
+/// Revision 5 6.5: the SSO services' public URLs the console sends browsers to.
+const SSO_URLS_FILE: &str = "api-sso-urls.json";
+/// Revision 5 6.1: the newest root-verified signer policy each org's maps were published under (its registry).
+const SIGNER_DIR: &str = "api-signer";
+/// API-1d 2.4, 5.1: per spokes relay its bound record, `{"relays": {relay: {"orgs": [org, ...], "generation": n,
+/// "release_roots": [org, ...]}}}`, flushed before it is relied on. A relay with a record is a spokes relay to the API
+/// sync (only spokes relays are ever bound).
+const SPOKES_BOUND_FILE: &str = "api-spokes-bound.json";
+/// API-1d 2.4 `api-orgs`: at most this many orgs per spokes relay.
+pub const SPOKES_ORGS_MAX: usize = 64;
 
 /// 12.3: the console's failover credential records (not in the signed map), flushed to disk after every change.
 const FAILOVER_FILE: &str = "api-failover-console.json";
@@ -308,15 +385,71 @@ impl ConsoleApi {
                 }
             }
         }
+        let sets = RelaySets::load(dir);
+        let (mut cj, broken) = ConsoleJournals::load(dir);
+        for (org, cseq) in broken {
+            logger.security("api.console-journal.unreadable", &Fields::new().with("org", org.as_str()).with("cseq", cseq), Level::Error);
+        }
+        // a crash between a pin and the console journal's settling: settle against the pinned maps again
+        for org in store.issuers().into_keys() {
+            if let Some(m) = store.get(&org, "").map(|m| Value::Object(m.map().clone())) {
+                if let Err(e) = cj.settle(&org, &m) {
+                    logger.security("api.console-journal.unsettled", &Fields::new().with("org", org.as_str()).with("why", e.message), Level::Error);
+                }
+            }
+        }
+        // revision 5 6.6: validation reads each org's active `person_revoke` entries from the published copy
+        for org in store.issuers().into_keys() {
+            crate::api_delegated::publish_revokes(&org, &cj.active(&org));
+        }
+        let sso_urls = dir
+            .and_then(|d| std::fs::read_to_string(d.join(SSO_URLS_FILE)).ok())
+            .and_then(|t| parse_json(&t))
+            .and_then(|v| v.as_object().cloned())
+            .into_iter()
+            .flatten()
+            .map(|(org, p)| (org, p.as_object().into_iter().flatten().filter_map(|(k, u)| Some((k.clone(), u.as_str()?.to_string()))).collect()))
+            .collect();
+        let spokes: BTreeMap<String, SpokesBound> = dir
+            .and_then(|d| std::fs::read_to_string(d.join(SPOKES_BOUND_FILE)).ok())
+            .and_then(|t| parse_json(&t))
+            .and_then(|v| v.get("relays").and_then(Value::as_object).cloned())
+            .into_iter()
+            .flatten()
+            .map(|(relay, record)| (relay, SpokesBound::of(&record)))
+            .collect();
         ConsoleApi {
+            delegated: crate::api_delegated::DelegatedState::new(dir, vault.clone()),
+            sso_urls: Mutex::new(sso_urls),
+            idp_tests: Mutex::default(),
+            spokes: Mutex::new(spokes),
+            a2a: crate::console_a2a::A2aState::default(),
             dir: dir.map(Path::to_path_buf),
             logger,
             vault,
-            inner: Mutex::new(Inner { store, orgs, relays: HashMap::new(), no_audit: Default::default(), checkpoint_at: HashMap::new(), backfill: Default::default(), audit_busy: Default::default(), edition: None, unsynced: Default::default(), sync_busy: Default::default() }),
+            inner: Mutex::new(Inner {
+                store,
+                orgs,
+                relays: HashMap::new(),
+                no_audit: Default::default(),
+                checkpoint_at: HashMap::new(),
+                backfill: Default::default(),
+                ev_backfill: Default::default(),
+                no_events: Default::default(),
+                audit_busy: Default::default(),
+                edition: None,
+                unsynced: Default::default(),
+                sync_busy: Default::default(),
+                sets,
+                cj,
+                withheld: Default::default(),
+            }),
+            idem: IdemStore::load(dir),
             sending: Mutex::new(HashMap::new()),
             issue: IssueState::new(),
             fetch: FetchCache::new(FETCH_MAX_AGE),
             audit: std::sync::OnceLock::new(),
+            events: std::sync::OnceLock::new(),
             export_hook: std::sync::OnceLock::new(),
             failover: Mutex::new(
                 dir.and_then(|d| std::fs::read_to_string(d.join(FAILOVER_FILE)).ok())
@@ -371,8 +504,302 @@ impl ConsoleApi {
     /// org. A conflict raises `api.map.conflict`. Called by the API access screen's save (slice 1a6).
     #[allow(clippy::too_many_arguments)]
     pub fn publish_map(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, signed: &Value, trust: &ApiTrust, now: i64, policy: Option<&Map<String, Value>>, edition: Option<Edition>) -> Result<AcceptOutcome, ApiMapError> {
-        let r = self.inner.lock().store.accept(signed, trust, now, policy, edition);
-        self.published(link, r, now)
+        let (r, was_off) = {
+            let mut inner = self.inner.lock();
+            let map = signed.get("map").unwrap_or(&Value::Null);
+            let org = map.get("org").and_then(Value::as_str).unwrap_or_default();
+            // revision 4 2.3 items 3 and 4: saved only while every relay of the org takes the map, and only folding or
+            // clearing console journal entries as revision 3 2.5 allows
+            inner.sets.gate(org, &crate::api_features::map_needs(map))?;
+            inner.cj.check_map(org, map)?;
+            let was_off = inner.store.is_off(org);
+            (inner.store.accept(signed, trust, now, policy, edition), was_off)
+        };
+        // revision 5 6.1: the registry (`iss`, `sso_serial`) of the root-verified signer policy the map was verified with
+        if let Ok(AcceptOutcome::Pinned(vm) | AcceptOutcome::Unchanged(vm)) = &r {
+            if let Err(e) = self.save_signer_policy(&vm.org, trust.signer_policy) {
+                self.logger.security("api.signer-policy.unsaved", &Fields::new().with("org", vm.org.as_str()).with("why", e), Level::Error);
+            }
+        }
+        self.published(link, r, now, was_off)
+    }
+
+    /// Revision 5 6.1: keep `<state>/api-signer/<org>.json`, the signer policy `publish_map` verified against the root.
+    fn save_signer_policy(&self, org: &str, policy: &Map<String, Value>) -> Result<(), String> {
+        let Some(dir) = &self.dir else { return Ok(()) };
+        let folder = dir.join(SIGNER_DIR);
+        crate::store::make_dir(&folder).map_err(|e| e.to_string())?;
+        crate::fleet_local::write_durable(&folder.join(format!("{org}.json")), stringify(&Value::Object(policy.clone())).as_bytes())
+    }
+
+    /// API-1d 2.4 (map trust on spokes relays): keep `<state>/api-signer/<org>.trust.json` = `{"root": <PEM>, "crl":
+    /// <PEM>?}`, the Meet org CA root (and its CRL) the console verifies the org's maps with, flushed. The
+    /// console's save calls it before it publishes, so a spokes relay can verify the map under the same root. A failed
+    /// write is the security line `api.map.trust-unsaved` (spokes relays then get no map until a later save keeps it).
+    /// A root other than the one kept is a root rotation: the spokes relays' records take a generation that releases
+    /// the org's pinned root (`spokes_rotate`), the only way a spokes relay ever drops a pinned root.
+    pub fn save_map_trust(&self, org: &str, root_der: &[u8], crl_pem: Option<&str>) {
+        let Some(dir) = self.dir.as_ref().filter(|_| org_ok(org)) else { return };
+        let folder = dir.join(SIGNER_DIR);
+        let file = folder.join(format!("{org}.trust.json"));
+        let root = crate::meet_x509::der_to_pem(root_der);
+        let kept = std::fs::read_to_string(&file).ok().and_then(|t| parse_json(&t)).and_then(|v| v.get("root").and_then(Value::as_str).map(str::to_string));
+        let mut v = json!({ "root": root.as_str() });
+        if let Some(crl) = crl_pem {
+            v["crl"] = json!(crl);
+        }
+        let saved = crate::store::make_dir(&folder).map_err(|e| e.to_string()).and_then(|_| crate::fleet_local::write_durable(&file, stringify(&v).as_bytes()));
+        match saved {
+            Err(e) => self.logger.security("api.map.trust-unsaved", &Fields::new().with("org", org).with("why", e), Level::Error),
+            Ok(()) if kept.is_some_and(|k| k != root) => self.spokes_rotate(org),
+            Ok(()) => {}
+        }
+    }
+
+    /// API-1d 2.4: the `trust` an `api-map` to a spokes relay carries, `{root, signer_policy, crl?}`: the saved root
+    /// (`save_map_trust`) and the root-signed signer policy the org's map was verified with. None before both are kept.
+    fn spokes_trust(&self, org: &str) -> Option<Value> {
+        let dir = self.dir.as_ref().filter(|_| org_ok(org))?.join(SIGNER_DIR);
+        let read = |name: String| std::fs::read_to_string(dir.join(name)).ok().and_then(|t| parse_json(&t));
+        let mut trust = read(format!("{org}.trust.json")).filter(|t| t.get("root").is_some_and(Value::is_string))?;
+        trust["signer_policy"] = read(format!("{org}.json")).filter(Value::is_object)?;
+        Some(trust)
+    }
+
+    // ── API-1d 2.4, 5.1: spokes relays and their bound orgs ──
+
+    /// The orgs bound to a spokes relay, sorted (none for a relay never bound, and for every Meet relay).
+    pub fn spokes_bound(&self, relay: &str) -> Vec<String> {
+        self.spokes.lock().get(relay).map(|b| b.orgs.clone()).unwrap_or_default()
+    }
+
+    /// A relay with a bound record is a spokes relay: it gets `api-orgs` first in every catch-up and `trust` with each
+    /// map. Meet relays never have one.
+    fn is_spokes(&self, relay: &str) -> bool {
+        self.spokes.lock().contains_key(relay)
+    }
+
+    /// `api-spokes-bound.json`, flushed (its folder made first: a console may bind before it keeps anything else).
+    fn save_spokes(&self, all: &BTreeMap<String, SpokesBound>) -> Result<(), String> {
+        let Some(dir) = &self.dir else { return Ok(()) };
+        crate::store::make_dir(dir).map_err(|e| e.to_string())?;
+        let relays: Map<String, Value> = all.iter().map(|(r, b)| (r.clone(), b.to_value())).collect();
+        crate::fleet_local::write_durable(&dir.join(SPOKES_BOUND_FILE), stringify(&json!({ "relays": relays })).as_bytes())
+    }
+
+    /// `api-orgs` with the relay's recorded list under its generation, after any delivery to the relay in flight. Once
+    /// the relay acknowledged a generation that carried released roots, the release is done: it is dropped from the
+    /// record unless a newer generation was recorded meanwhile. A relay that already applied a newer generation (the
+    /// console's record went back) refuses `stale-generation`, the security line `api.spokes.stale-generation`.
+    fn send_orgs(&self, link: &dyn FleetLink, relay: &str) -> Result<Value, LinkError> {
+        let record = self.spokes.lock().get(relay).cloned().unwrap_or_default();
+        let answer = link.request(relay, "api-orgs", record.body(), CALL_MS);
+        match &answer {
+            Ok(_) if !record.release_roots.is_empty() => {
+                let mut all = self.spokes.lock();
+                if all.get(relay).is_some_and(|b| b.generation == record.generation) {
+                    let mut candidate = all.clone();
+                    if let Some(b) = candidate.get_mut(relay) {
+                        b.release_roots.clear();
+                    }
+                    // unsaved, the release goes again with the next generation: harmless before the new root is pinned
+                    match self.save_spokes(&candidate) {
+                        Ok(()) => *all = candidate,
+                        Err(e) => self.logger.ops("api.spokes.bound-unsaved", &Fields::new().with("relay", relay).with("why", e), Level::Warn),
+                    }
+                }
+            }
+            Err(LinkError::Refused { code, .. }) if code == "stale-generation" => {
+                self.logger.security("api.spokes.stale-generation", &Fields::new().with("relay", relay).with("generation", record.generation), Level::Error);
+            }
+            _ => {}
+        }
+        answer
+    }
+
+    /// API-1d 2.4 (shared contract item 3): the Meet org CA root the console verifies `org`'s maps with changed, so
+    /// every spokes relay's record takes a new generation releasing `org`'s pinned root (a relay may still pin it
+    /// after an unbinding), and each relay is caught up again (`api-orgs` first) before the map under the new root.
+    fn spokes_rotate(&self, org: &str) {
+        let relays: Vec<String> = {
+            let mut all = self.spokes.lock();
+            if all.is_empty() {
+                return;
+            }
+            let mut candidate = all.clone();
+            for b in candidate.values_mut() {
+                b.generation += 1;
+                if !b.release_roots.iter().any(|o| o == org) {
+                    b.release_roots.push(org.to_string());
+                    b.release_roots.sort();
+                }
+            }
+            if let Err(e) = self.save_spokes(&candidate) {
+                self.logger.security("api.spokes.rotation-unsaved", &Fields::new().with("org", org).with("why", e), Level::Error);
+                return;
+            }
+            *all = candidate;
+            all.keys().cloned().collect()
+        };
+        self.logger.security("api.spokes.root-rotated", &Fields::new().with("org", org).with("relays", &relays[..]), Level::Warn);
+        let mut inner = self.inner.lock();
+        for relay in relays {
+            if !matches!(inner.relays.get(&relay), Some(RelayApi::NoApi)) {
+                inner.relays.insert(relay.clone(), RelayApi::Unknown);
+            }
+            inner.unsynced.insert(relay);
+        }
+    }
+
+    /// API-1d 5.1 (`POST settings/api/spokes/relays`): bind (or unbind) `org` on the spokes relay `relay`. The new list
+    /// is recorded durably first; then, when the relay is connected, `api-orgs` goes at once and, once acknowledged,
+    /// a catch-up follows on its own thread (heads, features, the org's map with `trust`, its journal). Ok(true) when
+    /// the relay acknowledged, Ok(false) when it was not connected or the send failed: the relay is then left unsynced,
+    /// so the minute's `sync_tick` (or its next `welcome`) sends `api-orgs` first. A relay that answers `fleet-op` is
+    /// older than API-1d: a bind is undone (`relay-outdated`), an unbind stays recorded. The caller stages the map's
+    /// `spokes.relays` and audits the route.
+    pub fn spokes_bind(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, relay: &str, org: &str, bound: bool, now: i64) -> Result<bool, ApiMapError> {
+        if !org_ok(org) || !crate::fleet_metrics::relay_id_ok(relay) {
+            return Err(ApiMapError::new("invalid", "that is not an organization and relay id"));
+        }
+        let (before, generation) = {
+            let mut all = self.spokes.lock();
+            let before = all.get(relay).cloned();
+            let mut next = before.clone().unwrap_or_default();
+            next.orgs.retain(|o| o != org);
+            if bound {
+                next.orgs.push(org.to_string());
+                next.orgs.sort();
+            }
+            if next.orgs.len() > SPOKES_ORGS_MAX {
+                return Err(ApiMapError::new("invalid", "a spokes relay serves at most 64 organizations"));
+            }
+            // every change is a new binding generation, so the relay refuses the older list if it is ever replayed
+            next.generation += 1;
+            let generation = next.generation;
+            let mut candidate = all.clone();
+            candidate.insert(relay.to_string(), next);
+            self.save_spokes(&candidate).map_err(io_e)?;
+            *all = candidate;
+            (before, generation)
+        };
+        let Some(link) = link.filter(|l| l.connected(relay)) else { return Ok(false) };
+        let sent = {
+            let gate = self.sending.lock().entry(relay.to_string()).or_default().clone();
+            let _one = gate.lock();
+            self.send_orgs(&*link, relay)
+        };
+        match sent {
+            Ok(_) => {
+                // the relay serves another set of orgs now: its heads are asked again, then it is caught up
+                self.inner.lock().relays.insert(relay.to_string(), RelayApi::Unknown);
+                let (me, r) = (self.clone(), relay.to_string());
+                let _ = std::thread::Builder::new().name("api-sync".into()).spawn(move || {
+                    me.sync(&*link, &r, now);
+                });
+                Ok(true)
+            }
+            Err(LinkError::Refused { code, .. }) if code == "fleet-op" => {
+                self.logger.ops("api.spokes.relay-outdated", &Fields::new().with("relay", relay).with("org", org), Level::Warn);
+                if !bound {
+                    return Ok(false);
+                }
+                let mut all = self.spokes.lock();
+                let mut candidate = all.clone();
+                // the list goes back, the generation never does
+                match before {
+                    Some(b) => candidate.insert(relay.to_string(), SpokesBound { generation, ..b }),
+                    None => candidate.remove(relay),
+                };
+                self.save_spokes(&candidate).map_err(io_e)?;
+                *all = candidate;
+                Err(ApiMapError::new(crate::api_features::OUTDATED, "that relay does not take organizations yet; update it first"))
+            }
+            Err(_) => {
+                let mut inner = self.inner.lock();
+                inner.unsynced.insert(relay.to_string());
+                if !matches!(inner.relays.get(relay), Some(RelayApi::NoApi)) {
+                    inner.relays.insert(relay.to_string(), RelayApi::Unknown);
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// API-1d 6.1 on the front door: one 6.2 view of a spokes relay bound to `org`, asked with `api-spokes`. None when
+    /// the relay is not a spokes relay of the org here (404); a relay that is not connected, does not answer or does
+    /// not report `spokes-read` is 503 `relay-unreachable`; its own `not-found` or `bad-request` is passed on.
+    pub fn spokes_view(&self, link: Option<&dyn FleetLink>, org: &str, relay: &str, view: &str, query: &str, people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        use crate::fleet_wire::Refusal;
+        if !self.spokes_bound(relay).iter().any(|o| o == org) {
+            return None;
+        }
+        let unreachable = || Refusal::new(503, "relay-unreachable", "That spokes relay is not answering now; try again later.");
+        let Some(link) = link.filter(|l| l.connected(relay)) else { return Some(Err(unreachable())) };
+        if !self.relay_has(relay, crate::api_features::SPOKES_READ) {
+            return Some(Err(unreachable()));
+        }
+        match link.request(relay, "api-spokes", json!({ "org": org, "view": view, "query": query, "people": people }), CALL_MS) {
+            Ok(v) => Some(Ok(v)),
+            Err(LinkError::Refused { status, code, error }) if code == "not-found" || code == "bad-request" => Some(Err(Refusal::new(status, &code, &error))),
+            Err(_) => Some(Err(unreachable())),
+        }
+    }
+
+    /// API-1d 4.2: the CRL tokens the spokes relays bound to `org` hold now (their `relays` view, `crl.token`), for the
+    /// check of a pasted service hub certificate. A relay that does not answer gives none.
+    pub fn spokes_crls(&self, link: Option<&dyn FleetLink>, org: &str) -> Vec<String> {
+        let relays: Vec<String> = self.spokes.lock().iter().filter(|(_, b)| b.orgs.iter().any(|o| o == org)).map(|(r, _)| r.clone()).collect();
+        relays
+            .iter()
+            .filter_map(|relay| self.spokes_view(link, org, relay, "relays", "", false)?.ok())
+            .filter_map(|v| v.pointer("/crl/token").and_then(Value::as_str).map(str::to_string))
+            .collect()
+    }
+
+    /// Whether the pinned map of `org` lets the spokes relay take it: no map yet, or `spokes.relays` lists the relay.
+    /// A map that does not list it (staged before the save that binds it) is neither sent nor awaited (5.1:
+    /// `not-bound`).
+    fn spokes_listed(inner: &Inner, relay: &str, org: &str) -> bool {
+        inner.store.get(org, "").is_none_or(|m| m.map().get("spokes").and_then(|s| s.get("relays")).and_then(Value::as_array).is_some_and(|l| l.iter().any(|r| r.as_str() == Some(relay))))
+    }
+
+    /// Revision 5 6.1: the org's registry entries (signer policy v3 `identity_providers`) from the newest signer policy
+    /// a pinned map of the org was verified with (none before the first publish).
+    pub fn identity_providers(&self, org: &str) -> Vec<crate::meet_org_policy::IdentityProvider> {
+        let Some(dir) = self.dir.as_ref().filter(|_| org_ok(org)) else { return Vec::new() };
+        let policy = std::fs::read_to_string(dir.join(SIGNER_DIR).join(format!("{org}.json"))).ok().and_then(|t| parse_json(&t));
+        let terms = policy.as_ref().and_then(Value::as_object).and_then(|p| crate::meet_org_policy::signer_terms(p).ok());
+        terms.map(|t| t.providers_of(org).into_iter().cloned().collect()).unwrap_or_default()
+    }
+
+    /// Revision 5 6.5 step 2: the SSO service's public URL for (org, provider), set by the console's admin (1c7).
+    pub fn sso_url(&self, org: &str, provider: &str) -> Option<String> {
+        self.sso_urls.lock().get(org)?.get(provider).cloned()
+    }
+
+    /// Set (or with None remove) the SSO service's public URL for (org, provider), flushed before Ok; `https://` only.
+    pub fn set_sso_url(&self, org: &str, provider: &str, url: Option<&str>) -> Result<(), String> {
+        if !org_ok(org) || url.is_some_and(|u| !u.starts_with("https://") || u.contains(['?', '#']) || crate::api_fetch::check_url(u).is_err()) {
+            return Err("an SSO URL is an https:// URL without a query or fragment".into());
+        }
+        let mut all = self.sso_urls.lock();
+        let mut next = all.clone();
+        match url {
+            Some(u) => {
+                next.entry(org.to_string()).or_default().insert(provider.to_string(), u.trim_end_matches('/').to_string());
+            }
+            None => {
+                if let Some(p) = next.get_mut(org) {
+                    p.remove(provider);
+                }
+            }
+        }
+        if let Some(dir) = &self.dir {
+            crate::fleet_local::write_durable(&dir.join(SSO_URLS_FILE), stringify(&json!(next)).as_bytes())?;
+        }
+        *all = next;
+        Ok(())
     }
 
     /// 13: hold every pinned map to the license `edition` (None: unknown, which serves no map). Revalidates only when
@@ -407,13 +834,22 @@ impl ConsoleApi {
     /// `publish_map` for a map already verified.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn publish_verified(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, vm: VerifiedApiMap, now: i64) -> Result<AcceptOutcome, ApiMapError> {
-        let r = self.inner.lock().store.pin(vm);
-        self.published(link, r, now)
+        let (r, was_off) = {
+            let mut inner = self.inner.lock();
+            let was_off = inner.store.is_off(&vm.org);
+            (inner.store.pin(vm), was_off)
+        };
+        self.published(link, r, now, was_off)
     }
 
-    fn published(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, r: Result<AcceptOutcome, ApiMapError>, now: i64) -> Result<AcceptOutcome, ApiMapError> {
+    /// After a pin or a refusal; `was_off` is whether the org's `api_off` was active before the pin.
+    fn published(self: &Arc<Self>, link: Option<Arc<dyn FleetLink>>, r: Result<AcceptOutcome, ApiMapError>, now: i64, was_off: bool) -> Result<AcceptOutcome, ApiMapError> {
         match &r {
             Ok(AcceptOutcome::Pinned(vm)) => {
+                // revision 4 7.1: a signed map that cleared the org's `api_off` turns the API on again
+                if was_off && !self.inner.lock().store.is_off(&vm.org) {
+                    self.emit_event(&vm.org, "api.enabled", Value::Null, now);
+                }
                 // a map pinned without an edition check (`publish_verified`) is held to the edition in force too
                 let changed = {
                     let mut inner = self.inner.lock();
@@ -426,6 +862,17 @@ impl ConsoleApi {
                 self.edition_lines(&changed.0, changed.1);
                 self.note_audit(vec![crate::fleet_agent::api_note_pinned(vm)], now);
                 self.prune(&vm.org, now);
+                let map = Value::Object(vm.map().clone());
+                let settled = {
+                    let mut inner = self.inner.lock();
+                    let r = inner.cj.settle(&vm.org, &map);
+                    crate::api_delegated::publish_revokes(&vm.org, &inner.cj.active(&vm.org));
+                    r
+                };
+                if let Err(e) = settled {
+                    // the entries stay active (stricter) until the next open settles them
+                    self.logger.security("api.console-journal.unsettled", &Fields::new().with("org", vm.org.as_str()).with("why", e.message), Level::Error);
+                }
                 self.export_changed(None);
                 if let Some(link) = link {
                     self.deliver_org(link, &vm.org);
@@ -450,6 +897,22 @@ impl ConsoleApi {
         if !org_ok(org) {
             return Err(ApiMapError::new("not-tightening", "that is not an organization id"));
         }
+        // revision 4 2.3 item 4c: an entry only revision 4 relays read is journaled while version 2 is open for the
+        // org; while it is closed, its revision 3 fallback (equal or stricter), once
+        let (action, target): (&str, Value) = {
+            let inner = self.inner.lock();
+            match crate::api_features::relay_entry_gate(action, &target) {
+                Some((need, fallback, ft)) if !inner.sets.open(org, need) => {
+                    let f = Fields::new().with("org", org).with("action", action).with("fallback", fallback).with("need", need);
+                    self.logger.security("api.journal.fallback", &f, Level::Warn);
+                    if let Some(held) = inner.store.active(org).iter().find(|e| e.action == fallback && e.target == ft) {
+                        return Ok(held.to_value());
+                    }
+                    (fallback, ft)
+                }
+                _ => (action, target),
+            }
+        };
         let entry = {
             let mut inner = self.inner.lock();
             let head = inner.orgs.get(org).map_or(0, OrgJournal::head);
@@ -473,11 +936,23 @@ impl ConsoleApi {
         // 9.2: the journal file is the record of the tightening; its audit entry follows it (a tightening is never
         // refused for the audit: `api.audit-failed` instead)
         self.note_audit(vec![crate::fleet_agent::api_note_tighten(org, &entry)], now);
+        // revision 4 7.1: its event, before any relay or destination hears of it
+        match (action, entry["target"].as_str()) {
+            ("client_suspend", Some(client)) => {
+                self.emit_event(org, "client.suspended", json!({ "client": client, "reason": action }), now);
+            }
+            ("api_off", _) => {
+                self.emit_event(org, "api.disabled", Value::Null, now);
+            }
+            _ => {}
+        }
         // 2.5, 11: a destination tightening takes effect on the console's exports at once
         self.export_changed(None);
         if let Some(link) = link {
             self.deliver_org(link, org);
         }
+        // revision 4 5.3.3 (Rev4Review R4-2): open export jobs of a narrowed client are canceled at once
+        crate::api_exports::tightened(org, now);
         Ok(entry)
     }
 
@@ -494,6 +969,160 @@ impl ConsoleApi {
     /// The active (not folded or cleared) journal entries of an org, as the console's store applies them.
     pub fn journal_active(&self, org: &str) -> Vec<crate::api_map::TightenEntry> {
         self.inner.lock().store.active(org).to_vec()
+    }
+
+    // ── revision 4 2.3: the feature gate and the console journal ──
+
+    /// 2.3 item 3: Ok while every relay of the org's set reports each need (`api_features` names; `map-v2` for map
+    /// version 2), else `relay-outdated` naming the relays that lack one. Stages and saves check it, and every
+    /// feature-specific request checks it again right before it is sent.
+    pub fn gate(&self, org: &str, needs: &[&str]) -> Result<(), ApiMapError> {
+        self.inner.lock().sets.gate(org, needs)
+    }
+
+    /// 2.3 item 3: whether a relay reports a need now (its latest `api-features` answer).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn relay_has(&self, relay: &str, need: &str) -> bool {
+        self.inner.lock().sets.report_of(relay).is_some_and(|r| r.has(need))
+    }
+
+    /// 2.3 item 2: the org's relay set, relay to its latest `api-features` answer (None: not answered yet).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn relay_set(&self, org: &str) -> BTreeMap<String, Option<Report>> {
+        self.inner.lock().sets.set(org)
+    }
+
+    /// 2.3 item 2 (`POST settings/api/relays/retire`): an admin retires a relay from the org's set. Refused
+    /// (`relay-connected`) while that relay is connected and still reports the org; Ok(false) when it was not in the
+    /// set. The caller audits it.
+    pub fn retire_relay(&self, org: &str, relay: &str) -> Result<bool, ApiMapError> {
+        if self.serves_now(relay, org) {
+            return Err(ApiMapError::new("relay-connected", "that relay is connected and still reports the organization"));
+        }
+        let mut inner = self.inner.lock();
+        let gone = inner.sets.retire(org, relay)?;
+        inner.withheld.remove(&(relay.to_string(), org.to_string()));
+        Ok(gone)
+    }
+
+    /// The attention item `relay-outdated` (2.3 item 3): per org with a pinned map, each relay of its set that lacks
+    /// a need of that map, with those needs.
+    pub fn outdated(&self) -> Vec<(String, String, Vec<&'static str>)> {
+        let inner = self.inner.lock();
+        let mut out = Vec::new();
+        for org in inner.sets.orgs() {
+            let Some(m) = inner.store.get(&org, "") else { continue };
+            let needs = crate::api_features::map_needs(&Value::Object(m.map().clone()));
+            let set = inner.sets.set(&org);
+            for relay in crate::api_features::lacking(&set, &needs) {
+                let missing: Vec<&'static str> = needs.iter().copied().filter(|n| !set.get(&relay).and_then(Option::as_ref).is_some_and(|r| r.has(n))).collect();
+                out.push((org.clone(), relay, missing));
+            }
+        }
+        out
+    }
+
+    /// 2.3 item 4: append a console-only (4a) or connector-relevant (4b) action to the org's console journal, as the
+    /// next `cseq`, flushed before Ok: only then does it take effect (the console's effect reads `console_active`)
+    /// and is the admin answered. Its `api.tighten` audit entry follows. Never sent to a relay. Ok is the entry.
+    pub fn append_console(&self, org: &str, action: &str, target: Value, now: i64) -> Result<Value, ApiMapError> {
+        let e = {
+            let mut inner = self.inner.lock();
+            let e = inner.cj.append(org, action, target, now)?.to_value();
+            // revision 5 6.6: offline validation sees a `person_revoke` at once
+            crate::api_delegated::publish_revokes(org, &inner.cj.active(org));
+            e
+        };
+        // the audit entry's resource is the `k_` id, which tells it from a relay journal entry
+        self.note_audit(vec![crate::fleet_agent::api_note_tighten(org, &e)], now);
+        // revision 4 2.4 `client_drop_recipient`: its open export jobs are canceled at once
+        crate::api_exports::tightened(org, now);
+        Ok(e)
+    }
+
+    /// 2.3 item 4: the org's console journal entries not yet folded or cleared, in `cseq` order (their effects:
+    /// `api_cjournal::caps`, `recipient_dropped`, `key_dropped`).
+    pub fn console_active(&self, org: &str) -> Vec<ConsoleEntry> {
+        self.inner.lock().cj.active(org)
+    }
+
+    /// Revision 5 6.6, 8.2: the org's last verified policy, which a delegated token at M is checked against.
+    pub fn verified_policy(&self, org: &str, now: i64) -> Option<crate::meet_org_policy::Obj> {
+        self.delegated.verified_policy(org, now)
+    }
+
+    /// 4b: the org's connector-relevant entries after `cseq`, in order (revision 5 syncs them to connectors).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn connector_entries(&self, org: &str, after: u64) -> Vec<ConsoleEntry> {
+        self.inner.lock().cj.connector_entries(org, after)
+    }
+
+    // ── revision 5 2.8: what the connector sync reads (`console_connector`) ──
+
+    /// The console's state folder (None in memory).
+    pub fn state_dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
+    /// 2.8 `sync`: what a connector holding map `seq` and relay journal `tseq` lacks of the org, as a relay's catch-up
+    /// plans it: the pinned map's signed wire (`{map, sig, chain}`) when newer than `seq` or when `tseq` is below the
+    /// pruned base, that base (only with the map), and the relay journal entries after `tseq` (after the base when
+    /// rebasing), in order.
+    pub fn connector_plan(&self, org: &str, seq: i64, tseq: u64) -> (Option<Value>, Option<u64>, Vec<Value>) {
+        let inner = self.inner.lock();
+        let (_, map, base, entries) = Self::plan(&inner, "", org, seq, tseq);
+        (map, base, entries)
+    }
+
+    /// 2.8, 12.1: the console's audit chains (connector chains are stored there) and the issuer of checkpoint
+    /// certificates, once `set_audit` ran.
+    pub fn audit_parts(&self) -> Option<(Arc<ApiAudit>, IssueFn)> {
+        self.audit.get().cloned()
+    }
+
+    /// 2.8 `ack` and r5 3.3: the connector joins the org's relay set under its id and its `Report` replaces the one
+    /// kept, flushed, exactly as a relay's `api-heads` and `api-features` answers; a report that closes a feature
+    /// open until now writes `api.relay-outdated`.
+    pub fn connector_reported(&self, org: &str, connector: &str, report: Report) -> Result<(), ApiMapError> {
+        let mut inner = self.inner.lock();
+        for o in inner.sets.joined(connector, [org])? {
+            self.logger.ops("api.relay-set.joined", &Fields::new().with("relay", connector).with("org", o.as_str()), Level::Info);
+        }
+        let watched = [
+            crate::api_features::MAP_V2,
+            crate::api_features::CONNECTORS,
+            crate::api_features::IDPS,
+            crate::api_features::CONTENT_CLIENTS,
+            crate::api_features::DELEGATED,
+            crate::api_features::JOURNAL_1C,
+        ];
+        for (o, needs) in inner.sets.reported(connector, report, &watched)? {
+            let f = Fields::new().with("relay", connector).with("org", o.as_str()).with("closed", needs.join(","));
+            self.logger.security("api.relay-outdated", &f, Level::Warn);
+        }
+        Ok(())
+    }
+
+    /// The `k_` ids a save may keep listing in `folded` and `cleared` (every console journal entry of the org).
+    pub fn console_ids(&self, org: &str) -> Vec<String> {
+        self.inner.lock().cj.entries(org).into_iter().map(|e| e.id).collect()
+    }
+
+    /// Every console journal entry of the org, settled ones included (revision 4 2.4: a `federation_drop_key` keeps
+    /// its attention item after a map folds it; `api_federation`).
+    pub fn console_entries(&self, org: &str) -> Vec<ConsoleEntry> {
+        self.inner.lock().cj.entries(org)
+    }
+
+    /// The console's sealed store (revision 4 8.1: the org federation keys, `api_federation`).
+    pub fn vault(&self) -> Arc<dyn VaultLock> {
+        self.vault.clone()
+    }
+
+    /// Revision 4 4.5: the front door's `Idempotency-Key` store (the compliance routes of slices 1b4 and 1b5).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn idempotency(&self) -> &IdemStore {
+        &self.idem
     }
 
     /// Per relay that serves the org (`relays_of`): `{id, acked, synced}`, `synced` when it acknowledged the journal
@@ -617,6 +1246,8 @@ impl ConsoleApi {
         // the reconnect catch-up checks the certificates and backfills from the stored heads again
         inner.checkpoint_at.remove(relay);
         inner.backfill.retain(|(r, _)| r != relay);
+        inner.ev_backfill.retain(|(r, _)| r != relay);
+        inner.no_events.remove(relay);
     }
 
     /// The relay's `api-heads` answer (`{org: {seq, tseq}}`). A relay reporting a tseq above the console's journal
@@ -631,6 +1262,15 @@ impl ConsoleApi {
             .map(|(org, h)| (org.clone(), (h.get("seq").and_then(Value::as_i64).unwrap_or(0), h.get("tseq").and_then(Value::as_u64).unwrap_or(0))))
             .collect();
         let mut inner = self.inner.lock();
+        // revision 4 2.3 item 2: every relay that reports an org is in its set from now on
+        match inner.sets.joined(relay, heads.keys().map(String::as_str)) {
+            Ok(joined) => {
+                for org in joined {
+                    self.logger.ops("api.relay-set.joined", &Fields::new().with("relay", relay).with("org", org.as_str()), Level::Info);
+                }
+            }
+            Err(e) => self.logger.security("api.relay-set.unsaved", &Fields::new().with("relay", relay).with("why", e.message), Level::Error),
+        }
         for (org, (_, tseq)) in &heads {
             let head = inner.orgs.get(org).map_or(0, OrgJournal::head);
             if *tseq > head {
@@ -646,6 +1286,29 @@ impl ConsoleApi {
             }
         }
         inner.relays.insert(relay.to_string(), RelayApi::Heads(heads));
+    }
+
+    /// Revision 4 2.3 items 1 and 3: the relay's `api-features` answer (`Report::old` for `fleet-op`) kept for every
+    /// org whose set holds it. An answer that lacks a feature open for an org until now (a rollback) closes it at once:
+    /// the `api.relay-outdated` security line names the relay and the closed features (the attention item
+    /// `relay-outdated` follows from `outdated`). False when the set could not be kept on disk (the catch-up tries
+    /// again).
+    fn take_features(&self, relay: &str, report: Report) -> bool {
+        let mut inner = self.inner.lock();
+        let watched = [crate::api_features::MAP_V2, crate::api_features::COMPLIANCE, crate::api_features::EVENTS, crate::api_features::SCIM_CHECK, crate::api_features::ARCHIVE];
+        match inner.sets.reported(relay, report, &watched) {
+            Ok(closed) => {
+                for (org, needs) in closed {
+                    let f = Fields::new().with("relay", relay).with("org", org.as_str()).with("closed", needs.join(","));
+                    self.logger.security("api.relay-outdated", &f, Level::Warn);
+                }
+                true
+            }
+            Err(e) => {
+                self.logger.security("api.relay-set.unsaved", &Fields::new().with("relay", relay).with("why", e.message), Level::Error);
+                false
+            }
+        }
     }
 
     fn holds_any(inner: &Inner) -> bool {
@@ -674,7 +1337,8 @@ impl ConsoleApi {
     pub fn needs_sync(&self, relay: &str) -> bool {
         let inner = self.inner.lock();
         match inner.relays.get(relay) {
-            Some(RelayApi::Unknown) => Self::holds_any(&inner),
+            // API-1d 2.4 (R6-10): a spokes relay gets `api-orgs` at every reconnect, even with nothing else to send
+            Some(RelayApi::Unknown) => Self::holds_any(&inner) || self.is_spokes(relay),
             Some(RelayApi::Heads(heads)) => heads.iter().any(|(org, (seq, tseq))| {
                 if *tseq > inner.orgs.get(org).map_or(0, OrgJournal::head) {
                     return false;
@@ -735,6 +1399,18 @@ impl ConsoleApi {
         let gate = self.sending.lock().entry(relay.to_string()).or_default().clone();
         let _one = gate.lock();
         let unknown = matches!(self.inner.lock().relays.get(relay), Some(RelayApi::Unknown));
+        // API-1d 2.4 (R6-10): a spokes relay takes its bound orgs right after `welcome`, before `api-heads`, so an org
+        // unbound while it was away is dropped before any other request; a failure leaves the catch-up incomplete
+        if unknown && self.is_spokes(relay) {
+            match self.send_orgs(link, relay) {
+                Ok(_) => {}
+                // older than API-1d: it holds no API state of its own, `api-heads` tells
+                Err(LinkError::Refused { code, .. }) if code == "fleet-op" => {
+                    self.logger.ops("api.spokes.relay-outdated", &Fields::new().with("relay", relay), Level::Warn);
+                }
+                Err(_) => return false,
+            }
+        }
         if unknown {
             match link.request(relay, "api-heads", json!({}), CALL_MS) {
                 Ok(v) => self.take_heads(relay, &v),
@@ -745,10 +1421,24 @@ impl ConsoleApi {
                 }
                 Err(_) => return false,
             }
+            // revision 4 2.3 item 1: the one request before the catch-up, read-only on the relay
+            let report = match link.request(relay, "api-features", json!({}), CALL_MS) {
+                Ok(v) => Report::of_answer(&v, now),
+                Err(LinkError::Refused { code, .. }) if code == "fleet-op" => Some(Report::old(now)),
+                Err(_) => return false,
+            };
+            if !self.take_features(relay, report.unwrap_or_else(|| Report::old(now))) {
+                return false;
+            }
         }
-        let orgs: Vec<String> = match self.inner.lock().relays.get(relay) {
-            Some(RelayApi::Heads(h)) => h.keys().cloned().collect(),
-            _ => Vec::new(),
+        let spokes = self.is_spokes(relay);
+        let orgs: Vec<String> = {
+            let inner = self.inner.lock();
+            match inner.relays.get(relay) {
+                // API-1d 5.1: a spokes relay waits for a map that lists it; until then nothing of that org is sent
+                Some(RelayApi::Heads(h)) => h.keys().filter(|org| !spokes || Self::spokes_listed(&inner, relay, org)).cloned().collect(),
+                _ => Vec::new(),
+            }
         };
         // then, in the reconnect catch-up only, per org the checkpoint certificate and the backfill of the relay's
         // audit chains (9.3, 12.2); later deliveries carry maps and journal entries alone
@@ -764,7 +1454,17 @@ impl ConsoleApi {
     fn synced(&self, link: &dyn FleetLink, relay: &str, orgs: &[String]) -> bool {
         let body: Map<String, Value> = {
             let inner = self.inner.lock();
-            orgs.iter().map(|org| (org.clone(), json!({ "seq": inner.store.get(org, "").map_or(0, |m| m.seq), "tseq": inner.orgs.get(org).map_or(0, OrgJournal::head) }))).collect()
+            // revision 4 2.3 item 5: an org whose map the relay cannot take holds it to the seq it has
+            let held = |org: &str| match inner.relays.get(relay) {
+                Some(RelayApi::Heads(h)) => h.get(org).map_or(0, |x| x.0),
+                _ => 0,
+            };
+            orgs.iter()
+                .map(|org| {
+                    let seq = if inner.withheld.contains(&(relay.to_string(), org.clone())) { held(org) } else { inner.store.get(org, "").map_or(0, |m| m.seq) };
+                    (org.clone(), json!({ "seq": seq, "tseq": inner.orgs.get(org).map_or(0, OrgJournal::head) }))
+                })
+                .collect()
         };
         match link.request(relay, "api-synced", json!({ "orgs": body }), CALL_MS) {
             Ok(_) => true,
@@ -809,6 +1509,53 @@ impl ConsoleApi {
             }
             Self::plan(&inner, relay, org, seq, tseq)
         };
+        // revision 4 2.3 items 3 and 5, checked again right before the send: a map goes only to a relay that reports
+        // what it needs, and only while it is open for the org; a relay that cannot take it keeps the map it has and
+        // still gets every journal entry it can read
+        let map = match map {
+            Some(m) => {
+                let needs = crate::api_features::map_needs(&m["map"]);
+                let mut inner = self.inner.lock();
+                let fits = inner.sets.gate(org, &needs).is_ok() && needs.iter().all(|n| inner.sets.report_of(relay).is_some_and(|r| r.has(n)));
+                let pair = (relay.to_string(), org.to_string());
+                if fits {
+                    inner.withheld.remove(&pair);
+                    Some(m)
+                } else {
+                    let f = Fields::new().with("relay", relay).with("org", org).with("seq", m["map"]["seq"].as_i64().unwrap_or(0)).with("needs", needs.join(","));
+                    self.logger.security("api.map.withheld", &f, Level::Warn);
+                    inner.withheld.insert(pair);
+                    if base.is_some() {
+                        // the entries kept start above the pruned base, which reaches a relay only with the map
+                        return false;
+                    }
+                    None
+                }
+            }
+            None => {
+                self.inner.lock().withheld.remove(&(relay.to_string(), org.to_string()));
+                None
+            }
+        };
+        // an entry journaled while its feature was open, for a relay that lost the feature since (a rollback): it gets
+        // the entries before it, never one it cannot read
+        let report = self.inner.lock().sets.report_of(relay).cloned();
+        let unreadable = |e: &Value| {
+            crate::api_features::relay_entry_gate(e["action"].as_str().unwrap_or_default(), &e["target"]).is_some_and(|(need, _, _)| !report.as_ref().is_some_and(|r| r.has(need)))
+        };
+        if let Some(i) = entries.iter().position(unreadable) {
+            let f = Fields::new().with("relay", relay).with("org", org).with("tseq", entries[i]["tseq"].as_u64().unwrap_or(0));
+            self.logger.security("api.journal.withheld", &f, Level::Warn);
+            let sendable = entries[..i].to_vec();
+            self.sync_send(link, relay, org, now, key, map, base, sendable);
+            return false;
+        }
+        self.sync_send(link, relay, org, now, key, map, base, entries)
+    }
+
+    /// The sends of one org's catch-up, in order: the key, the map, then each entry; false when one failed.
+    #[allow(clippy::too_many_arguments)]
+    fn sync_send(&self, link: &dyn FleetLink, relay: &str, org: &str, now: i64, key: bool, map: Option<Value>, base: Option<u64>, entries: Vec<Value>) -> bool {
         if key {
             let Ok((pkv, k, not_before)) = self.pseudonym_key(org, now) else { return false };
             let body = json!({ "org": org, "pkv": pkv, "key": b64u(&k), "not_before": not_before });
@@ -823,6 +1570,16 @@ impl ConsoleApi {
             let mut body = json!({ "org": org, "map": map.clone() });
             if let Some(b) = base {
                 body["base"] = json!(b);
+            }
+            // API-1d 2.4: a spokes relay holds no Meet org CA; it verifies the map under the root the console used
+            if self.is_spokes(relay) {
+                match self.spokes_trust(org) {
+                    Some(trust) => body["trust"] = trust,
+                    None => {
+                        self.logger.security("api.map.no-trust", &Fields::new().with("relay", relay).with("org", org), Level::Error);
+                        return false;
+                    }
+                }
             }
             match link.request(relay, "api-map", body, CALL_MS) {
                 Ok(a) => {
@@ -901,6 +1658,113 @@ impl ConsoleApi {
         self.audit.get().map(|(a, _)| a)
     }
 
+    // ── events (revision 4 7) ──
+
+    /// The console's event chains and feed index, set once at start; until then `events_in` answers 503 and
+    /// `emit_event` records nothing.
+    pub fn set_events(&self, events: Arc<crate::api_events::EventLog>) {
+        let _ = self.events.set(events);
+    }
+
+    /// The console's event chains and feed index, once set.
+    pub fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
+        self.events.get().cloned()
+    }
+
+    /// Revision 4 7.1: one console event for `org` (`kind` a registry name the console emits, `data` exactly its
+    /// registry fields), durable in the org's event chains and feed index before Some(its seq). Events never refuse
+    /// what the console does: a failure is the security line `api.events.failed` and None. Later slices call this
+    /// after their audit entry and before they report the effect anywhere else.
+    pub fn emit_event(&self, org: &str, kind: &str, data: Value, now: i64) -> Option<u64> {
+        // a console without fleet state opens no event chains (tests, a console that is starting)
+        let events = self.events.get()?;
+        events.emit(org, kind, data, now).map_err(|e| self.logger.security("api.events.failed", &Fields::new().with("org", org).with("type", kind).with("why", e.message), Level::Error)).ok()
+    }
+
+    /// `api-events` from a relay (revision 4 2.5): as `audit_in`, for its event chain; entries stored in all three
+    /// forms join the org's feed index before the answer.
+    pub fn events_in(&self, relay: &str, body: &Value) -> Result<Value, crate::fleet_wire::Refusal> {
+        use crate::fleet_wire::Refusal;
+        let events = self.events().ok_or_else(|| Refusal::new(503, "audit-unavailable", "The console's event chains are not open."))?;
+        let bad = |why: &str| Refusal::new(400, "bad-chain", why);
+        let org = body.get("org").and_then(Value::as_str).filter(|o| org_ok(o)).ok_or_else(|| bad("org is not an organization id"))?;
+        if !self.serves_now(relay, org) {
+            return Err(Refusal::new(403, "org-not-served", "This relay did not report that organization on this connection."));
+        }
+        let repr = body.get("repr").and_then(Value::as_str).and_then(Repr::of).ok_or_else(|| bad("repr must be as_is, pseudonymized or removed"))?;
+        let first = body.get("first").and_then(Value::as_u64).filter(|f| *f >= 1).ok_or_else(|| bad("first must be a seq from 1"))?;
+        let last = body.get("last").and_then(Value::as_u64).filter(|l| *l >= first).ok_or_else(|| bad("last must be a seq from first"))?;
+        let entries = body.get("entries").and_then(Value::as_array).ok_or_else(|| bad("entries must be a list"))?;
+        if entries.len() as u64 != last - first + 1 {
+            return Err(bad("entries must hold first to last"));
+        }
+        match events.ingest(org, relay, repr, first, last, entries) {
+            Ok(()) => Ok(json!({ "ok": true, "last": events.head(org, relay, repr).0 })),
+            Err(IngestError::Gap(expected)) => Ok(json!({ "ok": false, "code": "gap", "expected": expected })),
+            Err(IngestError::Invalid(why)) => {
+                let f = Fields::new().with("relay", relay).with("org", org).with("repr", repr.as_str()).with("first", first).with("why", why.as_str());
+                self.logger.security("api.events.ingest-refused", &f, Level::Error);
+                Err(bad(&why))
+            }
+            Err(IngestError::Unavailable(why)) => Err(Refusal::new(503, "audit-unavailable", &why)),
+        }
+    }
+
+    /// The backfill of one org's event chains of the relay (revision 4 2.5): `api-event-chains` pages from the heads
+    /// the console holds, as `backfill_org`. A relay answering `fleet-op` (revision 3) is left alone until it
+    /// reconnects. False when it did not end.
+    fn backfill_events_org(&self, link: &dyn FleetLink, relay: &str, org: &str) -> bool {
+        let Some(events) = self.events() else { return true };
+        let key = (relay.to_string(), org.to_string());
+        let set = |pending: bool| {
+            let mut inner = self.inner.lock();
+            if pending {
+                inner.ev_backfill.insert(key.clone());
+            } else {
+                inner.ev_backfill.remove(&key);
+            }
+        };
+        for _ in 0..PAGES_MAX {
+            if self.inner.lock().no_events.contains(relay) {
+                set(false);
+                return true;
+            }
+            let after: Map<String, Value> = Repr::ALL.iter().map(|r| (r.as_str().to_string(), json!(events.head(org, relay, *r).0))).collect();
+            let page = match link.request(relay, "api-event-chains", json!({ "org": org, "after": after }), CALL_MS) {
+                Ok(p) => p,
+                Err(LinkError::Refused { code, .. }) if code == "fleet-op" => {
+                    self.inner.lock().no_events.insert(relay.to_string());
+                    set(false);
+                    return true;
+                }
+                Err(_) => {
+                    set(true);
+                    return false;
+                }
+            };
+            for repr in Repr::ALL {
+                let entries = page.get(repr.as_str()).and_then(Value::as_array).cloned().unwrap_or_default();
+                let seq = |e: Option<&Value>| e.and_then(|e| e.get("seq")).and_then(Value::as_u64);
+                let (Some(first), Some(last)) = (seq(entries.first()), seq(entries.last())) else { continue };
+                if let Err(e) = events.ingest(org, relay, repr, first, last, &entries) {
+                    let why = match e {
+                        IngestError::Gap(n) => format!("gap: expected {n}"),
+                        IngestError::Invalid(w) | IngestError::Unavailable(w) => w,
+                    };
+                    self.logger.security("api.events.backfill-refused", &Fields::new().with("relay", relay).with("org", org).with("repr", repr.as_str()).with("why", why), Level::Error);
+                    set(false);
+                    return false;
+                }
+            }
+            if page.get("more") != Some(&Value::Bool(true)) {
+                set(false);
+                return true;
+            }
+        }
+        set(true);
+        false
+    }
+
     /// Record the console's own notes (see `fleet_agent::api_record`).
     fn note_audit(&self, notes: Vec<crate::fleet_agent::ApiNote>, now: i64) {
         if notes.is_empty() || self.audit.get().is_none() {
@@ -969,6 +1833,8 @@ impl ConsoleApi {
             return false;
         }
         self.backfill_org(link, relay, org);
+        // revision 4 7.3: the relay's event chains (signed with the same checkpoint key)
+        self.backfill_events_org(link, relay, org);
         true
     }
 
@@ -1069,7 +1935,7 @@ impl ConsoleApi {
     pub fn audit_work(&self, link: &dyn FleetLink, relay: &str, now: i64) {
         let gate = self.sending.lock().entry(relay.to_string()).or_default().clone();
         let _one = gate.lock();
-        let (orgs, renew, backfill) = {
+        let (orgs, renew, backfill, ev_backfill) = {
             let inner = self.inner.lock();
             let Some(RelayApi::Heads(h)) = inner.relays.get(relay) else { return };
             if inner.no_audit.contains(relay) {
@@ -1077,7 +1943,8 @@ impl ConsoleApi {
             }
             let renew = inner.checkpoint_at.get(relay).is_some_and(|at| now >= *at);
             let backfill: Vec<String> = inner.backfill.iter().filter(|(r, _)| r == relay).map(|(_, o)| o.clone()).filter(|o| h.contains_key(o)).collect();
-            (h.keys().cloned().collect::<Vec<String>>(), renew, backfill)
+            let ev_backfill: Vec<String> = inner.ev_backfill.iter().filter(|(r, _)| r == relay).map(|(_, o)| o.clone()).filter(|o| h.contains_key(o)).collect();
+            (h.keys().cloned().collect::<Vec<String>>(), renew, backfill, ev_backfill)
         };
         if renew {
             let ok = orgs.iter().all(|org| self.checkpoint_org(link, relay, org, now));
@@ -1086,6 +1953,9 @@ impl ConsoleApi {
         }
         for org in backfill {
             self.backfill_org(link, relay, &org);
+        }
+        for org in ev_backfill {
+            self.backfill_events_org(link, relay, &org);
         }
     }
 
@@ -1101,7 +1971,7 @@ impl ConsoleApi {
                 .relays
                 .iter()
                 .filter(|(r, s)| matches!(s, RelayApi::Heads(_)) && !inner.no_audit.contains(*r) && !inner.audit_busy.contains(*r))
-                .filter(|(r, _)| inner.checkpoint_at.get(*r).is_some_and(|at| now >= *at) || inner.backfill.iter().any(|(b, _)| b == *r))
+                .filter(|(r, _)| inner.checkpoint_at.get(*r).is_some_and(|at| now >= *at) || inner.backfill.iter().any(|(b, _)| b == *r) || inner.ev_backfill.iter().any(|(b, _)| b == *r))
                 .map(|(r, _)| r.clone())
                 .collect()
         };
@@ -1488,6 +2358,42 @@ impl ConsoleApi {
         Err("issuer-key-unlisted")
     }
 
+    /// API-1d 7.1.2: the keys a card of `org` is signed with now, in `kid` order: the pinned map's `a2a.jwks` entries
+    /// with `nbf <= now < exp`, not under an active `a2a_key_drop`, sealed here (`console_a2a::seal_name`) with the
+    /// same public point.
+    pub fn a2a_keys(&self, org: &str, now: i64) -> Vec<(String, EcdsaKeyPair)> {
+        let listed: Vec<Value> = {
+            let inner = self.inner.lock();
+            inner.store.get(org, "").and_then(|m| m.map().get("a2a")?.get("jwks")?.as_array().cloned()).unwrap_or_default()
+        };
+        let active = self.console_active(org);
+        let mut out: Vec<(String, EcdsaKeyPair)> = crate::console_a2a::usable(&listed, &active, now)
+            .into_iter()
+            .filter_map(|k| {
+                let kid = k.get("kid")?.as_str()?;
+                let pair = crate::console_a2a::sealed_key(&*self.vault, org, kid)?;
+                let mine = api_issue::ec_public_jwk(&pair, kid);
+                (mine.get("x") == k.get("x") && mine.get("y") == k.get("y")).then(|| (kid.to_string(), pair))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    /// API-1d 7.1.5: the org's pinned map (the `map` object) and its seq while its cards may be served: pinned and not
+    /// set aside, unexpired at `now`, and not under `api_off`.
+    pub fn a2a_serving(&self, org: &str, now: i64) -> Option<(Value, i64)> {
+        let inner = self.inner.lock();
+        let m = inner.store.get(org, "").filter(|m| m.expires > now && !inner.store.is_off(org))?;
+        Some((Value::Object(m.map().clone()), m.seq))
+    }
+
+    /// 6.5 on the front door's public routes outside `api_document` (API-1d 7.1.5): the source limiter; Err is the
+    /// seconds to wait.
+    pub fn public_source_ok(&self, source: IpAddr, now: i64) -> Result<(), i64> {
+        self.issue.source_ok(source, now)
+    }
+
     /// A read-only copy of one org's api state for the front door's routes: None unless the org has a pinned map or
     /// one set aside (6.1 `license` then answers).
     pub fn org_snapshot(&self, org: &str) -> Option<ApiMapStore> {
@@ -1515,7 +2421,11 @@ impl ConsoleApi {
         if !org_ok(org) {
             return None;
         }
-        let issuer = self.inner.lock().store.get(org, "")?.map().get("issuer").cloned().unwrap_or(Value::Null);
+        let (issuer, federation) = {
+            let inner = self.inner.lock();
+            let m = inner.store.get(org, "")?.map();
+            (m.get("issuer").cloned().unwrap_or(Value::Null), m.get("federation").cloned().unwrap_or(Value::Null))
+        };
         if let Err(s) = self.issue.source_ok(source, now) {
             let mut a = api_issue::problem(429, "abuse", "Too many requests from this address; try again later.");
             a.headers.push(("Retry-After", s.to_string()));
@@ -1523,9 +2433,24 @@ impl ConsoleApi {
         }
         let i = issuer.get("url").and_then(Value::as_str).unwrap_or_default();
         let body = match doc {
-            ApiDoc::AuthorizationServer => api_issue::as_metadata(i, &format!("{i}/oauth/token"), Some(&format!("{i}/oauth/revoke")), &format!("{i}/jwks.json")),
-            ApiDoc::ProtectedResource => api_issue::resource_metadata(i, &[i], &crate::api_map::SCOPES),
+            ApiDoc::AuthorizationServer => api_issue::console_as_metadata(i),
+            ApiDoc::McpResource => crate::api_delegated::mcp_metadata(i, org),
+            // directory.* tokens are for the SSO service's SCIM resource S, never for I (revision 4 4.3)
+            ApiDoc::ProtectedResource => api_issue::resource_metadata(i, &[i], &crate::api_map::SCOPES.iter().copied().filter(|s| !s.starts_with("directory.")).collect::<Vec<_>>()),
             ApiDoc::Jwks => api_issue::jwks(issuer.get("jwks").and_then(Value::as_array).map_or(&[][..], Vec::as_slice)),
+            // revision 4 8.1: served only when the org's federation issuer is I/federation, else 404
+            ApiDoc::FederationDiscovery | ApiDoc::FederationJwks => {
+                let map = json!({ "issuer": issuer, "federation": federation });
+                match crate::api_federation::front_door_document(&map, &self.console_active(org), doc == ApiDoc::FederationJwks) {
+                    Some(b) => b,
+                    None => return Some(api_issue::problem(404, "not-found", "Nothing is here.")),
+                }
+            }
+            // revision 4 7.3: public; a key under `webhook_key_drop` leaves at once (2.4)
+            ApiDoc::WebhookKeys => {
+                let keys = self.inner.lock().store.get(org, "").and_then(|m| m.map().get("webhook_keys").cloned());
+                crate::api_webhook::published(keys.as_ref(), &self.console_active(org))
+            }
         };
         Some(api_issue::document(body))
     }
@@ -1536,7 +2461,8 @@ impl ConsoleApi {
     /// `issuer-key-unlisted`). The store is a snapshot, so no lock is held while a JWKS or discovery fetch runs. A
     /// revocation is journaled as `token_deny` (`until` = the token's `exp`) and sent to the org's relays. `licensed`
     /// is the console's own license state (6.1 `license`). `audit(client, jti, until)` records a revocation in the
-    /// org's chain before it is journaled (9.4); its failure answers 503 `audit-unavailable`.
+    /// org's chain before it is journaled (9.4); its failure answers 503 `audit-unavailable`. `host` (revision 5 6) opens
+    /// the delegated grants and the M, C and CM resources; None refuses them (`grant`, `target`).
     #[allow(clippy::too_many_arguments)]
     pub fn api_token(
         self: &Arc<Self>,
@@ -1548,6 +2474,7 @@ impl ConsoleApi {
         owner_active: &dyn Fn(&str) -> bool,
         licensed: bool,
         audit: &dyn Fn(&str, &str, i64) -> Result<(), String>,
+        host: Option<&dyn crate::api_delegated::DelegatedHost>,
         now: i64,
     ) -> Option<Answer> {
         let store = self.org_snapshot(org);
@@ -1575,6 +2502,7 @@ impl ConsoleApi {
         let endpoint = format!("{issuer}/oauth/token");
         let mut resources = vec![issuer.clone()];
         resources.extend(store.relay_origins(org).into_iter().flatten().filter_map(|(_, o)| o.as_str()).map(|o| format!("{}/api/orgs/{org}", o.trim_end_matches('/'))));
+        let delegated = host.map(|host| crate::api_delegated::Delegated { host, state: &self.delegated });
         let ctx = IssueCtx {
             org,
             issuer: &issuer,
@@ -1589,6 +2517,7 @@ impl ConsoleApi {
             state: &self.issue,
             licensed,
             now,
+            delegated: delegated.as_ref(),
         };
         if !revoke {
             return Some(api_issue::token(&ctx, http));
@@ -1599,6 +2528,135 @@ impl ConsoleApi {
             self.append(link.clone(), org, "token_deny", json!({"client": client, "jti": jti}), Some(until), now).map(|_| ()).map_err(|e| ("journal", e.message))
         };
         Some(api_issue::revoke(&ctx, http, &journal))
+    }
+
+    // ── person-delegated OAuth (revision 5 4.2, 4.3, 6) ──
+
+    /// Revision 5 4.3: `api-subject` over the fleet link to a relay of the org connected now (any: the record is
+    /// self-verifying), the next one when one fails; Err when none is connected or none answered.
+    pub fn api_subject(&self, link: Option<Arc<dyn FleetLink>>, org: &str, request: &Value) -> Result<Value, String> {
+        let link = link.ok_or("the console has no fleet link")?;
+        let mut last = "no relay of the organization is connected".to_string();
+        for relay in self.relays_of(org).into_iter().filter(|r| self.serves_now(r, org)) {
+            match link.request(&relay, "api-subject", request.clone(), CALL_MS) {
+                Ok(answer) => return Ok(answer),
+                Err(e) => last = format!("{relay}: {e:?}"),
+            }
+        }
+        Err(last)
+    }
+
+    /// Revision 5 6.1, 6.4: `api-org-policy {org}` over the fleet link to the relays of the org connected now, in turn;
+    /// each answer is verified under the console's Meet CA `root` as it arrives (`api_delegated::first_verified_policy`),
+    /// so a relay that fails or answers with a policy that does not verify passes to the next. Ok(None) when the relays
+    /// hold no policy; Err when none is connected or none answered with one that verifies.
+    pub fn api_org_policy(&self, link: Option<Arc<dyn FleetLink>>, org: &str, root: &crate::api_delegated::Root, now: i64) -> Result<Option<crate::meet_org_policy::Obj>, String> {
+        let link = link.ok_or("the console has no fleet link")?;
+        let answers = self.relays_of(org).into_iter().filter(|r| self.serves_now(r, org)).map(|relay| {
+            let answer = link.request(&relay, "api-org-policy", json!({"org": org}), CALL_MS).map_err(|e| format!("{e:?}"));
+            (relay, answer)
+        });
+        crate::api_delegated::first_verified_policy(answers, root, org, now)
+    }
+
+    /// Revision 5 4.6, 6.5: the Authorize pipeline (`GET oauth/authorize`, `POST oauth/sso-return`, `GET` and `POST
+    /// oauth/consent`) on a snapshot of the org's store; None for an org without a pinned map (404). Every decision is
+    /// in the org's chain through `host.audit` before the answer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn api_authorize(
+        &self,
+        org: &str,
+        route: crate::api_delegated::AuthzRoute,
+        http: &crate::api_delegated::AuthzHttp,
+        owner_active: &dyn Fn(&str) -> bool,
+        licensed: bool,
+        host: &dyn crate::api_delegated::DelegatedHost,
+        now: i64,
+    ) -> Option<crate::api_resource::Reply> {
+        let store = self.org_snapshot(org)?;
+        let d = crate::api_delegated::Delegated { host, state: &self.delegated };
+        let limiter = |ip: IpAddr| self.issue.source_ok(ip, now);
+        let ctx = crate::api_delegated::AuthzCtx { org, store: &store, d: &d, fetch: &self.fetch, limiter: &limiter, owner_active, licensed, now };
+        Some(crate::api_delegated::authorize(&ctx, route, http))
+    }
+
+    /// Revision 5 4.2 (R5-3, R5-6): journal `person_revoke {client, principal}` (`client` a `c_` id or `*`), then end
+    /// that person's refresh families of the client (every client for `*`) at once. Called for an admin's revocation,
+    /// a person's Stop, a deprovisioned person (`api_people`) and `drop_delegation`.
+    pub fn person_revoke(&self, org: &str, client: &str, principal: &str, now: i64) -> Result<Value, ApiMapError> {
+        let principal = principal.trim().to_lowercase();
+        let e = self.append_console(org, "person_revoke", json!({"client": client, "principal": principal}), now)?;
+        let ended = self.delegated.end_families(org, now, &|f| (client == "*" || f.client == client) && f.person.eq_ignore_ascii_case(&principal), "person_revoke");
+        if let Err(f) = ended {
+            // the entry stands (every refresh is refused `person` by 6.1); the families end at their next use
+            self.logger.security("api.consent.unended", &Fields::new().with("org", org).with("why", f.why), Level::Error);
+        }
+        Ok(e)
+    }
+
+    /// Revision 5 4.2 (R5-6): journal `client_drop_delegation {client, <what>: value}` (`what` `group`, `principal`
+    /// or `idp`), then `person_revoke` for each principal with a live refresh family or a delegated token in the last
+    /// 10 minutes through that way in who is not still allowed by another listed group or principal. Ok is the
+    /// principals revoked. The admin's client update journals it (`console_fleet::api_journal`, slice 1c7).
+    pub fn drop_delegation(&self, org: &str, client: &str, what: &str, value: &str, now: i64) -> Result<Vec<String>, ApiMapError> {
+        if !matches!(what, "group" | "principal" | "idp") {
+            return Err(ApiMapError::new("not-tightening", "a delegation is dropped by group, principal or idp"));
+        }
+        let mut target = json!({"client": client});
+        target[what] = json!(value);
+        self.append_console(org, "client_drop_delegation", target, now)?;
+        let affected = self.delegated.through(org, client, &format!("{what}:{value}"), now).map_err(|f| ApiMapError::new("io", f.why))?;
+        let active = self.console_active(org);
+        let pinned = self.inner.lock().store.get(org, "").and_then(|m| m.map().get("clients")?.as_array()?.iter().find(|c| c.get("id").and_then(Value::as_str) == Some(client)).cloned());
+        let mut revoked = Vec::new();
+        for (principal, groups) in affected {
+            let still = pinned.as_ref().and_then(Value::as_object).is_some_and(|c| crate::api_delegated::still_allowed(c, client, &principal, &groups, &active));
+            if !still {
+                self.person_revoke(org, client, &principal, now)?;
+                revoked.push(principal);
+            }
+        }
+        Ok(revoked)
+    }
+
+    /// Revision 5 14.1 `GET settings/api/delegations`: each person's delegated grant uses of the org in the last 24
+    /// hours (of `client` only, when given) with their live refresh families' ends (`DelegatedState::uses`).
+    pub fn delegation_uses(&self, org: &str, client: Option<&str>, now: i64) -> Result<Vec<crate::api_delegated::Use>, String> {
+        self.delegated.uses(org, client, now).map_err(|f| f.why)
+    }
+
+    /// Revision 5 14.1 `POST settings/api/idps/test`: the IdP's discovery (`<issuer>/.well-known/openid-configuration`,
+    /// else `/.well-known/oauth-authorization-server`, naming exactly `issuer`) and its `jwks_uri`, fetched under 1a 8.1
+    /// with the front door's fetch cache. Ok is (jwks_uri, keys); nothing is kept but the test time and key count
+    /// (`idp_tested`).
+    pub fn idp_test(&self, issuer: &str, private_ok: bool) -> Result<(String, Vec<Value>), String> {
+        let base = issuer.trim_end_matches('/');
+        let mut last = "The identity provider's discovery document could not be fetched.".to_string();
+        for path in ["/.well-known/openid-configuration", "/.well-known/oauth-authorization-server"] {
+            match api_issue::fetch_doc(&self.fetch, &format!("{base}{path}"), private_ok) {
+                Ok(doc) => {
+                    let named = doc.get("issuer").and_then(Value::as_str) == Some(issuer);
+                    let Some(uri) = doc.get("jwks_uri").and_then(Value::as_str).filter(|_| named) else {
+                        last = "The identity provider's discovery document names another issuer or no jwks_uri.".to_string();
+                        continue;
+                    };
+                    let keys = api_issue::fetch_doc(&self.fetch, uri, private_ok).map_err(|r| r.why)?;
+                    return Ok((uri.to_string(), api_issue::keys_of(&keys)));
+                }
+                Err(r) => last = r.why,
+            }
+        }
+        Err(last)
+    }
+
+    /// Keep the last IdP test of (org, issuer): when (seconds) and how many keys it found (memory only).
+    pub fn idp_tested(&self, org: &str, issuer: &str, at: i64, keys: usize) {
+        self.idp_tests.lock().insert((org.to_string(), issuer.to_string()), (at, keys));
+    }
+
+    /// The last IdP test of (org, issuer) this console ran since it started: (when, key count).
+    pub fn idp_last_test(&self, org: &str, issuer: &str) -> Option<(i64, usize)> {
+        self.idp_tests.lock().get(&(org.to_string(), issuer.to_string())).copied()
     }
 }
 
@@ -1725,16 +2783,20 @@ mod tests {
         fail_retire: Mutex<bool>,
         /// The next applied `api-tighten` answers an error instead (an answer lost after the entry was applied).
         lose_answer: Mutex<bool>,
+        /// The `api-features` answer (None: this build's, `api_features::relay_answer`; `Some(Null)`: `fleet-op`, as a
+        /// revision 3 relay answers it while it knows every other api op).
+        features: Mutex<Option<Value>>,
     }
 
     impl FakeRelay {
         fn new(id: &'static str, org: &str, dir: &Path, logger: Arc<Logger>) -> FakeRelay {
-            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Arc::new(Mutex::new(MemVault::default())), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger, audit: Mutex::new(None), page: 2, no_audit: false, csr_now: Mutex::new(NOW), caught_up: Mutex::new(false), fail_retire: Mutex::new(false), lose_answer: Mutex::new(false) }
+            FakeRelay { id, org: org.to_string(), old: false, up: Mutex::new(true), dir: dir.to_path_buf(), store: Mutex::new(ApiMapStore::load(Some(dir))), vault: Arc::new(Mutex::new(MemVault::default())), sent: Mutex::new(Vec::new()), heads: Mutex::new(None), logger, audit: Mutex::new(None), page: 2, no_audit: false, csr_now: Mutex::new(NOW), caught_up: Mutex::new(false), fail_retire: Mutex::new(false), lose_answer: Mutex::new(false), features: Mutex::new(None) }
         }
 
-        /// The ops sent, without the `api-synced` that ends every catch-up that fully succeeded (see `caught_up`).
+        /// The ops sent, without the `api-synced` that ends every catch-up that fully succeeded (see `caught_up`) and the
+        /// `api-features` that follows every `api-heads` (revision 4 2.3).
         fn ops(&self) -> Vec<String> {
-            self.sent.lock().iter().map(|(op, _)| op.clone()).filter(|op| op != "api-synced").collect()
+            self.sent.lock().iter().map(|(op, _)| op.clone()).filter(|op| op != "api-synced" && op != "api-features").collect()
         }
 
         /// As `fleet_agent::api_caught_up`: set by an accepted `api-synced`, cleared by `api-heads`, a failed
@@ -1768,6 +2830,12 @@ mod tests {
                     *self.caught_up.lock() = false;
                     Ok(self.heads.lock().clone().unwrap_or_else(|| self.heads_now()))
                 }
+                // read-only: leaves the catch-up state as it is
+                "api-features" => match self.features.lock().clone() {
+                    Some(Value::Null) => Err(Refusal::of("fleet-op")),
+                    Some(v) => Ok(v),
+                    None => Ok(crate::api_features::relay_answer(Vec::new())),
+                },
                 "api-synced" => {
                     // what the relay holds on disk for every org asked about
                     let store = self.store.lock();
@@ -2190,9 +3258,9 @@ mod tests {
         assert!(api.needs_sync(RELAY));
         assert!(api.sync(&*link, RELAY, NOW));
         let sent = relay.sent.lock().clone();
-        assert_eq!(sent.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(), ["api-heads", "api-tighten", "api-tighten", "api-synced"], "the key and map are not sent again");
-        assert_eq!(sent[3].1["orgs"]["acme"], json!({"seq": 1, "tseq": 2}));
-        assert_eq!((sent[1].1["entry"]["tseq"].as_u64(), sent[2].1["entry"]["tseq"].as_u64()), (Some(1), Some(2)));
+        assert_eq!(sent.iter().map(|(op, _)| op.as_str()).collect::<Vec<_>>(), ["api-heads", "api-features", "api-tighten", "api-tighten", "api-synced"], "the key and map are not sent again");
+        assert_eq!(sent[4].1["orgs"]["acme"], json!({"seq": 1, "tseq": 2}));
+        assert_eq!((sent[2].1["entry"]["tseq"].as_u64(), sent[3].1["entry"]["tseq"].as_u64()), (Some(1), Some(2)));
         assert_eq!(relay.store.lock().head("acme"), (1, 2));
         assert_eq!(api.acked(RELAY, "acme"), 2);
         assert!(!api.needs_sync(RELAY));
@@ -2203,6 +3271,86 @@ mod tests {
         let again = ConsoleApi::open(Some(&d.join("console")), log, vault());
         assert_eq!((again.journal_head("acme"), again.acked(RELAY, "acme")), (3, 3));
         assert!(!lines.lock().iter().any(|l| l.contains("api.journal.conflict")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Revision 4 2.3 (Rev4Review R4-1): a revision 3 relay in a version 2 org keeps receiving the relay journal in
+    /// order (its tseq never stalls), never receives a version 2 map or a console journal action, ends its catch-up
+    /// with an accepted `api-synced`, and shows as outdated; the gate refuses what needs version 2.
+    #[test]
+    fn a_revision_3_relay_in_a_version_2_org_never_stalls() {
+        let d = temp("r3-relay");
+        let (log, lines) = logger();
+        let (relay, link) = one(&d, &log);
+        *relay.features.lock() = Some(Value::Null);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        api.publish_verified(None, map(1, 12, NOW + 30 * 86_400), NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        assert_eq!(relay.store.lock().head("acme").0, 1);
+        assert_eq!(api.gate("acme", &[crate::api_features::MAP_V2]).unwrap_err().code, "relay-outdated");
+        assert!(api.gate("acme", &[]).is_ok());
+        // a version 2 map saved before this relay joined (pinned here without the gate)
+        let mut v2 = map(2, 12, NOW + 30 * 86_400);
+        v2.wire["map"]["v"] = json!(2);
+        v2.wire["map"]["webhook_keys"] = json!([]);
+        v2.hash = api_map_hash(&v2.wire["map"]);
+        api.publish_verified(Some(link.clone()), v2, NOW).unwrap();
+        // a tightening only revision 4 relays read is journaled as its revision 3 fallback, once
+        let e = api.append(Some(link.clone()), "acme", "client_drop_scope", json!({"client": CLIENT, "scope": "directory.write"}), None, NOW).unwrap();
+        assert_eq!((e["action"].as_str(), e["target"].as_str()), (Some("client_suspend"), Some(CLIENT)));
+        api.append(Some(link.clone()), "acme", "client_drop_scope", json!({"client": CLIENT, "scope": "directory.write"}), None, NOW).unwrap();
+        assert_eq!(api.journal_head("acme"), 1);
+        // a console-only action reaches no relay
+        let k = api.append_console("acme", "webhook_key_drop", json!({"kid": "wk-1"}), NOW).unwrap();
+        assert_eq!(k["id"], "k_acme_000001");
+        assert!(wait_for(|| relay.store.lock().head("acme").1 == 1));
+        assert!(api.sync(&*link, RELAY, NOW), "the catch-up ends with an accepted api-synced");
+        assert!(relay.caught_up());
+        assert_eq!(relay.store.lock().head("acme"), (1, 1), "it keeps map 1 and holds every entry");
+        let sent = relay.sent.lock().clone();
+        assert!(!sent.iter().any(|(op, b)| op == "api-map" && b["map"]["map"]["v"] == 2), "never a version 2 map");
+        assert!(!sent.iter().any(|(_, b)| b["entry"]["id"].as_str().is_some_and(|i| i.starts_with("k_"))), "never a console journal action");
+        assert_eq!(api.outdated(), vec![("acme".to_string(), RELAY.to_string(), vec![crate::api_features::MAP_V2])]);
+        assert!(lines.lock().iter().any(|l| l.contains("api.map.withheld")));
+        assert_eq!(api.relay_set("acme").get(RELAY).cloned().flatten().map(|r| r.map), Some(vec![1]));
+        assert!(api.connector_entries("acme", 0).is_empty(), "revision 4 journals no connector action");
+        assert_eq!(api.idempotency().begin("acme", CLIENT, "AbCdEfGh12345678", &json!({}), NOW), crate::api_idempotency::Begin::Fresh);
+        // retiring a relay that is connected and still reports the org is refused; the set survives a restart
+        assert_eq!(api.retire_relay("acme", RELAY).unwrap_err().code, "relay-connected");
+        let again = ConsoleApi::open(Some(&d.join("console")), log, vault());
+        assert!(again.gate("acme", &[crate::api_features::MAP_V2]).is_err());
+        assert_eq!(again.console_active("acme").len(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Revision 4 2.3 item 3: a relay that answers `api-features` with version 2 opens the gate; its rollback to an
+    /// older build closes it at once (`api.relay-outdated`), and the relay gets no version 2 map after that.
+    #[test]
+    fn a_rollback_closes_the_gate_at_once() {
+        let d = temp("rollback");
+        let (log, lines) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        assert!(api.gate("acme", &[crate::api_features::MAP_V2]).is_ok());
+        assert!(api.relay_has(RELAY, crate::api_features::MAP_V2));
+        let mut v2 = map(1, 12, NOW + 30 * 86_400);
+        v2.wire["map"]["v"] = json!(2);
+        v2.wire["map"]["webhook_keys"] = json!([]);
+        v2.hash = api_map_hash(&v2.wire["map"]);
+        api.publish_verified(None, v2, NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        assert_eq!(relay.store.lock().head("acme").0, 1, "the version 2 map reached the relay that reports it");
+        // the relay is rolled back to revision 3 and reconnects
+        *relay.features.lock() = Some(Value::Null);
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        assert!(lines.lock().iter().any(|l| l.contains("api.relay-outdated")));
+        assert_eq!(api.gate("acme", &[crate::api_features::MAP_V2]).unwrap_err().code, "relay-outdated");
+        assert_eq!(api.outdated().len(), 1);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -2466,7 +3614,7 @@ mod tests {
         let basic = format!("Basic {}", crate::meet_json::b64(format!("{CLIENT}:{SECRET}").as_bytes()));
         let ask_as = |revoke: bool, body: &[u8], licensed: bool| {
             let http = TokenHttp { form: body, authorization: Some(basic.as_str()), dpop: None, client_cert: None, source };
-            api.api_token(None, "acme", revoke, &http, None, &|_: &str| true, licensed, &|_: &str, _: &str, _: i64| Ok(()), NOW)
+            api.api_token(None, "acme", revoke, &http, None, &|_: &str| true, licensed, &|_: &str, _: &str, _: i64| Ok(()), None, NOW)
         };
         let ask = |revoke: bool, body: &[u8]| ask_as(revoke, body, true);
         let cc = b"grant_type=client_credentials".as_slice();
@@ -2539,6 +3687,58 @@ mod tests {
 
     fn chains(dir: &Path, source: &str) -> Arc<ApiAudit> {
         Arc::new(ApiAudit::open(Some(dir), source, Arc::new(NoSigner), Arc::new(NoKeys), NOW))
+    }
+
+    fn event_log(dir: &Path, source: &str) -> Arc<crate::api_events::EventLog> {
+        Arc::new(crate::api_events::EventLog::open(Some(dir), source, Arc::new(NoSigner), Arc::new(NoKeys), NOW))
+    }
+
+    /// Revision 4 7.1, 2.5: a journaled suspension and `api_off` are events before any relay hears of them; a relay's
+    /// event chain arrives with `api-events` (in order, from the org it reported) and joins the feed index.
+    #[test]
+    fn tightenings_are_events_and_relay_event_chains_join_the_feed() {
+        let (d, _lines, _relay, _link, api) = failover_setup("events", false);
+        let events = event_log(&d.join("console"), "console");
+        assert_eq!(api.emit_event("acme", "api.enabled", Value::Null, NOW), None, "nothing before the chains are set");
+        api.set_events(events.clone());
+        api.append(None, "acme", "client_suspend", json!(CLIENT), None, NOW).unwrap();
+        api.append(None, "acme", "api_off", json!("acme"), None, NOW).unwrap();
+        let own = events.chains().range("acme", "console", Repr::AsIs, 0, 10);
+        let types: Vec<&str> = own.iter().filter_map(|e| e["type"].as_str()).collect();
+        assert_eq!(types, ["client.suspended", "api.disabled"]);
+        assert_eq!(own[0]["data"], json!({"client": CLIENT, "reason": "client_suspend"}));
+        assert_eq!(api.emit_event("acme", "nothing.happened", Value::Null, NOW), None, "a type outside the registry");
+        // the relay's own chain, shipped as the relay's loop ships it
+        let relay_events = event_log(&d.join("relay-events"), RELAY);
+        relay_events.emit("acme", "relay.mode.changed", json!({"relay": RELAY, "mode": "failover"}), NOW).unwrap();
+        let mut skip = std::collections::HashSet::new();
+        let mut shipped = BTreeMap::new();
+        while let Some(b) = api_next_batch(relay_events.chains(), &shipped, &skip) {
+            assert_eq!((b.op, b.shipped), ("api-events", crate::fleet_agent::API_EVENTS_SHIPPED_FILE));
+            let a = api.events_in(RELAY, &b.body).unwrap();
+            assert_eq!(a["ok"], true);
+            shipped.entry(b.org.clone()).or_insert_with(BTreeMap::new).insert(b.repr.as_str().to_string(), b.last);
+            skip.insert((b.org, b.repr));
+        }
+        assert_eq!(api.events_in("r_ffffffffffffffff", &json!({"org": "acme", "repr": "as_is", "first": 1, "last": 1, "entries": [{}]})).unwrap_err().code, "org-not-served");
+        let scopes = vec!["events.subscribe".to_string(), "monitor.read".to_string(), "audit.read".to_string()];
+        let any = |_: &str| true;
+        let viewer = crate::api_events::Viewer { scopes: &scopes, reaches: &any, ceiling: crate::api_catalog::Ceiling::Internal, repr: Repr::Pseudonymized, types: None };
+        let page = events.page("acme", &crate::api_events::FeedQuery::parse("").unwrap(), &viewer).unwrap();
+        let got: Vec<&str> = page["events"].as_array().unwrap().iter().filter_map(|e| e["type"].as_str()).collect();
+        assert_eq!(got, ["com.emertins.lucid.client.suspended", "com.emertins.lucid.api.disabled", "com.emertins.lucid.relay.mode.changed"]);
+        // a signed map that clears the `api_off` entry turns the API on again: `api.enabled` once, with no data
+        for seq in [2, 3] {
+            let mut vm = failover_map(seq, false);
+            vm.wire["map"]["issued"] = json!(NOW + 5);
+            vm.wire["map"]["cleared"] = json!(["t_acme_000002"]);
+            vm.hash = api_map_hash(&vm.wire["map"]);
+            api.publish_verified(None, vm, NOW + 10).unwrap();
+        }
+        let enabled: Vec<Value> = events.chains().range("acme", "console", Repr::AsIs, 0, 100).into_iter().filter(|e| e["type"] == "api.enabled").collect();
+        assert_eq!(enabled.len(), 1, "fired once");
+        assert!(enabled[0].get("data").is_none(), "api.enabled carries no data");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     fn call_entry(i: u64) -> Value {
@@ -2639,7 +3839,7 @@ mod tests {
             mine.record("acme", call_entry(i), NOW + i as i64).unwrap();
         }
         // the relay believes the console holds up to 5; the console holds 3 and answers gap
-        crate::fleet_agent::api_shipped_set(&rdir, "acme", "as_is", 5).unwrap();
+        crate::fleet_agent::api_shipped_set_in(&rdir, crate::fleet_agent::API_SHIPPED_FILE, "acme", "as_is", 5).unwrap();
         let b = api_next_batch(&mine, &api_shipped_load(&rdir), &Default::default()).unwrap();
         assert_eq!((b.repr, b.first, b.last), (Repr::AsIs, 6, 7));
         let answer = api.audit_in(RELAY, &b.body).unwrap();
@@ -2858,6 +4058,189 @@ mod tests {
         api.audit_tick(link.clone(), now_s());
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(relay.ops().is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // ── API-1d 2.4, 5.1: spokes relays ──
+
+    const SPOKE: &str = "n_00000000000000000000000000000a01";
+
+    /// A map whose `spokes.relays` lists `relays`.
+    fn spokes_map(seq: i64, relays: &[&str]) -> VerifiedApiMap {
+        let mut vm = map(seq, 12, NOW + 30 * 86_400);
+        vm.wire["map"]["spokes"] = json!({"root": "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0", "root_spki": "ab".repeat(32), "relays": relays});
+        vm.hash = api_map_hash(&vm.wire["map"]);
+        vm
+    }
+
+    fn sent_ops(relay: &FakeRelay) -> Vec<String> {
+        relay.sent.lock().iter().map(|(op, _)| op.clone()).collect()
+    }
+
+    fn body_of(relay: &FakeRelay, op: &str) -> Option<Value> {
+        relay.sent.lock().iter().rev().find(|(o, _)| o == op).map(|(_, b)| b.clone())
+    }
+
+    #[test]
+    fn a_spokes_relay_takes_api_orgs_before_api_heads_and_maps_with_trust_and_a_meet_relay_never_does() {
+        let d = temp("spokes-sync");
+        let (log, _) = logger();
+        let spokes = Arc::new(FakeRelay::new(RELAY, "acme", &d.join("spokes"), log.clone()));
+        let meet = Arc::new(FakeRelay::new(OTHER, "acme", &d.join("meet"), log.clone()));
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![spokes.clone(), meet.clone()]));
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        // bound while it is offline: recorded, nothing sent
+        *spokes.up.lock() = false;
+        assert!(!api.spokes_bind(Some(link.clone()), RELAY, "acme", true, NOW).unwrap());
+        *spokes.up.lock() = true;
+        assert!(spokes.sent.lock().is_empty());
+        // the root and signer policy the save verified the map with
+        api.save_map_trust("acme", b"root-der", Some("CRL PEM"));
+        let policy = json!({"v": 3, "org_domains": {"acme": ["acme.example"]}, "sig": "s"});
+        api.save_signer_policy("acme", policy.as_object().unwrap()).unwrap();
+        api.publish_verified(None, spokes_map(1, &[RELAY]), NOW).unwrap();
+        for r in [RELAY, OTHER] {
+            api.on_welcomed(r);
+            assert!(api.needs_sync(r), "{r}");
+            assert!(api.sync(&*link, r, NOW), "{r}");
+        }
+        // R6-10: `api-orgs` with the recorded list right after welcome, then `api-heads`, then `api-features`
+        assert_eq!(&sent_ops(&spokes)[..3], ["api-orgs", "api-heads", "api-features"]);
+        assert_eq!(body_of(&spokes, "api-orgs").unwrap(), json!({"orgs": ["acme"], "generation": 1}));
+        let sent = body_of(&spokes, "api-map").expect("the map reached the spokes relay");
+        assert_eq!(sent["trust"], json!({"root": crate::meet_x509::der_to_pem(b"root-der"), "crl": "CRL PEM", "signer_policy": policy}));
+        // a Meet relay: no `api-orgs`, and its map carries no trust
+        assert!(!sent_ops(&meet).iter().any(|op| op == "api-orgs"));
+        assert_eq!(sent_ops(&meet)[0], "api-heads");
+        assert!(body_of(&meet, "api-map").unwrap().get("trust").is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_map_that_does_not_list_the_spokes_relay_is_not_sent_and_its_catch_up_still_ends() {
+        let d = temp("spokes-unlisted");
+        let (log, _) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        *relay.up.lock() = false;
+        api.spokes_bind(Some(link.clone()), RELAY, "acme", true, NOW).unwrap();
+        *relay.up.lock() = true;
+        api.save_map_trust("acme", b"root-der", None);
+        api.save_signer_policy("acme", json!({"v": 3}).as_object().unwrap()).unwrap();
+        // bound on the relay, but the signed map binding it is not saved yet
+        api.publish_verified(None, spokes_map(1, &[]), NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        assert!(!relay.ops().iter().any(|op| op == "api-map" || op == "api-pseudonym-key"), "{:?}", relay.ops());
+        // the save that lists it goes out with its trust
+        api.publish_verified(Some(link.clone()), spokes_map(2, &[RELAY]), NOW).unwrap();
+        assert!(wait_for(|| body_of(&relay, "api-map").is_some_and(|b| b["map"]["map"]["seq"] == 2 && b["trust"]["root"].is_string())));
+        // no saved trust: the map is held back and the catch-up stays incomplete
+        let bare = temp("spokes-no-trust");
+        let (log, _) = logger();
+        let (relay, link) = one(&bare, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&bare.join("console")), log, vault()));
+        *relay.up.lock() = false;
+        api.spokes_bind(Some(link.clone()), RELAY, "acme", true, NOW).unwrap();
+        *relay.up.lock() = true;
+        api.publish_verified(None, spokes_map(1, &[RELAY]), NOW).unwrap();
+        api.on_welcomed(RELAY);
+        assert!(!api.sync(&*link, RELAY, NOW));
+        assert!(!relay.ops().iter().any(|op| op == "api-map"));
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    #[test]
+    fn bound_records_are_durable_and_an_unbind_while_offline_goes_first_at_reconnect() {
+        let d = temp("spokes-bound");
+        let (log, _) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        // connected: `api-orgs` at once with the full list
+        assert!(api.spokes_bind(Some(link.clone()), RELAY, "acme", true, NOW).unwrap());
+        assert_eq!(relay.sent.lock().first().cloned().unwrap(), ("api-orgs".to_string(), json!({"orgs": ["acme"], "generation": 1})));
+        assert!(api.spokes_bind(Some(link.clone()), RELAY, "beta", true, NOW).unwrap());
+        assert!(wait_for(|| body_of(&relay, "api-orgs") == Some(json!({"orgs": ["acme", "beta"], "generation": 2}))));
+        assert!(api.spokes_bind(None, RELAY, "nope!", true, NOW).is_err(), "an org id");
+        // kept on disk
+        let again = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        assert_eq!(again.spokes_bound(RELAY), ["acme", "beta"]);
+        assert!(again.spokes_bound(OTHER).is_empty());
+        // unbound while the relay is away: recorded only, then first thing at its next reconnect
+        *relay.up.lock() = false;
+        assert!(!again.spokes_bind(Some(link.clone()), RELAY, "acme", false, NOW).unwrap());
+        assert_eq!(ConsoleApi::open(Some(&d.join("console")), log, vault()).spokes_bound(RELAY), ["beta"]);
+        *relay.up.lock() = true;
+        // let the bind threads of `api` settle, then watch the reconnect alone
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        relay.sent.lock().clear();
+        again.on_welcomed(RELAY);
+        assert!(again.needs_sync(RELAY), "a spokes relay with nothing else to send still gets api-orgs");
+        assert!(again.sync(&*link, RELAY, NOW));
+        // the generation was kept on disk across the reopen and raised by the unbinding
+        assert_eq!(relay.sent.lock().first().cloned().unwrap(), ("api-orgs".to_string(), json!({"orgs": ["beta"], "generation": 3})));
+        // a failed `api-orgs` leaves the reconnect sync incomplete, so the minute tick tries again
+        let gone = Arc::new(Fleet(Vec::new()));
+        again.on_welcomed(RELAY);
+        assert!(!again.sync_once(&*gone, RELAY, NOW));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Shared contract item 3, R6-10: saving the same Meet org CA root again changes nothing; another root is a
+    /// rotation: every spokes relay's record (a relay with no org bound too, since it may still pin the old root) takes
+    /// a new generation releasing the org's root, sent first at the next catch-up, and the release is dropped once the
+    /// relay acknowledged it, so a resend never releases the newly pinned root.
+    #[test]
+    fn a_root_rotation_releases_the_pinned_root_under_a_new_generation_once() {
+        let d = temp("spokes-rotate");
+        let (log, _) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log.clone(), vault()));
+        *relay.up.lock() = false;
+        api.spokes_bind(Some(link.clone()), RELAY, "acme", true, NOW).unwrap();
+        api.spokes_bind(None, OTHER, "beta", true, NOW).unwrap();
+        api.spokes_bind(None, OTHER, "beta", false, NOW).unwrap();
+        api.save_map_trust("acme", b"root-one", None);
+        api.save_map_trust("acme", b"root-one", None);
+        let record = |r: &str| api.spokes.lock().get(r).cloned().unwrap();
+        assert_eq!((record(RELAY).generation, record(RELAY).release_roots.len()), (1, 0), "the same root is no rotation");
+        api.save_map_trust("acme", b"root-two", None);
+        assert_eq!(record(RELAY), SpokesBound { orgs: vec!["acme".into()], generation: 2, release_roots: vec!["acme".into()] });
+        assert_eq!(record(OTHER), SpokesBound { orgs: Vec::new(), generation: 3, release_roots: vec!["acme".into()] });
+        // kept on disk; the reconnect sends the release first, then the record forgets it
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        *relay.up.lock() = true;
+        api.on_welcomed(RELAY);
+        api.sync(&*link, RELAY, NOW);
+        assert_eq!(relay.sent.lock().first().cloned().unwrap(), ("api-orgs".to_string(), json!({"orgs": ["acme"], "generation": 2, "release_roots": ["acme"]})));
+        assert_eq!(api.spokes.lock().get(RELAY).cloned().unwrap().release_roots, Vec::<String>::new());
+        relay.sent.lock().clear();
+        api.on_welcomed(RELAY);
+        api.sync(&*link, RELAY, NOW);
+        assert_eq!(body_of(&relay, "api-orgs").unwrap(), json!({"orgs": ["acme"], "generation": 2}), "the resend releases nothing");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn narrowing_a_spokes_target_journals_client_drop_target_only_while_spokes_is_open() {
+        let d = temp("spokes-target");
+        let (log, _) = logger();
+        let (relay, link) = one(&d, &log);
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        api.publish_verified(None, map(1, 12, NOW + 30 * 86_400), NOW).unwrap();
+        // a relay of the org that does not report `spokes` (revision 5)
+        *relay.features.lock() = Some(json!({"map": [1, 2], "features": [crate::api_features::EVENTS]}));
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        let e = api.append(Some(link.clone()), "acme", "client_drop_target", json!({"client": CLIENT, "spoke": SPOKE}), None, NOW).unwrap();
+        assert_eq!((e["action"].as_str(), e["target"].as_str()), (Some("client_suspend"), Some(CLIENT)), "the revision 3 fallback");
+        // the relay reports `spokes` after an update: the action itself
+        *relay.features.lock() = None;
+        api.on_welcomed(RELAY);
+        assert!(api.sync(&*link, RELAY, NOW));
+        let e = api.append(Some(link.clone()), "acme", "client_drop_target", json!({"client": CLIENT, "spoke": SPOKE}), None, NOW).unwrap();
+        assert_eq!((e["action"].as_str(), &e["target"]), (Some("client_drop_target"), &json!({"client": CLIENT, "spoke": SPOKE})));
         let _ = std::fs::remove_dir_all(&d);
     }
 }
