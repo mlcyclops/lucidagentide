@@ -191,6 +191,7 @@ import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { oauthMemory, setOauthMemory } from "./settings_store.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
+import { setWorldUpdatesAnnounced, worldUpdatesAnnounced } from "./settings_store.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
@@ -6304,6 +6305,16 @@ return Bun.serve({
         const id = String(b.id ?? "");
         if (readInstalled(id)?.manifest.kind !== "world") return json({ ok: true, data: { ok: false, error: "that world is not installed" } });
         return json({ ok: true, data: await plugins.uninstall(id, false) });
+      }
+      // P-WORLDS.UPDATE1 (ADR-0685): which purchased-world updates were already announced ("<id>@<version>"), kept in
+      // the engine settings so a port-rolled launch (a new renderer origin, an empty localStorage) never re-announces.
+      // UI token only (not in AGENT_ROUTES); POST replaces the list, sanitized and bounded.
+      if (p === "/api/worlds/update-notices") {
+        if (req.method === "POST") {
+          const b = await readBody<{ announced?: unknown }>(req);
+          return json({ ok: true, data: { announced: setWorldUpdatesAnnounced(b.announced) } });
+        }
+        return json({ ok: true, data: { announced: worldUpdatesAnnounced() } });
       }
       // ADR-0653 (P-WORLDS.BUILD1): a world build's HTML artifact passes the in-process gate (shape, then the scanner,
       // FAIL-CLOSED) before the Visualize popup may show it; a pass is held under a random id and served only as the

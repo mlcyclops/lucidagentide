@@ -59,6 +59,7 @@ import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statu
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
 import { createPluginsFlyout, drawerAnchor } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
+import { createWorldUpdates } from "./world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -18799,6 +18800,31 @@ const pluginsFlyout = createPluginsFlyout({
   worldsPending: setPendingWorldRestores,
   openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
+// P-WORLDS.UPDATE1 (ADR-0685): purchased worlds with a newer store version. Update in the Worlds menu and the boot
+// notice install through the store card's own path; what was announced is kept engine-side.
+const worldUpdates = createWorldUpdates({
+  provider: getMarketProvider,
+  pluginsList: () => bridge.pluginsList(),
+  installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
+  loadAnnounced: () => bridge.worldUpdateNotices(),
+  saveAnnounced: (keys) => bridge.setWorldUpdateNotices(keys),
+  toast: showToast,
+  now: Date.now,
+});
+worldUpdates.onChange(() => {
+  const b = $("#ctViz") as HTMLElement | null;
+  const n = worldUpdates.pending().length;
+  b?.classList.toggle("has-upd", n > 0);
+  if (b) { if (n > 0) b.dataset.worldUpdates = String(n); else delete b.dataset.worldUpdates; }
+});
+/** P-WORLDS.UPDATE1: the update check waits until the UI has settled (a few seconds, then an idle slot), so it never
+ *  competes with the boot's own requests. */
+function scheduleWorldUpdateCheck(delayMs = 5000): void {
+  window.setTimeout(() => {
+    const run = (): void => { void worldUpdates.announce(); };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5000 }); else run();
+  }, delayMs);
+}
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   // P-WORLDS.STORE1: never open the Preview panel just to anchor the drawer (it flew out behind the drawer and
   // stayed open after the drawer closed); pluginsFlyout anchors to the work area when Preview is closed.
@@ -19939,6 +19965,7 @@ function wire(): void {
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
     openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    worldUpdates, // P-WORLDS.UPDATE1 (ADR-0685): each purchased world's Update and the Worlds button's dot
     // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
     // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
     fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
@@ -22663,6 +22690,8 @@ initMarket(readMarketBootConfig());
 // P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
 // (the engine's backup restore, then the store) and say so.
 void pluginsFlyout.restorePurchases("auto");
+// P-WORLDS.UPDATE1 (ADR-0685): once the UI has settled, say once which purchased worlds have a new version.
+scheduleWorldUpdateCheck();
 // P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
 // store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
 bridge.onKgDeviceUnlocked((r) => {
@@ -22675,6 +22704,7 @@ bridge.onKgDeviceUnlocked((r) => {
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
     if (!handleAuthCallback(url)) return;
+    scheduleWorldUpdateCheck(1500); // P-WORLDS.UPDATE1: signed in now, so the purchased worlds can be checked
     if (pluginsFlyout.onSignedIn()) return; // P-PLUGINS.1: a plugin purchase interrupted by sign-in picks up here
     // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
     // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
