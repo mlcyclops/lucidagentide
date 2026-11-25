@@ -472,6 +472,44 @@
       "grace-start": "At expiry", "grace-repeat": "In grace", stopped: "Service stopped", "upgrade-period": "Upgrade period" },
     wantedNeeded: "Write a number of seats above the license's <users>, at most 10,000.",
     emailNeeded: "Write an email.",
+    none: "None",
+    noneSent: "none yet",
+    noEntries: "No entries yet.",
+    noAnswerConsole: "The console did not answer. Check your connection and try again.",
+    httpErrorConsole: "The console answered with an error (<status>).",
+    httpErrorRelay: "<name> answered with an error (<status>).",
+    footerFleet: "Relays carry sealed messages, and neither they nor this console show their contents.",
+    helpGuideFleet: "The Lucid Admin Console guide covers setup, deploying relays, sign-in methods and profiles, email, and the operator commands.",
+    invite: "Invite",
+    askInvite: "Ask an admin to invite someone",
+    stoppedAdmin: "The Meeting Hub license of <relay> is not active, so it takes no invites. Install a license on that relay first.",
+    stoppedAdminHere: "The Meeting Hub license is not active, so this relay takes no invites. Install a license first.",
+    removeLicense: { title: "Remove license <id> from the library?", body: ["Relays that already installed it keep it. You can add it again later."], button: ["Remove"] },
+    revokeToken: { title: "Revoke the scrape token <label>?", body: ["Anything that reads metrics with it stops working now."], button: ["Revoke"] },
+    cancelInviteDlg: { title: "Cancel the invite for <email>?", body: ["The link stops working now. You can invite them again later."], button: ["Cancel invite"] },
+    cancelApproval: { title: "Cancel your request: <summary>?", body: ["Nothing changes, and other admins no longer see it."], button: ["Cancel request"] },
+    endThis: { title: "End this session?", body: ["This signs you out of this browser now."], button: ["Sign out"] },
+    endOther: { title: "End this session?", body: ["That browser is signed out now. You stay signed in here."], button: ["End session"] },
+    // Full sentences for a field the page refuses before asking (7.6), shown next to the field.
+    need: {
+      name: "Enter a name of 1 to 64 letters, digits, spaces, dots, dashes, underscores or parentheses.",
+      site: "Enter a site of up to 64 letters, digits, spaces, dots, dashes, underscores or parentheses.",
+      pki: "Choose where the relay certificate comes from.",
+      fingerprint: "Enter the fingerprint the relay printed.",
+      personName: "Enter the person's name.",
+      days: "Enter a number of days from 1 to 30.",
+      hours: "Enter a number of hours from 1 to 720.",
+      label: "Enter a label of 1 to 64 characters.",
+      tokenDays: "Enter a number of days from 30 to 365.",
+      aaguid: "Enter the AAGUID as 32 hexadecimal digits, grouped 8-4-4-4-12.",
+      serial: "Enter the serial as 2 to 64 hexadecimal digits.",
+      certPem: "Paste the ended certificate in PEM form.",
+      passkeyName: "Enter a name for this passkey.",
+      setupCode: "Enter the setup code from setup-code.txt.",
+      generation: "Enter the CA generation as a whole number and its fingerprint.",
+      adminKeys: "Enter each admin key fingerprint as 64 hexadecimal digits.",
+      sessions: "Enter 5 to 60 minutes without activity and 1 to 24 hours at most.",
+    },
   };
 
   // ---- Fleet words (AC-2a 13.1, exact; tests/vectors/admin_console_fleet_words_v1.json "page"), by the vector's ids.
@@ -874,7 +912,7 @@
   // Plain fleet words the contract leaves to the page (column and card labels, short notices).
   const FMSG = {
     product: { spokes: "Remote Spokes", meet: "Meeting Hub" },
-    cols: { name: "Name", product: "Product", site: "Site or region", version: "Version", license: "License", health: "Health", contact: "Last contact", relay: "Relay",
+    cols: { name: "Name", product: "Product", site: "Site or region", version: "Version", license: "License", health: "Health", contact: "Last seen", relay: "Relay",
       kind: "Kind", role: "Role", state: "State", source: "Source", email: "Email", days: "Days left", ends: "Ends", count: "Relays", worst: "Worst health" },
     cards: { spokes: "Spokes busy", licenses: "Licenses", certificates: "Certificates", approvals: "Approvals", requests: "Requests" },
     tabs: { summary: "Summary", health: "Health", scopes: "Scopes and controls", attention: "Attention", pages: "Product pages" },
@@ -908,11 +946,10 @@
     dropped: "Dropped",
     change: "Change",
     asked: "Asked",
-    open: "Open",
     rename: "Rename",
     scopes: "Change scopes",
     replace: "Replace",
-    remove: "Remove from the console",
+    remove: "Remove relay",
     leaveCmd: "To leave from the relay's host:",
     enrolledBy: "Enrolled by",
     enrolled: "Enrolled",
@@ -958,6 +995,29 @@
     pick: "Pick",
     devices: "Devices",
     profileWords: { high: "High", standard: "Standard" },
+    // The registry state "active" in lists: enrolled with the console, which says nothing about whether it answers now.
+    stateActive: "Enrolled",
+    failures24h: "<n> failures in 24 hours",
+    pickerNote: "Choosing a relay shows its page.",
+    pickerNone: "Choose a relay",
+    notReadable: "<name> cannot be read now (<state>), so this page shows no relay. Choose another relay.",
+    notFound: "Page not found",
+    notFoundBody: "There is no page at this address.",
+    notAllowed: "Your role cannot open this page.",
+    toOverview: "Go to Overview",
+    caOpen: "Open the CA page",
+    setupDone: "Setup is complete.",
+    review: "Review",
+    replaces: "Replaces an existing relay",
+    // Help on a fleet console: what each part of the console does (WCAG 3.2.6, one place from the account menu).
+    help: [
+      ["Relays", "Relays and locations lists every relay that joined this console, with its health, license and last contact. Open a relay for its summary, trust, charts and scopes, or deploy a new one."],
+      ["People", "People shows console accounts and the people on each relay in one list. Invite, suspend or remove them here; a change on a relay goes to that relay."],
+      ["Security and approvals", "With two-person control on, changes that lower security or take access away wait for a second admin for up to 24 hours. Changes on relays also need a passkey or security key."],
+      ["Audit", "The audit log records every change made in this console, who made it and when. Each entry is chained to the one before, so an exported copy shows any later edit."],
+      ["Blocks and revocation", "A block stops a relay from serving a device, hub or spoke for a while; its certificate stays valid elsewhere. To revoke a certificate, the console sends a request to the root holder or to an admin in the Meeting Hub app."],
+      ["Licenses", "License shows each relay's license and whether it serves people. Keep licenses in the library, then install them on relays from there."],
+    ],
     // AC-2b-D 3: labels the contract leaves to the page.
     deploy: {
       confirmRelay: "Confirm relay", installLicense: "Install a license", copyInstall: "Copy the install command", caFile: "ca.crt", keyFile: "ca.key",
@@ -1019,14 +1079,40 @@
   };
   const PRODUCT_NAME = { spokes: W["nav.spokes"], meet: W["nav.meet"] };
   const ROLE_WORD = { admin: W["role.names"][0], "user-manager": W["role.names"][1], viewer: W["role.names"][2] };
-  // The attention kinds of 7.3, for "Email me about" (account.mail).
-  const ATTENTION_KINDS = ["license-none", "license-grace", "license-expired", "license-expiring", "seats-high", "seats-over", "uncounted",
-    "crl-stale", "signer-unhealthy", "signer-expiring", "cert-expiring", "tls-expiring", "spokes-silent", "enrollments-waiting",
-    "approvals-mine", "requests-old", "admins-few", "anchor-single", "admin-suspended", "passkey-waiting", "joiner-waiting",
-    "audit-broken", "audit-rotating", "audit-dropped-unexported", "audit-not-exported", "quota-hits", "blocks-active", "admins-unproven",
-    "license-stopped", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
-    "break-glass-missing", "break-glass-used", "key-unattested", "mds-old", "signin-locked", "mail-failing", "clock-uncertain",
-    "clock-back", "aaguids-relaxed", "seal-key-file", "seal-lost", "seats-held", "seal-machine-scope"];
+  // The attention kinds of 7.3 for "Email me about" (account.mail), grouped, each with a short sentence. `fleet` marks
+  // the console's own relay kinds the mail sender knows (AC-2a revision 3.4), offered on a fleet console only.
+  const MAIL_GROUPS = [
+    ["License and seats", [
+      ["license-none", "No license is installed"], ["license-expiring", "The license ends soon"], ["license-grace", "The license ended and is in its grace days"],
+      ["license-expired", "The license and its grace days are over"], ["license-stopped", "Service stopped for want of a license"],
+      ["license-upgrade-period", "The upgrade period is ending"], ["seats-high", "Most licensed seats are in use"], ["seats-over", "More people than the license covers"],
+      ["seats-unseated", "Some people have no seat"], ["seats-protected", "Admins alone use more seats than the license covers"],
+      ["seats-held", "People over the license are held without service"], ["uncounted", "Hubs were refused for want of a seat"],
+      ["relay-license-expiring", "A relay's license ends soon", "fleet"], ["relay-license-grace", "A relay's license ended", "fleet"],
+      ["relay-license-stopped", "A relay stopped for want of a license", "fleet"]]],
+    ["Certificates and revocation", [
+      ["crl-stale", "A revocation list is out of date"], ["signer-unhealthy", "The certificate signer is not answering"],
+      ["signer-expiring", "The signer's certificate ends soon"], ["cert-expiring", "Certificates end within 7 days"],
+      ["tls-expiring", "The console's TLS certificate ends soon"], ["mds-old", "The security key metadata is old"],
+      ["aaguids-relaxed", "Approved key models have no FIPS certificate"], ["key-unattested", "Admins have no approved security key"]]],
+    ["People and sign-in", [
+      ["admins-few", "There is only one admin"], ["anchor-single", "Every admin depends on one hub or device"], ["admin-suspended", "An admin is suspended"],
+      ["passkey-waiting", "A new passkey is waiting for approval"], ["joiner-waiting", "Someone joined and is waiting for approval"],
+      ["admins-unproven", "Admins have not signed in since the upgrade"], ["signin-locked", "Accounts were locked after failed sign-ins"],
+      ["break-glass-missing", "There is no break-glass account"], ["break-glass-used", "The break-glass account signed in"],
+      ["profile-standard", "The console was moved to the Standard profile"], ["two-person-off", "A second admin is not required"],
+      ["enrollments-waiting", "Devices are waiting for approval"], ["spokes-silent", "Spokes have not checked in for a day"]]],
+    ["Approvals, requests and blocks", [
+      ["approvals-mine", "Changes are waiting for your approval"], ["requests-old", "Requests have waited more than 3 days"],
+      ["blocks-active", "Blocks are active"], ["quota-hits", "Requests were refused for limits"]]],
+    ["Audit", [
+      ["audit-broken", "The audit log does not verify"], ["audit-rotating", "The audit log will soon drop entries"],
+      ["audit-dropped-unexported", "The audit log dropped entries before they were exported"], ["audit-not-exported", "The audit log has not been exported for 30 days"]]],
+    ["Email, clock and secrets", [
+      ["mail-failing", "Email is failing"], ["clock-uncertain", "The relay's clock is uncertain"], ["clock-back", "The relay's clock is behind"],
+      ["seal-key-file", "Secrets are protected by a key file"], ["seal-machine-scope", "Secrets are protected for the whole machine"],
+      ["seal-lost", "Saved secrets could not be unlocked"]]],
+  ];
 
   // ---- Themes (7.1): the 23 palettes of Meeting Hub 0.96.0, same ids, labels and blurbs ----
   const THEMES = [
@@ -1135,15 +1221,41 @@
     return tpl.split(PH).map((part, i) => (i % 2 === 0 ? part : clean(vals && vals[part] != null ? vals[part] : ""))).join("");
   }
 
-  // ---- Times: the browser's locale with the time zone named ----
+  // ---- Times: the browser's locale, with the time zone named where there is a time of day ----
   const FMT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
-  const DFMT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZoneName: "short" });
-  const when = (ms) => (ms ? FMT.format(new Date(ms)) : MSG.never);
-  const whenSec = (s) => (s ? FMT.format(new Date(s * 1000)) : MSG.never);
-  const daySec = (s) => (s ? DFMT.format(new Date(s * 1000)) : MSG.never);
-  // Values whose unit the route does not name: milliseconds when large, else seconds.
-  const whenAny = (v) => (!v ? MSG.never : v > 1e12 ? when(v) : whenSec(v));
-  const dayAny = (v) => (!v ? MSG.never : v > 1e12 ? DFMT.format(new Date(v)) : daySec(v));
+  const DFMT = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const PLAIN_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const DATE_TEXT = /^\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+  // A time value as a Date, or null. Numbers (and digit strings) are milliseconds or seconds as `unit` says ("ms", "s",
+  // or "any": milliseconds when large, else seconds); ISO date-time strings as written; a plain YYYY-MM-DD is that
+  // calendar day, built as a local date so it does not move a day west of UTC.
+  function dateOf(v, unit) {
+    let d = null;
+    if (typeof v === "number") d = new Date(unit === "s" || (unit === "any" && Math.abs(v) <= 1e12) ? v * 1000 : v);
+    else if (typeof v === "string") {
+      const s = v.trim();
+      const day = PLAIN_DAY.exec(s);
+      if (day) d = new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+      else if (/^\d+(?:\.\d+)?$/.test(s)) return dateOf(Number(s), unit);
+      else if (DATE_TEXT.test(s)) d = new Date(s);
+    }
+    return d && Number.isFinite(d.getTime()) ? d : null;
+  }
+  // A value the page cannot read as a time is shown as its text, never thrown.
+  function timeText(f, v, unit) {
+    if (!v) return MSG.never;
+    const d = dateOf(v, unit);
+    if (!d) return clean(String(v));
+    return (typeof v === "string" && PLAIN_DAY.test(v.trim()) ? DFMT : f).format(d);
+  }
+  const when = (ms) => timeText(FMT, ms, "ms");
+  const whenSec = (s) => timeText(FMT, s, "s");
+  const daySec = (s) => timeText(DFMT, s, "s");
+  // Values whose unit the route does not name: milliseconds when large, else seconds; ISO text as written.
+  const whenAny = (v) => timeText(FMT, v, "any");
+  const dayAny = (v) => timeText(DFMT, v, "any");
+  // Whether an argument is a time the page formats (a number, or an ISO date or date-time text).
+  const isTime = (v) => typeof v === "number" || (typeof v === "string" && DATE_TEXT.test(v.trim()));
   function span(sec) {
     const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
     const parts = [];
@@ -1301,7 +1413,8 @@
     try {
       r = await fetch("/console/api/" + path, init);
     } catch (e) {
-      throw new ApiError(0, "network", MSG.noAnswer, null);
+      // On a fleet console the browser only ever talks to the console.
+      throw new ApiError(0, "network", fleet() ? MSG.noAnswerConsole : MSG.noAnswer, null);
     }
     if (o.raw && r.ok) {
       if (o.activity !== false && me()) touch();
@@ -1315,7 +1428,9 @@
     }
     if (!r.ok || !data || data.ok === false) {
       const code = (data && data.code) || "";
-      const err = new ApiError(r.status, code, (data && data.error) || fillText(MSG.httpError, { status: r.status }), data);
+      const said = !fleet() ? fillText(MSG.httpError, { status: r.status })
+        : rid ? fillText(MSG.httpErrorRelay, { name: relayName(rid), status: r.status }) : fillText(MSG.httpErrorConsole, { status: r.status });
+      const err = new ApiError(r.status, code, (data && data.error) || said, data);
       if (!o.noRedirect && ((r.status === 401 && code !== "stepup-needed") || code === "origin-session")) toSignIn(err.message);
       throw err;
     }
@@ -1399,6 +1514,38 @@
     $("alert").textContent = clean(msg);
     if (msg) $("status").textContent = "";
   }
+  // A field the page refuses (7.6): the sentence next to the field, tied to it with aria-describedby, and focus on it.
+  // The words go away when the field changes.
+  function invalid(input, text) {
+    const box = (input.closest && input.closest(".field, fieldset")) || input.parentElement;
+    let note = box ? box.querySelector(".field-error") : null;
+    if (box && !note) {
+      note = el("span", { class: "field-error", id: uid("err") });
+      box.append(note);
+    }
+    if (note) {
+      note.textContent = text;
+      const ids = (input.getAttribute("aria-describedby") || "").split(" ").filter(Boolean);
+      if (!ids.includes(note.id)) input.setAttribute("aria-describedby", ids.concat([note.id]).join(" "));
+      input.setAttribute("aria-invalid", "true");
+      const clear = () => {
+        note.textContent = "";
+        input.removeAttribute("aria-invalid");
+      };
+      input.addEventListener("input", clear, { once: true });
+      input.addEventListener("change", clear, { once: true });
+    } else fail(text);
+    input.focus();
+  }
+  // Enter in a single-line field runs the action of its form (D-8: there are no <form> elements).
+  function onEnter(input, run) {
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Enter" || ev.isComposing) return;
+      ev.preventDefault();
+      Promise.resolve().then(run).catch(fail);
+    });
+    return input;
+  }
   function clearMessages() {
     $("status").textContent = "";
     $("alert").textContent = "";
@@ -1419,6 +1566,18 @@
     else location.hash = hash;
   }
   const safeGo = (g) => (typeof g === "string" && /^#\/[A-Za-z0-9/_?=&.%:@+-]*$/.test(g) ? g : null);
+  // The relay console's routes that console-level attention items still name, as fleet routes (query kept).
+  const FLEET_ALIAS = {
+    "#/licenses": "#/license", "#/approvals": "#/security/approvals", "#/requests": "#/security/requests", "#/admins/audit": "#/security/audit",
+    "#/admins/settings/security": "#/settings/console", "#/admins/settings/email": "#/email", "#/admins/settings": "#/settings/console",
+    "#/admins/sessions": "#/settings/console", "#/admins/account": "#/settings/account", "#/admins": "#/people", "#/admins/people": "#/people",
+  };
+  function fleetGo(g) {
+    if (!fleet() || typeof g !== "string") return g;
+    const at = g.indexOf("?");
+    const path = at >= 0 ? g.slice(0, at) : g;
+    return (FLEET_ALIAS[path] || path) + (at >= 0 ? g.slice(at) : "");
+  }
   function pagesFor(group) {
     if (isAdmin()) return PAGES[group];
     return (ROLE_PAGES[rights()] || ROLE_PAGES.viewer)[group] || [];
@@ -1474,7 +1633,7 @@
     $("menu-btn").hidden = !signed;
     $("nav").hidden = !signed;
     $("shell").classList.toggle("bare", !signed);
-    $("footer").textContent = W.footer;
+    $("footer").textContent = isFleet ? MSG.footerFleet : W.footer;
     buildAccountMenu();
     buildThemeMenu();
   }
@@ -1675,6 +1834,25 @@
   function emptyLine(text) {
     return el("p", { class: "empty" }, text);
   }
+  // A page that could not load keeps its own title and says why inside the page (D-1, D-10).
+  function pageError(e) {
+    return panel(null, el("p", { class: "dlg-error", role: "alert" }, clean(e && e.message ? e.message : String(e))));
+  }
+  function routeTitle(r) {
+    const [a, b] = r.parts;
+    if (a === "help") return MSG.help;
+    if (fleet()) {
+      const g = FNAV.find((x) => x.route === a);
+      if (!g) return FW["nav.overview"];
+      const p = g.pages.find((x) => x[0] === (a === "relays" && !b ? "list" : b));
+      return p ? p[1] : FW[g.id];
+    }
+    if (PAGE_LABEL[a] && PAGE_LABEL[a][b]) return PAGE_LABEL[a][b];
+    if (a === "security") return W["nav.security"];
+    if (a === "approvals") return W["nav.approvals"];
+    if (a === "license") return PAGE_LABEL[product()].license;
+    return W["nav.overview"];
+  }
   function banner(kind, tag, ...kids) {
     return el("div", { class: "banner " + kind, role: "status" }, el("span", { class: "tag" }, tag), el("span", null, ...kids));
   }
@@ -1701,8 +1879,8 @@
   function argsOf(args) {
     const out = { product: PRODUCT_NAME[product()] };
     for (const [k, v] of Object.entries(args || {})) {
-      if (k === "date" && typeof v === "number") out[k] = dayAny(v);
-      else if ((k === "time" || k === "date and time") && typeof v === "number") out[k] = whenAny(v);
+      if (k === "date" && isTime(v)) out[k] = dayAny(v);
+      else if ((k === "time" || k === "date and time") && isTime(v)) out[k] = whenAny(v);
       else if (k === "why") out[k] = whyWords(v, args["verifier words"] || args.problem);
       else if (v != null) out[k] = v;
     }
@@ -1747,6 +1925,11 @@
 
   // ---- Tables (7.2): caption, th scope col, sortable header buttons with aria-sort, filters, count, Load more ----
   const PAGE_SIZE = 25;
+  // A filter row, folded under "Filters" at phone width (7.2).
+  function filterFold(kids) {
+    const narrow = window.matchMedia && window.matchMedia("(max-width: 600px)").matches;
+    return el("details", { class: "filters-fold", open: narrow ? null : true }, el("summary", null, MSG.filters), el("div", { class: "filters" }, kids));
+  }
   function dataTable(o) {
     const st = { q: o.q || "", chip: o.chip || "", sel: o.sel || "", more: [], sort: o.sortKey || null, dir: o.sortDir || 1, shown: PAGE_SIZE };
     const root = el("div", { class: "datatable" });
@@ -1791,7 +1974,7 @@
         chipBtns.push(b);
         g.append(b);
       }
-      filterKids.push(el("div", null, el("span", { class: "note" }, o.chips.label), g));
+      filterKids.push(el("div", { class: "chip-filter" }, el("span", { class: "note", "aria-hidden": "true" }, o.chips.label), g));
     }
     if (o.select) {
       const id = uid("sel");
@@ -1808,10 +1991,7 @@
     function syncChips() {
       for (const b of chipBtns) b.setAttribute("aria-pressed", b.getAttribute("data-v") === st.chip ? "true" : "false");
     }
-    if (filterKids.length) {
-      const narrow = window.matchMedia && window.matchMedia("(max-width: 600px)").matches;
-      root.append(el("details", { class: "filters-fold", open: narrow ? null : true }, el("summary", null, MSG.filters), el("div", { class: "filters" }, filterKids)));
-    }
+    if (filterKids.length) root.append(filterFold(filterKids));
     root.append(out);
     const active = () => !!(st.q || st.chip || st.sel || st.more.some(Boolean));
     function rows() {
@@ -1931,11 +2111,18 @@
     const getters = {};
     const fieldsBox = $("confirm-fields");
     fieldsBox.replaceChildren();
-    for (const f of o.fields || []) fieldsBox.append(field(f, getters, () => refresh()));
+    // A field with `when` shows only while when(values) holds (the Invite dialog's fields follow its Kind, D-12).
+    const shown = [];
+    for (const f of o.fields || []) {
+      const box = field(f, getters, () => refresh());
+      if (f.when) shown.push([f, box]);
+      fieldsBox.append(box);
+    }
     const goBtn = $("confirm-go");
     let asksNow = false;
     function refresh() {
       const cur = values();
+      for (const [f, box] of shown) box.hidden = !f.when(cur);
       const spec = o.specFor ? o.specFor(cur) : o.spec || D[o.dlgFor ? o.dlgFor(cur) : o.dlg];
       const v = o.vals2 ? Object.assign({}, vals, o.vals2(cur)) : vals;
       $("confirm-title").replaceChildren(fill(spec.title, v));
@@ -2181,8 +2368,12 @@
     const step = el("div", { class: "steps", id: "signin-step" });
     const kids = [gateTitle(W["signin.title"]), email.box,
       el("div", null, btn(W["signin.button"], () => keySignIn(email.input.value.trim(), step), "primary"))];
+    let pw = null;
+    // Enter in the email field signs in with the password when one is typed, else with a passkey.
+    onEnter(email.input, () => (pw && pw.input.value ? passwordSignIn(email.input.value.trim(), pw.input.value, step) : keySignIn(email.input.value.trim(), step)));
     if (profile() === "standard") {
-      const pw = currentPassword(W["signin.password.field"]);
+      pw = currentPassword(W["signin.password.field"]);
+      onEnter(pw.input, () => passwordSignIn(email.input.value.trim(), pw.input.value, step));
       kids.push(el("div", { class: "subpanel" }, el("h3", null, W["signin.password"]), pw.box,
         el("div", null, btn(W["signin.password.button"], () => passwordSignIn(email.input.value.trim(), pw.input.value, step), "primary"))),
       el("p", null, btn(W["signin.forgot"], () => forgotForm(email.input.value.trim()), "link")));
@@ -2236,7 +2427,7 @@
   }
   function totpStep(ceremony, step) {
     const c = codeField(W["signin.totp.field"]);
-    step.replaceChildren(el("p", null, W["signin.totp"]), c.box, el("div", null, btn(W["signin.totp.button"], async () => {
+    const submit = async () => {
       clearMessages();
       try {
         await api("POST", "login/totp", { ceremony, code: c.input.value.trim() }, { noRedirect: true });
@@ -2244,13 +2435,15 @@
       } catch (e) {
         fail(e);
       }
-    }, "primary")));
+    };
+    onEnter(c.input, submit);
+    step.replaceChildren(el("p", null, W["signin.totp"]), c.box, el("div", null, btn(W["signin.totp.button"], submit, "primary")));
     stepFocus(step);
   }
   // High with requirePassword: the password after the WebAuthn assertion (3.3 step 3, R3-M1).
   function passwordStep(ceremony, step) {
     const pw = currentPassword(W["signin.password.field"]);
-    step.replaceChildren(pw.box, el("div", null, btn(W["signin.password.button"], async () => {
+    const submit = async () => {
       clearMessages();
       try {
         const r = await api("POST", "login/password", { ceremony, password: pw.input.value }, { noRedirect: true });
@@ -2259,24 +2452,27 @@
       } catch (e) {
         fail(e);
       }
-    }, "primary")));
+    };
+    onEnter(pw.input, submit);
+    step.replaceChildren(pw.box, el("div", null, btn(W["signin.password.button"], submit, "primary")));
     stepFocus(step);
   }
   // The restricted setup session: only password.required and the join.password form (login/set-password).
   function setPasswordStep(ceremony, step) {
     const n = minPassword();
     const pw = newPassword(W["join.password.field"], n);
+    const submit = async () => {
+      clearMessages();
+      try {
+        await api("POST", "login/set-password", { ceremony, password: pw.input.value }, { noRedirect: true });
+        await signedIn();
+      } catch (e) {
+        fail(e);
+      }
+    };
+    onEnter(pw.input, submit);
     step.replaceChildren(el("p", null, W["password.required"]), el("h3", null, W["join.password"]),
-      el("p", null, fill(W["join.password.body"], { n })), pw.box,
-      el("div", null, btn(W["join.password.button"], async () => {
-        clearMessages();
-        try {
-          await api("POST", "login/set-password", { ceremony, password: pw.input.value }, { noRedirect: true });
-          await signedIn();
-        } catch (e) {
-          fail(e);
-        }
-      }, "primary")));
+      el("p", null, fill(W["join.password.body"], { n })), pw.box, el("div", null, btn(W["join.password.button"], submit, "primary")));
     stepFocus(step);
   }
   function forgotForm(prefill) {
@@ -2284,7 +2480,7 @@
     const email = textField(W["signin.forgot.field"], { type: "email", autocomplete: "username", maxlength: "254" });
     email.input.value = prefill || "";
     const result = el("div", { role: "status" });
-    showGate(gateTitle(W["signin.forgot"]), email.box, el("div", null, btn(W["signin.forgot.button"], async () => {
+    const send = async () => {
       clearMessages();
       const addr = email.input.value.trim();
       try {
@@ -2293,7 +2489,9 @@
       } catch (e) {
         fail(e);
       }
-    }, "primary"), " ", btn(W["signin.title"], () => renderSignIn())), result);
+    };
+    onEnter(email.input, send);
+    showGate(gateTitle(W["signin.forgot"]), email.box, el("div", null, btn(W["signin.forgot.button"], send, "primary"), " ", btn(W["signin.title"], () => renderSignIn())), result);
   }
   async function signedIn() {
     S.bannerOk = false;
@@ -2436,7 +2634,7 @@
     ++S.gen;
     RUN = [];
     const pw = newPassword(W["reset.title.field"], 12);
-    showGate(gateTitle(W["reset.title"]), pw.box, el("div", null, btn(W["reset.title.button"], async () => {
+    const save = async () => {
       clearMessages();
       try {
         await api("POST", "recover/finish", { token, password: pw.input.value }, { noRedirect: true });
@@ -2445,7 +2643,9 @@
       } catch (e) {
         fail(e);
       }
-    }, "primary")));
+    };
+    onEnter(pw.input, save);
+    showGate(gateTitle(W["reset.title"]), pw.box, el("div", null, btn(W["reset.title.button"], save, "primary")));
   }
 
   // Idle and lock (3.4, AC-11): lock.warn one minute before the idle limit, then every displayed value removed.
@@ -2553,8 +2753,7 @@
         fn = await fleetRoute(r, ctx);
       } catch (e) {
         if (gen !== S.gen || (e && e.status === 401)) return;
-        fn = async () => [head(FW["nav.overview"])];
-        fail(e);
+        fn = async () => [head(routeTitle(r)), pageError(e)];
       }
       if (gen !== S.gen) return;
     } else if (a === "overview") fn = pages.overview;
@@ -2572,15 +2771,14 @@
     } else if (a === "admins") {
       const allowed = pagesFor("admins");
       fn = pages["admins_" + (allowed.includes(b) ? b : allowed[0])];
-    }
+    } else if (!["security", "approvals", "license"].includes(a)) fn = noPage(FMSG.notFound, FMSG.notFoundBody);
     let kids;
     try {
       kids = await fn(ctx);
     } catch (e) {
       if (gen !== S.gen) return;
       if (e && e.status === 401) return;
-      kids = [head(W["nav.overview"])];
-      fail(e);
+      kids = [head(routeTitle(r)), pageError(e)];
     }
     if (gen !== S.gen) return;
     $("banner").replaceChildren(...bannerNodes());
@@ -2643,9 +2841,10 @@
       const tpl = own || W["attention." + it.kind];
       if (typeof tpl !== "string") continue;
       const sev = it.severity === "bad" ? "bad" : it.severity === "warn" ? "warn" : "info";
-      const target = safeGo(it.go);
+      const target = safeGo(fleetGo(it.go));
       const prefix = fleet() && it.relay && !own ? [u(relayName(it.relay)), ": "] : [];
-      const row = it.relay ? (S.relays || []).find((r) => r.id === it.relay) : null;
+      // A relay's pushed item may name the relay by its console name rather than its id.
+      const row = it.relay ? (S.relays || []).find((r) => r.id === it.relay) || (S.relays || []).find((r) => r.name === it.relay) : null;
       const args = fleet() ? fleetArgs(Object.assign(it.relay ? { relay: it.relay, product: row ? row.product : "" } : {}, it.args)) : argsOf(it.args);
       ul.append(el("li", { class: "sev-" + sev }, el("span", { class: "st st-" + (sev === "info" ? "none" : sev) }, MSG.sev[sev]),
         el("span", { class: "words" }, ...prefix, fill(tpl, args)), target && canOpen(target) ? el("a", { href: target }, MSG.go) : null));
@@ -2915,7 +3114,7 @@
       vals2: (v) => ({ n: v.hours || "", time: v.hours > 0 ? when(Date.now() + v.hours * 3600000) : "" }),
       body: (v) => [fill(D.block.body[0], v)],
       two: (v) => v.hours > 24,
-      check: (v) => (!(Number.isInteger(v.hours) && v.hours >= 1 && v.hours <= 720) ? MSG.hours : ""),
+      check: (v) => (!(Number.isInteger(v.hours) && v.hours >= 1 && v.hours <= 720) ? MSG.need.hours : ""),
       run,
     }, opts || {}));
   }
@@ -3091,6 +3290,7 @@
         fail(e);
       }
     });
+    onEnter(q, show);
     await show();
     return [head(PAGE_LABEL[product()].logs), panel(null, el("div", { class: "filters" }, srcL, catL, lvlL,
       el("label", { for: qid }, MSG.filterText, q), btn(MSG.show, show, "primary"), exp), lines)];
@@ -3108,10 +3308,11 @@
   }
   const serviceStopped = (lic) => !!(lic && lic.service && lic.service.state === "stopped");
   // AC-2a 11.4: the invite controls of a Meeting Hub relay stopped for its license, disabled with the AC-1 words.
+  // An admin is told to install a license, never to "Ask your admin" (D-13).
   function disabledAdd(label) {
     const id = uid("why");
     return el("span", { class: "disabled-add" }, el("button", { type: "button", "aria-disabled": "true", class: "is-disabled", "aria-describedby": id }, label),
-      " ", el("span", { class: "note", id }, W["meet.license-inactive"]));
+      " ", el("span", { class: "note", id }, isAdmin() ? MSG.stoppedAdminHere : W["meet.license-inactive"]));
   }
 
   // ---- Meeting Hub pages (7.4) ----
@@ -3146,13 +3347,18 @@
         })));
       $("person-h").focus();
     }
-    const invite = canWrite() ? btn("Ask an admin to invite someone", () => {
+    // An admin invites (the request goes to the Hub app, where the invite is made); through the fleet console a user
+    // manager may ask for an invite too (AC-2a 11.2), and says so.
+    const licOk = licState() === "valid" || licState() === "grace";
+    const mayAsk = canWrite() || (fleet() && isManager() && licOk);
+    const invite = mayAsk ? btn(isAdmin() ? MSG.invite : MSG.askInvite, () => {
       confirmDialog({
         dlg: "request-invite", vals: {},
         fields: [{ kind: "text", key: "name", label: "Name", maxlength: "80", required: true }, { kind: "text", type: "email", key: "email", label: "Email", maxlength: "254", required: true },
           { kind: "text", type: "number", key: "days", label: "Days the invite works", value: 7, min: "1", max: "30" }, { kind: "reason" }],
         vals2: (v) => ({ name: v.name, email: v.email }),
-        check: (v) => (!v.name || !/^[^@\s]+@[^@\s]+$/.test(v.email) ? "Write a name and an email." : ""),
+        check: (v) => (!v.name || !/^[^@\s]+@[^@\s]+$/.test(v.email) ? "Write a name and an email."
+          : !(Number.isInteger(v.days) && v.days >= 1 && v.days <= 30) ? MSG.need.days : ""),
         run: (v) => api("POST", "requests/new", { kind: "meet.invite", target: { name: v.name, email: v.email, days: v.days || 7 }, reason: v.reason }),
       });
     }) : null;
@@ -3242,7 +3448,7 @@
       kids.push(panel(W["seats.request"], w.box, btn(W["seats.request.button"], () => {
         const n = Number(w.input.value);
         if (!(Number.isInteger(n) && n > (d.users || 0) && n <= 10000)) {
-          fail(fillText(MSG.wantedNeeded, { users: d.users || 0 }));
+          invalid(w.input, fillText(MSG.wantedNeeded, { users: d.users || 0 }));
           return;
         }
         confirmDialog({
@@ -3292,15 +3498,47 @@
         { key: "lowering", label: "Pending lowering", cell: (o) => (o.policy && o.policy.pending_lowering ? u(clean(o.policy.pending_lowering.effective_at) + ": " + clean(o.policy.pending_lowering.reason)) : ""), sortable: false }],
     }))];
   };
+  // ---- Relay answers as words: field names as labels, times formatted, lists and objects as text, never JSON ----
+  const FIELD_WORDS = {
+    version: "Version", started: "Started", uptime_s: "Up for", window_s: "Time window", window_ends: "Window ends", window_estimate: "Window is an estimate",
+    configured: "Set up", healthy: "Healthy", error: "Error", state: "State", hint: "Note", since: "Since", days_left: "Days left",
+    not_after: "Certificate ends", root_mode: "Root mode", intermediate_serial: "Intermediate serial", previous_serial: "Previous serial",
+    previous_not_after: "Previous certificate ends", root_not_after: "Root certificate ends", root_crl_days_left: "Days left on the root revocation list",
+    root_days_left: "Days left on the root revocation list", pending_key: "Key waiting", ledger_seq: "Ledger entry", ledger_head: "Ledger head",
+    policy: "Policy", next_update: "Next update", published: "Published", vmid: "VM", node: "Proxmox node", people_online: "People online",
+    devices_online: "Devices online", participants: "People in calls", online: "Online now", rooms: "Rooms", room: "Room", release: "Release",
+    signer: "Signer", files: "Download server", relay: "Relay", enabled: "On", send: "Sent to partners", receive: "Taken from partners",
+    partners: "Partners", file_max_mb: "Largest file (MB)", notice: "Notice", dms: "Direct messages", file_links: "File links",
+    file_link_hours: "File links last (hours)", backfill_send: "Backfill sent (messages)", backfill_receive: "Backfill taken (messages)",
+    ts: "Time", at: "Time", actor: "Actor", action: "Action", org: "Organization", platform: "Platform", kind: "Kind", serial: "Serial",
+    subject: "Subject", principal: "Person", name: "Name", reason: "Reason", detail: "Detail", id: W["dialog.id"], seq: "Entry", result: "Result",
+  };
+  const TIME_KEY = /(?:^|_)(?:at|ts|time|since|started|published|updated|ends|until|after|update)$|(?:At|After|Until)$/;
+  const fieldWord = (k) => FIELD_WORDS[k] || stateWord(String(k).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()).replace(/\bmb\b/gi, "MB").replace(/\bid\b/gi, "ID");
+  function plainValue(k, v) {
+    if (v == null || v === "") return "";
+    if (typeof v === "boolean") return yesNo(v);
+    if (Array.isArray(v)) {
+      if (!v.length) return MSG.none;
+      return v.map((x) => plainValue("", x)).join(v.some((x) => x && typeof x === "object") ? "; " : ", ");
+    }
+    if (typeof v === "object") {
+      return Object.entries(v).filter(([, x]) => x != null && x !== "").map(([a, x]) => fieldWord(a) + ": " + plainValue(a, x)).join(", ");
+    }
+    if (typeof v === "number" && /_s$/.test(k)) return span(v);
+    if (TIME_KEY.test(k) && (typeof v === "number" ? v > 1e8 : DATE_TEXT.test(String(v).trim())) && dateOf(v, "any")) return whenAny(v);
+    return clean(String(v));
+  }
   function genericTable(caption, rows, empty) {
     const keys = [...new Set(rows.flatMap((r) => (r && typeof r === "object" ? Object.keys(r) : [])))].slice(0, 8);
     return dataTable({
-      caption, rows, empty, text: (r) => JSON.stringify(r), name: (r) => String(r[keys[0]] == null ? "" : r[keys[0]]),
-      cols: keys.map((k) => ({ key: k, label: stateWord(k), cell: (r) => u(typeof r[k] === "object" && r[k] !== null ? JSON.stringify(r[k]) : r[k] == null ? "" : r[k]) })),
+      caption, rows, empty, text: (r) => keys.map((k) => plainValue(k, r[k])).join(" "), name: (r) => plainValue(keys[0], r[keys[0]]),
+      cols: keys.map((k) => ({ key: k, label: fieldWord(k), cell: (r) => u(plainValue(k, r[k])), sort: (r) => (r[k] != null && typeof r[k] === "object" ? plainValue(k, r[k]) : r[k]) })),
     });
   }
+  // Key and value pairs of an object; a nested object becomes its own pairs.
   function objPairs(o) {
-    return pairs(Object.entries(o || {}).map(([k, v]) => [stateWord(k), typeof v === "object" && v !== null ? JSON.stringify(v) : typeof v === "boolean" ? yesNo(v) : v]));
+    return pairs(Object.entries(o || {}).map(([k, v]) => [fieldWord(k), v && typeof v === "object" && !Array.isArray(v) ? objPairs(v) : plainValue(k, v)]));
   }
   function crlUploadMeet() {
     const { box, area } = pasteOrFile("Revocation list (PEM)", ".pem,.crl,.txt");
@@ -3318,7 +3556,8 @@
   }
   pages.meet_signer = async () => {
     const d = await api("GET", "meet/signer");
-    return [head(PAGE_LABEL.meet.signer), panel("Signer", objPairs(d.signer)), panel("Revocation", objPairs(d.crl)),
+    const s = d.signer || {};
+    return [head(PAGE_LABEL.meet.signer), panel("Signer", Object.keys(s).length ? objPairs(s) : emptyLine(MSG.notSet)), panel("Revocation", objPairs(d.crl)),
       isAdmin() ? crlUploadMeet() : null, panel(null, genericTable("Ledger, newest first", (d.ledger || []).slice(0, 100), MSG.noneYet))];
   };
   function policyLines(p) {
@@ -3335,29 +3574,65 @@
   pages.meet_bridges = async () => {
     const [d, a, orgs] = await Promise.all([api("GET", "meet/bridge"), api("GET", "meet/bridge/audit?limit=100").catch(() => ({ rows: [] })),
       api("GET", "meet/organizations").catch(() => ({ organizations: [] }))]);
-    const labels = Object.fromEntries((orgs.organizations || []).map((o) => [o.id, o.label || o.id]));
-    const policies = Object.entries(d.policies || {});
-    const kids = [head(PAGE_LABEL.meet.bridges), help("help.meet-policies")];
-    if (!policies.some(([, p]) => p && p.enabled)) kids.push(panel(null, emptyLine(W["empty.bridges"])));
-    for (const [org, p] of policies) {
+    const labels = Object.assign({ [BRIDGE_NONE]: BRIDGE_NONE_LABEL }, Object.fromEntries((orgs.organizations || []).map((o) => [o.id, o.label || o.id])));
+    const all = d.policies || {};
+    // Only bridges that are on are shown; an organization without one has the off policy, which says nothing.
+    const on = Object.entries(all).filter(([, p]) => p && p.enabled);
+    const add = canWrite() ? btn(BRIDGE_ADD, () => bridgeAdd(all, labels), "primary") : null;
+    const kids = [head(PAGE_LABEL.meet.bridges, add), help("help.meet-policies")];
+    if (!on.length) kids.push(panel(null, emptyLine(W["empty.bridges"])));
+    for (const [org, p] of on) {
       const label = labels[org] || org;
-      const platforms = (p.partners || []).length ? (p.partners || []).join(", ") : "every partner";
-      kids.push(panel(null, el("h3", null, u(label)), el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), code(org)), objPairs(p),
+      kids.push(panel(null, el("h3", null, u(label)), org === BRIDGE_NONE ? null : el("p", { class: "id-line" }, el("span", { class: "id-label" }, W["dialog.id"]), code(org)),
+        bridgePairs(p, labels),
         el("div", { class: "page-head" },
-          isAdmin() && p.enabled ? btn("Turn off", () => confirmDialog({
-            dlg: "bridge-off", vals: { org: label, "platform list": platforms }, name: label, id: org, danger: true, fields: [{ kind: "reason" }],
+          isAdmin() ? btn(MSG.turnOff, () => confirmDialog({
+            dlg: "bridge-off", vals: { org: label, "platform list": bridgePartners(p, labels) }, name: label, id: org, danger: true, fields: [{ kind: "reason" }],
             run: (v) => post("meet/bridge", { org, policy: Object.assign({}, p, { enabled: false }), reason: v.reason }, { action: "meet.bridge.set", target: org }),
           })) : null,
           canWrite() ? btn("Change", () => bridgeChange(org, label, p)) : null)));
     }
     const rows = a.rows || a.audit || a.entries || [];
-    kids.push(panel(null, genericTable("Bridge audit", rows, W["empty.audit"])));
+    kids.push(panel(null, genericTable("Bridge audit", rows, MSG.noEntries)));
     return kids;
   };
-  function bridgeChange(org, label, p) {
+  // Bridges (BR-1): the org id of people with no organization, the kinds a policy carries, and its fields as words.
+  const BRIDGE_NONE = "_none";
+  const BRIDGE_NONE_LABEL = "People with no organization";
+  const BRIDGE_ADD = "Add a bridge";
+  const BRIDGE_KINDS = { text: "Messages", edits: "Edits", deletes: "Deletes", reactions: "Reactions", files: "Files", calls: "Calls" };
+  // The relay's off policy (meet_bridge.rs off_policy): the starting point of a new bridge.
+  const BRIDGE_OFF = { enabled: false, send: [], receive: [], partners: [], file_max_mb: 25, notice: "", dms: false, file_links: false, file_link_hours: 24,
+    backfill_send: 0, backfill_receive: 0 };
+  const bridgePartners = (p, labels, cap) => ((p.partners || []).includes("*") ? (cap ? "Any organization" : "any organization")
+    : (p.partners || []).length ? p.partners.map((x) => labels[x] || x).join(", ") : cap ? MSG.none : "no one");
+  function bridgePairs(p, labels) {
+    const kinds = (list) => ((list || []).length ? list.map((k) => BRIDGE_KINDS[k] || stateWord(k)).join(", ") : MSG.none);
+    return pairs([[FIELD_WORDS.send, kinds(p.send)], [FIELD_WORDS.receive, kinds(p.receive)], [FIELD_WORDS.partners, bridgePartners(p, labels, true)],
+      [FIELD_WORDS.file_max_mb, p.file_max_mb != null ? String(p.file_max_mb) : undefined], [FIELD_WORDS.notice, p.notice || MSG.none],
+      [FIELD_WORDS.dms, yesNo(p.dms)], [FIELD_WORDS.file_link_hours, p.file_links ? String(p.file_link_hours || 0) : MSG.off],
+      [FIELD_WORDS.backfill_send, String(p.backfill_send || 0)], [FIELD_WORDS.backfill_receive, String(p.backfill_receive || 0)]]);
+  }
+  // Add a bridge: pick the organization, then the same change dialog with that organization's policy turned on.
+  async function bridgeAdd(all, labels) {
+    const opts = Object.keys(labels).filter((id) => !(all[id] && all[id].enabled)).map((id) => [id, labels[id]]);
+    const r = await confirmDialog({
+      spec: { title: BRIDGE_ADD, body: ["Choose the organization whose people the bridge serves. Next you set what it carries."], button: [FW["deploy.continue"]] },
+      fields: [{ kind: "select", key: "org", label: FIELD_WORDS.org, options: opts, value: opts.length ? opts[0][0] : "" }],
+      check: (v) => (!v.org ? "Choose an organization." : ""),
+      plain: true,
+      run: async (v) => ({ org: v.org }),
+      done: () => clearMessages(),
+    });
+    if (!r || !r.org) return;
+    const now = Object.assign({}, BRIDGE_OFF, all[r.org] || {});
+    bridgeChange(r.org, labels[r.org] || r.org, now, Object.assign({}, now, { enabled: true }));
+  }
+  // `start` is the policy the text area opens with (a new bridge starts on); the diff is against `p`, the policy now.
+  function bridgeChange(org, label, p, start) {
     confirmDialog({
       dlg: "bridge-change", vals: { org: label }, name: label, id: org, two: true,
-      fields: [{ kind: "textarea", key: "policy", label: "Policy (JSON)", value: JSON.stringify(p, null, 2) }, { kind: "reason" }],
+      fields: [{ kind: "textarea", key: "policy", label: "Policy (JSON)", value: JSON.stringify(start || p, null, 2) }, { kind: "reason" }],
       body: (v, cur) => {
         let next = null;
         try {
@@ -3642,28 +3917,33 @@
       for (let i = 1; i < h.length; i++) {
         const before = ((h[i - 1].minimum || {})[app]) || "";
         const after = ((h[i].minimum || {})[app]) || "";
-        const at = h[i].published > 1e12 ? h[i].published / 1000 : h[i].published;
+        const day = dateOf(h[i].published, "any");
+        const at = day ? day.getTime() / 1000 : 0;
         if (at >= cut && before && (!after || vcmp(after, before) < 0) && before === next) restored = true;
       }
       if (!restored) return true;
     }
     return false;
   }
+  // Release platforms and minimum apps by their own names.
+  const PLATFORM_WORDS = { windows: "Windows", macos: "macOS", ios: "iPhone", iphone: "iPhone", linux: "Linux", android: "Android" };
+  const platformWord = (p) => PLATFORM_WORDS[String(p).toLowerCase()] || stateWord(p);
+  const MIN_APP = { hub: "Hub", ios: "iPhone" };
   pages.meet_releases = async () => {
     const d = await api("GET", "meet/release");
     const rel = d.release || {};
     const mins = d.minimums || rel.minimum || {};
     const files = rel.files || {};
     const kids = [head(PAGE_LABEL.meet.releases), panel("Latest release", pairs([
-      ["Version", rel.version || MSG.never], ["Published", rel.published],
-      ...Object.entries(files).map(([plat, f]) => [stateWord(plat), u(clean(f.name) + ", SHA-256 " + clean(f.sha256) + ", " + f.size + " bytes")]),
+      ["Version", rel.version || MSG.never], ["Published", rel.published ? whenAny(rel.published) : undefined],
+      ...Object.entries(files).map(([plat, f]) => [platformWord(plat), u(clean(f.name) + ", SHA-256 " + clean(f.sha256) + ", " + f.size + " bytes")]),
       rel.ios && rel.ios.version ? ["iPhone", rel.ios.version + " (" + rel.ios.build + ", " + clean(rel.ios.channel) + ")"] : ["iPhone", undefined],
       ["Notes", rel.notes], ["Minimum Hub", mins.hub || ""], ["Minimum iPhone", mins.ios || ""],
     ])), panel(null, dataTable({
       caption: "Minimums, last 10 releases", rows: d.history || [], empty: MSG.noneYet, name: (h) => h.version,
-      cols: [{ key: "version", label: "Version" }, { key: "minimum", label: "Minimums", cell: (h) => u(Object.entries(h.minimum || {}).map(([k, v]) => k + " " + v).join(", ")), sortable: false },
-        { key: "published", label: "Published", cell: (h) => (h.published > 1e12 ? when(h.published) : whenSec(h.published)) },
-        { key: "until", label: "Until", cell: (h) => (h.until ? (h.until > 1e12 ? when(h.until) : whenSec(h.until)) : "") }],
+      cols: [{ key: "version", label: "Version" }, { key: "minimum", label: "Minimums", cell: (h) => u(Object.entries(h.minimum || {}).map(([k, v]) => (MIN_APP[k] || k) + " " + v).join(", ")), sortable: false },
+        { key: "published", label: "Published", cell: (h) => whenAny(h.published) },
+        { key: "until", label: "Until", cell: (h) => (h.until ? whenAny(h.until) : "") }],
     }))];
     if (canWrite()) kids.push(releaseForm(rel, mins, d.history || []));
     return kids;
@@ -3716,7 +3996,7 @@
       const m = manifest();
       const two = releaseNeedsSecond(m.minimum, mins, history);
       const params = [["Version", m.version]];
-      for (const [plat, x] of Object.entries(m.files)) params.push([stateWord(plat) + " installer", x.name], [stateWord(plat) + " SHA-256", code(x.sha256)], [stateWord(plat) + " size", x.size + " bytes"]);
+      for (const [plat, x] of Object.entries(m.files)) params.push([platformWord(plat) + " installer", x.name], [platformWord(plat) + " SHA-256", code(x.sha256)], [platformWord(plat) + " size", x.size + " bytes"]);
       if (m.ios) params.push(["iPhone", m.ios.version + " (" + m.ios.build + ", " + m.ios.channel + ")"]);
       params.push(["Notes", m.notes], ["Minimum Hub", m.minimum.hub || ""], ["Minimum iPhone", m.minimum.ios || ""]);
       confirmDialog({
@@ -3743,10 +4023,49 @@
       panel(null, genericTable("Providers", d.providers || [], MSG.noneYet)), panel(null, genericTable("Proposals waiting", d.proposals || [], MSG.noneYet)),
       panel(null, pairs([["Suspended people", d.suspended || 0]])), panel(null, genericTable("Pending lowerings", d.pending_lowerings || [], MSG.noneYet))];
   };
+  // Calls and links: the relay, signer, download server and release in words, who is online and in which rooms, then
+  // each call link's quality over the relay's window (`links` is { window_s, rows, rooms }).
+  const listText = (list, n) => (list.length ? list.slice(0, n).join(", ") + (list.length > n ? fillText(", and <n> more", { n: list.length - n }) : "") : MSG.none);
+  const oneDecimal = (v) => (typeof v === "number" && Number.isFinite(v) ? String(Math.round(v * 10) / 10) : "");
   pages.meet_calls = async () => {
     const d = await api("GET", "meet/calls");
-    const links = Array.isArray(d.links) ? d.links : Object.entries(d.links || {}).map(([k, v]) => Object.assign({ link: k }, v));
-    return [head(PAGE_LABEL.meet.calls), panel("Summary", objPairs(d.summary)), panel(null, genericTable(PAGE_LABEL.meet.calls, links, MSG.noneYet))];
+    const s = d.summary || {};
+    const links = d.links || {};
+    const rows = Array.isArray(links) ? links : Array.isArray(links.rows) ? links.rows : [];
+    const rooms = Array.isArray(s.rooms) ? s.rooms : [];
+    const online = Array.isArray(s.online) ? s.online : [];
+    const relay = s.relay || {};
+    const sg = s.signer;
+    const files = s.files;
+    const rel = s.release;
+    const signerText = !sg ? undefined : !sg.configured ? "No certificate server is set up; the issuer's PC signs."
+      : (sg.healthy ? "Healthy" : "Not answering") + (sg.days_left != null ? ", " + sg.days_left + " days left" : "") + (sg.error ? ". " + clean(sg.error) : "");
+    const filesText = !files ? undefined : files.configured === false ? "Not set up." + (files.hint ? " " + clean(files.hint) : "")
+      : stateWord(files.state) + (files.window_ends ? ", until " + whenAny(files.window_ends) : "") + (files.error ? ". " + clean(files.error) : "");
+    const person = (r) => r.name || r.principal || (r.person != null ? "Person " + r.person : "");
+    const roomList = rooms.map((r) => clean(r.room) + " (" + ((r.participants || []).length) + ")");
+    const summary = pairs([
+      ["Relay version", relay.version || MSG.unknown], ["Up for", typeof relay.uptime_s === "number" ? span(relay.uptime_s) : undefined],
+      ["People online", s.people_online != null ? String(s.people_online) : String(online.length)],
+      ["Devices online", s.devices_online != null ? String(s.devices_online) : undefined],
+      ["People in calls", s.participants != null ? String(s.participants) : undefined],
+      ["Rooms with calls", listText(roomList, 20)],
+      ["Online now", !Array.isArray(s.online) ? undefined : listText(online.map((p) => clean(p.name || p.principal || "")), 20)],
+      ["Signer", signerText], ["Download server", filesText],
+      ["Release", rel && rel.version ? rel.version + (rel.published ? ", published " + whenAny(rel.published) : "") : MSG.none],
+    ]);
+    const caption = typeof links.window_s === "number" ? fillText("Call links in the last <time>", { time: span(links.window_s) }) : "Call links";
+    return [head(PAGE_LABEL.meet.calls), panel("Summary", summary), panel(null, dataTable({
+      caption, rows, empty: MSG.noneYet, name: (r) => person(r) + " " + (r.room || ""),
+      text: (r) => [r.room, person(r), r.level, r.path].join(" "),
+      cols: [{ key: "room", label: "Room" }, { key: "name", label: "Person", cell: (r) => u(person(r)), sort: person },
+        { key: "level", label: "Quality", cell: (r) => stateWord(r.level) }, { key: "reason", label: "Why", cell: (r) => stateWord(r.reason) },
+        { key: "rtt_ms", label: "Round trip (ms)", cell: (r) => oneDecimal(r.rtt_ms) }, { key: "loss_pct", label: "Loss (%)", cell: (r) => oneDecimal(r.loss_pct) },
+        { key: "out_kbps", label: "Sending (kbps)", cell: (r) => oneDecimal(r.out_kbps) },
+        { key: "path", label: "Path", cell: (r) => [r.path, r.proto].filter(Boolean).map(clean).join(", ") },
+        { key: "live", label: "In a call now", cell: (r) => (r.live == null ? "" : yesNo(r.live)) },
+        { key: "updated", label: "Updated", cell: (r) => whenAny(r.updated) }],
+    }))];
   };
   pages.meet_servers = async () => {
     const d = await api("GET", "meet/servers");
@@ -3754,7 +4073,7 @@
     const files = d.files;
     return [head(PAGE_LABEL.meet.servers),
       panel("Signer", pairs([["Healthy", yesNo(s.healthy)], ["Days left", s.days_left]])),
-      panel("Download server", files ? pairs([["State", stateWord(files.state)], ["Since", files.since ? whenSec(files.since) : ""]]) : emptyLine(MSG.unknown),
+      panel("Download server", files ? pairs([["State", stateWord(files.state)], ["Since", files.since ? whenAny(files.since) : ""]]) : emptyLine(MSG.unknown),
         files && canWrite() && files.state !== "running" ? btn(D["files-start"].button[0], () => confirmDialog({
           dlg: "files-start", run: () => post("meet/files/start", {}, { action: "meet.files.start", target: "-" }),
         }), "primary") : null)];
@@ -3855,15 +4174,10 @@
     const actions = el("div", { class: "row-actions" },
       waiting && !mine && !aboutMe ? btn(MSG.approve, () => approve(a), "primary") : null,
       waiting && !mine && !aboutMe ? btn(MSG.refuse, () => refuse(a), "danger") : null,
-      waiting && mine ? btn(MSG.cancel, async () => {
-        try {
-          await api("POST", "approvals/cancel", { id: a.id });
-          say(MSG.done);
-          render({ keepMessages: true });
-        } catch (e) {
-          fail(e);
-        }
-      }) : null);
+      waiting && mine ? btn(MSG.cancelApproval.button[0], () => confirmDialog({
+        spec: MSG.cancelApproval, vals: { summary: summaryOf(a) }, name: a.target, id: a.id, danger: true, plain: true,
+        run: () => api("POST", "approvals/cancel", { id: a.id }),
+      })) : null);
     const link = mine && a.result && typeof a.result === "object" && a.result.link ? a.result.link : null;
     return el("section", { class: "panel approval", "aria-label": summaryOf(a) },
       el("h3", null, u(summaryOf(a))),
@@ -3895,6 +4209,28 @@
     return [...new Set(words)].join(", ");
   };
   const manageable = (p) => p.role === "viewer" || p.role === "user-manager";
+  // The row actions on a console account ({email, role, state}), the same on Admins and audit > People and on the
+  // fleet People page (D-2): user managers suspend viewers and user managers; admins change roles, sign out, reset.
+  function accountActions(p, activeAdmins) {
+    if (p.email === myEmail()) return [];
+    if (!isAdmin()) {
+      if (!manageable(p)) return [];
+      return [
+        p.state === "active" ? { label: "Suspend", run: () => suspendDialog(p, activeAdmins) } : null,
+        p.state === "suspended" ? { label: "Unsuspend", run: () => unsuspendDialog(p) } : null,
+      ];
+    }
+    return [
+      p.role !== "admin" && p.state === "active" ? { label: "Make an admin", run: () => roleDialog(p, "admin") } : null,
+      p.role !== "user-manager" && p.state === "active" ? { label: "Make a user manager", run: () => roleDialog(p, "user-manager") } : null,
+      p.role !== "viewer" ? { label: "Make a viewer", run: () => roleDialog(p, "viewer") } : null,
+      p.state === "active" ? { label: "Suspend", run: () => suspendDialog(p, activeAdmins) } : null,
+      p.state === "suspended" ? { label: "Unsuspend", run: () => unsuspendDialog(p) } : null,
+      { label: "Sign out everywhere", run: () => confirmDialog({ dlg: "end-sessions", vals: { email: p.email }, name: p.email, id: p.email, danger: true, run: () => post("sessions/end-all", { email: p.email }, { action: "sessions.end-all", target: p.email }) }) },
+      { label: "Reset sign-in", run: () => resetDialog(p) },
+      { label: MSG.remove, run: () => removeDialog(p) },
+    ];
+  }
   pages.admins_people = async () => {
     const d = await api("GET", "admins");
     const people = d.people || [];
@@ -3905,26 +4241,7 @@
       admin && p.invitedBy && p.verifiedByHub === false ? el("span", { class: "note" }, fill(W["admins.unverified"], { email: p.invitedBy })) : null,
       p.unproven ? el("span", { class: "st st-warn" }, " " + W["admins.unproven"]) : null,
       p.suspendReason ? el("span", null, " ", u(p.suspendReason)) : null);
-    const actions = (p) => {
-      if (p.email === myEmail()) return [];
-      if (!admin) {
-        if (!manageable(p)) return [];
-        return [
-          p.state === "active" ? { label: "Suspend", run: () => suspendDialog(p, activeAdmins) } : null,
-          p.state === "suspended" ? { label: "Unsuspend", run: () => unsuspendDialog(p) } : null,
-        ];
-      }
-      return [
-        p.role !== "admin" && p.state === "active" ? { label: "Make an admin", run: () => roleDialog(p, "admin") } : null,
-        p.role !== "user-manager" && p.state === "active" ? { label: "Make a user manager", run: () => roleDialog(p, "user-manager") } : null,
-        p.role !== "viewer" ? { label: "Make a viewer", run: () => roleDialog(p, "viewer") } : null,
-        p.state === "active" ? { label: "Suspend", run: () => suspendDialog(p, activeAdmins) } : null,
-        p.state === "suspended" ? { label: "Unsuspend", run: () => unsuspendDialog(p) } : null,
-        { label: "Sign out everywhere", run: () => confirmDialog({ dlg: "end-sessions", vals: { email: p.email }, name: p.email, id: p.email, danger: true, run: () => post("sessions/end-all", { email: p.email }, { action: "sessions.end-all", target: p.email }) }) },
-        { label: "Reset sign-in", run: () => resetDialog(p) },
-        { label: MSG.remove, run: () => removeDialog(p) },
-      ];
-    };
+    const actions = (p) => accountActions(p, activeAdmins);
     const kids = [head(PAGE_LABEL.admins.people, btn(MSG.inviteSomeone, inviteDialog, "primary")),
       panel(null, dataTable({
         caption: PAGE_LABEL.admins.people, rows: people, empty: W["empty.people"], text: (p) => [p.email, p.role, p.state].join(" "), name: (p) => p.email,
@@ -3970,15 +4287,10 @@
           run: () => post("invites/resend", { email: i.email }, { action: "invites.resend", target: i.email }),
           done: (r) => showLink(r, i.email),
         }) },
-        { label: MSG.cancelInvite, run: async () => {
-          try {
-            await api("POST", "invites/revoke", { email: i.email });
-            say(MSG.done);
-            render({ keepMessages: true });
-          } catch (e) {
-            fail(e);
-          }
-        } },
+        { label: MSG.cancelInvite, run: () => confirmDialog({
+          spec: MSG.cancelInviteDlg, vals: { email: i.email }, name: i.email, id: i.email, danger: true, plain: true,
+          run: () => api("POST", "invites/revoke", { email: i.email }),
+        }) },
       ],
     })));
     return kids;
@@ -4052,18 +4364,13 @@
       actions: (s) => (s.email === myEmail() ? [{ label: MSG.endSession, run: () => endSession(s) }] : []),
     }))];
   };
-  async function endSession(s) {
-    try {
-      await api("POST", "sessions/end", { id_hint: s.id_hint });
-      if (s.current) {
-        toSignIn(MSG.signedOut);
-        return;
-      }
-      say(MSG.done);
-      render({ keepMessages: true });
-    } catch (e) {
-      fail(e);
-    }
+  // Ending the current session signs this browser out, and the dialog says so (D-7).
+  function endSession(s) {
+    confirmDialog({
+      spec: s.current ? MSG.endThis : MSG.endOther, name: [s.agent, s.ip].filter(Boolean).join(", ") || s.id_hint, id: s.id_hint, danger: true, plain: true,
+      run: () => api("POST", "sessions/end", { id_hint: s.id_hint }),
+      done: s.current ? () => toSignIn(MSG.signedOut) : null,
+    });
   }
   pages.admins_audit = async (c) => {
     const f = { actor: c.q.get("actor") || "", action: c.q.get("action") || "", result: c.q.get("result") || "", q: c.q.get("q") || "" };
@@ -4091,6 +4398,8 @@
       const s = p.toString();
       go((fleet() ? "#/security/audit" : "#/admins/audit") + (s ? "?" + s : ""));
     };
+    for (const i of [actor, action, q]) onEnter(i, apply);
+    const filtered = Object.values(f).some(Boolean);
     const head2 = d.head || {};
     const from0 = (d.exportedThrough || 0) + 1 <= (head2.seq || 0) ? (d.exportedThrough || 0) + 1 : 1;
     const exportBtn = btn(MSG.exportBtn, () => confirmDialog({
@@ -4116,12 +4425,12 @@
     }), "danger") : null;
     let after = entries.length ? entries[entries.length - 1].seq : null;
     const table = dataTable({
-      caption: PAGE_LABEL.admins.audit, rows: entries, total: d.total, empty: W["empty.audit"], name: (e) => "#" + e.seq + " " + e.action,
+      caption: PAGE_LABEL.admins.audit, rows: entries, total: d.total, empty: filtered ? W["empty.audit"] : MSG.noEntries, name: (e) => "#" + e.seq + " " + e.action,
       cols: [{ key: "seq", label: "Entry" }, { key: "ts", label: "Time", cell: (e) => when(e.ts) }, { key: "actor", label: "Actor" }, { key: "role", label: "Role" },
         { key: "ip", label: "Address" }, { key: "action", label: "Action" }, { key: "target", label: "Target" },
         { key: "result", label: "Result", cell: (e) => stChip(e.result, e.result === "ok" ? "ok" : e.result === "refused" || e.result === "failed" ? "bad" : "none") },
         { key: "approval", label: "Approval", cell: (e) => (e.approval ? code(e.approval) : "") }, { key: "stepup", label: "Step-up", cell: (e) => yesNo(e.stepup) },
-        { key: "detail", label: "Detail", cell: (e) => u(e.detail ? JSON.stringify(e.detail) : ""), sortable: false }],
+        { key: "detail", label: "Detail", cell: (e) => u(e.detail ? plainValue("detail", e.detail) : ""), sortable: false }],
       more: entries.length < (d.total || 0) ? async () => {
         const x = await api("GET", "audit?limit=100&after=" + encodeURIComponent(after) + qs());
         const got = x.entries || [];
@@ -4200,7 +4509,7 @@
         addKey.box, btn(addWord, () => {
           const a = addKey.input.value.trim().toLowerCase();
           if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(a)) {
-            fail(MSG.aaguid);
+            invalid(addKey.input, MSG.need.aaguid);
             return;
           }
           saveKeys(keys.map((x) => x.aaguid).concat([a]), "key-approve", a, false);
@@ -4220,7 +4529,7 @@
             return;
           }
           confirmDialog({
-            dlg: "metadata", vals: { no: p.no, date: p.nextUpdate || MSG.unknown },
+            dlg: "metadata", vals: { no: p.no, date: p.nextUpdate ? dayAny(p.nextUpdate) : MSG.unknown },
             run: () => post("settings/mds", { blob: text }, { action: "settings.mds", target: "-" }),
             done: settingsDone,
           });
@@ -4300,7 +4609,7 @@
       btn(MSG.save, () => {
         const n = next();
         if (!high && !(n.idleMinutes >= 5 && n.idleMinutes <= 60 && n.maxHours >= 1 && n.maxHours <= 24)) {
-          fail(fillText(W["settings.sessions"], { n: "5 to 60", h: "1 to 24" }));
+          invalid(n.idleMinutes >= 5 && n.idleMinutes <= 60 ? max : idle, MSG.need.sessions);
           return;
         }
         const loosen = (si.requirePassword && !n.requirePassword) || n.idleMinutes > si.idleMinutes || n.maxHours > si.maxHours;
@@ -4477,7 +4786,7 @@
     const renameRow = (k) => confirmDialog({
       spec: { title: MSG.renameTitle, body: [], button: [MSG.rename] }, vals: { label: k.label }, name: k.label, id: k.hint,
       fields: [{ kind: "text", key: "label", label: W["join.label"], value: k.label, maxlength: "40" }],
-      check: (v) => (!v.label ? W["join.label"] : ""),
+      check: (v) => (!v.label ? MSG.need.passkeyName : ""),
       plain: true,
       run: (v) => api("POST", "passkeys/rename", { hint: k.hint, label: v.label }),
     });
@@ -4513,13 +4822,17 @@
     return kids;
   };
   function mailChoices(chosen) {
-    const boxes = ATTENTION_KINDS.map((k) => {
-      const id = uid("mk");
-      const c = el("input", { id, type: "checkbox", value: k, checked: chosen.includes(k) ? true : null });
-      return [c, el("label", { class: "inline", for: id }, c, stateWord(k))];
+    const boxes = [];
+    const groups = MAIL_GROUPS.map(([heading, kinds]) => {
+      const mine = kinds.filter((x) => x[2] !== "fleet" || fleet()).map(([k, words]) => {
+        const id = uid("mk");
+        const c = el("input", { id, type: "checkbox", value: k, checked: chosen.includes(k) ? true : null });
+        boxes.push([c]);
+        return el("label", { class: "inline", for: id }, c, words);
+      });
+      return el("fieldset", { class: "choice grid" }, el("legend", null, heading), mine);
     });
-    return el("section", { class: "panel", "aria-labelledby": "mail-h" }, el("h3", { id: "mail-h" }, W["account.mail"]),
-      el("fieldset", { class: "choice grid" }, el("legend", { class: "vh" }, W["account.mail"]), boxes.map((x) => x[1])),
+    return el("section", { class: "panel", "aria-labelledby": "mail-h" }, el("h3", { id: "mail-h" }, W["account.mail"]), groups,
       btn(MSG.save, async () => {
         try {
           await api("POST", "account/mail", { kinds: boxes.filter((x) => x[0].checked).map((x) => x[0].value) });
@@ -4608,9 +4921,15 @@
 
   // Consistent help (WCAG 3.2.6): every help text of the console in one place, from the account menu.
   pages.help = async () => {
+    // A fleet console: what each part of the console does, under headings; the relay's own help texts speak of "this
+    // relay" and stay on the relay's console.
+    if (fleet()) {
+      return [head(MSG.help), ...FMSG.help.map(([title, words], i) => section("help-" + i, title, el("p", null, words))),
+        panel(null, el("p", null, MSG.helpGuideFleet))];
+    }
     const keys = ["help.overview", "help.approvals", "help.requests", "help.audit", "help.blocks", "help.security", "help.two-person", "help.banner",
       profile() === "standard" ? "help.aaguids.standard" : "help.aaguids", "help.mds"]
-      .concat(fleet() ? [] : product() === "spokes" ? ["help.spokes-elsewhere"] : ["help.seats", "help.meet-signing", "help.meet-policies", "help.id1", "help.push"]);
+      .concat(product() === "spokes" ? ["help.spokes-elsewhere"] : ["help.seats", "help.meet-signing", "help.meet-policies", "help.id1", "help.push"]);
     return [head(MSG.help), panel(null, keys.map((k) => el("p", null, W[k])), el("p", null, MSG.helpGuide))];
   };
 
@@ -4691,7 +5010,9 @@
   const scopesText = (list) => (list || []).map(scopeWord).join(", ");
   const healthWord = (h) => FW["health." + h] || stateWord(h);
   const healthTone = (h) => (h === "ok" ? "ok" : h === "warn" ? "warn" : h === "bad" ? "bad" : "none");
-  const relayStateWord = (s) => FW["state." + s] || stateWord(s);
+  // The registry's "active" reads as live ("Connected") beside a relay that does not answer, so lists say Enrolled and
+  // leave liveness to Health (D-9).
+  const relayStateWord = (s) => (s === "active" ? FMSG.stateActive : FW["state." + s] || stateWord(s));
   const productWord = (p) => FMSG.product[p] || stateWord(p);
   const toneChip = (word, tone) => el("span", { class: "st st-" + (tone || "none") }, word);
   const readable = (x) => x.state === "active" || x.state === "unconfirmed";
@@ -4725,30 +5046,36 @@
     for (const [k, v] of Object.entries(args || {})) {
       if (k === "relay") out.relay = relayName(v);
       else if (k === "product") out.product = FMSG.product[v] || v;
-      else if (k === "date" && typeof v === "number") out.date = dayAny(v);
-      else if ((k === "time" || k === "date and time") && typeof v === "number") out[k] = whenAny(v);
-      else if (k === "stopsAt" && typeof v === "number") out["date and time"] = whenAny(v);
+      else if (k === "date" && isTime(v)) out.date = dayAny(v);
+      else if ((k === "time" || k === "date and time") && isTime(v)) out[k] = whenAny(v);
+      else if (k === "stopsAt" && isTime(v)) out["date and time"] = whenAny(v);
       else out[k] = v;
     }
     return out;
   }
 
   // ---- Routing (12.4 hash routes; AC-1's link routes kept) ----
+  // An address with no page, or a page this role cannot open, says so with a way back (D-10).
+  const noPage = (title, why) => async () => [head(title), panel(null, el("p", null, why), el("p", null, el("a", { href: "#/overview" }, FMSG.toOverview)))];
   async function fleetRoute(r) {
     let [a, b] = r.parts;
-    if (a === "approvals") [a, b] = ["security", "approvals"];
-    else if (a === "admins") {
-      const map = { account: ["settings", "account"], audit: ["security", "audit"], people: ["people"], sessions: ["settings", "console"], settings: ["settings", "console"] };
-      [a, b] = map[b] || ["settings", "account"];
-    }
+    // The relay console's routes (old links, attention items, bookmarks) open their fleet page; the query stays.
+    const alias = FLEET_ALIAS["#/" + r.parts.join("/")] || (a === "admins" ? "#/settings/account" : null);
+    if (alias) [a, b] = alias.slice(2).split("/");
+    if (a === "spokes" && b === "nodes") b = r.q.get("role") === "hub" ? "hubs" : "spokes";
+    if (a === "meet") b = { enrollments: "approvals", releases: "release", servers: "signer" }[b] || b;
+    if (a === "relays" && b === "list") b = undefined;
     // The enrollment code is shown once (3.1): it leaves memory as soon as its screen is left.
     if (!((a === "relays" && b === "add") || (a === "setup" && b === "relay"))) S.enroll = null;
+    if (a === "overview") return pages.fleetOverview;
     if (a === "help") return pages.help;
-    if (a === "setup") return isAdmin() ? (c) => setupPage(b || "signin", c) : pages.fleetOverview;
+    if (a === "setup") return isAdmin() ? (c) => setupPage(b || "signin", c) : noPage(FMSG.notFound, FMSG.notAllowed);
     // AC-2b-D 3.7: the Meeting Hub organization CA page (admin).
-    if (a === "license" && b === "meet-ca") return isAdmin() ? pages.fleetMeetCa : pages.fleetOverview;
+    if (a === "license" && b === "meet-ca") return isAdmin() ? pages.fleetMeetCa : noPage(FW["meet-ca.title"], FMSG.notAllowed);
+    const g = FNAV.find((x) => x.route === a);
+    if (!g || (b && !g.pages.some(([id]) => id === b) && !(a === "relays" && /^r_[A-Za-z0-9]+$/.test(b)))) return noPage(FMSG.notFound, FMSG.notFoundBody);
     const href = a === "relays" && (!b || /^r_/.test(b)) ? "#/relays" : "#/" + a + (b ? "/" + b : "");
-    if (!canOpen(href)) return pages.fleetOverview;
+    if (!canOpen(href)) return noPage(routeTitle({ parts: [a, b].filter(Boolean) }), FMSG.notAllowed);
     if (a === "people") return pages.fleetPeople;
     if (a === "spokes" || a === "meet") return fleetProduct(a, b || "relays", r);
     if (a === "relays") {
@@ -4778,10 +5105,19 @@
     const mine = all.filter((x) => (!own || x.product === group) && readable(x)).sort(byName);
     if (own && (pg === "relays" || !mine.length)) return (c) => productRelays(group, all, c);
     const base = group === "license" ? "#/license" : "#/" + group + "/" + pg;
-    if (!mine.length) return async () => [head(group === "license" ? FW["nav.license"] : pageLabel(group, pg)), panel(null, emptyLine(MSG.noneYet))];
+    // U-1: the page is titled as its place in the nav, not with the relay console's longer name.
+    const title = group === "license" ? FW["nav.license"] : pageLabel(group, pg);
+    if (!mine.length) return async () => [head(title), panel(null, emptyLine(MSG.noneYet))];
     const key = group + "/" + pg;
-    const want = r.q.get("relay") || S.pick[key] || S.pick[group];
+    const asked = r.q.get("relay");
     const allowAll = group === "spokes" && (pg === "hubs" || pg === "spokes");
+    // D-4: a link to a relay that cannot be read now (pending, left, removed, or unknown) says so and shows no other relay.
+    if (asked && !(asked === "all" && allowAll) && !mine.some((x) => x.id === asked)) {
+      const x = all.find((y) => y.id === asked);
+      return async () => [head(title), relayPicker(base, mine, "", allowAll),
+        panel(null, el("p", { role: "status" }, fill(FMSG.notReadable, { name: x ? x.name : asked, state: x ? relayStateWord(x.state) : FMSG.notFound })))];
+    }
+    const want = asked || S.pick[key] || S.pick[group];
     S.pick[key] = want === "all" && allowAll ? "all" : null;
     if (allowAll && want === "all") return (c) => allNodes(pg === "hubs" ? "hub" : "spoke", mine, base, c);
     const row = mine.find((x) => x.id === want) || mine[0];
@@ -4793,12 +5129,16 @@
       const pick = relayPicker(base, mine, row.id, allowAll);
       try {
         const kids = [].concat(await fn(c)).filter(Boolean);
+        const h = kids[0] && kids[0].querySelector ? kids[0].querySelector("h2") : null;
+        if (h) h.textContent = title;
         kids.splice(1, 0, pick);
         return kids;
       } catch (e) {
-        // A page whose scope the relay did not give shows fleet.scope-missing (8.3).
-        if (e && e.code === "fleet-scope") return [head(group === "license" ? FW["nav.license"] : pageLabel(group, pg)), pick, scopeMissing(group, pg, row, e)];
-        throw e;
+        if (e && e.status === 401) throw e;
+        // A page whose scope the relay did not give shows fleet.scope-missing (8.3); any other failure stays inside
+        // the page, under its title and the picker, so another relay is one choice away (D-1).
+        if (e && e.code === "fleet-scope") return [head(title), pick, scopeMissing(group, pg, row, e)];
+        return [head(title), pick, pageError(e)];
       }
     };
   }
@@ -4808,7 +5148,8 @@
       k[0] = head(pageLabel("spokes", "blocks"));
       return k.slice(0, -1);
     };
-    const signer = async (c) => (await pages.meet_signer(c)).concat((await pages.meet_servers(c)).slice(1));
+    // Signer and servers: the signer page, then the download server (meet_servers' own Signer panel repeats it, U-9).
+    const signer = async (c) => (await pages.meet_signer(c)).concat((await pages.meet_servers(c)).slice(2));
     const map = {
       spokes: { hubs: pages.spokes_hubs, spokes: pages.spokes_spokes, seats: pages.spokes_seats, revocation: pages.spokes_relays, blocks, logs: pages.logs },
       meet: { people: pages.meet_people, seats: pages.meet_seats, calls: pages.meet_calls, approvals: pages.meet_enrollments, organizations: pages.meet_organizations,
@@ -4823,15 +5164,20 @@
     return panel(null, el("p", null, fill(FW["fleet.scope-missing"], { scope: scopeWord(scope) })),
       isAdmin() ? el("p", null, el("a", { href: "#/relays/" + encodeURIComponent(row.id) + "?tab=scopes" }, FW["fleet.scope-ask"])) : null);
   }
-  // "Relay: <name>" (fleet.picker), remembered in the hash; "All relays" where the page is a list. The choice applies
-  // with Show, so changing the select never moves the page by itself (WCAG 3.2.2).
+  // The relay a product page reads, remembered in the hash; "All relays" where the page is a list. Choosing a relay
+  // loads its page; the note beside the select says so before it is used (WCAG 3.2.2). With no current relay the
+  // first option asks for one, so any choice is a change.
   function relayPicker(base, rows, cur, allowAll) {
     const id = uid("pick");
-    const opts = (allowAll ? [["all", FW["fleet.all"]]] : []).concat(rows.map((x) => [x.id, fillText(FW["fleet.picker"], { name: x.name })]));
-    const s = el("select", { id }, opts.map(([v, w]) => el("option", { value: v }, w)));
-    s.value = cur;
-    return el("div", { class: "picker" }, el("label", { for: id }, FMSG.cols.relay, s),
-      btn(MSG.show, () => go(base + (base.includes("?") ? "&" : "?") + "relay=" + encodeURIComponent(s.value))));
+    const nid = id + "-n";
+    const known = cur === "all" ? allowAll : rows.some((x) => x.id === cur);
+    const opts = (known ? [] : [["", FMSG.pickerNone]]).concat(allowAll ? [["all", FW["fleet.all"]]] : [], rows.map((x) => [x.id, x.name]));
+    const s = el("select", { id, "aria-describedby": nid }, opts.map(([v, w]) => el("option", { value: v }, clean(w))));
+    s.value = known ? cur : "";
+    s.addEventListener("change", () => {
+      if (s.value) go(base + (base.includes("?") ? "&" : "?") + "relay=" + encodeURIComponent(s.value));
+    });
+    return el("div", { class: "picker" }, el("label", { for: id }, FMSG.cols.relay, s), el("span", { class: "note", id: nid }, FMSG.pickerNote));
   }
   // Calls one phase 1 read on every relay, at most 8 at once (8.3), each answer labeled with its relay and time.
   async function eachRelay(rows, path) {
@@ -4906,6 +5252,12 @@
     const steps = [30, 14, 7, 3, 1].map((n) => expMs - n * 86400000).concat([expMs]);
     return steps.find((t) => t > now) || null;
   }
+  // relay.license-reminders: the reminders sent ("30 days (Nov 1, 2026, ...)", separated by semicolons because the
+  // times hold commas) and the next one. The words end in their own period, so "none yet" carries none.
+  function reminderLine(sent, next) {
+    const list = sent.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + " (" + whenAny(r.at) + ")").join("; ");
+    return fill(FW["relay.license-reminders"], { list: list || MSG.noneSent, date: next ? when(next) : MSG.never.toLowerCase() });
+  }
   // The License part of the relay detail (8.2): the service state, why, the stop time, the reminders sent and next,
   // and "Install a license", which works on a stopped relay (11.4).
   function relayLicense(d, l) {
@@ -4913,10 +5265,9 @@
     const sent = (l && l.reminders) || (s && s.reminders) || [];
     const exp = l && l.license ? l.license.exp : d.license ? d.license.exp : null;
     const next = nextReminder(exp, s, sent);
-    const list = sent.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + " " + whenAny(r.at)).join(", ");
     return panel(FMSG.cols.license, pairs([[FMSG.cols.license, licenseCell(d)],
       [MSG.serviceWhy, s && s.state === "stopped" ? relayWhy(s) || undefined : undefined]]),
-      sent.length || next ? el("p", null, fill(FW["relay.license-reminders"], { list: list || MSG.noneYet, date: next ? when(next) : MSG.never })) : null,
+      sent.length || next ? el("p", null, reminderLine(sent, next)) : null,
       s && s.state === "stopped" ? el("p", { class: "note" }, FW["relay.license-install-stopped"]) : null,
       isAdmin() && d.state === "active" ? el("a", { class: "btn", href: "#/license?relay=" + encodeURIComponent(d.id) }, W["license.install"]) : null);
   }
@@ -4929,8 +5280,8 @@
   function relayActions(r) {
     if (!isAdmin()) return [];
     const live = r.state !== "removed";
+    // The name links to the relay, so the menu holds only the actions.
     return [
-      { label: FMSG.open, run: () => go("#/relays/" + encodeURIComponent(r.id)) },
       r.state === "unconfirmed" ? { label: FD["confirm-relay"].button, run: () => confirmRelay(r.id) } : null,
       live ? { label: FMSG.rename, run: () => labelDialog(r) } : null,
       live ? { label: FMSG.scopes, run: () => go("#/relays/" + encodeURIComponent(r.id) + "?tab=scopes") } : null,
@@ -5006,7 +5357,7 @@
       spec: fspec("confirm-relay"), vals: { name: d.name, fingerprint: d.fingerprint || "" }, name: d.name, id,
       body: (v) => [fill(FD["confirm-relay"].body, v), el("p", { class: "note" }, FW["enroll.confirm-help"])],
       fields: [{ kind: "text", key: "fingerprint", label: FW["enroll.fingerprint"], maxlength: "160", required: true }],
-      check: (v) => (!v.fingerprint ? FW["enroll.fingerprint"] : ""),
+      check: (v) => (!v.fingerprint ? MSG.need.fingerprint : ""),
       run: (v) => post("fleet/relays/confirm", { relay: id, fingerprint: v.fingerprint }, { action: "fleet.relay.confirm", target: id }),
       done: relaysChanged,
     });
@@ -5016,7 +5367,7 @@
       spec: fspec("label"), vals: { name: r.name }, name: r.name, id: r.id,
       fields: [{ kind: "text", key: "name", label: FW["enroll.name"], value: r.name, maxlength: "64", required: true },
         { kind: "text", key: "site", label: FW["enroll.site"], value: r.site || "", maxlength: "64" }],
-      check: (v) => (!NAME_RE.test(v.name) ? FW["enroll.name"] : !SITE_RE.test(v.site) ? FW["enroll.site"] : ""),
+      check: (v) => (!NAME_RE.test(v.name) ? MSG.need.name : !SITE_RE.test(v.site) ? MSG.need.site : ""),
       run: (v) => post("fleet/relays/label", { relay: r.id, name: v.name, site: v.site }, { action: "fleet.relay.label", target: r.id }),
       done: relaysChanged,
     });
@@ -5090,8 +5441,8 @@
       ["FIPS mode", yesNo(d.fips)], [W["settings.profile"], d.profile ? FMSG.profileWords[d.profile] || d.profile : ""],
       [FMSG.cols.license, licenseCell(d)], [FMSG.cols.contact, when(d.lastContactAt)], [FMSG.certEnds, d.certNotAfter ? when(d.certNotAfter) : MSG.unknown],
       nodes ? [FMSG.nodes, [nodes.hubsOnline + " of " + nodes.hubs + " hubs online", nodes.spokesOnline + " of " + nodes.spokes + " spokes online", nodes.spokesSilent + " silent"].join(", ")] : [FMSG.nodes, undefined],
-      svc ? [FMSG.services, [svc.signer ? FMSG.signer + " " + (svc.signer.healthy ? MSG.yes : MSG.no) + (svc.signer.daysLeft != null ? ", " + svc.signer.daysLeft + " " + FMSG.daysWord : "") : null,
-        svc.push ? FMSG.push + " " + onOff(svc.push.enabled) + ", " + (svc.push.failed24h || 0) : null].filter(Boolean).join("; ")] : [FMSG.services, undefined],
+      svc ? [FMSG.services, [svc.signer ? FMSG.signer + " " + (svc.signer.healthy ? MSG.yes : MSG.no).toLowerCase() + (svc.signer.daysLeft != null ? ", " + svc.signer.daysLeft + " " + FMSG.daysWord : "") : null,
+        svc.push ? FMSG.push + " " + onOff(svc.push.enabled).toLowerCase() + ", " + fillText(FMSG.failures24h, { n: svc.push.failed24h || 0 }) : null].filter(Boolean).join("; ")] : [FMSG.services, undefined],
       [FW["enroll.fingerprint"], d.fingerprint ? el("code", { class: "fingerprint" }, clean(d.fingerprint)) : undefined],
       [FMSG.enrolledBy, d.enrolledBy || undefined], [FMSG.enrolled, d.enrolledAt ? when(d.enrolledAt) : undefined],
       [W["dialog.id"], code(d.id)],
@@ -5272,7 +5623,18 @@
     }));
     sync();
     return [el("fieldset", { class: "deploy-cards" }, el("legend", null, FW["deploy.product-h"]), cards), none,
-      el("div", { class: "wizard-actions" }, cont)];
+      el("div", { class: "wizard-actions" }, cont, cancelDeploy(st))];
+  }
+  // Cancel on every step (U-4): the page's state and any code leave memory; outside the setup wizard it goes back to
+  // the relay list, inside it the deploy starts over (the wizard has its own Back and Skip).
+  function cancelDeploy(st) {
+    const wizard = /^#\/setup\//.test(location.hash);
+    if (wizard && st.step === 1) return null;
+    return btn(MSG.cancel, () => {
+      S.enroll = null;
+      if (wizard) redrawDeploy();
+      else go("#/relays");
+    });
   }
   // The prerequisites of a card (3.3), by word id.
   function deployNeeds(st, opts, env) {
@@ -5335,7 +5697,7 @@
       el("div", { class: "wizard-actions" }, btn(FW["setup.back"], () => {
         st.step = 1;
         redrawDeploy();
-      }), cont)];
+      }), cont, cancelDeploy(st))];
   }
   // Step 3 (3.4): the relay's details, then the code and the command. No admins field: the script asks on the host.
   async function deployDetails(st, opts, wizard) {
@@ -5366,14 +5728,14 @@
       return [cb, el("label", { class: "inline", for: id }, cb, scopeWord(s), required ? el("span", { class: "note", id: id + "-n" }, " ", FR["fleet-scope-required"]) : null)];
     });
     const rid = uid("en");
-    const replaces = el("select", { id: rid }, el("option", { value: "" }, MSG.no), rows.filter((x) => x.product === p).map((x) => el("option", { value: x.id }, fillText(FW["enroll.replaces"], { name: x.name }))));
+    const replaces = el("select", { id: rid }, el("option", { value: "" }, MSG.none), rows.filter((x) => x.product === p).map((x) => el("option", { value: x.id }, clean(x.name))));
     replaces.value = f.replaces || "";
     replaces.addEventListener("change", () => {
       f.replaces = replaces.value;
     });
     const kids = [name.box, site.box, el("fieldset", { class: "choice" }, el("legend", null, FW["enroll.scopes"]), boxes.map((x) => x[1])),
-      el("div", { class: "field" }, el("label", { for: rid }, FMSG.replace), replaces)];
-    let host = null, turn = null, clients = null, pkiGroup = null, lic = null;
+      el("div", { class: "field" }, el("label", { for: rid }, FMSG.replaces), replaces)];
+    let host = null, turn = null, clients = null, pkiGroup = null, pkiBox = null, lic = null;
     if (!installed) {
       host = textField(FW["deploy.host"], { maxlength: "253", required: true, autocapitalize: "none" }, FW["deploy.host-help"]);
       host.input.value = f.host || "";
@@ -5396,8 +5758,9 @@
           });
           return el("label", { class: "inline", for: id }, r, FW["deploy.pki-" + v]);
         });
-        kids.push(el("fieldset", { class: "choice" }, el("legend", null, FW["deploy.pki"]), choices,
-          ca ? null : el("p", { class: "note" }, high ? FW["meet-ca.high"] : FW["deploy.pki-ca-missing"])));
+        pkiBox = el("fieldset", { class: "choice" }, el("legend", null, FW["deploy.pki"]), choices,
+          ca ? null : el("p", { class: "note" }, high ? FW["meet-ca.high"] : FW["deploy.pki-ca-missing"]));
+        kids.push(pkiBox);
       } else {
         clients = textField(FW["deploy.clients"], { maxlength: "1024", autocapitalize: "none" }, FW["deploy.clients-help"]);
         clients.input.value = f.clients != null ? f.clients : "0.0.0.0/0, ::/0";
@@ -5422,45 +5785,42 @@
         fail(FR["deploy-product"]);
         return;
       }
+      // D-6: each refusal is a sentence next to its field, and the field takes focus.
       if (!NAME_RE.test(body.name)) {
-        fail(FW["enroll.name"]);
-        name.input.focus();
+        invalid(name.input, MSG.need.name);
         return;
       }
       if (!SITE_RE.test(body.site)) {
-        fail(FW["enroll.site"]);
+        invalid(site.input, MSG.need.site);
         return;
       }
       if (body.scopes.includes("read-logs") && !body.scopes.includes("people")) {
-        fail(FR["fleet-scope-needs-people"]);
+        invalid(boxes.find((x) => x[0].value === "read-logs")[0], FR["fleet-scope-needs-people"]);
         return;
       }
       if (!installed) {
         const h = host.input.value.trim().toLowerCase();
         if (!(dnsOk(h) || (p === "spokes" && addressOk(h)))) {
-          fail(FR["deploy-host"]);
-          host.input.focus();
+          invalid(host.input, FR["deploy-host"]);
           return;
         }
         const d = { host: h, turnHost: null, clients: null, pki: null, license: lic.value || null };
         if (p === "meet") {
           const t = turn.input.value.trim().toLowerCase();
           if (t && !dnsOk(t) && !addressOk(t)) {
-            fail(FR["deploy-host"]);
-            turn.input.focus();
+            invalid(turn.input, FR["deploy-host"]);
             return;
           }
           d.turnHost = t || null;
           if (f.pki !== "console" && f.pki !== "own") {
-            fail(FW["deploy.pki"]);
+            invalid(pkiBox.querySelector("input"), MSG.need.pki);
             return;
           }
           d.pki = f.pki;
         } else {
           const list = clients.input.value.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
           if (!list.length || list.length > 16 || !list.every(cidrOk)) {
-            fail(FR["deploy-clients"]);
-            clients.input.focus();
+            invalid(clients.input, FR["deploy-clients"]);
             return;
           }
           d.clients = list;
@@ -5487,7 +5847,7 @@
       el("div", { class: "wizard-actions" }, btn(FW["setup.back"], () => {
         st.step = 2;
         redrawDeploy();
-      }), make)];
+      }), make, cancelDeploy(st))];
   }
   // The answer of the mint (3.4): the code block (once, Copy, expiry), the Install block (3.5), the anchor note, and
   // Continue. The code and the command are never on one line, and the command never contains the code (A1-M1).
@@ -5528,7 +5888,7 @@
       st.step = 4;
       if (wizard || !st.id) redrawDeploy();
       else go("#/relays/add/" + encodeURIComponent(st.id));
-    }, "primary"))];
+    }, "primary"), cancelDeploy(st))];
   }
   // Step 4 (3.6): polls the enrollment every 3 s while visible and shows where the join is.
   function deployWait(st, c, wizard) {
@@ -5663,6 +6023,8 @@
   function chartBox(titleKey, ...nodes) {
     return el("section", null, el("h4", null, FW[titleKey]), ...nodes);
   }
+  // A box with two charts names each one above it (L-8), so the second is not a chart without a title.
+  const subChart = (title, chart) => el("div", null, el("p", { class: "chart-heat-label" }, title), chart);
   const LC = () => window.LucidCharts;
   const lineOf = (title, series, opts) => LC().lineChart(series, Object.assign({ title }, opts || {}));
   function barsOf(title, points, range, opts) {
@@ -5732,8 +6094,8 @@
     kids.push(chartBox("charts.people", lineOf(FW["charts.people"], [sp.length ? { name: productWord("spokes"), points: pointsOf(aSp, "people_online", F) } : null,
       mt.length ? { name: productWord("meet"), points: pointsOf(aMt, "people_online", F) } : null].filter(Boolean))));
     if (mt.length) {
-      kids.push(chartBox("charts.calls", barsOf(FMSG.metric.call_minutes, pointsOf(aMt, "call_minutes", F), range),
-        lineOf(FMSG.metric.calls_active, [{ name: FMSG.metric.calls_active, points: pointsOf(aMt, "calls_active", F) }])));
+      kids.push(chartBox("charts.calls", subChart(FMSG.metric.call_minutes, barsOf(FMSG.metric.call_minutes, pointsOf(aMt, "call_minutes", F), range)),
+        subChart(FMSG.metric.calls_active, lineOf(FMSG.metric.calls_active, [{ name: FMSG.metric.calls_active, points: pointsOf(aMt, "calls_active", F) }]))));
     }
     kids.push(chartBox("charts.messages", barsOf(FW["charts.messages"], pointsOf(aAll, "messages", F), range)));
     if (sp.length) {
@@ -5759,13 +6121,14 @@
     const p = (k) => pointsOf(m, k, id);
     const kids = [chartBox("charts.people", lineOf(FW["charts.people"], [{ name: FW["charts.people"], points: p("people_online") }]))];
     if (d.product === "meet") {
-      kids.push(chartBox("charts.calls", barsOf(FMSG.metric.call_minutes, p("call_minutes"), range), lineOf(FMSG.metric.calls_active, [{ name: FMSG.metric.calls_active, points: p("calls_active") }])));
+      kids.push(chartBox("charts.calls", subChart(FMSG.metric.call_minutes, barsOf(FMSG.metric.call_minutes, p("call_minutes"), range)),
+        subChart(FMSG.metric.calls_active, lineOf(FMSG.metric.calls_active, [{ name: FMSG.metric.calls_active, points: p("calls_active") }]))));
     }
     kids.push(chartBox("charts.messages", barsOf(FW["charts.messages"], p("messages"), range)));
     if (d.product !== "meet") kids.push(chartBox("charts.spokes", lineOf(FW["charts.spokes"], ["spokes_busy", "spokes_online", "lanes_busy", "lanes_total"].map((k) => ({ name: FMSG.metric[k], points: p(k) })))));
     kids.push(chartBox("charts.cpu", lineOf(FW["charts.cpu"], [{ name: FMSG.metric.cpu_host, points: p("cpu_host") }, { name: FMSG.metric.cpu_process, points: p("cpu_process") }], { yMax: 100, yFormat: fmtPct })));
-    kids.push(chartBox("charts.memory", lineOf(FW["charts.memory"], [{ name: FMSG.metric.mem_host_used, points: p("mem_host_used") }], { yMax: 100, yFormat: fmtPct }),
-      lineOf(FMSG.metric.mem_process, [{ name: FMSG.metric.mem_process, points: p("mem_process").map(([t, v]) => [t, Number.isFinite(v) ? v / 1048576 : null]) }], { yFormat: (v) => fmtN(v) + " MiB" })));
+    kids.push(chartBox("charts.memory", subChart(FMSG.metric.mem_host_used, lineOf(FW["charts.memory"], [{ name: FMSG.metric.mem_host_used, points: p("mem_host_used") }], { yMax: 100, yFormat: fmtPct })),
+      subChart(FMSG.metric.mem_process, lineOf(FMSG.metric.mem_process, [{ name: FMSG.metric.mem_process, points: p("mem_process").map(([t, v]) => [t, Number.isFinite(v) ? v / 1048576 : null]) }], { yFormat: (v) => fmtN(v) + " MiB" }))));
     kids.push(chartBox("charts.network", lineOf(FW["charts.network"], [{ name: FMSG.metric.net_in, points: perMinute(p("net_in"), m.step) },
       { name: FMSG.metric.net_out, points: perMinute(p("net_out"), m.step) }], { area: true, yFormat: fmtBytes })));
     kids.push(chartBox("charts.latency", lineOf(FW["charts.latency"], [{ name: FW["charts.latency"], points: p("latency_console") }], { yFormat: fmtMs })));
@@ -5867,31 +6230,28 @@
     const qid = uid("pf");
     f.q = el("input", { id: qid, type: "search", maxlength: "100", autocomplete: "off" });
     f.q.value = c.q.get("q") || "";
-    const show = btn(MSG.show, () => {
+    const apply = () => {
       const p = new URLSearchParams();
       for (const k of PEOPLE_FILTERS) if (f[k].value.trim()) p.set(k, f[k].value.trim());
       const s = p.toString();
       go("#/people" + (s ? "?" + s : ""));
-    }, "primary");
-    const filters = el("div", { class: "filters" },
+    };
+    onEnter(f.q, apply);
+    const show = btn(MSG.show, apply, "primary");
+    // The one filter row of this page (the console filters every relay's people; the table adds no second box).
+    const filters = filterFold([
       sel("product", FMSG.cols.kind, [["console", FW["people.kind-console"]], ["meet", FW["people.kind-meet"]], ["spokes", FW["people.kind-spokes"]]]),
       sel("relay", FMSG.cols.relay, relays.map((x) => [x.id, x.name])),
       sel("role", FMSG.cols.role, [["admin", ROLE_WORD.admin], ["user-manager", ROLE_WORD["user-manager"]], ["viewer", ROLE_WORD.viewer], ["relay-admin", FMSG.roles["relay-admin"]], ["member", FMSG.roles.member], ["hub-user", FMSG.roles["hub-user"]]]),
       sel("state", FMSG.cols.state, ["active", "suspended", "invited", "waiting", "silent", "blocked", "revoked", "unseated"].map((s) => [s, stateWord(s)])),
       sel("source", FMSG.cols.source, ["invite", "operator", "app", "request", "hub", "sso", "scim"].map((s) => [s, stateWord(s)])),
-      el("label", { for: qid }, MSG.filterText, f.q), show);
+      el("label", { for: qid }, MSG.filterText, f.q), show]);
     const kindWord = (p) => FW["people.kind-" + p.kind] || stateWord(p.kind);
     const roleWord = (p) => ROLE_WORD[p.role] || FMSG.roles[p.role] || stateWord(p.role);
     const actions = (p) => {
       const relay = p.relay ? relays.find((x) => x.id === p.relay) || { id: p.relay, name: relayName(p.relay) } : null;
-      if (p.kind === "console") {
-        if (p.id === myEmail()) return [];
-        const acct = { email: p.id, role: p.role, state: p.state };
-        if (!admin && !manageable(acct)) return [];
-        return [p.state === "active" ? { label: "Suspend", run: () => suspendDialog(acct, consoleAdmins) } : null,
-          p.state === "suspended" ? { label: "Unsuspend", run: () => unsuspendDialog(acct) } : null,
-          admin ? { label: MSG.remove, run: () => removeDialog(acct) } : null];
-      }
+      // A console account has the same actions here as on the relay console's Admins page (D-2).
+      if (p.kind === "console") return accountActions({ email: p.id, role: p.role, state: p.state }, consoleAdmins);
       const out = [];
       if (p.kind === "meet" && p.request && isManager()) {
         out.push({ label: FW["people.remind"], run: async () => {
@@ -5922,7 +6282,6 @@
       asOf.length ? el("ul", { class: "plain asof" }, asOf.map(([id, t]) => el("li", null, u(relayName(id)), ": ", fill(FW["fleet.as-of"], { time: when(t) })))) : null,
       panel(null, filters, dataTable({
         caption: FW["people.title"], rows, total: d.total, empty: MSG.noneYet, name: personName,
-        text: (p) => [p.id, p.name, p.org].join(" "),
         cols: [{ key: "kind", label: FMSG.cols.kind, cell: kindWord }, { key: "name", label: FMSG.cols.name, cell: (p) => u(personName(p)), sort: personName },
           { key: "id", label: W["dialog.id"], cell: (p) => code(p.id) }, { key: "relay", label: FMSG.cols.relay, cell: (p) => (p.relay ? u(relayName(p.relay)) : "") },
           { key: "role", label: FMSG.cols.role, cell: roleWord }, { key: "state", label: FMSG.cols.state, cell: (p) => el("span", null, stateWord(p.state), p.request ? el("span", { class: "note" }, " ", FW["people.request-waiting"]) : null) },
@@ -5949,7 +6308,7 @@
     confirmDialog({
       spec: fspec(k), vals, name: personName(p), id: p.id, danger: op !== "unsuspend", reaches: [relay.name], fields,
       vals2: (v) => ({ hours: v.hours || "" }),
-      check: (v) => (op === "suspend" && !(Number.isInteger(v.hours) && v.hours >= 1 && v.hours <= 720) ? MSG.hours : ""),
+      check: (v) => (op === "suspend" && !(Number.isInteger(v.hours) && v.hours >= 1 && v.hours <= 720) ? MSG.need.hours : ""),
       run: (v) => {
         const body = Object.assign({ kind: p.kind, relay: relay.id, id: p.id, reason: v.reason }, op === "suspend" ? { hours: v.hours } : {});
         return fleetPost("fleet/people/" + op, body, { action: "people." + op, target: p.id }, [relay.id]);
@@ -5966,15 +6325,19 @@
       specFor: (v) => (v.product === "meet" ? fspec("invite-meet") : D[v.role === "admin" ? "invite-admin-spokes" : v.role === "user-manager" ? "invite-user-manager" : "invite-viewer"]),
       fields: [{ kind: "select", key: "product", label: FMSG.cols.kind, options: [["console", FW["people.kind-console"]]].concat(meet.length ? [["meet", FW["people.kind-meet"]]] : []), value: "console" },
         { kind: "text", type: "email", key: "email", label: FMSG.cols.email, maxlength: "254", required: true },
-        { kind: "select", key: "role", label: FMSG.cols.role, options: roles, value: "viewer" },
-        meet.length ? { kind: "select", key: "relay", label: FMSG.cols.relay, options: meet.map((x) => [x.id, x.name]), value: meet[0].id } : null,
-        { kind: "text", key: "name", label: FMSG.cols.name, maxlength: "80" },
-        { kind: "text", type: "number", key: "days", label: FMSG.daysInvite, value: 7, min: "1", max: "30", inputmode: "numeric" }].filter(Boolean),
+        // D-12: a console account takes a role; a Meeting Hub invite takes a relay, a name and days. Each shows only
+        // for its Kind.
+        { kind: "select", key: "role", label: FMSG.cols.role, options: roles, value: "viewer", when: (v) => v.product !== "meet" },
+        meet.length ? { kind: "select", key: "relay", label: FMSG.cols.relay, options: meet.map((x) => [x.id, x.name]), value: meet[0].id, when: (v) => v.product === "meet" } : null,
+        { kind: "text", key: "name", label: FMSG.cols.name, maxlength: "80", when: (v) => v.product === "meet" },
+        { kind: "text", type: "number", key: "days", label: FMSG.daysInvite, value: 7, min: "1", max: "30", inputmode: "numeric", when: (v) => v.product === "meet" }].filter(Boolean),
       vals2: (v) => ({ email: v.email, relay: v.product === "meet" ? relayName(v.relay) : "" }),
       two: (v) => v.product !== "meet" && v.role === "admin",
       check: (v) => (!/^[^@\s]+@[^@\s]+$/.test(v.email) ? MSG.emailNeeded
-        : v.product === "meet" && stopped(v.relay) ? W["meet.license-inactive"]
-          : v.product === "meet" && (!v.name || !(Number.isInteger(v.days) && v.days >= 1 && v.days <= 30)) ? FMSG.cols.name : ""),
+        // D-13: the relay's own "Ask your admin" words are for people who are not admins.
+        : v.product === "meet" && stopped(v.relay) ? (isAdmin() ? fillText(MSG.stoppedAdmin, { relay: relayName(v.relay) }) : W["meet.license-inactive"])
+          : v.product === "meet" && !v.name ? MSG.need.personName
+            : v.product === "meet" && !(Number.isInteger(v.days) && v.days >= 1 && v.days <= 30) ? MSG.need.days : ""),
       run: (v) => (v.product === "meet"
         ? fleetPost("fleet/people/invite", { product: "meet", relay: v.relay, email: v.email, name: v.name, role: "member", days: v.days }, { action: "people.invite", target: v.email }, [v.relay])
         // Console accounts are AC-1's `admins/invite` with the console's own step-up (fleet/people/invite takes only
@@ -6052,11 +6415,15 @@
     await fleetRelays();
     const rows = d.relays || [];
     const admin = isAdmin();
+    // The licensed user count shows only when fleet/licenses carries it (`license.users`); a relay row without it would
+    // leave the column empty (L-6).
+    const users = (x) => (x.license && x.license.users != null ? (x.license.used != null ? x.license.used : (x.seats || {}).seated || 0) + " of " + x.license.users : "");
+    const withUsers = rows.some((x) => users(x) !== "");
     return [head(FW["nav.license"]), panel(null, dataTable({
       caption: FW["nav.license"], rows, empty: MSG.noneYet, name: (x) => relayName(x.relay),
       cols: [{ key: "relay", label: FMSG.cols.relay, cell: (x) => u(relayName(x.relay)) }, { key: "product", label: FMSG.cols.product, cell: (x) => productWord(x.product) },
         { key: "state", label: FMSG.cols.state, cell: (x) => stateWord((x.license || {}).state || "none"), sort: (x) => (x.license || {}).state },
-        { key: "users", label: "Users", cell: (x) => (x.license && x.license.users != null ? (x.license.used || 0) + " of " + x.license.users : "") },
+        withUsers ? { key: "users", label: "Users", cell: users, sort: (x) => (x.license || {}).users } : null,
         { key: "days", label: FMSG.cols.days, cell: (x) => (x.license && x.license.daysLeft != null ? x.license.daysLeft : "") },
         { key: "service", label: MSG.serviceLabel, cell: (x) => {
           const s = serviceOf(x);
@@ -6068,9 +6435,8 @@
         { key: "reminders", label: MSG.reminders, sortable: false, cell: (x) => {
           const sent = x.reminders || [];
           const next = nextReminder(x.license ? x.license.exp : null, serviceOf(x), sent);
-          return sent.length || next ? el("span", null, fill(FW["relay.license-reminders"], { list: sent.map((r) => (MSG.reminderKind[r.kind] || stateWord(r.kind)) + " " + whenAny(r.at)).join(", ") || MSG.noneYet,
-            date: next ? when(next) : MSG.never })) : "";
-        } }],
+          return sent.length || next ? el("span", null, reminderLine(sent, next)) : "";
+        } }].filter(Boolean),
       // Install works on a stopped relay (11.4): the channel and the `license` scope keep working.
       actions: (x) => (admin ? [{ label: FMSG.install, run: () => go("#/license?relay=" + encodeURIComponent(x.relay)) }] : []),
     })), libraryPanel(d.library || []), ...(admin ? await orgRootPanels() : [])];
@@ -6146,7 +6512,12 @@
   }
   async function orgRootPanels() {
     const high = profile() === "high";
-    const ca = section("meet-ca-h", FW["meet-ca.title"], el("p", null, high ? FW["meet-ca.high"] : el("a", { href: "#/license/meet-ca" }, FW["meet-ca.title"])));
+    // The section says whether the console holds a CA, then links to its page (the title is not repeated as the link, L-6).
+    let held = null;
+    if (!high) held = await api("GET", "fleet/meet-ca", null, { direct: true, activity: false }).catch(() => null);
+    const state = !held ? null : held.ca ? pairs([[FW["meet-ca.id"], code(held.ca.id || "")], [FW["meet-ca.ends"], held.ca.notAfter ? dayAny(held.ca.notAfter) : MSG.unknown]])
+      : el("p", null, FW["meet-ca.none"]);
+    const ca = section("meet-ca-h", FW["meet-ca.title"], high ? el("p", null, FW["meet-ca.high"]) : [state, el("p", null, el("a", { href: "#/license/meet-ca" }, FMSG.caOpen))]);
     // Under High a delivered root is never used (6.7), so the Remote Spokes root section is hidden (12).
     return high ? [ca] : [ca, await spokesRootPanel()];
   }
@@ -6313,7 +6684,7 @@
     confirmDialog({
       spec: fspec("meet-ca-revoke"), vals: { serial: serial || "" }, vals2: (v) => ({ serial: serial || v.serial || "" }), name: serial || "", id: serial || "", danger: true,
       fields: (serial ? [] : [{ kind: "text", key: "serial", label: FMSG.deploy.serial, maxlength: "64", required: true }]).concat([{ kind: "reason" }]),
-      check: (v) => (!serial && !/^[0-9a-fA-F]{2,64}$/.test(v.serial || "") ? FMSG.deploy.serial : ""),
+      check: (v) => (!serial && !/^[0-9a-fA-F]{2,64}$/.test(v.serial || "") ? MSG.need.serial : ""),
       run: (v) => {
         const s = (serial || v.serial).toLowerCase();
         return post("fleet/meet-ca/revoke", { serial: s, reason: v.reason }, { action: "fleet.meet-ca.revoke", target: s });
@@ -6325,7 +6696,7 @@
     confirmDialog({
       spec: caSpec(FW["meet-ca.prune"], fillText(FW["meet-ca.prune-help"], { days: ca.maxLifetimeDays || 400 }), FW["meet-ca.prune"]), name: serial, id: serial, two: true,
       fields: [{ kind: "textarea", key: "certPem", label: FMSG.deploy.certPem, required: true }, { kind: "reason" }],
-      check: (v) => (!pemDer(v.certPem, "CERTIFICATE") ? FMSG.deploy.certPem : ""),
+      check: (v) => (!pemDer(v.certPem, "CERTIFICATE") ? MSG.need.certPem : ""),
       run: (v) => post("fleet/meet-ca/prune", { certPem: v.certPem, reason: v.reason }, { action: "fleet.meet-ca.prune", target: "-" }),
     });
   }
@@ -6337,15 +6708,10 @@
       cols: [{ key: "id", label: W["dialog.id"], cell: (l) => code(l.id) }, { key: "product", label: FMSG.cols.product, cell: (l) => productWord(l.product) },
         { key: "edition", label: "Edition" }, { key: "users", label: "Users" }, { key: "relays", label: FMSG.cols.count },
         { key: "exp", label: FMSG.cols.ends, cell: (l) => dayAny(l.exp) }, { key: "root", label: "Root", cell: (l) => code(l.root || "") }],
-      actions: (l) => (admin ? [{ label: MSG.remove, run: async () => {
-        try {
-          await post("fleet/licenses/library", { remove: l.id }, { action: "fleet.license.library", target: l.id });
-          say(MSG.done);
-          render({ keepMessages: true });
-        } catch (e) {
-          fail(e);
-        }
-      } }] : []),
+      actions: (l) => (admin ? [{ label: MSG.remove, run: () => confirmDialog({
+        spec: MSG.removeLicense, vals: { id: l.id }, name: [productWord(l.product), l.edition].filter(Boolean).join(", "), id: l.id, danger: true, plain: true,
+        run: () => post("fleet/licenses/library", { remove: l.id }, { action: "fleet.license.library", target: l.id }),
+      }) }] : []),
     })];
     if (admin) {
       const { box, area } = pasteOrFile(W["license.install.field"], ".lic,.txt");
@@ -6452,7 +6818,7 @@
         { kind: "select", key: "relays", label: FMSG.cols.count, options: [["all", FMSG.relaysAll]].concat(relays.map((x) => [x.id, x.name])), value: "all" },
         { kind: "text", type: "number", key: "days", label: FMSG.daysField, value: 365, min: "30", max: "365", inputmode: "numeric" }],
       vals2: (v) => ({ label: v.label, relays: relaysWord(v.relays), days: v.days }),
-      check: (v) => (!v.label || v.label.length > 64 ? FMSG.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 365) ? FMSG.daysField : ""),
+      check: (v) => (!v.label || v.label.length > 64 ? MSG.need.label : !(Number.isInteger(v.days) && v.days >= 30 && v.days <= 365) ? MSG.need.tokenDays : ""),
       run: (v) => post("settings/exports/token", { label: v.label, relays: v.relays === "all" ? "all" : [v.relays], days: v.days }, { action: "exports.token.create", target: v.label }),
       plain: true,
       // The token is shown once, here, and never again (10.1).
@@ -6466,15 +6832,10 @@
       cols: [{ key: "label", label: FMSG.label }, { key: "hint", label: W["dialog.id"], cell: (t) => code(t.hint) }, { key: "relays", label: FMSG.cols.count, cell: (t) => relaysWord(t.relays), sortable: false },
         { key: "createdBy", label: FMSG.enrolledBy }, { key: "createdAt", label: FMSG.created, cell: (t) => when(t.createdAt) },
         { key: "expires", label: FMSG.cols.ends, cell: (t) => when(t.expires) }, { key: "lastUsedAt", label: "Last used", cell: (t) => when(t.lastUsedAt) }],
-      actions: (t) => [{ label: FMSG.revoke, run: async () => {
-        try {
-          await api("POST", "settings/exports/token/revoke", { hint: t.hint }, { direct: true });
-          say(MSG.done);
-          render({ keepMessages: true });
-        } catch (e) {
-          fail(e);
-        }
-      } }],
+      actions: (t) => [{ label: FMSG.revoke, run: () => confirmDialog({
+        spec: MSG.revokeToken, vals: { label: t.label }, name: t.label, id: t.hint, danger: true, plain: true,
+        run: () => api("POST", "settings/exports/token/revoke", { hint: t.hint }, { direct: true }),
+      }) }],
     }));
     // SIEM (10.2): staged save behind a test message; turning it off needs a second admin with two-person on.
     const host = textField(FMSG.siemHost, { maxlength: "253" });
@@ -6627,10 +6988,14 @@
     const { steps } = stepsOf(await loadSetup());
     const title = pageLabel("settings", "setup");
     if (!steps) return [head(title)];
-    return [head(title), panel(null, el("ul", { class: "checklist" }, SETUP_STEPS.filter(([id]) => steps[id]).map(([id, n, word]) => el("li", null,
-      el("span", { class: "words" }, fillText(FW["setup.step"], { n }), ": ", FW[word]),
-      toneChip(FW["setup.state-" + steps[id]] || stateWord(steps[id]), steps[id] === "done" ? "ok" : "warn"),
-      el("a", { href: "#/setup/" + id }, FW["setup.continue"])))))];
+    // L-7: a finished step offers Review, an open or skipped one Continue; with every step done the page says so.
+    const listed = SETUP_STEPS.filter(([id]) => steps[id]);
+    const complete = listed.length && listed.every(([id]) => steps[id] === "done");
+    return [head(title), panel(null, complete ? el("p", { role: "status" }, toneChip(FMSG.setupDone, "ok")) : null,
+      el("ul", { class: "checklist" }, listed.map(([id, n, word]) => el("li", null,
+        el("span", { class: "words" }, fillText(FW["setup.step"], { n }), ": ", FW[word]),
+        toneChip(FW["setup.state-" + steps[id]] || stateWord(steps[id]), steps[id] === "done" ? "ok" : "warn"),
+        el("a", { href: "#/setup/" + id }, steps[id] === "done" ? FMSG.review : FW["setup.continue"])))))];
   };
   // One wizard step (12.2): "Step <n> of 6", the step itself, Back, Skip for now (not for the first admin), and Save
   // and continue (Finish on the last). State is the server's (12.3), so a step can be resumed from any browser.
@@ -6716,7 +7081,7 @@
       el("p", { class: "note" }, FW["setup.gov-help"]),
       el("div", { class: "wizard-actions" }, btn(FW["setup.save"], () => {
         if (!codeF.input.value.trim()) {
-          fail(FW["setup.code-field"]);
+          invalid(codeF.input, MSG.need.setupCode);
           return;
         }
         clearMessages();
@@ -6778,7 +7143,7 @@
           clearMessages();
           const adminKeys = keys.value.split(/\s+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
           if (adminKeys.some((x) => !/^[0-9a-f]{64}$/.test(x))) {
-            fail(FMSG.adminKeys);
+            invalid(keys, MSG.need.adminKeys);
             return;
           }
           try {
@@ -6863,7 +7228,7 @@
       sub(FD["local-trust-ca"].button, gen.box, fp.box, btn(FD["local-trust-ca"].button, () => {
         const g = Number(gen.input.value), f = fp.input.value.trim();
         if (!(Number.isInteger(g) && g >= 1) || !f) {
-          fail(FMSG.generation);
+          invalid(!(Number.isInteger(g) && g >= 1) ? gen.input : fp.input, MSG.need.generation);
           return;
         }
         confirmDialog({
@@ -7009,6 +7374,13 @@
       if (ev.key === "Enter" && t.id === "code-input") {
         ev.preventDefault();
         codeGo();
+        return;
+      }
+      // D-8: Enter in the only field of a confirmation dialog confirms it (a text area keeps Enter for new lines).
+      if (ev.key === "Enter" && !ev.isComposing && t.tagName === "INPUT" && $("confirm-fields").contains(t)
+        && $("confirm-fields").querySelectorAll("input, select, textarea").length === 1) {
+        ev.preventDefault();
+        dialogGo();
         return;
       }
       if (ev.key === "Escape" && !$("search-results").hidden) {

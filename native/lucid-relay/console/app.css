@@ -609,6 +609,10 @@ details.help p { margin-top: 6px; color: var(--text-primary); }
 .filters-fold { margin-bottom: 8px; }
 .filters-fold > summary { display: none; }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.chip-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.field-error { display: block; color: var(--ac-danger); font-weight: 600; font-size: 13px; margin-top: 4px; }
+.field-error:empty { display: none; }
+[aria-invalid="true"] { border-color: var(--ac-danger); }
 .chips button { min-height: 28px; border-radius: 999px; padding: 2px 10px; font-size: 13px; }
 .chips button[aria-pressed="true"] { background: var(--text-primary); color: var(--bg-primary); border-color: var(--text-primary); }
 .countline { color: var(--text-secondary); font-size: 13px; margin: 6px 0; }
@@ -714,7 +718,9 @@ ul.plain { list-style: none; padding: 0; }
 .chart-table-wrap { overflow: auto; max-height: 360px; margin-top: 6px; }
 .chart-table-wrap table { font-size: 13px; }
 .charts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); gap: 0 16px; }
-.charts-grid > section { min-width: 0; }
+/* A chart never widens the page (L-8): its labels and its closed table stay inside the column. */
+.charts-grid > section { min-width: 0; max-width: 100%; overflow-x: clip; overflow-clip-margin: 4px; }
+.charts-grid .chart, .charts-grid .chart-svg, .charts-grid .chart-table-wrap { max-width: 100%; }
 .charts-grid h4 { font-size: 15px; margin: 8px 0 4px; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .kpi {
