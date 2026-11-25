@@ -458,6 +458,10 @@ pub const FLEET_SCOPES: &[ScopeRow] = &[
     row("GET", "meet/bridge/audit", Health::Refused, LOGS),
     row("POST", "meet/block", Health::Write, PEOPLE),
     row("POST", "meet/unblock", Health::Write, PEOPLE),
+    // SE-1 (meet_support.rs): Meeting Hub support tickets
+    row("GET", "meet/support", Health::Refused, PEOPLE),
+    row("POST", "meet/support/answer", Health::Write, PEOPLE),
+    row("POST", "meet/support/close", Health::Write, PEOPLE),
 ];
 
 pub fn scope_row(method: &str, path: &str) -> Option<&'static ScopeRow> {

@@ -52,8 +52,13 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-pub static ROUTES: [RouteSpec; 40] = [
+pub static ROUTES: [RouteSpec; 43] = [
     RouteSpec { method: "GET", path: "meet/people", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    // SE-1 (meet_support.rs): the support tickets people's Meeting Hubs filed; reads and answers in every license
+    // state, since a support question is most needed when something is wrong
+    RouteSpec { method: "GET", path: "meet/support", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/support/answer", role: Role::Admin, action: "meet.support.answer", target: "id", stepup: true, need: Need::Any, security: false, keys: &["id", "text"], body_max: 64 * 1024 },
+    RouteSpec { method: "POST", path: "meet/support/close", role: Role::Admin, action: "meet.support.close", target: "id", stepup: true, need: Need::Any, security: false, keys: &["id"], body_max: 1024 },
     // 2.4 seats and trusted time (R4-2, R3-M3): allowed in every license state
     RouteSpec { method: "GET", path: "meet/seats", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "POST", path: "meet/seats/pick", role: Role::Manager, action: "meet.seats.pick", target: "principal", stepup: true, need: Need::Any, security: false, keys: &["principal", "pick"], body_max: 1024 },
@@ -114,8 +119,8 @@ pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value 
 }
 
 const SECURITY_ACTIONS: [&str; 6] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place", "meet.ai.hold"];
-const PAGES: [&str; 16] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai"];
-const LOCKED_PAGES: [&str; 5] = ["security", "seats", "license", "logs", "requests"];
+const PAGES: [&str; 17] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support"];
+const LOCKED_PAGES: [&str; 6] = ["security", "seats", "license", "logs", "requests", "support"];
 
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -1199,6 +1204,11 @@ impl ProductSection for MeetSection {
         if blocks > 0 {
             out.push(item("blocks-active", "info", json!({"n": blocks}), "#/meet/people"));
         }
+        // SE-1: support tickets from people's Meeting Hubs waiting for an answer
+        let tickets = crate::meet_support::waiting(&relay);
+        if tickets > 0 {
+            out.push(item("support-waiting", "warn", json!({"n": tickets}), "#/meet/support"));
+        }
         out
     }
 
@@ -1227,7 +1237,7 @@ impl ProductSection for MeetSection {
         let relay = self.relay()?;
         let read = |v: Result<Value, ApiError>| v.map(SectionAnswer::Read);
         // Seats and the relay's time are always allowed (2.4)
-        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts");
+        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts" | "meet/support");
         if call.spec.method == "GET" && call.license == LicenseState::None && !always {
             return Err(license_needed());
         }
@@ -1268,6 +1278,12 @@ impl ProductSection for MeetSection {
                 let done = gate.confirm_clock(browser).map_err(|w| ApiError::with("clock-disagree", w))?;
                 Ok(SectionAnswer::Done { answer: json!({"ok": true}), target: "-".into(), detail: json!({"old": done.old, "new": done.new, "credited": done.credited}) })
             }
+            ("GET", "meet/support") => {
+                let f = filters(call.query, &["state"])?;
+                read(crate::meet_support::console_list(&relay, f.get("state").map(String::as_str).unwrap_or_default()))
+            }
+            ("POST", "meet/support/answer") => crate::meet_support::console_answer(&relay, call),
+            ("POST", "meet/support/close") => crate::meet_support::console_close(&relay, call),
             ("GET", "meet/people") => read(self.people(&relay, call)),
             ("GET", "meet/enrollments") => read(self.enrollments(&relay, call, self.core().as_deref())),
             ("GET", "meet/organizations") => read(self.organizations(&relay, call)),
