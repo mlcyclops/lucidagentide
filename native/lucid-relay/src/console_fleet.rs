@@ -4937,7 +4937,9 @@ impl crate::fleet_people::PeopleHost for PeopleBridge {
         let Some(f) = self.fleet() else { return Vec::new() };
         let two = f.book.lock().policy["twoPerson"] == "on";
         let recs: Vec<RelayRecord> = f.registry.lock().relays.values().cloned().collect();
+        // a relay that left or was removed is not part of the fleet: People must not list it as not answering
         recs.iter()
+            .filter(|r| r.state.live())
             .map(|r| crate::fleet_people::RelayView {
                 id: r.id.clone(),
                 name: r.name.clone(),
