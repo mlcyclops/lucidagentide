@@ -13,6 +13,12 @@ type Route = fn(&mut Ctx) -> R<Obj>;
 
 fn get_route(path: &str) -> Option<Route> {
     let route: Route = match path {
+        // SE-1 (meet_support.rs): a person's own support tickets and the admins' answers
+        "/v1/support/tickets" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let case = c.q("case", "");
+            crate::meet_support::device_mine(c.relay, &who, &case)
+        },
         // AC-1 4.10: the signing side reads the Admin Console's meet.* requests
         "/v1/admin/console/requests" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -298,6 +304,11 @@ fn get_route(path: &str) -> Option<Route> {
 
 fn post_route(path: &str) -> Option<Route> {
     let route: Route = match path {
+        // SE-1 (meet_support.rs): a person files a support ticket for the org's Admin Console
+        "/v1/support/tickets" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(64 * 1024)?);
+            crate::meet_support::device_file(c.relay, &who, &b)
+        },
         "/v1/join" => join,
         "/v1/signal" => signal,
         "/v1/link" => link,
@@ -1461,6 +1472,8 @@ mod tests {
         assert!(get_route("/v1/admin/console/where").is_some());
         assert!(get_route("/v1/admin/console/fleet-bootstrap").is_some());
         assert!(post_route("/v1/admin/console/fleet-endorse").is_some());
+        // SE-1 support tickets on the main port
+        assert!(get_route("/v1/support/tickets").is_some() && post_route("/v1/support/tickets").is_some());
         for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
             assert!(post_route(p).is_some(), "{p}");
         }

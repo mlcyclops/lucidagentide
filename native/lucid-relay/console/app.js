@@ -136,6 +136,7 @@
     "attention.audit-not-exported": "The audit log has not been exported for 30 days.",
     "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
     "attention.blocks-active": "<n> blocks are active on this relay.",
+    "attention.support-waiting": "<n> support tickets from Meeting Hub wait for an answer.",
     "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
     "attention.license-upgrade-period": "Install a Meeting Hub license by <date and time>, or this relay stops serving people.",
     "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
@@ -241,6 +242,8 @@
     "empty.enrollments": "No devices are waiting for approval.",
     "empty.organizations": "No organizations yet. People are put into one from People and devices.",
     "empty.holds": "No legal holds.",
+    "empty.support": "No support tickets.",
+    "help.support": "Every Meeting Hub has a built-in support engineer. When it cannot solve a problem, the person can send the case here as a ticket: their words and the redacted checks, never meeting content. Answer it, and the person sees the answer in their Meeting Hub.",
     "empty.bridges": "No bridges are on.",
     "empty.approvals": "Nothing is waiting for approval.",
     "empty.requests": "No requests.",
@@ -336,6 +339,8 @@
     "bridge-change": { title: "Change bridges for <org>?", body: ["<diff>."], button: ["Ask for approval"], single: "Change bridges" },
     "hold-place": { title: "Place a legal hold on <n> people or conversations?", body: ["Their messages and files are kept past retention until the hold is released."], button: ["Place hold", "Ask for approval"] },
     "hold-release": { title: 'Release the hold "<reason>"?', body: ["Retention applies again."], button: ["Release hold", "Ask for approval"] },
+    "support-answer": { title: 'Answer "<title>"', body: ["The person sees your answer in their Meeting Hub."], button: ["Send answer"] },
+    "support-close": { title: 'Close "<title>"?', body: ["The person sees it closed. A new question starts a new ticket."], button: ["Close ticket"] },
     "release": { title: "Publish Lucid Meeting Hub <version>?", body: ["Every Hub sees it at its next check. Minimums: Hub <hub> (now <hub now>), iPhone <ios> (now <ios now>)."], button: ["Publish", "Ask for approval"] },
     "files-start": { title: "Start the download server?", body: ["Invite links work while it runs."], button: ["Start"] },
     "audit-restart": { title: "Start a new audit chain?", body: ["Export first. The new chain names the torn file so the gap is on record."], button: ["Start a new chain"] },
@@ -1770,7 +1775,7 @@
 
   const PAGES = {
     spokes: ["hubs", "spokes", "relays", "seats", "license", "logs", "requests"],
-    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai"],
+    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support"],
     admins: ["people", "sessions", "audit", "settings", "account"],
   };
   // Settings > AI (contract AI-1 section 9). The contract's own words are verbatim; the rest are the page's labels.
@@ -1812,6 +1817,8 @@
     admins: Object.fromEntries(PAGES.admins.map((id, i) => [id, W["nav.admins.pages"][i]])),
   };
   PAGE_LABEL.meet.ai = AIW.page;
+  // SE-1: the page is named for its tickets; the AC-2a fleet nav keeps the one-word support group for a later phase
+  PAGE_LABEL.meet.support = "Support tickets";
   // What each role below admin may open (2.3, 7.2): user managers the people lists and seats, viewers health and lists.
   const ROLE_PAGES = {
     "user-manager": { spokes: ["hubs", "spokes", "seats"], meet: ["people", "seats"], admins: ["people", "account"] },
@@ -1823,7 +1830,7 @@
   const ATTENTION_KINDS = ["license-none", "license-grace", "license-expired", "license-expiring", "seats-high", "seats-over", "uncounted",
     "crl-stale", "signer-unhealthy", "signer-expiring", "cert-expiring", "tls-expiring", "spokes-silent", "enrollments-waiting",
     "approvals-mine", "requests-old", "admins-few", "anchor-single", "admin-suspended", "passkey-waiting", "joiner-waiting",
-    "audit-broken", "audit-rotating", "audit-dropped-unexported", "audit-not-exported", "quota-hits", "blocks-active", "admins-unproven",
+    "audit-broken", "audit-rotating", "audit-dropped-unexported", "audit-not-exported", "quota-hits", "blocks-active", "support-waiting", "admins-unproven",
     "license-stopped", "license-upgrade-period", "seats-unseated", "seats-protected", "profile-standard", "two-person-off",
     "break-glass-missing", "break-glass-used", "key-unattested", "mds-old", "signin-locked", "mail-failing", "clock-uncertain",
     "clock-back", "aaguids-relaxed", "seal-key-file", "seal-lost", "seats-held", "seal-machine-scope"];
@@ -4229,6 +4236,47 @@
           });
         },
       }] : []),
+    }))];
+  };
+
+  // Support (SE-1, src/meet_support.rs): tickets people's Meeting Hubs filed when their built-in support engineer
+  // could not solve a problem. An admin reads the conversation, answers or closes it; the Hub shows the answer.
+  const SUPPORT_STATE = { open: ["Waiting for you", "warn"], answered: ["Answered", "ok"], closed: ["Closed", "none"] };
+  const supportWho = (t, m) => (m.by === "admin" ? (m.who || "Admin") : (t.name ? `${t.name} (${t.principal})` : t.principal));
+  function answerTicket(t) {
+    confirmDialog({
+      dlg: "support-answer", vals: { title: t.title }, name: t.title, id: t.id,
+      body: () => [fill(D["support-answer"].body[0], {}), ...(t.messages || []).map((m) => `${supportWho(t, m)}: ${m.text}`)],
+      fields: [{ kind: "textarea", key: "text", label: "Your answer", maxlength: 20000 }],
+      check: (v) => (!String(v.text || "").trim() ? "Write an answer first." : ""),
+      run: (v) => post("meet/support/answer", { id: t.id, text: v.text }, { action: "meet.support.answer", target: t.id }),
+    });
+  }
+  function closeTicket(t) {
+    confirmDialog({
+      dlg: "support-close", vals: { title: t.title }, name: t.title, id: t.id, plain: true,
+      run: () => post("meet/support/close", { id: t.id }, { action: "meet.support.close", target: t.id }),
+    });
+  }
+  pages.meet_support = async (c) => {
+    const d = await api("GET", "meet/support?state=all");
+    const rows = d.tickets || [];
+    const last = (t) => (t.messages || [])[(t.messages || []).length - 1];
+    return [head(PAGE_LABEL.meet.support), help("help.support"), panel(null, dataTable({
+      caption: PAGE_LABEL.meet.support, rows, total: rows.length, empty: W["empty.support"],
+      text: (t) => [t.id, t.title, t.principal, t.name, ...(t.messages || []).map((m) => m.text)].join(" "),
+      chips: { label: "State", options: Object.entries(SUPPORT_STATE).map(([k, v]) => [k, v[0]]), of: (t) => t.state }, chip: (c && c.q && c.q.get("state")) || "open",
+      name: (t) => t.title,
+      cols: [
+        { key: "title", label: "Ticket" },
+        { key: "principal", label: "From", cell: (t) => u(t.name ? `${t.name} (${t.principal})` : t.principal) },
+        { key: "last", label: "Last message", cell: (t) => { const m = last(t); return m ? `${m.by === "admin" ? "Answer: " : ""}${String(m.text).slice(0, 160)}` : ""; }, sortable: false },
+        { key: "updated", label: "Updated", cell: (t) => when(t.updated) },
+        { key: "state", label: "State", cell: (t) => el("span", { class: "st st-" + (SUPPORT_STATE[t.state] || ["", "none"])[1] }, (SUPPORT_STATE[t.state] || [t.state])[0]) },
+        { key: "version", label: "Meeting Hub" },
+        { key: "id", label: W["dialog.id"], cell: (t) => code(t.id) },
+      ],
+      actions: (t) => (isAdmin() && t.state !== "closed" ? [{ label: "Answer", run: () => answerTicket(t) }, { label: "Close", run: () => closeTicket(t) }] : []),
     }))];
   };
 
