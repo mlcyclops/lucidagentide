@@ -154,6 +154,7 @@ export interface BuddyReply { ok: boolean; error?: string; model?: string; doing
 /** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
 export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
+import type { AuthView, RenewReply, TokenRecord } from "../market_token.ts"; // P-MARKET.AUTH2 (ADR-0684): types only
 import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): where a listed session is live
@@ -553,7 +554,18 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true; imported?: true }
+/** P-SESSXFER.1 (ADR-0682): mirrors desktop/session_transfer.ts and session_transfer_routes.ts. */
+export interface HistoryTransferInfo { project: string; sessions: number; lanes: { id: string; name: string; sessions: number }[] }
+export type HistoryExportScope = { kind: "project" } | { kind: "lane"; laneId: string } | { kind: "sessions"; ids: string[] };
+export interface HistoryExportView {
+  ok: boolean; error?: string; stage: string; file?: string; filename?: string; payloadSha256?: string; exported: number; blocked: number;
+  report: { id: string; title: string; status: "exported" | "blocked" | "skipped"; reason?: string }[];
+}
+export interface HistoryImportView {
+  ok: boolean; error?: string; stage: string; imported: string[]; skipped: string[]; conflicts: string[];
+  blocked: { id: string; reason: string }[]; failed: { id: string; reason: string }[]; project?: string; marking?: string; createdAt?: string;
+}
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
 // P-SESS-SEARCH.1 (ADR-0515): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
 // P-SESS-ARCHIVE.1 (ADR-0517): `archived` = this workspace's archived chats (the Archived group's count).
@@ -842,6 +854,8 @@ export interface ProfileSettings {
   // P-THEME.1: the chosen app theme id, or "" when never chosen (then the OS light/dark preference
   // decides). An opaque string on purpose: theme.ts's THEMES registry is the only place ids are defined.
   theme?: string;
+  // P-WHATSNEW.1 (ADR-0686): the version whose What's new notes were seen; null = never recorded.
+  whatsNewSeen?: string | null;
 }
 export interface ManagedPolicy {
   managed: boolean; orgName: string;
@@ -1374,6 +1388,15 @@ export interface LucidBridge {
   /** P-WORLDS.HEAL1: the engine restores one id (or, with none, every recorded one) from its backup, through every
    *  install gate, then answers the health report. */
   pluginsRestore(id?: string): Promise<PluginHealthView | null>;
+  /** P-MARKET.AUTH2 (ADR-0684): the engine custody of the store sign-in (market_auth.engineCustody). Null / false
+   *  when the engine does not answer or refuses. The refresh token goes in with marketAuthPut and never comes back. */
+  marketAuthGet(): Promise<{ view: AuthView | null } | null>;
+  marketAuthPut(record: TokenRecord): Promise<boolean>;
+  marketAuthClear(): Promise<boolean>;
+  marketAuthRenew(o: { apiKey: string; skewMs: number }): Promise<RenewReply | null>;
+  /** P-MARKET.AUTH2: the world receipts held by the engine (`{ [worldId]: at }`), null when it does not answer. */
+  marketReceipts(): Promise<Record<string, number> | null>;
+  marketReceiptsPut(patch: { set?: Record<string, number>; drop?: string[] }): Promise<boolean>;
   /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
   worldsList(): Promise<InstalledWorld[]>;
   /** Install a SIGNED world package file the user picked (an export from another machine). */
@@ -1382,6 +1405,11 @@ export interface LucidBridge {
    *  as `?t=` (like previewServeUrl), because a download link cannot set a header. */
   worldExportUrl(id: string): string;
   worldUninstall(id: string): Promise<boolean>;
+  /** P-WORLDS.UPDATE1 (ADR-0685): the world updates already announced ("<id>@<version>", engine settings); null when
+   *  the engine did not answer. */
+  worldUpdateNotices(): Promise<string[] | null>;
+  /** Replace the announced keys (the engine sanitizes and bounds them). */
+  setWorldUpdateNotices(keys: string[]): Promise<string[] | null>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -1419,6 +1447,10 @@ export interface LucidBridge {
   archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;
   archivePolicy(set?: ArchivePolicyView): Promise<ArchivePolicyState | null>;
   archiveNow(): Promise<ArchiveRunView | null>;
+  // P-SESSXFER.1 (ADR-0682): offline history export/import (UI token only). Null = the engine did not answer.
+  historyTransferInfo(): Promise<HistoryTransferInfo | null>;
+  exportHistory(scope: HistoryExportScope, marking: string, includeImages: boolean): Promise<HistoryExportView | null>;
+  importHistory(file: string): Promise<HistoryImportView | null>;
   /** Same refusal rule as resumeSession. */
   newSession(opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   setZoom(factor: number): void;
@@ -1432,6 +1464,8 @@ export interface LucidBridge {
   // ADR-0088/0089 (P-ROLE.1/.1b): persist the onboarding role + the first-run-tour replay guard.
   saveRole(role: UserRole): Promise<ProfileSettings | null>;
   setTourSeen(seen: boolean): Promise<ProfileSettings | null>;
+  // P-WHATSNEW.1 (ADR-0686): record the version whose What's new notes were seen (engine settings, durable).
+  setWhatsNewSeen(version: string): Promise<ProfileSettings | null>;
   // P-GOVCUI.1: persist the first-run Government/CUI answer (so the gov onboarding step asks exactly once).
   setGovconCui(govconCui: boolean): Promise<ProfileSettings | null>;
   // P-THEME.1: persist the chosen app theme id ("" clears it back to following the OS preference).
@@ -1840,6 +1874,11 @@ async function getData(path: string): Promise<any> {
 }
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+}
+/** P-WORLDS.UPDATE1: `{ announced: string[] }` from /api/worlds/update-notices, or null when the engine did not answer. */
+function announcedOf(d: unknown): string[] | null {
+  const a = d && typeof d === "object" && "announced" in d ? d.announced : null;
+  return Array.isArray(a) ? a.filter((k): k is string => typeof k === "string") : null;
 }
 /** P-ASKLUCID.SPEED1: one Ask Lucid question as NDJSON: `phase` lines go to `onPhase`, the `reply` line is the
  *  answer. A refusal before the stream (a bad question, a refused file) arrives as plain JSON and is returned as
@@ -2364,6 +2403,21 @@ export const bridge: LucidBridge = {
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
   pluginsHealth: () => getData("/api/plugins/health"),
   pluginsRestore: (id) => post("/api/plugins/restore", id ? { id } : {}),
+  marketAuthGet: async () => {
+    const d: unknown = await getData("/api/market/auth");
+    return d && typeof d === "object" && "view" in d ? (d as { view: AuthView | null }) : null;
+  },
+  marketAuthPut: async (record) => (await post("/api/market/auth", { record })) !== null,
+  marketAuthClear: async () => (await post("/api/market/auth/clear", {})) !== null,
+  marketAuthRenew: async (o) => {
+    const d: unknown = await post("/api/market/auth/renew", o);
+    return d && typeof d === "object" && "status" in d ? (d as RenewReply) : null;
+  },
+  marketReceipts: async () => {
+    const d: unknown = await getData("/api/market/receipts");
+    return d && typeof d === "object" && "receipts" in d && d.receipts && typeof d.receipts === "object" ? (d.receipts as Record<string, number>) : null;
+  },
+  marketReceiptsPut: async (patch) => (await post("/api/market/receipts", patch)) !== null,
   worldsList: async () => {
     const d: unknown = await getData("/api/worlds");
     return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];
@@ -2380,6 +2434,8 @@ export const bridge: LucidBridge = {
   },
   worldExportUrl: (id) => `/api/worlds/export?id=${encodeURIComponent(id)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`,
   worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
+  worldUpdateNotices: async () => announcedOf(await getData("/api/worlds/update-notices")),
+  setWorldUpdateNotices: async (keys) => announcedOf(await post("/api/worlds/update-notices", { announced: keys })),
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
@@ -2412,6 +2468,9 @@ export const bridge: LucidBridge = {
   archivedSessions: () => getData("/api/sessions/archived"),
   archivePolicy: (set) => (set ? post("/api/sessions/archive-policy", set) : getData("/api/sessions/archive-policy")),
   archiveNow: () => post("/api/sessions/archive-now", {}),
+  historyTransferInfo: () => getData("/api/sessions/transfer"), // P-SESSXFER.1
+  exportHistory: (scope, marking, includeImages) => post("/api/sessions/export", { scope, marking, includeImages }),
+  importHistory: (file) => post("/api/sessions/import", { file }),
   newSession: (opts) => postSessionSwitch("/api/newSession", { force: opts?.force === true }),
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
@@ -2478,6 +2537,7 @@ export const bridge: LucidBridge = {
   skipEmail: () => post("/api/settings", { skip: true }),
   saveRole: (role) => post("/api/settings", { role }),
   setTourSeen: (seen) => post("/api/settings", { tourSeen: seen }),
+  setWhatsNewSeen: (version) => post("/api/settings", { whatsNewSeen: version }),
   setGovconCui: (govconCui) => post("/api/settings", { govconCui }),
   setTheme: (theme) => post("/api/settings", { theme }), // P-THEME.1
   managed: () => getData("/api/managed"),

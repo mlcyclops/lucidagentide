@@ -18,6 +18,7 @@ import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatu
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
+import { openHistoryMenu } from "./session_transfer_ui.ts"; // P-SESSXFER.1 (ADR-0682): Export / Import history
 import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-SECRET-INTAKE.1 (ADR-0476): the agent's secret dialog
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
@@ -47,6 +48,8 @@ import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171):
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
+import { latestNotes, notesSince, type ReleaseNotes } from "./release_notes.ts"; // P-WHATSNEW.1 (ADR-0686)
+import { shouldShowWhatsNew, WHATS_NEW_HINT, whatsNewHtml } from "./whats_new.ts";
 import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
@@ -59,6 +62,7 @@ import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statu
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
 import { createPluginsFlyout, drawerAnchor } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
+import { createWorldUpdates } from "./world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -70,11 +74,12 @@ import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
 // P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
-import { CURTAIN, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
+import { CURTAIN, chipAfterHide, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
 import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
 import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
-import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
+import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut, startMarketKeepFresh } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect + P-MARKET.AUTH2 keep-fresh
+import { engineCustody, localAuthStorage } from "./market_auth.ts"; // P-MARKET.AUTH2 (ADR-0684): the engine holds the store sign-in
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
 import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRelayFile } from "../collab/drive_file.ts";
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
@@ -136,6 +141,10 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 (window as unknown as { __lucidWebrtcSelfTest?: typeof webrtcLoopbackSelfTest }).__lucidWebrtcSelfTest = webrtcLoopbackSelfTest;
 (window as unknown as { __lucidWebrtcRelaySelfTest?: typeof webrtcRelaySelfTest }).__lucidWebrtcRelaySelfTest = webrtcRelaySelfTest;
 (window as unknown as { __lucidP2PModuleSelfTest?: typeof webrtcP2PModuleSelfTest }).__lucidP2PModuleSelfTest = webrtcP2PModuleSelfTest;
+// P-DOCS.2 (ADR-0681): shows the onboarding Connect a provider modal regardless of the configured-provider gate, so
+// demo_p_docs_2.mjs can prove its docs link on a QA engine that already has a provider. Cosmetic, never gates.
+(window as unknown as { __lucidShowProviderPrompt?: () => void }).__lucidShowProviderPrompt = () => showProviderPrompt();
+import { docsUrl, docsLinkHtml } from "./docs_links.ts"; // P-DOCS.2 (ADR-0681): docs.lucid-agents.com, single source
 // P-COLLAB.17 (ADR-0202): renderer-side direct-P2P share/join (RTCPeerConnection is renderer-only) - the "prefer
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
@@ -524,6 +533,7 @@ function buildShell(): void {
         <div class="side-head"><span>Sessions</span>
           <div class="side-actions">
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
+            <button class="side-new" id="sessHistory" type="button" aria-haspopup="menu" aria-label="Export or import session history" data-tip="History|Export this project's sessions to one plain-text file, or import one. Works offline." data-tip-side="bottom">${icon("download", 15)}</button>
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
         <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
@@ -826,17 +836,20 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   const spokeLine = !badge && s.spoke ? `<div class="sess-live">agent "${esc(s.spoke)}"</div>` : "";
   // P-SESS-ARCHIVE.1 (ADR-0517): an archived row says so and offers Restore; a live row offers Archive.
   const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
+  // P-SESSXFER.1 (ADR-0682): a session written by a history import is untrusted content; the row says so.
+  const impLine = s.imported ? `<div class="sess-live sess-imported">imported \u00b7 untrusted</div>` : "";
   const archBtn = s.archived
     ? `<button class="sess-del sess-arch" data-restore="${esc(s.id)}" data-tip="Restore|Back to the sessions list. Opening it does the same." aria-label="Restore session" tabindex="-1">${icon("restore", 13)}</button>`
     : `<button class="sess-del sess-arch" data-archive="${esc(s.id)}" data-tip="Archive|Moves it to the Archived group. Nothing is deleted: search still finds it, and opening it brings it back." aria-label="Archive session" tabindex="-1">${icon("archive", 13)}</button>`;
   // The row can come from the localStorage cache, so `turns` is untyped data: render it only as a number.
   const turns = Math.max(0, Math.trunc(Number(s.turns)) || 0);
   const turnsText = `${turns} turn${turns === 1 ? "" : "s"}`;
-  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${turnsText} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
+  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}"${s.imported ? " data-imported" : ""} data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${turnsText} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
       <div class="t">${query ? markTerms(s.title, query) : esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${turnsText} · ${relTime(s.updatedAt)}</div>
       ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : spokeLine}
       ${archLine}
+      ${impLine}
       ${s.snippet ? `<div class="sess-snip">${markTerms(s.snippet, query)}</div>` : ""}
       ${badge ? "" : archBtn}
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
@@ -5161,7 +5174,7 @@ function promptForEmailIfMissing(onDone?: () => void): void {
 // First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
 // is cosmetic - none gate or weaken the security path (invariant #3).
 function runOnboarding(): void {
-  const afterProv = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterProv = () => { onboardingSettled = true; if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
   const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
   const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
@@ -5180,6 +5193,13 @@ async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
   let auth = state.auth;
   try { const a = await bridge.auth(); if (a) { auth = a; state.auth = a; } } catch { /* offline: still offer */ }
   if (configuredProviderCount(auth) > 0) { onDone?.(); return; } // already has a provider connected
+  showProviderPrompt(onDone);
+}
+
+/** The Connect a provider modal itself (the gates live in promptForProviderIfNeeded). The docs anchor is a plain
+ *  target=_blank link (navigation_policy.ts opens it in the system browser); only [data-prov] buttons close it. */
+function showProviderPrompt(onDone?: () => void): void {
+  if (document.getElementById("provChoice")) return;
   const ov = el(`<div id="provChoice" class="modal-ov">
     <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="provChoiceTitle">
       <div class="modal-icon">${icon("spark", 24)}</div>
@@ -5189,6 +5209,7 @@ async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
         <button class="gov-choice ok" type="button" data-prov="yes">${icon("expand", 18)}<span class="gov-choice-tx"><b>Connect a provider</b><span class="gov-choice-sub">Open the provider list - OAuth or API key.</span></span></button>
         <button class="gov-choice" type="button" data-prov="later">${icon("clock", 18)}<span class="gov-choice-tx"><b>I'll do it later</b><span class="gov-choice-sub">Add one from the model picker or Settings any time.</span></span></button>
       </div>
+      ${docsLinkHtml("connect", "How to connect your AI ↗", "modal-docs", "Step-by-step guide in your browser")}
     </div></div>`);
   document.body.appendChild(ov);
   $$("[data-prov]", ov).forEach((b) => b.addEventListener("click", () => {
@@ -5792,6 +5813,7 @@ function expireSuggestedTheme(): void {
 }
 
 function maybeSuggest(): void {
+  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   expireSuggestedTheme();
   const store = miniStore();
   const prefs = seasonPrefs();
@@ -10946,10 +10968,41 @@ function curtainReady(key: string, path: string, r: CurtainResult, open: boolean
  *  ("main", the Agent Worlds hub; the composer has its own chip, paintCurtainChip). */
 function setTargetChip(target: string, v: ChipState | null): void {
   if (target !== "main") {
+    if (v) laneChipState.set(target, v); else laneChipState.delete(target);
+    // P-PREVIEW.CHIPX1: a chip the user closed stays away while the lane's page is the one it showed (its reload or
+    // a second gate on the same file included); a different page brings the chip back.
+    const after = chipAfterHide(dismissedLaneChips.get(target), v);
+    if (after.hidden === undefined) dismissedLaneChips.delete(target);
+    v = after.show;
     paintLanePreview(target, v);
     paintSpokePreview(target, v);
   }
   paintVizPreview(target, v);
+}
+
+/** P-PREVIEW.CHIPX1: lanes whose chip was closed with its red x, and the page it showed. In memory, like the
+ *  composer's dismissedAgentPreviews: a restart starts with no lane chips anyway. */
+const dismissedLaneChips = new Map<string, string>();
+/** Each lane's chip as the curtain last set it (shown or not), so Undo can put it back. */
+const laneChipState = new Map<string, ChipState>();
+
+/** P-PREVIEW.CHIPX1: the red x on a lane's chip (its fleet card or orbit spoke). The chip leaves the card, the
+ *  spoke and the lane's Agent Worlds node together; the toast offers Undo. */
+function dismissLaneChip(laneId: string): void {
+  const v = laneChipState.get(laneId);
+  if (!v) return;
+  dismissedLaneChips.set(laneId, v.path);
+  setTargetChip(laneId, v);
+  showToast({
+    title: "Preview chip hidden",
+    desc: "It comes back when this agent makes a different page. A page that rendered stays on its tab in the Preview panel.",
+    timeout: 6000,
+    actions: [{ label: "Undo", run: () => {
+      if (dismissedLaneChips.get(laneId) === v.path) dismissedLaneChips.delete(laneId);
+      const cur = laneChipState.get(laneId);
+      if (cur) setTargetChip(laneId, cur);
+    } }],
+  });
 }
 
 /** The composer chip: the one preview chip (preview_chip.ts, size "full") at the chat column's top-right edge,
@@ -17746,10 +17799,63 @@ function openAbout(): void {
   ov.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
     if (t.closest("[data-about-tour]")) { close(); startTour(state.userRole ?? "developer"); return; } // ADR-0089: replay
+    if (t.closest("[data-about-whatsnew]")) { close(); openWhatsNew(latestNotes(APP_VERSION), false); return; } // ADR-0686: read-only replay
     if (t === ov || t.closest("[data-about-close]")) close(); // backdrop or a close control
   });
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
+}
+
+// ── P-WHATSNEW.1 (ADR-0686): the one-time What's new popup after an upgrade ──────────────────────────
+// Decided once per launch by whats_new.ts against the engine-side seen version (never localStorage alone: a
+// port-rolled launch has an empty store). A fresh install records the version silently; an upgrade shows the
+// notes once, after onboarding, the tour and any other modal, and takes the launch's one notice slot so
+// Lucid's suggestion toast never stacks on it. About > What's new replays it without touching the seen state.
+let whatsNewPending = false; // a popup is due this launch: Lucid's suggestion toast stands down
+let onboardingSettled = false; // runOnboarding reached its last step (the tour, when unseen, starts there)
+
+/** Single instance; Dismiss, the X, a backdrop click and Esc all close it. `hint` (the upgrade popup only)
+ *  then tells the user where to find it again. */
+function openWhatsNew(notes: readonly ReleaseNotes[], hint: boolean): void {
+  if ($("#whatsNewModal") || !notes.length) return;
+  const ov = el(`<div id="whatsNewModal" class="modal-ov about-ov">${whatsNewHtml(notes)}</div>`);
+  const close = () => {
+    ov.remove();
+    document.removeEventListener("keydown", onKey);
+    if (hint) showToast({ ...WHATS_NEW_HINT, tone: "info", timeout: 9000, actions: [{ label: "Open About", kind: "ok", run: openAbout }, { label: "Got it" }] });
+  };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-wn-close], [data-wn-dismiss]")) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+  ($("[data-wn-dismiss]", ov) as HTMLElement | null)?.focus();
+}
+
+/** Boot: `seenAtBoot` is the engine's whatsNewSeen; `firstRun` a fresh install (nothing seen, no role yet). */
+function maybeWhatsNew(seenAtBoot: string | null, firstRun: boolean): void {
+  const decide = (): void => {
+    // An install from before the popup has no seen version: the engine's previous-run version stands in.
+    const seen = seenAtBoot ?? state.auth?.upgradedFrom ?? null;
+    const d = shouldShowWhatsNew({
+      seen,
+      current: APP_VERSION,
+      firstRun,
+      onboardingActive: !onboardingSettled || tourActive || !!document.querySelector(".modal-ov, .coach-card, .goal-scrim, #bootCine"),
+      noticeShownThisLaunch: suggestionsShown > 0,
+    });
+    whatsNewPending = d === "wait";
+    if (d === "wait") { window.setTimeout(decide, 1500); return; }
+    if (d === "none") return;
+    void bridge.setWhatsNewSeen(APP_VERSION).catch(() => null); // record or show: once per version
+    if (d !== "show") return;
+    suggestionsShown += 1;
+    openWhatsNew(notesSince(seen, APP_VERSION), true);
+  };
+  whatsNewPending = !firstRun && seenAtBoot !== APP_VERSION; // hold the suggestion toast until decided
+  window.setTimeout(decide, 1200);
 }
 
 // ── P-COLLAB.3 (ADR-0192): the live-session Share window ───────────────────────────────────────
@@ -18768,6 +18874,31 @@ const pluginsFlyout = createPluginsFlyout({
   worldsPending: setPendingWorldRestores,
   openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
+// P-WORLDS.UPDATE1 (ADR-0685): purchased worlds with a newer store version. Update in the Worlds menu and the boot
+// notice install through the store card's own path; what was announced is kept engine-side.
+const worldUpdates = createWorldUpdates({
+  provider: getMarketProvider,
+  pluginsList: () => bridge.pluginsList(),
+  installFromUrl: (url, id) => bridge.pluginsInstallFromUrl(url, id),
+  loadAnnounced: () => bridge.worldUpdateNotices(),
+  saveAnnounced: (keys) => bridge.setWorldUpdateNotices(keys),
+  toast: showToast,
+  now: Date.now,
+});
+worldUpdates.onChange(() => {
+  const b = $("#ctViz") as HTMLElement | null;
+  const n = worldUpdates.pending().length;
+  b?.classList.toggle("has-upd", n > 0);
+  if (b) { if (n > 0) b.dataset.worldUpdates = String(n); else delete b.dataset.worldUpdates; }
+});
+/** P-WORLDS.UPDATE1: the update check waits until the UI has settled (a few seconds, then an idle slot), so it never
+ *  competes with the boot's own requests. */
+function scheduleWorldUpdateCheck(delayMs = 5000): void {
+  window.setTimeout(() => {
+    const run = (): void => { void worldUpdates.announce(); };
+    if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5000 }); else run();
+  }, delayMs);
+}
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
   // P-WORLDS.STORE1: never open the Preview panel just to anchor the drawer (it flew out behind the drawer and
   // stayed open after the drawer closed); pluginsFlyout anchors to the work area when Preview is closed.
@@ -19727,6 +19858,7 @@ function wire(): void {
     openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the card's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
     // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
@@ -19793,6 +19925,7 @@ function wire(): void {
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
     openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the spoke's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
@@ -19911,6 +20044,7 @@ function wire(): void {
     openFleet: () => openFleetGrid(),
     focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
     openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    worldUpdates, // P-WORLDS.UPDATE1 (ADR-0685): each purchased world's Update and the Worlds button's dot
     // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
     // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
     fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
@@ -20989,8 +21123,23 @@ function wire(): void {
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
     const s = t.closest(".sess") as HTMLElement | null;
-    if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
+    if (!s?.dataset.sid) return;
+    const sid = s.dataset.sid;
+    // P-SESSXFER.1 (ADR-0682): an imported session came from a file; opening it hands its turns to the model as
+    // context, so the user says yes first (the import already scanned it, fail-closed).
+    if (s.hasAttribute("data-imported")) {
+      showToast({
+        tone: "warn",
+        title: "Open an imported session?",
+        desc: "It came from a history file, so its content is untrusted. It passed the scanner, but opening it gives its turns to the model as context.",
+        actions: [{ label: "Cancel" }, { label: "Open", run: () => void openSession(sid) }],
+        timeout: 0,
+      });
+      return;
+    }
+    void openSession(sid); // P-SWITCH.1: asks first when Main is working
   });
+  $("#sessHistory")?.addEventListener("click", (e) => openHistoryMenu(e.currentTarget as HTMLElement, () => void renderSessions()));
   // P-SESS-SEARCH.1 (ADR-0515): search box (debounced; Esc clears) and the persisted Spokes toggle.
   const sessSearch = $("#sessSearch") as HTMLInputElement | null;
   sessSearch?.addEventListener("input", () => onSessSearchInput(sessSearch.value));
@@ -21124,6 +21273,7 @@ const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "prov", title: "Connect a provider…", icon: "expand", hint: "providers", run: () => openProviderHub() }, // P-PROV.2: Provider Hub
+    { id: "docs", title: "Help: open the documentation", icon: "info", hint: "docs.lucid-agents.com", run: () => void openAuthUrl(docsUrl()) }, // P-DOCS.2 (ADR-0681)
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugins", icon: "plugins", hint: "drawer", run: () => openPluginsDrawer() }, // P-PLUGINS.1 (ADR-0461)
@@ -22631,10 +22781,17 @@ onNetChange(() => {
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
-initMarket(readMarketBootConfig());
+// P-MARKET.AUTH2 (ADR-0684): the sign-in is held by the engine vault (not this origin's localStorage, which a rolled
+// port empties), an older version's localStorage copy moves there once, and it is renewed before it lapses.
+initMarket(readMarketBootConfig(), { custody: engineCustody(bridge), legacy: localAuthStorage() });
+startMarketKeepFresh();
+// Read-only diagnostic for the real-UI proof (demo_p_market_auth_2.mjs): who is signed in, never a token.
+(window as unknown as { __lucidMarketUser?: typeof marketUser }).__lucidMarketUser = marketUser;
 // P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
 // (the engine's backup restore, then the store) and say so.
 void pluginsFlyout.restorePurchases("auto");
+// P-WORLDS.UPDATE1 (ADR-0685): once the UI has settled, say once which purchased worlds have a new version.
+scheduleWorldUpdateCheck();
 // P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
 // store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
 bridge.onKgDeviceUnlocked((r) => {
@@ -22647,6 +22804,7 @@ bridge.onKgDeviceUnlocked((r) => {
 try {
   (window as unknown as { lucid?: { onAuthCallback?: (cb: (url: string) => void) => void } }).lucid?.onAuthCallback?.((url) => {
     if (!handleAuthCallback(url)) return;
+    scheduleWorldUpdateCheck(1500); // P-WORLDS.UPDATE1: signed in now, so the purchased worlds can be checked
     if (pluginsFlyout.onSignedIn()) return; // P-PLUGINS.1: a plugin purchase interrupted by sign-in picks up here
     // P-KGMARKET.5 (ADR-0333): finish the purchase the user started, instead of telling them to find the
     // row again. ONE SHOT and time-boxed: this deep link also lands for a LUCID Remote sign-in and for a
@@ -22710,6 +22868,9 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-WHATSNEW.1 (ADR-0686): decided before Lucid's suggestion is scheduled, so the two never stack. A fresh
+  // install (nothing seen, no role chosen yet) records the version silently.
+  if (s) maybeWhatsNew(s.whatsNewSeen ?? null, !s.whatsNewSeen && !s.role);
   // P-MINI.1 (ADR-0580): a launch that opens on an empty chat counts as a new session; one that is already
   // showing a restored conversation does not.
   if (document.getElementById("chatHint")) noteNewSessionForMini(); else syncMiniLucid();

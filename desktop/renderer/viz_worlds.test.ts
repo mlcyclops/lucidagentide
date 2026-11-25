@@ -7,8 +7,9 @@
 import { describe, expect, test } from "bun:test";
 import { WORLD_API_VERSION, type InstalledWorld, type WorldDefinition, type WorldOption, type WorldOptionValues } from "./viz_world_api.ts";
 import {
-  decideWorldAccess, loadWorlds, mergeEnvironment, mergeOptions, optionDefaults, parseStyle, RECEIPT_TTL_MS, RECEIPTS_KEY, receiptFresh, saveOption, loadOptions, savedWorldState,
-  validateWorld, worldEnvironment, worldKeyOfStyle, worldStyle, worldAccess, worldUsable, type WorldsDeps,
+  decideWorldAccess, engineReceipts, loadWorlds, memoryReceipts, mergeEnvironment, mergeOptions, optionDefaults, parseStyle, RECEIPT_RENEW_MS, RECEIPT_TTL_MS,
+  RECEIPTS_KEY, receiptFresh, saveOption, loadOptions, savedWorldState, validateWorld, worldEnvironment, worldKeyOfStyle, worldStyle, worldAccess, worldUsable,
+  type ReceiptsApi, type WorldsDeps,
 } from "./viz_worlds.ts";
 import { nullProvider, type EntitlementProvider } from "./market_gate.ts";
 import type { WorldHost } from "./viz_world_api.ts";
@@ -284,19 +285,85 @@ describe("receipts and access", () => {
     expect(decideWorldAccess(true, null, { signedIn: true }, active, now)).toBe("allowed");
   });
 
+  let asked = 0;
+  const provider: EntitlementProvider = {
+    ...nullProvider, configured: () => true, auth: async () => ({ signedIn: true }),
+    entitlement: async (id) => { asked++; return { packId: id, state: "active" }; },
+  };
+  const unreachable: EntitlementProvider = { ...provider, entitlement: async () => { throw new Error("offline"); } };
+  const signedOut: EntitlementProvider = { ...provider, auth: async () => ({ signedIn: false }) };
+
   test("an active entitlement writes a receipt, which answers next time without asking", async () => {
-    const mem = new Map<string, string>();
-    const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) };
-    let asked = 0;
-    const provider: EntitlementProvider = {
-      ...nullProvider, configured: () => true, auth: async () => ({ signedIn: true }),
-      entitlement: async (id) => { asked++; return { packId: id, state: "active" }; },
-    };
-    expect(await worldAccess("world-christmas", provider, storage, now)).toBe("allowed");
-    expect(JSON.parse(mem.get(RECEIPTS_KEY)!)["world-christmas"].at).toBe(now);
-    expect(await worldAccess("world-christmas", { ...provider, auth: async () => { throw new Error("offline"); } }, storage, now + 1000)).toBe("allowed");
+    asked = 0;
+    const receipts = memoryReceipts();
+    expect(await worldAccess("world-christmas", provider, receipts, now)).toBe("allowed");
+    expect(await receipts.get("world-christmas")).toEqual({ at: now });
+    expect(await worldAccess("world-christmas", { ...provider, auth: async () => { throw new Error("offline"); } }, receipts, now + 1000)).toBe("allowed");
     expect(asked).toBe(1);
-    expect(await worldAccess("world-christmas", { ...provider, entitlement: async () => null }, storage, now + RECEIPT_TTL_MS + 1)).toBe("checkout");
+    expect(await worldAccess("world-christmas", { ...provider, entitlement: async () => null }, receipts, now + RECEIPT_TTL_MS + 1)).toBe("checkout");
+  });
+
+  test("ADR-0684: OFFLINE or signed out, a fresh receipt keeps the world allowed (no Get, no sign-in prompt)", async () => {
+    const receipts = memoryReceipts();
+    await receipts.put("world-christmas", { at: now - 5 * 24 * 3600_000 }); // older than RECEIPT_RENEW_MS, still fresh
+    expect(await worldAccess("world-christmas", unreachable, receipts, now)).toBe("allowed");
+    expect(await worldAccess("world-christmas", signedOut, receipts, now)).toBe("allowed");
+    expect(await worldAccess("world-christmas", { ...provider, auth: async () => { throw new Error("offline"); } }, receipts, now)).toBe("allowed");
+    // without a receipt the same answers lock it
+    expect(await worldAccess("world-christmas", unreachable, memoryReceipts(), now)).toBe("checkout");
+    expect(await worldAccess("world-christmas", signedOut, memoryReceipts(), now)).toBe("signin");
+  });
+
+  test("ADR-0684: an older fresh receipt is renewed when the store confirms; a definitive 'not entitled' drops it", async () => {
+    asked = 0;
+    const receipts = memoryReceipts();
+    await receipts.put("world-christmas", { at: now - RECEIPT_RENEW_MS - 1 });
+    expect(await worldAccess("world-christmas", provider, receipts, now)).toBe("allowed");
+    expect(asked).toBe(1);
+    expect(await receipts.get("world-christmas")).toEqual({ at: now });
+
+    await receipts.put("world-christmas", { at: now - RECEIPT_RENEW_MS - 1 });
+    const refunded: EntitlementProvider = { ...provider, entitlement: async (id) => ({ packId: id, state: "none" }) };
+    expect(await worldAccess("world-christmas", refunded, receipts, now)).toBe("checkout");
+    expect(await receipts.get("world-christmas")).toBeUndefined();
+  });
+
+  test("ADR-0684: receipts held by the engine survive an origin change (a rolled port) and the legacy copy moves once", async () => {
+    const engine: Record<string, number> = {};
+    let reachable = true;
+    const api: ReceiptsApi = {
+      marketReceipts: async () => (reachable ? { ...engine } : null),
+      marketReceiptsPut: async (patch) => {
+        if (!reachable) return false;
+        Object.assign(engine, patch.set ?? {});
+        for (const id of patch.drop ?? []) delete engine[id];
+        return true;
+      },
+    };
+    const origin = (seed?: Record<string, unknown>) => {
+      const m = new Map<string, string>(seed ? [[RECEIPTS_KEY, JSON.stringify(seed)]] : []);
+      return { m, store: { getItem: (k: string) => m.get(k) ?? null, removeItem: (k: string) => void m.delete(k) } };
+    };
+    // origin A (127.0.0.1:7811): an older version left a receipt in localStorage; the first check moves it.
+    const a = origin({ "world-soccer": { at: now - 1000 } });
+    const atA = engineReceipts(api, a.store);
+    expect(await worldAccess("world-christmas", provider, atA, now)).toBe("allowed");
+    expect(engine).toEqual({ "world-christmas": now, "world-soccer": now - 1000 });
+    expect(a.m.has(RECEIPTS_KEY)).toBe(false);
+
+    // origin B (a rolled port): empty localStorage, offline store; the engine's receipts still answer.
+    asked = 0;
+    const b = origin();
+    const atB = engineReceipts(api, b.store);
+    expect(await worldAccess("world-christmas", unreachable, atB, now + 60_000)).toBe("allowed");
+    expect(await worldAccess("world-soccer", signedOut, atB, now + 60_000)).toBe("allowed");
+    expect(asked).toBe(0);
+
+    // the engine not answering at all: a legacy copy still counts and is kept for next time
+    reachable = false;
+    const c = origin({ "world-farm": { at: now - 1000 } });
+    expect(await worldAccess("world-farm", unreachable, engineReceipts(api, c.store), now)).toBe("allowed");
+    expect(c.m.has(RECEIPTS_KEY)).toBe(true);
   });
 });
 
@@ -328,7 +395,7 @@ describe("loadWorlds", () => {
   const host = { THREE: {}, apiVersion: 1, kit: {} } as unknown as WorldHost; // the world under test never touches them
   const deps = (over: Partial<WorldsDeps>): WorldsDeps => ({
     list: async () => [INST], importModule: async () => ({ default: () => goodDef() }), host, provider: nullProvider,
-    storage: { getItem: () => null, setItem: () => {} }, now: () => 0, ...over,
+    receipts: memoryReceipts(), now: () => 0, ...over,
   });
 
   test("a valid world loads and is usable without a provider", async () => {

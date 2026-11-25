@@ -60,6 +60,8 @@ export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's ready mini "Preview" chip was clicked; swing the Preview panel
    *  out on this lane's tab, from `from` (the orbit closes right after, since it covers the panel). */
   openLanePreview?: (laneId: string, from: HTMLElement) => void;
+  /** P-PREVIEW.CHIPX1: the spoke chip's red x (the same hide as the fleet card's). */
+  dismissLanePreview?: (laneId: string) => void;
   /** The P-FLEET.L8 attach/release pair, owned by app.ts (thread park/seed lives there). */
   promoteLane: (laneId: string) => void;
   demoteLane: () => void;
@@ -909,6 +911,13 @@ function onViewClick(ev: Event): void {
   if (respawn) { void deps?.fleetRespawn(respawn.dataset.orbitRespawn!); window.setTimeout(() => void refresh(false), 400); return; }
   // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready preview chip opens the lane's preview, never a takeover. The orbit
   // covers the panel, so it closes once the swing has its origin.
+  // P-PREVIEW.CHIPX1: the chip's x, checked before the card so it is never a takeover click.
+  const chipX = t.closest("[data-pchip-close]") as HTMLElement | null;
+  if (chipX) {
+    const laneId = chipX.closest<HTMLElement>(".orbit-node")?.dataset.laneId;
+    if (laneId) deps?.dismissLanePreview?.(laneId);
+    return;
+  }
   const preview = t.closest("[data-orbit-preview]") as HTMLElement | null;
   if (preview) {
     if (preview.dataset.phase === "ready" && deps?.openLanePreview) { deps.openLanePreview(preview.dataset.orbitPreview!, preview); closeFleetOrbit(); }
@@ -1246,6 +1255,9 @@ function hash(s: string): number {
   return h;
 }
 
+/** Px the ring gives up at its top (and, to stay centered, its bottom) for a spoke's floating preview chip and x. */
+const SPOKE_CHIP_ROOM = 14;
+
 /** Position every card from the pure layout and hand the spokes and rings to the canvas. Cards transition
  *  on --tx/--ty; lines land at once, which is invisible in practice because the poll repositions both together. */
 function layoutStage(lanes: LaneView[]): void {
@@ -1253,7 +1265,9 @@ function layoutStage(lanes: LaneView[]): void {
   const stage = $("[data-orbit-stage]", view) as HTMLElement;
   const w = stage.clientWidth, h = stage.clientHeight;
   if (w === 0 || h === 0) return;
-  const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
+  // P-PREVIEW.CHIPX1: a spoke's preview chip floats above its card (and its red x above the chip), so the ring is a
+  // little flatter: the top spoke's chip and x stay clear of the orbit header (they sat under it at 12 o'clock).
+  const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h - 2 * SPOKE_CHIP_ROOM); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
   // One sample slot per occupied ring carries that ring's radii (orbit_layout.ts ringRx/ringRy), so the canvas
   // draws each ring exactly on its spokes, and a stage resize re-sizes it on the next pass.

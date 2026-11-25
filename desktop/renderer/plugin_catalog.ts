@@ -14,6 +14,7 @@
 // Ids are stable forever (AGENTS.md invariant 9) and double as the entitlement id (PLUGINS-CONTRACT).
 
 import { decidePackAction, isEntitled, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
+import type { PluginGate } from "./bridge.ts";
 
 export type PluginTier = "premium" | "free";
 export type PluginSection = "civilian" | "government";
@@ -672,6 +673,17 @@ export function provenanceChip(p: InstalledFacts): { tone: "ok" | "warn"; label:
   if (p.source === "catalog") return { tone: "ok", label: "LUCID store" };
   return p.signed ? { tone: "ok", label: "Private, signed by TECHLEAD 187 LLC" } : { tone: "warn", label: "Private, unsigned" };
 }
+
+/** Plain-language reasons for each install gate (ADR-0462), so a refusal says what failed. */
+export const GATE_TEXT: Record<PluginGate, string> = {
+  manifest: "The package manifest is not valid",
+  hash: "A file in the package does not match its recorded checksum",
+  signature: "The package is not signed by a trusted publisher",
+  authenticode: "A program in the package is not signed by TECHLEAD 187 LLC",
+  scan: "The security scan stopped the package",
+  download: "The package could not be downloaded",
+  private: "This package cannot be installed from a file",
+};
 
 /** Is `candidate` a strictly newer release than `installed`? Numeric `major.minor.patch`, where a prerelease
  *  (`1.2.0-beta.1`) sorts below its release. An unparseable side is never "newer": a garbled version must not
