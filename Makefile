@@ -1855,6 +1855,12 @@ demo-P-VIZ.FLEET1: ## P-VIZ.FLEET1 (ADR-0680): Visualize draws every running fle
 	node --check desktop/scripts/demo_p_viz_fleet_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_fleet_1.mjs; else echo "demo-P-VIZ.FLEET1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-SESSXFER.1
+demo-P-SESSXFER.1: ## P-SESSXFER.1 (ADR-0682): offline session history export and import in one CDS-inspectable file (lucid-history/1: printable ASCII and LF, sorted keys, sha256 per session and payload, home path scrubbed, secrets redacted, every text scanned fail-closed both ways); imports land in the current project as omp transcripts marked imported and untrusted, identical sessions skipped, id conflicts never overwritten. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_sessxfer_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/session_transfer.test.ts desktop/sessions_search.test.ts desktop/sessions_index.test.ts desktop/sessions_archive.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_sessxfer_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sessxfer_1.mjs; else echo "demo-P-SESSXFER.1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WORLDS.UPDATE1
 demo-P-WORLDS.UPDATE1: ## P-WORLDS.UPDATE1 (ADR-0685): a purchased world with a newer store version gets one "World updates available" notice (remembered engine-side, so a port-rolled launch never repeats it), a dot on the Worlds and Visualize buttons, and a one-line Update beside Export... in the Worlds menu that installs through the store card's verified path. Real-UI proof (QA engine: [QA_PLUGIN_DEV_LOOPBACK=1] bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ [LUCID_DEMO_WORLD=<zip>] [LUCID_DEMO_WORLD_NEWER=<zip>] node desktop/scripts/demo_p_worlds_update_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/world_updates.test.ts desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts

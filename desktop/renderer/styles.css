@@ -1297,6 +1297,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-del.sess-arch:hover{background:color-mix(in srgb,var(--accent-2) 16%,transparent);color:var(--accent-2)}
 .sess:hover .t,.sess:focus-within .t{padding-right:52px}
 .sess .sess-archived{color:var(--txt-4)}
+.sess .sess-imported{color:var(--amber-txt)} /* P-SESSXFER.1 (ADR-0682) */
 .sess-group-clear.sess-arch-rule{opacity:.6}
 .sess-group-clear.sess-arch-rule:hover{color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 16%,transparent)}
 .arch-pop{display:block;width:300px;padding:4px 2px;font-size:12px;color:var(--txt-2)}
@@ -4690,6 +4691,26 @@ body.preview-open .thread{font-size:.9em}
 .secret-modal .modal-actions{flex-wrap:wrap;justify-content:flex-end}
 .secret-dest-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
 .secret-dest-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+/* P-SESSXFER.1 (ADR-0682): Export / Import history. Same .modal chrome and grid rows as the secret dialog. */
+.popover.sx-pop{width:230px}
+.sx-menu{display:block}
+.cfg-opt[data-sx] .tick{opacity:.85}
+.modal.sx-modal{width:min(520px,92vw);text-align:left}
+.sx-modal .modal-icon{margin-left:0}
+.sx-modal .modal-desc{margin-left:0;max-width:none}
+.sx-row{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
+.sx-lab{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+.sx-row .prov-key{text-align:left}
+.sx-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--txt-2);cursor:pointer}
+.sx-check input{flex:none;margin:0}
+.sx-check span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-modal .modal-actions{justify-content:flex-end}
+.sx-list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:4px 0}
+.sx-item{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:10px;padding:5px 11px;font-size:11.5px}
+.sx-id,.sx-note{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-id{font-family:var(--mono);color:var(--txt-2)}
+.sx-note{color:var(--txt-3)}
+.sx-counts{color:var(--txt-2)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */

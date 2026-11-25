@@ -74,7 +74,7 @@ test("a malformed or foreign-version index file is ignored and rebuilt, never tr
   await listSessions(CWD, root);
   flushSessionIndex();
   // A genuine, current index whose only fault is the version: an older parser's titles must not survive.
-  const foreign = readFileSync(file, "utf8").replace('"v":1', '"v":999');
+  const foreign = readFileSync(file, "utf8").replace(/"v":\d+/, '"v":999');
   for (const bad of ["{not json", foreign, ln({ v: 1, entries: [["x", { meta: 5 }]] })]) {
     writeFileSync(file, bad);
     __setSessionIndexStore({ file, root });

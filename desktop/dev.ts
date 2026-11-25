@@ -179,6 +179,7 @@ import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_R
 import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
 import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
 import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
+import { handleSessionTransferRoutes } from "./session_transfer_routes.ts"; // P-SESSXFER.1 (ADR-0682): /api/sessions/transfer|export|import
 import { handleMarketAuthRoutes } from "./market_auth_routes.ts"; // P-MARKET.AUTH2 (ADR-0684): /api/market/auth*, /api/market/receipts
 import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
@@ -2742,6 +2743,20 @@ return Bun.serve({
       }
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
       const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
+      // P-SESSXFER.1 (ADR-0682): history export/import, UI token only (not in AGENT_ROUTES). A lane's sessions are
+      // every session the ledger says it ran plus the one it holds now.
+      const sx = await handleSessionTransferRoutes(req, p, {
+        uiToken: TOKEN,
+        holdOpen: (r) => srv.timeout(r, 0), // scanning a whole project's history can outlast the idle timeout
+        lanes: () => fleet.owners(),
+        laneSessionIds: (laneId) => {
+          const ids = new Set(readLaneLedger().filter((r) => r.laneId === laneId).map((r) => r.sessionId));
+          const held = fleet.owners().find((l) => l.id === laneId)?.sessionId;
+          if (held) ids.add(held);
+          return [...ids];
+        },
+      });
+      if (sx) return sx;
       const ma = await handleMarketAuthRoutes(req, p, { uiToken: TOKEN }); if (ma) return ma; // P-MARKET.AUTH2 (ADR-0684)
       const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
