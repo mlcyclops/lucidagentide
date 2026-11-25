@@ -179,6 +179,7 @@ import { claimPairing, markTodo, meetingDetail, meetingsView, MEETING_HUB_CRED_R
 import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474): /api/vault/*; loading it takes LUCID_VAULT_MAIN_TOKEN out of process.env
 import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
 import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
+import { handleMarketAuthRoutes } from "./market_auth_routes.ts"; // P-MARKET.AUTH2 (ADR-0684): /api/market/auth*, /api/market/receipts
 import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
 import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
@@ -2739,6 +2740,7 @@ return Bun.serve({
       }
       const vr = await handleVaultRoutes(req, p, { uiToken: TOKEN }); if (vr) return vr; // P-VAULT-V2.1 (ADR-0474)
       const vb = await handleVaultBackupRoutes(req, p, { uiToken: TOKEN }); if (vb) return vb; // P-VAULT-UI.1 (ADR-0475)
+      const ma = await handleMarketAuthRoutes(req, p, { uiToken: TOKEN }); if (ma) return ma; // P-MARKET.AUTH2 (ADR-0684)
       const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();

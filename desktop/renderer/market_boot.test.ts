@@ -12,7 +12,7 @@ import {
   __resetMarketBootForTest,
 } from "./market_boot.ts";
 import { getMarketProvider } from "./market_gate.ts";
-import type { AuthStorage } from "./market_auth.ts";
+import { storageCustody, type AuthStorage } from "./market_auth.ts";
 
 afterEach(() => __resetMarketBootForTest());
 
@@ -80,6 +80,17 @@ describe("initMarket + beginSignIn", () => {
     expect(getMarketProvider().configured()).toBe(false);
     const r = beginSignIn();
     expect(r).toEqual({ opened: false, signedIn: false, reason: "marketplace sign-in is not configured" });
+  });
+
+  test("ADR-0684: the provider answers after the custody is read; a legacy localStorage record moves into the custody", async () => {
+    const engine = mem();
+    const legacy = mem();
+    legacy.set(JSON.stringify({ idToken: "old", email: "p@x.com", expiresAt: NOW - 3600_000, refreshToken: "r0" }));
+    initMarket({ mode: "firebase", functionsBaseUrl: "https://f.example" }, { custody: storageCustody(engine), legacy, now: () => NOW });
+    // an hour past the ID token's expiry, but renewable: signed in, never a boot-time "signed out"
+    expect(await getMarketProvider().auth()).toEqual({ signedIn: true, email: "p@x.com" });
+    expect(JSON.parse(engine.get()!).refreshToken).toBe("r0");
+    expect(legacy.get()).toBeNull();
   });
 
   test("an invalid deep link does not sign the user in", () => {
