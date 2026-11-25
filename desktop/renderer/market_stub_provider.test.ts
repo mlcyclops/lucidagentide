@@ -48,6 +48,34 @@ describe("makeStubMarketProvider", () => {
     expect((await p.entitlement("kgp-owned"))?.state).toBe("active");
   });
 
+  test("P-WORLDS.STORE1: Sponsor grants exactly 6 unowned picks plus credits; a credit unlocks one more world", async () => {
+    const ledger = memoryLedger(["world-farm"]);
+    const p = makeStubMarketProvider({ getUser: () => ({ signedIn: true }), ledger });
+    const six = ["world-golf", "world-circus", "world-tennis", "world-hockey", "world-soccer", "world-bowling"];
+    expect((await p.redeemWorldCredit("world-esports")).ok).toBe(false);                      // no Sponsor pack yet
+    await p.checkoutUrl("bundle-sponsor", "one-time", { picks: six.slice(0, 5) });             // 5 picks: refused
+    await p.checkoutUrl("bundle-sponsor", "one-time", { picks: [...six.slice(0, 5), "world-farm"] }); // owned pick: refused
+    expect(ledger.has("bundle-sponsor")).toBe(false);
+    await p.checkoutUrl("bundle-sponsor", "one-time", { picks: six });
+    for (const id of six) expect((await p.entitlement(id))?.state).toBe("active");
+    expect((await p.entitlement("bundle-sponsor"))?.creditsRemaining).toBe(6);
+    expect(await p.redeemWorldCredit("world-esports")).toEqual({ ok: true, remaining: 5 });
+    expect((await p.entitlement("world-esports"))?.state).toBe("active");
+    expect((await p.entitlement("bundle-sponsor"))?.creditsRemaining).toBe(5);
+    expect((await p.redeemWorldCredit("world-esports")).ok).toBe(false);                      // already owned
+    expect((await p.redeemWorldCredit("pathfinder")).ok).toBe(false);                         // not a world
+  });
+
+  test("P-WORLDS.STORE1: Patron Class covers every world; signed out, a credit is never spent", async () => {
+    const p = makeStubMarketProvider({ getUser: () => ({ signedIn: true }), ledger: memoryLedger() });
+    expect(await p.entitlement("world-circus")).toBeNull();
+    await p.checkoutUrl("bundle-patron", "one-time");
+    expect((await p.entitlement("world-circus"))?.state).toBe("active");
+    expect(await p.entitlement("pathfinder")).toBeNull();
+    const out = makeStubMarketProvider({ getUser: () => ({ signedIn: false }), ledger: memoryLedger(["bundle-sponsor"]) });
+    expect((await out.redeemWorldCredit("world-circus")).ok).toBe(false);
+  });
+
   test("revoke removes entitlement (defense-in-depth on the ledger)", async () => {
     const ledger = memoryLedger(["kgp-x"]);
     const p = makeStubMarketProvider({ getUser: () => ({ signedIn: true }), ledger });

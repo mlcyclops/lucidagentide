@@ -109,7 +109,7 @@ body:
 
         **macOS / Linux:** attach `~/Library/Application Support/lucidagentide-desktop/engine.log` (macOS) or `~/.config/lucidagentide-desktop/engine.log` (Linux), plus `~/.omp/lucid-acp.log` and the newest `~/.omp/logs/omp.*.log`. These are not redacted: search them for `sk-`, `Bearer`, `token` and `key` first.
 
-        Full instructions: [How to pull your logs](https://github.com/mlcyclops/lucidagentide#how-to-pull-your-logs).
+        Full instructions: [How to pull your logs](https://github.com/mlcyclops/lucidagentide/blob/master/docs/SUPPORT.md#how-to-pull-your-logs).
     validations:
       required: true
 

@@ -6,7 +6,13 @@
 
 import { describe, expect, test } from "bun:test";
 import type { PersonalGraphData } from "./bridge.ts";
-import { capGraph, graphOpts, normalizePerfMode, pollDelay, resolveTier, watchPerfTier } from "./perf_tier.ts";
+import type { GpuProbe } from "./gpu_probe.ts";
+import {
+  baseTier, capGraph, capTier, createFrameGovernor, GOVERNOR_MISS_SHARE, GOVERNOR_MISS_WINDOWS, GOVERNOR_SETTLE_MS, GOVERNOR_SLACK,
+  GOVERNOR_STALL_MS, GOVERNOR_STEP_GAP_MS, GOVERNOR_WINDOW_MS, graphOpts, isSlowFrame, isStall, mayStepDown, normalizePerfMode, pollDelay,
+  resolveTier, stepDownTier, supportedTier, watchPerfTier, windowVerdict, type FrameGovernor, type PerfTier, type PerfTierWatcher,
+} from "./perf_tier.ts";
+import type { KVStore } from "./swr_cache.ts";
 
 const AC = { onBattery: false, batteryLevel: null, cores: 16, reducedMotion: false };
 
@@ -108,7 +114,7 @@ describe("watchPerfTier - persisted user mode", () => {
     const store = new Map<string, string>();
     return { store, kv: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, v), removeItem: (k) => void store.delete(k) } };
   };
-  test("cycles auto → full → reduced → minimal → auto and persists each step", () => {
+  test("cycles auto → full → reduced → minimal → ultra → cinematic → auto and persists each step", () => {
     const { store, kv } = mem();
     const w = watchPerfTier(kv);
     expect(w.mode()).toBe("auto");
@@ -116,6 +122,10 @@ describe("watchPerfTier - persisted user mode", () => {
     expect(w.cycleMode()).toBe("reduced");
     expect(store.get("lucid.perfMode")).toBe("reduced");
     expect(w.cycleMode()).toBe("minimal");
+    expect(w.cycleMode()).toBe("ultra");
+    expect(w.tier()).toBe("ultra");
+    expect(w.cycleMode()).toBe("cinematic");
+    expect(store.get("lucid.perfMode")).toBe("cinematic");
     expect(w.cycleMode()).toBe("auto");
   });
   test("a persisted override is honored on construction; junk falls back to auto", () => {
@@ -132,5 +142,266 @@ describe("watchPerfTier - persisted user mode", () => {
     w.onChange((t, m) => seen.push(`${m}:${t}`));
     w.cycleMode();
     expect(seen).toEqual(["full:full"]);
+  });
+});
+
+// P-VIZ.GPU1 (ADR-0651): the GPU class joins the auto decision; ultra and cinematic sit above full.
+describe("resolveTier - the GPU matrix", () => {
+  const gpu = (g: "software" | "integrated" | "discrete" | null) => ({ ...AC, gpu: g });
+  test("software GPU → minimal, whatever the rest of the machine", () => {
+    expect(resolveTier("auto", gpu("software"))).toBe("minimal");
+  });
+  test("integrated GPU → full on a strong plugged-in machine, reduced on battery or few cores", () => {
+    expect(resolveTier("auto", gpu("integrated"))).toBe("full");
+    expect(resolveTier("auto", { ...gpu("integrated"), onBattery: true, batteryLevel: 0.8 })).toBe("reduced");
+    expect(resolveTier("auto", { ...gpu("integrated"), cores: 4 })).toBe("reduced");
+  });
+  test("discrete GPU on AC → ultra; on battery it follows the battery rules", () => {
+    expect(resolveTier("auto", gpu("discrete"))).toBe("ultra");
+    expect(resolveTier("auto", { ...gpu("discrete"), onBattery: true, batteryLevel: 0.8 })).toBe("reduced");
+    expect(resolveTier("auto", { ...gpu("discrete"), onBattery: true, batteryLevel: 0.1 })).toBe("minimal");
+    expect(resolveTier("auto", { ...gpu("discrete"), reducedMotion: true })).toBe("reduced");
+  });
+  test("an unknown GPU never degrades and auto never picks cinematic", () => {
+    expect(resolveTier("auto", gpu(null))).toBe("full");
+    expect(resolveTier("auto", AC)).toBe("full");
+    for (const g of ["software", "integrated", "discrete", null] as const) expect(resolveTier("auto", gpu(g))).not.toBe("cinematic");
+  });
+  test("an explicit tier always wins over the GPU", () => {
+    expect(resolveTier("cinematic", gpu("software"))).toBe("cinematic");
+    expect(resolveTier("ultra", { ...gpu("integrated"), onBattery: true, batteryLevel: 0.05 })).toBe("ultra");
+    expect(resolveTier("minimal", gpu("discrete"))).toBe("minimal");
+  });
+});
+
+describe("tier helpers - step down, cap, base tier, new modes", () => {
+  test("stepDownTier walks cinematic → ultra → full → reduced → minimal and stops", () => {
+    const seen: string[] = [];
+    let t: PerfTier = "cinematic";
+    for (let i = 0; i < 5; i++) { seen.push(t); t = stepDownTier(t); }
+    expect(seen).toEqual(["cinematic", "ultra", "full", "reduced", "minimal"]);
+    expect(stepDownTier("minimal")).toBe("minimal");
+  });
+  test("capTier never raises a tier", () => {
+    expect(capTier("ultra", "full")).toBe("full");
+    expect(capTier("reduced", "full")).toBe("reduced");
+    expect(capTier("cinematic", null)).toBe("cinematic");
+  });
+  test("ultra and cinematic are full to everything outside Visualize", () => {
+    expect(baseTier("ultra")).toBe("full");
+    expect(baseTier("cinematic")).toBe("full");
+    expect(baseTier("reduced")).toBe("reduced");
+    expect(pollDelay(4000, "ultra", false)).toBe(4000);
+    expect(pollDelay(4000, "cinematic", true)).toBe(16000);
+    expect(graphOpts("ultra")).toEqual(graphOpts("full"));
+    expect(graphOpts("cinematic")).toEqual(graphOpts("full"));
+  });
+  test("the new modes round-trip through normalizePerfMode", () => {
+    expect(normalizePerfMode("ultra")).toBe("ultra");
+    expect(normalizePerfMode("cinematic")).toBe("cinematic");
+  });
+});
+
+describe("createFrameGovernor - the 3 s frame-time check", () => {
+  const BUDGET = 1000 / 60;
+  /** Feed `ms`-long frames from `start` until a verdict (or 20 s). */
+  const run = (start: number, ms: number): { verdict: string; at: number } => {
+    const g = createFrameGovernor(start);
+    let now = start;
+    while (now < start + 20000) {
+      now += ms;
+      const v = g.sample(now, ms, BUDGET);
+      if (v !== "pending") return { verdict: v, at: now - start };
+    }
+    return { verdict: g.verdict(), at: now - start };
+  };
+  test("a scene that holds its budget passes after settle + 3 s", () => {
+    const r = run(0, BUDGET);
+    expect(r.verdict).toBe("ok");
+    expect(r.at).toBeGreaterThanOrEqual(GOVERNOR_SETTLE_MS + GOVERNOR_WINDOW_MS - BUDGET); // the window's first frame counts whole
+  });
+  test("vsync quantization (75 Hz or 144 Hz panels) is not a miss", () => {
+    expect(run(0, 1000 / 37.5).verdict).toBe("ok");
+    expect(run(0, 1000 / 48).verdict).toBe("ok");
+  });
+  test("frames at well under half the budget's rate miss", () => {
+    expect(run(0, 40).verdict).toBe("miss");
+    expect(run(0, BUDGET * GOVERNOR_SLACK + 1).verdict).toBe("miss");
+  });
+  test("frames during the settle period and stalls are not counted", () => {
+    const g = createFrameGovernor(0);
+    expect(g.sample(GOVERNOR_SETTLE_MS - 1, 100, BUDGET)).toBe("pending");
+    expect(g.stats().frames).toBe(0);
+    expect(g.sample(GOVERNOR_SETTLE_MS + 10, 400, BUDGET)).toBe("pending"); // a stall (tab switch, dialog)
+    expect(g.stats().frames).toBe(0);
+  });
+  test("one verdict per mount: later frames do not change it", () => {
+    const g = createFrameGovernor(0);
+    let now = GOVERNOR_SETTLE_MS;
+    while (g.verdict() === "pending") { now += 40; g.sample(now, 40, BUDGET); }
+    expect(g.verdict()).toBe("miss");
+    for (let i = 0; i < 500; i++) { now += BUDGET; g.sample(now, BUDGET, BUDGET); }
+    expect(g.verdict()).toBe("miss");
+    expect(g.stats().slowShare).toBeGreaterThan(GOVERNOR_MISS_SHARE);
+  });
+});
+
+describe("P-VIZ.NOFLASH1 - governor hysteresis under CPU pressure", () => {
+  const BUDGET = 1000 / 60;
+  /** Feed `ms`-long frames for `forMs`; returns the time reached. */
+  const feed = (g: FrameGovernor, from: number, ms: number, forMs: number): number => {
+    let now = from;
+    while (now < from + forMs && g.verdict() === "pending") { now += ms; g.sample(now, ms, BUDGET); }
+    return now;
+  };
+
+  test("the pure thresholds", () => {
+    expect(isStall(GOVERNOR_STALL_MS)).toBe(false);
+    expect(isStall(GOVERNOR_STALL_MS + 1)).toBe(true);
+    expect(isSlowFrame(BUDGET * GOVERNOR_SLACK, BUDGET)).toBe(false);
+    expect(isSlowFrame(BUDGET * GOVERNOR_SLACK + 0.01, BUDGET)).toBe(true);
+    expect(windowVerdict(100, 90, GOVERNOR_WINDOW_MS - 1)).toBe("pending"); // not a whole window yet
+    expect(windowVerdict(9, 9, GOVERNOR_WINDOW_MS)).toBe("pending"); // too few frames to judge
+    expect(windowVerdict(100, 50, GOVERNOR_WINDOW_MS)).toBe("ok"); // exactly the share is not more than it
+    expect(windowVerdict(100, 51, GOVERNOR_WINDOW_MS)).toBe("miss");
+  });
+
+  test("a miss takes GOVERNOR_MISS_WINDOWS missed checks in a row", () => {
+    expect(GOVERNOR_MISS_WINDOWS).toBeGreaterThanOrEqual(2);
+    const g = createFrameGovernor(0);
+    let now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // one whole slow window
+    expect(g.verdict()).toBe("pending");
+    now = feed(g, now, 40, 20000);
+    expect(g.verdict()).toBe("miss");
+    expect(now).toBeGreaterThanOrEqual(GOVERNOR_SETTLE_MS + GOVERNOR_MISS_WINDOWS * GOVERNOR_WINDOW_MS);
+  });
+
+  test("a transient slow stretch (a GC burst, a window drag) is followed by a healthy check: ok, no step-down", () => {
+    const g = createFrameGovernor(0);
+    const now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40);
+    expect(g.verdict()).toBe("pending");
+    feed(g, now, BUDGET, 20000);
+    expect(g.verdict()).toBe("ok");
+  });
+
+  test("a stall restarts the check in progress", () => {
+    const g = createFrameGovernor(0);
+    const now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS / 2);
+    expect(g.stats().frames).toBeGreaterThan(0);
+    g.sample(now + 400, 400, BUDGET);
+    expect(g.stats().frames).toBe(0);
+    expect(g.verdict()).toBe("pending");
+  });
+
+  test("hold: frames right after a swap, a resize or the window coming back are not counted, and the checks start over", () => {
+    const g = createFrameGovernor(0);
+    let now = feed(g, GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // one missed check
+    g.hold(now);
+    expect(g.stats().frames).toBe(0);
+    expect(g.sample(now + GOVERNOR_SETTLE_MS - 1, 40, BUDGET)).toBe("pending");
+    expect(g.stats().frames).toBe(0);
+    now = feed(g, now + GOVERNOR_SETTLE_MS, 40, GOVERNOR_WINDOW_MS + 40); // the missed count started over
+    expect(g.verdict()).toBe("pending");
+    feed(g, now, 40, 20000);
+    expect(g.verdict()).toBe("miss");
+    g.hold(now + 30000); // no effect once decided
+    expect(g.verdict()).toBe("miss");
+  });
+
+  test("supportedTier: a miss lands where the measured frame time fits, at least one step down", () => {
+    const budget = (t: PerfTier): number => (t === "reduced" ? 1000 / 30 : t === "minimal" ? 1000 / 20 : 1000 / 60);
+    expect(supportedTier("ultra", 40, budget)).toBe("full"); // full's share of 40 ms fits 60 fps
+    expect(supportedTier("ultra", 80, budget)).toBe("reduced"); // full would still miss: straight past it
+    expect(supportedTier("full", 200, budget)).toBe("minimal"); // nothing fits: the floor
+    expect(supportedTier("cinematic", 17, budget)).toBe("ultra"); // a barely missed check still steps once
+    expect(supportedTier("full", 17, budget)).toBe("reduced");
+    expect(supportedTier("reduced", 500, budget)).toBe("minimal");
+    expect(supportedTier("minimal", 500, budget)).toBe("minimal");
+  });
+
+  test("Auto steps down at most once per step gap", () => {
+    expect(GOVERNOR_STEP_GAP_MS).toBeGreaterThanOrEqual(GOVERNOR_SETTLE_MS + GOVERNOR_MISS_WINDOWS * GOVERNOR_WINDOW_MS);
+    expect(mayStepDown(1000, -Infinity)).toBe(true);
+    expect(mayStepDown(1000 + GOVERNOR_STEP_GAP_MS - 1, 1000)).toBe(false);
+    expect(mayStepDown(1000 + GOVERNOR_STEP_GAP_MS, 1000)).toBe(true);
+  });
+});
+
+describe("watchPerfTier - GPU probe and governor step-down", () => {
+  const mem = (): { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void } => {
+    const store = new Map<string, string>();
+    return { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, v), removeItem: (k) => void store.delete(k) };
+  };
+  /** A watcher on a probe that has already answered; awaiting `ready` runs after the watcher's own handler (it
+   *  subscribed first), so no timer is needed. */
+  const watch = (kv: KVStore, cls: "software" | "integrated" | "discrete" | null): { w: PerfTierWatcher; ready: Promise<GpuProbe> } => {
+    const ready = Promise.resolve<GpuProbe>({ cls, name: cls ? "Test GPU" : null, renderer: null, source: "webgl" });
+    return { w: watchPerfTier(kv, () => ready), ready };
+  };
+  const machine = (gpu: "software" | "integrated" | "discrete" | null) => ({
+    onBattery: false, batteryLevel: null, cores: typeof navigator !== "undefined" ? (navigator.hardwareConcurrency ?? null) : null, reducedMotion: false, gpu,
+  });
+  test("the probed GPU class feeds auto and notifies when the tier moves", async () => {
+    const { w, ready } = watch(mem(), "software");
+    const seen: string[] = [];
+    w.onChange((t) => seen.push(t));
+    await ready;
+    expect(w.gpu()?.cls).toBe("software");
+    expect(w.tier()).toBe("minimal");
+    expect(seen).toEqual(resolveTier("auto", machine(null)) === "minimal" ? [] : ["minimal"]);
+  });
+  test("a discrete GPU resolves like the pure resolver says (ultra on a strong plugged-in machine)", async () => {
+    const { w, ready } = watch(mem(), "discrete");
+    await ready;
+    expect(w.tier()).toBe(resolveTier("auto", machine("discrete")));
+  });
+  test("stepDown caps auto one tier at a time, and a mode change clears it", async () => {
+    const { w, ready } = watch(mem(), "discrete");
+    await ready;
+    const before = w.tier();
+    const after = w.stepDown();
+    if (before === "minimal") expect(after).toBeNull();
+    else {
+      expect(after).toBe(stepDownTier(before));
+      expect(w.tier()).toBe(stepDownTier(before));
+      expect(w.steppedFrom()).toBe(before);
+    }
+    w.cycleMode(); // full
+    expect(w.steppedFrom()).toBeNull();
+    w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); // back to auto
+    expect(w.mode()).toBe("auto");
+    expect(w.tier()).toBe(before); // the cap went with the user's choice
+  });
+  test("P-VIZ.NOFLASH1: stepDown(to) lands further down in one go; a `to` not below one step is one step", async () => {
+    const kv = mem();
+    const { w, ready } = watch(kv, "discrete");
+    await ready;
+    const before = w.tier();
+    if (before === "minimal" || before === "reduced") return; // nothing further down to skip to on this machine
+    expect(w.stepDown("minimal")).toBe("minimal");
+    expect(w.tier()).toBe("minimal");
+    expect(w.steppedFrom()).toBe(before);
+    w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); w.cycleMode(); // back to auto, cap cleared
+    expect(w.tier()).toBe(before);
+    expect(w.stepDown(before)).toBe(stepDownTier(before)); // not below one step: one step
+  });
+  test("an explicit tier is never stepped down", async () => {
+    const kv = mem();
+    kv.setItem("lucid.perfMode", "cinematic");
+    const { w, ready } = watch(kv, "software");
+    await ready;
+    expect(w.tier()).toBe("cinematic");
+    expect(w.stepDown()).toBeNull();
+    expect(w.tier()).toBe("cinematic");
+  });
+  test("a failed or unknown probe leaves the GPU unknown (no degrade)", async () => {
+    const failed = Promise.reject<GpuProbe>(new Error("no gpu"));
+    const w = watchPerfTier(mem(), () => failed);
+    await failed.catch(() => undefined);
+    expect(w.gpu()).toBeNull();
+    expect(w.tier()).toBe(resolveTier("auto", machine(null)));
+    const { w: u, ready } = watch(mem(), null);
+    await ready;
+    expect(u.tier()).toBe(resolveTier("auto", machine(null)));
   });
 });

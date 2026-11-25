@@ -7,9 +7,10 @@
 import { describe, expect, test } from "bun:test";
 import { resolvePreview } from "../preview_resolve.ts";
 import type { InstalledPluginView, PluginFileInspectView } from "./bridge.ts";
-import { FREE_PLUGINS, type FreePlugin } from "./plugin_catalog.ts";
+import { FREE_PLUGINS, PATRON_PACK_ID, PREMIUM_PLUGINS, SPONSOR_PACK_ID, isWorldPlugin, type FreePlugin, type SoldPlugin } from "./plugin_catalog.ts";
 import {
-  addonFootHtml, addonOpenSheetHtml, drawerGeometry, drawerShellHtml, freeCardHtml, installedBodyHtml, privateInstallSheetHtml, removeSheetHtml,
+  addonFootHtml, addonOpenSheetHtml, buySheetHtml, drawerAnchor, drawerGeometry, drawerShellHtml, freeCardHtml, installedBodyHtml, pickCountLabel, premiumCardHtml,
+  premiumFootHtml, privateInstallSheetHtml, removeSheetHtml, sponsorPickerSheetHtml,
 } from "./plugins_flyout.ts";
 
 // P-PLUGINS.7 (ADR-0505): what the INSTALLED tab shows and what its sheets let a user do.
@@ -44,6 +45,14 @@ describe("the INSTALLED tab", () => {
     expect(count(html, "data-plg-iremove=")).toBe(2);
     expect(html).not.toContain('data-plg-iremove="pathfinder"');
     expect(html).toContain("data-plg-file");
+  });
+
+  // P-WORLDS.HEAL1: the Installed tab's header offers Restore purchases, even with nothing installed (that is when it
+  // matters most: the packages went missing).
+  test("Restore purchases sits in the Installed header when offered, also with nothing installed", () => {
+    expect(installedBodyHtml([], "", new Map(), true, false, true)).toContain("data-plg-restore");
+    expect(installedBodyHtml([row({})], "", new Map(), false, false, true)).toContain(">Restore purchases</button>");
+    expect(installedBodyHtml([], "", new Map(), true)).not.toContain("data-plg-restore");
   });
 
   test("installing from a file is offered only where a native picker exists; search narrows the rows", () => {
@@ -160,5 +169,88 @@ describe("drawerGeometry", () => {
     const g = drawerGeometry(900, 450, 56);
     expect(g.left).toBe(56);
     expect(g.left + g.width).toBeLessThanOrEqual(900);
+  });
+});
+
+// P-WORLDS.STORE1: the drawer never needs the Preview panel open to know where it goes.
+describe("drawerAnchor", () => {
+  const rect = (left: number, top: number, width: number, height: number) => ({ left, top, width, height, right: left + width });
+  const work = rect(0, 40, 1600, 932); // below a 40 px title bar, above a 28 px status bar
+
+  test("an open Preview panel anchors the drawer on its left edge, as before", () => {
+    expect(drawerAnchor(rect(900, 40, 700, 932), work)).toEqual({ right: 900, top: 40, height: 932 });
+  });
+
+  test("with Preview closed the drawer sits on the work area's right edge, between the title and status bars", () => {
+    expect(drawerAnchor(null, work)).toEqual({ right: 1600, top: 40, height: 932 });
+    expect(drawerAnchor(rect(1600, 40, 0, 932), work)).toEqual({ right: 1600, top: 40, height: 932 }); // collapsed panel
+    const g = drawerGeometry(1600, 1600, 56);
+    expect(g.left).toBeGreaterThanOrEqual(56);
+    expect(g.left + g.width).toBe(1600);
+  });
+
+  test("no layout yet: the whole window", () => {
+    expect(drawerAnchor(null, null)).toBeNull();
+    expect(drawerAnchor(null, rect(0, 0, 0, 0))).toBeNull();
+  });
+});
+
+describe("Lucid Agent World Packs on the drawer (P-WORLDS.STORE1)", () => {
+  const sold = PREMIUM_PLUGINS.filter((p): p is SoldPlugin => p.sale === "buy");
+  const sponsor = sold.find((p) => p.id === SPONSOR_PACK_ID)!;
+  const patron = sold.find((p) => p.id === PATRON_PACK_ID)!;
+  const worlds = sold.filter(isWorldPlugin);
+  const picks = worlds.slice(0, 6).map((w) => w.id);
+
+  test("every world and both packs play their own loop over their own poster", () => {
+    for (const p of [...worlds, sponsor, patron]) {
+      const html = premiumCardHtml(p, { kind: "buy", price: p.price }, false, null);
+      expect(html).toContain('<video class="plg-loop"');
+      expect(html).toContain(`data-src="assets/plugins/${p.id}-loop.mp4"`);
+      expect(html).toContain(`poster="assets/plugins/${p.id}-poster.webp"`);
+      expect(html).not.toContain("plg-gen");
+    }
+  });
+
+  test("an owned pack is a disabled Owned button; Sponsor's foot says the credits left", () => {
+    const s = premiumFootHtml(sponsor, { kind: "owned", credits: 4 }, false, null);
+    expect(s).toContain("4 world credits left");
+    expect(s).toMatch(/data-kind="owned"[^>]*disabled>Owned</);
+    expect(premiumFootHtml(patron, { kind: "owned", credits: null }, false, null)).toContain("Every world unlocked");
+    expect(premiumFootHtml(worlds[0]!, { kind: "redeem" }, false, null)).toMatch(/data-kind="redeem"[^>]*>Use a credit</);
+  });
+
+  test("the picker lists every world as a toggle, owned ones disabled as Owned, and Continue starts disabled", () => {
+    const owned = new Set([worlds[1]!.id]);
+    const sheet = sponsorPickerSheetHtml(worlds, owned);
+    expect(sheet.split("data-plg-pick=").length - 1).toBe(worlds.length);
+    expect(worlds.length).toBe(40);
+    for (const w of worlds) expect(sheet).toContain(`src="assets/plugins/${w.id}-poster.webp"`);
+    expect(sheet).toMatch(new RegExp(`data-plg-pick="${worlds[1]!.id}" aria-pressed="false" disabled`));
+    expect(sheet).toContain('<span class="plg-pick-tag">Owned</span>');
+    expect(sheet).toContain(pickCountLabel(0));
+    expect(sheet).toMatch(/data-plg-picks-go disabled>Continue</);
+    expect(pickCountLabel(6)).toBe("6 of 6 picked");
+    expect(sheet).not.toContain("are left"); // enough worlds left
+    const most = new Set(worlds.slice(4).map((w) => w.id));
+    expect(sponsorPickerSheetHtml(worlds, most)).toContain("only 4 are left");
+  });
+
+  test("the license sheet names Sponsor's picks and carries them to checkout; Patron carries none", () => {
+    const s = buySheetHtml(sponsor, picks);
+    expect(s).toContain(`data-plg-picks="${picks.join(",")}"`);
+    for (const id of picks) expect(s).toContain(worlds.find((w) => w.id === id)!.name);
+    expect(s).toContain("Buy Sponsor");
+    const p = buySheetHtml(patron);
+    expect(p).not.toContain("data-plg-picks");
+    expect(p).toContain("Every Lucid Agent World unlocks right after checkout");
+  });
+
+  test("no em dash in any pack or picker string", () => {
+    const all = [
+      sponsorPickerSheetHtml(worlds, new Set()), sponsorPickerSheetHtml(worlds, new Set(worlds.slice(2).map((w) => w.id))), buySheetHtml(sponsor, picks), buySheetHtml(patron),
+      premiumFootHtml(sponsor, { kind: "owned", credits: 0 }, false, null), premiumCardHtml(sponsor, { kind: "buy", price: sponsor.price }, false, null),
+    ].join("");
+    expect(all).not.toContain("\u2014");
   });
 });

@@ -13,7 +13,8 @@
 // through the P-KGPACK.4 verify + re-scan import gate — a stub grants access, not trust.
 
 import type { AuthState, Entitlement, GovAccessRequest, GovAccessStatus, PackLicensing } from "../../harness/market/entitlement.ts";
-import type { EntitlementProvider } from "./market_gate.ts";
+import type { CheckoutOptions, EntitlementProvider, RedeemResult } from "./market_gate.ts";
+import { PATRON_PACK_ID, SPONSOR_CREDITS, SPONSOR_PACK_ID, SPONSOR_PICKS } from "./plugin_catalog.ts";
 
 /** A tiny "which packs does this user own" ledger. In-memory by default; a real dev build could persist it. */
 export interface StubLedger {
@@ -51,15 +52,41 @@ export function makeStubMarketProvider(opts: StubProviderOpts): EntitlementProvi
   const ledger = opts.ledger ?? memoryLedger();
   const signedIn = () => opts.getUser().signedIn === true;
   let gov: GovAccessStatus = "none";
+  // P-WORLDS.STORE1: the backend's world pack rules, offline. Patron Class covers every world; Sponsor grants
+  // its 6 picks and banks SPONSOR_CREDITS credits, each one spent on a world the buyer does not own yet.
+  const isWorld = (id: string) => id.startsWith("world-");
+  const owns = (id: string) => ledger.has(id) || (isWorld(id) && ledger.has(PATRON_PACK_ID));
+  let credits = SPONSOR_CREDITS;
   return {
     configured: () => true,
     auth: async () => opts.getUser(),
     entitlement: async (packId: string): Promise<Entitlement | null> =>
-      signedIn() && ledger.has(packId) ? { packId, state: "active", method: "card" } : null,
-    checkoutUrl: async (packId: string, _licensing: PackLicensing): Promise<string | null> => {
+      signedIn() && owns(packId)
+        ? { packId, state: "active", method: "card", ...(packId === SPONSOR_PACK_ID ? { creditsRemaining: credits } : {}) }
+        : null,
+    checkoutUrl: async (packId: string, _licensing: PackLicensing, co?: CheckoutOptions): Promise<string | null> => {
       if (!signedIn()) return null;      // must be signed in to buy — fail-closed
+      if (packId === SPONSOR_PACK_ID) {
+        // The backend refuses anything but exactly SPONSOR_PICKS distinct worlds the buyer does not own yet.
+        const picks = co?.picks ?? [];
+        const valid = !ledger.has(packId) && picks.length === SPONSOR_PICKS && new Set(picks).size === SPONSOR_PICKS
+          && picks.every((id) => isWorld(id) && !owns(id));
+        if (!valid) return null;
+        for (const id of picks) ledger.grant(id);
+        credits = SPONSOR_CREDITS;
+      }
       ledger.grant(packId);              // DEV: a purchase completes instantly (no real Stripe)
       return null;                       // no external checkout page in stub mode
+    },
+    redeemWorldCredit: async (packId: string): Promise<RedeemResult> => {
+      if (!signedIn()) return { ok: false, error: "Sign in to use a world credit." };
+      if (!isWorld(packId)) return { ok: false, error: "Only a Lucid Agent World takes a world credit." };
+      if (!ledger.has(SPONSOR_PACK_ID)) return { ok: false, error: "This account has no Sponsor world pack." };
+      if (owns(packId)) return { ok: false, error: "This world is already yours." };
+      if (credits <= 0) return { ok: false, error: "No world credits are left." };
+      ledger.grant(packId);
+      credits -= 1;
+      return { ok: true, remaining: credits };
     },
     downloadUrl: async (packId: string): Promise<string | null> =>
       signedIn() && ledger.has(packId) ? (opts.downloadUrlFor?.(packId) ?? null) : null,

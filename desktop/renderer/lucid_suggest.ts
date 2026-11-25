@@ -162,8 +162,8 @@ export const WHATS_NEW: readonly NewsItem[] = [
   {
     id: "ask-lucid",
     title: "New: Ask Lucid",
-    summary: "A side conversation that does not interrupt your session. Lucid can see your fleet lanes, the Fleet Orbit and the knowledge graph.",
-    more: "**Ask Lucid** is this panel. Ask about your fleet lanes, the Fleet Orbit goal or what the knowledge graph holds, or about anything else. It does not interrupt the session you are working in.\n\nI can also **propose** starting a lane, prompting one, or adding an orbit task. Each proposal is a card, and nothing runs until you press **Confirm**.\n\nDrag the header to float the panel, drop it on the right or bottom edge to dock it, or minimize it to a pill.",
+    summary: "A side conversation that does not interrupt your session. Lucid can see your fleet agents, the Fleet Orbit and the knowledge graph.",
+    more: "**Ask Lucid** is this panel. Ask about your fleet agents, the Fleet Orbit goal or what the knowledge graph holds, or about anything else. It does not interrupt the session you are working in.\n\nI can also **propose** starting an agent, prompting one, or adding an orbit task. Each proposal is a card, and nothing runs until you press **Confirm**.\n\nDrag the header to float the panel, drop it on the right or bottom edge to dock it, or minimize it to a pill.",
   },
 ];
 

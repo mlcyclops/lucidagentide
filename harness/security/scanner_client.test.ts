@@ -11,8 +11,9 @@ import { test, expect, describe, beforeAll, afterAll, afterEach, setSystemTime }
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ScannerClient, sidecarDir, type ScannerExit } from "./scanner_client.ts";
+import { ScannerClient, ScanUnavailableError, chooseSidecarDir, resolveSidecarDir, type ScannerExit } from "./scanner_client.ts";
 import { scanAndDecide } from "./gate.ts";
+import { repoAsset } from "../../desktop/repo_root.ts";
 
 const ZWSP = String.fromCodePoint(0x200b);
 
@@ -94,7 +95,7 @@ describe("a hung sidecar", () => {
       "",
     ].join("\n"));
     // The real sidecar's interpreter, resolved before LUCID_SCANNER_DIR is pointed at the stand-in.
-    const realVenv = join(sidecarDir(), ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const realVenv = join(resolveSidecarDir().dir, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
     process.env.SCANNER_PYTHON = saved.py ?? (existsSync(realVenv) ? realVenv : process.platform === "win32" ? "python" : "python3");
     process.env.LUCID_SCANNER_DIR = dir;
   });
@@ -117,6 +118,8 @@ describe("a hung sidecar", () => {
     const client = new ScannerClient({ timeoutMs: 1500, onExit: (e) => exits.push(e) });
     client.start();
     try {
+      // An override that holds server.py wins over the probed repo sidecar (ADR-0604).
+      expect(client.sidecar).toEqual({ dir, source: "env", usable: true, note: "" });
       const hung = await scanAndDecide(client, "benign");
       expect(hung.block).toBe(true);
       expect(hung.failClosed).toBe(true);
@@ -128,6 +131,100 @@ describe("a hung sidecar", () => {
       skipBackoff(exits[0]!.restartInMs);
       const after = await scanAndDecide(client, "benign");
       expect(after.block).toBe(false);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+// P-SCANLIVE.2 (ADR-0604, #631): a stale user-level LUCID_SCANNER_DIR used to win over the probed
+// sidecar, so every scan failed closed with nothing saying why.
+describe("which sidecar directory is used", () => {
+  const holds = (...dirs: string[]) => (d: string) => dirs.includes(d);
+  const PROBED = "/repo/scanner-sidecar";
+
+  test("a stale override loses to a probed directory that holds server.py, and the note names it", () => {
+    const r = chooseSidecarDir("/old-install/scanner-sidecar", PROBED, holds(PROBED));
+    expect(r).toMatchObject({ dir: PROBED, source: "probe", usable: true });
+    expect(r.note).toContain("/old-install/scanner-sidecar");
+  });
+
+  test("an override that holds server.py wins over the probe (the launcher's own child)", () => {
+    const r = chooseSidecarDir(" /lane/scanner-sidecar ", PROBED, holds("/lane/scanner-sidecar", PROBED));
+    expect(r).toEqual({ dir: "/lane/scanner-sidecar", source: "env", usable: true, note: "" });
+  });
+
+  test("with no override the probe is used", () => {
+    expect(chooseSidecarDir(undefined, PROBED, holds(PROBED))).toEqual({ dir: PROBED, source: "probe", usable: true, note: "" });
+    expect(chooseSidecarDir("  ", PROBED, holds(PROBED))).toEqual({ dir: PROBED, source: "probe", usable: true, note: "" });
+  });
+
+  test("with neither usable the result is unusable and the note names every directory tried", () => {
+    const both = chooseSidecarDir("/old-install/scanner-sidecar", PROBED, holds());
+    expect(both.usable).toBe(false);
+    expect(both.note).toContain("/old-install/scanner-sidecar");
+    expect(both.note).toContain(PROBED);
+    const probeOnly = chooseSidecarDir(undefined, PROBED, holds());
+    expect(probeOnly.usable).toBe(false);
+    expect(probeOnly.note).toContain(PROBED);
+  });
+
+  test("a stale LUCID_SCANNER_DIR in the real environment is ignored: the repo sidecar starts and scans", async () => {
+    const saved = process.env.LUCID_SCANNER_DIR;
+    const stale = mkdtempSync(join(tmpdir(), "scanstale-")); // exists, but holds no server.py
+    process.env.LUCID_SCANNER_DIR = stale;
+    try {
+      const r = resolveSidecarDir();
+      expect(r).toMatchObject({ dir: repoAsset("scanner-sidecar"), source: "probe", usable: true });
+      expect(r.note).toContain(stale);
+      const client = new ScannerClient({ timeoutMs: 4000 });
+      client.start();
+      try {
+        expect(client.sidecar?.source).toBe("probe");
+        expect((await scanAndDecide(client, "benign")).block).toBe(false);
+        // A real scanner, not a pass-through.
+        expect((await scanAndDecide(client, `edit${ZWSP}file`)).failClosed).toBe(false);
+      } finally {
+        client.stop();
+      }
+    } finally {
+      if (saved === undefined) delete process.env.LUCID_SCANNER_DIR; else process.env.LUCID_SCANNER_DIR = saved;
+      rmSync(stale, { recursive: true, force: true });
+    }
+  });
+
+  test("FAIL-CLOSED: with no usable directory nothing is spawned and every scan throws, naming the directory", async () => {
+    const gone = "/gone/scanner-sidecar";
+    const exits: ScannerExit[] = [];
+    const client = new ScannerClient({
+      timeoutMs: 4000,
+      onExit: (e) => exits.push(e),
+      resolveDir: () => chooseSidecarDir(gone, PROBED, () => false),
+    });
+    client.start();
+    try {
+      expect(client.alive).toBe(false);
+      expect(client.pid).toBeUndefined();
+      expect(exits.length).toBe(1);
+      expect(exits[0]!.reason).toContain(gone);
+      expect(exits[0]!.reason).toContain(PROBED);
+
+      const err = await client.scan("benign").then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(ScanUnavailableError);
+      expect((err as Error).message).toContain(gone);
+
+      const d = await scanAndDecide(client, "benign");
+      expect(d.block).toBe(true);
+      expect(d.failClosed).toBe(true);
+      expect(d.reason).toContain(gone);
+
+      // Past the backoff the retry resolves again, still finds nothing, and still blocks.
+      skipBackoff(exits[exits.length - 1]!.restartInMs);
+      const again = await scanAndDecide(client, "benign");
+      expect(again.block).toBe(true);
+      expect(again.failClosed).toBe(true);
+      expect(again.reason).toContain(gone);
+      expect(exits.length).toBeGreaterThan(1);
     } finally {
       client.stop();
     }

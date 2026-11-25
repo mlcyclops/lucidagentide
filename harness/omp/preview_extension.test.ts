@@ -123,7 +123,7 @@ describe("preview_extension (mock pi)", () => {
     const { pi, tools } = capture();
     previewExtension(pi);
     const open = byName(tools, "preview_open");
-    const dq = await open.execute("id", { path: '"C:/Users/x/OneDrive/Apps AI Vibe/app.html"' });
+    const dq = await open.execute("id", { path: '"C:/Users/x/OneDrive/My Projects/app.html"' });
     expect(dq.isError).toBeFalsy();
     expect(dq.content[0].text).toContain("app.html");
     const sq = await open.execute("id", { path: " 'C:\\Users\\n\\game.svg' " });
@@ -235,7 +235,7 @@ describe("preview_open execute (P-PREVIEW.11): the tool reports itself to the de
     else process.env.LUCID_PREVIEW_OPEN_URL = realUrl;
   });
   const openTool = () => { const { pi, tools } = capture(); previewExtension(pi); return byName(tools, "preview_open"); };
-  const HTML = "C:/Users/n/OneDrive/Apps AI Vibe/proj/.omp/tmp/deck.html";
+  const HTML = "C:/Users/n/OneDrive/My Projects/proj/.omp/tmp/deck.html";
 
   test("POSTs the path to LUCID_PREVIEW_OPEN_URL and still returns the ack", async () => {
     process.env.LUCID_PREVIEW_OPEN_URL = "http://127.0.0.1:9/api/preview/open?t=x";

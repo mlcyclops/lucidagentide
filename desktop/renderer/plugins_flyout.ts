@@ -3,7 +3,8 @@
 
 // desktop/renderer/plugins_flyout.ts - P-PLUGINS.1 (ADR-0461): the Plugins drawer.
 //
-// A drawer that slides out of the Preview panel's left edge over the chat, `min(1180px, 88vw)` wide, with a
+// A drawer that slides out of the Preview panel's left edge over the chat (or, with the Preview panel closed, out of
+// the main work area's right edge; P-WORLDS.STORE1), `min(1180px, 88vw)` wide, with a
 // PREMIUM | FREE | INSTALLED toggle (default PREMIUM, remembered) and techlead187.com-style cards. It replaces the ADR-0158
 // `#scrim` marketplace modal. Every card's state comes from plugin_catalog.ts `decideCardAction`; this module
 // only renders it and runs the side effects through injected dependencies (the market provider for sign-in,
@@ -23,6 +24,17 @@
 // the drawer open on the terminal commands that use it. Nothing of an add-on installs or runs before the user
 // presses Install.
 //
+// P-WORLDS.STORE1: PREMIUM opens on the Lucid Agent World Packs, then the worlds. A pack never installs: buying
+// one unlocks worlds on the account, and each unlocked world installs from its own card. Sponsor's Buy first opens
+// a picker of exactly SPONSOR_PICKS worlds (the picks travel to checkout); a world the Sponsor pack can still
+// unlock offers Use a credit instead of Buy.
+//
+// P-WORLDS.HEAL1: restorePurchases (app start, every drawer open, and the Installed tab's Restore purchases) reads the
+// engine's install-ledger health, lets the engine restore from its verified backups first, then reinstalls what is
+// still missing through the store card's own install when the account is entitled (plugin_restore.ts decides), and
+// says what happened once: Repaired N after an update, Restored N, or a persistent "needs restoring" with Sign in
+// and Retry.
+//
 // Media is bundled under assets/plugins/ (offline). A loop only gets its `src` while its card is on screen
 // (IntersectionObserver), and never under prefers-reduced-motion: then the poster is the picture.
 
@@ -30,18 +42,24 @@ import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
-  BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PLUGIN_PRICE_LABEL, PREMIUM_PLUGINS,
-  addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, matchesQuery, parseCageOrUei, parseTierPref, provenanceChip,
-  sortFree, storeInstalledVersion,
+  BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PREMIUM_PLUGINS, SPONSOR_CREDITS, SPONSOR_PACK_ID, SPONSOR_PICKS, WORLDS_GROUP, WORLD_PACKS_GROUP,
+  addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, isBundle, isWorldPlugin, matchesQuery, ownedPackMeta, parseCageOrUei, parseTierPref,
+  provenanceChip, sortFree, storeInstalledVersion,
   type AddonAction, type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
-import type { AuthState, Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
-import type { EntitlementProvider } from "./market_gate.ts";
+import { isEntitled, type AuthState, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
+import type { EntitlementProvider, RedeemResult } from "./market_gate.ts";
 import type {
-  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginInstallView, PluginLicenseView, PluginStartView, PluginsListView,
+  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginHealthItem, PluginHealthView, PluginInstallView, PluginKind, PluginLicenseView,
+  PluginRepairView, PluginStartView, PluginsListView,
 } from "./bridge.ts";
+import {
+  REPAIRS_SEEN_KEY, RESTORE_GIVEN_UP_KEY, newestRepairAt, notEntitledCopy, notInStoreCopy, parseIdList, pendingCopy, planRestore, repairedCopy,
+  restorableStoreItem, restoredCopy, unseenRepairs, type EntitlementAnswer,
+} from "./plugin_restore.ts";
 import type { ToastOpts } from "./ui.ts";
+import type { InstalledWorld } from "./viz_world_api.ts";
 
 export const TIER_PREF_KEY = "lucid.plugins-tier";
 const MEDIA_DIR = "assets/plugins";
@@ -54,6 +72,20 @@ const MEDIA_DIR = "assets/plugins";
 export function drawerGeometry(viewportW: number, anchorLeft: number, minLeft: number): { left: number; width: number } {
   const width = Math.max(320, Math.min(1180, Math.round(viewportW * 0.88), viewportW - minLeft));
   return { left: Math.max(minLeft, Math.min(anchorLeft, viewportW) - width), width };
+}
+
+/** The parts of a DOMRect the drawer anchor reads. */
+export interface AnchorRect { left: number; right: number; top: number; width: number; height: number }
+/** Where the drawer's right edge sits, and its top and height. */
+export interface DrawerAnchor { right: number; top: number; height: number }
+
+/** P-WORLDS.STORE1: the drawer never opens the Preview panel just to have an edge. An open Preview panel (`preview`,
+ *  null when closed) anchors it on its left edge, as before; otherwise it is the right edge of the main work area
+ *  (`work`: below the title bar, above the status bar). Null when neither has a layout: the whole window. Pure. */
+export function drawerAnchor(preview: AnchorRect | null, work: AnchorRect | null): DrawerAnchor | null {
+  if (preview && preview.width > 0) return { right: preview.left, top: preview.top, height: preview.height };
+  if (work && work.width > 0) return { right: work.right, top: work.top, height: work.height };
+  return null;
 }
 
 // ── markup ─────────────────────────────────────────────────────────────────────────────────────────
@@ -80,26 +112,28 @@ function shotHtml(id: string, name: string, m: PluginMedia): string {
 export interface CardNote { tone: "info" | "ok" | "danger"; text: string }
 
 /** The footer of a premium card: meta line, the one state button, and the status note. Re-rendered alone on
- *  every state change so the card's loop keeps playing. */
-export function premiumFootHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null): string {
+ *  every state change so the card's loop keeps playing. An installed world also offers Export (ADR-0648) when
+ *  `canExport`: its original signed package, to install offline on another machine. */
+export function premiumFootHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
   const meta = p.sale === "link"
     ? (p.partner ? `<span class="plg-meta">Partner: ${esc(p.partner)}</span>` : `<span class="plg-meta">Own subscription</span>`)
-    : `<span class="plg-meta">One-time ${PLUGIN_PRICE_LABEL}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`;
-  const disabled = a.kind === "installing" || a.kind === "access-pending" || a.kind === "coming-soon" ? " disabled" : "";
+    : `<span class="plg-meta">${a.kind === "owned" ? esc(ownedPackMeta(a)) : `One-time ${esc(p.price)}`}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`;
+  const exportBtn = installed && canExport && isWorldPlugin(p) ? `<button type="button" class="plg-lic" data-plg-wexport="${esc(p.id)}">Export</button>` : "";
+  const disabled = a.kind === "installing" || a.kind === "access-pending" || a.kind === "coming-soon" || a.kind === "owned" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
   const ext = a.kind === "visit" ? icon("arrowRight", 13) : "";
-  return `<div class="plg-foot">${meta}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-act="${esc(p.id)}"${disabled}${busy}>${esc(cardActionLabel(a))}${ext}</button></div>`
+  return `<div class="plg-foot">${meta}${exportBtn}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-act="${esc(p.id)}"${disabled}${busy}>${esc(cardActionLabel(a))}${ext}</button></div>`
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
 }
 
-export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null): string {
+export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
   return `<article class="plg-card" data-plg-card="${esc(p.id)}">${shotHtml(p.id, p.name, p.media)}
     <div class="plg-cbody">
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(p.kicker)}</span>
       <p class="plg-pitch">${esc(p.pitch)}</p>
       <p class="plg-lucid"><span>With LUCID Agent</span>${esc(p.lucid)}</p>
-      <div class="plg-foot-slot" data-plg-foot="${esc(p.id)}">${premiumFootHtml(p, a, installed, note)}</div>
+      <div class="plg-foot-slot" data-plg-foot="${esc(p.id)}">${premiumFootHtml(p, a, installed, note, canExport)}</div>
     </div>
   </article>`;
 }
@@ -108,19 +142,22 @@ const STATUS_CHIP: Record<FreePlugin["status"], string> = { featured: "Featured"
 
 /** The footer of an optional add-on's card (ADR-0541): the one state button, Remove once installed, and the
  *  status note. Re-rendered alone on every state change. */
-export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null): string {
-  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "update" ? `Free, version ${esc(a.from)}, ${esc(a.to)} available` : a.kind === "not-offered" ? "Free, not shipped with this build" : "Free";
+export function addonFootHtml(p: FreePlugin, a: AddonAction, note: CardNote | null, canPick = false): string {
+  const meta = a.kind === "install" ? `Free, version ${esc(a.version)}` : a.kind === "update" ? `Free, version ${esc(a.from)}, ${esc(a.to)} available` : a.kind === "not-offered" ? "Free, not included in this copy" : "Free";
   const disabled = a.kind === "checking" || a.kind === "not-offered" || a.kind === "installing" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
   const remove = a.kind === "open" || a.kind === "update" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
+  // Not in this build: say why and offer the one other install path, the Installed tab's Install from file.
+  const why = a.kind !== "not-offered" ? "" : `<div class="plg-foot plg-foot-why"><span class="plg-meta">This copy of LUCID does not include the signed ${esc(p.name)} package. ${canPick ? "If you have the package file, install it here." : "To install it from a package file, use the LUCID desktop app."}</span>${canPick ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>` : ""}</div>`;
   return `<div class="plg-foot"><span class="plg-meta">${meta}</span>${remove}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-addon="${esc(p.id)}"${disabled}${busy}>${esc(addonActionLabel(a))}</button></div>`
+    + why
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
 }
 
 /** A free card. An add-on row takes its live state (`addon`); every other row is a link or a built-in. */
-export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note: CardNote | null }): string {
+export function freeCardHtml(p: FreePlugin, addon?: { action: AddonAction; note: CardNote | null; canPick?: boolean }): string {
   let foot: string;
-  if (addon) foot = `<div class="plg-foot-slot" data-plg-afoot="${esc(p.id)}">${addonFootHtml(p, addon.action, addon.note)}</div>`;
+  if (addon) foot = `<div class="plg-foot-slot" data-plg-afoot="${esc(p.id)}">${addonFootHtml(p, addon.action, addon.note, addon.canPick)}</div>`;
   else {
     const dl = fmtDownloads(p.downloads);
     const action = p.repo
@@ -175,20 +212,58 @@ export function govPanelHtml(signedIn: boolean, status: GovAccessStatus, formOpe
     </form></div></div>`;
 }
 
-/** The license, shown before checkout (ADR-0464). Continue stays disabled until the box is ticked. */
-export function buySheetHtml(p: SoldPlugin): string {
+/** P-WORLDS.STORE1: the Sponsor picker's live count. */
+export function pickCountLabel(n: number): string { return `${n} of ${SPONSOR_PICKS} picked`; }
+
+/** P-WORLDS.STORE1: Sponsor's Buy opens this first. Every world is a toggle tile (poster thumbnail and name); a world
+ *  already owned is shown disabled as Owned. Continue enables at exactly SPONSOR_PICKS picks. The pick state lives
+ *  in the tiles' aria-pressed, so the controller reads what the user sees. */
+export function sponsorPickerSheetHtml(worlds: readonly PremiumPlugin[], owned: ReadonlySet<string>): string {
+  const open = worlds.filter((w) => !owned.has(w.id)).length;
+  const tiles = worlds.map((w) => {
+    const have = owned.has(w.id);
+    return `<button type="button" class="plg-pick" data-plg-pick="${esc(w.id)}" aria-pressed="false"${have ? " disabled" : ""} data-tip="${esc(tipEsc(w.name))}">`
+      + `<img class="plg-pick-img" src="${MEDIA_DIR}/${esc(w.id)}-poster.webp" width="720" height="405" alt="" loading="lazy" decoding="async">`
+      + `<span class="plg-pick-name">${esc(w.name)}</span>${have ? `<span class="plg-pick-tag">Owned</span>` : ""}</button>`;
+  }).join("");
+  const short = open < SPONSOR_PICKS
+    ? `<p class="plg-note" data-tone="danger" role="status">Sponsor needs ${SPONSOR_PICKS} worlds you do not own yet, and only ${open} are left. Patron Class covers every world.</p>`
+    : "";
+  return `<div class="plg-sheet plg-sheet-wide" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
+    <div class="plg-sheet-h"><b id="plgSheetTitle">Pick your ${SPONSOR_PICKS} Sponsor worlds</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
+    <p class="plg-sheet-price">They unlock right after checkout. You also bank ${SPONSOR_CREDITS} world credits to spend on any world, current or future, over the next 3 years.</p>
+    ${short}
+    <div class="plg-pick-grid" data-plg-pickgrid>${tiles}</div>
+    <div class="plg-form-row"><span class="plg-pick-count" data-plg-pickcount role="status" aria-live="polite">${pickCountLabel(0)}</span><button type="button" class="btn-mini" data-plg-sheet-close>Cancel</button><button type="button" class="plg-act" data-kind="buy" data-plg-picks-go disabled>Continue</button></div>
+  </div>`;
+}
+
+/** What a purchase gives, the first line of its license sheet. */
+function buySheetLead(p: SoldPlugin, picks: readonly string[]): string {
+  if (p.id === SPONSOR_PACK_ID) {
+    const names = picks.map((id) => PREMIUM_PLUGINS.find((w) => w.id === id)?.name ?? id).join(", ");
+    return `One-time ${p.price}. Your ${SPONSOR_PICKS} picks unlock right after checkout: ${names}. You also bank ${SPONSOR_CREDITS} world credits to spend on any world over the next 3 years.`;
+  }
+  if (isBundle(p)) return `One-time ${p.price}. Every Lucid Agent World unlocks right after checkout, plus every world released in the next 3 years, yours to keep.`;
+  return `One-time ${p.price}. Yours for good, with free updates. It runs on this machine and never needs to call home.`;
+}
+
+/** The license, shown before checkout (ADR-0464). Continue stays disabled until the box is ticked. A Sponsor pack
+ *  carries its `picks` to checkout on the Continue button (P-WORLDS.STORE1). */
+export function buySheetHtml(p: SoldPlugin, picks: readonly string[] = []): string {
+  const carry = picks.length ? ` data-plg-picks="${esc(picks.join(","))}"` : "";
   return `<div class="plg-sheet" role="dialog" aria-modal="true" aria-labelledby="plgSheetTitle">
     <div class="plg-sheet-h"><b id="plgSheetTitle">Buy ${esc(p.name)}</b><button type="button" class="set-close" data-plg-sheet-close aria-label="Close">${icon("close", 15)}</button></div>
-    <p class="plg-sheet-price">One-time ${PLUGIN_PRICE_LABEL}. Yours for good, with free updates. It runs on this machine and never needs to call home.</p>
+    <p class="plg-sheet-price">${esc(buySheetLead(p, picks))}</p>
     <p class="plg-sheet-sub">${esc(PLUGIN_LICENSE_NAME)}, in short:</p>
     <ul class="plg-sheet-list">
-      <li>A perpetual license for one user, not transferable, to run the plugin inside LUCID Agent.</li>
+      <li>A perpetual license for one user, not transferable, to run ${isBundle(p) ? "each unlocked world" : "the plugin"} inside LUCID Agent.</li>
       <li>No redistribution, resale, reverse engineering, or getting around the license check.</li>
       <li>Provided as is, without warranty. Copyright TECHLEAD 187 LLC. Florida law applies.</li>
     </ul>
     <button type="button" class="plg-lic" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">Read the full license${icon("arrowRight", 12)}</button>
     <label class="plg-accept"><input type="checkbox" data-plg-accept> I accept the ${esc(PLUGIN_LICENSE_NAME)}.</label>
-    <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Cancel</button><button type="button" class="plg-act" data-kind="buy" data-plg-checkout="${esc(p.id)}" disabled>Continue to checkout</button></div>
+    <div class="plg-form-row"><button type="button" class="btn-mini" data-plg-sheet-close>Cancel</button><button type="button" class="plg-act" data-kind="buy" data-plg-checkout="${esc(p.id)}"${carry} disabled>Continue to checkout</button></div>
   </div>`;
 }
 
@@ -203,9 +278,10 @@ export function licenseTextSheetHtml(name: string, version: string, text: string
 
 // ── the INSTALLED tab (ADR-0505) ───────────────────────────────────────────────────────────────────
 
-const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program" };
+const KIND_LABEL: Record<InstalledPluginView["kind"], string> = { web: "Web app", server: "Local server", daemon: "Local program", world: "Lucid Agent World" };
 
 function installedDesc(p: InstalledPluginView): string {
+  if (p.kind === "world") return "A Lucid Agent World for the Visualize view. Pick it in Visualize's style picker; it never runs as a program.";
   if (p.source === "catalog") return "From the LUCID store. Updates come from its card on the Premium tab.";
   return p.signed
     ? "Installed from a file you chose, signed by TECHLEAD 187 LLC. Never updated automatically: install a newer file to update it."
@@ -214,36 +290,46 @@ function installedDesc(p: InstalledPluginView): string {
 
 /** The footer of an Installed row: Open for every plugin, Remove for a private one (a store plugin is managed
  *  from its card). Re-rendered alone on every state change. */
-export function installedFootHtml(p: InstalledPluginView, note: CardNote | null): string {
+export function installedFootHtml(p: InstalledPluginView, note: CardNote | null, canExport = false): string {
+  const noteHtml = note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "";
+  // ADR-0648: a world opens in Visualize and can be exported; it has no running state.
+  if (p.kind === "world") {
+    const exportBtn = canExport ? `<button type="button" class="plg-lic" data-plg-wexport="${esc(p.id)}">Export</button>` : "";
+    return `<div class="plg-foot"><span class="plg-meta">Version ${esc(p.version)}</span>${exportBtn}<button type="button" class="plg-act" data-kind="open-world" data-plg-iopen="${esc(p.id)}">Open in Visualize</button></div>` + noteHtml;
+  }
   const state = p.state === "running" ? "Running" : p.state === "starting" ? "Starting" : p.state === "error" ? "Stopped with an error" : "Not running";
   const remove = p.source === "private" ? `<button type="button" class="plg-lic" data-plg-iremove="${esc(p.id)}">Remove</button>` : "";
-  return `<div class="plg-foot"><span class="plg-meta">${esc(state)}</span>${remove}<button type="button" class="plg-act" data-kind="open" data-plg-iopen="${esc(p.id)}">Open</button></div>`
-    + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
+  return `<div class="plg-foot"><span class="plg-meta">${esc(state)}</span>${remove}<button type="button" class="plg-act" data-kind="open" data-plg-iopen="${esc(p.id)}">Open</button></div>` + noteHtml;
 }
 
-export function installedCardHtml(p: InstalledPluginView, note: CardNote | null): string {
+export function installedCardHtml(p: InstalledPluginView, note: CardNote | null, canExport = false): string {
   const chip = provenanceChip(p);
   const tone: PosterTone = p.source === "catalog" ? "green" : p.signed ? "cyan" : "amber";
-  return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, { loop: false, poster: "generated", glyph: "plugins", tone })}
+  // A store install shows its store card's picture (a world's loop over its poster); a private package, the glyph.
+  const store = p.source === "catalog" ? PREMIUM_PLUGINS.find((x) => x.id === p.id) : undefined;
+  const media: PluginMedia = store?.media.poster === "webp" ? store.media : { loop: false, poster: "generated", glyph: "plugins", tone };
+  return `<article class="plg-card" data-plg-card="${esc(p.id)}" data-plg-source="${p.source}">${shotHtml(p.id, p.name, media)}
     <div class="plg-cbody">
       <b class="plg-name">${esc(p.name)}</b>
       <span class="plg-kind">${esc(KIND_LABEL[p.kind])} ${esc(p.version)}<span class="plg-chip" data-status="${chip.tone === "warn" ? "unsigned" : "verified"}">${esc(chip.label)}</span></span>
       <p class="plg-pitch">${esc(installedDesc(p))}</p>
-      <div class="plg-foot-slot" data-plg-ifoot="${esc(p.id)}">${installedFootHtml(p, note)}</div>
+      <div class="plg-foot-slot" data-plg-ifoot="${esc(p.id)}">${installedFootHtml(p, note, canExport)}</div>
     </div>
   </article>`;
 }
 
-/** The whole INSTALLED tab: the explicit install-from-file entry, then every installed plugin. */
-export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean): string {
+/** The whole INSTALLED tab: the explicit install-from-file entry (and, P-WORLDS.HEAL1, Restore purchases: put back
+ *  every purchase recorded on this machine that is missing or damaged), then every installed plugin. */
+export function installedBodyHtml(list: readonly InstalledPluginView[], query: string, notes: ReadonlyMap<string, CardNote>, canPick: boolean, canExport = false, canRestore = false): string {
   const pick = canPick
     ? `<button type="button" class="plg-act" data-kind="install" data-plg-file>${icon("folder", 13)}Install from file</button>`
     : `<span class="plg-meta">Installing from a file needs the LUCID desktop app.</span>`;
-  const lede = `<div class="plg-inst-head"><p class="plg-lede">Plugins on this machine. Store plugins install and update from their cards. A private plugin is a .lplugin.zip you install here yourself: it runs in the same sandbox as a store plugin, is marked when it is unsigned, and is never updated automatically.</p>${pick}</div>`;
+  const restore = canRestore ? `<button type="button" class="plg-act" data-kind="restore" data-plg-restore data-tip="${esc(tipEsc("Check every store plugin and world installed on this machine, and reinstall any that is missing or damaged."))}">${icon("refresh", 13)}Restore purchases</button>` : "";
+  const lede = `<div class="plg-inst-head"><p class="plg-lede">Plugins on this machine. Store plugins install and update from their cards. A private plugin is a .lplugin.zip you install here yourself: it runs in the same sandbox as a store plugin, is marked when it is unsigned, and is never updated automatically.</p>${restore}${pick}</div>`;
   const shown = list.filter((p) => matchesQuery([p.name, p.id, KIND_LABEL[p.kind], provenanceChip(p).label], query));
   if (!list.length) return lede + `<p class="plg-empty">No plugins are installed yet.</p>`;
   if (!shown.length) return lede + `<p class="plg-empty">No plugins match "${esc(query.trim())}".</p>`;
-  return lede + `<div class="plg-grid">${shown.map((p) => installedCardHtml(p, notes.get(p.id) ?? null)).join("")}</div>`;
+  return lede + `<div class="plg-grid">${shown.map((p) => installedCardHtml(p, notes.get(p.id) ?? null, canExport)).join("")}</div>`;
 }
 
 type InspectedFile = Extract<PluginFileInspectView, { ok: true }>;
@@ -324,9 +410,22 @@ export interface PluginsFlyoutDeps {
   openExternal: (url: string) => void;
   /** Show a running plugin in its own Preview tab. */
   openPluginTab: (id: string, name: string, url: string) => void;
-  toast: (t: ToastOpts) => void;
-  /** The Preview panel: the drawer's right edge sits on its left edge. */
-  anchor: () => HTMLElement | null;
+  /** ADR-0648: open the Visualize view on this installed world (app.ts wires it; absent: the card says how). */
+  openWorld?: (id: string) => void;
+  /** ADR-0648: install a signed world package file (bridge.worldImport); absent hides Import world file. */
+  worldImport?: (bytes: ArrayBuffer, filename: string) => Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
+  /** ADR-0648: the download link of an installed world's package (bridge.worldExportUrl); absent hides Export. */
+  worldExportUrl?: (id: string) => string;
+  /** P-WORLDS.HEAL1: the engine's install-ledger health report (bridge.pluginsHealth). */
+  pluginsHealth: () => Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the engine restores from its verified backups, then answers the health report. */
+  pluginsRestore: () => Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the world package ids still waiting for a restore (empty once none is); Visualize says so. */
+  worldsPending?: (ids: readonly string[]) => void;
+  /** Show a toast; showToast returns its dismiss, which a persistent "needs restoring" toast uses. */
+  toast: (t: ToastOpts) => (() => void) | void;
+  /** Where the drawer sits (drawerAnchor: the open Preview panel's left edge, else the work area's right edge). */
+  anchor: () => DrawerAnchor | null;
   /** The left rail's right edge, which the drawer never slides under. */
   minLeft: () => number;
   storage: Pick<Storage, "getItem" | "setItem">;
@@ -344,6 +443,10 @@ export interface PluginsFlyout {
   onSignedIn(): boolean;
   /** The window regained focus: finish a checkout the user completed in the browser. */
   onWindowFocus(): void;
+  /** P-WORLDS.HEAL1: bring back purchases that went missing or got damaged. `auto` (app start, drawer open) reports
+   *  quietly and never re-asks about an item already reported as not restorable; `manual` (Restore purchases) asks
+   *  the engine and the store again about everything and always says the outcome. */
+  restorePurchases(mode: "auto" | "manual"): Promise<void>;
 }
 
 /** Plain-language reasons for each install gate (ADR-0462), so a refusal says what failed. */
@@ -359,6 +462,9 @@ const GATE_TEXT: Record<PluginGate, string> = {
 
 /** The optional add-ons on the Free tab (ADR-0541): the rows whose card installs, opens and removes. */
 const ADDON_PLUGINS = FREE_PLUGINS.filter((p) => p.status === "add-on");
+
+/** P-WORLDS.STORE1: the worlds the Sponsor picker offers, in catalog order. */
+const WORLD_PLUGINS = PREMIUM_PLUGINS.filter(isWorldPlugin);
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
@@ -391,6 +497,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     return decideCardAction(p, {
       signedIn: deps.user().signedIn,
       entitlement: ents.get(p.id) ?? null,
+      sponsor: ents.get(SPONSOR_PACK_ID) ?? null,
       gov,
       installedVersion: storeInstalledVersion(installed.get(p.id)),
       busy: busy.has(p.id),
@@ -412,13 +519,13 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   function paintFoot(id: string): void {
     const p = premium(id);
     const slot = root?.querySelector(`[data-plg-foot="${CSS.escape(id)}"]`);
-    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null);
+    if (p && slot) slot.innerHTML = premiumFootHtml(p, actionFor(p), storeInstalledVersion(installed.get(id)) !== null, notes.get(id) ?? null, !!deps.worldExportUrl);
     const a = addon(id);
     const aslot = root?.querySelector(`[data-plg-afoot="${CSS.escape(id)}"]`);
-    if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null);
+    if (a && aslot) aslot.innerHTML = addonFootHtml(a, addonActionFor(id), notes.get(id) ?? null, !!deps.pickFile);
     const row = installed.get(id);
     const islot = root?.querySelector(`[data-plg-ifoot="${CSS.escape(id)}"]`);
-    if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null);
+    if (row && islot) islot.innerHTML = installedFootHtml(row, notes.get(id) ?? null, !!deps.worldExportUrl);
   }
 
   function paintGov(): void {
@@ -437,17 +544,25 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (tier === "free") {
       const cards = sortFree(FREE_PLUGINS)
         .filter((p) => matchesQuery([p.name, p.desc, p.category, p.lucid], query))
-        .map((p) => freeCardHtml(p, p.status === "add-on" ? { action: addonActionFor(p.id), note: notes.get(p.id) ?? null } : undefined));
+        .map((p) => freeCardHtml(p, p.status === "add-on" ? { action: addonActionFor(p.id), note: notes.get(p.id) ?? null, canPick: !!deps.pickFile } : undefined));
       return `<p class="plg-lede">Integrations that are free with LUCID Agent: the ones already built in, optional add-ons that install only when you press Install, and the ones on the way.</p>`
         + (cards.length ? `<div class="plg-grid">${cards.join("")}</div>` : empty);
     }
-    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile);
-    const section = (s: "civilian" | "government") => PREMIUM_PLUGINS
-      .filter((p) => p.section === s && matchesQuery([p.name, p.kicker, p.pitch, p.lucid, p.sale === "link" ? (p.partner ?? "") : ""], query))
-      .map((p) => premiumCardHtml(p, actionFor(p), storeInstalledVersion(installed.get(p.id)) !== null, notes.get(p.id) ?? null));
-    const civ = section("civilian"), govCards = section("government");
-    if (!civ.length && !govCards.length) return empty;
-    return `<p class="plg-lede">Full LUCID apps that install in one click and open in a Preview tab. ${PLUGIN_PRICE_LABEL} each, one time, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
+    if (tier === "installed") return installedBodyHtml([...installed.values()], query, notes, !!deps.pickFile, !!deps.worldExportUrl, true);
+    // A card with a `group` (the world packs and the Lucid Agent Worlds) is listed under that heading, not its
+    // section's. P-WORLDS.STORE1: packs first, then worlds, then Civilian and Government.
+    const cards = (keep: (p: PremiumPlugin) => boolean) => PREMIUM_PLUGINS
+      .filter((p) => keep(p) && matchesQuery([p.name, p.kicker, p.pitch, p.lucid, p.sale === "link" ? (p.partner ?? "") : "", p.group ?? ""], query))
+      .map((p) => premiumCardHtml(p, actionFor(p), storeInstalledVersion(installed.get(p.id)) !== null, notes.get(p.id) ?? null, !!deps.worldExportUrl));
+    const packCards = cards((p) => p.group === WORLD_PACKS_GROUP);
+    const civ = cards((p) => p.section === "civilian" && !p.group);
+    const worldCards = cards((p) => p.group === WORLDS_GROUP);
+    const govCards = cards((p) => p.section === "government" && !p.group);
+    if (!packCards.length && !civ.length && !worldCards.length && !govCards.length) return empty;
+    const importBtn = deps.worldImport ? `<button type="button" class="plg-act" data-kind="install" data-plg-wimport>${icon("folder", 13)}Import world file</button>` : "";
+    return `<p class="plg-lede">Lucid Agent World Packs and Lucid Agent Worlds for the Visualize view, then full LUCID apps that install in one click and open in a Preview tab. Each is a one-time purchase, priced on its card, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
+      + (packCards.length ? `<section class="plg-sec" aria-labelledby="plgSecPacks"><h3 class="plg-h" id="plgSecPacks">${esc(WORLD_PACKS_GROUP)}</h3><p class="plg-sec-sub">Many worlds in one purchase. The worlds a pack unlocks install from their own cards.</p><div class="plg-grid">${packCards.join("")}</div></section>` : "")
+      + (worldCards.length ? `<section class="plg-sec" aria-labelledby="plgSecWorlds"><div class="plg-inst-head"><h3 class="plg-h" id="plgSecWorlds">${esc(WORLDS_GROUP)}</h3>${importBtn}</div><p class="plg-sec-sub">Themed casts, stages, skies, throwables and storms for the Visualize view. An installed world exports as its signed package file, which imports on another machine with no internet.</p><div class="plg-grid">${worldCards.join("")}</div></section>` : "")
       + (civ.length ? `<section class="plg-sec" aria-labelledby="plgSecCiv"><h3 class="plg-h" id="plgSecCiv">Civilian</h3><div class="plg-grid">${civ.join("")}</div></section>` : "")
       + (govCards.length ? `<section class="plg-sec" aria-labelledby="plgSecGov"><h3 class="plg-h" id="plgSecGov">Government</h3><p class="plg-sec-sub">Sold only after government access is verified. ${esc(BLACK_ARROW)} partner apps open on the partner's site.</p><div data-plg-gov>${govPanelHtml(deps.user().signedIn, gov, govFormOpen, govError)}</div><div class="plg-grid">${govCards.join("")}</div></section>` : "");
   }
@@ -509,14 +624,13 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
 
   function place(): void {
     const drawer = root?.querySelector(".plg-drawer") as HTMLElement | null;
-    const anchor = deps.anchor();
     if (!drawer) return;
-    const r = anchor && !anchor.hidden ? anchor.getBoundingClientRect() : null;
-    const g = drawerGeometry(window.innerWidth, r ? r.left : window.innerWidth, deps.minLeft());
+    const a = deps.anchor();
+    const g = drawerGeometry(window.innerWidth, a ? a.right : window.innerWidth, deps.minLeft());
     drawer.style.left = `${g.left}px`;
     drawer.style.width = `${g.width}px`;
-    drawer.style.top = `${r ? r.top : 0}px`;
-    drawer.style.height = `${r ? r.height : window.innerHeight}px`;
+    drawer.style.top = `${a ? a.top : 0}px`;
+    drawer.style.height = `${a ? a.height : window.innerHeight}px`;
   }
 
   function focusables(scope: HTMLElement): HTMLElement[] {
@@ -597,6 +711,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     window.addEventListener("resize", onResize);
     for (const b of document.querySelectorAll("[data-plg-toggle]")) b.setAttribute("aria-expanded", "true");
     void refresh();
+    void restorePurchases("auto"); // P-WORLDS.HEAL1: a purchase that went missing since the last look comes back
   }
 
   function close(): void {
@@ -647,17 +762,23 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if ((el = hit("[data-plg-tier]"))) { setTier(parseTierPref(el.dataset.plgTier)); return; }
     if ((el = hit("[data-plg-repo]"))) { deps.openExternal(el.dataset.plgRepo!); return; }
     if ((el = hit("[data-plg-ext]"))) { deps.openExternal(el.dataset.plgExt!); return; }
-    if ((el = hit("[data-plg-checkout]"))) { void checkout(el.dataset.plgCheckout!); return; }
+    if ((el = hit("[data-plg-pick]"))) { togglePick(el as HTMLButtonElement); return; }
+    if (hit("[data-plg-picks-go]")) { continuePicks(); return; }
+    if ((el = hit("[data-plg-checkout]"))) { void checkout(el.dataset.plgCheckout!, el.dataset.plgPicks?.split(",").filter(Boolean)); return; }
     if ((el = hit("[data-plg-license]"))) { void showLicense(el.dataset.plgLicense!); return; }
     if (hit("[data-plg-signin]")) { signIn(null); return; }
     if (hit("[data-plg-govopen]")) { openGovForm(); return; }
     if (hit("[data-plg-govcancel]")) { govFormOpen = false; govError = ""; paintGov(); return; }
     if (hit("[data-plg-file]")) { void reviewFile(); return; }
+    if (hit("[data-plg-restore]")) { void restorePurchases("manual"); return; }
     if (hit("[data-plg-fileinstall]")) { void installReviewed(); return; }
+    if (hit("[data-plg-wimport]")) { pickWorldFile(); return; }
+    if ((el = hit("[data-plg-wexport]"))) { exportWorld(el.dataset.plgWexport!); return; }
     if ((el = hit("[data-plg-iopen]"))) {
       // An add-on (ADR-0541) opens through openAddon: its page when it serves one, and its terminal commands.
+      // A world (ADR-0648) opens in Visualize; it has no process to start.
       const id = el.dataset.plgIopen!, a = addon(id), p = installed.get(id);
-      if (a && p) void openAddon(a); else if (p) void openPlugin(p);
+      if (p?.kind === "world") openWorld(p); else if (a && p) void openAddon(a); else if (p) void openPlugin(p);
       return;
     }
     if ((el = hit("[data-plg-iremove]"))) { const p = installed.get(el.dataset.plgIremove!); if (p?.source === "private") showSheet(removeSheetHtml(p)); return; }
@@ -779,16 +900,84 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       case "visit": deps.openExternal(a.url); return;
       case "signin": signIn(p); return;
       case "request-access": openGovForm(); return;
-      case "buy": if (p.sale === "buy") showSheet(buySheetHtml(p)); return;
+      // P-WORLDS.STORE1: Sponsor picks its worlds before the license sheet; every other sale goes straight to it.
+      case "buy":
+        if (p.sale !== "buy") return;
+        showSheet(p.id === SPONSOR_PACK_ID ? sponsorPickerSheetHtml(WORLD_PLUGINS, ownedWorlds()) : buySheetHtml(p));
+        return;
+      case "redeem": await redeem(p); return;
       case "install": case "update": await install(p); return;
       case "open": await openPlugin(p); return;
-      case "access-pending": case "installing": case "coming-soon": return;
+      case "open-world": openWorld(p); return;
+      case "access-pending": case "installing": case "coming-soon": case "owned": return;
     }
+  }
+
+  /** P-WORLDS.STORE1: the worlds this account already owns (the picker shows them as Owned, not pickable). */
+  function ownedWorlds(): Set<string> {
+    const now = new Date(deps.now()).toISOString();
+    return new Set(WORLD_PLUGINS.filter((w) => isEntitled(ents.get(w.id), now)).map((w) => w.id));
+  }
+
+  /** P-WORLDS.STORE1: the picks are whatever tiles show pressed, so the count can never disagree with the sheet. */
+  function pickedWorlds(): string[] {
+    return [...(root?.querySelectorAll<HTMLElement>('[data-plg-pick][aria-pressed="true"]') ?? [])].map((b) => b.dataset.plgPick!);
+  }
+
+  function togglePick(tile: HTMLButtonElement): void {
+    if (tile.disabled) return;
+    const on = tile.getAttribute("aria-pressed") === "true";
+    if (!on && pickedWorlds().length >= SPONSOR_PICKS) return; // full: unpick one first
+    tile.setAttribute("aria-pressed", String(!on));
+    const n = pickedWorlds().length;
+    const count = root?.querySelector("[data-plg-pickcount]");
+    if (count) count.textContent = pickCountLabel(n);
+    root?.querySelector("[data-plg-pickgrid]")?.toggleAttribute("data-full", n >= SPONSOR_PICKS);
+    const go = root?.querySelector("[data-plg-picks-go]") as HTMLButtonElement | null;
+    if (go) go.disabled = n !== SPONSOR_PICKS;
+  }
+
+  function continuePicks(): void {
+    const p = premium(SPONSOR_PACK_ID);
+    const picks = pickedWorlds();
+    if (!p || p.sale !== "buy" || picks.length !== SPONSOR_PICKS) return;
+    showSheet(buySheetHtml(p, picks));
+  }
+
+  /** P-WORLDS.STORE1: spend a Sponsor world credit on this world, then install it like a purchase. */
+  async function redeem(p: PremiumPlugin): Promise<void> {
+    busy.add(p.id);
+    setNote(p.id, { tone: "info", text: "Using a world credit." });
+    const r = await deps.provider().redeemWorldCredit(p.id).catch((): RedeemResult => ({ ok: false, error: "The LUCID store could not be reached." }));
+    if (r.ok) await refresh(); // still busy meanwhile, so a second press cannot spend a second credit
+    busy.delete(p.id);
+    if (!r.ok) { setNote(p.id, { tone: "danger", text: `No credit was used: ${r.error}` }); return; }
+    if (actionFor(p).kind === "install") { await install(p); return; }
+    setNote(p.id, { tone: "info", text: `Credit used, ${r.remaining} left. This world unlocks as soon as the LUCID store confirms it.` });
+  }
+
+  /** P-WORLDS.STORE1: a pack is bought. It has nothing to install: its worlds are unlocked on their own cards. */
+  async function packUnlocked(p: PremiumPlugin): Promise<void> {
+    await refresh();
+    setNote(p.id, { tone: "ok", text: "Unlocked. Install your worlds from their cards." });
+    deps.toast({
+      tone: "ok", title: `${p.name} is yours`, timeout: 8000,
+      desc: p.id === SPONSOR_PACK_ID
+        ? `Your ${SPONSOR_PICKS} picked worlds are unlocked: install them from their cards. Use a credit on any other world's card.`
+        : "Every Lucid Agent World is unlocked: install them from their cards.",
+    });
+  }
+
+  /** After sign-in, carry on with the card the user pressed. A world credit is never spent without its own press
+   *  (P-WORLDS.STORE1): such a card just shows Use a credit. */
+  function resumeCard(id: string): void {
+    const p = premium(id);
+    if (p && actionFor(p).kind !== "redeem") void act(id);
   }
 
   function signIn(p: PremiumPlugin | null): void {
     const r = deps.beginSignIn();
-    if (r.signedIn) { void refresh().then(() => { if (p) void act(p.id); }); return; }
+    if (r.signedIn) { void refresh().then(() => { if (p) resumeCard(p.id); }); return; }
     if (r.opened) {
       if (p) pending = { packId: p.id, packName: p.name, startedAt: deps.now(), stage: "signin" };
       deps.toast({
@@ -801,48 +990,59 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     deps.toast({ tone: "warn", title: "Sign-in is not available", desc: r.reason ? `Sign-in is unavailable in this build: ${r.reason}.` : "Sign-in is unavailable in this build.", timeout: 6000 });
   }
 
-  async function checkout(id: string): Promise<void> {
+  /** `picks`: the Sponsor pack's chosen worlds (P-WORLDS.STORE1); no other sale carries any. */
+  async function checkout(id: string, picks?: string[]): Promise<void> {
     const p = premium(id);
     if (!p || p.sale !== "buy") return;
+    if (id === SPONSOR_PACK_ID && picks?.length !== SPONSOR_PICKS) return;
     closeSheet();
     setNote(id, { tone: "info", text: "Opening checkout in your browser." });
     const prov = deps.provider();
-    const url = await prov.checkoutUrl(id, "one-time").catch(() => null);
+    const url = await prov.checkoutUrl(id, "one-time", picks?.length ? { picks } : undefined).catch(() => null);
     if (url) {
       pending = { packId: id, packName: p.name, startedAt: deps.now(), stage: "checkout" };
       deps.openExternal(url);
-      setNote(id, { tone: "info", text: "Finish checkout in your browser. The install starts when you come back to LUCID." });
+      setNote(id, { tone: "info", text: isBundle(p)
+        ? "Finish checkout in your browser. Your worlds unlock when you come back to LUCID."
+        : "Finish checkout in your browser. The install starts when you come back to LUCID." });
       return;
     }
     // No checkout page: either a dev build that grants instantly (stub) or a refusal. The entitlement decides.
     ents.set(id, await prov.entitlement(id).catch(() => null));
-    if (actionFor(p).kind === "install") { await install(p); return; }
+    const next = actionFor(p).kind;
+    if (next === "owned") { await packUnlocked(p); return; }
+    if (next === "install") { await install(p); return; }
     if (p.section === "government") gov = await prov.govAccess().catch((): GovAccessStatus => "none");
     setNote(id, { tone: "danger", text: p.section === "government" && gov !== "approved"
       ? "Checkout needs approved government access for this account."
-      : "Checkout is not available right now. Try again in a minute." });
+      : "The LUCID store could not be reached, so check your connection and try again." });
     paintGov();
   }
 
-  async function install(p: PremiumPlugin): Promise<void> {
+  /** Download and install a store card's package. `quiet` (a restore, P-WORLDS.HEAL1) skips the success toast: the
+   *  restore says it once for all of them. True when it installed. */
+  async function install(p: PremiumPlugin, quiet = false): Promise<boolean> {
     busy.add(p.id);
     setNote(p.id, { tone: "info", text: "Downloading the signed package." });
     try {
       const url = await deps.provider().downloadUrl(p.id).catch(() => null);
-      if (!url) { setNote(p.id, { tone: "danger", text: "No download link came back. The purchase may still be processing, or the package is not published yet." }); return; }
+      if (!url) { setNote(p.id, { tone: "danger", text: "No download link came back. The purchase may still be processing, or the package is not published yet." }); return false; }
       setNote(p.id, { tone: "info", text: "Checking the signature, checksums, and security scan." });
       const r = await deps.installFromUrl(url, p.id);
-      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return; }
+      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return false; }
       if (!r.ok) {
         const why = `${GATE_TEXT[r.gate]}: ${r.reason}`;
         setNote(p.id, { tone: "danger", text: `Not installed. ${why}` });
         deps.toast({ tone: "danger", title: `${p.name} was not installed`, desc: why, timeout: 0, actions: [{ label: "OK" }] });
-        return;
+        return false;
       }
       const list = await deps.pluginsList().catch(() => null);
       for (const x of list?.plugins ?? []) installed.set(x.id, x);
       setNote(p.id, { tone: "ok", text: `Installed version ${r.version}.` });
-      deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(p) }] });
+      if (quiet) return true;
+      if (isWorldPlugin(p)) deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "Pick it in the Visualize view's style picker.", timeout: 6000, actions: [{ label: "Open in Visualize", kind: "ok", run: () => openWorld(p) }] });
+      else deps.toast({ tone: "ok", title: `${p.name} is installed`, desc: "It runs on this machine. Open it in a Preview tab.", timeout: 6000, actions: [{ label: "Open", kind: "ok", run: () => void openPlugin(p) }] });
+      return true;
     } finally {
       busy.delete(p.id);
       paintFoot(p.id);
@@ -861,6 +1061,159 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       return;
     }
     setNote(p.id, { tone: "danger", text: `${p.name} did not start${r && !r.ok && r.error ? `: ${r.error}` : "."}` });
+  }
+
+  /** ADR-0648: a world opens in the Visualize view (app.ts owns that view); the drawer gets out of the way. */
+  function openWorld(p: { id: string; name: string }): void {
+    if (!deps.openWorld) {
+      deps.toast({ title: `${p.name} is installed`, desc: "Open the Visualize view and pick it in the style picker.", timeout: 6000 });
+      return;
+    }
+    deps.openWorld(p.id);
+    close();
+  }
+
+  // ── P-WORLDS.HEAL1: restoring purchases ─────────────────────────────────────────────────────────────
+  // The engine already put back what it could from its verified backups; what is still missing comes back from the
+  // store through `install` (the card's own path) when the account is entitled. plugin_restore.ts decides and words it.
+
+  let restoring: Promise<void> | null = null;
+  /** The persistent "needs restoring" toast on screen and what it names (an automatic re-check does not stack it). */
+  let pendingToast: { dismiss: () => void; key: string } | null = null;
+  /** The last check stopped on sign-in: the next sign-in checks again. */
+  let restoreOnSignIn = false;
+
+  function restorePurchases(mode: "auto" | "manual"): Promise<void> {
+    restoring ??= runRestore(mode === "manual").catch(() => { /* a restore check never breaks the drawer */ }).finally(() => { restoring = null; });
+    return restoring;
+  }
+
+  function closePendingToast(): void {
+    pendingToast?.dismiss();
+    pendingToast = null;
+  }
+
+  /** The engine's reinstalls from backup, each announced once (REPAIRS_SEEN_KEY holds the newest one shown). */
+  function announceRepairs(repairs: readonly PluginRepairView[]): void {
+    let seen: string | null = null;
+    try { seen = deps.storage.getItem(REPAIRS_SEEN_KEY); } catch { /* none seen */ }
+    const fresh = unseenRepairs(repairs, seen);
+    if (!fresh.length) return;
+    const mark = newestRepairAt(fresh, seen);
+    if (mark) try { deps.storage.setItem(REPAIRS_SEEN_KEY, mark); } catch { /* at worst shown again next launch */ }
+    deps.toast({ tone: "ok", ...repairedCopy(fresh.map((r) => ({ name: restorableStoreItem(r.id)?.name ?? r.name, kind: r.kind }))), timeout: 10_000 });
+  }
+
+  function showPending(names: readonly string[], signedOut: boolean, manual: boolean, key: string): void {
+    if (!names.length) { closePendingToast(); return; }
+    if (!manual && pendingToast?.key === key) return;
+    closePendingToast();
+    const dismiss = deps.toast({
+      tone: "warn", ...pendingCopy(names, signedOut), timeout: 0,
+      actions: [
+        ...(signedOut ? [{ label: "Sign in", kind: "ok" as const, run: () => { pendingToast = null; signIn(null); } }] : []),
+        { label: "Retry", run: () => { pendingToast = null; void restorePurchases("manual"); } },
+      ],
+    });
+    pendingToast = typeof dismiss === "function" ? { dismiss, key } : null;
+  }
+
+  async function runRestore(manual: boolean): Promise<void> {
+    const first = await deps.pluginsHealth().catch(() => null);
+    if (!first) {
+      if (manual) deps.toast({ tone: "danger", title: "Purchases were not checked", desc: "The install service did not answer. Is the LUCID engine running?", timeout: 6000 });
+      return;
+    }
+    // The engine first, from its own verified backups (a pass a dead scanner interrupted runs again here).
+    const health = manual || first.items.some((i) => i.status !== "ok" && i.backup) ? (await deps.pluginsRestore().catch(() => null)) ?? first : first;
+    announceRepairs(health.repairs);
+    const broken = health.items.filter((i) => i.status !== "ok");
+    const byId = new Map(broken.map((i): [string, PluginHealthItem] => [i.id, i]));
+    const label = (id: string): string => restorableStoreItem(id)?.name ?? byId.get(id)?.name ?? id;
+    const worldIds = (ids: readonly string[]): string[] => ids.filter((id) => byId.get(id)?.kind === "world");
+    if (!broken.length) {
+      closePendingToast();
+      restoreOnSignIn = false;
+      deps.worldsPending?.([]);
+      if (root) void refresh();
+      if (manual) {
+        const n = health.items.length;
+        deps.toast({ tone: "ok", title: "Your purchases are in place", timeout: 5000, desc: n ? `All ${n} store ${n === 1 ? "item" : "items"} on this machine ${n === 1 ? "is" : "are"} installed and intact.` : "Nothing from the LUCID store is recorded on this machine yet." });
+      }
+      return;
+    }
+    deps.worldsPending?.(worldIds(broken.map((i) => i.id)));
+    const prov = deps.provider();
+    const signedIn = deps.user().signedIn;
+    const storeReachable = prov.configured() && (typeof navigator === "undefined" || navigator.onLine !== false);
+    let givenUp = new Set<string>();
+    try { givenUp = parseIdList(deps.storage.getItem(RESTORE_GIVEN_UP_KEY)); } catch { /* none */ }
+    const entitlements = new Map<string, EntitlementAnswer>();
+    if (storeReachable && signedIn) {
+      await Promise.all(broken.filter((i) => restorableStoreItem(i.id) && (manual || !givenUp.has(i.id))).map(async (i) => {
+        entitlements.set(i.id, await prov.entitlement(i.id).catch((): EntitlementAnswer => "unreachable"));
+      }));
+    }
+    const plan = planRestore(broken, { signedIn, storeReachable, entitlements, nowIso: new Date(deps.now()).toISOString(), givenUp, manual });
+    const restored: { name: string; kind: PluginKind }[] = [];
+    const failed: string[] = [];
+    for (const id of plan.install) {
+      const p = premium(id);
+      if (p && await install(p, true)) { restored.push({ name: p.name, kind: byId.get(id)?.kind ?? "world" }); givenUp.delete(id); }
+      else failed.push(id);
+    }
+    if (restored.length) deps.toast({ tone: "ok", ...restoredCopy(restored), timeout: 8000 });
+    // Told once, then left alone: only Restore purchases asks the store again about these.
+    for (const id of [...plan.notEntitled, ...plan.notInStore]) givenUp.add(id);
+    try { deps.storage.setItem(RESTORE_GIVEN_UP_KEY, JSON.stringify([...givenUp].sort())); } catch { /* this session only */ }
+    if (plan.notEntitled.length) deps.toast({ tone: "warn", ...notEntitledCopy(plan.notEntitled.map(label)), timeout: 0, actions: [{ label: "OK" }] });
+    if (plan.notInStore.length) deps.toast({ tone: "warn", ...notInStoreCopy(plan.notInStore.map(label)), timeout: 0, actions: [{ label: "OK" }] });
+    const pending = [...plan.signin, ...plan.offline, ...failed];
+    const signedOut = plan.signin.length > 0;
+    restoreOnSignIn = signedOut;
+    deps.worldsPending?.(worldIds(pending));
+    showPending(pending.map(label), signedOut, manual, `${signedOut}:${pending.join(",")}`);
+    if (root) void refresh();
+  }
+
+  /** ADR-0648: install a world package file (an export from another machine). The engine requires a world signed
+   *  by TECHLEAD 187 LLC and runs every store gate; using it is still checked against the account in Visualize. */
+  function pickWorldFile(): void {
+    const importWorld = deps.worldImport;
+    if (!importWorld) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".zip,application/zip";
+    input.addEventListener("change", () => {
+      const f = input.files?.[0];
+      if (f) void importWorldFile(f, importWorld);
+    }, { once: true });
+    input.click();
+  }
+
+  async function importWorldFile(f: File, importWorld: NonNullable<PluginsFlyoutDeps["worldImport"]>): Promise<void> {
+    deps.toast({ title: `Checking ${f.name}`, desc: "Checking the signature, checksums, and security scan.", timeout: 4000 });
+    const r = await f.arrayBuffer().then((bytes) => importWorld(bytes, f.name)).catch(() => null);
+    const w = r?.ok ? r.world : undefined;
+    if (!w) {
+      deps.toast({ tone: "danger", title: "The world was not installed", desc: r?.error ?? "The install service did not answer. Is the LUCID engine running?", timeout: 0, actions: [{ label: "OK" }] });
+      return;
+    }
+    await refresh();
+    deps.toast({ tone: "ok", title: `${w.name} is installed`, desc: "Pick it in the Visualize view's style picker.", timeout: 6000, actions: [{ label: "Open in Visualize", kind: "ok", run: () => openWorld(w) }] });
+  }
+
+  /** ADR-0648: download an installed world's original signed package, to import it on another machine. */
+  function exportWorld(id: string): void {
+    const url = deps.worldExportUrl?.(id);
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "";
+    a.rel = "noopener";
+    document.body.append(a);
+    a.click();
+    a.remove();
   }
 
   async function showLicense(id: string): Promise<void> {
@@ -894,15 +1247,18 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   return {
     open,
     close,
+    restorePurchases,
     toggle(btn) { if (root) close(); else { opener = btn ?? null; open(); } },
     isOpen: () => root !== null,
     onSignedIn() {
+      // P-WORLDS.HEAL1: purchases waiting on sign-in come back from the store now.
+      if (restoreOnSignIn) { restoreOnSignIn = false; void restorePurchases("auto"); }
       const pend = pending;
       if (pend?.stage === "signin" && shouldResumeCheckout(pend, deps.now())) {
         pending = null;
         open("premium");
         deps.toast({ title: `Signed in, picking up ${pend.packName}`, desc: "Resuming right where you left off.", timeout: 4000 });
-        void refresh().then(() => act(pend.packId));
+        void refresh().then(() => resumeCard(pend.packId));
         return true;
       }
       if (pend?.stage === "signin") pending = null; // stale: a later, unrelated sign-in must never start a purchase
@@ -917,9 +1273,11 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
       if (!p) { pending = null; return; }
       void deps.provider().entitlement(p.id).catch(() => null).then((ent) => {
         ents.set(p.id, ent);
-        if (actionFor(p).kind !== "install" || pending !== pend) { paintFoot(p.id); return; }
+        // P-WORLDS.STORE1: a pack has nothing to install; its return refreshes the worlds it unlocked.
+        const done = actionFor(p).kind === (isBundle(p) ? "owned" : "install");
+        if (!done || pending !== pend) { paintFoot(p.id); return; }
         pending = null;
-        void install(p);
+        void (isBundle(p) ? packUnlocked(p) : install(p));
       });
     },
   };

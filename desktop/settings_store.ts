@@ -167,6 +167,9 @@ export interface GuiSettings {
   // fix/v2.5.1-provider-default-models: the explicit-choice marker written by setChosenModel. Absent on
   // values written before the fix; chosenModel() then refuses to restore a LOCAL value (read-time migration).
   chosenModelSource?: "user";
+  // P-AUTH.RELOGIN1 (ADR-0640): OAuth providers LUCID has seen signed in, and the model each one displaced
+  // when its sign-in was lost (desktop/oauth_relogin.ts). Lets a vanished login be told apart from a fresh install.
+  oauthMemory?: { seen: string[]; displaced: Record<string, string> };
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -176,6 +179,10 @@ export interface GuiSettings {
   // P-GOAL.6 (ADR-0048): the model the /goal loop's CHECKER runs on, overriding the maker's model.
   // "" / unset = auto (the harness recommends a cheap, capable, recent model from the user's picker).
   checkerModel?: string;
+  // P-ASKLUCID.MODEL1: every model id omp's model list has offered on this machine. Right after a start omp lists
+  // only its built-in models (Haiku 4.5, not the Haiku 5.5 the picker shows from its last full list), so the
+  // small-tier recommendation also considers these, for providers that are live now.
+  modelsSeen?: string[];
   // ADR-0088 (P-ROLE.1): the user's chosen role. Cosmetic preset; unset = "developer". Captured at
   // first-run onboarding (before the email step) and switchable in Settings → Profile.
   userRole?: UserRole;
@@ -1089,6 +1096,14 @@ export function setChosenModel(model: string): GuiSettings {
   if (m) { s.chosenModel = m; s.chosenModelSource = "user"; } else { delete s.chosenModel; delete s.chosenModelSource; }
   save(s); return s;
 }
+/** P-AUTH.RELOGIN1 (ADR-0640): the OAuth sign-ins LUCID has seen, and the model each lost one displaced. */
+export function oauthMemory(): { seen: string[]; displaced: Record<string, string> } {
+  const m = load().oauthMemory;
+  return { seen: Array.isArray(m?.seen) ? m.seen : [], displaced: m?.displaced && typeof m.displaced === "object" ? m.displaced : {} };
+}
+export function setOauthMemory(m: { seen: string[]; displaced: Record<string, string> }): void {
+  const s = load(); s.oauthMemory = m; save(s);
+}
 /** Every configured Local Provider's omp prefix, enabled or not (a disabled one is still LOCAL), for
  *  isLocalModel. The implicit engines (Ollama, llama.cpp, LM Studio, ...) are covered by isLocalModel itself. */
 export function localProviderPrefixes(): Set<string> {
@@ -1280,6 +1295,19 @@ export function checkerModel(): string { return load().checkerModel ?? ""; }
 export function setCheckerModel(model: string): void {
   const m = (model ?? "").trim();
   const s = load(); if ((s.checkerModel ?? "") === m) return; s.checkerModel = m || undefined; save(s);
+}
+/** P-ASKLUCID.MODEL1: the model ids omp has offered here (newest additions last, at most MODELS_SEEN_MAX). */
+export function modelsSeen(): string[] { return load().modelsSeen ?? []; }
+const MODELS_SEEN_MAX = 600;
+/** Remember `values`; writes only when something new was offered. Returns the full list. */
+export function addModelsSeen(values: readonly string[]): string[] {
+  const s = load();
+  const have = new Set(s.modelsSeen ?? []);
+  const fresh = values.filter((v) => v && !have.has(v));
+  if (!fresh.length) return s.modelsSeen ?? [];
+  s.modelsSeen = [...(s.modelsSeen ?? []), ...fresh].slice(-MODELS_SEEN_MAX);
+  save(s);
+  return s.modelsSeen;
 }
 /** User skipped the email prompt: attribute by workstation hostname instead (recorded, not forced).
  *  No-op when managed policy disallows skipping (the caller should check `skipAllowed()` first). */

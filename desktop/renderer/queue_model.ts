@@ -141,7 +141,7 @@ export function pushLaneName(src: Pick<PushSource, "kind" | "name">, existing: r
 export function parallelPushPrompt(src: PushSource, wt: { branch: string; path?: string }, text: string): string {
   const where = wt.path ? ` at ${wt.path}` : "";
   const preamble = [
-    `[LUCID parallel push] Another agent (${src.kind === "master" ? "the main LUCID agent" : `lane "${src.name}"`}) is still working on its own task in ${src.cwd || "the main checkout of this repo"}.`,
+    `[LUCID parallel push] Another agent (${src.kind === "master" ? "the main LUCID agent" : `agent "${src.name}"`}) is still working on its own task in ${src.cwd || "the main checkout of this repo"}.`,
     `You are a separate agent in your own git worktree of the same repo${where}, on branch ${wt.branch}.`,
     "Complete the request below independently on your branch. Do not edit files in, commit to, or run commands against the other agent's checkout.",
   ].join(" ");
@@ -155,8 +155,8 @@ export function parallelPushNotice(src: PushSource, lane: string, opts: { branch
   const where = `in its own worktree${opts.branch ? ` (branch ${opts.branch})` : ""}`;
   const who = src.kind === "master" ? "The main agent" : src.name;
   const desc = opts.busy
-    ? `${who} is still working on its current task. Your request is being actioned in parallel by a new lane, ${lane}, ${where}.`
-    : `${who} is not running a turn right now. Your request is being actioned by a new lane, ${lane}, ${where}.`;
+    ? `${who} is still working on its current task. Your request is being actioned in parallel by a new agent, ${lane}, ${where}.`
+    : `${who} is not running a turn right now. Your request is being actioned by a new agent, ${lane}, ${where}.`;
   return { title: opts.branch ? `Running in parallel: ${lane}` : `Starting ${lane} in parallel`, desc };
 }
 
@@ -169,12 +169,12 @@ export type PushNowRoute = { kind: "send" } | { kind: "parallel" } | { kind: "st
 export function pushNowRoute(ctx: { running: boolean; cwd: string; images: number }): PushNowRoute {
   if (!ctx.running) return { kind: "send" };
   if (ctx.cwd.trim()) return { kind: "parallel" };
-  return noWorktreeFallback("No workspace folder is open, so there is no repo to give a parallel lane its own worktree.", ctx.images, true);
+  return noWorktreeFallback("No workspace folder is open, so there is no repo to give a parallel agent its own worktree.", ctx.images, true);
 }
 
 function noWorktreeFallback(why: string, images: number, steerable: boolean): { kind: "steer" | "stage"; title: string; desc: string } {
   if (steerable && images === 0) return { kind: "steer", title: "Steering the running turn instead", desc: `${why} Your prompt goes into the running turn as a steer note.` };
-  return { kind: "stage", title: "Push now could not start a parallel lane", desc: `${why} ${images ? "A steer note cannot carry images, so it" : "It"} stays staged and runs as the next turn.` };
+  return { kind: "stage", title: "Push now could not start a parallel agent", desc: `${why} ${images ? "A steer note cannot carry images, so it" : "It"} stays staged and runs as the next turn.` };
 }
 
 /** A refused parallel push (the spawn, or the new lane's first prompt). `code: "no-repo"` means no worktree
@@ -199,4 +199,39 @@ export function canSteer(ctx: { hold: boolean; running: boolean; images: number 
  *  before this rule: a source that finished first ran the pushed prompt on its own checkout too. */
 export function laneDrainReady(ctx: { streaming: boolean; queued: number; status: string; pushing: boolean }): boolean {
   return !ctx.streaming && ctx.queued > 0 && !ctx.pushing && (ctx.status === "awaiting-input" || ctx.status === "done");
+}
+
+/** P-FLEET.DRAIN1 (ADR-0644): the lane view to keep from a status poll. A poll ASKED before this lane's last
+ *  drain describes the queue before that drain popped its head: taking its `queued` and `status` would put the
+ *  drained prompt back, and the drain's own end would then run it a second time (the engine answers "queue is
+ *  empty" and the card shows the prompt twice). Such a poll keeps the local queue and status; everything else
+ *  it carries (model, usage, names) is still news. A poll asked at or after the drain is the truth. */
+export function pollLaneView<V extends { queued: unknown; status: unknown }>(polled: V, local: V, askedAt: number, drainAt: number): V {
+  return askedAt < drainAt ? { ...polled, queued: local.queued, status: local.status } : polled;
+}
+
+/** P-FLEET.STAGE1 (ADR-0609): one stage request's time budget per attempt. Each retry carries the SAME stage
+ *  id, which the engine dedups, so a retry is safe even when the first attempt landed and only its answer was
+ *  late. About a minute in all: under a pegged CPU the engine still answers within it, and the composer never
+ *  waits forever on a request that will not come back. */
+export const STAGE_ATTEMPT_MS: readonly number[] = [10_000, 20_000, 30_000];
+
+/** P-FLEET.STAGE1: a fresh stage id in the engine's accepted shape (16 random bytes as hex). getRandomValues,
+ *  not randomUUID, because it is available in every renderer context the engine page is served in. */
+export function newStageId(): string {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** P-FLEET.STAGE1: what a lane composer is about to stage. Images are compared by their bytes' length and
+ *  type, file ids exactly; enough to tell "the same draft again" from "a different draft". */
+export function stageSignature(text: string, images: readonly { data: string; mimeType: string }[], fileIds: readonly string[]): string {
+  return JSON.stringify([text, images.map((im) => `${im.mimeType}:${im.data.length}`), fileIds]);
+}
+
+/** P-FLEET.STAGE1: the stage id for this attempt. Retrying the SAME draft after a failure reuses the earlier
+ *  id, so if that failure was only a lost answer the engine stages nothing new; a changed draft gets a new id. */
+export function stageKeyFor(prev: { id: string; sig: string } | null, sig: string, mint: () => string = newStageId): { id: string; sig: string } {
+  return prev && prev.sig === sig ? prev : { id: mint(), sig };
 }

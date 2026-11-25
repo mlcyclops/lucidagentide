@@ -28,13 +28,16 @@ export type PluginPermission = (typeof PLUGIN_PERMISSIONS)[number];
 export const PLUGIN_CSP_DIRECTIVES = ["img-src", "media-src", "connect-src"] as const;
 export type PluginCspDirective = (typeof PLUGIN_CSP_DIRECTIVES)[number];
 
-export type PluginKind = "web" | "server" | "daemon";
+/** `world` (Lucid Agent Worlds): an ES module the Visualize view imports in the renderer; never started
+ *  as a process, no permissions, no csp. */
+export type PluginKind = "web" | "server" | "daemon" | "world";
 export type PluginTier = "premium" | "free";
 export type PluginSection = "civilian" | "government";
 
 export interface WebEntry { root: string; index: string }
 export interface ServerEntry { main: string; healthPath: string }
 export interface DaemonEntry { exe: string; args?: string[]; healthPath: string }
+export interface WorldEntry { module: string }
 
 export interface PluginManifest {
   schema: 1;
@@ -46,7 +49,7 @@ export interface PluginManifest {
   tier: PluginTier;
   section: PluginSection;
   kind: PluginKind;
-  entry: WebEntry | ServerEntry | DaemonEntry;
+  entry: WebEntry | ServerEntry | DaemonEntry | WorldEntry;
   mcp?: { command: string; args?: string[] };
   ai?: { provider: "lucid" };
   permissions?: PluginPermission[];
@@ -106,7 +109,7 @@ export function validatePluginManifest(raw: unknown, opts: { requireFiles: boole
   if (!text(m.license)) return bad("license is required");
   if (m.tier !== "premium" && m.tier !== "free") return bad("tier must be premium or free");
   if (m.section !== "civilian" && m.section !== "government") return bad("section must be civilian or government");
-  if (m.kind !== "web" && m.kind !== "server" && m.kind !== "daemon") return bad("kind must be web, server or daemon");
+  if (m.kind !== "web" && m.kind !== "server" && m.kind !== "daemon" && m.kind !== "world") return bad("kind must be web, server, daemon or world");
   if (!isObj(m.entry)) return bad("entry is required");
   const e = m.entry;
   const healthOk = (h: unknown) => typeof h === "string" && h.startsWith("/") && h.length <= 200 && !/[\s#]/.test(h);
@@ -119,6 +122,14 @@ export function validatePluginManifest(raw: unknown, opts: { requireFiles: boole
     if (!safeRelPath(e.main)) return bad("entry.main must be a safe relative path");
     if (!healthOk(e.healthPath)) return bad("entry.healthPath must be a path starting with /");
     entryFiles.push(e.main);
+  } else if (m.kind === "world") {
+    if (!safeRelPath(e.module) || !e.module.endsWith(".js")) return bad("entry.module must be a safe relative path to a .js file");
+    if (m.mcp !== undefined) return bad("a world has no mcp server");
+    if (m.ai !== undefined) return bad("a world has no ai provider");
+    if (m.permissions !== undefined && !(Array.isArray(m.permissions) && m.permissions.length === 0)) return bad("a world declares no permissions (no network:* or fs:*)");
+    if (m.csp !== undefined) return bad("a world has no csp");
+    if (typeof m.apiVersion !== "number" || !Number.isInteger(m.apiVersion) || m.apiVersion < 1 || m.apiVersion > 1000) return bad("a world needs apiVersion, a positive integer (desktop/renderer/viz_world_api.ts WORLD_API_VERSION)");
+    entryFiles.push(e.module);
   } else {
     if (!safeRelPath(e.exe)) return bad("entry.exe must be a safe relative path");
     if (e.args !== undefined && !strArray(e.args, 64, 1024)) return bad("entry.args must be an array of strings");

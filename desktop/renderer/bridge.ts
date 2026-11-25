@@ -14,6 +14,7 @@ import type { AgentSpec } from "../../harness/agent/spec.ts"; // P-AGENT.2b: Age
 import type { SpecFileSummary } from "../../harness/agent/file_store.ts"; // P-AGENT.2b: spec list summary
 import type { UserCommand } from "../../harness/commands/spec.ts"; // P-CMD.1: user-authored slash commands
 import type { AgentRunTrace, TraceSummary } from "../../harness/agent/trace.ts"; // P-AGENT.13: run traces
+import { newStageId, STAGE_ATTEMPT_MS } from "./queue_model.ts"; // P-FLEET.STAGE1 (ADR-0609): idempotent, timed staging
 import { isSystemStatus, type SystemStatusView } from "./system_guard.ts"; // P-SYSRES.1: resource guard view (types owned there - layering rule)
 import { isCreatorResources, type CreatorResourcesView } from "./creator_monitor.ts"; // CREATOR-0 (ADR-0283): odometer view types live there
 import { isCreatorStudio, type CreatorStudioView } from "./creator_studio.ts"; // CREATOR-0 (ADR-0282): Studio view types live there
@@ -143,6 +144,13 @@ import type { PerCallModelSetting, PerCallModelView } from "../per_call_model.ts
 export interface ResultWindowView { setting: ResultWindowSetting; model: string; contextTokens: number | null; window: ResultWindow | null }
 import type { AskExtrasView, AskReplyView, AskTurnView } from "./ask_lucid_panel.ts"; // P-ASKLUCID.1 (ADR-0581): types only
 import { pathFileName, type ImageModelsView } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): pure
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddy. `main` rides the main composer, `lane` a Fleet lane card. */
+export type BuddySurface = "main" | "lane";
+/** One recommendation: a one-line `title` (<= 80 chars) and a `prompt` (<= 600 chars) a parallel agent could run. */
+export interface BuddyIdea { id: string; title: string; prompt: string }
+/** POST /api/buddy/suggest's answer. `doing` (<= 140 chars) says what the agent is doing now; at most 3 `ideas`.
+ *  `withheld` = the agent's recent work failed the security scan, so no model was called. */
+export interface BuddyReply { ok: boolean; error?: string; model?: string; doing: string; ideas: BuddyIdea[]; withheld: boolean }
 /** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
 export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
@@ -189,6 +197,8 @@ export interface SandboxStateView {
   tier?: "base-container" | "appcontainer-bfs" | "appcontainer-dacl";
   isolated: boolean; disclosed: boolean; platform: string;
   execBlocked: string | null; proxied: boolean; at: string;
+  /** P-SANDBOX.WIN1 (ADR-0658): why Windows exec fell back to the passthrough, headline first. */
+  fallback?: { kind: string; detail: string }[];
 }
 export interface SandboxBlockView { host: string; channel: string; type: string; reason: string; at: string }
 // P-SANDBOX.8: one user-approved standing directory grant (AppContainer ACE), listed with Revoke.
@@ -197,7 +207,7 @@ export interface SandboxGrantView { path: string; mode: "rx" | "rw"; grantedAt: 
 export interface SandboxControlView {
   available: boolean; userOff: boolean; policyLocked: boolean; registered: boolean; foldersLocked?: boolean;
   /** P-MXC.1 (ADR-0441): the MXC executor on this host and the elevated steps it still needs. */
-  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string };
+  mxc?: { staged: boolean; tier?: string; prepNeeded: string[]; loopbackNeeded: boolean; source?: string; reason?: string; bootTask?: boolean };
 }
 // P-SANDBOX.13 (ADR-0391): a folder LUCID itself grants the contained agent (listed read-only in the panel).
 export interface RuntimeFolderView { path: string; mode: "rx" | "rw"; why: string }
@@ -287,6 +297,8 @@ export interface CodeActivity {
   workspaces: { name: string; path: string; added: number; deleted: number; files: number; spend: number }[];
   totals: { added: number; deleted: number; files: number };
   month: string; daysInMonth: number;
+  /** P-PERF.IDLE1: when git last counted (ISO); null before the first count. */
+  countedAt: string | null;
 }
 export interface ConfigOption {
   id: string; name: string; category: string; type: string;
@@ -296,15 +308,19 @@ export interface ConfigOption {
 // P-FLEET.L1: the fleet grid's view shapes (renderer mirrors of desktop/fleet_lanes.ts - kept in parity
 // at this one boundary, like ChatEvent).
 import type { ProgressView } from "../turn_progress.ts"; // P-PROGRESS.1 (DOM-free, types only)
+import type { SeedRecord } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: a lane transcript record (types only, owned there)
 import type { NetView } from "./net_status.ts"; // P-NETSTAT.1 (ADR-0423): the network indicator's view (owned there)
 import type { JobsData, JobTargetView, JobView } from "./jobs_view.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs (owned there)
 export type { NetView };
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (types only)
 import type { AosControl, AosSnapshot } from "../aos.ts"; // P-AOS.1 (ADR-0452): the fleet goal (types only, owned there)
-import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
+import type { RecallView, RemoteActionView, RemoteApprovalsView, RemoteHubView, RemoteStatusView } from "./remote_spokes_model.ts"; // P-IDE-SPOKES.1 (ADR-0506): owned there
 export type { AosControl, AosSnapshot };
 /** P-AOS.1: a fleet-goal change: the new snapshot, or the engine's refusal in words. */
 export type FleetGoalReply = { ok: true; data: AosSnapshot } | { ok: false; error: string };
+// P-FLEET-BOARDS.1 (ADR-0601): the engine's boards (types only, owned by desktop/fleet_boards.ts).
+import type { Board as BoardView, BoardLayout, Boards as BoardsView } from "../fleet_boards.ts";
+export type { BoardLayout, BoardView, BoardsView };
 export type { ProgressView, WaitView };
 export type LaneStatus = "starting" | "working" | "needs-approval" | "awaiting-input" | "done" | "error" | "stopped";
 /** Approval scope: "once" answers only the pending ask; "session" also allows every same-kind ask for
@@ -313,6 +329,9 @@ export type ApprovalScope = "once" | "session";
 export interface LaneView {
   id: string; name: string; cwd: string; model: string; status: LaneStatus;
   createdAt: number; lastActivityAt: number; turns: number;
+  /** P-HOLDER.2 (ADR-0574): a held lane runs from this version's runtime copy, an earlier version's, or the install
+   *  folder; absent for a lane that is the engine's own child. */
+  heldRuntime?: "current" | "previous" | "install";
   /** P-FLEET.L4: Retry is offered only when a last prompt exists; respawns counts in-place revivals. */
   canRetry: boolean; respawns: number;
   /** P-FLEET.L5: the omp session id behind this lane - the key into its on-disk history. */
@@ -365,6 +384,8 @@ export interface LaneImage { data: string; mimeType: string }
 export interface StagedLanePromptView { text: string; images: LaneImage[]; attachments?: string[] }
 import type { AttachPolicyView, StageResult } from "../attach_kinds.ts"; // P-ATTACH.1 (ADR-0598): types only
 import type { AttachDescribeResult } from "./attach_ui.ts"; // P-ATTACH.1 (ADR-0598): types only
+import type { McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): types only
+import type { InstalledWorld } from "./viz_world_api.ts"; // P-WORLDS.1 (ADR-0648): the frozen world contract, types only
 /** P-FLEET.L3 (mirrors P-CHAT.1): a write's content, an edit's before/after pair, or a hashline patch. */
 export interface LaneToolCode { path: string; content?: string; oldText?: string; newText?: string; patch?: string }
 export type LaneEvent =
@@ -373,6 +394,9 @@ export type LaneEvent =
    *  P-PROGRESS.1: `id`/`status`/`elapsedMs` let a tool_call_update settle the step its tool_call opened
    *  (one row per call, marked done or failed with its duration); `intent` is the agent's own `i` phrase. */
   | { type: "tool"; id?: string; name: string; detail: string; code?: LaneToolCode; input?: string; intent?: string; status?: "open" | "done" | "failed"; elapsedMs?: number }
+  /** P-VIZ.4 (ADR-0625): the lane's `task` call delegated to subagents (mirrors the chat `subagent` event).
+   *  The call's own `tool` event rides beside it, so the grid card ignores this one. */
+  | { type: "subagent"; id: string; agent: string; title: string; assignments: string[]; names?: string[] }
   /** P-PROGRESS.1: the lane's progress view, every few seconds while its turn runs. */
   | { type: "progress"; progress: ProgressView }
   /** P-WAIT.1: a write in the lane's turn waits for a file another worker is editing. */
@@ -386,9 +410,11 @@ export type LaneEvent =
   | { type: "status"; status: LaneStatus }
   | { type: "done" }
   | { type: "error"; message: string }
+  /** P-FLEET.STAGE1 (ADR-0609): a prompt sent with a stage id found the lane busy and was staged instead. */
+  | { type: "staged"; queued: number }
   /** P-FLEET.L8: only on /api/fleet/watch - the lane's bounded history, so a composer attaching mid-turn
    *  renders the conversation instead of an empty pane. Never emitted on a prompt stream. */
-  | { type: "watch-seed"; turns: { role: "user" | "assistant"; text: string }[] };
+  | { type: "watch-seed"; turns: SeedRecord[] };
 export interface FleetStatusView {
   lanes: LaneView[];
   /** P-FLEET.L2: sustained-pressure evidence. No lane cap - the fleet is unlimited; only CPU or memory
@@ -600,7 +626,7 @@ export interface KbPackImportView {
 }
 // P-PLUGINS.2 (ADR-0462): installed `.lplugin` plugins and their runtime (desktop/plugins/*). Every
 // running kind is opened at `url` (http://localhost:<port>/, the plugin's own loopback origin).
-export type PluginKind = "web" | "server" | "daemon";
+export type PluginKind = "web" | "server" | "daemon" | "world";
 export type PluginState = "installed" | "running" | "starting" | "error";
 export type PluginGate = "manifest" | "hash" | "signature" | "authenticode" | "scan" | "download" | "private";
 export interface InstalledPluginView {
@@ -633,6 +659,15 @@ export type PluginFileInspectView =
 export type PluginStartView = { ok: true; url: string } | { ok: false; error: string };
 export type PluginActionView = { ok: true } | { ok: false; error: string };
 export interface PluginLicenseView { ok: boolean; id?: string; version?: string; text?: string; error?: string }
+/** P-WORLDS.HEAL1: one purchase the engine's install ledger records, against the disk (desktop/plugins/restore.ts
+ *  HealthItem). `backup`: the engine still has a verified-at-install backup to restore it from. */
+export interface PluginHealthItem {
+  id: string; name: string; kind: PluginKind; version: string; status: "ok" | "missing" | "broken";
+  problem?: string; backup: boolean; restoreProblem?: string;
+}
+/** One reinstall the engine made from a backup since it started (shown once: "Repaired N worlds after an update"). */
+export interface PluginRepairView { id: string; name: string; kind: PluginKind; version: string; at: string }
+export interface PluginHealthView { items: PluginHealthItem[]; needsRestore: string[]; repairs: PluginRepairView[] }
 /** ADR-0542: what the first start of a release after a dev build removed (data kept) and which dev settings it ignores. */
 export interface ReleaseCleanupView { from: string; to: string; at: string; removed: { id: string; name: string; version: string }[]; envIgnored: string[] }
 // P-PROV.1 (ADR-0210): extra per-provider config env (Azure resource/version, Vertex project/location/ADC,
@@ -649,10 +684,16 @@ export interface ProviderAuth {
   /** Why the LAST OAuth attempt died after the browser said "success" (server-side broker exited
    *  without persisting a credential). Present only while the provider is NOT connected. */
   oauthError?: { message: string; at: number };
+  /** P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone (expired = omp disabled it after a
+   *  failed refresh; missing = LUCID saw it signed in and it vanished). Never set on a deliberate sign-out. */
+  relogin?: { reason: "expired" | "missing"; detail?: string };
+  /** P-AUTH.RELOGIN1: the model the user was on when this sign-in was lost. */
+  restoreModel?: string;
 }
 /** P-VAULT-KEYS.1 (ADR-0472): where saved keys live (mirrors desktop/engine_vault.ts VaultStatus). */
 export interface KeyVaultStatus { custody: "dpapi" | "keychain" | "libsecret" | "plaintext-file"; state: "ok" | "unavailable" | "unreadable"; detail?: string }
-export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus }
+/** `upgradedFrom` (P-AUTH.RELOGIN1): the version the previous engine start ran, when it differs. */
+export interface AuthStatus { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault?: KeyVaultStatus; upgradedFrom?: string }
 export interface HeadroomStatus {
   installed: boolean; version: string | null; running: boolean; enabled: boolean;
   port: number; url: string; installHint: string;
@@ -737,7 +778,7 @@ import type { TurnStatus } from "./chat_events.ts";
 import { streamNdjson as streamNdjsonCore } from "./ndjson_stream.ts"; // reader + drop classification + P-REATTACH.1 recovery
 export type { ChatEvent };
 /** P-GOAL.13 (ADR-0067): the per-command-type Speed↔Risk dial - each type's max auto-run tier (T0-T3). */
-export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3">>;
+export type GoalDial = Partial<Record<"shell" | "edit" | "delete" | "web-fetch" | "web-search" | "subagent", "T0" | "T1" | "T2" | "T3" | "T4">>;
 export interface GoalOpts { goal: string; condition: string; command?: string; maxIters: number; resume?: string; budgetUsd?: number; criteria?: string; dial?: GoalDial }
 // P-GOAL.4: a stopped loop that can be resumed from its on-disk memory file.
 export interface ResumableLoop { rel: string; goal: string; condition: string; command?: string; iterations: number; updatedAt: number }
@@ -808,6 +849,9 @@ export interface ManagedPolicy {
   asksageOnly: boolean;
   /** ADR-0068 (P-ENT.1): which controls the managed policy locks (UI disables them + "Managed by <org>"). */
   locks?: { exec: boolean; egress: boolean; loop: boolean; models: boolean };
+  /** ADR-0616 (P-SETUX.1): org-authorized MCP servers for Settings "Quick connect", normalized server side
+   *  (normalizeOrgCatalog, `source: "org"`). Empty = unmanaged or none set: show MCP_COMMUNITY_CATALOG. */
+  mcpCatalog: McpCatalogEntry[];
 }
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
@@ -925,8 +969,14 @@ export interface LucidBridge {
   /** P-CTX.2b (ADR-0579): read / store the tool-result window choice (applies at the next agent start). */
   resultWindow(): Promise<ResultWindowView | null>;
   setResultWindow(setting: ResultWindowSetting): Promise<ResultWindowView | null>;
-  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation. */
-  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.1 (ADR-0581): one question to Ask Lucid with the recent turns of the side conversation.
+   *  P-ASKLUCID.SPEED1: `onPhase` streams where the answer is (reading, scanning, asking + model, queued, starting,
+   *  writing) while it is made. */
+  askLucid(text: string, history: AskTurnView[], extras?: AskExtrasView, onPhase?: (phase: string, model?: string) => void): Promise<AskReplyView | null>;
+  /** P-ASKLUCID.SPEED1: open a warm side-completion session for the next question (best effort). */
+  askLucidWarm(): Promise<unknown>;
+  /** P-BUDDY.1 (ADR-0667): a buddy's short read of what its agent is doing, with up to 3 next-step ideas. Null = no answer. */
+  buddySuggest(req: { surface: BuddySurface; laneId?: string; purpose?: "app" | "docs" | "analysis" | "other" | null }): Promise<BuddyReply | null>;
   /** P-ASKLUCID.9 (ADR-0600): the image models the engine's keys make usable, best first (or why none may be). */
   imageModels(): Promise<ImageModelsView | null>;
   /** P-ASKLUCID.9: edit one image the user attached, after they confirmed the card. Null = no answer. */
@@ -1054,7 +1104,8 @@ export interface LucidBridge {
   remoteAgentRemove(id: string): Promise<unknown>;
   remoteAgentToggle(id: string, enabled: boolean): Promise<unknown>;
   usage(): Promise<UsageLedger | null>;
-  codeActivity(): Promise<CodeActivity | null>;
+  /** P-PERF.IDLE1: the remembered counts (no git); `count` asks the engine to recount with git. */
+  codeActivity(count?: boolean): Promise<CodeActivity | null>;
   // P-COLLAB.3 (ADR-0192): live session sharing (view-only host). `status` is the poll; `start` mints the
   // room + view/full links + stands up the host (fails closed if no relay); `stop` ends it; `setRelay`
   // configures the authorized relay (self-hosted default, public opt-in).
@@ -1150,6 +1201,20 @@ export interface LucidBridge {
   fleetTaskAdd(input: { title: string; prompt: string; outputContract: string; checks: string[]; assignee: string; dependsOn: string[] }): Promise<FleetGoalReply | null>;
   fleetTaskCheck(taskId: string, checkId: string, passed: boolean): Promise<FleetGoalReply | null>;
   fleetTaskCancel(taskId: string): Promise<FleetGoalReply | null>;
+  /** P-FLEET-BOARDS.1 (ADR-0601): the engine's boards. Every change resolves to the whole new Boards, or null
+   *  when the engine refused it or could not be reached. Agent keys: a lane id, or `rs:<node>:<task>`. */
+  fleetBoards(): Promise<BoardsView | null>;
+  fleetBoardCreate(name: string): Promise<BoardsView | null>;
+  fleetBoardRename(id: string, name: string): Promise<BoardsView | null>;
+  /** Only the board goes; its agents keep running. */
+  fleetBoardRemove(id: string): Promise<BoardsView | null>;
+  fleetBoardMove(id: string, to: number): Promise<BoardsView | null>;
+  /** Drops apply before adds; a board holds at most 200 agents. */
+  fleetBoardAgents(id: string, change: { add?: string[]; drop?: string[] }): Promise<BoardsView | null>;
+  /** `id` "all" is Everything. A focus not on the board is dropped, and leaving it out clears the focus. */
+  fleetBoardLayout(id: string, layout: BoardLayout, focus?: string): Promise<BoardsView | null>;
+  /** Forget every agent key not in `live`, from every board and focus. */
+  fleetBoardsPrune(live: string[]): Promise<BoardsView | null>;
   /** P-REPO.1 (ADR-0406): the repo Main works on and where its commits go. */
   repoContext(): Promise<RepoContext | null>;
   /** P-REPO.1: local folders a spoke can start in (workspace, lanes, recents, checkouts beside them). */
@@ -1168,10 +1233,13 @@ export interface LucidBridge {
   fleetSpawn(opts: { cwd: string; model?: string; name?: string; repoUrl?: string; pat?: string; sessionId?: string; worktree?: boolean }): Promise<{ ok: boolean; lane?: LaneView; reason?: string; code?: "no-repo"; worktree?: { path: string; branch: string } } | null>;
   /** P-FLEET.L3: `images` ride as ACP image blocks after the text, exactly like the master chat.
    *  P-ATTACH.1 (ADR-0598): `attachments` are staged file ids, as for sendPrompt. */
-  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[], attachments?: string[]): Promise<void>;
+  fleetPrompt(laneId: string, text: string, onEvent: (e: LaneEvent) => void, images?: LaneImage[], attachments?: string[], stageId?: string): Promise<void>;
   /** P-FLEET.L3: the staged-prompt queue - manager-owned; drain streams the next item like a prompt.
-   *  P-ATTACH.1: staged file ids stay with the item; their text is built and scanned when it drains. */
-  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[], attachments?: string[]): Promise<{ ok: boolean; queued?: number; reason?: string } | null>;
+   *  P-ATTACH.1: staged file ids stay with the item; their text is built and scanned when it drains.
+   *  P-FLEET.STAGE1 (ADR-0609): every request carries a stage id (the caller's, else one minted here) and is
+   *  retried on a timeout with that same id, so a slow engine never hangs the composer and never stages twice.
+   *  Null after the last attempt: the engine did not answer. */
+  fleetQueueAdd(laneId: string, text: string, images?: LaneImage[], attachments?: string[], stageId?: string): Promise<{ ok: boolean; queued?: number; reason?: string; duplicate?: boolean } | null>;
   /** P-PUSH.PAR1 (ADR-pending): `expect` (the item's full text) makes a late remove fail closed instead of
    *  deleting whichever prompt slid into `index` meanwhile. */
   fleetQueueRemove(laneId: string, index: number, expect?: string): Promise<{ ok: boolean } | null>;
@@ -1206,7 +1274,10 @@ export interface LucidBridge {
    *  Recall and parked actions come back scanned; recalled text is shown as text and enters a prompt only as the
    *  delimited `context`. Every action is re-gated by the hub certificate's scopes engine-side. */
   remoteSpokes(): Promise<RemoteHubView | null>;
-  remoteSpokeRecall(node: string, task?: string): Promise<RecallView | null>;
+  /** `since` (P-RS-SESSION.1, ADR-0573): only the entries after that journal seq. */
+  remoteSpokeRecall(node: string, task?: string, since?: number): Promise<RecallView | null>;
+  /** P-RS-SESSION.1: the spoke's own task list, read now (not the hub's 15 s summary). */
+  remoteSpokeStatus(node: string): Promise<RemoteStatusView | null>;
   remoteSpokeApprovals(node: string): Promise<RemoteApprovalsView | null>;
   /** `password`: a `password` hub's presence password, on an allow only (ADR-0507); sent once, never kept. */
   remoteSpokeDecide(input: { node: string; task: string; ask: string; digest: string; allow: boolean; password?: string }): Promise<RemoteActionView | null>;
@@ -1234,7 +1305,9 @@ export interface LucidBridge {
   /** FOLLOW a lane's live events WITHOUT owning a turn. Resolves when the stream ends; call the returned
    *  aborter to leave. This is what lets a promote join a turn that is already running. */
   fleetWatch(laneId: string, onEvent: (e: LaneEvent) => void): { done: Promise<void>; stop: () => void };
-  fleetTranscript(laneId: string): Promise<{ turns: { role: "user" | "assistant"; text: string }[] } | null>;
+  /** The lane's bounded transcript (every settled turn, whoever started it, and the prompt of the running one).
+   *  P-FLEET.DOCK1: the records are rich (thinking, tool calls, error), which the grid card's backfill renders. */
+  fleetTranscript(laneId: string): Promise<{ turns: SeedRecord[] } | null>;
   // -- P-HEALTH.1: the harness's self-watch ---------------------------------------------------------
   /** Read-only: where the stall ladder stands for the master session and every lane. Takes no action. */
   health(): Promise<{
@@ -1296,6 +1369,19 @@ export interface LucidBridge {
   /** keepData defaults to true: the plugin's data dir survives unless the user asks to delete it. */
   pluginsUninstall(id: string, keepData?: boolean): Promise<PluginActionView | null>;
   pluginsLicense(id: string): Promise<PluginLicenseView | null>;
+  /** P-WORLDS.HEAL1: every recorded purchase against the disk (waits for the engine's startup self-heal). */
+  pluginsHealth(): Promise<PluginHealthView | null>;
+  /** P-WORLDS.HEAL1: the engine restores one id (or, with none, every recorded one) from its backup, through every
+   *  install gate, then answers the health report. */
+  pluginsRestore(id?: string): Promise<PluginHealthView | null>;
+  /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
+  worldsList(): Promise<InstalledWorld[]>;
+  /** Install a SIGNED world package file the user picked (an export from another machine). */
+  worldImport(bytes: ArrayBuffer, filename: string): Promise<{ ok: boolean; world?: InstalledWorld; error?: string }>;
+  /** A download link for an installed world's original signed package (an attachment). It carries the UI token
+   *  as `?t=` (like previewServeUrl), because a download link cannot set a header. */
+  worldExportUrl(id: string): string;
+  worldUninstall(id: string): Promise<boolean>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -1387,6 +1473,8 @@ export interface LucidBridge {
   oauthLogoutAll(): Promise<AuthStatus | null>;
   /** Device-authorization flow: forward a code the user copied from the provider's page to the broker's stdin. */
   oauthCode(oauthId: string, code: string): Promise<{ sent: boolean; reason?: string } | null>;
+  /** P-AUTH.RELOGIN1 (ADR-0640): forget the model a lost sign-in displaced (restored, or the user kept another). */
+  reloginRestored(oauthId: string): Promise<boolean | null>;
   // AskSage gov gateway (ADR-0007)
   asksage(): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
   saveAsksage(opts: { baseUrl?: string; only?: boolean; limit?: number; datasets?: string[]; queryModel?: string; persona?: string }): Promise<{ configured: boolean; base: string; only: boolean; limit: number; datasets: string[]; queryModel: string; persona: string } | null>;
@@ -1516,6 +1604,10 @@ export interface LucidBridge {
   // preview with HTTP 200 and a human-readable HTML body, so the client cannot tell a rendered app from a
   // rendered failure; this is that missing signal, and it costs one `stat` (no read, no asset inlining).
   previewProbe(path: string): Promise<boolean>;
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the same probe with its detail (kind, size, HTTP status) for the loading
+  // curtain. `remote` asks the engine to reach a LOOPBACK URL (a dev server). Fail-closed: no answer reads
+  // as { resolves: false }.
+  previewProbeInfo(path: string, remote?: boolean): Promise<{ resolves: boolean; kind?: string; bytes?: number; status?: number; error?: string }>;
   // P-PREVIEW.4b (ADR-0096): the same-origin URL that SERVES a local file as a document with its own
   // per-frame CSP, for the iframe's `src`. Carries the transport token as a query param (an iframe src GET
   // can't set a header). Used instead of srcdoc so the previewed app's inline scripts actually run.
@@ -1540,8 +1632,9 @@ export interface LucidBridge {
   browserClose(): Promise<void>;
   // Same close POST; the stop-the-turn half happens renderer-side (the pill calls stopTurn itself).
   browserStop(): Promise<void>;
-  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation
-  subagents(): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
+  // P-TASK.5 (ADR-0180): live subagent activity behind the current session's delegation. P-VIZ.4 (ADR-0625):
+  // with a lane id, that lane's session's runs instead.
+  subagents(laneId?: string): Promise<{ runs: { name: string; done: boolean; lastAt: number; startedAt?: number; endedAt?: number; assignment: string; model: string | null; tools: number; steps: { kind: string; tool?: string; label: string }[] }[] } | null>;
   // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict (types live in system_guard.ts)
   systemStatus(fresh?: boolean): Promise<SystemStatusView | null>;
   // CREATOR-0 (ADR-0279): this build's identity + which Creator surfaces exist. Null in an old backend.
@@ -1698,6 +1791,8 @@ interface NativeShell {
   showInFolder?(path: string): Promise<boolean>; // P-FSREVEAL.1: reveal a file highlighted in its parent folder
   relaunch?(): Promise<void>; // P-LOCAL.3 polish: restart the app to apply local-provider changes
   restartEngine?(): Promise<EngineRestartView>; // P-RECOVER.1 (ADR-0385): main restarts an unreachable engine
+  // P-VIZ.GPU1 (ADR-0651): read-only GPU facts (feature status, PCI ids, GL strings); gpu_probe.ts validates them.
+  gpuInfo?(): Promise<unknown>;
   win?: { minimize(): void; toggleMaximize(): void; close(): void };
   // P-NETWL.1 (ADR-0106): native file picker + OS-encrypted credential vault (Electron-only).
   pickFile?(opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }): Promise<string | null>;
@@ -1745,6 +1840,35 @@ async function getData(path: string): Promise<any> {
 }
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+}
+/** P-ASKLUCID.SPEED1: one Ask Lucid question as NDJSON: `phase` lines go to `onPhase`, the `reply` line is the
+ *  answer. A refusal before the stream (a bad question, a refused file) arrives as plain JSON and is returned as
+ *  is. Null when the engine cannot be reached or the stream ends without a reply. */
+async function askLucidStream(body: Record<string, unknown>, onPhase: (phase: string, model?: string) => void): Promise<AskReplyView | null> {
+  try {
+    const res = await fetch("/api/ask-lucid", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ ...body, stream: true }) });
+    if (!res.body || (res.headers.get("content-type") ?? "").includes("application/json")) return (await res.json())?.data ?? null;
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    let reply: AskReplyView | null = null;
+    const line = (s: string): void => {
+      if (!s.trim()) return;
+      let e: { type?: unknown; phase?: unknown; model?: unknown; data?: unknown };
+      try { e = JSON.parse(s); } catch { return; }
+      if (e.type === "phase" && typeof e.phase === "string") onPhase(e.phase, typeof e.model === "string" ? e.model : undefined);
+      else if (e.type === "reply" && e.data && typeof e.data === "object") reply = e.data as AskReplyView; // the engine's own AskReply
+    };
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) { line(buf.slice(0, nl)); buf = buf.slice(nl + 1); }
+    }
+    line(buf);
+    return reply;
+  } catch { return null; }
 }
 /** P-SWITCH.1 (ADR-0403): the outcome of asking Main to open or start a session. `busy` (with `sessionId`,
  *  the session Main kept) and `heldBy` come only from the engine's 409 refusal; any other failure is a
@@ -1946,7 +2070,9 @@ export const bridge: LucidBridge = {
   codeGraphAgent: () => getData("/api/codegraph/agent"),
   resultWindow: () => getData("/api/result-window"), // P-CTX.2b (ADR-0579)
   setResultWindow: (setting) => post("/api/result-window", { setting }),
-  askLucid: (text, history, extras) => post("/api/ask-lucid", { text, history, ...(extras ?? {}) }), // P-ASKLUCID.1 (ADR-0581)
+  askLucid: (text, history, extras, onPhase) => (onPhase ? askLucidStream({ text, history, ...(extras ?? {}) }, onPhase) : post("/api/ask-lucid", { text, history, ...(extras ?? {}) })), // P-ASKLUCID.1 (ADR-0581)
+  askLucidWarm: () => post("/api/ask-lucid/warm", {}), // P-ASKLUCID.SPEED1
+  buddySuggest: (req) => post("/api/buddy/suggest", req), // P-BUDDY.1 (ADR-0667)
   imageModels: () => getData("/api/image/models"), // P-ASKLUCID.9 (ADR-0600)
   imageEdit: (req) => post("/api/image/edit", req), // P-ASKLUCID.9
   saveEditedImageAs: async (path) => {
@@ -2055,7 +2181,7 @@ export const bridge: LucidBridge = {
   remoteAgentRemove: (id) => post("/api/agents/remove", { id }),
   remoteAgentToggle: (id, enabled) => post("/api/agents/toggle", { id, enabled }),
   usage: () => getData("/api/usage"),
-  codeActivity: () => getData("/api/code-activity"),
+  codeActivity: (count) => getData(count ? "/api/code-activity?count=1" : "/api/code-activity"),
   sendPrompt: streamChat,
   chatStatus: async () => {
     const response = await fetch("/api/chat/status", { cache: "no-store", headers: authHeaders(), signal: AbortSignal.timeout(10_000) });
@@ -2109,6 +2235,14 @@ export const bridge: LucidBridge = {
   fleetTaskAdd: (input) => post("/api/fleet/goal/task", input), // P-AOS.2 (ADR-0453)
   fleetTaskCheck: (taskId, checkId, passed) => post("/api/fleet/goal/task/check", { taskId, checkId, passed }),
   fleetTaskCancel: (taskId) => post("/api/fleet/goal/task/cancel", { taskId }),
+  fleetBoards: () => getData("/api/fleet/boards"), // P-FLEET-BOARDS.1 (ADR-0601)
+  fleetBoardCreate: (name) => post("/api/fleet/boards/create", { name }),
+  fleetBoardRename: (id, name) => post("/api/fleet/boards/rename", { id, name }),
+  fleetBoardRemove: (id) => post("/api/fleet/boards/remove", { id }),
+  fleetBoardMove: (id, to) => post("/api/fleet/boards/move", { id, to }),
+  fleetBoardAgents: (id, change) => post("/api/fleet/boards/agents", { id, ...change }),
+  fleetBoardLayout: (id, layout, focus) => post("/api/fleet/boards/layout", { id, layout, ...(focus !== undefined ? { focus } : {}) }),
+  fleetBoardsPrune: (live) => post("/api/fleet/boards/prune", { live }),
   repoContext: () => getData("/api/repo/context"), // P-REPO.1 (ADR-0406)
   repoChoices: () => getData("/api/repo/choices"),
   repoGithub: (refresh) => getData(`/api/repo/github${refresh ? "?refresh=1" : ""}`),
@@ -2116,14 +2250,21 @@ export const bridge: LucidBridge = {
   hubOpen: () => post("/api/hub/open", {}),
   timelineList: (limit = 100, offset = 0, includeSelfTest = false, kind) => getData(`/api/timeline?limit=${limit}&offset=${offset}${includeSelfTest ? "&selfTest=1" : ""}${kind ? `&kind=${kind}` : ""}`), // P-FLEET.L5
   timelineSession: (id, limit = 40) => post("/api/timeline/session", { id, limit }), // P-FLEET.L5
-  fleetPrompt: (laneId, text, onEvent, images, attachments) => {
+  fleetPrompt: (laneId, text, onEvent, images, attachments, stageId) => {
     // The lane stream carries LaneEvent lines; the reader's own fallback events (token/done) are
     // structurally valid LaneEvents too, so the sink types unify at this one boundary. Named cast per
     // house rule: structurally-compatible tagged unions the reader's ChatEvent signature can't express.
     const sink = onEvent as (e: ChatEvent) => void;
-    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }, sink);
+    return streamNdjson("/api/fleet/prompt", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), ...(stageId ? { stageId } : {}) }, sink);
   },
-  fleetQueueAdd: (laneId, text, images, attachments) => post("/api/fleet/queue", { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}) }),
+  fleetQueueAdd: async (laneId, text, images, attachments, stageId) => {
+    const body = { laneId, text, ...(images?.length ? { images } : {}), ...(attachments?.length ? { attachments } : {}), stageId: stageId ?? newStageId() };
+    for (const ms of STAGE_ATTEMPT_MS) {
+      const r = await postTimed("/api/fleet/queue", body, ms) as { ok: boolean; queued?: number; reason?: string; duplicate?: boolean } | null;
+      if (r) return r;
+    }
+    return null;
+  },
   // P-ATTACH.1 (ADR-0598): staging, removal and the policy; the path comes from the preload (Electron only).
   attachmentStage: (f) => post("/api/attachments", f),
   attachmentRemove: async (id) => (await post("/api/attachments/remove", { id }))?.removed === true,
@@ -2145,7 +2286,8 @@ export const bridge: LucidBridge = {
   fleetRespawn: (laneId) => post("/api/fleet/respawn", { laneId }),
   fleetAnswer: (laneId, allow, scope) => post("/api/fleet/answer", { laneId, allow, ...(scope ? { scope } : {}) }),
   remoteSpokes: () => getData("/api/remote-spokes"), // P-IDE-SPOKES.1 (ADR-0506)
-  remoteSpokeRecall: (node, task) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}) }),
+  remoteSpokeRecall: (node, task, since) => post("/api/remote-spokes/recall", { node, ...(task ? { task } : {}), ...(since !== undefined ? { since } : {}) }),
+  remoteSpokeStatus: (node) => getData(`/api/remote-spokes/status?node=${encodeURIComponent(node)}`),
   remoteSpokeApprovals: (node) => getData(`/api/remote-spokes/approvals?node=${encodeURIComponent(node)}`),
   remoteSpokeDecide: (input) => post("/api/remote-spokes/decide", input),
   remoteSpokeAct: (op, input) => post(`/api/remote-spokes/${op}`, input),
@@ -2220,6 +2362,24 @@ export const bridge: LucidBridge = {
   pluginsStop: (id) => post("/api/plugins/stop", { id }),
   pluginsUninstall: (id, keepData = true) => post("/api/plugins/uninstall", { id, keepData }),
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
+  pluginsHealth: () => getData("/api/plugins/health"),
+  pluginsRestore: (id) => post("/api/plugins/restore", id ? { id } : {}),
+  worldsList: async () => {
+    const d: unknown = await getData("/api/worlds");
+    return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];
+  },
+  worldImport: async (bytes, filename) => {
+    try {
+      // The raw package bytes ride a JSON content type on purpose: the origin guard admits only application/json
+      // POSTs, and the route reads the body as bytes (the creatorCadInspect convention).
+      const res = await fetch("/api/worlds/import", { method: "POST", headers: authHeaders({ "content-type": "application/json", "x-lucid-filename": encodeURIComponent(filename) }), body: bytes });
+      const j = await res.json() as { ok?: unknown; data?: { world?: InstalledWorld }; error?: unknown };
+      if (j.ok === true && j.data?.world) return { ok: true, world: j.data.world };
+      return { ok: false, error: typeof j.error === "string" ? j.error : `the engine answered ${res.status}` };
+    } catch { return { ok: false, error: "the LUCID engine could not be reached" }; }
+  },
+  worldExportUrl: (id) => `/api/worlds/export?id=${encodeURIComponent(id)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`,
+  worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
@@ -2352,6 +2512,7 @@ export const bridge: LucidBridge = {
   oauthLogout: (oauthId) => post("/api/auth/logout", { oauthId }),
   oauthLogoutAll: () => post("/api/auth/logout-all", {}),
   oauthCode: (oauthId, code) => post("/api/auth/oauth-code", { oauthId, code }),
+  reloginRestored: (oauthId) => post("/api/auth/relogin-restored", { oauthId }),
   asksage: () => getData("/api/asksage"),
   saveAsksage: (opts) => post("/api/asksage", opts),
   asksageTokens: () => getData("/api/asksage/tokens"),
@@ -2471,6 +2632,17 @@ export const bridge: LucidBridge = {
     const r = d as { resolves?: unknown } | null;
     return r?.resolves === true;
   },
+  previewProbeInfo: async (path, remote) => { // P-PREVIEW-CURTAIN.1 (ADR-0621)
+    const d = await getData(`/api/preview/probe?path=${encodeURIComponent(path)}${remote ? "&remote=1" : ""}`);
+    const r = (d ?? {}) as { resolves?: unknown; kind?: unknown; bytes?: unknown; status?: unknown; error?: unknown };
+    return {
+      resolves: r.resolves === true,
+      ...(typeof r.kind === "string" ? { kind: r.kind } : {}),
+      ...(typeof r.bytes === "number" ? { bytes: r.bytes } : {}),
+      ...(typeof r.status === "number" ? { status: r.status } : {}),
+      ...(typeof r.error === "string" ? { error: r.error } : d ? {} : { error: "the engine did not answer" }),
+    };
+  },
   // P-PREVIEW.4b. The `v` nonce makes every deliberate load a FRESH navigation: assigning an iframe src
   // its current value does not renavigate in Chromium, so without it a re-open (or a re-edit of the same
   // file) kept showing the previously served document forever, no matter what was on disk. The server
@@ -2492,7 +2664,7 @@ export const bridge: LucidBridge = {
   browserShot: async () => { const d: unknown = await getData("/api/browser/shot"); return d && typeof d === "object" && "png" in d && typeof d.png === "string" ? d.png : null; },
   browserClose: async () => { await post("/api/browser/close", {}); },
   browserStop: async () => { await post("/api/browser/close", {}); }, // the turn-stop half is renderer-side
-  subagents: () => getData("/api/subagents"), // P-TASK.5
+  subagents: (laneId) => getData(laneId ? `/api/subagents?laneId=${encodeURIComponent(laneId)}` : "/api/subagents"), // P-TASK.5; P-VIZ.4: a lane's runs
   systemStatus: async (fresh) => { // P-SYSRES.1: fail-open - malformed/missing reads as null (never blocks)
     const v: unknown = await getData(`/api/system${fresh ? "?fresh=1" : ""}`).catch(() => null);
     return isSystemStatus(v) ? v : null;

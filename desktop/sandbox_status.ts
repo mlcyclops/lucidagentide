@@ -17,6 +17,8 @@
 //
 // Metadata only (invariant: never raw scanned content) — a backend name, a boolean, a host, a reason.
 
+import type { SandboxFallback } from "../harness/runs/sandbox_exec.ts";
+
 /** P-MXC.1 (ADR-0441): `mxc` is the Microsoft eXecution Container executor on Windows. */
 export type SandboxBackendName = "bwrap" | "seatbelt" | "appcontainer" | "mxc" | "noop";
 
@@ -38,6 +40,9 @@ export interface SandboxState {
   proxied: boolean;
   /** ISO timestamp of when this state was resolved. */
   at: string;
+  /** P-SANDBOX.WIN1 (ADR-0658): on a disclosed Windows passthrough, why each container runtime was not
+   *  used, headline first (the panel states the first one). Absent ⇒ cause unknown, generic disclosure. */
+  fallback?: SandboxFallback[];
 }
 
 /** One blocked subprocess reach-out, as shown in the panel (already host-deduped by the audit sink). */

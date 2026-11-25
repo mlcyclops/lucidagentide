@@ -112,7 +112,7 @@ describe("preset attributes reach the omp overlay", () => {
     expect(m.compat).toEqual({
       thinkingFormat: "qwen-chat-template",
       reasoningContentField: "reasoning",
-      supportsReasoningEffort: false,
+      supportsReasoningEffort: true,
     });
   });
 

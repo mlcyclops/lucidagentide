@@ -21,6 +21,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { ATTACH_LIMITS, type AttachPolicyView } from "./attach_kinds.ts"; // P-ATTACH.1 (ADR-0598)
+import { normalizeOrgCatalog, type McpCatalogEntry } from "./renderer/mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): pure, DOM-free
 
 export interface ManagedAttribution {
   /** Require a corporate email (no workstation-only attribution; implies skip is disabled). */
@@ -215,6 +216,11 @@ export interface ManagedConfig {
    *  Unset/empty = the full filesystem (the individual-user default). When set, the browser is confined
    *  to these subtrees and never offers a parent above them. Only TIGHTENS (mirrors ADR-0068). */
   workspaceRoots?: string[];
+  /** ADR-0616 (P-SETUX.1): the org-authorized MCP servers shown in Settings > Connectors "Quick connect"
+   *  instead of the community catalog. Each item: `{ id?, name, url, transport?: "http"|"sse",
+   *  auth?: "oauth"|"token"|"none", docsUrl?, category?, note? }`. Untrusted JSON: managedMcpCatalog
+   *  keeps only well-formed https entries. Absent or empty = the community catalog. */
+  mcpCatalog?: unknown[];
   /** Reserved/extensible: pinned mcpServers, BI endpoint, etc. */
   [k: string]: unknown;
 }
@@ -581,6 +587,12 @@ export function managedAttachmentPolicy(mc: ManagedConfig | null = managedConfig
     bytes: clamp(a?.maxBytes, ATTACH_LIMITS.bytes),
     retentionDays: clamp(a?.retentionDays, ATTACH_LIMITS.retentionDays),
   };
+}
+
+/** ADR-0616 (P-SETUX.1): the org-authorized MCP catalog, normalized (https only, `source: "org"`). Unmanaged
+ *  or absent = []. Pure when given `mc`. */
+export function managedMcpCatalog(mc: ManagedConfig | null = managedConfig().config): McpCatalogEntry[] {
+  return normalizeOrgCatalog(mc?.mcpCatalog);
 }
 
 /** P-SANDBOX.14: may users (and the agent) add sandbox folders of their own? Pure when given `mc`. */

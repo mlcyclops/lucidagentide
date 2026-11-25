@@ -162,7 +162,7 @@ function capRows(rows: DiffRow[]): DiffRow[] {
   if (rows.length <= LANE_DIFF_ROWS_CAP) return rows;
   const kept = rows.slice(0, LANE_DIFF_ROWS_CAP - 1);
   const hidden = rows.length - kept.length;
-  kept.push({ type: "ctx", text: `[truncated: ${hidden} more rows not shown, a lane card caps a diff at ${LANE_DIFF_ROWS_CAP} rows]` });
+  kept.push({ type: "ctx", text: `[truncated: ${hidden} more rows not shown, an agent card caps a diff at ${LANE_DIFF_ROWS_CAP} rows]` });
   return kept;
 }
 
@@ -172,7 +172,7 @@ function capInput(input: string): string {
   const v = input.trim();
   if (v.length <= LANE_INPUT_CAP) return v;
   const hidden = v.length - LANE_INPUT_CAP;
-  return `${v.slice(0, LANE_INPUT_CAP)}\n[truncated: ${hidden} more characters not shown, a lane card caps an input at ${LANE_INPUT_CAP} characters]`;
+  return `${v.slice(0, LANE_INPUT_CAP)}\n[truncated: ${hidden} more characters not shown, an agent card caps an input at ${LANE_INPUT_CAP} characters]`;
 }
 
 export function laneChipBody(t: LaneToolRow): LaneChipBody | null {
@@ -244,6 +244,13 @@ export function turnCopyText(t: LaneTurnRow): string {
   // An empty turn contributes nothing: a lonely role header is the same bug as a dead chevron.
   if (!blocks.length) return "";
   return `${t.role === "user" ? "[user]" : "[assistant]"}\n${blocks.join("\n")}`;
+}
+
+/** P-FLEET.READ1 (ADR-0646): what a turn's own copy button writes. An answer copies its reply exactly as the
+ *  agent wrote it (the markdown, tables intact), like the main chat's Copy; thinking and tool rows stay in the
+ *  whole-transcript copy in the card header. A prompt, or a turn with no reply text, copies as before. */
+export function turnReplyText(t: LaneTurnRow): string {
+  return t.role === "assistant" && t.text.trim() ? t.text.trim() : turnCopyText(t);
 }
 
 export function transcriptCopyText(

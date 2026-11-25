@@ -13,7 +13,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { homedir } from "node:os";
-import { codeActivity, parseNumstat, renamedPath } from "../tools/memory_data.ts";
+import { __resetCodeActivity, activityKey, cachedCodeActivity, codeActivity, parseNumstat, renamedPath, setCodeActivityStore } from "../tools/memory_data.ts";
 
 const cleanup: string[] = [];
 afterAll(() => { for (const d of cleanup) try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } });
@@ -119,6 +119,37 @@ test.skipIf(!gitAvailable)("codeActivity: real repo → workspace listed with di
   expect(ca.totals).toEqual({ added: 3, deleted: 0, files: 1 });
 });
 
+// P-PERF.GIT1: the month total is remembered per repo until its HEAD moves, so a poll costs no git spawn, but a new
+// commit (or a checkout) is never missed.
+test.skipIf(!gitAvailable)("codeActivity: a repo whose HEAD did not move is not asked again; a new commit is counted", async () => {
+  const repo = tmpRepoUnderHome();
+  writeFileSync(join(repo, "a.ts"), "one\ntwo\n", "utf8");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "seed");
+  const first = await codeActivity({ workspaces: [repo] });
+  expect(first.totals).toEqual({ added: 2, deleted: 0, files: 1 });
+  const k1 = await activityKey(repo, new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  expect(k1).not.toBeNull();
+
+  // Nothing moved: the same total, and the key it is remembered under is unchanged.
+  const again = await codeActivity({ workspaces: [repo] });
+  expect(again.totals).toEqual(first.totals);
+  expect(await activityKey(repo, new Date(new Date().getFullYear(), new Date().getMonth(), 1))).toBe(k1);
+
+  // The commit appends a reflog line, so the key changes by size even within one mtime tick.
+  writeFileSync(join(repo, "b.ts"), "x\ny\nz\n", "utf8");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "more");
+  const after = await codeActivity({ workspaces: [repo] });
+  expect(after.totals).toEqual({ added: 5, deleted: 0, files: 2 });
+});
+
+test("activityKey: no reflog (not a repo) gives no key (codeActivity falls back to a 10 minute clock)", async () => {
+  const dir = mkdtempSync(join(homedir(), ".lucid-nokey-test-"));
+  cleanup.push(dir);
+  expect(await activityKey(dir, new Date())).toBeNull();
+});
+
 test.skipIf(!gitAvailable)("codeActivity: commits before this month are excluded by the window", async () => {
   const repo = tmpRepoUnderHome();
   writeFileSync(join(repo, "old.ts"), "x\n", "utf8");
@@ -136,4 +167,38 @@ test.skipIf(!gitAvailable)("codeActivity: confirms our own .git layout is detect
   // sanity: the helper actually produced a git repo
   const repo = tmpRepoUnderHome();
   expect(existsSync(join(repo, ".git"))).toBe(true);
+});
+
+// P-PERF.IDLE1: opening LUCID shows the last count without running git. The counts survive a restart through the
+// store, and the cached read never recounts: a commit made after the count only shows once the user asks again.
+test.skipIf(!gitAvailable)("cachedCodeActivity: serves the stored count after a restart and never recounts on its own", async () => {
+  const repo = tmpRepoUnderHome();
+  const storeDir = mkdtempSync(join(homedir(), ".lucid-codeact-store-"));
+  cleanup.push(storeDir);
+  const store = join(storeDir, "code-activity.json");
+  setCodeActivityStore(store);
+  try {
+    __resetCodeActivity();
+    expect((await cachedCodeActivity()).countedAt).toBeNull();
+    writeFileSync(join(repo, "a.ts"), "one\ntwo\n", "utf8");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "seed");
+    const counted = await codeActivity({ workspaces: [repo] });
+    expect(counted.totals).toEqual({ added: 2, deleted: 0, files: 1 });
+    expect(existsSync(store)).toBe(true);
+
+    __resetCodeActivity(); // a restart: memory empty, the store remains
+    writeFileSync(join(repo, "b.ts"), "x\ny\nz\n", "utf8");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "more");
+    const cached = await cachedCodeActivity();
+    expect(cached.workspaces.find((w) => w.path === counted.workspaces[0]!.path)?.added).toBe(2);
+    expect(cached.countedAt).toBe(counted.countedAt);
+
+    const recount = await codeActivity({ workspaces: [repo] });
+    expect(recount.totals).toEqual({ added: 5, deleted: 0, files: 2 });
+  } finally {
+    setCodeActivityStore(null);
+    __resetCodeActivity();
+  }
 });

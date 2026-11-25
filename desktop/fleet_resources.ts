@@ -119,10 +119,10 @@ export function laneAdmission(history: PressureSample[], linePct = FLEET_PRESSUR
   };
   const held = `held ${linePct}%+ for ${secs(sustainMs)}s`;
   if (memHot >= sustainMs) {
-    return { ...base, ok: false, reason: `system memory has been at ${Math.round(base.memPct ?? linePct)}% for ${secs(memHot)}s (${held} is not a burst) - stop a lane or close something before adding one` };
+    return { ...base, ok: false, reason: `system memory has been at ${Math.round(base.memPct ?? linePct)}% for ${secs(memHot)}s (${held} is not a burst) - stop an agent or close something before adding one` };
   }
   if (cpuHot >= sustainMs) {
-    return { ...base, ok: false, reason: `system CPU has been at ${Math.round(base.cpuPct ?? linePct)}% for ${secs(cpuHot)}s (${held} is not a burst) - let the current work drain before adding a lane` };
+    return { ...base, ok: false, reason: `system CPU has been at ${Math.round(base.cpuPct ?? linePct)}% for ${secs(cpuHot)}s (${held} is not a burst) - let the current work drain before adding an agent` };
   }
   return base;
 }

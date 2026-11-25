@@ -19,6 +19,8 @@ describe("market_gate provider seam", () => {
     expect(await nullProvider.entitlement("p1")).toBeNull();
     expect(await nullProvider.checkoutUrl("p1", "one-time")).toBeNull();
     expect(await nullProvider.downloadUrl("p1")).toBeNull();
+    expect(await nullProvider.checkoutUrl("bundle-sponsor", "one-time", { picks: ["world-farm"] })).toBeNull();
+    expect((await nullProvider.redeemWorldCredit("world-farm")).ok).toBe(false); // P-WORLDS.STORE1: never grants
   });
 
   test("an unconfigured build decides `signin` for every pack (never pull)", async () => {
@@ -32,6 +34,7 @@ describe("market_gate provider seam", () => {
       auth: async () => ({ signedIn: true, email: "a@b.com" }),
       entitlement: async () => ({ packId: "p1", state: "active" }),
       checkoutUrl: async () => "https://checkout.example/p1",
+      redeemWorldCredit: async () => ({ ok: true, remaining: 5 }),
       downloadUrl: async () => "https://signed.example/p1.lkgpack",
       govAccess: async () => "none",
       requestGovAccess: async () => null,

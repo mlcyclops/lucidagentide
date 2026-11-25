@@ -94,6 +94,34 @@ jobs:
       - name: Packaged-boot guard (release boots under the packaging filter)
         run: bun test desktop/packaged_boot.test.ts
 
+  # P-SETUX.1 (ADR-0617, AGENTS.md invariant #12): a PR that touches a UI surface must carry the ticked
+  # "UX review" checklist from .github/pull_request_template.md (or `UX: N/A (reason)`), and no added UI
+  # line may contain an em dash. The body is fetched from the API at run time, not read from the event
+  # payload, so editing the PR body and re-running this job picks up the edit.
+  ux-gate:
+    name: UX review gate (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: UX review gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.body // ""' > "$RUNNER_TEMP/pr_body.md"
+          bun run tools/ux_pr_gate.ts --base "$BASE_SHA" --head "$HEAD_SHA" --body-file "$RUNNER_TEMP/pr_body.md"
+
   # P-HOLDER.1 (ADR-0534): the holder's POSIX half (setsid, the agent's process group, the Unix socket) only runs
   # here; the Windows gate below covers the job object and the named pipe.
   holder-posix:

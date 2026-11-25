@@ -130,7 +130,7 @@ export async function closeLaneWorktree(wt: { root: string; path: string; branch
     if (status.out) {
       const add = await git(wt.path, ["add", "-A"]);
       const made = add.ok ? await git(wt.path, [...SNAPSHOT_IDENTITY, "commit", "--no-verify", "-q", "-m", message]) : add;
-      if (!made.ok) return { ok: false, reason: `git could not commit the lane's work to ${wt.branch}, so its worktree stays at ${wt.path}: ${made.err.split(/\r?\n/).pop() || "unknown error"}` };
+      if (!made.ok) return { ok: false, reason: `git could not commit the agent's work to ${wt.branch}, so its worktree stays at ${wt.path}: ${made.err.split(/\r?\n/).pop() || "unknown error"}` };
       commit = (await git(wt.path, ["rev-parse", "HEAD"])).out || null;
     }
     await git(wt.root, ["worktree", "remove", "--force", wt.path]);

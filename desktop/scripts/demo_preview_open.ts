@@ -61,7 +61,7 @@ const desktop = Bun.serve({
 const prevUrl = process.env.LUCID_PREVIEW_OPEN_URL;
 try {
   // A path shaped like the real one that failed in the field: OneDrive, spaces, a dot-dir.
-  const target = "C:/Users/n/OneDrive/Desktop/Apps AI Vibe/proj/.omp/tmp/hardening.html";
+  const target = "C:/Users/n/OneDrive/Desktop/My Projects/proj/.omp/tmp/hardening.html";
 
   console.log("[1] the OLD detection is genuinely dead under intent tracing (why this increment exists)");
   const ri = { path: target, i: "Opening rendered deck in preview" };

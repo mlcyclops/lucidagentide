@@ -18,6 +18,8 @@ export interface JobView {
   id: string; name: string; prompt: string; cron: string; armed: boolean; autoApprove: boolean; maxMinutes: number;
   missed: "run-once" | "skip"; createdAt: number; lastRunAt?: number; lastOutcome?: JobOutcome; suspended?: string;
   nextFireAt: number | null; history: JobRunView[];
+  /** P-SCHED.AGENT1: a one-time run (disarmed by the engine after its date). */
+  once?: boolean;
   target: { laneId?: string; name: string; cwd: string; model?: string; repo?: string };
 }
 export interface UpcomingFire { at: number; jobId: string; name: string; lane: string; repo: string }
@@ -110,7 +112,7 @@ function outcomePill(j: JobView, running: boolean): string {
   if (running) return `<span class="pill">running</span>`;
   if (j.suspended) return `<span class="pill quarantined">suspended</span>`;
   if (!j.armed) return `<span class="pill dismissed">disarmed</span>`;
-  if (j.lastOutcome === "waiting") return `<span class="pill dismissed">waiting on the lane</span>`;
+  if (j.lastOutcome === "waiting") return `<span class="pill dismissed">waiting on the agent</span>`;
   if (j.lastOutcome === "error" || j.lastOutcome === "timeout") return `<span class="pill quarantined">${esc(j.lastOutcome)}</span>`;
   return `<span class="pill">armed</span>`;
 }
@@ -146,14 +148,14 @@ export function jobRowHtml(j: JobView, now: number, running: boolean): string {
 export function jobsSheetHtml(data: JobsData, targets: JobTargetView[], now: number): string {
   const rows = data.jobs.map((j) => jobRowHtml(j, now, data.running.includes(j.id))).join("");
   const opts = targets.map((t) => `<option value="${esc(t.laneId)}">${esc(`${t.name} · ${repoLabel(t)}${t.live ? "" : " (remembered)"}`)}</option>`).join("");
-  return `<div class="jobs-head"><span class="jobs-title">${icon("calendar", 16)} Scheduled jobs</span><span class="jobs-sub">Wake a Fleet lane while you are away. LUCID must stay open; a job runs with the lane's model and folder.</span><button class="set-close" data-jobs-close aria-label="Close">${icon("close", 16)}</button></div>
+  return `<div class="jobs-head"><span class="jobs-title">${icon("calendar", 16)} Scheduled jobs</span><span class="jobs-sub">Wake a Fleet agent while you are away. LUCID must stay open; a job runs with the agent's model and folder.</span><button class="set-close" data-jobs-close aria-label="Close">${icon("close", 16)}</button></div>
   <div class="jobs-body">
     <div class="jobs-list">${rows || `<div class="cfg-empty">No jobs yet. Add one below; it starts disarmed.</div>`}</div>
     <form class="job-form" data-job-form>
       <div class="job-form-h">${icon("plus", 13)} New job</div>
       <label class="job-f"><span>Name</span><input class="prov-key" name="name" required maxlength="80" placeholder="Nightly ticket triage" /></label>
-      <label class="job-f"><span>Lane</span><select class="prov-key" name="target" required>${opts || `<option value="">no lanes yet (spawn one in Fleet)</option>`}</select></label>
-      <label class="job-f"><span>Prompt</span><textarea class="prov-key" name="prompt" rows="3" required placeholder="What the lane should do when the job fires"></textarea></label>
+      <label class="job-f"><span>Agent</span><select class="prov-key" name="target" required>${opts || `<option value="">no agents yet (spawn one in Fleet)</option>`}</select></label>
+      <label class="job-f"><span>Prompt</span><textarea class="prov-key" name="prompt" rows="3" required placeholder="What the agent should do when the job fires"></textarea></label>
       <div class="job-f"><span>When</span>
         <div class="job-when">
           <select class="prov-key" name="kind"><option value="daily">Every day at</option><option value="weekly">Weekly at</option><option value="cron">Cron expression</option></select>

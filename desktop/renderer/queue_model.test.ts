@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { Attachment } from "./composer_attachments.ts";
-import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pushLaneName, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts";
+import { addQueued, canSteer, editQueued, laneDrainReady, mainCheckoutCwd, nextHold, parallelPushNotice, parallelPushPrompt, parallelPushRefusal, pollLaneView, pushLaneName, pushNowRoute, pushRecovery, stageKeyFor, stageSignature, type PushSource, type QueuedItem } from "./queue_model.ts";
 
 const hold = (text: string): QueuedItem => ({ text, mode: "hold" });
 const push = (text: string): QueuedItem => ({ text, mode: "push" });
@@ -226,7 +226,7 @@ describe("parallel push: what the new agent and the user are told", () => {
     const text = "add a retry to the uploader\nwith backoff";
     const out = parallelPushPrompt(laneSrc, { branch: "lucid/api-push-1-ab12cd", path: "C:\\work\\repo.lucid-worktrees\\api-push-1-ab12cd" }, text);
     expect(out.endsWith(`\n\n${text}`)).toBe(true);
-    expect(out).toContain(`lane "api"`);
+    expect(out).toContain(`agent "api"`);
     expect(out).toContain("still working on its own task in C:\\work\\repo\\desktop");
     expect(out).toContain("own git worktree");
     expect(out).toContain("branch lucid/api-push-1-ab12cd");
@@ -238,10 +238,10 @@ describe("parallel push: what the new agent and the user are told", () => {
 
   test("the user hears it at once, then again with the branch; a not-busy source is never called busy", () => {
     const now = parallelPushNotice(laneSrc, "api-push-1", { busy: true });
-    expect(now.desc).toBe("api is still working on its current task. Your request is being actioned in parallel by a new lane, api-push-1, in its own worktree.");
+    expect(now.desc).toBe("api is still working on its current task. Your request is being actioned in parallel by a new agent, api-push-1, in its own worktree.");
     const later = parallelPushNotice(masterSrc, "main-push-1", { busy: true, branch: "lucid/main-push-1-ff" });
     expect(later.title).toBe("Running in parallel: main-push-1");
-    expect(later.desc).toBe("The main agent is still working on its current task. Your request is being actioned in parallel by a new lane, main-push-1, in its own worktree (branch lucid/main-push-1-ff).");
+    expect(later.desc).toBe("The main agent is still working on its current task. Your request is being actioned in parallel by a new agent, main-push-1, in its own worktree (branch lucid/main-push-1-ff).");
     expect(parallelPushNotice(laneSrc, "api-push-1", { busy: false }).desc).not.toContain("still working");
   });
 });
@@ -296,5 +296,45 @@ describe("laneDrainReady (P-PUSH.PAR1)", () => {
     expect(laneDrainReady({ ...idle, status: "needs-approval" })).toBe(false);
     expect(laneDrainReady({ ...idle, streaming: true })).toBe(false);
     expect(laneDrainReady({ ...idle, queued: 0 })).toBe(false);
+  });
+});
+
+// P-FLEET.DRAIN1 (ADR-0644): measured in the real UI with one status answer held back 4 s (what a pegged machine
+// does): the late answer restored the drained prompt, the drain's end ran it again, and the card printed the
+// prompt twice plus a red "queue is empty".
+describe("pollLaneView (P-FLEET.DRAIN1)", () => {
+  const local = { queued: [] as string[], status: "working", model: "a", usage: 1 };
+  const stale = { queued: ["drained already"], status: "done", model: "b", usage: 2 };
+  test("a poll asked before the last drain cannot put the drained prompt back or mark the lane idle", () => {
+    const v = pollLaneView(stale, local, 1_000, 1_500);
+    expect(v.queued).toEqual([]);
+    expect(v.status).toBe("working");
+    expect(laneDrainReady({ streaming: false, queued: v.queued.length, status: v.status, pushing: false })).toBe(false);
+  });
+  test("the rest of a stale poll is still taken", () => {
+    expect(pollLaneView(stale, local, 1_000, 1_500)).toMatchObject({ model: "b", usage: 2 });
+  });
+  test("a poll asked at or after the drain is the truth, queue and status included", () => {
+    expect(pollLaneView(stale, local, 1_500, 1_500)).toEqual(stale);
+    expect(pollLaneView(stale, local, 2_000, 1_500)).toEqual(stale);
+  });
+});
+
+// P-FLEET.STAGE1 (ADR-0609): pressing Stage again after a failed attempt must reuse that attempt's id when the
+// draft is unchanged (the attempt may have landed and only its answer was lost), and must not when it changed.
+describe("lane stage ids", () => {
+  const png = { data: "aGVsbG8=", mimeType: "image/png" };
+  let n = 0;
+  const mint = (): string => `id-${++n}`;
+  test("the same draft keeps its id; a new draft, image or file gets a new one", () => {
+    const first = stageKeyFor(null, stageSignature("fix the build", [png], ["att-1"]), mint);
+    expect(stageKeyFor(first, stageSignature("fix the build", [png], ["att-1"]), mint)).toBe(first);
+    expect(stageKeyFor(first, stageSignature("fix the build!", [png], ["att-1"]), mint).id).not.toBe(first.id);
+    expect(stageKeyFor(first, stageSignature("fix the build", [], ["att-1"]), mint).id).not.toBe(first.id);
+    expect(stageKeyFor(first, stageSignature("fix the build", [png], ["att-2"]), mint).id).not.toBe(first.id);
+  });
+  test("after a confirmed stage (no previous key) the same words get a fresh id, so staging them twice on purpose works", () => {
+    const sig = stageSignature("continue", [], []);
+    expect(stageKeyFor(null, sig, mint).id).not.toBe(stageKeyFor(null, sig, mint).id);
   });
 });

@@ -44,6 +44,16 @@
    identifier that must be ABSENT. This is the ADR-0303 vacuous-green trap in
    its most expensive form, because everything looks green and the user sees no
    change at all.
+1. **If you touched a UI control, prove it in the running UI, not just in unit tests.** Drive the real
+   control with real input (puppeteer-core over CDP against an isolated QA engine or a second instance)
+   in EVERY layout it lives in (for example Ask Lucid docked right, docked bottom and floating; a narrow
+   and a wide window), and assert what the user sees: `document.elementFromPoint` at the control's
+   center must hit the control, not a panel on top of it. Keep the check as a re-runnable
+   `desktop/scripts/demo_<id>.mjs` (pattern: `demo_p_askplus_1.mjs`) and show it failing against the
+   old behavior once. A menu that opens behind its own panel passes every unit test (ADR-0632).
+   In the same run, `auditBoxes` from `desktop/scripts/demo_p_spacing_1.mjs` must pass on the changed
+   surface: no two boxes touch, stacked fields share a width, cards sit one even gap apart (ADR-0633).
+   Settings changes run `make demo-P-SPACING.1` (both layouts, every card).
 1. Append exactly 3 lines to PROGRESS.md: shipped / stubbed / next.
 
 Do not start the next increment in the same session. A half-finished second
@@ -160,6 +170,15 @@ icon and let the text flow as a normal BLOCK paragraph. NEVER place raw text plu
 inline tags directly as siblings inside a flex box. And mockups MUST reuse the real
 component CSS (or copy it verbatim) - a hand-rolled divergent style that flexes
 prose is this same bug wearing a costume, which is exactly how it slipped back in.
+
+### 12. UI/UX changes pass the UX gate.
+
+A PR that touches `desktop/renderer/**` (not tests), `desktop/*.html` or `mockups/**`
+carries the ticked "UX review" checklist from `.github/pull_request_template.md`
+(rules: `docs/UX-PR-CHECKLIST.md`, baseline: `docs/UX-REVIEW.md`) or one line
+`UX: N/A (reason)`. Every added control, card or overlay pays for itself in the
+complexity budget. CI runs `tools/ux_pr_gate.ts`, which also fails on any em dash
+in an added UI line (ADR-0617).
 
 -----
 

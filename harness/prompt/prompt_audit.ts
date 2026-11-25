@@ -13,7 +13,7 @@
 // offline: echo mock model, in-memory session store, temp auth, MCP/LSP off.
 //
 // Accounting parity is load-bearing: totals reuse omp's OWN counters (the agent's
-// Tokenizer, estimateToolSchemaTokens, estimateSkillsTokens, computeNonMessageTokens)
+// Tokenizer, estimateToolSchemaTokens, computeNonMessageBreakdown, computeNonMessageTokens)
 // through the SAME tokenizer instance omp itself resolves for /context (session-stats.ts:
 // `get #tokenizer() { return this.#host.agent.tokenizer; }`), so the audit's baseline is
 // the number omp's /context panel would show, not a parallel estimate that drifts.
@@ -39,7 +39,10 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 // omp 18.2.5 moved the terminal UI modules (status line included) into @oh-my-pi/pi-tui and removed
 // the coding-agent subpaths; pi-tui is exact-pinned alongside the other four omp packages for that.
-import { computeNonMessageTokens, estimateSkillsTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
+// omp 18.21 removed estimateSkillsTokens (a name+description estimate): skills are now located in the
+// built prompt (session.systemPromptSources) and counted from their rendered bytes, which is what
+// /context shows. The audit reads the same claims, so the skills rows are measured, not estimated.
+import { claimPromptSources, computeNonMessageBreakdown, computeNonMessageTokens, estimateToolSchemaTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import type { Tool as AiTool } from "@oh-my-pi/pi-ai";
 import { loadProjectContextFiles } from "@oh-my-pi/pi-coding-agent/system-prompt";
 import { buildWorkspaceTree } from "@oh-my-pi/pi-coding-agent/workspace-tree";
@@ -256,11 +259,17 @@ export async function captureAssembly(options: CaptureOptions = {}): Promise<Aud
       source: builtinNames.has(t.name) ? "builtin" : "extension",
     }));
 
-    const skills = session.skills ?? [];
-    const skillRows = skills.map((s: { name: string; description: string }) => ({
-      name: s.name,
-      tokens: tokenizer.countTokens([s.name, s.description]),
-    }));
+    // One row per skill omp actually rendered, counted over the exact range its source claim names
+    // (the slice omp's computeNonMessageBreakdown counts). A skill whose block changed after the
+    // build is not claimed, so omp does not count it as a skill either; it stays in its block's total.
+    const skillRows: Array<{ name: string; tokens: number }> = [];
+    for (const [index, claims] of claimPromptSources(blocks, session.systemPromptSources).byBlock) {
+      const block = blocks[index] ?? "";
+      for (const source of claims) {
+        if (source.kind !== "skills") continue;
+        skillRows.push({ name: source.label, tokens: tokenizer.countTokens(block.slice(source.start, source.end)) });
+      }
+    }
 
     const contextFiles = (await loadProjectContextFiles({ cwd })).map((f) => {
       const rel = relative(cwd, f.path);
@@ -288,7 +297,7 @@ export async function captureAssembly(options: CaptureOptions = {}): Promise<Aud
       tools: auditTools,
       toolsTokens: estimateToolSchemaTokens(tools, tokenizer),
       skills: skillRows,
-      skillsTokens: estimateSkillsTokens(skills, tokenizer),
+      skillsTokens: computeNonMessageBreakdown(session, tokenizer).skillsTokens,
       appendedPolicyTokens: tokenizer.countTokens(appended),
       policyRows: policyParts().map((p) => ({ label: p.label, tokens: tokenizer.countTokens(p.text) })),
       contextFiles,
@@ -449,7 +458,7 @@ export function renderReport(r: AuditReport, detail = 8): string {
   lines.push(pad("-", 58).replace(/ /g, "-") + "-------");
   lines.push(`${pad("non-message baseline (omp computeNonMessageTokens)", 58)}${num(r.total, 7)}`);
   if (r.accounted !== r.total) {
-    lines.push(`${pad("section sum (skills estimator vs in-prompt rendering)", 58)}${num(r.accounted, 7)}`);
+    lines.push(`${pad("section sum (per-block and per-tool counts)", 58)}${num(r.accounted, 7)}`);
   }
   lines.push("");
   lines.push(`window ${r.window}: baseline leaves ${r.workingRoom} tokens of working room`);

@@ -18,11 +18,20 @@ cfg.appId = "com.lucidcreator.desktop";
 cfg.productName = "LucidCreator";
 cfg.directories = { ...cfg.directories, output: "release-creator" };
 // Packaged identity + the flavor marker desktop/main.ts reads from the app's own package.json.
+// `description` is what Windows shows when you hover the desktop / Start-menu shortcut (NSIS writes it as
+// the shortcut comment, APP_DESCRIPTION) and the exe's FileDescription. Without this override Creator
+// inherited Agent's text. No em dash in either (P-SETUX.1, ADR-0618).
 cfg.extraMetadata = {
   name: "lucidcreator-desktop",
   productName: "LucidCreator",
+  description: "Lucid Creator: secure AI creator studio for audio, video, images and 3D",
   lucidBuildFlavor: "creator",
 };
+
+// Icon identity (P-SETUX.1, ADR-0618): Creator gets its own installer, uninstaller, exe, shortcut and app
+// icon, a derivative of the Agent icon (build/icon-creator.svg; make-icons.ts rasterizes both families).
+const CREATOR_ICON_ICO = "build/icon-creator.ico";
+const CREATOR_ICON_PNG = "build/icon-creator.png";
 // Creator claims its OWN scheme. It must never register lucid:// - that belongs to the Agent build.
 cfg.protocols = [{ name: "Lucid Creator", schemes: ["lucid-creator"] }];
 
@@ -65,6 +74,7 @@ cfg.publish = [
 
 cfg.mac = {
   ...cfg.mac,
+  icon: CREATOR_ICON_PNG,
   artifactName: "LucidCreator-mac-${arch}.${ext}",
   extendInfo: { ...(cfg.mac && cfg.mac.extendInfo), CFBundleDisplayName: "Lucid Creator" },
 };
@@ -76,12 +86,20 @@ cfg.pkg = { ...cfg.pkg, mustClose: ["com.lucidcreator.desktop"] };
 // nsis + portable, so the two targets and their config blocks are dropped rather than renamed.
 const AGENT_ONLY_WIN_TARGETS = ["msi", "appx"];
 const winTargetName = (t) => (typeof t === "string" ? t : t && t.target);
-cfg.win = { ...cfg.win, target: (cfg.win.target || []).filter((t) => !AGENT_ONLY_WIN_TARGETS.includes(winTargetName(t))) };
+cfg.win = { ...cfg.win, icon: CREATOR_ICON_ICO, target: (cfg.win.target || []).filter((t) => !AGENT_ONLY_WIN_TARGETS.includes(winTargetName(t))) };
 for (const name of AGENT_ONLY_WIN_TARGETS) delete cfg[name];
-cfg.nsis = { ...cfg.nsis, shortcutName: "Lucid Creator", artifactName: "LucidCreator-Setup.${ext}" };
+cfg.nsis = {
+  ...cfg.nsis,
+  shortcutName: "Lucid Creator",
+  artifactName: "LucidCreator-Setup.${ext}",
+  installerIcon: CREATOR_ICON_ICO,
+  uninstallerIcon: CREATOR_ICON_ICO,
+  installerHeaderIcon: CREATOR_ICON_ICO,
+};
 cfg.portable = { ...cfg.portable, artifactName: "LucidCreator-portable.${ext}" };
 cfg.linux = {
   ...cfg.linux,
+  icon: CREATOR_ICON_PNG,
   desktop: { ...(cfg.linux && cfg.linux.desktop), Name: "Lucid Creator" },
   synopsis: "Sovereignty-aware, fail-closed AI creator studio",
   artifactName: "LucidCreator-x86_64.${ext}",

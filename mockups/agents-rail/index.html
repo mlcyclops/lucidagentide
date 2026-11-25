@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- Copyright (c) 2026 TechLead 187 LLC / SPDX-License-Identifier: BUSL-1.1 -->
+<!-- Agents rail mockups: launcher for the three visual directions (live, scaled previews). Self-contained, no network. -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LUCID · Agents rail mockups</title>
+<style>
+/* tokens: a subset of desktop/renderer/styles.css lucid-dark */
+:root{--bg-0:#0a0b0f;--bg-1:#0f1117;--bg-2:#151823;--bg-3:#1b1f2b;--bg-glow:#16101f;--line:#252a3a;--line-soft:#1a1e2a;--line-strong:#323a4f;
+  --txt:#edeff6;--txt-2:#aeb4c6;--txt-3:#727a90;--accent-2:#e07bf0;--hero:#41ff8b;--hero-rgb:65 255 139;--sh-rgb:0 0 0;
+  --ease-out:cubic-bezier(.16,1,.3,1);--t:180ms;
+  --font:"Inter",ui-sans-serif,-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{min-height:100vh;background:radial-gradient(1200px 700px at 80% -10%,var(--bg-glow) 0%,transparent 55%),var(--bg-0);color:var(--txt);
+  font-family:var(--font);font-size:13px;line-height:1.55;-webkit-font-smoothing:antialiased;padding:28px 32px 48px}
+h1{margin:0;font-size:19px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{margin:4px 0 22px;max-width:880px;color:var(--txt-2);font-size:13px}
+.grid{display:flex;flex-wrap:wrap;gap:20px}
+.card{display:block;width:468px;text-decoration:none;color:inherit;background:var(--bg-1);border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 2px 6px rgb(var(--sh-rgb) / .35);transition:transform var(--t) var(--ease-out),border-color var(--t),box-shadow var(--t)}
+.card:hover{transform:translateY(-3px);border-color:rgb(var(--hero-rgb) / .45);box-shadow:0 14px 30px -14px rgb(var(--hero-rgb) / .55)}
+.card:focus-visible{outline:2px solid var(--accent-2);outline-offset:3px}
+.prev{position:relative;height:300px;overflow:hidden;border-bottom:1px solid var(--line-soft);background:var(--bg-0)}
+.prev iframe{position:absolute;left:0;top:0;width:1500px;height:1000px;border:0;transform:scale(.312);transform-origin:0 0;pointer-events:none}
+.meta{padding:12px 14px 14px}
+.k{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.t{font-size:15px;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.d{margin:6px 0 0;color:var(--txt-2);font-size:12.5px}
+.foot{margin-top:24px;color:var(--txt-3);font-size:12px}
+.foot a{color:var(--accent-2)}
+@media (prefers-reduced-motion:reduce){.card{transition:none}}
+</style></head>
+<body>
+<h1>Agents rail · three visual directions</h1>
+<p class="sub">A new Agents view for the right metrics rail: a mini LUCID toggle sits right of the expand button, and each Agent (a recent repo, working folder, or saved Agent) lives in a metric-sized box as a mini Lucid sealed in a block. Each page shows the real app proportions, both toggle states and hover, six Agents in different colors and states, the hover module with Activate expanded, and a first-run variant. Previews below are live; open a card for the full page.</p>
+<div class="grid">
+  <a class="card" href="a-glass-brick.html">
+    <div class="prev"><iframe src="a-glass-brick.html" title="Direction A preview" loading="lazy" tabindex="-1"></iframe></div>
+    <div class="meta"><div class="k">Direction A</div><div class="t">Glass brick</div>
+      <p class="d">The Brick Brigade brick, made translucent in the Agent's color: bevel, recessed window, gloss band, glass streaks, troop trim. A smooth vector chibi Lucid inside.</p></div>
+  </a>
+  <a class="card" href="b-pixel-brick.html">
+    <div class="prev"><iframe src="b-pixel-brick.html" title="Direction B preview" loading="lazy" tabindex="-1"></iframe></div>
+    <div class="meta"><div class="k">Direction B</div><div class="t">Pixel brick</div>
+      <p class="d">The real 20 x 26 mascot grid from mascot.ts at 1 px per cell, sealed in a pixel-art brick. Frame-swap animation only, so it stays crisp at 1x, 2x and 4x.</p></div>
+  </a>
+  <a class="card" href="c-voxel-cube.html">
+    <div class="prev"><iframe src="c-voxel-cube.html" title="Direction C preview" loading="lazy" tabindex="-1"></iframe></div>
+    <div class="meta"><div class="k">Direction C</div><div class="t">Voxel cube</div>
+      <p class="d">An isometric glass cube on a voxel pedestal in the Agent's color, the Lucid inside like a figurine in a display case. The toggle's hexagon turns like a voxel.</p></div>
+  </a>
+</div>
+<p class="foot">Design notes and open questions: <a href="README.md">README.md</a></p>
+</body></html>

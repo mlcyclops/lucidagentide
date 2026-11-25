@@ -11,8 +11,9 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { Database as Sqlite } from "bun:sqlite";
+import { sessionFilesSync } from "./session_files.ts";
 
 // ── model context windows (tokens) ────────────────────────────────────────────
 // Keyed by the SHORT model id (provider prefix stripped). Keep in sync with
@@ -60,33 +61,27 @@ export interface Session {
 /** Newest session whose `session.cwd` matches our cwd; else newest overall. */
 // P-PERF.3: the sessions dir grows without bound (thousands of .jsonl files). Re-walking + re-stat-ing them all
 // on every memory-snapshot poll is a multi-second SYNCHRONOUS block that stalls the server event loop — and the
-// model's reply streaming with it. Cache the walk (short TTL) and the per-transcript parse (by mtime) so repeat
-// polls are cheap; a new session/turn shows within the TTL / on the next mtime change.
-const _SESS_SCAN_TTL = 15_000;
-let _sessScan: { root: string; at: number; files: { p: string; mtime: number }[] } | null = null;
-function scanSessions(root: string): { p: string; mtime: number }[] {
-  if (_sessScan && _sessScan.root === root && Date.now() - _sessScan.at < _SESS_SCAN_TTL) return _sessScan.files;
-  const files: { p: string; mtime: number }[] = [];
-  if (existsSync(root)) for (const d of readdirSync(root)) {
-    const dir = join(root, d);
-    try { if (!statSync(dir).isDirectory()) continue; for (const f of readdirSync(dir)) if (f.endsWith(".jsonl")) files.push({ p: join(dir, f), mtime: statSync(join(dir, f)).mtimeMs }); }
-    catch { /* skip unreadable dir */ }
-  }
-  files.sort((a, b) => b.mtime - a.mtime);
-  _sessScan = { root, at: Date.now(), files };
-  return files;
-}
+// model's reply streaming with it. Cache the per-transcript parse (by mtime) so repeat
+// polls are cheap; a new session/turn shows on the next mtime change.
+// P-PERF.IDLE1: the file list is the shared incremental index (tools/session_files.ts): after its one build a call
+// re-stats only what changed, never the whole tree, and line one is read from a bounded head, never the whole file.
 const _parseCache = new Map<string, { mtime: number; s: Session }>();
+/** P-PERF.IDLE1: bytes read to find a transcript's first line. */
+const FIRST_LINE_BYTES = 64 * 1024;
 
 export function findSession(explicit?: string): string | undefined {
   if (explicit) return existsSync(explicit) ? explicit : undefined;
   const root = join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(root)) return undefined;
   const cwd = process.cwd();
-  const files = scanSessions(root); // P-PERF.3: TTL-cached walk
+  const files = sessionFilesSync(root);
+  const buf = Buffer.allocUnsafe(FIRST_LINE_BYTES);
   for (const { p } of files) {
     try {
-      const first = readFileSync(p, "utf8").split("\n", 1)[0] ?? "";
+      const fd = openSync(p, "r");
+      let first: string;
+      try { first = buf.toString("utf8", 0, readSync(fd, buf, 0, FIRST_LINE_BYTES, 0)).split("\n", 1)[0] ?? ""; }
+      finally { closeSync(fd); }
       const o = JSON.parse(first);
       if (o?.type === "session" && o.cwd === cwd) return p;
     } catch {
@@ -106,8 +101,7 @@ export function sessionPathById(id: string | null | undefined): string | undefin
   if (!id) return undefined;
   const root = join(homedir(), ".omp", "agent", "sessions");
   if (!existsSync(root)) return undefined;
-  const matches = scanSessions(root).filter((x) => x.p.includes(id)); // P-PERF.3: reuse the cached walk (already newest-first)
-  return matches[0]?.p;
+  return sessionFilesSync(root).find((x) => x.name.includes(id))?.p; // P-PERF.IDLE1: the shared index, already newest-first
 }
 
 export function parseSession(path: string): Session {

@@ -789,4 +789,45 @@
 //            subagent per-call model choice as a LUCID setting (#628, ADR-0602); the titlebar fits a narrow
 //            window (#629, ADR-0603). PRERELEASE: never marked Latest; the Homebrew cask and stable installs
 //            stay on 2.5.3.
-export const APP_VERSION = "2.5.4-beta.5";
+// v2.5.4-beta.6 = 2.5.4-beta.5 plus: lucid-relay parity wave D (#627); the GLM preset advertises reasoning
+//            effort (#635, ADR-0607); omp 18.21.0 (#638, ADR-0608); held lanes share one scanner per omp process
+//            and no longer leak sidecars (#639, ADR-0605); a stale LUCID_SCANNER_DIR no longer wins over the probed
+//            sidecar (#636, ADR-0604); a Fleet lane prompt stages once and never hangs under load (#640,
+//            ADR-0609); Fleet full auto-mode passes data pipes and answers every ask except the managed denylist
+//            (#641, #642, ADR-0610, ADR-0611); remote spokes approve without retyping, held lanes run off the
+//            install folder (#621, ADR-0571..0575). PRERELEASE: never marked Latest; the Homebrew cask and stable
+//            installs stay on 2.5.3.
+// v2.5.4-beta.7 = 2.5.4-beta.6 plus: Fleet boards live in the engine, with board tabs and layout presets
+//            (#622, ADR-0576, ADR-0601); the Fleet header keeps the essentials and the rest moves into More
+//            (#643, ADR-0612); "agent" is the one word for a fleet worker (#643, ADR-0614); Share session gets its
+//            own animated glyph and Relay setup offers the LUCID relay (#644, ADR-0613). PRERELEASE: never marked
+//            Latest; the Homebrew cask and stable installs stay on 2.5.3.
+// v2.5.4-beta.8 = 2.5.4-beta.7 plus (#647): the Settings window with categories and official MCP Quick connect,
+//            email and calendar connectors, and the UX review gate (ADR-0615..0619, ADR-0638); the titlebar
+//            magnifier (ADR-0620); the preview curtain (ADR-0621); Visualize with the anime and office casts, the
+//            session ledger, things to throw and Storm (ADR-0622..0631, ADR-0635..0637); the Ask Lucid "+" menu in
+//            every dock mode (ADR-0632); one Settings spacing standard (ADR-0633); the Fleet header keeps Minimize
+//            only (ADR-0634); full auto means full auto, only managed policy stops it (ADR-0639). PRERELEASE: never
+//            marked Latest; the Homebrew cask and stable installs stay on 2.5.3.
+// v2.6.0 = 2.5.4-beta.8 plus (#650-#654, #656-#660): Lucid Agent Worlds, purchasable world packs for
+//            Visualize with balanced casting, the character kit, GPU quality tiers, plasma streams, build sites and
+//            sandboxed sample mini games (ADR-0648..0654); tool-call approvals inside Visualize (ADR-0655); pop-out
+//            readability (ADR-0656); the scripted QA fleet (ADR-0657); the Windows sandbox names its blocker and host
+//            prep survives reboots (ADR-0658); the Fleet button always brings the fleet back and cards show turns
+//            they did not start (ADR-0659); lost sign-in notice (ADR-0640); P-VIZ.7 sponsors and the stapler
+//            (ADR-0641); Preview fit (ADR-0642); Visualize header clicks (ADR-0643); Fleet drain, Preview over Fleet,
+//            readable Fleet tables and card header clicks (ADR-0644..0647). STABLE: marked Latest; moves the cask.
+// v2.6.1 = 2.6.0 plus documentation: the README and lucid-agents.com showcase Lucid Agent Worlds and name 2.6.1 as
+//            current; ADR-0660 plans docs.lucid-agents.com (screenshots, captioned videos, search, in-app Help links)
+//            for developers and non-developers alike. No app behavior change. STABLE: marked Latest; moves the cask.
+// v2.7.1 = 2.6.1 plus (#671): the right rail's Agents view, mini Lucids in glass bricks with Activate into Main, a Fleet
+//            lane or an Agent World, a two-step + Add agent (ADR-0665, ADR-0666); Schedule this Agent, once or on a repeat
+//            with instructions (ADR-0677); floating Agent buddies with ideas from a smaller model and a red x to hide them
+//            for the session (ADR-0667, ADR-0669, ADR-0676); a walking mini Lucid while an agent starts (ADR-0668); one
+//            preview chip and lane snapshots (ADR-0664); World Packs lead the store and purchases self-heal, Visualize
+//            never flashes (ADR-0661..0663); Ask Lucid's live waiting line, newest small model and right-rail fly-out
+//            (ADR-0670, ADR-0671); no git at open and an idle LUCID near 1% CPU (ADR-0672); the loopback connection cap
+//            lifted so many agents keep the window answering, and a live rail (ADR-0674, ADR-0675); malformed plugin
+//            installs file no Live block, owners hold every store item (ADR-0673). 2.7.0 skipped. STABLE: marked Latest;
+//            moves the cask.
+export const APP_VERSION = "2.7.1";

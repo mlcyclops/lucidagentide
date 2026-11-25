@@ -18,7 +18,7 @@ const io = (content: string, bytes = content.length) => ({ read: () => content, 
 
 describe("toFsPath (round-trip partner of toFileUrl's percent-encoding)", () => {
   test("decodes %20 segments back to spaces (OneDrive-style dirs)", () => {
-    expect(toFsPath("file:///C:/Users/x/OneDrive/Apps%20AI%20Vibe/app.html")).toBe("C:/Users/x/OneDrive/Apps AI Vibe/app.html");
+    expect(toFsPath("file:///C:/Users/x/OneDrive/My%20Projects/app.html")).toBe("C:/Users/x/OneDrive/My Projects/app.html");
     expect(toFsPath("file:///home/n/my%20app/x.html")).toBe("/home/n/my app/x.html");
   });
   test("decodes %25 back to a literal percent sign", () => {
@@ -181,6 +181,12 @@ describe("probePreviewFile", () => {
     const r = probePreviewFile("/a/game.html", { size: () => 1234 });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.kind).toBe("html");
+  });
+
+  test("P-PREVIEW-CURTAIN.1: the size rides along, so an empty file can be called blank", () => {
+    const r = probePreviewFile("/a/empty.html", { size: () => 0 });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.bytes).toBe(0);
   });
 
   test("THE BUG: a missing file does NOT resolve", () => {

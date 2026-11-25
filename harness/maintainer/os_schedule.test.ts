@@ -11,7 +11,7 @@ import type { Cadence } from "./contracts.ts";
 import { ScheduleRefusedError, scheduleInstallPlan, type Platform, type RefusalReason } from "./os_schedule.ts";
 
 // A real path with spaces, of exactly the shape this repository lives at.
-const WIN_EXE = "C:\\Users\\operator\\OneDrive\\Desktop\\Apps AI Vibe\\10-COVERT AGENT IDE\\LucidAgentIDE\\bin\\lucid-maintainer.exe";
+const WIN_EXE = "C:\\Users\\operator\\OneDrive\\Desktop\\My Projects\\Agent IDE\\LucidAgentIDE\\bin\\lucid-maintainer.exe";
 const NIX_EXE = "/opt/Lucid Agent IDE/bin/lucid-maintainer";
 const ARGS = ["maintainer", "sweep", "--target", "core"];
 const DAILY: Cadence = { kind: "daily", hhmm: "02:30" };
@@ -37,11 +37,11 @@ test("win32 daily: schtasks command quotes a space-bearing path the way the CRT 
   const plan = scheduleInstallPlan({ platform: "win32", cadence: DAILY, id: "core", exe: WIN_EXE, args: ARGS });
   expect(plan.register).toBe(
     'schtasks /Create /F /RL LIMITED /TN "LUCID Maintainer core" ' +
-      '/TR "\\"C:\\Users\\operator\\OneDrive\\Desktop\\Apps AI Vibe\\10-COVERT AGENT IDE\\LucidAgentIDE\\bin\\lucid-maintainer.exe\\" maintainer sweep --target core" ' +
+      '/TR "\\"C:\\Users\\operator\\OneDrive\\Desktop\\My Projects\\Agent IDE\\LucidAgentIDE\\bin\\lucid-maintainer.exe\\" maintainer sweep --target core" ' +
       "/SC DAILY /ST 02:30",
   );
   expect(plan.remove).toBe('schtasks /Delete /TN "LUCID Maintainer core" /F');
-  // The exe is wrapped in \" \" so the space inside "Apps AI Vibe" cannot split the argv.
+  // The exe is wrapped in \" \" so the space inside "My Projects" cannot split the argv.
   expect(plan.register).toContain('\\"C:\\Users');
   expect(plan.register).toContain('lucid-maintainer.exe\\"');
   expect(plan.unitPath).toBeUndefined();

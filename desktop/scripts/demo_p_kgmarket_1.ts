@@ -35,6 +35,7 @@ const fake: EntitlementProvider = {
   auth: async () => ({ signedIn: true, email: "buyer@example.com" }),
   entitlement: async () => ent({ method: "gpc" }),
   checkoutUrl: async () => "https://checkout.example/p1",
+  redeemWorldCredit: async () => ({ ok: false, error: "not a world" }),
   downloadUrl: async () => "https://signed.example/p1.lkgpack",
   govAccess: async () => "none",
   requestGovAccess: async () => null,

@@ -27,6 +27,7 @@ import { LaneChannels } from "./lane_channel.ts";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { dirname, join } from "node:path";
+import { LaneRuntime } from "./lane_runtime.ts";
 import { tokenValid } from "./origin_guard.ts";
 import { repoAsset } from "./repo_root.ts";
 import type { LaneTurnRecord } from "./fleet_lanes.ts";
@@ -400,26 +401,56 @@ export interface HeldLaneRecord {
   /** The turn in flight: its session/prompt id, the offset at which it was sent, what the user said, when, and
    *  the agent's requests already answered in it (a replay must not answer them twice). */
   inFlight: { requestId: number; offset: number; text: string; at: number; answered: (number | string)[] } | null;
+  /** P-HOLDER.2 (ADR-0574): the lane runtime copy this lane's processes run from (its key), or null (or absent, a
+   *  record from before it) when they run from the install folder. A copy a record names is never deleted. */
+  runtime?: string | null;
 }
 
-export interface LaunchedHolder extends HolderIdentity { holderId: string; endpoint: string; token: string; channel: string; link: HolderLink }
+/** `runtime`: the lane runtime copy the holder and its agent run from, or null for the install folder. */
+export interface LaunchedHolder extends HolderIdentity { holderId: string; endpoint: string; token: string; channel: string; link: HolderLink; runtime: string | null }
 
 /** The holders of this engine's data root: launching them, and the records that bring their lanes back. */
 export class HolderPool {
   /** LH-03: the channel keys of the held lanes this engine runs (launched here or reattached). */
   readonly channels = new LaneChannels();
 
-  constructor(readonly dir: string, readonly binary: string) {
+  /** `runtime` (P-HOLDER.2, ADR-0574): the versioned copy held lanes run from, null to run them from where the
+   *  engine found them (a source checkout, LUCID_LANE_RUNTIME=install, tests). */
+  constructor(readonly dir: string, readonly binary: string, readonly runtime: LaneRuntime | null = null) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (process.platform !== "win32") chmodSync(dir, 0o700);
   }
 
   /** The pool for this engine, or null when no holder binary is available or the engine has no data root of its
-   *  own. Records name processes to reattach to, so they never live in ~/.omp, which agents can write. */
+   *  own. Records name processes to reattach to, so they never live in ~/.omp, which agents can write. On a
+   *  packaged install the lane runtime copy is made in the background now, and copies no lane uses are removed. */
   static forEngine(env: Record<string, string | undefined> = process.env): HolderPool | null {
     const bin = holderBinary(env);
     if (!bin || !env.LUCID_DATA_ROOT) return null;
-    return new HolderPool(join(env.LUCID_DATA_ROOT, "lane-holders"), bin);
+    const pool = new HolderPool(join(env.LUCID_DATA_ROOT, "lane-holders"), bin, LaneRuntime.forEngine(env));
+    const rt = pool.runtime;
+    if (rt) void rt.prepare().then(() => pool.cleanupRuntimes());
+    return pool;
+  }
+
+  /** The runtime copies the held lanes' records name (never deleted while a record names one), or null when any
+   *  holder record could not be read: its lane's copy is unknown, so no copy can be called unused. */
+  runtimesInUse(): Set<string> | null {
+    const { records, unreadable } = this.#scan();
+    if (unreadable.length) return null;
+    return new Set(records.map((r) => r.runtime).filter((k): k is string => typeof k === "string"));
+  }
+
+  /** Remove the runtime copies no held lane uses. A pass in which any holder record cannot be read removes nothing
+   *  (returns null): that record may name a live lane's copy. */
+  cleanupRuntimes(): string[] | null {
+    if (!this.runtime) return [];
+    const inUse = this.runtimesInUse();
+    if (!inUse) {
+      console.warn(`[lane-holder] runtime cleanup skipped: a holder record in ${this.dir} could not be read (${this.#scan().unreadable.slice(0, 5).join(", ")})`);
+      return null;
+    }
+    return this.runtime.cleanup(inUse);
   }
 
   /** Start a holder for `laneId` running `cmd args` in `cwd` with `env` plus the lane's new channel key, and attach
@@ -430,8 +461,42 @@ export class HolderPool {
     if (!HOLDER_ID_RE.test(holderId)) throw new Error(`lane id "${laneId}" cannot name a holder`);
     const token = randomBytes(32).toString("hex");
     const channel = mintChannelKey();
-    const child = spawn(this.binary, ["run", "--dir", this.dir, "--id", holderId, "--cwd", cwd, "--orphan-ms", String(HELD_IDLE_KEEP_MS), "--", cmd, ...args], {
-      cwd, detached: true, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...env, [CHANNEL_ENV]: channel },
+    // P-HOLDER.2 (ADR-0574): the holder and everything its agent runs come from the runtime copy when there is one,
+    // so an update can replace the install folder while this lane lives on. No copy: the install folder, as before.
+    const copy = this.runtime ? await this.runtime.prepare() : null;
+    const holder = copy ? this.runtime!.holderIn(copy) : null;
+    const plan = copy && holder ? this.runtime!.map(copy, cmd, args, env, cwd) : { cmd, args, env };
+    const fromInstall = !(copy && holder);
+    if (fromInstall) {
+      const why = !this.runtime ? "this engine has no lane runtime copy (a source checkout, or LUCID_LANE_RUNTIME=install)"
+        : !copy ? "the lane runtime copy could not be prepared"
+        : `the lane runtime copy ${copy} has no lane holder`;
+      // An install the person committed to may be replacing these files right now: no new lane starts from them.
+      if (this.#installCommitted) throw new Error(`agent "${laneId}" did not start: an update is installing, and ${why}, so it would run from the install folder`);
+      console.warn(`[lane-holder] lane "${laneId}" runs from the install folder, so an update cannot install while it runs: ${why}`);
+      this.#installLaunches++;
+    }
+    try {
+      return await this.#start(laneId, holderId, token, channel, holder ?? this.binary, cwd, plan, copy && holder ? this.runtime!.key : null);
+    } finally {
+      if (fromInstall) this.#installLaunches--;
+    }
+  }
+
+  #installCommitted = false;
+  #installLaunches = 0;
+
+  /** P-HOLDER.2 (ADR-0574): the person chose to install an update. From now on no held lane starts from the install
+   *  folder (one that would is refused). Returns how many such starts are still in progress: they are not yet in
+   *  the lane list, so the install must wait while any is. `false` lifts it (the update waited after all). */
+  commitInstall(on: boolean): number {
+    this.#installCommitted = on;
+    return this.#installLaunches;
+  }
+
+  async #start(laneId: string, holderId: string, token: string, channel: string, bin: string, cwd: string, plan: { cmd: string; args: string[]; env: Record<string, string | undefined> }, runtime: string | null): Promise<LaunchedHolder> {
+    const child = spawn(bin, ["run", "--dir", this.dir, "--id", holderId, "--cwd", cwd, "--orphan-ms", String(HELD_IDLE_KEEP_MS), "--", plan.cmd, ...plan.args], {
+      cwd, detached: true, windowsHide: true, stdio: ["pipe", "pipe", "pipe"], env: { ...plan.env, [CHANNEL_ENV]: channel },
     });
     child.stdin!.on("error", () => { /* a holder that refused to start says why on stderr */ });
     child.stdin!.end(`${token}\n`);
@@ -452,7 +517,7 @@ export class HolderPool {
     const link = await HolderLink.connect(ready.endpoint, token, 0);
     this.channels.register(laneId, channel);
     // The holder's start (on Windows its creation time) is recorded now, so no later kill can reach another process.
-    return { holderId, endpoint: ready.endpoint, token, channel, ...holderIdentity(link.hello.pid, link.hello.childPid), link };
+    return { holderId, endpoint: ready.endpoint, token, channel, ...holderIdentity(link.hello.pid, link.hello.childPid), link, runtime };
   }
 
   #path(laneId: string): string { return join(this.dir, `${laneId}.lane.json`); }
@@ -482,17 +547,28 @@ export class HolderPool {
    *  id, holder id or endpoint is not one a holder of this pool would have (a pipe or socket path anywhere else, a
    *  UNC path, a lane id that is not its file's name), is skipped and left for a human (it names a process). */
   all(): HeldLaneRecord[] {
-    const out: HeldLaneRecord[] = [];
+    return this.#scan().records;
+  }
+
+  /** The records `all()` returns, and the file names of the ones it skipped (`<dir>` when the folder itself could
+   *  not be listed). A missing folder holds no records and is not unreadable. */
+  #scan(): { records: HeldLaneRecord[]; unreadable: string[] } {
+    const records: HeldLaneRecord[] = [];
+    const unreadable: string[] = [];
     let names: string[] = [];
-    try { names = readdirSync(this.dir); } catch { return out; }
+    try { names = readdirSync(this.dir); } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") unreadable.push("<dir>");
+      return { records, unreadable };
+    }
     for (const n of names) {
       if (!n.endsWith(".lane.json")) continue;
       try {
         const r = JSON.parse(readFileSync(join(this.dir, n), "utf8")) as HeldLaneRecord;
-        if (r?.v === 1 && `${r.laneId}.lane.json` === n && typeof r.token === "string" && this.ownsEndpoint(r.holderId, r.endpoint, r.laneId)) out.push(r);
-      } catch { /* skipped */ }
+        if (r?.v === 1 && `${r.laneId}.lane.json` === n && typeof r.token === "string" && this.ownsEndpoint(r.holderId, r.endpoint, r.laneId)) records.push(r);
+        else unreadable.push(n);
+      } catch { unreadable.push(n); }
     }
-    return out;
+    return { records, unreadable };
   }
 
   /** The endpoint a holder of this pool, for this lane, would have listened on (serve.rs endpoint_for). */

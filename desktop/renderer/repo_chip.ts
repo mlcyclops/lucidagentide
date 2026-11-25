@@ -111,7 +111,7 @@ export function initTitlebarRepo(deps: TitlebarRepoDeps): void {
   btn?.addEventListener("click", () => {
     if (!tbCtx || !btn) return;
     const lane = deps.getLaneTarget();
-    openRepoDetails(btn, tbCtx, lane ? `spoke ${lane.name}` : "Main", deps.openUrl);
+    openRepoDetails(btn, tbCtx, lane ? `agent ${lane.name}` : "Main", deps.openUrl);
   });
   void refreshTitlebarRepo();
   window.setInterval(() => { if (document.visibilityState === "visible") void refreshTitlebarRepo(); }, POLL_MS);

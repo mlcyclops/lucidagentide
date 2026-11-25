@@ -21,8 +21,8 @@ function job(over: Partial<ScheduledJob> = {}): ScheduledJob {
 describe("normalizeJobSpec", () => {
   test("refuses what must not arm, names why", () => {
     expect(normalizeJobSpec({ prompt: "x", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs a name" });
-    expect(normalizeJobSpec({ name: "n", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the prompt it sends to the lane" });
-    expect(normalizeJobSpec({ name: "n", prompt: "p", target: {}, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the lane's folder" });
+    expect(normalizeJobSpec({ name: "n", target: { cwd: "C:\\w" }, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the prompt it sends to the agent" });
+    expect(normalizeJobSpec({ name: "n", prompt: "p", target: {}, cron: "0 2 * * *" })).toEqual({ ok: false, reason: "a job needs the agent's folder" });
     const bad = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "every tuesday" });
     expect(bad.ok).toBe(false);
     const never = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "0 9 30 2 *" });
@@ -158,5 +158,33 @@ describe("JobScheduler", () => {
     await new JobScheduler(f.deps).tick();
     expect(f.jobs()[0]!.lastOutcome).toBe("error");
     expect(f.jobs()[0]!.history[0]!.note).toBe("lane is stopped");
+  });
+});
+
+// P-SCHED.AGENT1: a one-time run is one date and time within a year; the engine disarms it once it acts on that fire,
+// whatever the outcome, so it never comes round again on the next anniversary.
+describe("one-time jobs", () => {
+  const tomorrow = new Date(Date.now() + 24 * H);
+  const onceCron = `30 9 ${tomorrow.getDate()} ${tomorrow.getMonth() + 1} *`;
+  test("normalize keeps once, and refuses a repeating cron or a date beyond a year", () => {
+    const ok = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: onceCron, once: true, armed: true });
+    expect(ok.ok && ok.spec.once).toBe(true);
+    const daily = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "30 9 * * *", once: true });
+    expect(daily.ok).toBe(false);
+    const plain = normalizeJobSpec({ name: "n", prompt: "p", target: { cwd: "C:\\w" }, cron: "30 9 * * *" });
+    expect(plain.ok && plain.spec.once).toBe(false);
+  });
+  test("after its fire is acted on (ok, error or skipped) the job is disarmed and never due again", () => {
+    const spec = normalizeJobSpec({ name: "once", prompt: "p", target: { cwd: "C:\\w" }, cron: "0 2 9 10 *", armed: true });
+    if (!spec.ok) throw new Error(spec.reason);
+    const job = { ...createJob(spec.spec, T0, "job_once"), once: true };
+    const fireAt = new Date(2026, 9, 9, 2, 0).getTime();
+    expect(dueVerdict(job, fireAt)).toMatchObject({ due: true });
+    for (const outcome of ["ok", "error", "cancelled"] as const) {
+      const after = withRun(job, { startedAt: fireAt, endedAt: fireAt, outcome }, fireAt);
+      expect(after.armed).toBe(false);
+      expect(dueVerdict(after, fireAt + 366 * 24 * H)).toEqual({ due: false });
+    }
+    expect(withRun({ ...job, once: false }, { startedAt: fireAt, outcome: "ok" }, fireAt).armed).toBe(true); // repeating jobs stay armed
   });
 });

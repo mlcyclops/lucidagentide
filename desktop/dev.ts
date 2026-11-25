@@ -41,7 +41,8 @@ import { flavorInfo, buildInfoView, normalizeUiMode, resolveBuildFlavor, uiModeP
 import { buildLocalAgentManifest, writeLocalAgentManifest } from "./local_agent_manifest.ts"; // P-LEGIBLE.1 (ADR-0384)
 import { mcpServersForAcp } from "./settings_store.ts"; // P-LEGIBLE.1: the configured MCP servers the manifest declares
 import { APP_VERSION } from "./version.ts"; // CREATOR-0: /api/build-info reports the single-sourced version
-import { acknowledgeReleaseCleanup, pendingReleaseCleanup, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0542
+import { acknowledgeReleaseCleanup, pendingReleaseCleanup, readMarker as readReleaseMarker, runReleaseCleanup } from "./release_cleanup.ts"; // ADR-0542
+import { annotateRelogin, clearDisplaced, forgetOauth, observeOauth } from "./oauth_relogin.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import {
   CREATOR_PRESSURE_PCT, CREATOR_SUSTAIN_MS, CREATOR_WARM_PCT, creatorAdmission, freshnessOf, gpuFromDcgm,
   pushCreatorSample, sampleCreatorCpu, sampleLocalGpu, sampleOf, telemetryFromAgentJson, validateRemoteTarget,
@@ -111,7 +112,7 @@ import { installWhisper, removeWhisperModel, shouldAutostartWhisper, startWhispe
 import { downloadWhisperModel, resolveWhisperBin, spawnWhisperServer } from "./whisper_manager.ts";
 import { stageWhisperBinary } from "./whisper_binary_stage.ts"; // P-STT.7: dev-run pinned-binary staging
 import { whisperServeUrl, type WhisperTier } from "./whisper_install.ts";
-import { devSnapshot, securitySnapshot } from "../tools/web/data.ts";
+import { devSnapshot, securitySnapshot, type SecuritySnapshot } from "../tools/web/data.ts";
 import { sandboxStatus } from "./sandbox_status.ts"; // P-SANDBOX.5 (ADR-0169)
 import { addGrant, applyGrantAce, consumePending, loadGrants, managedPolicyFolderPlan, removeGrant, revokeGrantAce, sandboxGrantsView, saveGrants, setLoopbackRegistrationElevated, type GrantMode } from "./sandbox_grants.ts"; // P-SANDBOX.8: user-approved directory grants
 import { repoAsset, resolvedRepo } from "./repo_root.ts"; // P-SANDBOX.8: the bundled lucid-appcontainer helper, probed-root resolved (ADR-0356)
@@ -119,19 +120,20 @@ import { ensureNetdiagWatch, startNetdiagWatch, stopNetdiagWatch, netdiagView } 
 import { clearAllOauthCredentials, clearDisabledCredential, credentialSnapshot, disconnectCredential, landedFreshCredential } from "./auth_vault.ts";
 import { clearOauthFailure, extractOauthFailure, getOauthFailure, recordOauthFailure } from "./oauth_failure.ts";
 import { DeviceCodeScanner, deviceUrlAllowed, isShowCodeLogin, vaultProviderFor } from "./device_code.ts"; // P-PROV.3: OpenAI device-code sign-in
-import { mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
+import { mxcBootTaskInstalled, mxcHost, resetMxcProbeCache, runMxcHostPrepElevated } from "./mxc_runtime.ts"; // P-MXC.1 (ADR-0441): the MXC executor posture + host prep
 import { GUIDE_FILES } from "./guides_manifest.ts";
 import { ARCADE_GAMES } from "./arcade_games.ts";
 import { approveBlock, dismissAllBlocks, dismissBlock, liveBlocks } from "./security_log.ts";
 import { ackArtifact, ackFindings, ackView } from "./security_ack.ts"; // P-SECACK.1 (ADR-0170)
 import { deleteSteps, readTurnSteps, syncStepTurns } from "./session_steps.ts"; // P-RESUME.1 (ADR-0171)
 import { probeRateLimits } from "./ratelimit_probe.ts";
-import { OBS_DB_PATH, codeActivity, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
+import { OBS_DB_PATH, obsKey, cachedCodeActivity, codeActivity, setCodeActivityStore, setUsageLedgerStore, memorySnapshot, rateLimits, sessionPathById, usageLedger, type CodeActivity, type UsageLedger } from "../tools/memory_data.ts";
 import { backend, fleetLaneArgv, interjectChildEnv, judgePlan, perCallModelView, TURN_ALREADY_RUNNING, type JudgePlan } from "./acp_backend.ts";
 import { incidentView, lastSessionPath, parseIncidentIdBody, parseIncidentUpdate, parseResumeBody, readLastSession, writeLastSession } from "./engine_recovery.ts"; // P-RECOVER.1 (ADR-0385)
 import { incidentReport, listIncidents, markIncidentSeen, updateIncident } from "./incident_store.ts"; // P-RECOVER.1 (ADR-0385)
-import { FleetLaneManager, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
+import { FleetLaneManager, parseStageId, TRANSCRIPT_MAX_TURNS, type LaneTurnRecord } from "./fleet_lanes.ts"; // P-FLEET.L1: local lanes + the fleet grid
 import { HolderPool } from "./lane_holder.ts"; // P-HOLDER.1 (ADR-0534): lanes outlive the engine
+import { stopForUpdate, updateCheck } from "./update_lanes.ts"; // P-HOLDER.2 (ADR-0574): the lanes an update meets
 import { answerChannel, CHANNEL_ROUTES, channelAdmits } from "./lane_channel.ts"; // LH-03 (ADR-0544): a held lane's channel
 import { displayStatus } from "./collab/fleet_status.ts"; // P-STUCK-SHOW.3 (ADR-0521): phone guests see likely-stuck spokes too
 import { sessionLive, withLiveState, type SessionLiveSpoke } from "./session_owner.ts"; // P-SWITCH.2 (ADR-0404): one session, one owner
@@ -143,13 +145,14 @@ import { completeBrowserCommand, drainBrowserCommands, enqueueBrowserCommand, fa
 import { parseKeyCombo } from "./browser_keys.ts"; // P-BROWSER.2: shared combo parse, so a typo fails fast at the route
 import { isBrowserAction, isBrowserPageShape } from "./browser_snapshot.ts"; // P-JEV.4 (ADR-0379): the policy's act/snapshot shapes
 import { FleetGoal } from "./fleet_goal.ts"; // P-AOS.1 (ADR-0452): the standing fleet goal + the AOS-1 heartbeat
+import { addAgents, createBoard, dropAgents, moveBoard, openBoards, parseAgentsBody, parsePruneBody, pruneBoards, removeBoard, renameBoard, setLayout } from "./fleet_boards.ts"; // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards
 import { appendLaneLedger, isTimelineKind, laneSessionNames, listTimeline, readLaneLedger } from "./timeline.ts"; // P-FLEET.L5: lane-session ledger + the reviewable timeline; P-SCHED.1 reads it to recover a job's lane; P-SESS-SEARCH.1 tags spoke sessions
 import { JobScheduler, type LedgerHit } from "./job_scheduler.ts"; // P-SCHED.1 (ADR-0443): scheduled lane jobs
 import { createJob as createScheduledJob, jobTargetRepo, loadJobs, normalizeJobSpec, saveJobs, updateJob, nextFireAt } from "./scheduled_jobs.ts"; // P-SCHED.1 (aliased: creator_jobs.ts exports a createJob too, and the second import silently replaced the first at runtime)
 import { firesBetween } from "./cron.ts"; // P-SCHED.1
 import { LIVE_HEARTBEAT_MS, otherEnginesSessions, publishLiveSessions, withdrawLiveSessions } from "./live_sessions.ts"; // P-SESS-ARCHIVE.1: sessions other engines hold
 import { archivedSessions, archivePolicy, archiveSession, autoArchive, clearAskLucidSessions, clearIngestSessions, deleteSession, flushSessionIndex, listSessions, restoreSession, searchSessions, sessionMessages, type ArchiveRun, type SpokeFilter } from "./sessions.ts";
-import { providerAuth, typesafeKeySet, type ProviderAuthSnapshot } from "./auth_status.ts";
+import { providerAuth, typesafeKeySet, vaultRows, type ProviderAuthSnapshot } from "./auth_status.ts";
 import { parseJudgmentReport } from "../harness/judgment/trace_schema.ts"; // P-JEV.2 (ADR-0377): the loopback boundary for judgment traces
 import { openHubWindow } from "./hub_launch.ts"; // P-TUI.2: the Fleet view's Terminal hub button
 import { createLaneWorktree, removeLaneWorktree } from "./lane_worktree.ts"; // P-FLEET.WT1: a lane in its own git worktree
@@ -187,13 +190,18 @@ import { setDefaultWindowsHide } from "./acp.ts";
 import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER.5 (ADR-0456): show the headed browser omp's broker spawns hidden
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
+import { oauthMemory, setOauthMemory } from "./settings_store.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
 import { answerAskLucid, NOTHING_SEEN } from "./ask_lucid_service.ts"; // P-ASKLUCID.1 (ADR-0581)
+import { parseBuddyRequest, suggestForBuddy } from "./agent_buddy_service.ts"; // P-BUDDY.1 (ADR-0667)
+import { recommendBuddyModel } from "./checker_model.ts"; // P-BUDDY.1: the buddy's mid-tier model
+import type { BuddyReply } from "./renderer/bridge.ts"; // P-BUDDY.1: types only
 import { ATTACH_DISABLED, attachmentsPromptBlock, describeStaged, parseAttachmentIds, removeStagedAttachment, stageAttachment, sweepAttachments, withAttachmentBlock, withAttachmentReference, type AttachDeps } from "./attachments.ts"; // P-ATTACH.1 (ADR-0598)
 import { managedAttachmentPolicy } from "./managed_config.ts"; // P-ATTACH.1 (ADR-0598)
 import { scanAndDecideLarge } from "../harness/security/large_scan.ts"; // P-ATTACH.1: a whole file's text, chunked
+import { ARTIFACT_GONE_DOC, artifactFrameDoc, artifactFrameHeaders, gateVizArtifact, VizArtifactStore } from "./viz_artifact_gate.ts"; // P-WORLDS.BUILD1 (ADR-0653)
 import { IMAGE_EDIT_LIMITS, availableImageModels, editImage, saveEditedImage } from "./image_edit.ts"; // P-ASKLUCID.9 (ADR-0600)
 import { askLucidDataRoot, askLucidImagesDir, imageEgressVerdict, imageModelOptions, insideDir, saveAsSource, type SaveAsSource } from "./ask_lucid_images.ts"; // P-ASKLUCID.9
 import { mkdir as mkdirAsync, rm as rmAsync, writeFile as writeFileAsync } from "node:fs/promises"; // P-ASKLUCID.9: saveEditedImage's fs
@@ -459,7 +467,7 @@ function whisperDeps(): WhisperRuntimeDeps {
     },
   };
 }
-import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
+import { authorizeRelayBind, collabServeAllowed, emailDomainAllowed, managedAsksageOnly, managedConfig, managedLocks, managedMcpCatalog, managedSandboxFoldersLocked, managedSandboxLocksOn, modelAllowed, skipAllowed } from "./managed_config.ts";
 import { mxcHostPrepSteps, planModeChange, refuseGrantPath, refuseUserFolderAdd, runtimeFolderView, sandboxControlView, type ModeRequest, type RuntimeFolderView, type SandboxControlView } from "./sandbox_control.ts"; // P-SANDBOX.12 (ADR-0390)
 import { appContainerRuntimeGrants, discoverGitRoot, gitCmdDir, gitExe, loopbackExempted, parseOmpShellPath, prependPathOverlay, resetLoopbackExemptCache } from "../harness/runs/sandbox_exec.ts"; // P-SANDBOX.12/.13
 import { runningEgressProxyUrl } from "../harness/runs/egress_proxy.ts";
@@ -582,8 +590,10 @@ import { kbScanner, kbStore, kgEntry, listKgs, activeKgId, createKg, renameKg, s
 import { readKbSources } from "./kb_sources.ts"
 import { ingestSourcesIntoKg } from "../harness/kb/batch_ingest.ts"
 import { exportKgPack, importPackFromPath, installPackFromUrl } from "./kb_pack.ts"
-import { addonsDir, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons
+import { MAX_DOWNLOAD_BYTES as MAX_PLUGIN_PACKAGE_BYTES, addonsDir, exportWorld, inspectPluginFile, installOfferedPlugin, installPluginFile, installPluginFromUrl, installWorldBytes, readOfferedAddons, readPluginLicense, uninstallPlugin } from "./plugins/install.ts" // P-PLUGINS.2 (ADR-0462), P-PLUGINS.7 (ADR-0505), ADR-0541 offered add-ons, ADR-0648 worlds
+import { listInstalledWorlds, readInstalled, resolveWorldAsset } from "./plugins/installed.ts" // ADR-0648 Lucid Agent Worlds
 import { PluginRuntime, resolvePluginNode } from "./plugins/runtime.ts" // P-PLUGINS.2 (ADR-0462)
+import { createPluginHealer } from "./plugins/restore.ts" // P-WORLDS.HEAL1: purchased plugins and worlds come back after a glitch
 import { startKbIngest, kbIngestJobStatus, cancelKbIngest } from "./kb_ingest_job.ts"
 import { ingestDocument } from "../harness/kb/ingest.ts"
 import { retrieveKnowledge, type RetrieveMode, type RetrieveArgs } from "../harness/kb/retrieve.ts"
@@ -986,8 +996,11 @@ setInterval(() => {
   })();
 }, 5000);
 
-// 30s memo for /api/code-activity — each rebuild spawns `git log` per workspace (ADR-0030 P-CODE.1).
-let codeActivityCache: { at: number; data: Promise<CodeActivity> } | null = null; // P-BOOTPERF.1: async, single-flight
+// P-PERF.IDLE1: /api/code-activity answers from the remembered counts (no git); `?count=1` is the user asking for
+// a recount, and only that spawns `git log`. One count at a time; a second ask shares it.
+let codeActivityCount: Promise<CodeActivity> | null = null;
+setCodeActivityStore(join(homedir(), ".omp", "agent", "lucid-code-activity.json"));
+setUsageLedgerStore(join(homedir(), ".omp", "agent", "lucid-usage-ledger.json")); // P-PERF.IDLE1: no cold re-parse per boot
 // P-NETSTAT.1 (ADR-0423): one probe window per engine, shared by every renderer that polls it.
 const netProbe = new NetProbe();
 // P-PERF.3: the dashboard poll hammers these obs-DB reads (~every 4s). Each can take SECONDS as the DB grows,
@@ -995,10 +1008,17 @@ const netProbe = new NetProbe();
 // (the "replies slow coming back" symptom). Memoize with SINGLE-FLIGHT (concurrent polls share one in-flight
 // query, never overlap) + a short TTL so rapid polls are cheap and the loop stays free for the model stream.
 const SNAP_TTL_MS = 8000; // > the ~4s dashboard poll, so the steady poll is served from cache (the DuckDB read runs at most ~every 8s). Live gate blocks are merged FRESH from liveBlocks() at request time, so nothing urgent is delayed by this cache.
-let secSnapMemo: { at: number; p: ReturnType<typeof securitySnapshot> } | null = null;
-function securitySnapshotMemo(): ReturnType<typeof securitySnapshot> {
-  const t = Date.now();
-  if (!secSnapMemo || t - secSnapMemo.at > SNAP_TTL_MS) secSnapMemo = { at: t, p: securitySnapshot() };
+// P-PERF.IDLE1: also keyed on the obs store's stamp, so an idle dashboard poll reuses the last snapshot instead of
+// re-opening the DuckDB file (about a second of CPU) every SNAP_TTL_MS while nothing has written to it.
+// A null snapshot (the live gate held the file) is retried on the old clock rather than kept until the next write.
+let secSnapMemo: { at: number; key: string; empty: boolean; p: Promise<SecuritySnapshot | null> } | null = null;
+async function securitySnapshotMemo(): Promise<SecuritySnapshot | null> {
+  const t = Date.now(), key = await obsKey();
+  if (!secSnapMemo || ((secSnapMemo.key !== key || secSnapMemo.empty) && t - secSnapMemo.at > SNAP_TTL_MS)) {
+    const entry: NonNullable<typeof secSnapMemo> = { at: t, key, empty: false, p: securitySnapshot() };
+    void entry.p.then((s) => { entry.empty = s === null; });
+    secSnapMemo = entry;
+  }
   return secSnapMemo.p; // concurrent callers await the SAME query
 }
 let usageMemo: { at: number; data: Promise<UsageLedger> } | null = null; // P-BOOTPERF.1: async, single-flight
@@ -1773,10 +1793,13 @@ const QUERY_TOKEN_ROUTES: ReadonlySet<string> = new Set([
   "/api/browser/open", "/api/browser/capture", "/api/browser/scroll", "/api/browser/close",
   "/api/browser/shot", "/api/browser/click", "/api/browser/type", "/api/browser/drag", "/api/browser/keys",
   "/api/browser/snapshot", "/api/browser/act", // P-JEV.4 (ADR-0379): the browser_run policy loop
+  "/api/worlds/export",      // ADR-0648: the drawer's Export is a plain download link, which cannot set a header
+  "/api/viz/artifact/frame", // ADR-0653: the artifact popup's iframe src (an iframe GET cannot set a header)
 ]);
-// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. Only
-// /api/preview/serve is left out: the renderer's iframe loads it with the UI token, and no child calls it.
-const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve"));
+// P-SANDBOX.15 (ADR-0396): the routes the AGENT token opens - every child-called route above. /api/preview/serve,
+// /api/worlds/export and /api/viz/artifact/frame are left out: the renderer loads them with the UI token, and no
+// child calls them.
+const AGENT_ROUTES: ReadonlySet<string> = new Set([...QUERY_TOKEN_ROUTES].filter((r) => r !== "/api/preview/serve" && r !== "/api/worlds/export" && r !== "/api/viz/artifact/frame"));
 // LH-03 (ADR-0544 as amended): the routes a held lane's channel opens. lane_channel.ts CHANNEL_ROUTES lists them with
 // the speaker each one names; only agent routes count, so the channel never reaches a route the agent token cannot.
 const CHANNEL_AUTH_ROUTES: ReadonlySet<string> = new Set(Object.keys(CHANNEL_ROUTES).filter((r) => AGENT_ROUTES.has(r)));
@@ -1834,6 +1857,9 @@ const fleet: FleetLaneManager = new FleetLaneManager({
 // P-FLEET.L6: NEW lanes inherit the persisted full-auto default. The risk-ack gate lives in the
 // /api/fleet/auto route; by the time this flag is true, the user already accepted the warning once.
 fleet.setAutoDefault(!!loadSettings().fleetAutoApprove);
+// P-FLEET-BOARDS.1 (ADR-0601): boards live in the engine, in fleet-boards.json under the data root, so every
+// window of this engine shows the same boards.
+const fleetBoards = openBoards(process.env.LUCID_DATA_ROOT || join(homedir(), ".omp"));
 // P-AOS.1 (ADR-0452): the AOS-1 orchestrator state. Its heartbeat is this engine's own pulse: an orbit that
 // sees it age past 1.5x / 3x the interval is looking at a frozen or dead engine.
 const fleetGoal = new FleetGoal({
@@ -1923,6 +1949,10 @@ let autoArchiveTimer: Timer | null = null;
 /** P-ASKLUCID.7 (ADR-0588): models that answered a picture of the screen with an error, for this run of the
  *  engine. In memory on purpose: a provider or a model can gain vision between runs. */
 const askLucidNoPictures = new Set<string>();
+/** P-BUDDY.1 (ADR-0667): each buddy's last answer (key: surface + lane id), reused for 20 s so many buddies
+ *  asking at once cost one model call each. The promise is kept, so a request while one is in flight shares it. */
+const BUDDY_CACHE_MS = 20_000;
+const buddyCache = new Map<string, { at: number; reply: Promise<BuddyReply> }>();
 
 /** P-ASKLUCID.5 (ADR-0586): sweep Ask Lucid's throwaway sessions (one per question) once they are an hour
  *  old: two minutes after start, then every six hours. Unref'd: it never keeps the engine alive. */
@@ -2157,9 +2187,17 @@ const plugins = new PluginRuntime({
   onMcpChange: () => backend.restart(),
 });
 process.on("exit", () => { try { plugins.stopAllSync(); } catch { /* dying anyway */ } });
+// P-WORLDS.HEAL1: the install ledger's self-heal (desktop/plugins/restore.ts). A restore stops a running copy before
+// the damaged folder moves aside, like an update's switch.
+const pluginHealer = createPluginHealer({ beforeSwitch: async (id) => { await plugins.stop(id); } });
 // ADR-0542: the first start of a release after a dev build removes the development modules (data kept), before
 // any plugin can start. Every start records the version that ran. A failure here must never stop the engine.
+// P-AUTH.RELOGIN1 (ADR-0640): read the previous version FIRST (the cleanup rewrites the marker), so a re-login
+// notice can say "after the update from X". A provider-side app update is the common reason a sign-in dies.
+const PREVIOUS_RUN_VERSION = ((): string | null => { try { return readReleaseMarker(); } catch { return null; } })();
 try { runReleaseCleanup(APP_VERSION); } catch (e) { console.error(`[release-cleanup] ${e instanceof Error ? e.message : String(e)}`); }
+// Record the model each lost sign-in displaced NOW, before omp reports a fallback model and lastModel follows it.
+try { authWithOauthErrors(); } catch (e) { console.error(`[relogin] ${e instanceof Error ? e.message : String(e)}`); }
 // P-PREVIEW.3a-shot (ADR-0096): latest PNG of the rendered preview, pushed by the renderer after each render
 // (Electron capturePage → /api/preview/shot-cache) and read by the agent's preview_screenshot tool. In-memory.
 let latestPreviewShot: string | null = null;
@@ -2275,7 +2313,7 @@ const switchRefused = (busy: string, sessionId: string | null) =>
 /** P-SWITCH.2 (ADR-0404): the 409 for a session a live spoke holds. `heldBy` lets a client attach to that
  *  spoke instead; no flag overrides it, because two processes on one session corrupt its history. */
 const sessionHeld = (lane: SessionLiveSpoke) =>
-  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in spoke "${lane.name}". Attach to that spoke instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
+  Response.json({ ok: false, heldBy: { laneId: lane.laneId, name: lane.name, status: lane.status }, error: `This session is running in agent "${lane.name}". Attach to that agent instead.` }, { status: 409, headers: { "cache-control": "no-store" } });
 
 // P-SEC.1 (ADR-0209): a caught exception's message/stack must never flow into a client response
 // (CWE-209/497 — CodeQL js/stack-trace-exposure). This control plane is loopback-only (ADR-0022 H1), so the
@@ -2362,6 +2400,9 @@ function kgListView(error?: string) {
     ...(error ? { error } : {}),
   };
 }
+
+// P-WORLDS.BUILD1 (ADR-0653): world-build artifacts that passed the gate, served only as the sandboxed popup frame.
+const vizArtifacts = new VizArtifactStore();
 
 // P-AGENT.9: lazy scanner sidecar for imported agent files. Shared across imports; FAIL-CLOSED by design —
 // if the sidecar is dead or slow, importSpec quarantines the spec (ScanUnavailableError becomes a blocking
@@ -2481,6 +2522,14 @@ function authWithOauthErrors(): ProviderAuthSnapshot {
     const f = getOauthFailure(row.oauthId);
     if (f) row.oauthError = f;
   }
+  // P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone gets `relogin`; one that came back
+  // with a model to return to gets `restoreModel`. Memory is written only when it changed.
+  const rows = vaultRows();
+  const before = oauthMemory();
+  const memory = observeOauth(a, rows, before, [chosenModel(), lastChatModel()]);
+  if (memory !== before) setOauthMemory(memory);
+  annotateRelogin(a, rows, memory);
+  if (PREVIOUS_RUN_VERSION && PREVIOUS_RUN_VERSION !== APP_VERSION) a.upgradedFrom = PREVIOUS_RUN_VERSION;
   return a;
 }
 
@@ -2821,13 +2870,15 @@ return Bun.serve({
         if (!steps) return json({ ok: true, data: { changed: false, detail: before.mxc?.staged ? "the host is already prepared" : "the MXC executor is not staged on this host" } });
         const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
         if (!m.host) return json({ ok: true, data: { changed: false, detail: m.reason } });
-        const launched = runMxcHostPrepElevated(m.executors.prep, steps);
+        const launched = runMxcHostPrepElevated(m.executors.prep, steps, m.executors.prepSha256);
         resetMxcProbeCache(); resetLoopbackExemptCache();
         const after = sandboxControlNow();
         const remaining = mxcHostPrepSteps(after);
-        const changed = launched && !remaining;
+        // P-SANDBOX.WIN1: the re-read state decides; a failed boot-task registration (script exit 5) leaves the
+        // host prepared for this boot, so it still counts as changed, and the detail says the task is missing.
+        const changed = !remaining && (launched || !!steps.bootTask);
         const detail = changed
-          ? "the host is prepared - the agent restarts inside the MXC container"
+          ? `the host is prepared${steps.bootTask ? (after.mxc?.bootTask ? " and the NUL step re-runs at every boot" : " but the boot task could not be confirmed, so the NUL step may be needed again after a restart") : ""} - the agent restarts inside the MXC container`
           : !launched ? "the administrator prompt was declined or a step failed - nothing changed"
           : `the prompt ran but the host still needs: ${[remaining?.systemDrive && "prepare-system-drive", remaining?.nullDevice && "prepare-null-device", remaining?.loopback && "the loopback exemption"].filter(Boolean).join(", ")}`;
         emitSecurityEvent({ category: "approval", type: "sandbox_host_prep", decision: changed ? "allow" : "block", severity: "medium", tool: "wxc-host-prep", reason: detail.slice(0, 200) });
@@ -3024,13 +3075,17 @@ return Bun.serve({
       if (p === "/api/usage") return json({ ok: true, data: await usageLedgerMemo() }); // P-PERF.3 memo
       // ADR-0030 P-CODE.1: per-workspace git diffstat for the current month (repo
       // activity, not AI authorship). Read-only, metadata-only, fail-closed per workspace.
-      // Cached 30s — each call spawns `git log` per workspace, so don't re-run it on
-      // every dashboard poll. `?force=1` bypasses the cache (manual refresh).
+      // P-PERF.IDLE1: the dashboard poll reads the remembered counts and spawns nothing; `?count=1` (the user clicked
+      // the tile or opened the usage card) recounts. P-PERF.GIT1 still applies to that count: a repo whose HEAD has not
+      // moved costs no git at all (tools/memory_data.ts).
       if (p === "/api/code-activity") {
-        const now = Date.now();
-        if (!codeActivityCache || now - codeActivityCache.at > 30_000 || url.searchParams.get("force") === "1")
-          codeActivityCache = { at: now, data: codeActivity() };
-        return json({ ok: true, data: await codeActivityCache.data });
+        if (url.searchParams.get("count") !== "1") return json({ ok: true, data: await cachedCodeActivity() });
+        if (!codeActivityCount) {
+          const run = codeActivity();
+          codeActivityCount = run;
+          run.finally(() => { if (codeActivityCount === run) codeActivityCount = null; }).catch(() => { /* the route's await reports it */ });
+        }
+        return json({ ok: true, data: await codeActivityCount });
       }
       // P-PORTGUARD.1 (ADR-0305): echo the per-launch nonce main minted for THIS child. Main only
       // trusts a health answer carrying it, so a squatter on the port can never win the window. The
@@ -3962,8 +4017,27 @@ return Bun.serve({
       // published it to a guest as a permanent snapshot. One `stat`, no read, no inlining.
       if (p === "/api/preview/probe") {
         const target = (url.searchParams.get("path") ?? "").trim();
+        // P-PREVIEW-CURTAIN.1 (ADR-0621): a LOOPBACK dev server (the agent's `npm run dev`) is asked too, only
+        // when the curtain says so (`remote=1`), so "connection refused" or an HTTP error never reaches the
+        // screen. Loopback only: anything else is the egress gate's business, and this answers with a status
+        // and a length, never the body.
+        if (url.searchParams.get("remote") === "1" && /^https?:\/\//i.test(target)) {
+          let host = "";
+          try { host = new URL(target).hostname.toLowerCase(); } catch { /* not a URL */ }
+          if (host !== "localhost" && host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") return json({ ok: true, data: { resolves: false, error: "not a loopback URL" } });
+          try {
+            // Redirects are NOT followed: a loopback hop to a remote host would be engine egress. A 3xx counts
+            // as answering (the frame follows it under the egress rules it always had), with no length.
+            const res = await fetch(target, { redirect: "manual", signal: AbortSignal.timeout(3000) });
+            if (res.status >= 400) return json({ ok: true, data: { resolves: false, status: res.status, error: `HTTP ${res.status}` } });
+            const bytes = res.ok ? (await res.arrayBuffer()).byteLength : undefined;
+            return json({ ok: true, data: { resolves: true, kind: "remote", status: res.status, ...(bytes === undefined ? {} : { bytes }) } });
+          } catch {
+            return json({ ok: true, data: { resolves: false, error: "connection refused or timed out" } });
+          }
+        }
         const r = probePreviewFile(target);
-        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind } : { resolves: false, error: r.error } });
+        return json({ ok: true, data: r.ok ? { resolves: true, kind: r.kind, bytes: r.bytes } : { resolves: false, error: r.error } });
       }
       // P-PREVIEW.4b (ADR-0096): serve a local previewable file's CONTENT as an HTML document with its OWN
       // per-frame CSP (PREVIEW_FRAME_CSP), loaded by the renderer via `iframe.src`. A `srcdoc` frame inherits
@@ -4358,8 +4432,11 @@ return Bun.serve({
       // P-TASK.5 (ADR-0180): live subagent activity for the delegation card. Reads the CURRENT
       // session's subtask transcripts (omp persists each subtask beside the parent session file) -
       // read-only, path-confined to the resolved session file, fail-quiet [] when nothing delegated.
+      // P-VIZ.4 (ADR-0625): `?laneId=` reads that LANE's session instead (lane `task` calls run in the
+      // background, so only their transcripts say when each subagent ends). Same read-only path, same gate.
       if (p === "/api/subagents") {
-        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(backend.currentSessionId())) } }); }
+        const laneId = url.searchParams.get("laneId");
+        try { return json({ ok: true, data: { runs: listSubagentRuns(sessionPathById(laneId ? fleet.laneSessionId(laneId) : backend.currentSessionId())) } }); }
         catch { return json({ ok: true, data: { runs: [] } }); }
       }
       // P-SYSRES.1 (ADR-0182): system resource profile + guard verdict + top processes. Read-only
@@ -5371,7 +5448,7 @@ return Bun.serve({
       if (p === "/api/session/archive" && req.method === "POST") {
         const { id } = await readBody<{ id?: unknown }>(req);
         const sid = String(id ?? "");
-        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or a spoke. Switch away from it (or stop the spoke) first." } });
+        if (ownSessionIds().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in Main or an agent. Switch away from it (or stop the agent) first." } });
         if (otherEnginesSessions().has(sid)) return json({ ok: true, data: { ok: false, error: "This session is open in another LUCID window. Switch away from it there first." } });
         return json({ ok: true, data: archiveSession(sid, { cwd: currentWorkspace() }) });
       }
@@ -5401,7 +5478,7 @@ return Bun.serve({
         const sid = String(id);
         // P-SWITCH.2: deleting the file under a running spoke would leave it appending to nothing.
         const held = spokeHolding(sid);
-        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in spoke "${held.name}". Stop that spoke first, then delete it.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `This session is running in agent "${held.name}". Stop that agent first, then delete it.` } });
         // If it's the live session, close it first so omp releases the file handle (Windows
         // locks open files), then start fresh. newSession() does session/close + ensureSession.
         if (backend.currentSessionId() === sid) await backend.newSession().catch(() => {});
@@ -5506,6 +5583,7 @@ return Bun.serve({
           attribution: mc.config?.attribution ?? null,
           asksageOnly: managedAsksageOnly(mc.config),
           locks: managedLocks(mc.config),
+          mcpCatalog: managedMcpCatalog(mc.config), // P-SETUX.1 (ADR-0616): org-authorized Quick connect list
         } });
       }
       // P-IDE.1c (ADR-0029): the China-origin data-sovereignty acknowledgment gate. GET returns the
@@ -5666,13 +5744,23 @@ return Bun.serve({
         // Settings status reflects it regardless of whether the omp spawn succeeded.
         Bun.spawnSync([ompBin(), "auth-broker", "logout", id], { timeout: 4000 });
         disconnectCredential(id);
+        setOauthMemory(forgetOauth(oauthMemory(), [id])); // P-AUTH.RELOGIN1: a deliberate sign-out never prompts a re-login
         return json({ ok: true, data: providerAuth() });
+      }
+      // P-AUTH.RELOGIN1 (ADR-0640): the renderer put the user back on (or declined) the model a lost sign-in displaced.
+      if (p === "/api/auth/relogin-restored" && req.method === "POST") {
+        const { oauthId } = await readBody<{ oauthId?: unknown }>(req);
+        const before = oauthMemory();
+        const after = clearDisplaced(before, String(oauthId ?? ""));
+        if (after !== before) setOauthMemory(after);
+        return json({ ok: true, data: true });
       }
       // "Sign out of all providers" — clears EVERY OAuth login, including orphans the per-provider Disconnect
       // can't reach (a broker id with no Settings descriptor, or a key-only provider that still has an oauth
       // row). The reliable post-reinstall reset. API keys are untouched.
       if (p === "/api/auth/logout-all" && req.method === "POST") {
         const r = clearAllOauthCredentials();
+        setOauthMemory({ seen: [], displaced: {} }); // P-AUTH.RELOGIN1: signed out of everything on purpose
         return json({ ok: true, data: providerAuth(), removed: r.removed });
       }
       // ── P-ACCT.1 (ADR-0375): named provider accounts. GET = the full snapshot; the mutations answer
@@ -5702,6 +5790,8 @@ return Bun.serve({
           // Disconnect ONE identity: rows (token blob included) gone; other accounts untouched.
           const idk = accountId.slice("oauth:".length);
           disconnectOauthIdentity(prov.oauthId, idk === "unknown" ? null : idk);
+          // P-AUTH.RELOGIN1: removing the last signed-in account is a deliberate sign-out, not a lost login.
+          if (!vaultRows().some((r) => r.provider === prov.oauthId && r.credential_type === "oauth" && !r.disabled_cause)) setOauthMemory(forgetOauth(oauthMemory(), [prov.oauthId]));
         } else if (accountId === LEGACY_KEY_ACCOUNT_ID) {
           setKey(prov.env, ""); // the legacy slot IS the env slot
         } else {
@@ -6133,6 +6223,18 @@ return Bun.serve({
         return json({ ok: true, data: { plugins: plugins.list(), offered } });
       }
       if (p === "/api/plugins/license" && req.method === "GET") return json({ ok: true, data: readPluginLicense(url.searchParams.get("id") ?? "") });
+      // P-WORLDS.HEAL1: every purchase the install ledger records against the disk (ok / missing / broken), the ids
+      // that need restoring and the reinstalls from backup since start; restore heals one id (or, with none, all)
+      // from its backup through every install gate. Both wait for a heal pass in flight.
+      if (p === "/api/plugins/health" && req.method === "GET") {
+        srv.timeout(req, 0); // the startup pass may be re-scanning a restored package
+        return json({ ok: true, data: await pluginHealer.health() });
+      }
+      if (p === "/api/plugins/restore" && req.method === "POST") {
+        srv.timeout(req, 0);
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: await pluginHealer.restore(typeof b.id === "string" && b.id ? b.id : undefined) });
+      }
       if (p === "/api/plugins/install-from-url" && req.method === "POST") {
         srv.timeout(req, 0); // a large package (download + per-file scan) can outlast the 60 s idle limit
         const b = await readBody<{ url?: unknown; expectId?: unknown }>(req);
@@ -6178,6 +6280,57 @@ return Bun.serve({
       if (p === "/api/plugins/uninstall" && req.method === "POST") {
         const b = await readBody<{ id?: unknown; keepData?: unknown }>(req);
         return json({ ok: true, data: await plugins.uninstall(String(b.id ?? ""), b.keepData !== false) });
+      }
+      // ADR-0648 (Lucid Agent Worlds): installed `.lplugin` packages of kind "world". The list names each world's
+      // same-origin module URL; import installs a SIGNED world file (kind world + signature mandatory, then every
+      // store gate) from the raw package bytes, sent with a JSON content type because the origin guard admits only
+      // that on a POST (the CAD inspect convention); export hands back the kept original signed bytes.
+      if (p === "/api/worlds" && req.method === "GET") return json({ ok: true, data: { worlds: listInstalledWorlds() } });
+      if (p === "/api/worlds/import" && req.method === "POST") {
+        srv.timeout(req, 0); // the per-file scan of a large world can outlast the 60 s idle limit
+        if (Number(req.headers.get("content-length") ?? "0") > MAX_PLUGIN_PACKAGE_BYTES) return json({ ok: false, error: "that world package is over the size limit" });
+        let filename = "";
+        try { filename = decodeURIComponent(req.headers.get("x-lucid-filename") ?? ""); } catch { /* refused as not a .zip */ }
+        const r = await installWorldBytes(Buffer.from(await req.arrayBuffer()), filename);
+        return json(r.ok ? { ok: true, data: { world: r.world } } : { ok: false, error: r.reason });
+      }
+      if (p === "/api/worlds/export" && req.method === "GET") {
+        const r = exportWorld(url.searchParams.get("id") ?? "");
+        if (!r.ok) return json({ ok: false, error: r.error });
+        return new Response(r.bytes, { headers: { "content-type": "application/zip", "content-disposition": `attachment; filename="${r.name}"`, "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+      }
+      if (p === "/api/worlds/uninstall" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        const id = String(b.id ?? "");
+        if (readInstalled(id)?.manifest.kind !== "world") return json({ ok: true, data: { ok: false, error: "that world is not installed" } });
+        return json({ ok: true, data: await plugins.uninstall(id, false) });
+      }
+      // ADR-0653 (P-WORLDS.BUILD1): a world build's HTML artifact passes the in-process gate (shape, then the scanner,
+      // FAIL-CLOSED) before the Visualize popup may show it; a pass is held under a random id and served only as the
+      // sandboxed frame below (its own CSP, the artifact in a srcdoc child). A block is audited and never stored.
+      if (p === "/api/viz/artifact" && req.method === "POST") {
+        const b = await readBody<{ html?: unknown }>(req);
+        const v = await gateVizArtifact(b.html, async (text) => { const d = await scanAndDecideLarge(agentScanner(), text); return { block: d.block, reason: d.reason }; });
+        if (!v.ok) {
+          emitSecurityEvent({ category: "scanner", type: "scanner_block", decision: "block", severity: "high", tool: "viz_artifact", reason: v.reason.slice(0, 200), sessionId: backend.currentSessionId() ?? undefined });
+          return json({ ok: true, data: { ok: false, reason: v.reason, trust: "quarantined" } });
+        }
+        return json({ ok: true, data: { ok: true, id: vizArtifacts.put(b.html as string), trust: "untrusted" } });
+      }
+      if (p === "/api/viz/artifact/discard" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json({ ok: true, data: { dropped: vizArtifacts.drop(String(b.id ?? "")) } });
+      }
+      if (p === "/api/viz/artifact/frame" && req.method === "GET") {
+        const html = vizArtifacts.get(url.searchParams.get("id") ?? "");
+        return new Response(html === null ? ARTIFACT_GONE_DOC : artifactFrameDoc(html), { status: html === null ? 404 : 200, headers: artifactFrameHeaders() });
+      }
+      // A world's files, served like /app.js: no token (a dynamic import() cannot send a header), behind the loopback
+      // bind and the Host gate. Only the current version of an installed world, only files its signed manifest lists.
+      if (p.startsWith("/worlds/") && (req.method === "GET" || req.method === "HEAD")) {
+        const asset = resolveWorldAsset(p);
+        if (!asset) return new Response("not found", { status: 404, headers: { "cache-control": "no-cache" } });
+        return new Response(Bun.file(asset.file), { headers: { "content-type": asset.contentType, "cache-control": "no-cache", "x-content-type-options": "nosniff" } });
       }
       // ADR-0542: the notice for the last dev-to-release cleanup, shown once; ack marks it seen.
       if (p === "/api/release-cleanup" && req.method === "GET") return json({ ok: true, data: pendingReleaseCleanup() });
@@ -6396,7 +6549,7 @@ return Bun.serve({
         const patch = (b.patch && typeof b.patch === "object" ? b.patch : {}) as Record<string, unknown>;
         const current = loadJobs().find((j) => j.id === id);
         if (!current) return json({ ok: false, error: "no such job" });
-        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, ...patch });
+        const merged = normalizeJobSpec({ name: current.name, prompt: current.prompt, target: current.target, cron: current.cron, armed: current.armed, autoApprove: current.autoApprove, maxMinutes: current.maxMinutes, missed: current.missed, once: current.once === true, ...patch });
         if (!merged.ok) return json({ ok: false, error: merged.reason });
         // Arming a suspended job is the user saying "I fixed it": the suspension clears and the cursor
         // restarts from now, so the fires missed while suspended are not owed.
@@ -6540,19 +6693,34 @@ return Bun.serve({
       // P-ASKLUCID.2 (ADR-0582): the reply may carry PROPOSED actions. This route runs none of them; the user
       // confirms a card and the renderer then calls /api/fleet/spawn, /api/fleet/queue or /api/fleet/goal/task.
       if (p === "/api/ask-lucid" && req.method === "POST") {
-        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ text?: unknown; history?: unknown; screen?: unknown; brief?: unknown; settings?: unknown; unusedFeatures?: unknown; shot?: unknown; images?: unknown; attachments?: unknown; stream?: unknown }>(req);
         const q = parseQuestion(b.text);
         if (!q.ok) return json({ ok: false, error: q.error, data: { ok: false, error: q.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
         // P-ATTACH.1 (ADR-0598): the attached files' block, built and scanned now; a refusal refuses the question.
         const files = await promptWithAttachments("", b.attachments);
         if (!files.ok) return json({ ok: false, error: files.error, data: { ok: false, error: files.error, seen: { ...NOTHING_SEEN }, withheld: [], actions: [], actionsDropped: 0 } });
-        const reply = await answerAskLucid(q.text, sanitizeHistory(b.history), {
+        // P-ASKLUCID.SPEED1: with `stream: true` the answer arrives as NDJSON: `phase` lines while Lucid works (reading,
+        // scanning, asking + model, queued, starting, writing), then one `reply` line. The panel shows the phase and
+        // a timer instead of sitting silent for the whole answer.
+        const modelInfo = backend.checkerModelInfo();
+        let ranOn: string | undefined;
+        const answer = (phase?: (e: { type: "phase"; phase: string; model?: string }) => void) => answerAskLucid(q.text, sanitizeHistory(b.history), {
+          onPhase: (p, model) => phase?.({ type: "phase", phase: p, ...(model ? { model } : {}) }),
           fleetStatus: () => fleet.status(),
           orbit: () => fleetGoal.snapshot(),
           knowledge: async (query) => (await retrieveKnowledge({ query, mode: "compiled", k: 4, compiled: { store: await kbStore() } })).items,
           scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
-          pinModel: () => backend.completionModel(backend.checkerModelInfo().recommended || undefined),
-          complete: (system, user, model, images) => backend.complete(system, user, { model, idleMs: 45_000, ...(images?.length ? { images } : {}) }),
+          // P-ASKLUCID.MODEL1: the newest small-tier model omp has offered here for the picker's provider (Haiku 5.5,
+          // not the Haiku 4.5 of a list omp has not finished loading); the live list's pick is the fallback.
+          pinModel: () => backend.completionModel(modelInfo.newest || undefined),
+          modelUsed: () => ranOn,
+          // P-ASKLUCID.SPEED1: no MCP servers for this text-only call, and its own phases go to the panel too.
+          complete: (system, user, model, images) => backend.complete(system, user, {
+            model, fallbackModel: modelInfo.recommended || undefined, idleMs: 45_000, noMcp: true,
+            onPhase: (p) => phase?.({ type: "phase", phase: p }),
+            onModel: (m) => { if (m && m !== model) { ranOn = m; phase?.({ type: "phase", phase: "asking", model: m }); } },
+            ...(images?.length ? { images } : {}),
+          }),
           // P-ASKLUCID.7 (ADR-0588): a model that answered a picture with an error is not sent another this run.
           visionRefused: (model) => askLucidNoPictures.has(model ?? ""),
           noteVisionRefused: (model) => { askLucidNoPictures.add(model ?? ""); },
@@ -6564,6 +6732,46 @@ return Bun.serve({
           currentSessionId: () => backend.currentSessionId(),
           now: () => Date.now(),
         }, { screen: b.screen, brief: b.brief === true, settings: b.settings, unusedFeatures: b.unusedFeatures, shot: b.shot, images: b.images, ...(files.block ? { attachedFiles: files.block } : {}) }); // P-ASKLUCID.8: the user's pasted images; P-ATTACH.1: files
+        // P-ASKLUCID.SPEED1: the next question finds a warm session (opened while the user reads this answer).
+        const rewarm = () => { void backend.warmSpare(backend.checkerModelInfo().newest || undefined); };
+        if (b.stream === true) return ndjsonStream("ask-lucid", async (emit) => { emit({ type: "reply", data: await answer(emit) }); rewarm(); }, req.signal);
+        const reply = await answer();
+        rewarm();
+        return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
+      }
+      // P-ASKLUCID.SPEED1: the panel opened: open a warm side-completion session for the first question now. UI
+      // token only, no body, nothing returned but ok; a failure just means the question opens its own session.
+      if (p === "/api/ask-lucid/warm" && req.method === "POST") {
+        void backend.warmSpare(backend.checkerModelInfo().newest || undefined);
+        return json({ ok: true });
+      }
+      // P-BUDDY.1 (ADR-0667): a floating Agent buddy's read of one agent plus up to 3 next-step ideas, from a mid-tier
+      // model. UI token only (never AGENT_ROUTES): an agent must not be able to feed itself ideas through it. Reads
+      // only; the context and every idea are scanned (agent_buddy_service.ts). Running an idea is the user's press.
+      if (p === "/api/buddy/suggest" && req.method === "POST") {
+        const parsed = parseBuddyRequest(await readBody<unknown>(req));
+        if (!parsed.ok) return json({ ok: false, error: parsed.error, data: { ok: false, error: parsed.error, doing: "", ideas: [], withheld: false } });
+        const key = `${parsed.req.surface}:${parsed.req.laneId ?? ""}`;
+        const now = Date.now();
+        for (const [k, v] of buddyCache) if (now - v.at >= BUDDY_CACHE_MS) buddyCache.delete(k);
+        let hit = buddyCache.get(key);
+        if (!hit) {
+          hit = {
+            at: now,
+            reply: suggestForBuddy(parsed.req, {
+              fleetStatus: () => fleet.status(),
+              laneTranscript: (laneId) => fleet.laneTranscript(laneId),
+              currentSessionId: () => backend.currentSessionId(),
+              sessionTail: (id) => sessionMessages(id, 6),
+              scan: async (text) => { const d = await scanAndDecide(agentScanner(), text); return { block: d.block, reason: d.reason }; },
+              pinModel: () => { const info = backend.checkerModelInfo(); return backend.completionModel(recommendBuddyModel(info.options, info.current)?.value); },
+              complete: (system, user, model) => backend.complete(system, user, { model, idleMs: 45_000, noMcp: true }), // P-ASKLUCID.SPEED1: text only
+              now: () => Date.now(),
+            }),
+          };
+          buddyCache.set(key, hit);
+        }
+        const reply = await hit.reply;
         return json({ ok: reply.ok, data: reply, ...(reply.error ? { error: reply.error } : {}) });
       }
       // P-AOS.1 (ADR-0452): the standing fleet goal. UI token only (never AGENT_ROUTES): criteria are verified
@@ -6588,6 +6796,47 @@ return Bun.serve({
       if (p === "/api/fleet/goal/task/cancel" && req.method === "POST") {
         const b = await readBody<{ taskId?: unknown }>(req);
         return json({ ok: true, data: fleetGoal.cancelTask(b.taskId) });
+      }
+      // P-FLEET-BOARDS.1 (ADR-0601): the Fleet window's boards. UI token only (never AGENT_ROUTES). Each change
+      // answers the whole Boards, or the refusal in plain words; removing a board never stops its agents.
+      if (p === "/api/fleet/boards" && req.method === "GET") return json({ ok: true, data: fleetBoards.read() });
+      if (p === "/api/fleet/boards/create" && req.method === "POST") {
+        const b = await readBody<{ name?: unknown }>(req);
+        return json(fleetBoards.update((s) => createBoard(s, typeof b.name === "string" ? b.name : "")));
+      }
+      if (p === "/api/fleet/boards/rename" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; name?: unknown }>(req);
+        return json(fleetBoards.update((s) => renameBoard(s, String(b.id ?? ""), typeof b.name === "string" ? b.name : "")));
+      }
+      if (p === "/api/fleet/boards/remove" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown }>(req);
+        return json(fleetBoards.update((s) => removeBoard(s, String(b.id ?? ""))));
+      }
+      if (p === "/api/fleet/boards/move" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; to?: unknown }>(req);
+        return json(fleetBoards.update((s) => moveBoard(s, String(b.id ?? ""), typeof b.to === "number" ? b.to : Number.NaN)));
+      }
+      // Drops apply before adds, so a swap near the 200-agent cap fits.
+      if (p === "/api/fleet/boards/agents" && req.method === "POST") {
+        // Validated in full first: a bad id, list or key refuses the whole request before the store is read.
+        const b = parseAgentsBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { id, add, drop } = b.value;
+        return json(fleetBoards.update((s) => {
+          const dropped = dropAgents(s, id, drop);
+          return dropped.ok ? addAgents(dropped.data, id, add) : dropped;
+        }));
+      }
+      if (p === "/api/fleet/boards/layout" && req.method === "POST") {
+        const b = await readBody<{ id?: unknown; layout?: unknown; focus?: unknown }>(req);
+        return json(fleetBoards.update((s) => setLayout(s, String(b.id ?? ""), typeof b.layout === "string" ? b.layout : "", typeof b.focus === "string" ? b.focus : undefined)));
+      }
+      if (p === "/api/fleet/boards/prune" && req.method === "POST") {
+        // A missing or malformed `live` is refused with no write: pruning against it would empty every board.
+        const b = parsePruneBody(await readBody<unknown>(req).catch(() => null));
+        if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
+        const { live } = b.value;
+        return json(fleetBoards.update((s) => ({ ok: true, data: pruneBoards(s, live) })));
       }
       // P-TUI.2: open `lucid hub` in a new terminal window, attached to THIS engine. UI token only (never in
       // AGENT_ROUTES): one fixed command, no argument from the request, never inside the agent sandbox.
@@ -6637,21 +6886,38 @@ return Bun.serve({
       // P-FLEET.L3: lane prompts carry P-VISION.1 image blocks like /api/chat (defensively filtered,
       // capped at 6). The same filter guards the queue and its drain below.
       if (p === "/api/fleet/prompt" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown; stageId?: unknown }>(req);
         const laneId = String(b.laneId ?? "");
+        // P-FLEET.STAGE1 (ADR-0609): with a stage id, a lane that is busy RIGHT NOW stages the prompt (raw text
+        // and file ids, expanded at drain like any staged item) instead of refusing it. Checked again after the
+        // attachment await, and stageIfBusy and prompt() both check synchronously, so no turn can start between.
+        const stageId = parseStageId(b.stageId);
+        const stageNow = (): Response | null => {
+          if (!stageId) return null;
+          const ids = parseAttachmentIds(b.attachments);
+          if (ids.length && !managedAttachmentPolicy().enabled) return null; // the prompt path reports the refusal
+          const r = fleet.stageIfBusy(laneId, String(b.text ?? ""), laneImages(b.images), ids, stageId);
+          if (!r) return null;
+          return ndjsonStream("fleet", async (emit) => { emit(r.ok ? { type: "staged", queued: r.queued ?? 0 } : { type: "error", message: r.reason ?? "could not stage the prompt" }); });
+        };
+        const early = stageNow();
+        if (early) return early;
         // P-ATTACH.1 (ADR-0598): the staged files' block rides after the text; a refusal is the stream's error.
         const withFiles = await promptWithAttachments(String(b.text ?? ""), b.attachments);
         if (!withFiles.ok) { const error = withFiles.error; return ndjsonStream("fleet", async (emit) => { emit({ type: "error", message: error }); }); }
+        const late = stageNow();
+        if (late) return late;
         return ndjsonStream("fleet", (emit) => fleet.prompt(laneId, withFiles.text, emit, laneImages(b.images)));
       }
       // P-FLEET.L3: the staged-prompt queue - manager-owned (survives dock close), drained FIFO by the
       // renderer when the lane goes idle, so every drained turn streams into a visible card.
       // P-ATTACH.1 (ADR-0598): staged file ids are kept with the item and expanded (and scanned) at drain.
       if (p === "/api/fleet/queue" && req.method === "POST") {
-        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown }>(req);
+        const b = await readBody<{ laneId?: unknown; text?: unknown; images?: unknown; attachments?: unknown; stageId?: unknown }>(req);
         const ids = parseAttachmentIds(b.attachments);
         if (ids.length && !managedAttachmentPolicy().enabled) return json({ ok: true, data: { ok: false, reason: ATTACH_DISABLED } });
-        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images), ids) });
+        // P-FLEET.STAGE1 (ADR-0609): the client's stage id makes a retried or doubled request stage once.
+        return json({ ok: true, data: fleet.enqueue(String(b.laneId ?? ""), String(b.text ?? ""), laneImages(b.images), ids, parseStageId(b.stageId)) });
       }
       if (p === "/api/fleet/queue/remove" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown; index?: unknown; expect?: unknown }>(req);
@@ -6719,6 +6985,25 @@ return Bun.serve({
       if (p === "/api/fleet/stop" && req.method === "POST") {
         const b = await readBody<{ laneId?: unknown }>(req);
         return json({ ok: true, data: fleet.stop(String(b.laneId ?? "")) });
+      }
+      // P-HOLDER.2 (ADR-0574): before an update installs, the IDE asks which lanes run (stuck, idle, working, and
+      // which run from the install folder), and stops only the ones the person chose that are still idle or stuck.
+      if (p === "/api/fleet/update-check" && req.method === "GET") return json({ ok: true, data: updateCheck((await fleet.status()).lanes) });
+      if (p === "/api/fleet/stop-for-update" && req.method === "POST") {
+        const b = await readBody<{ laneIds?: unknown }>(req);
+        const ids = Array.isArray(b.laneIds) ? b.laneIds.filter((x): x is string => typeof x === "string").slice(0, 200) : [];
+        const r = stopForUpdate(ids, (await fleet.status()).lanes, (id) => fleet.stop(id));
+        if (r.stopped.length) console.log(`[fleet] stopped for an update: ${r.stopped.join(", ")}`);
+        return json({ ok: true, data: r });
+      }
+      // The person chose to install (`on: true`): no held lane starts from the install folder from now on, and the
+      // answer counts the starts from it still in progress (the install waits while any is). `on: false` lifts it.
+      if (p === "/api/fleet/commit-install" && req.method === "POST") {
+        const b = await readBody<{ on?: unknown }>(req);
+        const on = b.on === true;
+        const pending = laneHolders ? laneHolders.commitInstall(on) : 0;
+        console.log(`[fleet] update install ${on ? "committed" : "released"} (${pending} start${pending === 1 ? "" : "s"} from the install folder in progress)`);
+        return json({ ok: true, data: { committed: on, pending } });
       }
       // P-FLEET.L10: DISMISS a lane (stop parks it, this forgets it). Fail-closed on a live turn unless
       // the caller passes `force`, so one click can never destroy work in flight; the UI makes it a
@@ -6816,7 +7101,7 @@ return Bun.serve({
         const b = parseResumeBody(await readBody<unknown>(req).catch(() => null));
         if (!b.ok) return Response.json({ ok: false, error: b.error }, { status: 400 });
         const held = spokeHolding(b.value.sessionId); // P-SWITCH.2 (ADR-0404)
-        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in spoke "${held.name}", so it was not reopened in Main.` } });
+        if (held) return json({ ok: true, data: { ok: false, error: `That session is running in agent "${held.name}", so it was not reopened in Main.` } });
         return json({ ok: true, data: await backend.resumeSession(b.value.sessionId) });
       }
       if (p === "/api/recovery/recover" && req.method === "POST") return json({ ok: true, data: await backend.recoverMaster() });
@@ -7446,7 +7731,9 @@ backend.startAutomationScheduler();
 jobScheduler.start();
 // P-PLUGINS.8 (ADR-0546): the plugins the user left running come back, once, now that the engine serves. Detached:
 // the bind never waits on a plugin; each one gets a bounded retry, and a user's Stop meanwhile cancels its retry.
-void plugins.autostart().catch((e) => console.warn("[plugins] autostart failed:", e));
+// P-WORLDS.HEAL1: first put back any purchased plugin or world that went missing or got damaged (from its backup,
+// through every install gate), so autostart finds it whole. Detached like autostart; startup() never throws.
+void pluginHealer.startup().then(() => plugins.autostart()).catch((e) => console.warn("[plugins] autostart failed:", e));
 // ADR-0501: controller lanes the previous engine ran come back idle on their own lane ids and omp sessions (after
 // the child env above is set, so a restored lane is wired like a new one). Detached: the bind never waits on omp;
 // controller routes do (the gate set with controllerDeps), and open when this settles, success or not.
@@ -7476,9 +7763,11 @@ function sandboxControlNow(): SandboxControlView {
   let mxc: SandboxControlView["mxc"];
   if (process.platform === "win32") {
     const m = mxcHost({ resourcesPath: process.env.LUCID_RESOURCES || undefined });
+    // P-SANDBOX.WIN1 (ADR-0658): the concrete reason when it is not usable, and whether the boot task that
+    // re-prepares the NUL device at every startup is registered (the NUL step exists only on the DACL tier).
     mxc = m.host
-      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source }
-      : { staged: false, prepNeeded: [], loopbackNeeded: false };
+      ? { staged: true, tier: m.host.tier, prepNeeded: m.probe.prepNeeded, loopbackNeeded: m.host.tier !== "base-container" && !loopbackExempted(), source: m.executors.source, ...(m.host.tier === "appcontainer-dacl" ? { bootTask: mxcBootTaskInstalled(m.executors.prepSha256) } : {}) }
+      : { staged: false, prepNeeded: [], loopbackNeeded: false, reason: m.reason };
   }
   return sandboxControlView({
     platform: process.platform,

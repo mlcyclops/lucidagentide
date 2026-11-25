@@ -167,6 +167,12 @@ describe("seedTurns (P-FLEET.L8)", () => {
     expect(lines[1]).toBe("Hello"); // prose survives byte for byte
   });
 
+  it("a multi-line tool title (a heredoc) from an older engine still collapses into the one note", () => {
+    const heredoc = "$ cat > x <<'EOF'\nhi\nEOF";
+    const out = seedTurns([{ role: "assistant", text: `[ran: ${heredoc}]\n[ran: read]\nDone.`, tools: [{ name: "bash", detail: heredoc }, { name: "read", detail: "read" }] }]);
+    expect(out[0]!.text).toBe("[ran 2 tool calls: $ cat > x <<'EOF' hi EOF, read]\nDone.");
+  });
+
   it("keeps multi-line prose, its blank lines and its indentation verbatim", () => {
     const prose = "  indented first\n\nsecond para\ttabbed";
     const out = seedTurns([{ role: "assistant", text: `[ran: bash]\n${prose}\n` }]);

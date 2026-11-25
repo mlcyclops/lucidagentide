@@ -65,7 +65,7 @@ describe("validateAction", () => {
   });
 
   test("prompt_lane must name a lane Lucid was shown", () => {
-    expect(validateAction({ kind: "prompt_lane", params: { laneId: "lane-2", text: "continue" } }, KNOWN, 1)).toMatchObject({ id: "a2", kind: "prompt_lane", label: "Prompt lane lane-2", risk: "write", params: { laneId: "lane-2", text: "continue" } });
+    expect(validateAction({ kind: "prompt_lane", params: { laneId: "lane-2", text: "continue" } }, KNOWN, 1)).toMatchObject({ id: "a2", kind: "prompt_lane", label: "Prompt agent lane-2", risk: "write", params: { laneId: "lane-2", text: "continue" } });
     expect(validateAction({ kind: "prompt_lane", params: { laneId: "lane-99", text: "continue" } }, KNOWN, 0)).toBeNull();
     expect(validateAction({ kind: "prompt_lane", params: { laneId: "lane-2", text: "   " } }, KNOWN, 0)).toBeNull();
   });
@@ -109,7 +109,7 @@ describe("validateAction", () => {
     expect(validateAction({ kind: "spawn_lane", params: { name: "docs", prompt: "p".repeat(ACTION_LIMITS.prompt + 1) } }, KNOWN, 0)).toBeNull();
     expect(validateAction({ kind: "spawn_lane", params: { name: "docs", prompt: "p".repeat(ACTION_LIMITS.prompt) } }, KNOWN, 0)).not.toBeNull();
     // An over-long label falls back to the default; it is not a reason to drop a valid action.
-    expect(validateAction({ kind: "spawn_lane", label: "L".repeat(500), params: { name: "docs", prompt: "p" } }, KNOWN, 0)?.label).toBe('Start lane "docs"');
+    expect(validateAction({ kind: "spawn_lane", label: "L".repeat(500), params: { name: "docs", prompt: "p" } }, KNOWN, 0)?.label).toBe('Start agent "docs"');
   });
 
   test("wrong shapes are dropped without throwing", () => {
@@ -193,9 +193,9 @@ describe("what the card shows is what is sent", () => {
   test("actionDetails lists every field of each kind, commands marked as commands", () => {
     const t = validateAction(task, KNOWN, 0)!;
     const rows = Object.fromEntries(actionDetails(t).map((r) => [r.label, r.value]));
-    expect(rows).toEqual({ Task: "Run the suite", "Runs on lane": "lane-2", Prompt: task.params.prompt, "Must deliver": "A green make test run.", Checks: "The suite passes\ncommand: make test", After: "t-1" });
+    expect(rows).toEqual({ Task: "Run the suite", "Runs on agent": "lane-2", Prompt: task.params.prompt, "Must deliver": "A green make test run.", Checks: "The suite passes\ncommand: make test", After: "t-1" });
     const s = validateAction(spawn, KNOWN, 0)!;
-    expect(actionDetails(s)).toEqual([{ label: "New lane", value: "docs" }, { label: "First prompt", value: spawn.params.prompt }]);
+    expect(actionDetails(s)).toEqual([{ label: "New agent", value: "docs" }, { label: "First prompt", value: spawn.params.prompt }]);
     expect(actionDetails(validateAction({ kind: "open_view", params: { view: "orbit" } }, KNOWN, 0)!)).toEqual([{ label: "View", value: "orbit" }]);
   });
 
@@ -288,7 +288,7 @@ describe("answerAskLucid with proposals", () => {
 
   test("a lane Lucid was not shown cannot be named: with the fleet view withheld, lane actions are dropped", async () => {
     const reply = `Staging it.\n\n${fence([{ kind: "prompt_lane", params: { laneId: "lane-1", text: "continue" } }, { kind: "open_view", params: { view: "fleet" } }])}`;
-    const r = await answerAskLucid("go", [], deps(reply, { scan: async (text) => ({ block: text.includes('lane "scout"'), reason: "quarantined" }) }));
+    const r = await answerAskLucid("go", [], deps(reply, { scan: async (text) => ({ block: text.includes('agent "scout"'), reason: "quarantined" }) }));
     expect(r.withheld).toEqual(["fleet"]);
     expect(r.actions.map((a) => a.kind)).toEqual(["open_view"]);
     expect(r.actionsDropped).toBe(1);

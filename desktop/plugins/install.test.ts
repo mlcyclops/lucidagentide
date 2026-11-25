@@ -15,12 +15,13 @@ import { zipEntries } from "../../harness/kb/zip.ts";
 import { readAllZipEntries } from "../../harness/personal/unzip.ts";
 import { signPluginManifest, type PluginManifest } from "../../harness/plugins/package.ts";
 import { authenticodeVerdict } from "./authenticode.ts";
-import { CLEAN, buildServerFixture, testKey } from "./fixtures.ts";
+import { buildPlugin } from "../../tools/build_plugin.ts";
+import { CLEAN, buildServerFixture, testKey, writeStage, type TestKey } from "./fixtures.ts";
 import {
-  addonsDir, downloadUrlProblem, inspectPluginFile, installOfferedPlugin, installPluginBytes, installPluginFile, installPluginFromUrl,
-  pluginLogPath, readOfferedAddons, readPluginLicense, uninstallPlugin, type InstallDeps,
+  addonsDir, downloadUrlProblem, exportWorld, inspectPluginFile, installOfferedPlugin, installPluginBytes, installPluginFile, installPluginFromUrl,
+  installWorldBytes, pluginLogPath, readOfferedAddons, readPluginLicense, uninstallPlugin, type InstallDeps,
 } from "./install.ts";
-import { listInstalled, pluginDataDir, readInstalled } from "./installed.ts";
+import { listInstalled, listInstalledWorlds, pluginDataDir, readInstalled } from "./installed.ts";
 import { PluginRuntime } from "./runtime.ts";
 
 const KEY = testKey();
@@ -178,6 +179,19 @@ describe("the download gate", () => {
     const log = readFileSync(pluginLogPath(), "utf8");
     expect(log.trim().split("\n").length).toBe(3);
     expect(log).not.toContain("SECRET");
+  });
+
+  // P-PLUGINS.ID1: a request with no valid id downloads nothing and files no Live block; a real gate refusal does.
+  test("a request without a valid plugin id is refused before any download and files no Live block", async () => {
+    let fetched = 0;
+    const fetchImpl = (async () => { fetched++; return new Response(buildServerFixture(KEY)); }) as unknown as typeof fetch;
+    const blocks: string[] = [];
+    const record = (b: { reason: string }) => { blocks.push(b.reason); };
+    expect(await installPluginFromUrl("https://cdn.example/p.zip", "", deps({ fetchImpl, record }))).toMatchObject({ ok: false, gate: "manifest", reason: "invalid plugin id" });
+    expect(fetched).toBe(0);
+    expect(blocks).toEqual([]);
+    expect(await installPluginFromUrl("http://cdn.example/p.zip", "fixture-server", deps({ fetchImpl, record }))).toMatchObject({ ok: false, gate: "download" });
+    expect(blocks).toHaveLength(1);
   });
 });
 
@@ -421,5 +435,73 @@ describe("offered add-ons", () => {
     expect(addonsDir(join(work, "resources"))).toBe(join(work, "resources", "addons"));
     process.env.LUCID_ADDONS_DIR = join(work, "elsewhere");
     expect(addonsDir(join(work, "resources"))).toBe(join(work, "elsewhere"));
+  });
+});
+
+// ADR-0648: a Lucid Agent World. The same gates; a file import needs kind world AND a valid signature; the
+// original signed bytes are kept beside the version dir for Export; the private path and the runtime refuse it.
+describe("Lucid Agent Worlds", () => {
+  const WORLD_JS = "export default (host) => ({ id: 'christmas', label: 'Christmas' });\n";
+  const buildWorld = (key: TestKey | null, over: Record<string, unknown> = {}): Buffer => {
+    const src = writeStage({ LICENSE: "LUCID Premium Plugin License (test fixture)\n", "world.js": WORLD_JS }, {
+      schema: 1, id: "world-christmas", name: "Christmas", version: "1.0.0", publisher: "TECHLEAD 187 LLC",
+      license: "LUCID-Premium-Plugin-1.0", tier: "premium", section: "civilian", kind: "world",
+      entry: { module: "world.js" }, apiVersion: 1, ...over,
+    });
+    return readFileSync(buildPlugin({ src, out: mkdtempSync(join(work, "out-")), privateKey: key?.privateKey }).zipPath);
+  };
+
+  test("a signed world imports from a file, keeps its original package, exports it byte-for-byte, and uninstalls", async () => {
+    const zip = buildWorld(KEY);
+    const r = await installWorldBytes(zip, "world-christmas-1.0.0.lplugin.zip", deps());
+    expect(r).toEqual({ ok: true, world: { id: "world-christmas", version: "1.0.0", name: "Christmas", module: "/worlds/world-christmas/1.0.0/world.js", apiVersion: 1, installedAt: expect.any(String) } });
+    expect(readdirSync(join(process.env.LUCID_PLUGINS_DIR!, "world-christmas")).sort()).toEqual(["1.0.0", "current.json", "world-christmas-1.0.0.lplugin.zip"]);
+    expect(existsSync(pluginDataDir("world-christmas"))).toBe(false);
+    expect(listInstalledWorlds().map((w) => w.id)).toEqual(["world-christmas"]);
+    const out = exportWorld("world-christmas");
+    expect(out.ok && out.name).toBe("world-christmas-1.0.0.lplugin.zip");
+    expect(out.ok && Buffer.compare(out.bytes, zip)).toBe(0);
+    // The exported bytes install again on "another machine".
+    expect(uninstallPlugin("world-christmas", false)).toEqual({ ok: true });
+    expect(exportWorld("world-christmas")).toMatchObject({ ok: false });
+    expect(await installWorldBytes(out.ok ? out.bytes : Buffer.alloc(0), "x.lplugin.zip", deps())).toMatchObject({ ok: true });
+  });
+
+  test("an update keeps only the new version's package", async () => {
+    expect((await installWorldBytes(buildWorld(KEY), "a.lplugin.zip", deps())).ok).toBe(true);
+    expect((await installWorldBytes(buildWorld(KEY, { version: "1.1.0" }), "b.lplugin.zip", deps())).ok).toBe(true);
+    expect(readdirSync(join(process.env.LUCID_PLUGINS_DIR!, "world-christmas")).sort()).toEqual(["1.1.0", "current.json", "world-christmas-1.1.0.lplugin.zip"]);
+  });
+
+  test("the store download path keeps the package for a world too", async () => {
+    const zip = buildWorld(KEY);
+    const fetchImpl = (async () => new Response(zip)) as unknown as typeof fetch;
+    expect(await installPluginFromUrl("https://cdn.example/world-christmas.lplugin.zip", "world-christmas", deps({ fetchImpl }))).toMatchObject({ ok: true });
+    expect(exportWorld("world-christmas")).toMatchObject({ ok: true, name: "world-christmas-1.0.0.lplugin.zip" });
+  });
+
+  test("an unsigned world, a non-world package, a tampered world and a non-zip name are refused", async () => {
+    expect(await installWorldBytes(buildWorld(null, { tier: "free" }), "w.lplugin.zip", deps())).toMatchObject({ ok: false, gate: "signature" });
+    expect(await installWorldBytes(buildServerFixture(KEY), "s.lplugin.zip", deps())).toMatchObject({ ok: false, gate: "manifest" });
+    expect(await installWorldBytes(buildWorld(testKey("stranger")), "w.lplugin.zip", deps())).toMatchObject({ ok: false, gate: "signature" });
+    const tampered = rezip(buildWorld(KEY), (es) => es.map((e) => e.name === "world.js" ? { ...e, data: Buffer.from(WORLD_JS + "//x") } : e));
+    expect(await installWorldBytes(tampered, "w.lplugin.zip", deps())).toMatchObject({ ok: false, gate: "hash" });
+    expect(await installWorldBytes(buildWorld(KEY), "w.txt", deps())).toMatchObject({ ok: false, gate: "manifest" });
+    expect(listInstalled()).toEqual([]);
+    expect(exportWorld("fixture-server")).toMatchObject({ ok: false });
+  });
+
+  test("the private file path refuses a world, even a free signed one", () => {
+    const path = join(work, "world-christmas-1.0.0.lplugin.zip");
+    writeFileSync(path, buildWorld(KEY, { tier: "free" }));
+    expect(inspectPluginFile(path, deps())).toMatchObject({ ok: false, gate: "private" });
+  });
+
+  test("the runtime never starts a world", async () => {
+    expect((await installWorldBytes(buildWorld(KEY), "w.lplugin.zip", deps())).ok).toBe(true);
+    const rt = new PluginRuntime({ nodeExe: () => process.execPath, agentBin: () => "C:/lucid/omp.exe", onMcpChange: () => {} });
+    const s = await rt.start("world-christmas");
+    expect(s.ok).toBe(false);
+    expect(s.ok ? "" : s.error).toContain("Lucid Agent World");
   });
 });

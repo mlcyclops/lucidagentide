@@ -144,7 +144,9 @@ export const PREVIEW_BRIDGE_JS = `(function(){
   if (window.__lucidInspect) return; window.__lucidInspect = 1;
   // P-PREVIEW.13: ADOPT the early shim's buffer rather than starting a fresh one, so preview_inspect's
   // { what: 'errors' } also reports failures thrown before this script existed. That is the common case
-  // for a dead page: the throw happens in the page's own first script, long before </body>.
+  // for a dead page: the throw happens in the page's own first script, long before the body closes.
+  // (Never spell a closing body tag anywhere in this string: a page with no body tag gets the bridge APPENDED,
+  // and injectPreviewZoom's lastIndexOf would then land inside this script and cut it in half.)
   var errs = window.__lucidErrs = window.__lucidErrs || [];
   function push(s){ try{ errs.push(String(s)); if(errs.length>60) errs.shift(); }catch(_){} }
   window.addEventListener('error', function(e){ push('error: ' + (e && e.message || e)); });
@@ -157,10 +159,73 @@ export const PREVIEW_BRIDGE_JS = `(function(){
     role: el.getAttribute&&el.getAttribute('role')||undefined,
     name: el.getAttribute&&(el.getAttribute('name')||el.getAttribute('aria-label')||el.getAttribute('placeholder'))||undefined,
     visible: !!(r.width && r.height), rect:{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)} }; }
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): a PAINT look for the loading curtain. The host decides whether an auto
+  // preview is worth showing BEFORE the user sees it, from a hidden probe frame, so it asks the page what
+  // it actually painted: visible text, loaded media, boxes that differ from the page background, and a
+  // nearest-neighbor readback grid of the largest canvases (the host classifies the pixels; the
+  // thresholds arrive with the command). LUCID's own banners are excluded, so a dead page carrying only
+  // "This preview stopped early" does not count as content. Read-only: the readback draws into a canvas
+  // this function creates, never into the page's own.
+  function paint(cmd){
+    try{
+      var de=document.documentElement, b=document.body;
+      var vw=window.innerWidth||(de&&de.clientWidth)||0, vh=window.innerHeight||(de&&de.clientHeight)||0;
+      var area=Math.max(1,vw*vh), minPx=Number(cmd.minBoxPx)||64, full=Number(cmd.fullFrac)||0.9;
+      var edge=Math.max(8,Math.min(96,Number(cmd.sampleEdge)||48));
+      var skip=[document.getElementById('lucid-script-error'),document.getElementById('lucid-blocked-refs')].filter(Boolean);
+      function skipped(el){ for(var i=0;i<skip.length;i++){ if(skip[i]===el||skip[i].contains(el)) return true; } return false; }
+      var text=b?String(b.innerText||''):'';
+      for(var s=0;s<skip.length;s++){ var t=String(skip[s].innerText||''); if(t) text=text.split(t).join(''); }
+      function rgba(c){ var m=/rgba?\\(([^)]+)\\)/.exec(String(c||'')); if(!m) return null;
+        var p=m[1].split(/[\\s,\\/]+/).filter(Boolean).map(function(x){ return parseFloat(x); });
+        return { r:p[0], g:p[1], b:p[2], a:p.length>3?p[3]:1 }; }
+      function same(x,y){ return !!(x&&y&&Math.abs(x.r-y.r)<=12&&Math.abs(x.g-y.g)<=12&&Math.abs(x.b-y.b)<=12); }
+      var bg={ r:255, g:255, b:255, a:1 };
+      [de,b].forEach(function(e){ if(!e) return; var c=rgba(getComputedStyle(e).backgroundColor); if(c&&c.a>0.5) bg=c; });
+      var els=b?b.getElementsByTagName('*'):[], n=Math.min(els.length,2500), boxes=0, media=0, canv=[];
+      for(var i=0;i<n;i++){
+        var el=els[i]; if(skipped(el)) continue;
+        var tag=String(el.tagName||'').toLowerCase();
+        if(tag==='script'||tag==='style'||tag==='noscript'||tag==='template') continue;
+        var r=el.getBoundingClientRect(), a=r.width*r.height;
+        if(a<minPx||r.right<=0||r.bottom<=0) continue;
+        var cs=getComputedStyle(el);
+        if(cs.visibility==='hidden'||cs.opacity==='0') continue;
+        if(tag==='canvas'){ canv.push(el); continue; }
+        if(tag==='img'){ if(el.complete&&el.naturalWidth>0) media++; continue; }
+        if(tag==='svg'){ if(el.childElementCount>0) media++; continue; }
+        if(tag==='video'||tag==='iframe'||tag==='embed'||tag==='object'){ media++; continue; }
+        var fill=rgba(cs.backgroundColor), img=cs.backgroundImage&&cs.backgroundImage!=='none';
+        if(a>=area*full&&!img){ if(fill&&fill.a>0.5) bg=fill; continue; } // a full-viewport fill restates the background
+        var bc=rgba(cs.borderTopColor), border=parseFloat(cs.borderTopWidth)>0&&cs.borderTopStyle!=='none'&&bc&&bc.a>0.3&&!same(bc,bg);
+        if((fill&&fill.a>0.5&&!same(fill,bg))||img||border||(cs.boxShadow&&cs.boxShadow!=='none')) boxes++;
+      }
+      canv.sort(function(x,y){ return (y.width*y.height)-(x.width*x.height); });
+      var canvases=[], sc=document.createElement('canvas'), sx=null;
+      sc.width=edge; sc.height=edge;
+      try{ sx=sc.getContext('2d',{ willReadFrequently:true }); }catch(_){ sx=null; }
+      for(var k=0;k<canv.length&&k<3;k++){
+        var cv=canv[k], px=null;
+        if(sx&&cv.width>0&&cv.height>0){
+          try{ sx.clearRect(0,0,edge,edge); sx.imageSmoothingEnabled=false; sx.drawImage(cv,0,0,edge,edge); px=Array.prototype.slice.call(sx.getImageData(0,0,edge,edge).data); }catch(_){ px=null; }
+        }
+        canvases.push({ w:cv.width|0, h:cv.height|0, px:px });
+      }
+      var thumb='';
+      if(canv.length&&canv[0].width>0&&canv[0].height>0){
+        try{ var tc=document.createElement('canvas'); tc.width=Math.max(16,Math.min(240,Number(cmd.thumbW)||112)); tc.height=Math.max(10,Math.min(160,Number(cmd.thumbH)||70));
+          var tx=tc.getContext('2d'); if(tx){ tx.drawImage(canv[0],0,0,tc.width,tc.height); thumb=tc.toDataURL('image/png'); } }catch(_){ thumb=''; }
+      }
+      var bad=0; for(var j=0;j<errs.length;j++){ if(errs[j].indexOf('error:')===0||errs[j].indexOf('unhandledrejection:')===0) bad++; }
+      return { title: clip(document.title,80), textChars: text.replace(/\\s+/g,'').length, media:media, boxes:boxes, canvases:canvases,
+        errors:bad, scriptError: !!document.getElementById('lucid-script-error'), blockedRefs: !!document.getElementById('lucid-blocked-refs'), thumb:thumb };
+    }catch(e){ return { error: String(e&&e.message||e) }; }
+  }
   function inspect(cmd){
     try{
       var what=(cmd&&cmd.what)||(cmd&&cmd.selector?'select':'summary'), sel=cmd&&cmd.selector;
       if(what==='errors') return { errors: errs.slice(-30) };
+      if(what==='paint') return paint(cmd);
       if(what==='title') return { title: document.title, url: location.href };
       if(sel){
         var q; try{ q=document.querySelectorAll(sel); }catch(e){ return { error:'bad selector: '+String(e&&e.message||e) }; }
@@ -285,6 +350,23 @@ export const PREVIEW_ZOOM_JS = `(function(){
     window.parent.postMessage({__lucid:'preview-zoom-wheel',deltaY:Math.max(-1000,Math.min(1000,ev.deltaY)),deltaMode:ev.deltaMode},'*');
   },{passive:false,capture:true});
   window.parent.postMessage({__lucid:'preview-zoom-ready'},'*');
+  // P-PREVIEW.FIT1: report the document's own size so the panel can fit (or pan across) content wider than its
+  // frame. fixed: html/body cannot scroll, so content past the frame's bottom is unreachable from inside.
+  var sizeQueued=false;
+  function size(){
+    sizeQueued=false;
+    try{
+      var d=document.documentElement,b=document.body;
+      var w=Math.max(d.scrollWidth,b?b.scrollWidth:0),h=Math.max(d.scrollHeight,b?b.scrollHeight:0);
+      var fixed=/hidden|clip/.test(getComputedStyle(d).overflowY)||(!!b&&/hidden|clip/.test(getComputedStyle(b).overflowY));
+      window.parent.postMessage({__lucid:'preview-size',w:w,h:h,vw:window.innerWidth,vh:window.innerHeight,fixed:fixed},'*');
+    }catch(_){}
+  }
+  function queue(){ if(sizeQueued) return; sizeQueued=true; requestAnimationFrame(size); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',queue); else queue();
+  window.addEventListener('load',queue);
+  window.addEventListener('resize',queue);
+  try{ new ResizeObserver(queue).observe(document.documentElement); }catch(_){}
 })();`;
 
 /** Preserve SVG's XML MIME and document while adding the same bounded wheel channel as HTML. */

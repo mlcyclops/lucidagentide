@@ -18,8 +18,9 @@
 //   deny          → block, no persistence.
 //
 // Fail-closed: anything unparseable / compound-ambiguous / simply unknown is classified RISKY; a
-// non-silenceable catastrophic ALWAYS_PROMPT set (sudo, rm -rf, pipe-to-shell, dd/mkfs, fork bomb,
-// git reset --hard / clean -f / push --force) prompts regardless of ANY standing allow or danger mode.
+// catastrophic ALWAYS_PROMPT set (sudo, rm -rf, pipe-to-shell, dd/mkfs, fork bomb, git reset --hard /
+// clean -f / push --force) prompts despite a standing program allow or this-turn scope. Full auto (danger mode;
+// a T4 loop dial; Fleet full auto-mode) runs it too: P-AUTO.FULL1 (ADR-0639). Only managed policy stops full auto.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -74,13 +75,14 @@ const GIT_READONLY = new Set([
 // Shell control operators that make a command compound / write-capable → risky and un-pinnable (key=null).
 const COMPOUND = /[|;&]|&&|\|\||\$\(|`|>>|>|<\(/;
 
-// Non-silenceable catastrophic patterns (T4). Each ALWAYS prompts (interactive) / ALWAYS blocks
-// (unattended), regardless of any standing allow or danger mode — mirroring an egress ask-site pin.
-interface Catastrophic { re: RegExp; why: string }
+// Catastrophic patterns (T4). Each prompts (interactive) / blocks (unattended) despite a standing program allow
+// or this-turn scope; only full auto runs them unasked (ADR-0639), and managed policy can still deny them.
+/** `benign` (P-FLEET.AUTO1, ADR-0610) clears a match the pattern alone cannot tell apart from the danger it names. */
+interface Catastrophic { re: RegExp; why: string; benign?: (cmd: string) => boolean }
 const ALWAYS_PROMPT: Catastrophic[] = [
   { re: /(^|\s)(sudo|doas)\b/i, why: "runs as root (sudo/doas)" },
   { re: /(^|\s)rm\b(?=[^|;&]*\s-)[^|;&]*\b(?:-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?=[^|;&]*\s-[a-z]*r)(?=[^|;&]*\s-[a-z]*f))/i, why: "recursive force-delete (rm -rf)" },
-  { re: /\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby)\b/i, why: "pipes downloaded code into an interpreter" },
+  { re: /\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby)\b/i, why: "pipes downloaded code into an interpreter", benign: (cmd) => pipesOnlyData(cmd) },
   { re: /(^|\s)dd\b/i, why: "raw disk write (dd)" },
   { re: /(^|\s)mkfs\b/i, why: "formats a filesystem (mkfs)" },
   { re: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, why: "fork bomb" },
@@ -123,14 +125,15 @@ function launcherPayload(prog: string, rest: string[]): string | null {
  *  `powershell -Command`) would run. Only the program position is rewritten, so a quoted argument
  *  (`grep "rm -rf" log`) is not read as a command. */
 function catastrophicIn(raw: string, depth = 0): Catastrophic | null {
-  for (const c of ALWAYS_PROMPT) if (c.re.test(raw)) return c;
+  const hit = (c: Catastrophic, s: string): boolean => c.re.test(s) && !c.benign?.(s);
+  for (const c of ALWAYS_PROMPT) if (hit(c, raw)) return c;
   if (depth > 4) return null;
   for (const seg of raw.split(/\|\||&&|[;&|\r\n]/)) {
     const spans = tokenSpans(seg);
     const { prog, at } = argv0At(spans.map((s) => s.text));
     if (!prog || at < 0) continue;
     const norm = `${prog}${seg.slice(spans[at]!.end)}`;
-    for (const c of ALWAYS_PROMPT) if (c.re.test(norm)) return c;
+    for (const c of ALWAYS_PROMPT) if (hit(c, norm)) return c;
     const payload = launcherPayload(prog, spans.slice(at + 1).map((s) => s.text));
     if (payload !== null) {
       const hit = catastrophicIn(payload, depth + 1);
@@ -138,6 +141,64 @@ function catastrophicIn(raw: string, depth = 0): Catastrophic | null {
     }
   }
   return null;
+}
+
+/** Every pipe into an interpreter in `cmd`: the interpreter's name and its argument tokens up to the next
+ *  pipeline or list operator. Quote-aware, so `python -c "import a; b()"` keeps its code as one token. */
+const PIPE_INTO_INTERPRETER = /\|\s*(?:sudo\s+)?(sh|bash|zsh|dash|ksh|python[0-9.]*|node|perl|ruby)\b/gi;
+
+/** P-FLEET.AUTO1 (ADR-0610): true when every pipe into an interpreter in `cmd` hands it its program some
+ *  other way (`-c` / `-e` code, `-m` module, a script file), so what arrives on stdin is DATA. The pattern
+ *  exists for `curl … | sh`, where stdin IS the program; it also caught `curl … | python -c "parse it"`, the
+ *  most common way an agent reads a JSON or HTML answer, and in Fleet full auto-mode every such call stopped
+ *  for a human. Fail-closed: a bare interpreter, `-` or `-s` (read the program from stdin), or code that
+ *  evaluates its input (`exec(`/`eval`, a shell `$(...)` or backtick) still counts as the catastrophic form. */
+function pipesOnlyData(cmd: string): boolean {
+  for (const m of cmd.matchAll(PIPE_INTO_INTERPRETER)) {
+    const words: string[] = [];
+    for (const s of tokenSpans(cmd.slice(m.index + m[0].length))) {
+      if (/^(\||\|\||&&|;|&)$/.test(s.text)) break;
+      // A paired quote is already gone from s.text, so a trailing one closes the string this pipe sits in
+      // (`bash -lc 'curl x | sh'`): the interpreter's arguments end there, and a lone quote is no script name.
+      const word = s.text.replace(/\\?["'`)]+$/, "");
+      if (word) words.push(word);
+      if (word !== s.text || /[;|&]$/.test(s.text)) break;
+    }
+    if (!interpreterHasOwnProgram(m[1]!.toLowerCase(), words)) return false;
+  }
+  return true;
+}
+
+/** Does an interpreter invoked with `args` take its program from an argument (code, module or script file)
+ *  rather than from stdin? Options that consume a value are skipped with it, so that value is not read as a
+ *  script name (`bash -o pipefail`, `node -r ts-node/register`). */
+function interpreterHasOwnProgram(prog: string, args: readonly string[]): boolean {
+  const shell = /^(sh|bash|zsh|dash|ksh)$/.test(prog);
+  const python = prog.startsWith("python");
+  const codeFlag = shell ? /^-[a-z]*c[a-z]*$/i
+    : python ? /^-[a-z]*[cm][a-z]*$/i
+    : prog === "node" ? /^(-[a-z]*[ep][a-z]*|--eval|--print)$/i
+    : /^-[a-z]*e[a-z]*$/i; // perl -e/-ne/-E, ruby -e
+  const takesValue = shell ? /^[-+]o$/
+    : python ? /^-[WXQ]$/
+    : prog === "node" ? /^(-r|--require|--import|--loader|--experimental-loader)$/
+    : /^-[IrM]$/;
+  // Code built at run time (a `$(...)` or backtick the outer shell expands) is as unknown as stdin.
+  const evaluatesInput = shell ? /\$\(|`|\beval\b|\bsource\b|(^|\s)\.\s/ : /\$\(|`|\bexec\s*\(|\beval\b/;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "-" || (shell && /^-[a-z]*s[a-z]*$/i.test(a))) return false; // the program is read from stdin
+    if (python && /^-m[\w.]+$/.test(a)) return true; // -mjson.tool: a module, attached
+    if (codeFlag.test(a)) {
+      // -m names a module; -c/-e carry the code, which must not just run what arrived on stdin.
+      if (python && /m/i.test(a) && !/c/i.test(a)) return true;
+      const code = args[i + 1] ?? "";
+      return code !== "" && !evaluatesInput.test(code);
+    }
+    if (takesValue.test(a)) { i++; continue; }
+    if (!a.startsWith("-") && !a.startsWith("+")) return true; // a script file: stdin is its input
+  }
+  return false; // a bare interpreter: stdin is the program
 }
 
 /** Strip leading `VAR=val` assignments and an `env`/`command`/`nice`/`time` wrapper to find the real argv0. */
@@ -313,12 +374,15 @@ export const TOOL_TYPE_TIER: Record<DialType, RiskTier> = {
   subagent: "T2",     // spawns more agent work
 };
 
-/** Pure loop decision: may a command of `tier` auto-run under a dial set to `dialMax`? Fail-closed:
- *  T4 ALWAYS blocks (no human, never auto-runnable); otherwise auto iff tier ≤ dialMax. An absent dial
- *  defaults to T0 (the safest, most-blocking posture). */
+/** Pure loop decision: may a command of `tier` auto-run under a dial set to `dialMax`? Auto iff tier ≤ dialMax,
+ *  so T4 (catastrophic) runs only under a T4 "full auto" dial. An absent dial defaults to T0 (the safest,
+ *  most-blocking posture). */
 export function loopVerdict(dialMax: RiskTier | undefined, tier: RiskTier): "auto" | "block" {
-  if (tier === "T4") return "block";
   const ceil = dialMax ?? "T0";
+  // P-AUTO.FULL1 (ADR-0639): a dial at T4 ("full auto") auto-runs everything, the catastrophic tier included;
+  // below it T4 still blocks. The managed loop ceiling clamps the dial first (clampDialRow), so an org that caps
+  // loops below T4 keeps the block.
+  if (tier === "T4" && ceil !== "T4") return "block";
   return TIER_ORDER[tier] <= TIER_ORDER[ceil] ? "auto" : "block";
 }
 
@@ -343,13 +407,16 @@ export function execVerdict(
 ): ExecVerdict {
   if (cls.risk === "safe") return "allow";
   const gate: ExecVerdict = opts.unattended ? "block" : "prompt";
-  // Catastrophic: never silenceable by any standing allow/danger/turn scope.
-  if (cls.alwaysPrompt) return gate;
   // A managed denylisted program can never be auto-allowed (overrides danger + pins, like an egress deny).
   if (cls.key && (store.denyPrograms ?? []).includes(cls.key)) return gate;
+  // P-AUTO.FULL1 (ADR-0639): danger mode is FULL auto: it runs the catastrophic patterns too (sudo, ssh into
+  // sudo, rm -rf, pipe-to-shell), attended or not. Only the organization's managed policy still stops it: a
+  // denylisted program (above) or `disableDangerMode` (clampExec turns danger off).
+  if (store.dangerMode) return "allow";
+  // Catastrophic: never silenced by the narrower standing scopes (this turn, an allowed program).
+  if (cls.alwaysPrompt) return gate;
   if (opts.turnAllowed) return "allow";
   if (cls.key && (store.allowPrograms ?? []).includes(cls.key)) return "allow";
-  if (store.dangerMode) return "allow";
   return gate;
 }
 
@@ -380,17 +447,31 @@ export function execCommand(toolCall: unknown, toolName: string = askToolName(to
   return null;
 }
 
-/** #612: the floor that no standing scope crosses, for an ask answered WITHOUT a human (Fleet full auto-mode, a
- *  lane's session grant). It is the floor execVerdict keeps under danger mode and allow-turn: a catastrophic
+/** #612: the floor a lane's session grant does not cross (Fleet FULL auto-mode keeps only its managed-deny part since
+ *  P-FLEET.AUTO2, ADR-0611: execManagedDeny). It is the floor execVerdict keeps under allow-turn: a catastrophic
  *  command (ALWAYS_PROMPT) or a managed-denylisted program. Returns why the ask must reach a human, or null when
  *  it is not an exec ask or may run unasked. `requestTools` are the request-level tool names (#616). Pure apart
  *  from `store`. */
 export function execFloor(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
+  const cls = classifyExecAsk(toolCall, requestTools);
+  if (!cls) return null;
+  return execVerdict({ ...store, dangerMode: false }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+}
+
+/** P-FLEET.AUTO2 (ADR-0611): the part of the floor Fleet FULL auto-mode still keeps: a program the organization's
+ *  managed policy denies (`denyPrograms`, ADR-0068). The user's own switch never widens what the org forbids.
+ *  Catastrophic patterns are the user's call in auto-mode; a session grant keeps the whole floor (execFloor). */
+export function execManagedDeny(toolCall: unknown, store: ExecStore, ...requestTools: unknown[]): string | null {
+  const cls = classifyExecAsk(toolCall, requestTools);
+  return cls?.key && (store.denyPrograms ?? []).includes(cls.key) ? `${cls.key} is denied by your organization's policy` : null;
+}
+
+/** The class of an exec permission ask, or null when the ask is not an exec ask. */
+function classifyExecAsk(toolCall: unknown, requestTools: readonly unknown[]): ExecClass | null {
   const name = askToolName(toolCall, ...requestTools);
   const cmd = execCommand(toolCall, name);
   if (cmd === null && !EXEC_TOOLS.test(name)) return null;
-  const cls = /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
-  return execVerdict({ ...store, dangerMode: true }, cls, { turnAllowed: true }) === "allow" ? null : cls.reason;
+  return /\beval\b/.test(name) ? classifyEval() : classifyCommand(cmd ?? name);
 }
 
 /** P-EXEC.2 (ADR-0110): omp (≥16.1) delivers its per-tool "Approve/Deny" approval — and plan-mode

@@ -33,7 +33,7 @@ import { modCombo, modSymbol } from "./platform.ts";
 import { aiLocHasData } from "../ailoc_view.ts";
 import { GUIDE_FILES } from "../guides_manifest.ts"; // P-GUIDE.2: provider id -> bundled advisor guide
 import { PREVIEW_ALLOW, PREVIEW_SANDBOX, canPreviewRemote, resolvePreview } from "../preview_resolve.ts";
-import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, PreviewWheelSteps, stepPreviewZoom } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
+import { PREVIEW_ZOOM_MAX, PREVIEW_ZOOM_MIN, previewLayout, PreviewWheelSteps, stepPreviewZoom, type PreviewContentSize } from "./preview_zoom.ts"; // whole-10% Preview zoom steps
 import { ASK_LUCID_TAB_ID, PREVIEW_KIND_ICON, isAutoPreviewPath, laneTabId, pluginTabId, previewKindLabel, previewPathKind, removeLaneTab, upsertAskLucidTab, upsertLaneTab, upsertPluginTab, type PreviewTab } from "./preview_tabs.ts";
 import { imageForAction } from "./ask_image_card.ts"; // P-ASKLUCID.9 (ADR-0600): the image an Edit image card names
 import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599): data-tip values for new controls
@@ -58,7 +58,7 @@ import { agedProgress, DurationHistory, ETA_ESTIMATING, estimateFromSamples, eta
 import { ringView, setStatusDetail, setStatusEta, setStatusRing, shownEta, statusDetail, statusEta, statusRing } from "./status_prefs.ts"; // P-PROGRESS.3: quiet by default; detail and the estimate are opt-in
 import { foldSummary, QUICK_MS, stepFate, stepKey } from "./tool_fold.ts"; // P-PROGRESS.2: which tool steps get a row, and what the rest fold into
 import type { WaitView } from "../write_claims.ts"; // P-WAIT.1 (type only: the module itself is engine-side)
-import { createPluginsFlyout } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
+import { createPluginsFlyout, drawerAnchor } from "./plugins_flyout.ts"; // P-PLUGINS.1 (ADR-0461): replaces the ADR-0158 marketplace modal
 import { KG_PACKS, kgPacksHtml, kgPackRowsHtml, type KgPack } from "./kg_packs.ts"; // P-KGPACK.5 (ADR-0205)
 import { getMarketProvider } from "./market_gate.ts"; // P-KGMARKET.1 (ADR-0206)
 // P-KGMARKET.5 (ADR-0333): the KG-header Packs button, and the pending-checkout policy that lets a purchase
@@ -69,6 +69,10 @@ import { enterSubmitTarget } from "./enter_submit.ts"; // P-KGMARKET.5: Enter ru
 import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
+// P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
+import { CURTAIN, chipAfterHide, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
+import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
+import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
 import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
@@ -81,7 +85,9 @@ import { mountOrbitGraph, type OrbitView } from "./graph_orbit.ts"; // P-KG-ORBI
 import { rankNodes, type RankedNode } from "./kg_search.ts"; // P-KG-ORBIT.1: ranked "Find a node" results
 import { qrSvg } from "../collab/qr.ts"; // P-REMOTE.4a (ADR-0226/0227): scannable QR of the invite link
 import { addEdgeOptimistic, applyForget, chainPairs, matchNodes, removeEdgeOptimistic, resolveRelationLabel } from "./kg_ops.ts";
-import { capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { baseTier, capGraph, graphOpts, pollDelay, watchPerfTier } from "./perf_tier.ts";
+import { vizBus } from "./viz_bus.ts"; // P-VIZ.1 (ADR-0622): the Visualize tap
+import { initViz, isOpen as vizIsOpen, openVizAgent, openVizWorld, paintVizPreview, setPendingWorldRestores, setVizPreviewCover, toggleViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the Visualize overlay; P-WORLDS.1 (ADR-0648); P-WORLDS.HEAL1; P-PREVIEW.CHIP1
 import { kgDataMenuHtml, kgPickerHtml, kgPickerRowsHtml, kgViewActive, kgViewLabel, kgViewsMenuHtml, type KgListItem } from "./kg_header.ts"; // P-KGUI.1/.2 (ADR-0184/0185) + P-KGPACK.2 (ADR-0205)
 import { slowPhaseLabel, slowToastCopy, snapshotPhaseLabel, STARTING_AGENT_PHASE } from "./stall_notice.ts"; // P-STALL.1/P-STALL.2 (ADR-0186/0263)
 import { addQueued, canSteer, editQueued, nextHold, parallelPushNotice, parallelPushRefusal, pushNowRoute, pushRecovery, type PushSource, type QueuedItem } from "./queue_model.ts"; // P-INTERJECT.2: the composer's staged-prompt queue (pure, testable); ADR-0414: refused-push recovery; P-PUSH.PAR1: Push now in a parallel worktree lane
@@ -135,10 +141,18 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
 import type { CollabOptions } from "../collab/frames.ts"; // P-COLLAB.14 (ADR-0228): edit-guest model+folder pickers
 import { loadDockState, saveDockState, clampToViewport, snapDecision, participantSummary, isCollapsed, orderBindAddresses, redactShareSnapshot, classifyInviteLink, defaultShape, JOIN_DOCK_KEY, type DockShape, type DockState, type DockStorage, type ShareSnapshot } from "./share_dock.ts"; // P-SHARE.1/2/3 + P-COLLAB.20 (ADR-0242) + P-VOICE.4 (ADR-0248): the floating Share / Join / Voice docks
-import { closeFleetGrid, initFleetGrid, mountFleetPill, openFleetGrid, pushToNewLane, toggleFleetGrid } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
-import { closeFleetOrbit, fleetHome, initFleetOrbit, noteSpokeAsk, openFleetOrbit, renderSpokeBanner, toggleFleetOrbit } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { autoRiskModal, closeFleetGrid, fleetGridState, initFleetGrid, mountFleetPill, openFleetGrid, paintLanePreview, pushToNewLane, revealFleetLane } from "./fleet_grid.ts"; // P-FLEET.L1/L2: local engine lanes as a movable fleet grid; P-PUSH.PAR1: Push now spawns a worktree lane
+import { closeFleetOrbit, fleetHome, fleetOrbitShown, initFleetOrbit, noteSpokeAsk, openFleetOrbit, paintSpokePreview, renderSpokeBanner } from "./fleet_orbit.ts"; // P-FLEET.L17: the hub-and-spoke Fleet Orbit view + the spoke takeover banner
+import { fleetButtonAction } from "./fleet_dock_model.ts"; // P-FLEET.DOCK1: what a Fleet button press does (pure)
+import { folderName, handoffFailure, handoffToast, pendingCopy, planTakeover, sameFolder, startFailure, STOP_FAILED, switchFailure, takeoverQueue, takeoverSheetCopy, worldMissing, type BusyChoice, type MainView, type TakeoverStep } from "./agent_activate.ts"; // P-RAIL.AGENTS1: the Agents rail's Activate choices
 import { hideRemoteView, initRemoteView, isRemoteViewOpen, REMOTE_SPOKES_PLUGIN, remoteViewHtml, showRemoteView, type RemoteViewTarget } from "./remote_spokes_view.ts"; // P-RS-VIEW.1 (ADR-0539)
 import { launchRemoteAdmin } from "./remote_admin_launch.ts"; // P-RS-WINDOW.1 (ADR-0543)
+import { mountAgentsRail, type AgentsRail } from "./agents_rail.ts"; // P-RAIL.AGENTS1: the rail's Agents view
+import { BUDDY_SETTINGS_KEY, mountAgentBuddies, readBuddySettings, saveBuddySettings, type AgentBuddies } from "./agent_buddy.ts"; // P-BUDDY.1 (ADR-0667): floating Agent buddies
+import type { BuddyIdea } from "./bridge.ts";
+import { mountSpinupWalkers, type SpinupWalkers } from "./agent_spinup.ts"; // P-SPINUP.1 (ADR-0668): a walking mini Lucid while an agent starts
+import { AGENTS_KEY, baseName, displayNames, laneFolderIds, loadDoc as loadAgentsDoc, purposeOf } from "./agents_store.ts"; // P-RAIL.AGENTS1c: an added Agent's purpose answers the workspace setup question
+import { toggleArt as agentsToggleArt } from "./agents_rail_art.ts"; // P-RAIL.AGENTS1: the rail header toggle's mini Lucid
 import { MASTER_TARGET, demoteAgentNote, demoteNotice, isLaneTarget, promoteAgentNote, promoteNotice, promoteRefusal, sameTarget, seedTurns, targetBadge, targetCaps, type ComposerTarget } from "./composer_target.ts"; // P-FLEET.L8: the composer attaches to a running lane
 import { initTimelineDock, toggleTimelineDock } from "./timeline_dock.ts"; // P-FLEET.L5: the reviewable timeline
 import { gitCredRef } from "../git_url.ts"; // P-FLEET.L2: per-host git credential ref for the OS vault
@@ -160,6 +174,8 @@ import { buildHubSections, configuredProviderCount, credentialedProviderIds, HUB
 import { LOCAL_MODEL_PRESETS } from "./local_presets.ts"; // P-LOCAL.4: one-click local-model presets in the hub
 import { renderSandboxSection } from "./sandbox_panel.ts"; // P-SANDBOX.5 (ADR-0169)
 import { installVaultEnvPanel, offerVaultEnvImport, VAULT_ENV_SEC, vaultEnvBodyHtml } from "./vault_env_panel.ts"; // P-VAULT-ENV.1 (ADR-0477)
+import { parseSettingsCat, parseSettingsLayout, resolveSettingsTarget, searchSettings, sectionsOf, SETTINGS_CAT_KEY, SETTINGS_CATEGORIES, SETTINGS_LAYOUT_KEY, settingsCategory, type SettingsCatId, type SettingsLayout, type SettingsSecId } from "./settings_nav.ts"; // P-SETUX.1 (ADR-0615)
+import { catalogEntryIsOfficial, configuredFor, MCP_CATEGORY_LABEL, MCP_COMMUNITY_CATALOG, MCP_OAUTH_HINT, normalizeOrgCatalog, type McpCatalogEntry } from "./mcp_catalog.ts"; // P-SETUX.1 (ADR-0616): Quick connect
 import { bumpSkillUsage, bundledSkillsByUsage, installedSkills, isSkillEnabled, setSkillEnabled, taskProforma } from "./skills.ts"; // ADR-0460: flavor-gated built-ins
 import { renderSkillInspect, renderSkillsDirectory, renderStudioCandidate, skillsDirSig, type SkillDirRow } from "./skills_dir.ts"; // P-SKILL.4 (ADR-0097) / P-SKILL.5 (ADR-0101)
 import { skillKey, type SkillRoot, trustEnableable } from "../skills_gov.ts"; // P-SKILL.4 (ADR-0097)
@@ -171,7 +187,7 @@ import { distillTopic, nextThinkingCue } from "../../harness/voice/thinking_cues
 import { SpeechQueue } from "./speech_queue.ts"; // P-VOICE.2: ordered, cancelable playback of those sentences
 import { applyReadAloudPatch, touchesReadAloud } from "../voice_flags.ts"; // P-VOICE.8 (ADR-0400): one rule for the read-aloud flags, shared with the engine
 import { VoiceEqualizer } from "./voice_eq.ts"; // P-VOICE.4 (ADR-0248): the glowing spectrum analyzer
-import type { AuthStatus, ElevenVoiceView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
+import type { AuthStatus, ElevenVoiceView, EmbeddingsConfigView, JudgmentView, KeyVaultStatus, TtsEngineView, VoiceListView, VoiceSettingsView } from "./bridge.ts";
 import { changeGraphSvg, schemaSvg, type ChangeGraph, type ModuleChange, type GraphEdge, type StoreChange } from "../../harness/brief/change_graph.ts"; // P-REPORT.8: report annex graphs
 import { assumedCacheRate, priceFor } from "../model_pricing.ts";
 import { DIGEST_MIN_CHARS } from "../../harness/voice/spoken_digest.ts"; // P-VOICE.6: slow-engine spoken digest
@@ -184,6 +200,7 @@ import { mountSeasonBackdrop, type BackdropHandle, type BackdropMotion } from ".
 import { SCENES, SCENE_ORDER } from "./season_scenes.ts";
 // P-FLEET.L13: the catch-up scroll math, shared with every fleet lane transcript.
 import { JUMP_SHOW_PX, anchorTop, chatTakesUpScroll, nextFollow, pageDownTarget, readingAnchor, shouldShowJump, type MsgBox, type ScrollAnchor, type ScrollBox } from "./scroll_jump.ts";
+import { humanModelId, LOGIN_TIP, loginChoices, providerShortName, reloginCopy, reloginTargets } from "./relogin.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { loginLabel, providerRoute, setSpokeSwitchScroll, spokeSwitchScroll } from "./spoke_prefs.ts"; // P-SCROLL.1: where a spoke switch lands; colliding rows share the fleet login words
 import { lineDiff, diffStat, patchLineType, patchStat, type DiffRow } from "./linediff.ts";
 // P-TPS.1 (ADR-0044): the shared output-token speedometer - same engine the omp
@@ -441,27 +458,33 @@ function buildShell(): void {
       </button>
       <!-- P-REPO.1 (ADR-0406): the repo the composer's session works on, and where its commits go. -->
       <button class="tb-chip repo-chip" id="tbRepo" type="button" hidden aria-label="Repository and push target"></button>
-      <!-- Persona + Skills live in the titlebar (full-width, so they don't squish when a right surface opens). -->
+      <!-- AskSage Persona lives in the titlebar (full-width, so it doesn't squish when a right surface opens). -->
       <button class="ctool tb-chip" id="ctPersona" data-tip="AskSage persona|Server-supplied role guidance - scanned before use" hidden>${icon("user", 14)}<span id="ctPersonaName">Persona</span>${icon("chevron", 11)}</button>
-      <button class="ctool tb-chip" id="ctSkill" data-tip="Skills|Built-in skills, /task delegation, and project skills" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
-      <!-- ADR-0219: AskSage RAG Datasets picker (next to Skills). Short name shown; full name on hover. -->
+      <!-- P-SETUX.1 (ADR-0620): shown ONLY while a skill is active, named after it. Picking a skill is in the composer "+" menu. -->
+      <button class="ctool tb-chip" id="ctSkill" data-tip="Active skill|Click to switch or clear it" hidden>${icon("bolt", 14)}<span>Skills</span>${icon("chevron", 11)}</button>
+      <!-- ADR-0219: AskSage RAG Datasets picker, AskSage users only (ADR-0620). Short name shown; full name on hover. -->
       <button class="ctool tb-chip" id="ctDataset" data-tip="Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover." hidden>${icon("folder", 14)}<span id="ctDatasetName">Datasets</span>${icon("chevron", 11)}</button>
-      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Skills / Knowledge fold in here. -->
-      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Skills and Knowledge, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
+      <!-- P-TITLEBAR.1 (ADR-0603): when the window is too narrow, Persona / Datasets / the active skill fold in here. -->
+      <button class="ctool tb-chip" id="tbMore" type="button" hidden aria-haspopup="menu" aria-expanded="false" data-tip="More|Persona, Datasets and the active skill, folded here while the window is narrow">${icon("more", 14)}<span>More</span>${icon("chevron", 11)}</button>
       <!-- ADR-0219: per-session CUI vs Search mode (only shown under AskSage lockdown). -->
       <div class="mode-toggle" id="modeToggle" role="group" aria-label="Session mode" hidden data-tip="CUI vs Search mode|In CUI mode there is NO web search (spillage risk). To search the web, open another chat session and switch it to Search - never run search in a CUI thread." data-tip-side="bottom">
         <button class="mode-seg" data-mode="cui" type="button">${icon("shield", 12)} CUI</button>
         <button class="mode-seg" data-mode="search" type="button">${icon("search", 12)} Search</button>
       </div>
       <div class="tb-spacer"></div>
-      <div class="zoom" role="group" aria-label="Text zoom">
-        <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
-        <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
-        <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+      <!-- P-SETUX.1 (ADR-0620): text zoom is one magnifier icon; hovering (or focusing / clicking) it drops the
+           zoom out / reset / zoom in controls down beneath it. -->
+      <div class="zoom-wrap" id="zoomWrap">
+        <button class="zoom-btn" id="zoomBtn" type="button" aria-label="Text zoom" aria-haspopup="true" aria-expanded="false" aria-controls="zoomGroup">${icon("zoom", 16)}</button>
+        <div class="zoom" id="zoomGroup" role="group" aria-label="Text zoom">
+          <button id="zoomOut" data-tip="Zoom out|${modSymbol("−")}">${icon("minus", 13)}</button>
+          <span class="lvl" id="zoomLvl" data-tip="Reset zoom|${modSymbol("0")}">100%</span>
+          <button id="zoomIn" data-tip="Zoom in|${modSymbol("+")}">${icon("plus", 13)}</button>
+        </div>
       </div>
       <!-- P-AVATAR.1: back into the stage after an Esc exit; visible only for the lucid-agent role. -->
       <label class="agent-tier-control" id="agentTierControl" hidden data-tip="Regular: Opus/Luna class. Max: the strongest available model for this provider; API billing may apply."><span>Agent</span><select id="agentTier" aria-label="LUCID Agent model tier"><option value="regular">Regular</option><option value="max">Max</option></select></label>
-      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet lanes, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
+      <button class="ctool tb-chip tb-ask" id="tbAskLucid" type="button" data-tip="Ask Lucid|A side conversation that does not interrupt your session. Lucid can see your fleet agents, the Fleet Orbit and the knowledge graph.">${icon("spark", 14)}<span>Ask Lucid</span></button>
       <button class="ctool tb-chip" id="tbStage" hidden data-tip="Enter the stage|Rails away, immersive LUCID Agent view. Esc steps back out.">${icon("spark", 14)}<span>Stage</span></button>
       <div class="win-ctrls">
         <button id="winMin" data-tip="Minimize">${icon("minus", 15)}</button>
@@ -479,14 +502,14 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="knowledge" data-tip="Knowledge graph|Your private, encrypted personalization graph - nodes, edges, drill-down" data-tip-icon="graph">${icon("graph", 20)}</button>
         <button class="rail-btn" data-rail="meetings" data-tip="Meetings|What was decided, and what you owe - read live from your Lucid Meeting Hub. Nothing is stored here" data-tip-icon="calendar">${icon("calendar", 20)}</button>
         <!-- P-RS-VIEW.1 (ADR-0539): shown once the Remote Spokes plugin is installed; the badge counts parked approvals and open alerts. -->
-        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote spokes|LUCID on your other machines: what each one is doing, its alerts, and a button for the hub's admin panel" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
+        <button class="rail-btn" data-rail="remote" id="railRemote" hidden data-tip="Remote agents|LUCID on your other machines: what each one is doing, its alerts, and a button for the hub's admin panel" data-tip-icon="link">${icon("link", 20)}<span class="badge" id="railRemoteBadge" hidden>0</span></button>
         <button class="rail-btn" data-rail="preview" data-tip="Preview|Open a local app/page the agent built in a sandboxed in-app browser, and send a screenshot to chat" data-tip-icon="eye">${icon("eye", 20)}<span class="rail-live-dot prev-rail-dot" id="railPreviewDot" hidden></span></button>
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
         <button class="rail-btn" id="railMarket" data-plg-toggle data-tip="Free plugins|Integrations that come with LUCID: Excalidraw, Git, Obsidian, Whisper and more. Premium apps are one tab over." data-tip-icon="plugins">${icon("plugins", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
-        <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="share">${icon("share", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
+        <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="shareLive">${icon("shareLive", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
         <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
         <button class="rail-btn" id="railStudio" hidden data-tip="Creator Studio|Audio, video, 3D and game integrations, their real capabilities, and your local track library" data-tip-icon="volume">${icon("volume", 20)}</button>
         <button class="rail-btn" id="railLogs" data-rail="dev" hidden data-tip="Logs|Read-only developer logs: telemetry, run lineage, transcripts, gate-block audit, AskSage tool-call diagnostics" data-tip-icon="logs">${icon("logs", 20)}</button>
@@ -506,7 +529,7 @@ function buildShell(): void {
         <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
         <div class="sess-find">
           <label class="sess-search">${icon("search", 13)}<input id="sessSearch" type="search" placeholder="Search sessions" aria-label="Search sessions by title or by what was said" spellcheck="false" autocomplete="off" /></label>
-          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" data-tip="Spokes hidden|Sessions your fleet spokes ran are hidden. Click to show them." data-tip-side="bottom"><span class="sess-spokes-l">Spokes</span><span class="sess-spokes-n" hidden></span></button>
+          <button class="sess-spokes" id="sessSpokes" type="button" aria-pressed="false" aria-label="Show agent sessions" data-tip="Agents hidden|Sessions your fleet agents ran are hidden. Click to show them." data-tip-side="bottom">${icon("share", 14)}<span class="sess-spokes-n" hidden></span></button>
         </div>
         <div class="side-list" id="sessList"></div>
         <div class="resizer resizer-r" data-resize="sidebar" data-tip="Drag to resize" data-tip-side="right"></div>
@@ -562,7 +585,7 @@ function buildShell(): void {
             <button class="ctool ctool-icon" id="ctVoice" data-tip="Voice - read aloud|Choose the speech engine and voice, and switch on auto-speak to have replies read to you as they stream.">${icon("volume", 15)}</button>
             <!-- P-FLEET.L1/L17: the fleet - headless local engine lanes. Opens the hub-and-spoke ORBIT map;
                  the classic grid of mini agent windows is one click away inside it. -->
-            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub &amp; spoke|Your spokes around the Main hub. Click a spoke to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
+            <button class="ctool ctool-icon" id="ctFleet" data-tip="LUCID Fleet - hub and agents|Your agents around the Main hub. Click an agent to drive it from the full composer; the classic grid is one click away.">${icon("bolt", 15)}</button>
             <!-- P-CONNUI.1 (ADR-0368): the connection affordance for a session with NOTHING at stake.
                  A failed startup status probe used to paint a paragraph into an empty thread ("Connection
                  unavailable: signal timed out. Reconnect to check session status before sending."), which
@@ -572,7 +595,9 @@ function buildShell(): void {
                  a turn that may still be running. -->
             <button class="ctool ctool-icon ctool-warn" id="ctReconnect" hidden data-tip="Reconnect|LUCID could not reach its engine to check for an active session. Nothing was lost. Click to retry.">${icon("refresh", 15)}</button>
             <!-- P-FLEET.L5: the reviewable timeline - every session (chats, lanes, ingest) across every workspace. -->
-            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet spokes, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <button class="ctool ctool-icon" id="ctTimeline" data-tip="Timeline - review any session|Every conversation this machine has had - master chats, fleet agents, imports - on one chronological, reviewable surface.">${icon("clock", 15)}</button>
+            <!-- P-VIZ.1 (ADR-0622): Visualize - Main, its agents and subagents in 3D with the tokens flowing between them. -->
+            <button class="ctool ctool-icon" id="ctViz" type="button" aria-label="Visualize agents and token flow" data-tip="Visualize|Main, your agents and their subagents in 2D or 3D, with estimated tokens flowing between them. Hover for the rate, click a node for its actions, record a clip.">${icon("visualize", 15)}</button>
             <!-- Visible only while a reply is being spoken: a live indicator with a one-click stop. -->
             <!-- P-VOICE.4 (ADR-0248): a live spectrum analyzer of the agent's actual voice - segmented LEDs
                  with hanging peak caps. Pops out into a draggable "LUCID Agent [Voice]" panel. -->
@@ -593,17 +618,30 @@ function buildShell(): void {
         </div>
         <div class="insp-body" id="inspBody"></div>
         <div class="metrics-rail" id="metricsRail">
-          <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+          <div class="rail-head">
+            <button class="rail-expand" id="railExpand" data-tip="Expand panel" data-tip-side="right">${icon("expand", 16)}</button>
+            <!-- P-RAIL.AGENTS1: flips the rail between the live metrics and your Agents (agents_rail.ts) -->
+            <button class="agr-toggle" id="railAgents" type="button" aria-pressed="false" aria-label="Show Agents" data-tip="Agents|Show your Agents: one Lucid per folder you work in" data-tip-side="bottom">${agentsToggleArt()}</button>
+          </div>
           <div class="rail-tiles" id="railTiles"></div>
+          <div id="railAgentsView" hidden></div>
         </div>
       </aside>
 
-      <aside class="settings" id="settings" hidden>
+      <!-- P-SETUX.1 (ADR-0615): Settings is an overlay, never an in-flow aside, so no fixed panel (the fleet
+           dock, the IDE, the orbit) can sit on top of it. init moves both nodes to <body>. -->
+      <div class="set-scrim" id="setScrim" hidden></div>
+      <aside class="settings" id="settings" data-layout="window" aria-labelledby="setTitle" hidden>
         <div class="set-head">
-          <div class="set-title">${icon("sliders", 17)} Settings</div>
-          <button class="set-close" id="setClose" data-tip="Close settings">${icon("close", 16)}</button>
+          <div class="set-title" id="setTitle">${icon("sliders", 17)} Settings</div>
+          <label class="set-search">${icon("search", 13)}<input id="setSearch" type="search" placeholder="Search settings" aria-label="Search settings" spellcheck="false" autocomplete="off" /></label>
+          <button class="set-close" id="setLayoutBtn" type="button"></button>
+          <button class="set-close" id="setClose" type="button" aria-label="Close settings" data-tip="Close settings|Esc">${icon("close", 16)}</button>
         </div>
-        <div class="set-body" id="setBody"></div>
+        <div class="set-main">
+          <nav class="set-nav" id="setNav" aria-label="Settings categories"></nav>
+          <div class="set-body" id="setBody"></div>
+        </div>
       </aside>
 
       <aside class="settings skills-dir" id="skillsDir" hidden>
@@ -727,11 +765,12 @@ function buildShell(): void {
             <button class="btn-mini prev-ask-act" id="prevCopyPath" hidden data-tip="Copy path|Copy the edited image's full path.">${icon("copy", 13)}</button>
           </div>
           <div class="preview-zoom" id="prevZoomControls" role="group" aria-label="Preview content zoom" data-tip="Zoom the preview. Ctrl/Meta+wheel zooms local content; for PDFs, remote pages and nested frames, wheel over these controls.">
+            <button type="button" class="btn-mini" id="prevZoomFit" aria-pressed="true" aria-label="Fit the page in the Preview" data-tip="Fit|Show the whole page in the panel (on by default). Picking a zoom turns it off; Fit turns it back on.">Fit</button>
             <button type="button" class="btn-mini" id="prevZoomOut" aria-label="Zoom Preview out">-</button>
             <button type="button" class="btn-mini" id="prevZoomReset" aria-label="Reset Preview zoom to 100 percent">100%</button>
             <button type="button" class="btn-mini" id="prevZoomIn" aria-label="Zoom Preview in">+</button>
           </div>
-          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the zoomed Yours preview. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
+          <button type="button" class="btn-mini" id="prevPan" aria-pressed="false" aria-controls="prevViewport" data-tip="Grab and drag the preview to pan a zoomed or oversized page. Escape returns to page interaction; arrow keys also pan.">${icon("move", 13)}<span class="bl">Pan</span></button>
         </div>
         <div class="preview-body" id="prevBody">
           <!-- P-PREVIEW.6a (ADR-0153): a live "reviewing / testing" pill shown while the agent looks at the preview. -->
@@ -784,7 +823,7 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   // P-SWITCH.2 (ADR-0404): where this session is running right now, visible before the click.
   const badge = liveBadge(s.live);
   // P-SESS-SEARCH.1: a spoke session that is not live still says which spoke ran it (shown only with Spokes on).
-  const spokeLine = !badge && s.spoke ? `<div class="sess-live">spoke "${esc(s.spoke)}"</div>` : "";
+  const spokeLine = !badge && s.spoke ? `<div class="sess-live">agent "${esc(s.spoke)}"</div>` : "";
   // P-SESS-ARCHIVE.1 (ADR-0517): an archived row says so and offers Restore; a live row offers Archive.
   const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
   const archBtn = s.archived
@@ -818,12 +857,13 @@ function paintSpokesToggle(hidden: number | undefined): void {
   const b = $("#sessSpokes") as HTMLElement | null;
   if (!b) return;
   b.setAttribute("aria-pressed", String(showSpokes));
+  b.setAttribute("aria-label", showSpokes ? "Hide agent sessions" : "Show agent sessions");
   b.classList.toggle("on", showSpokes);
   const n = $(".sess-spokes-n", b) as HTMLElement | null;
   if (n) { n.textContent = String(hidden ?? 0); n.hidden = showSpokes || !hidden; }
   b.dataset.tip = showSpokes
-    ? "Spokes shown|Sessions your fleet spokes ran are listed. Click to hide them."
-    : `Spokes hidden|${hidden ?? 0} session${hidden === 1 ? "" : "s"} your fleet spokes ran ${hidden === 1 ? "is" : "are"} hidden. Click to show them.`;
+    ? "Agents shown|Sessions your fleet agents ran are listed. Click to hide them."
+    : `Agents hidden|${hidden ?? 0} session${hidden === 1 ? "" : "s"} your fleet agents ran ${hidden === 1 ? "is" : "are"} hidden. Click to show them.`;
 }
 
 async function renderSessionSearch(): Promise<void> {
@@ -836,7 +876,7 @@ async function renderSessionSearch(): Promise<void> {
   if (!r) { list.innerHTML = `<div class="side-empty">Search did not answer. The engine may be restarting; try again in a moment.</div>`; return; }
   lastSearchHits = r.hits;
   paintSpokesToggle(r.hiddenSpokes);
-  const hiddenNote = r.hiddenSpokes ? ` ${r.hiddenSpokes} more in spoke sessions; turn on Spokes to see them.` : "";
+  const hiddenNote = r.hiddenSpokes ? ` ${r.hiddenSpokes} more in agent sessions; turn on Agents to see them.` : "";
   if (!r.hits.length) { list.innerHTML = `<div class="side-empty">No sessions match "${esc(q)}".${hiddenNote}</div>`; return; }
   const head = `<div class="sess-count">${r.total === r.hits.length ? `${r.total} match${r.total === 1 ? "" : "es"}` : `Newest ${r.hits.length} of ${r.total} matches`}</div>`;
   const tail = r.total > r.hits.length || hiddenNote ? `<div class="side-empty">${r.total > r.hits.length ? "Add a word to narrow it." : ""}${hiddenNote}</div>` : "";
@@ -932,9 +972,9 @@ async function openArchiveRule(anchor: HTMLElement): Promise<void> {
       <div class="arch-pop-h">${icon("archive", 14)} <b>Auto-archive</b></div>
       <label class="arch-pop-row"><input type="checkbox" data-ap-auto ${st.policy.auto ? "checked" : ""}/> <span>Archive automatically (at start, then every 6 hours)</span></label>
       <label class="arch-pop-row"><span>Sessions untouched for</span> <input type="number" min="1" max="3650" data-ap-days value="${st.policy.days}"/> <span>days</span></label>
-      <label class="arch-pop-row"><span>Spoke and empty sessions after</span> <input type="number" min="1" max="3650" data-ap-spoke value="${st.policy.spokeDays}"/> <span>days</span></label>
+      <label class="arch-pop-row"><span>Agent and empty sessions after</span> <input type="number" min="1" max="3650" data-ap-spoke value="${st.policy.spokeDays}"/> <span>days</span></label>
       <p class="arch-pop-note" data-ap-preview>${st.wouldArchive} session${st.wouldArchive === 1 ? "" : "s"} match the saved rule now. ${esc(last)}</p>
-      <p class="arch-pop-note">Covers every workspace. Sessions open in Main or any spoke are never moved, and nothing is deleted.</p>
+      <p class="arch-pop-note">Covers every workspace. Sessions open in Main or any agent are never moved, and nothing is deleted.</p>
       <div class="arch-pop-actions"><button class="btn-mini" data-ap-save>Save</button><button class="btn-mini" data-ap-now>Save and archive now</button></div>
     </div>`);
   const read = (): ArchivePolicyView => ({
@@ -958,7 +998,7 @@ async function openArchiveRule(anchor: HTMLElement): Promise<void> {
         if (!s) return;
         showToast({
           title: `Archive ${s.wouldArchive} session${s.wouldArchive === 1 ? "" : "s"}?`,
-          desc: `Sessions untouched for ${s.policy.days} days (spoke and empty ones after ${s.policy.spokeDays}) move to the Archived group, in every workspace. Nothing is deleted.`,
+          desc: `Sessions untouched for ${s.policy.days} days (agent and empty ones after ${s.policy.spokeDays}) move to the Archived group, in every workspace. Nothing is deleted.`,
           actions: [
             { label: "Cancel" },
             { label: "Archive", run: async () => {
@@ -1002,11 +1042,11 @@ async function renderSessions(): Promise<void> {
 // and off the interactive path via requestIdleCallback; sequential fetches keep the server load flat.
 let warmedTranscripts = false;
 async function warmTranscripts(data: SessionList): Promise<void> {
-  if (warmedTranscripts || perfWatch.tier() !== "full") return;
+  if (warmedTranscripts || baseTier(perfWatch.tier()) !== "full") return;
   warmedTranscripts = true;
   const run = async (): Promise<void> => {
     for (const s of data.sessions.slice(0, 5)) {
-      if (perfWatch.tier() !== "full") break; // unplugged mid-warm -> stop spending
+      if (baseTier(perfWatch.tier()) !== "full") break; // unplugged mid-warm -> stop spending
       if (cachedTranscript(s.id)) continue;
       const page = await bridge.sessionMessages(s.id, RESUME_TAIL).catch(() => null);
       if (page?.messages.length) setCachedTranscript(s.id, page.messages, Date.now());
@@ -1816,7 +1856,20 @@ function createReasoning(): ReasoningWin {
 // event. We render an inline approve/deny card; the choice is POSTed back to resolve the parked
 // request. Unanswered at turn's end ⇒ Denied (the backend already fail-closes server-side).
 const isAllowOpt = (kind?: string, optionId?: string) => /allow|approve|grant|accept|yes/i.test(`${kind ?? ""} ${optionId ?? ""}`);
-function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void } {
+/** P-VIZ.APPROVE1 (ADR-0655): Main's open permission cards by engine id (each card's `pick`), so the Visualize pop-out
+ *  answers through the card itself: the same option reading, the card's result line or toast, the voice approval
+ *  disarmed. Left when the card is answered by any path. */
+const chatAsks = new Map<string, (oid: string | null) => void>();
+/** A chat bubble's readable text for a summary surface (the Visualize hub panel): buttons, hidden parts and the
+ *  stream cursor left out, one line per block so paragraphs and tool rows never glue into each other. */
+function chatProse(el: Element | null): string {
+  if (!el) return "";
+  const c = el.cloneNode(true) as HTMLElement;
+  for (const x of c.querySelectorAll("button, [hidden], .cursor")) x.remove();
+  const lines = [...c.children].map((x) => (x.textContent ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return (lines.length ? lines.join("\n") : (c.textContent ?? "")).trim();
+}
+function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onAnswered?: () => void): { el: HTMLElement; finalize: () => void; respond: (oid: string | null, label: string, ok: boolean) => void; pick: (oid: string | null) => void } {
   let win: HTMLElement;
   if (e.egress) {
     // P-EGRESS.1 (ADR-0062): the agent wants to reach the internet. Docked above the composer. Subdued
@@ -1928,14 +1981,20 @@ function createPermissionCard(e: Extract<ChatEvent, { type: "permission" }>, onA
     actions.hidden = true;
     if (result) { result.hidden = false; result.className = `perm-result ${ok ? "ok" : "no"}`; result.innerHTML = `${icon(ok ? "check" : "close", 13)}<span>${esc(label)}</span>`; }
   };
+  // One option, read the way this card's own buttons are (P-VIZ.APPROVE1: Visualize's pop-out answers through it).
+  // No option (null) is a deny at the engine, fail-closed.
+  const pick = (oid: string | null): void => {
+    if (oid === null) { choose(null, "Denied", false); return; }
+    const opt = e.options.find((o) => o.optionId === oid);
+    if (!opt) return;
+    const isDeny = (e.egress || e.exec) ? opt.kind === "reject" : !isAllowOpt(opt.kind, opt.optionId);
+    choose(oid, isDeny ? "Denied" : "Allowed", !isDeny);
+  };
   actions.addEventListener("click", (ev) => {
     const b = (ev.target as HTMLElement).closest("[data-oid]") as HTMLElement | null;
-    if (!b) return;
-    const opt = e.options.find((o) => o.optionId === b.dataset.oid);
-    const isDeny = (e.egress || e.exec) ? opt?.kind === "reject" : !isAllowOpt(opt?.kind, opt?.optionId);
-    choose(b.dataset.oid!, isDeny ? "Denied" : "Allowed", !isDeny);
+    if (b?.dataset.oid) pick(b.dataset.oid);
   });
-  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose };
+  return { el: win, finalize: () => choose(null, "Denied (turn ended)", false), respond: choose, pick };
 }
 /** P-EGRESS.1: the dock above the composer where egress approval cards sit (not inline in the chat). */
 function egressDock(): HTMLElement {
@@ -2109,7 +2168,9 @@ interface SubagentCard {
   etas: () => readonly (number | null)[];
 }
 
-function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true): SubagentCard {
+// P-VIZ.4 (ADR-0625): `laneId` = the delegation came from a lane the composer is attached to (lanes now emit
+// `subagent` too), so its runs are read from that lane's session, not Main's.
+function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleCard: () => boolean = () => true, laneId?: string): SubagentCard {
   const n = e.assignments.length;
   const body = (e.assignments.length ? e.assignments : [e.title]).map((a) =>
     `<div class="subagent-task">${icon("chevron", 11)}<span>${esc(a)}</span></div>`).join("");
@@ -2202,7 +2263,7 @@ function createSubagentCard(e: Extract<ChatEvent, { type: "subagent" }>, isSoleC
     liveEtas = [];
   };
   const refreshRuns = async (): Promise<void> => {
-    const v = await bridge.subagents().catch(() => null);
+    const v = await bridge.subagents(laneId).catch(() => null);
     // P-TASK.5a: /api/subagents returns ALL runs in the parent session - scope this card to ITS batch
     // (task names when the delegation carried them, else assignment-prefix matching; the sole-card
     // fallback keeps single-batch turns rendering even when neither yields a match).
@@ -2353,7 +2414,7 @@ function renderStartupFailed(container: HTMLElement, reason?: string): void {
  *  app; only a refusal needs words here, with the engine's own reason. */
 async function openTerminalHub(): Promise<void> {
   const r = await bridge.hubOpen().catch(() => null);
-  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same spokes. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
+  if (r?.ok) showToast({ title: "Terminal hub opened", desc: "It is attached to this app: the Fleet deck shows these same agents. Next time you can also type lucid hub in any terminal.", timeout: 4200 });
   else showToast({ tone: "warn", title: "Terminal hub not opened", desc: r?.reason ?? "The engine did not answer.", timeout: 8000 });
 }
 
@@ -2967,6 +3028,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   if (!adopted) startThinkingCues({ toolActive: () => sawTool, topic: distillTopic(text), thinking: () => thinkBuf });
   const onEvent = (e: ChatEvent) => {
     if (!owns() || settled) return;
+    vizBus.emit(opts.laneId ?? "main", "chat", e); // P-VIZ.1 (ADR-0622): a no-op unless Visualize is open
     if (e.type === "connection") {
       rejoined = true; // the next snapshot arrives on the re-attach stream
       setPhase(e.message); paintHud();
@@ -2983,7 +3045,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     // did not exist.
     if (wireType === "error" && opts.laneId) {
       terminal = true;
-      const why = ("message" in e && typeof e.message === "string" && e.message) || "the lane did not accept the prompt";
+      const why = ("message" in e && typeof e.message === "string" && e.message) || "the agent did not accept the prompt";
       const started = buf.trim() || sawTool;
       stopThinkingCues(); finishHud(); setPhase(started ? "Failed" : "Not sent"); paintHud();
       if (started) { buf += `\n\n[turn ended in error: ${why}]`; (node as MsgNode)._md = buf; renderAnswerBody(streamEl, buf, marks); }
@@ -3076,7 +3138,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // write's own path is the signal - so without this the spoke takeover had no preview pane at all.
       if (opts.laneId && e.code?.path && isAutoPreviewPath(e.code.path)) {
         const lt = state.composerTarget;
-        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "lane", e.code.path);
+        previewShowLaneFile(opts.laneId, isLaneTarget(lt) ? lt.name : "agent", e.code.path);
       }
       scrollChat();
     }
@@ -3115,7 +3177,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     }
     else if (e.type === "subagent") {
       sawTool = true; setPhase(`Delegating to ${e.agent}…`); paintHud();
-      const card = createSubagentCard(e, () => subCards.length <= 1);
+      const card = createSubagentCard(e, () => subCards.length <= 1, opts.laneId);
       subCards.push(card);
       streamEl.after(card.el); // delegation card sits just below the answer
       scrollChat();
@@ -3129,10 +3191,18 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       noteSpokeAsk(opts.laneId, { summary: String(ask.summary ?? "a privileged action"), kind: String(ask.kind ?? "action") });
     }
     else if (e.type === "permission") {
-      if (answeredPermissions.has(e.id) || permCards.has(e.id)) return;
+      // P-VIZ.APPROVE1 (ADR-0655): Visualize took the tapped ask; a replay of one already answered leaves it again.
+      const resolved: { type: string; id: string } = { type: "permission-resolved", id: e.id };
+      if (answeredPermissions.has(e.id)) { vizBus.emit("main", "chat", resolved); return; }
+      if (permCards.has(e.id)) return;
       setPhase("Needs approval"); paintHud();
-      const card = createPermissionCard(e, () => { answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null; });
+      const card = createPermissionCard(e, () => {
+        answeredPermissions.add(e.id); if (voiceApproval?.id === e.id) voiceApproval = null;
+        chatAsks.delete(e.id);
+        vizBus.emit("main", "chat", resolved); // answered anywhere (chat, voice, Visualize, turn end)
+      });
       permCards.set(e.id, card);
+      chatAsks.set(e.id, card.pick);
       armVoiceApproval(e, card.respond); // P-AVATAR.5: hands-free sessions hear the request + can speak the verdict
       // P-EGRESS.1 / P-EXEC.1: egress + exec approvals dock directly above the prompt bar; normal tool
       // prompts stay inline.
@@ -3179,6 +3249,8 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       // (mode + key + lockdown), never a stale client copy.
       // Lane children carry no trace yet (master-only extension), so a lane turn says nothing either way.
       if (!judgments && !opts.laneId) void bridge.judgment().then((j) => { if (j?.configured && owns() && !judgments) hud.before(judgmentIdleNote()); });
+      // P-RAIL.AGENTS1: Main's folder Agent plays the turn-end ring (a lane turn is caught by the rail's fleet poll).
+      if (!opts.laneId && state.workspace?.current) { agentsRail?.noteTurnEnd(state.workspace.current); agentBuddies?.noteTurnEnd(state.workspace.current); }
     }
   };
   const settle = () => {
@@ -3193,6 +3265,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
     scheduleKnowledgeRefresh(); maybeListen();
     // P-TURN-RECOVERY-DRAIN: only a turn that finished releases a held prompt. A deliberate Stop never does
     // (stopHoldsQueue); an interrupted connection waits for reconnect.
+    if (!opts.laneId) void runQueuedTakeover(); // P-RAIL.AGENTS1: "After this turn" runs once Main is idle
     if (terminal) releaseHeldPrompt();
     renderQueued(); // a pill still staged now offers "Send now" instead of pushing into a turn that ended
   };
@@ -3217,7 +3290,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
   };
   const reconnect = async () => {
     if (!owns() || settled || connecting) return;
-    if (opts.laneId) { showTurnReconnect("Reopen this lane from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
+    if (opts.laneId) { showTurnReconnect("Reopen this agent from the fleet to follow its current activity.", () => { demoteLane(); void promoteLane(opts.laneId!); }); return; }
     try {
       if (turnId) {
         const status = await bridge.chatStatus();
@@ -3250,7 +3323,7 @@ async function renderChatTurn(text: string, connect: (onEvent: (e: ChatEvent) =>
       if (!owns()) return;
       try {
         const result = await (opts.laneId ? bridge.fleetCancel(opts.laneId) : bridge.cancelChat());
-        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The lane did not confirm Stop");
+        if (opts.laneId && !(result as { ok?: boolean } | null)?.ok) throw new Error("The agent did not confirm Stop");
         stopped = true; if (owns()) settle();
       } catch (error) { if (owns()) showTurnReconnect(`Stop was not confirmed: ${error instanceof Error ? error.message : String(error)}. Reconnect or try Stop again.`, () => void reconnect()); }
     },
@@ -3348,9 +3421,9 @@ function renderQueued(): void {
     const files = nf ? `<span class="q-files" data-tip="${nf} file${nf === 1 ? "" : "s"} ride with this prompt|Copied and scanned when they were added. Update brings them back to the composer.">${nf} file${nf === 1 ? "" : "s"}</span>` : "";
     // P-PUSH.PAR1: an item already starting its parallel lane cannot be pushed or sent again until that settles.
     const push = q.mode !== "hold" ? ""
-      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new lane on its own worktree is starting for this prompt">Pushing\u2026</button>`
+      : pushingItems.has(q) ? `<button class="q-push q-push-off" data-q-push="${i}" aria-disabled="true" data-tip="Pushing|A new agent on its own worktree is starting for this prompt">Pushing\u2026</button>`
       : idle ? `<button class="q-push" data-q-push="${i}" data-tip="Send now|Send this as the next turn">Send now</button>`
-      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new lane on its own worktree" aria-label="Push now: run this in parallel in a new lane on its own worktree">Push now</button>`;
+      : `<button class="q-push" data-q-push="${i}" data-tip="Push now|Run this in parallel in a new agent on its own worktree" aria-label="Push now: run this in parallel in a new agent on its own worktree">Push now</button>`;
     const edit = q.mode === "hold" ? `<button class="q-push q-edit" data-q-edit="${i}" data-tip="Update|Pull this prompt and its images back into the composer to edit">Update</button>` : "";
     return `<div class="q-pill" data-q-row="${i}" data-tip="${q.mode === "hold" ? (stopHoldsQueue ? "Held because you pressed Stop - it waits until you send" : "Sends automatically when the current turn ends") : "Already pushed into the running turn - kept as a record"}|Right-click or long-press to copy it">
       <span class="q-label">${q.mode === "hold" ? "next turn" : "mid-turn"}</span>
@@ -3373,7 +3446,7 @@ function renderQueued(): void {
   $$("[data-q-edit]", stack).forEach((b) => b.addEventListener("click", () => {
     const i = Number((b as HTMLElement).dataset.qEdit);
     // P-PUSH.PAR1: pulled back mid-push, the same prompt would sit in the composer AND run in the new lane.
-    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel lane. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
+    if (pushingItems.has(state.queuedItems[i]!)) { showToast({ tone: "warn", title: "Still pushing", desc: "This prompt is starting in a new parallel agent. Update it once that settles; if the push fails it stays here.", timeout: 4000 }); return; }
     editStagedPrompt(i);
   }));
   $$("[data-q-img]", stack).forEach((b) => b.addEventListener("click", () => {
@@ -3703,6 +3776,244 @@ function snapshotThread(): { role: string; text: string }[] {
   }));
 }
 
+// ── P-RAIL.AGENTS1: the Agents rail's Activate choices ─────────────────────────────────────────────────────────
+// The rail's hover module calls activateAgentFolder and shows `message` when ok is false; nothing here touches the
+// rail. What a takeover does is agent_activate.planTakeover's decision; this runs it against the engine and the
+// composer. Main's work is never dropped: its session goes to a Fleet lane, and a busy Main asks first.
+
+type ActivateResult = { ok: boolean; message?: string };
+/** "After this turn": the folder Main opens once its turn ends, the quiet status that says so, and the backstop check
+ *  (a /goal loop or an adopted turn settles outside renderChatTurn's done). */
+interface QueuedTakeover { folder: string; name: string; dismiss: () => void; timer: number }
+const takeovers = takeoverQueue<QueuedTakeover>();
+let takeoverRunning = false;
+/** P-SPINUP.1 (ADR-0668): the folder a running takeover moves Main to (its walker wears that Agent's name). */
+let takeoverFolder: string | null = null;
+
+/** Take over main composer / Start new Fleet session / Agent World session, for the Agent `name` on `folder`. */
+async function activateAgentFolder(kind: "takeover" | "fleet" | "world", folder: string, name: string): Promise<ActivateResult> {
+  const label = name.trim() || folderName(folder);
+  // A real move is announced by the workspace switch itself ("Workspace set"); takeOver says it is moving at once.
+  if (kind === "takeover") return takeOver(folder, label, null);
+  // Fleet and world both start a lane in the background (never promoted); a refusal carries the engine's reason.
+  // A real agent takes a while to load (the engine answers the spawn only after its handshake), so the user sees the
+  // lane at once: the engine lists it as "starting" as soon as it registers, and that is shown while it loads.
+  // Nothing is awaited before this feedback: the engine can be slow to answer while other agents load.
+  const pending = showToast({
+    tone: "info", title: kind === "fleet" ? `Starting ${label} in the Fleet` : `Starting ${label} in Agent Worlds`,
+    desc: kind === "fleet" ? "The agent is loading. Its card appears now; it takes prompts as soon as it is ready."
+      : "The agent is loading. It appears in Agent Worlds with its prompt panel; it takes prompts as soon as it is ready.", timeout: 0,
+  });
+  if (kind === "fleet") openFleetGrid(); else if (!vizIsOpen()) toggleViz();
+  const spawn = bridge.fleetSpawn({ cwd: folder, name: label }).catch(() => null);
+  let settled = false;
+  void spawn.finally(() => { settled = true; });
+  let early: string | null = null;
+  while (!settled && !early) {
+    const lanes = (await bridge.fleetStatus().catch(() => null))?.lanes ?? [];
+    // ours: the lane still starting in this folder (the engine registers it before its slow handshake)
+    early = lanes.find((l) => l.status === "starting" && sameFolder(l.cwd, folder))?.id ?? null;
+    if (!early) { const t = Promise.withResolvers<void>(); window.setTimeout(t.resolve, 700); await t.promise; }
+  }
+  if (early) { if (kind === "fleet") void revealFleetLane(early, false); else void openVizAgent(early, 20_000); }
+  const r = await spawn;
+  if (!r?.ok || !r.lane) { pending(); return { ok: false, message: startFailure(r?.reason) }; }
+  if (kind === "fleet") {
+    await revealFleetLane(r.lane.id);
+    pending();
+    showToast({ tone: "ok", title: `${r.lane.name} is ready`, desc: "Type its first prompt in its card.", timeout: 5000 });
+    return { ok: true };
+  }
+  // The loading note stays until the agent stands in Agent Worlds (the fleet poll behind it can lag a busy engine).
+  const shown = await openVizAgent(r.lane.id, 45_000);
+  pending();
+  if (shown) showToast({ tone: "ok", title: `${r.lane.name} is ready in Agent Worlds`, desc: "Its prompt panel is open.", timeout: 5000 });
+  return shown ? { ok: true } : { ok: false, message: worldMissing(r.lane.name) };
+}
+
+/** What Main is doing, from the engine when it answers (busy + session id), else from this composer. */
+async function readMainView(): Promise<MainView> {
+  const st = await bridge.sessionBusy().catch(() => null);
+  return {
+    folder: state.workspace?.current ?? null,
+    busy: st ? !!st.busy : state.streaming && !isLaneTarget(state.composerTarget),
+    // The engine's id; when Main's child has not loaded one yet, the conversation on screen (the active sidebar row).
+    sessionId: st?.sessionId || (($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null),
+    hasWork: $$("#thread .msg").length > 0,
+    prompt: state.lastPrompt,
+  };
+}
+
+async function takeOver(folder: string, name: string, choice: BusyChoice | null): Promise<ActivateResult> {
+  if (takeoverRunning) return { ok: false, message: "A takeover is already moving Main. Try again in a moment." };
+  if (isLaneTarget(state.composerTarget)) demoteLane(); // "main composer" is Main's: leave an attached lane first
+  // Reading Main can take seconds while its agent is busy: acknowledge the click at once.
+  const reading = sameFolder(state.workspace?.current, folder) ? () => {} : showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Checking what Main is doing first.", timeout: 0 });
+  const main = await readMainView().finally(reading);
+  const plan = planTakeover(main, folder, choice);
+  if (plan.kind === "none") return { ok: true };
+  // Planned again with the answer and a fresh view: a turn that ended while the sheet was open just hands off.
+  if (plan.kind === "ask") return takeOver(folder, name, await askTakeover(main.folder ? folderName(main.folder) : "this folder", name));
+  if (plan.kind === "queue") { queueTakeover(folder, name); return { ok: true }; }
+  dropQueuedTakeover(); // this takeover supersedes one waiting for the turn
+  takeoverRunning = true;
+  takeoverFolder = folder;
+  spinup?.sync(); // P-SPINUP.1: the target Agent walks over the composer while Main moves
+  // Moving Main restarts its agent in the new folder (several seconds with a real model): say so at once.
+  const moving = showToast({ tone: "info", title: `Moving Main to ${name}`, desc: "Main's agent is restarting in this folder. The composer is ready when this note goes away.", timeout: 0 });
+  try { return await runTakeover(plan.steps, main, folder, name); }
+  finally { takeoverRunning = false; takeoverFolder = null; moving(); spinup?.sync(); }
+}
+
+async function runTakeover(steps: readonly TakeoverStep[], main: MainView, folder: string, toName: string): Promise<ActivateResult> {
+  const from = main.folder ?? "";
+  const fromName = from ? folderName(from) : "the previous folder";
+  const prompt = main.prompt.trim();
+  const info = cachedSessionInfo(main.sessionId);
+  const model = info?.model || state.model || state.config.find((c) => c.id === "model")?.currentValue || "";
+  let lane: LaneView | null = null;
+  let staged: boolean | null = null, stageReason: string | undefined;
+  let stopped = false;
+  for (const step of steps) {
+    if (step === "stop-main") {
+      if (!(await stopMainTurn())) return { ok: false, message: STOP_FAILED };
+      stopped = true;
+    } else if (step === "switch-main") {
+      // FIRST, so Main lets go of its session before a lane loads it: one session, one omp process (P-SWITCH.1).
+      await applyWorkspace(folder);
+      const ws = sameFolder(state.workspace?.current, folder) ? state.workspace : await bridge.workspace().catch(() => null);
+      if (!sameFolder(ws?.current, folder)) {
+        const back = stopped && !!prompt && !composerHasDraft();
+        if (back) { const ta = $("#input") as HTMLTextAreaElement; ta.value = prompt; autosize(ta); setSendEnabled(); }
+        return { ok: false, message: switchFailure(toName, back) };
+      }
+    } else if (step === "spawn-lane") {
+      if (!from) continue;
+      const r = await bridge.fleetSpawn({
+        cwd: from,
+        name: spokeNameFor(info?.title ?? fromName),
+        ...(model ? { model } : {}),
+        ...(main.sessionId ? { sessionId: main.sessionId } : {}),
+      }).catch(() => null);
+      if (!r?.ok || !r.lane) return { ok: false, message: handoffFailure(fromName, toName, r?.reason) };
+      lane = r.lane;
+    } else if (step === "stage-prompt") {
+      if (!lane) continue;
+      // Staged, not sent: the lane manager runs no turn where nobody can see it, so the Fleet dock opens and drains it.
+      const q = await bridge.fleetQueueAdd(lane.id, prompt).catch(() => null);
+      staged = !!q?.ok; stageReason = q?.reason;
+      void revealFleetLane(lane.id, false);
+    } else {
+      const input = $("#input") as HTMLTextAreaElement | null;
+      // "Take over main composer" lands the user in Main's composer: a floating Fleet dock lying over it is put away
+      // (its pill brings it back), so the focused composer is also the visible one.
+      const dock = $("#fleetDock") as HTMLElement | null;
+      if (input && dock && fleetGridState() === "shown") {
+        const a = input.getBoundingClientRect(), b = dock.getBoundingClientRect();
+        if (Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)) closeFleetGrid();
+      }
+      input?.focus();
+    }
+  }
+  if (lane) {
+    const shown = lane;
+    const t = handoffToast(fromName, toName, shown.name, staged, stageReason);
+    showToast({ tone: staged === false ? "warn" : "ok", title: t.title, desc: t.desc, actions: [{ label: "Show lane", run: () => void revealFleetLane(shown.id) }, { label: "OK" }], timeout: 9000 });
+  }
+  return { ok: true };
+}
+
+/** Move it now: end Main's turn through the Stop path, then wait (about 10 s at most) until the engine says idle. */
+async function stopMainTurn(): Promise<boolean> {
+  if (state.streaming && !isLaneTarget(state.composerTarget)) await stopTurn();
+  else await bridge.cancelChat().catch(() => null); // a turn this composer is not showing (a goal loop, a re-adopt)
+  for (let i = 0; i < 40; i++) {
+    const st = await bridge.sessionBusy().catch(() => null);
+    if (st && !st.busy) return true;
+    const tick = Promise.withResolvers<void>();
+    window.setTimeout(tick.resolve, 250);
+    await tick.promise;
+  }
+  return false;
+}
+
+/** The busy confirm, docked above the composer in the session-switch sheet's place and markup (it can stop work, so
+ *  it never times out and an outside click never answers it). Esc, Stay here, or another sheet replacing it = stay. */
+function askTakeover(fromName: string, toName: string): Promise<BusyChoice> {
+  const { promise, resolve } = Promise.withResolvers<BusyChoice>();
+  closeSwitchSheet();
+  const wrap = $(".composer-wrap") as HTMLElement | null;
+  if (!wrap) { resolve("stay"); return promise; }
+  const copy = takeoverSheetCopy(fromName, toName);
+  const node = el(`<div id="switchSheet" role="alertdialog" aria-label="Main is still working">
+    <div class="perm perm-egress">
+      <div class="perm-eg-head">${icon("clock", 13)}<span class="switch-title"></span></div>
+      <div class="switch-body"></div>
+      <div class="perm-actions perm-actions-col">
+        <button class="perm-btn eg-allow" data-takeover="after"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn eg-block" data-takeover="now"><b class="switch-label"></b><span class="switch-hint"></span></button>
+        <button class="perm-btn" data-takeover="stay"></button>
+      </div>
+    </div>
+  </div>`);
+  ($(".switch-title", node) as HTMLElement).textContent = copy.title;
+  ($(".switch-body", node) as HTMLElement).textContent = copy.body;
+  ($('[data-takeover="after"] .switch-label', node) as HTMLElement).textContent = copy.after;
+  ($('[data-takeover="after"] .switch-hint', node) as HTMLElement).textContent = copy.afterHint;
+  ($('[data-takeover="now"] .switch-label', node) as HTMLElement).textContent = copy.now;
+  ($('[data-takeover="now"] .switch-hint', node) as HTMLElement).textContent = copy.nowHint;
+  ($('[data-takeover="stay"]', node) as HTMLElement).textContent = copy.stay;
+  let answered = false;
+  const gone = new MutationObserver(() => { if (!node.isConnected) finish("stay"); });
+  function finish(choice: BusyChoice): void {
+    if (answered) return;
+    answered = true;
+    gone.disconnect();
+    if (switchSheet === node) closeSwitchSheet();
+    resolve(choice);
+  }
+  node.addEventListener("click", (ev) => {
+    const c = ((ev.target as HTMLElement).closest("[data-takeover]") as HTMLElement | null)?.dataset.takeover;
+    if (c === "after" || c === "now" || c === "stay") finish(c);
+  });
+  (wrap.querySelector(".composer-row") ?? wrap.firstElementChild)?.before(node);
+  gone.observe(wrap, { childList: true, subtree: true });
+  switchSheet = node;
+  document.addEventListener("keydown", onSwitchSheetKey, true); // Esc closes it like the switch sheet
+  ($('[data-takeover="after"]', node) as HTMLButtonElement).focus(); // Enter takes the choice that stops nothing
+  return promise;
+}
+
+function queueTakeover(folder: string, name: string): void {
+  const copy = pendingCopy(name);
+  const job: QueuedTakeover = { folder, name, dismiss: () => undefined, timer: 0 };
+  job.dismiss = showToast({ tone: "info", title: copy.title, desc: copy.desc, actions: [{ label: "Cancel handoff", run: () => { if (takeovers.pending() === job) dropQueuedTakeover(); } }] });
+  job.timer = window.setInterval(() => void runQueuedTakeover(), 3000);
+  const was = takeovers.queue(job);
+  if (was) endQueuedTakeover(was);
+}
+
+function endQueuedTakeover(job: QueuedTakeover): void {
+  window.clearInterval(job.timer);
+  job.dismiss();
+}
+
+function dropQueuedTakeover(): void {
+  const was = takeovers.cancel();
+  if (was) endQueuedTakeover(was);
+}
+
+/** Main's turn ended (renderChatTurn's settle, or the backstop): run the queued handoff once Main is idle. */
+async function runQueuedTakeover(): Promise<void> {
+  if (!takeovers.pending() || takeoverRunning) return;
+  const st = await bridge.sessionBusy().catch(() => null);
+  const job = takeovers.onTurnEnd(st ? !!st.busy : state.streaming);
+  if (!job) return;
+  endQueuedTakeover(job);
+  const r = await takeOver(job.folder, job.name, null);
+  if (!r.ok && r.message) showToast({ tone: "warn", title: "The handoff did not finish", desc: r.message, actions: [{ label: "OK" }], timeout: 9000 });
+}
+
 /** P-FLEET.L8: attach the composer to a running lane. */
 async function promoteLane(laneId: string): Promise<void> {
   // Identity is the laneId alone (a lane may be renamed, cd, or swap models without becoming a different
@@ -3721,7 +4032,7 @@ async function promoteLane(laneId: string): Promise<void> {
     // The engine refuses through composer_target.promoteRefusal, so its wording is shown verbatim. An
     // ABSENT reason is the module's own "did not report a status" case, not a sentence invented here;
     // promoteRefusal returns null only for a status that ALLOWS promotion, which "" is not.
-    showToast({ tone: "warn", title: "Can't attach to this spoke", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
+    showToast({ tone: "warn", title: "Can't attach to this agent", desc: r?.reason ?? promoteRefusal("")!, actions: [{ label: "OK" }], timeout: 8000 });
     void recoverMasterTurn();
     return;
   }
@@ -3787,7 +4098,7 @@ function demoteLane(): void {
   const held = nextHold(state.queuedItems);
   if (held.item) {
     state.queuedItems = state.queuedItems.filter((q) => q.mode !== "hold"); renderQueued();
-    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the spoke's turn to end. It is back in the composer; reattach the spoke to send it there.", timeout: 7000 });
+    showToast({ tone: "warn", title: "Staged prompt not sent", desc: "It was waiting for the agent's turn to end. It is back in the composer; reattach the agent to send it there.", timeout: 7000 });
   }
   // Leaving mid-turn: freeze the half-written bubble rather than stranding it in a "running" state that
   // no further event will ever settle.
@@ -3801,7 +4112,7 @@ function demoteLane(): void {
   void bridge.fleetDemote().then((r) => {
     if (r?.ok) return;
     // The composer has already detached; the fleet card may still paint as attached until it reconciles.
-    showToast({ tone: "warn", title: "The spoke still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
+    showToast({ tone: "warn", title: "The agent still shows as attached", desc: "The composer is back on the main chat, but the fleet did not confirm the release. It will reconcile on the next fleet poll.", actions: [{ label: "OK" }], timeout: 6000 });
   }).catch(() => { /* best-effort: fleetDemote is idempotent and the next poll reconciles */ });
   swapAttachments(was, MASTER_TARGET);
   // P-QUEUE-IMG.1 (ADR-0469): the held prompt comes back WITH its own images, after the swap, so they land
@@ -3909,13 +4220,14 @@ function onLaneWatchEvent(e: LaneEvent): void {
   if (e.type === "error") {
     // The turn died, so the half-written bubble has to stop looking live.
     settleLaneWatchNode();
-    addNoteChip(`The lane reported an error: ${e.message}`);
+    addNoteChip(`The agent reported an error: ${e.message}`);
     releaseHeldPrompt();
     return;
   }
   if (e.type === "done") {
     settleLaneWatchNode();
     releaseHeldPrompt();
+    if (isLaneTarget(state.composerTarget)) { agentsRail?.noteTurnEnd(state.composerTarget.cwd); agentBuddies?.noteTurnEnd(state.composerTarget.cwd); } // P-RAIL.AGENTS1: the lane's Agent rings now, not at the next poll
   }
 }
 
@@ -4246,7 +4558,13 @@ function renderMetricsRail(): void {
     { n: fmtNum(avg), label: "avg/turn", cls: "c", tip: "Average tokens per turn" },
     { n: fmtNum(cur), label: "context", cls: "b", tip: "Context tokens in use this turn" },
     { n: String(turns), label: "turns", cls: "b2", tip: "Agent turns in this session" },
-    ...(ca && ca.totals.files > 0 ? [{ n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.` } as T] : []),
+    // P-PERF.IDLE1: LUCID runs no git until asked. The tile shows the last count (kept across restarts) and a click
+    // recounts; before any count it offers one.
+    linesCounting
+      ? { n: "...", label: "lines", cls: "g", tip: "Counting this month's workspace lines with git. This runs only because you asked." }
+      : ca && (ca.totals.files > 0 || ca.countedAt)
+        ? { n: `+${fmtNum(ca.totals.added)}`, label: "lines", cls: "g", tip: `Workspace activity this month (${ca.month}): ${fmtNum(ca.totals.added)} lines added, ${fmtNum(ca.totals.deleted)} deleted across ${fmtNum(ca.totals.files)} files. This is REPO activity (all commits), not AI-authored lines.${ca.countedAt ? ` Counted ${relTime(Date.parse(ca.countedAt))}.` : ""} Click to recount with git.` }
+        : { n: "count", label: "lines", cls: "g", tip: "Workspace lines this month. LUCID does not run git until you ask, so nothing is counted yet. Click to count with git." },
     { n: String(findings), label: "findings", cls: "m", tip: "Scanner findings so far", attn: findings > 0 },
     { n: String(quar), label: "quarantd", cls: "r", tip: "Artifacts currently quarantined", attn: quar > 0 },
     // Shared lifetime points remain visible even when the Trivia Wire ticker is disabled.
@@ -4278,12 +4596,24 @@ function renderMetricsRail(): void {
     return `<div class="${cl}"${tip} data-tile="${esc(t.label)}"><div class="n">${esc(t.n)}</div><div class="l">${esc(t.label)}</div></div>`;
   }).join("");
   railPrimed = true;
+  const linesEl = tiles.querySelector('[data-tile="lines"]') as HTMLElement | null;
+  if (linesEl) { linesEl.style.cursor = "pointer"; linesEl.addEventListener("click", () => { void countCodeActivity(); }); }
   const jobsEl = tiles.querySelector('[data-tile="jobs"]') as HTMLElement | null;
   if (jobsEl && state.jobs) {
     attachRichTip(jobsEl, jobsHoverHtml(state.jobs, Date.now()));
     jobsEl.style.cursor = "pointer";
     jobsEl.addEventListener("click", () => { void openJobsSheet(); });
   }
+}
+
+// P-PERF.IDLE1: the one place the renderer asks the engine to run git for code activity (the lines tile click).
+let linesCounting = false;
+async function countCodeActivity(): Promise<void> {
+  if (linesCounting) return;
+  linesCounting = true; renderMetricsRail();
+  try { const ca = await bridge.codeActivity(true); if (ca) state.codeActivity = ca; }
+  catch { /* keep the last numbers */ }
+  finally { linesCounting = false; renderMetricsRail(); renderInspector(); }
 }
 
 // ── P-SCHED.1/.2 (ADR-0443): scheduled lane jobs - the rail's data, the sheet ─────────────────────────
@@ -4347,7 +4677,7 @@ async function openJobsSheet(): Promise<void> {
     const cron = readCron();
     if (!cron) { if (err) err.textContent = "Pick a valid time, day set, or cron expression."; return; }
     const t = tlist.find((x) => x.laneId === String(fd.get("target")));
-    if (!t) { if (err) err.textContent = "Pick a spoke (spawn one in Fleet first)."; return; }
+    if (!t) { if (err) err.textContent = "Pick an agent (start one in Fleet first)."; return; }
     const spec = {
       name: String(fd.get("name") ?? ""), prompt: String(fd.get("prompt") ?? ""), cron,
       target: { laneId: t.laneId, name: t.name, cwd: t.cwd, model: t.model, repo: t.repo },
@@ -4369,7 +4699,7 @@ async function openJobsSheet(): Promise<void> {
     const arm = t.closest("[data-job-arm]") as HTMLElement | null;
     if (arm) { void bridge.jobsUpdate(arm.dataset.jobArm!, { armed: arm.dataset.armTo === "1" }).then(redraw); return; }
     const run = t.closest("[data-job-run]") as HTMLElement | null;
-    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the spoke in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
+    if (run) { void bridge.jobsRun(run.dataset.jobRun!).then((r) => { showToast(r?.started ? { title: "Job started", desc: "Watch the agent in Fleet.", actions: [{ label: "OK" }], timeout: 3000 } : { tone: "warn", title: "Job not started", desc: "It may be running already.", actions: [{ label: "OK" }], timeout: 4000 }); return redraw(); }); return; }
     const hist = t.closest("[data-job-hist]") as HTMLElement | null;
     if (hist) { const box = hist.closest(".job-row")?.querySelector(".job-hist") as HTMLElement | null; if (box) { box.hidden = !box.hidden; hist.setAttribute("aria-expanded", String(!box.hidden)); } return; }
     const del = t.closest("[data-job-del]") as HTMLElement | null;
@@ -4378,10 +4708,69 @@ async function openJobsSheet(): Promise<void> {
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
 }
+/** P-RAIL.AGENTS1: the rail's Agents view (agents_rail.ts), mounted at init. */
+let agentsRail: AgentsRail | null = null;
+/** P-BUDDY.1 (ADR-0667): the floating Agent buddies (agent_buddy.ts), mounted at init after the rail. */
+let agentBuddies: AgentBuddies | null = null;
+/** P-SPINUP.1 (ADR-0668): the spin-up walkers (agent_spinup.ts), mounted at init after the buddies. */
+let spinup: SpinupWalkers | null = null;
+/** P-SPINUP.1: the startup recovery is restoring the previous session (its "Restoring your previous session" note). */
+let restoringSession = false;
+/** P-SPINUP.1: the boot standby counts as Main spinning up only this long (an offline boot never ends it). */
+const BOOT_SPIN_MAX_MS = 120_000;
+let bootSpinDone = false;
+let spinNamesRaw: string | null | undefined;
+let spinNames = new Map<string, string>();
+/** The Agents rail's display name for `folder` (its record, else its main checkout's), else its base name. */
+function agentDisplayName(folder: string): string {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(AGENTS_KEY); } catch { /* storage off: the base name */ }
+  if (raw !== spinNamesRaw) { spinNamesRaw = raw; spinNames = displayNames(loadAgentsDoc(raw).agents); }
+  for (const id of laneFolderIds(folder)) { const n = spinNames.get(id); if (n) return n; }
+  return baseName(folder) || "Lucid";
+}
+/** P-SPINUP.1: Main is spinning up (who is arriving), or null: a takeover moving Main (the TARGET's name), the boot
+ *  standby (net_monitor: engine, network, models, settings still pending; once it ends it never counts again), the
+ *  startup session restore. The boot ends early when Main's first model-list warm cycle ends (loadConfig). */
+function mainSpinup(): { name: string; folder: string | null } | null {
+  if (takeoverRunning && takeoverFolder) return { name: agentDisplayName(takeoverFolder), folder: takeoverFolder };
+  if (!bootSpinDone && (!netBooting() || Date.now() - windowOpenedAt > BOOT_SPIN_MAX_MS)) bootSpinDone = true;
+  // Not `state.configWarming`: the picker re-polls the model list on later loads too (every cycle when an agent
+  // never reports models), and a walker arriving every few seconds would say Main is starting when it is not.
+  if (bootSpinDone && !restoringSession) return null;
+  // Wait for the folder (a fraction of a second at boot) so the bubble names the Agent from its first line.
+  const folder = state.workspace?.current ?? null;
+  return folder ? { name: agentDisplayName(folder), folder } : null;
+}
+/** P-BUDDY.1 (ADR-0667): a buddy's idea runs in a NEW worktree lane of its folder (Push now's path), the idea's
+ *  prompt as that lane's first turn. The user hears it at once, before the engine is asked anything. */
+async function runBuddyIdea(folder: string, idea: BuddyIdea, name: string): Promise<void> {
+  const main = sameFolder(state.workspace?.current, folder);
+  const src: PushSource = main
+    ? { kind: "master", name: "main", cwd: folder, model: state.model || state.config.find((c) => c.id === "model")?.currentValue || "" }
+    : { kind: "lane", name, cwd: folder, model: "" };
+  const busy = main && state.streaming && !isLaneTarget(state.composerTarget);
+  let dismiss = showToast({ tone: "info", title: `Starting a worktree agent for ${name}`, desc: idea.title, timeout: 0 });
+  const r = await pushToNewLane(src, idea.prompt, [], {
+    announce: (lane) => {
+      dismiss();
+      const n = parallelPushNotice(src, lane, { busy });
+      dismiss = showToast({ tone: "info", title: n.title, desc: n.desc, timeout: 0 });
+    },
+  });
+  dismiss();
+  if (r.ok) {
+    const n = parallelPushNotice(src, r.name, { busy, branch: r.branch });
+    showToast({ tone: "ok", title: n.title, desc: n.desc, timeout: 9000 });
+    return;
+  }
+  const why = r.code === "no-repo" ? "This folder is not a git repository, so there is no worktree to give a parallel agent." : r.reason;
+  showToast({ tone: "warn", title: `${name}: the worktree agent did not start`, desc: why, timeout: 9000 });
+}
 function setInspectorRail(rail: boolean): void {
   state.inspectorRail = rail;
   $("#inspector")!.classList.toggle("rail", rail);
-  if (rail) { renderMetricsRail(); return; }
+  if (rail) { renderMetricsRail(); agentsRail?.sync(); return; }
   // ADR-0021: expanding from rail → if active blocks exist, override to Security tab
   if (hasActiveBlocks() && state.inspectorTab !== "security") {
     focusInspector("security");
@@ -4507,7 +4896,7 @@ function provCard(p: ProviderAuth): string {
   }).join("");
   return `<div class="prov">
     <div class="prov-h"><span class="prov-name">${esc(p.name)}</span><span class="prov-status">${status}</span></div>
-    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow}${fieldsRows}${hint}${guideRow}</div></div>`;
+    <div class="prov-body">${quota}${oauthRow}${oauthErr}${keyRow || fieldsRows ? `<div class="prov-grid" style="--prov-trail:2">${keyRow}${fieldsRows}</div>` : ""}${hint}${guideRow}</div></div>`;
 }
 
 // ── P-ACCT.1: named multi-account per provider ─────────────────────────────────────────────────
@@ -4691,8 +5080,8 @@ function datasetsSection(list: string[] | null): string {
 // slow omp/AskSage fetch never blocks the whole page (the old renderSettings awaited
 // every fetch + 8s dataset/persona timeouts before painting anything). Heavy/optional
 // sections collapse to keep the panel short.
-// Declutter (user call, 2026-08-01): every section starts collapsed; deep links (openSettingsToVoice
-// etc.) add their card id here before opening, so guided fixes still land expanded.
+// Declutter (user call, 2026-08-01): every section starts collapsed; a deep link (openSettingsTo) adds its
+// card id here before opening, so guided fixes still land expanded.
 const SET_OPEN = new Set<string>([]);
 
 function setCard(name: string, title: string, sub: string, body: string, collapsible: boolean): string {
@@ -4707,6 +5096,7 @@ const setSkel = (name: string, title: string, sub: string, collapsible = false):
 function fillSec(name: string, html: string): void {
   const el = document.querySelector(`#setBody [data-sec="${name}"]`);
   if (el) el.outerHTML = html;
+  if (name !== "overview") queueSetOverview(); // P-SETUX.1: every hydration that lands can change a status tile
 }
 
 const isValidEmail = (s: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -4775,7 +5165,9 @@ function runOnboarding(): void {
   const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
   const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
-  void promptForRole().then(() => promptForEmailIfMissing(afterEmail));
+  // P-RAIL.AGENTS1: no role yet = this install's first run, so the rail lands on Agents (unless a view was
+  // already chosen). Existing installs keep Metrics until they flip the toggle.
+  void promptForRole().then(() => { agentsRail?.adoptFirstRunDefault(); promptForEmailIfMissing(afterEmail); });
 }
 
 // P-PROV.2: first-run "connect a provider" step.
@@ -4881,7 +5273,7 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
     </div></div>`);
   document.body.appendChild(ov);
   const err = $("#govSetupErr", ov) as HTMLElement;
-  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsToAsksage(); onDone?.(); };
+  const finish = (msg: { title: string; desc: string }) => { ov.remove(); showToast({ ...msg, timeout: 4200 }); openSettingsTo("asksage"); onDone?.(); };
   const save = async () => {
     const plan = planGovSetup({ key: ($("#govKey", ov) as HTMLInputElement)?.value ?? "", base: ($("#govBase", ov) as HTMLInputElement)?.value ?? "" });
     if (!plan.enableLockdown) { err.textContent = "Paste your AskSage API key to turn on lockdown, or choose \u201cI'll add it later\u201d."; err.hidden = false; return; }
@@ -4905,75 +5297,6 @@ async function promptGovSetup(onDone?: () => void): Promise<void> {
   $("#govSetupLater", ov)!.addEventListener("click", () => void later());
   ($("#govKey", ov) as HTMLInputElement)?.addEventListener("input", () => { err.hidden = true; });
   setTimeout(() => ($("#govKey", ov) as HTMLInputElement)?.focus(), 30);
-}
-
-// P-GOVCUI.1: open Settings on the AskSage gov-gateway card (expanded + scrolled + briefly highlighted) so a
-// new user SEES where lockdown lives. Mirrors openPersonalizationSettings.
-function openSettingsToAsksage(): void {
-  SET_OPEN.add("asksage");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="asksage"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-LOCAL.4: jump Settings to the Local Providers card (from the Provider Hub's "Local & self-hosted" tile),
-// scrolled + flashed so the user lands on the add form (with the one-click model presets).
-function openSettingsToLocalProviders(): void {
-  SET_OPEN.add("localProviders");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="localProviders"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ASKLUCID.9 (ADR-0600): jump Settings to the Providers card (from the Edit image card when no image model is
-// connected), scrolled and flashed like the jumps above.
-function openSettingsToProviders(): void {
-  SET_OPEN.add("providers");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="providers"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-STT.4: jump Settings to the Voice card (from the dictation-failure toast) so the fix is one click away.
-function openSettingsToVoice(): void {
-  SET_OPEN.add("voice");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="voice"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
-}
-
-// P-ATTACH.1 (ADR-0598): the "+" menu's Connectors (MCP) entry lands on the MCP connectors card, opened,
-// scrolled and flashed like the jumps above.
-function openSettingsToMcp(): void {
-  SET_OPEN.add("mcp");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="mcp"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-    sec?.classList.add("set-flash");
-    setTimeout(() => sec?.classList.remove("set-flash"), 1600);
-  }, 140);
 }
 
 // First-run role picker - four cards in the model-card idiom. Resolves once a role is chosen (or
@@ -5081,7 +5404,14 @@ function syncImmersiveWithRole(role: UserRole | null): void {
 let askLucidPanel: AskLucidHandle | null = null;
 function askLucid(): AskLucidHandle {
   askLucidPanel ??= createAskLucid({
-    ask: (text, history, extras) => bridge.askLucid(text, history, extras),
+    ask: (text, history, extras, onPhase) => bridge.askLucid(text, history, extras, onPhase),
+    warm: () => { void bridge.askLucidWarm(); },
+    // P-ASKLUCID.SPEED1: the waiting line and the answer name the model the way the picker does.
+    // The answer carries the bare id ("claude-haiku-4-5"), the phase the provider-prefixed one: match either.
+    modelName: (id) => {
+      const opt = state.config.find((c) => c.id === "model")?.options.find((o) => o.value === id || o.value.endsWith(`/${id}`));
+      return opt ? cleanModelName(opt.name) : modelLabel(id);
+    },
     screen: readScreenForLucid,
     shot: shotForLucid,
     recSignals: recSignalsForLucid,
@@ -5094,13 +5424,14 @@ function askLucid(): AskLucidHandle {
     enhance: enhanceCodeBlocks,
     topBar: ".titlebar",
     zoomOf: "#app",
+    rightOf: "#inspector", // P-ASKLUCID.SPEED1b: fly out left of the right rail, over the page and its popups
     runAction: runAskAction,
     // P-ASKLUCID.9 (ADR-0600): the Edit image card's models (remembered choice in localStorage), the Providers
     // jump, and where an edited image opens.
     imageEdit: {
       models: () => bridge.imageModels(),
       store: miniStore(),
-      openProviders: openSettingsToProviders,
+      openProviders: () => openSettingsTo("providers"),
       open: showAskLucidImage,
       ...(bridge.canShowInFolder() ? { showInFolder: (path: string) => bridge.showInFolder(path) } : {}),
     },
@@ -5117,6 +5448,7 @@ let lastFleetLanes = 0;
 let lastOrbitGoal = false;
 let lastKnowledge = false;
 let lastAutoArchive = false;
+let autoArchiveKnown = false; // P-ASKLUCID.SPEED1: never tell Lucid a value the engine has not answered yet
 const FEATURE_SAMPLE_MS = 60_000;
 
 function readSeenFeatures(): string[] {
@@ -5148,8 +5480,11 @@ function featureRecsForLucid(): Rec[] {
  *  may propose changing, and the ids of the features this user has not used. The engine keeps only known
  *  keys, accepted values and catalog ids. */
 async function extrasForLucid(): Promise<AskExtrasView> {
-  const [arch, win] = await Promise.all([bridge.archivePolicy().catch(() => null), bridge.resultWindow().catch(() => null)]);
-  lastAutoArchive = !!arch?.policy.auto;
+  // P-ASKLUCID.SPEED1: these two engine reads are settings context, not the question: on a busy engine they took
+  // 3.6 s and the question waited for them. Each gets 1.2 s; a late one leaves its last known value (or none).
+  const within = <T,>(p: Promise<T>): Promise<T | null> => Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 1200))]);
+  const [arch, win] = await Promise.all([within(bridge.archivePolicy()), within(bridge.resultWindow())]);
+  if (arch) { lastAutoArchive = !!arch.policy.auto; autoArchiveKnown = true; }
   const prefs = seasonPrefs();
   const settings: Record<string, string> = {
     "season.follow": prefs.auto ? "on" : "off",
@@ -5157,7 +5492,7 @@ async function extrasForLucid(): Promise<AskExtrasView> {
     "theme": themePref() || "default",
     "mini.presence": readPresence(miniStore()),
     "suggest.enabled": suggestEnabled(miniStore()) ? "on" : "off",
-    "sessions.autoArchive": lastAutoArchive ? "on" : "off",
+    ...(autoArchiveKnown ? { "sessions.autoArchive": lastAutoArchive ? "on" : "off" } : {}),
   };
   if (win && (win.setting === "auto" || typeof win.setting === "number")) settings["toolOutput.window"] = String(win.setting);
   return { settings, unusedFeatures: unusedFeaturesForLucid().map((f) => f.id) };
@@ -5198,6 +5533,7 @@ async function applyAskSetting(key: AskSettingKey, value: string): Promise<AskAc
     const next = await bridge.archivePolicy({ ...cur.policy, auto: value === "on" }).catch(() => null);
     if (!next) return refused("The archive rule could not be saved.");
     lastAutoArchive = next.policy.auto;
+    autoArchiveKnown = true;
     return done;
   }
   const saved = await bridge.setResultWindow(value === "auto" ? "auto" : Number(value)).catch(() => null);
@@ -5212,7 +5548,7 @@ async function recSignalsForLucid(): Promise<RecSignals | null> {
   const lanes = (fleet?.lanes ?? []).map((l) => {
     const r = l as unknown as Record<string, unknown>;
     const status = typeof r.status === "string" ? r.status : "";
-    return { name: typeof r.name === "string" && r.name ? r.name : "a lane", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
+    return { name: typeof r.name === "string" && r.name ? r.name : "an agent", status, waiting: !!r.pendingApproval || /approval|waiting/i.test(status) };
   });
   const g = (goal?.goal ?? null) as unknown as Record<string, unknown> | null;
   const active = $(".sess.active") as HTMLElement | null;
@@ -5307,8 +5643,8 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
     else if (v === "settings") openSettings();
     else if (v === "preview") openPreview();
     else if (v === "skills") openSkills();
-    else if (v === "local-models") openSettingsToLocalProviders();
-    else openSettingsToVoice();
+    else if (v === "local-models") openSettingsTo("localProviders");
+    else openSettingsTo("voice");
     // P-ASKLUCID.6 (ADR-0587): a view Lucid opened for the user is a feature they have now found.
     markFeaturesSeen(v === "orbit" ? ["fleet"] : [v]);
     return { ok: true, message: `Opened the ${v} view.` };
@@ -5317,19 +5653,19 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
   if (a.kind === "set_setting") return applyAskSetting(a.params.key, a.params.value);
   if (a.kind === "spawn_lane") {
     const cwd = state.workspace?.current ?? "";
-    if (!cwd) return { ok: false, message: "There is no workspace folder open to start a lane in." };
+    if (!cwd) return { ok: false, message: "There is no workspace folder open to start an agent in." };
     const r = await bridge.fleetSpawn({ cwd, name: a.params.name }).catch(() => null);
-    if (!r?.ok || !r.lane) return failed("The lane could not start", r?.reason);
+    if (!r?.ok || !r.lane) return failed("The agent could not start", r?.reason);
     const q = await bridge.fleetQueueAdd(r.lane.id, a.params.prompt).catch(() => null);
     openFleetGrid();
-    if (!q?.ok) return failed(`Lane "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
-    return { ok: true, message: `Started lane "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
+    if (!q?.ok) return failed(`Agent "${r.lane.name}" started, but its first prompt could not be staged`, q?.reason);
+    return { ok: true, message: `Started agent "${r.lane.name}" and staged its first prompt. The Fleet view is open: the prompt runs there.` };
   }
   if (a.kind === "prompt_lane") {
     const q = await bridge.fleetQueueAdd(a.params.laneId, a.params.text).catch(() => null);
     if (!q?.ok) return failed("The prompt could not be staged", q?.reason);
     openFleetGrid();
-    return { ok: true, message: `Staged on lane ${a.params.laneId}. The Fleet view is open: it runs there when the lane is idle.` };
+    return { ok: true, message: `Staged on agent ${a.params.laneId}. The Fleet view is open: it runs there when that agent is idle.` };
   }
   // P-ASKLUCID.9 (ADR-0600): the user confirmed an Edit image card that named the model. The engine scans the
   // change, checks egress, edits and saves under ~/.omp/ask-lucid/images; the result opens in the Preview's Ask
@@ -5348,7 +5684,7 @@ async function runAskAction(a: AskAction, ctx?: AskActionContext): Promise<AskAc
   }
   const t = await bridge.fleetTaskAdd(a.params).catch(() => null);
   if (!t?.ok) return failed("The task could not be added", t && !t.ok ? t.error : undefined);
-  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to lane ${a.params.assignee}.` };
+  return { ok: true, message: `Added "${a.params.title}" to the Fleet Orbit goal, assigned to agent ${a.params.assignee}.` };
 }
 let miniRunner: RunnerHandle | null = null;
 // P-MINI.1 (ADR-0580): which kind of runner is mounted, whether a visit is under way, and how many new
@@ -5705,7 +6041,7 @@ function renderAgentGap(item: ReadyItem): void {
     // The fix surfaces live in the rails, which the stage hides - park the stage first, then deep-link.
     if (state.immersive) setImmersive(false);
     if (fix === "hub") openProviderHub();
-    else if (fix === "voice") openSettingsToVoice();
+    else if (fix === "voice") openSettingsTo("voice");
     else openKnowledge();
   });
   document.querySelector(".center")?.appendChild(card);
@@ -5815,9 +6151,9 @@ function secProfile(s: { username: string; email?: string; attribution?: import(
     <div class="role-seg-row">${chips}</div>
     ${hero}
     <div class="set-note">${icon("info", 12)} Shapes what you see first; nothing is ever locked away. <button class="btn-link" id="replayTour" type="button">Take the tour</button></div>`;
-  return setCard("profile", "Profile", "", `<div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
+  return setCard("profile", "Profile", "", `<div class="prov-grid"><div class="prov-row"><input id="setUsername" class="prov-key" placeholder="Your name" value="${esc(s?.username ?? "")}" /></div>
     <div class="prov-row"><input id="setEmail" class="prov-key" type="email" inputmode="email" autocomplete="email" placeholder="Corporate email (optional - for code-activity attribution)" value="${esc(s?.email ?? "")}" />
-      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div>
+      <button class="btn-mini ok" id="saveUsername">${icon("check", 12)} Save</button></div></div>
     ${managedLine}${idLine}
     ${roleRow}`, true);
 }
@@ -6023,7 +6359,7 @@ function secSubagents(v: PerCallModelView | null): string {
   const locked = v?.clamp != null;
   const body = `<div class="set-note">${icon("info", 12)} When the agent starts a <b>subagent</b> (a helper that takes one slice of the work), it normally runs on the model its role is set to. Turn this on to let the agent pick the model for each subagent it starts, for example a fast model for a quick search and a strong one for a hard review. It can only pick models you already have set up. The agent cannot turn this on itself.</div>
     <div class="voice-row"><label class="voice-lbl" for="perCallModel">Subagents may pick their model</label>
-      <select id="perCallModel" class="prov-key" data-percall-set="mode"${locked ? " disabled" : ""} data-tip="Per-call model choice|Off: subagents use their role's model. Only in eval agents: the agent may choose a model in eval agent() and workpool() calls only. On: also for every subagent it starts with the task tool. Takes effect for the main session now and for each lane at its next start.">
+      <select id="perCallModel" class="prov-key" data-percall-set="mode"${locked ? " disabled" : ""} data-tip="Per-call model choice|Off: subagents use their role's model. Only in eval agents: the agent may choose a model in eval agent() and workpool() calls only. On: also for every subagent it starts with the task tool. Takes effect for the main session now and for each fleet agent at its next start.">
         <option value="off"${sel("off")}>Off - subagents use their role's model (default)</option>
         <option value="eval"${sel("eval")}>Only in eval agents</option>
         <option value="on"${sel("on")}>On - the agent picks per subagent</option>
@@ -6149,17 +6485,24 @@ function secMcp(servers: import("./bridge.ts").McpServerStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add an MCP server</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="mcpName" class="prov-key" placeholder="Name (e.g. Linear, internal-tools)" /></div>
         <div class="prov-row"><input id="mcpUrl" class="prov-key" placeholder="https://mcp.example.com/mcp (or /sse)" />
-          <select id="mcpTransport" class="prov-key" style="flex:none;width:84px"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
+          <select id="mcpTransport" class="prov-key" aria-label="Transport"><option value="http">HTTP</option><option value="sse">SSE</option></select></div>
         <div class="prov-row"><input id="mcpToken" class="prov-key" type="password" placeholder="Bearer token (optional)" />
           <button class="btn-mini ok" id="mcpAdd">${icon("check", 12)} Connect</button></div>
+        </div>
       </div></div>`;
   const note = `<div class="set-note">${icon("info", 12)} Auth + config only - <b>omp owns the MCP connection</b> (ADR-0020). The token is stored on this machine (git-ignored) and sent as an <code>Authorization: Bearer</code> header; MCP tool output is still scanned by the security gate. Enterprise IdP sign-in (Okta / Entra / GCP WIF) lands in P-MCP.2.</div>`;
   return setCard("mcp", "MCP connectors", "model context protocol", rows + form + note, true);
 }
 function hydrateMcp(): void {
-  void bridge.mcpList().then((m) => { state.mcpServers = m ?? []; fillSec("mcp", secMcp(state.mcpServers)); });
+  void bridge.mcpList().then((m) => {
+    state.mcpServers = m ?? []; setLoaded.add("mcp");
+    fillSec("mcp", secMcp(state.mcpServers));
+    // P-SETUX.1: Quick connect's "Connected" badges follow the list, unless a token is being typed there.
+    if (document.activeElement?.id !== "mcpqToken") fillSec("mcpQuick", secMcpQuick());
+  });
 }
 // P-AGENTFW.2 (ADR-0149): Remote agents (hermes/openclaw) reached THROUGH the Lucid agent-firewall.
 function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
@@ -6176,10 +6519,12 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   const form = `<div class="prov" style="border-style:dashed">
       <div class="prov-h"><span class="prov-name">${icon("plus", 13)} Add a remote agent</span></div>
       <div class="prov-body">
+        <div class="prov-grid">
         <div class="prov-row"><input id="agentName" class="prov-key" placeholder="Name (e.g. Hermes prod)" />
-          <select id="agentKind" class="prov-key" style="flex:none;width:110px"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
+          <select id="agentKind" class="prov-key" aria-label="Agent kind"><option value="hermes">hermes</option><option value="openclaw">openclaw</option><option value="acp">acp</option></select></div>
         <div class="prov-row"><input id="agentCommand" class="prov-key" placeholder="Command (e.g. hermes, openclaw, uvx)" /></div>
         <div class="prov-row"><input id="agentArgs" class="prov-key" placeholder="Args (e.g. acp --url wss://host:18789 --token-file /abs/path)" /></div>
+        </div>
         <div class="prov-row">
           <select id="agentPerm" class="prov-key" style="flex:none;width:160px"><option value="deny">permissions: deny</option><option value="allow">permissions: allow</option></select>
           <button class="btn-mini ok" id="agentAdd">${icon("check", 12)} Connect</button></div>
@@ -6188,7 +6533,7 @@ function secAgents(agents: import("./bridge.ts").RemoteAgentStatus[]): string {
   return setCard("agents", "Remote agents", "hermes · openclaw · ACP firewall", rows + form + note, true);
 }
 function hydrateAgents(): void {
-  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; fillSec("agents", secAgents(state.agents)); });
+  void bridge.remoteAgentList().then((a) => { state.agents = a ?? []; setLoaded.add("agents"); fillSec("agents", secAgents(state.agents)); });
 }
 
 // P-NETWL.2 (ADR-0106): the curated Network Whitelist section. Lets a user pre-authorize domains (`*.com`
@@ -6257,11 +6602,13 @@ function secWhitelist(entries: import("./bridge.ts").WhitelistEntryView[], creds
             <select id="wlAuthKind" class="prov-key" style="flex:none;width:120px"><option value="">No auth</option><option value="jwt">JWT</option><option value="oauth">OAuth</option><option value="saml">SAML</option><option value="pem">PEM</option><option value="apikey">API key</option><option value="basic">User / Pass</option></select>
             <input id="wlAuthLabel" class="prov-key" placeholder="Label (e.g. prod-gateway)" />
           </div>
+          <div class="prov-grid">
           <div class="prov-row"><input id="wlAuthUser" class="prov-key" placeholder="Username (User/Pass only, optional)" spellcheck="false" /></div>
           <div class="prov-row"><input id="wlAuthRotate" class="prov-key" type="number" min="0" placeholder="Rotate every N days (optional)" data-tip="Rotation reminder|Flags the key as due N days after it's set. Visibility only - nothing auto-rotates; use the Rotate button to replace it." /></div>
           <div class="prov-row">
             <input id="wlAuthSecret" class="prov-key" type="password" placeholder="Paste token / password / API key" />
             <button class="btn-mini" id="wlAuthFile" data-tip="Upload file|Pick a token / PEM / API-key / config file. It's read + encrypted in the vault; the secret never enters this window.">${icon("folder", 12)} Upload file</button>
+          </div>
           </div>
           <div class="set-note">${icon("shield", 12)} Secrets are stored <b>OS-encrypted</b> (Windows DPAPI / macOS Keychain / Linux libsecret). The whitelist keeps only a reference - never the secret itself.</div>
         </details>
@@ -6431,10 +6778,10 @@ function secChatScroll(): string {
   const v = spokeSwitchScroll();
   const opt = (val: string, label: string) => `<option value="${val}"${v === val ? " selected" : ""}>${label}</option>`;
   const inner = `
-    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching spokes</label>
+    <div class="goal-row"><label class="goal-lbl" for="spokeSwitchScroll">Switching agents</label>
       <select id="spokeSwitchScroll" class="prov-key">${opt("latest", "Jump to the newest message")}${opt("resume", "Return to where I left off")}</select></div>
-    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and a spoke, or from one spoke to another.</div>`;
-  return setCard("chatScroll", "Chat scrolling", "follow · spoke switching", inner, true);
+    <div class="set-note">${icon("info", 12)} The chat always follows new output while you are at the bottom. Scrolling up to re-read pauses it until you scroll back down or press the jump-to-newest arrow. This choice decides where you land when you switch between Main and an agent, or from one agent to another.</div>`;
+  return setCard("chatScroll", "Chat scrolling", "follow · agent switching", inner, true);
 }
 /** P-PROGRESS.3 (ADR-0412): the quiet footer is the default; this card opts into the P-PROGRESS.1 detail and
  *  the experimental time estimate. Rendered from localStorage, so it paints with no fetch. */
@@ -6447,7 +6794,7 @@ function secWorkingStatus(): string {
     <label class="set-toggle"><input type="checkbox" id="statusEta" ${statusEta() ? "checked" : ""}/>
       <span><b>Show a time estimate (experimental)</b> - how long the work probably has left, from how long your recent turns and helper runs took on this machine. It cannot see how big the task is, so treat it as a rough guess. Nothing is shown until there is enough history for a number.</span></label>
     <label class="set-toggle"><input type="checkbox" id="statusRing" ${statusRing() ? "checked" : ""}/>
-      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet lane's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
+      <span><b>Show a progress ring</b> - a small ring at the right end of the working line (and in each running fleet agent's header) that fills as the turn goes, measured against your recent turns. Hover it for the details. It stays empty until there is enough history.</span></label>
     <div class="set-note">${icon("info", 12)} If the agent process stops, the Restart line always appears, whichever you choose.</div>`;
   return setCard("workingStatus", "Working status", "one line · details · estimate", inner, true);
 }
@@ -6460,6 +6807,20 @@ function secMiniLucid(): string {
   // P-MINI.3 (ADR-0596): the show switch (a right-click turns him off) and the size live here too.
   const store = miniStore();
   return setCard("miniLucid", "Mini Lucid", "show · off · sometimes · always · size · suggestions · sight", `${miniLucidCardHtml(readPresence(store), esc, icon("info", 12), readMascotSize(store), readMascotHidden(store))}\n    ${suggestToggleHtml(suggestEnabled(store))}\n    ${pictureToggleHtml(pictureEnabled(store))}`, true);
+}
+
+// ── P-BUDDY.1 (ADR-0667): Settings -> Floating Agents ───────────────────────────────────────────────
+// The buddies over the composers and in Agent Worlds, and whether they fetch ideas on their own after a turn.
+// Rendered from localStorage (agent_buddy.ts), no fetch; a change applies live through agentBuddies.sync().
+function secFloatingAgents(): string {
+  const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+  const inner = `
+    <label class="set-toggle"><input type="checkbox" id="buddyShow" ${s.show ? "checked" : ""}/>
+      <span><b>Show floating Agents</b> - a small Agent in its folder's color floats over the main composer, each Fleet card and each agent in Agent Worlds. Drag it anywhere; a double-click puts it back. Click it for ideas.</span></label>
+    <label class="set-toggle"><input type="checkbox" id="buddyAuto" ${s.auto ? "checked" : ""}/>
+      <span><b>Suggest ideas after each turn</b> - when an agent finishes a turn, its buddy asks for a few ideas on its own, at most every 3 minutes per agent.</span></label>
+    <div class="set-note">${icon("info", 12)} Ideas come from a smaller model and cost a little each time they are made.</div>`;
+  return setCard("floatingAgents", "Floating Agents", "buddies · ideas after each turn", inner, true);
 }
 
 // ── P-THEME.1: Settings -> Theme ────────────────────────────────────────────────────────────────────
@@ -6534,7 +6895,7 @@ function sceneFor(season: SeasonDef | undefined): SceneId | null {
 }
 function backdropMotion(): BackdropMotion {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
-  const tier = perfWatch.tier();
+  const tier = baseTier(perfWatch.tier());
   return tier === "full" ? "full" : tier === "reduced" ? "reduced" : "still";
 }
 /** Show, swap or park the chat-column backdrop. Visible on the LUCID Agent stage, or everywhere when
@@ -6735,11 +7096,15 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
   const c = cfg ?? { enabled: false, baseUrl: "", model: "", dim: 768, authKind: "none" as const, vaultRef: undefined as string | undefined };
   const opt = (v: string, label: string) => `<option value="${v}" ${c.authKind === v ? "selected" : ""}>${label}</option>`;
   const pill = active ? `<span class="abadge ok">active</span>` : (c.enabled ? `<span class="abadge warn">needs a key / relaunch</span>` : `<span class="abadge">off</span>`);
-  return `<div class="set-sec">
+  // P-SETUX.1 (ADR-0615): through setCard, so the fill keeps the card's header, collapse and data-sec (a bare
+  // `.set-sec` replaced the collapsible card with a headerless blob that later hydrations could not find).
+  return setCard("embeddings", "Semantic search", "knowledge RAG \u00b7 your own embeddings", `
     <div class="set-note">${icon("search", 12)} Ground the agent on your own notes with SEMANTIC search. Point at a LOCAL Ollama (offline / air-gap: <code>http://localhost:11434/v1</code> · <code>nomic-embed-text</code> · dim 768) or a cloud endpoint (OpenAI <code>text-embedding-3-small</code> · dim 1536). Off = lexical search only. ${pill}</div>
     <label class="set-toggle"><input type="checkbox" id="embEnabled" ${c.enabled ? "checked" : ""}/><span><b>Enable semantic search</b> - embed ingested knowledge for meaning-based retrieval.</span></label>
+    <div class="prov-grid">
     <div class="prov-row"><input class="prov-key" id="embBaseUrl" placeholder="Base URL - e.g. http://localhost:11434/v1" value="${esc(c.baseUrl)}" autocomplete="off" spellcheck="false"/></div>
-    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" value="${c.dim || ""}" style="max-width:90px"/></div>
+    <div class="prov-row"><input class="prov-key" id="embModel" placeholder="Embedding model - e.g. nomic-embed-text" value="${esc(c.model)}"/><input class="prov-key" id="embDim" type="number" min="1" placeholder="dim" aria-label="Dimension" value="${c.dim || ""}" style="width:90px"/></div>
+    </div>
     <div class="prov-row">
       <select class="prov-key" id="embAuth" style="max-width:160px">${opt("none", "No auth (local)")}${opt("bearer", "Bearer key")}${opt("apikey", "API-key header")}</select>
       <input class="prov-key" id="embKey" type="password" placeholder="${c.vaultRef ? "Key saved - blank keeps it" : "API key (stored in the OS vault)"}" autocomplete="off"/>
@@ -6747,8 +7112,7 @@ function secEmbeddings(cfg: import("./bridge.ts").EmbeddingsConfigView | null, a
       <button class="btn-mini ok" id="embSave">${icon("check", 13)} Save</button>
     </div>
     ${active ? `<div class="prov-row"><button class="btn-mini" id="embReindex">${icon("refresh", 13)} Re-index knowledge graphs</button><span class="set-sub" style="align-self:center">Rebuild every KG's semantic index from its compiled pages.</span></div>` : ""}
-    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>
-  </div>`;
+    <div class="set-sub">A local no-auth endpoint applies immediately; a cloud key is vaulted and takes effect on the next launch. Test checks connectivity + fills in the model's dimension. Re-ingest (or re-index) a knowledge graph to build its semantic index.</div>`, true);
 }
 async function saveEmbeddings(): Promise<void> {
   const body = $("#setBody")!;
@@ -6805,39 +7169,189 @@ async function reindexEmbeddings(): Promise<void> {
   if (r?.ok) showToast({ tone: "ok", title: "Semantic index rebuilt", desc: `${r.stored ?? 0} passage${r.stored === 1 ? "" : "s"} across ${r.kgs ?? 0} knowledge graph${r.kgs === 1 ? "" : "s"}.`, timeout: 5200 });
   else showToast({ tone: "danger", title: "Re-index didn't run", desc: r?.error ?? "Enable semantic search first.", timeout: 5200 });
 }
+// ── P-SETUX.1 (ADR-0615): the Settings window - categories, Overview, Quick connect ─────────────────────
+/** Which fetches have landed at least once. Until one has, its Overview tile says "Checking", never a guess. */
+const setLoaded = new Set<"workspace" | "local" | "mcp" | "agents">();
+let setEmbeddings: { cfg: EmbeddingsConfigView | null; active: boolean } | null = null;
+let setVoice: VoiceSettingsView | null = null;
+
+/** First paint of every card, keyed by EVERY SettingsSecId (settings_nav.ts), so no card can be rendered
+ *  outside a category: adding one there without a renderer here, or the reverse, fails the typecheck. */
+const SET_SHELL: Record<SettingsSecId, () => string> = {
+  overview: () => secOverview(),
+  workspace: () => setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
+  // Profile is just the local name we already hold in state - render it instantly (no skeleton /
+  // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
+  profile: () => secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
+  personal: () => setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
+  providers: () => setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
+  asksage: () => setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
+  asksageQuota: () => `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
+  localProviders: () => setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
+  others: () => setSkel("others", "More providers", "", true),
+  sovereignty: () => `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
+  subagents: () => setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
+  judgment: () => setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
+  compression: () => setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
+  mcpQuick: () => secMcpQuick(), // P-SETUX.1 (ADR-0616): official MCP servers, one click each
+  mcp: () => setSkel("mcp", "MCP connectors", "model context protocol", true),
+  agents: () => setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
+  embeddings: () => setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
+  vault: () => setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
+  [VAULT_DEST_SEC]: () => setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
+  [VAULT_ENV_SEC]: () => setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
+  whitelist: () => setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
+  voice: () => setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
+  theme: () => secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
+  appearance: () => secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
+  chatScroll: () => secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
+  workingStatus: () => secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
+  miniLucid: () => secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
+  floatingAgents: () => secFloatingAgents(), // P-BUDDY.1 (ADR-0667): the floating Agent buddies
+  trivia: () => secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
+  settingsLayout: () => secSettingsLayout(),
+  developer: () => setSkel("developer", "Developer", "logs · diagnostics", true),
+};
+/** One `<section class="set-cat">` per category; only the active one is shown. Cards keep their
+ *  `[data-sec]` ids under #setBody, so every in-place fillSec hydration works across categories. */
 function settingsShell(): string {
+  const keyNote = `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`;
+  return SETTINGS_CATEGORIES.map((c) => `<section class="set-cat" data-cat="${c.id}" aria-label="${esc(c.label)}"${c.id === setCat ? "" : " hidden"}>
+    <h2 class="set-cat-h">${esc(c.label)}</h2>${sectionsOf(c.id).map((s) => SET_SHELL[s]()).join("")}${c.id === "models" ? keyNote : ""}</section>`).join("");
+}
+
+type SetTileTone = "ok" | "off" | "warn" | "wait" | "info";
+interface SetTile { sec: SettingsSecId; icon: string; title: string; tone: SetTileTone; badge: string; detail: string }
+const SET_WAIT = { tone: "wait", badge: "Checking", detail: "Reading the current state" } as const;
+const TTS_LABEL: Record<VoiceSettingsView["ttsProvider"], string> = { elevenlabs: "ElevenLabs", "openai-tts": "OpenAI", "local-tts": "on-device", "dots-tts": "dots.tts" };
+const STT_LABEL: Record<VoiceSettingsView["sttProvider"], string> = { elevenlabs: "ElevenLabs", whisper: "Whisper", whistle: "Whistle" };
+const CUSTODY_LABEL: Record<KeyVaultStatus["custody"], string> = { dpapi: "Windows DPAPI", keychain: "macOS Keychain", libsecret: "Secret Service", "plaintext-file": "a plain file" };
+
+/** "on/total" status for a list of switchable things (MCP servers, remote agents). */
+function setCountTile(sec: SettingsSecId, ic: string, title: string, loaded: boolean, items: readonly { name: string; enabled: boolean }[], none: string): SetTile {
+  if (!loaded) return { sec, icon: ic, title, ...SET_WAIT };
+  if (!items.length) return { sec, icon: ic, title, tone: "off", badge: "None", detail: none };
+  const on = items.filter((x) => x.enabled);
+  return { sec, icon: ic, title, tone: on.length ? "ok" : "warn", badge: `${on.length}/${items.length} on`, detail: (on.length ? on : items).map((x) => x.name).join(", ") };
+}
+/** The Overview's tiles, each from data hydrateSettings already fetched. Unknown stays "Checking". */
+function overviewTiles(): SetTile[] {
+  const ws = state.workspace;
+  const a = state.auth;
+  const providers = [...(a?.gateway ?? []), ...(a?.majors ?? []), ...(a?.others ?? [])].filter((p) => !HUB_NON_MODEL_EXCLUDE.includes(p.id) && providerConfigured(p));
+  const ask = state.asksage;
+  const vault = a?.vault;
+  const emb = setEmbeddings;
+  const voice = state.voice ?? setVoice; // the composer's live cache once loaded; the Voice card's fetch until then
   return [
-    setSkel("workspace", "Workspace", "folder \u00b7 clone \u00b7 git", true),
-    // Profile is just the local name we already hold in state - render it instantly (no skeleton /
-    // no fetch wait; the first /api/settings call pays a ~0.6s cold cost that made this lag).
-    secProfile({ username: state.username, email: state.email, attribution: state.attribution ?? undefined }),
-    setSkel("personal", "Personalization", "private · encrypted · opt-in", true),
-    setSkel("providers", "Providers", "U.S. frontier · key or OAuth", true),
-    setSkel("asksage", "AskSage gov gateway", "accredited proxy", true),
-    `<div data-sec="asksageQuota"></div>`, // AskSage Monthly-tokens bar - ONLY when the gov gateway is configured (filled in hydrateSettings)
-    setSkel("localProviders", LP_CARD_TITLE, LP_CARD_SUB, true), // P-LOCAL.3 (ADR-0135); auto-collapsed
-    setSkel("embeddings", "Semantic search", "knowledge RAG · your own embeddings", true), // ADR-0221; auto-collapsed
-    `<div data-sec="sovereignty"></div>`, // P-IDE.1c: China-origin unlock (renders only when such models exist)
-    setSkel("compression", "Token compression", "headroom · on-device · opt-in", true),
-    setSkel("mcp", "MCP connectors", "model context protocol", true),
-    setSkel("agents", "Remote agents", "hermes · openclaw · ACP firewall", true), // P-AGENTFW.2 (ADR-0149)
-    setSkel("whitelist", "Network Whitelist", "domains · IPs · trust-scoped", true), // P-NETWL.2 (ADR-0106)
-    setSkel("vault", "Credential vault", "names only \u00b7 encrypted backup", true), // P-VAULT-UI.1 (ADR-0475)
-    setSkel(VAULT_DEST_SEC, VAULT_DEST_TITLE, VAULT_DEST_SUB, true), // P-VAULT-DEST.1 (ADR-0478); collapsed by default
-    setCard(VAULT_ENV_SEC, "Import from .env", "workspace secrets · names only", vaultEnvBodyHtml(), true), // P-VAULT-ENV.1 (ADR-0477)
-    setSkel("others", "More providers", "", true),
-    setSkel("voice", "Voice", "TTS · STT · ElevenLabs", true), // P-VOICE.1 (ADR-0115)
-    setSkel("judgment", "Judgment", "None by default \u00b7 Jev \u00b7 your models", true), // P-JEV.1 (ADR-0374) + P-JEV.5
-    setSkel("subagents", "Subagents", PER_CALL_SUB, true), // P-MODEL.11 (ADR-0602)
-    secTheme(), // P-THEME.1: light mode + color themes (rendered from theme.ts + localStorage, no fetch wait)
-    secAppearance(), // P-APPEAR.1: chat background (rendered from state - loaded at boot, no fetch wait)
-    secChatScroll(), // P-SCROLL.1 (ADR-0405): where a spoke switch lands (rendered from localStorage)
-    secWorkingStatus(), // P-PROGRESS.3 (ADR-0412): quiet footer by default; opt-in detail and estimate
-    secMiniLucid(), // P-MINI.1 (ADR-0580): the prompt-bar mascot outside the LUCID Agent role
-    secTrivia(), // P-TRIV.4 (ADR-0191): the Trivia Wire toggle + AI re-seed (rendered from state/localStorage)
-    setSkel("developer", "Developer", "logs · diagnostics", true),
-    `<div class="set-note">${icon("shield", 12)} Keys are stored on this machine and passed to omp as env vars - never sent anywhere else. OAuth uses omp's own secure credential vault.</div>`,
-  ].join("");
+    ws ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "ok", badge: "Open", detail: ws.current }
+      : setLoaded.has("workspace") ? { sec: "workspace", icon: "folder", title: "Workspace", tone: "off", badge: "No folder", detail: "Pick a folder to work in" }
+      : { sec: "workspace", icon: "folder", title: "Workspace", ...SET_WAIT },
+    !a ? { sec: "providers", icon: "spark", title: "Providers", ...SET_WAIT }
+      : providers.length ? { sec: "providers", icon: "spark", title: "Providers", tone: "ok", badge: `${providers.length} connected`, detail: providers.map((p) => p.name).join(", ") }
+      : { sec: "providers", icon: "spark", title: "Providers", tone: "off", badge: "Not connected", detail: "Sign in or paste a key to start chatting" },
+    !ask ? { sec: "asksage", icon: "shield", title: "AskSage gateway", ...SET_WAIT }
+      : ask.configured ? { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "ok", badge: "Connected", detail: ask.only ? "Lockdown on: every turn routes through the gateway" : "Configured, lockdown off" }
+      : { sec: "asksage", icon: "shield", title: "AskSage gateway", tone: "off", badge: "Not set up", detail: "For Government and CUI work" },
+    !setLoaded.has("local") ? { sec: "localProviders", icon: "gauge", title: "Local providers", ...SET_WAIT }
+      : state.localProviders.length ? { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "ok", badge: `${state.localProviders.length} added`, detail: state.localProviders.map((p) => p.name).join(", ") }
+      : { sec: "localProviders", icon: "gauge", title: "Local providers", tone: "off", badge: "None", detail: "Ollama, vLLM or another self-hosted endpoint" },
+    setCountTile("mcp", "plugins", "MCP servers", setLoaded.has("mcp"), state.mcpServers, "Quick connect lists official servers"),
+    setCountTile("agents", "link", "Remote agents", setLoaded.has("agents"), state.agents, "Hermes or OpenClaw through the agent firewall"),
+    !voice ? { sec: "voice", icon: "volume", title: "Voice", ...SET_WAIT }
+      : { sec: "voice", icon: "volume", title: "Voice", tone: "info", badge: voice.ttsAutoSpeak ? "Auto-speak on" : "Selected", detail: `Read aloud: ${TTS_LABEL[voice.ttsProvider] ?? voice.ttsProvider}, dictation: ${STT_LABEL[voice.sttProvider] ?? voice.sttProvider}` },
+    !a ? { sec: "vault", icon: "shield", title: "Credential vault", ...SET_WAIT }
+      : !vault ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "info", badge: "Not reported", detail: "The engine did not report its key store" }
+      : vault.state !== "ok" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Unavailable", detail: vault.detail || `The ${CUSTODY_LABEL[vault.custody]} store could not be read` }
+      : vault.custody === "plaintext-file" ? { sec: "vault", icon: "shield", title: "Credential vault", tone: "warn", badge: "Plain file", detail: "Keys are kept in a plain file on this machine" }
+      : { sec: "vault", icon: "shield", title: "Credential vault", tone: "ok", badge: "Protected", detail: `Keys encrypted by ${CUSTODY_LABEL[vault.custody]}` },
+    !emb ? { sec: "embeddings", icon: "search", title: "Semantic search", ...SET_WAIT }
+      : emb.active ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "ok", badge: "On", detail: emb.cfg?.model || "Embedding endpoint active" }
+      : emb.cfg?.enabled ? { sec: "embeddings", icon: "search", title: "Semantic search", tone: "warn", badge: "Needs attention", detail: "Saved, but needs a key or a relaunch" }
+      : { sec: "embeddings", icon: "search", title: "Semantic search", tone: "off", badge: "Off", detail: "Lexical search only" },
+  ];
+}
+function secOverview(): string {
+  const tiles = overviewTiles().map((t) => `<button class="set-tile" type="button" data-set-jump="${t.sec}" aria-label="${esc(`${t.title}: ${t.badge}. Open its settings`)}">
+    <span class="set-tile-h">${icon(t.icon, 15)}<b class="set-tile-t">${esc(t.title)}</b><span class="set-tile-b t-${t.tone}">${esc(t.badge)}</span></span>
+    <span class="set-tile-d">${esc(t.detail)}</span></button>`).join("");
+  return setCard("overview", "What's connected", "click a tile to open its card", `<div class="set-tiles">${tiles}</div>`, false);
+}
+/** Repaint the Overview once per frame however many hydrations land in it, keeping a focused tile focused. */
+let setOverviewQueued = false;
+function queueSetOverview(): void {
+  if (!state.settingsOpen || setOverviewQueued) return;
+  setOverviewQueued = true;
+  requestAnimationFrame(() => {
+    setOverviewQueued = false;
+    const focused = (document.activeElement as HTMLElement | null)?.closest?.('[data-sec="overview"] [data-set-jump]') as HTMLElement | null;
+    fillSec("overview", secOverview());
+    if (focused) ($(`#setBody [data-sec="overview"] [data-set-jump="${focused.dataset.setJump}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
+  });
+}
+
+// ADR-0616: Quick connect. An org's managed list REPLACES the community catalog (never merges with it).
+let mcpQuickCat = "all";
+let mcpQuickTokenFor = "";
+/** Re-validated here too: the list arrives as JSON over the engine API, and only well-formed https entries
+ *  may ever reach a Connect button. An engine that predates the field sends none (community catalog). */
+function orgMcpCatalog(): McpCatalogEntry[] {
+  return normalizeOrgCatalog(state.managed?.mcpCatalog ?? []);
+}
+function mcpQuickTile(e: McpCatalogEntry): string {
+  const official = catalogEntryIsOfficial(e);
+  const conn = setLoaded.has("mcp") ? configuredFor(e, state.mcpServers) : undefined;
+  const auth = e.auth === "oauth" ? "OAuth sign-in" : e.auth === "token" ? "Token" : "No sign-in";
+  let action: string;
+  if (!official) action = `<button class="btn-mini" type="button" disabled>Not offered</button>`;
+  else if (conn) action = `<button class="btn-mini" type="button" data-set-jump="mcp">Manage</button>`;
+  else if (e.auth === "token" && mcpQuickTokenFor === e.id) action = `<input class="prov-key" id="mcpqToken" type="password" placeholder="${esc(e.name)} token" aria-label="${esc(e.name)} token" autocomplete="off" spellcheck="false" /><button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  else action = `<button class="btn-mini ok" type="button" data-mcpq-connect="${esc(e.id)}">Connect</button>`;
+  return `<div class="mcpq-tile${official ? "" : " blocked"}">
+    <div class="mcpq-h"><b class="mcpq-name">${esc(e.name)}</b>${conn ? `<span class="abadge ok">${conn.enabled ? "Connected" : "Added, off"}</span>` : ""}</div>
+    <div class="mcpq-vendor">${esc(e.vendor)}</div>
+    <div class="mcpq-badges"><span class="abadge set">${esc(MCP_CATEGORY_LABEL[e.category] ?? e.category)}</span><span class="abadge">${auth}</span></div>
+    ${official ? (e.note ? `<div class="mcpq-note">${esc(e.note)}</div>` : "") : `<div class="mcpq-note warn">Not offered: its endpoint or docs page is not on a domain the vendor owns.</div>`}
+    <div class="mcpq-foot">${official ? `<a class="mcpq-docs" href="${esc(e.docsUrl)}" target="_blank" rel="noopener noreferrer">Official docs</a>` : ""}${action}</div>
+  </div>`;
+}
+function secMcpQuick(): string {
+  const org = orgMcpCatalog();
+  const entries = org.length ? org : MCP_COMMUNITY_CATALOG;
+  const cats = [...new Set(entries.map((e) => e.category))];
+  const cat = cats.some((c) => c === mcpQuickCat) ? mcpQuickCat : "all";
+  const chips = ["all", ...cats].map((c) => `<button class="mcpq-chip${c === cat ? " on" : ""}" type="button" data-mcpq-cat="${esc(c)}" aria-pressed="${c === cat}">${esc(c === "all" ? "All" : MCP_CATEGORY_LABEL[c as McpCatalogEntry["category"]] ?? c)}</button>`).join("");
+  const tiles = entries.filter((e) => cat === "all" || e.category === cat).map(mcpQuickTile).join("");
+  const source = org.length
+    ? `<div class="mcpq-src">${icon("shield", 13)}<span>Authorized by ${esc(state.managed?.orgName || "your organization")}</span></div>`
+    : `<div class="mcpq-src">${icon("check", 13)}<span>Community catalog: official vendor endpoints only</span></div>`;
+  const note = `<div class="set-note">${icon("info", 12)} ${org.length ? "Your organization's policy lists these servers." : "Every entry is the vendor's own endpoint, checked against the vendor's own documentation page; look-alike servers are left out."} Connecting adds the server to <b>MCP connectors</b> below, where you can turn it off or remove it. Tool output is still scanned by the security gate.</div>`;
+  return setCard("mcpQuick", "Quick connect", "official MCP servers", `${source}<div class="mcpq-chips" role="group" aria-label="Filter by category">${chips}</div><div class="mcpq-grid">${tiles || `<div class="empty">Nothing in this category.</div>`}</div>${note}`, false);
+}
+async function mcpQuickConnect(id: string): Promise<void> {
+  const org = orgMcpCatalog();
+  const e = (org.length ? org : MCP_COMMUNITY_CATALOG).find((x) => x.id === id);
+  if (!e || !catalogEntryIsOfficial(e)) return; // never connect an entry that fails the official-domain check
+  let token: string | undefined;
+  if (e.auth === "token") {
+    if (mcpQuickTokenFor !== id) { mcpQuickTokenFor = id; fillSec("mcpQuick", secMcpQuick()); ($("#mcpqToken") as HTMLInputElement | null)?.focus(); return; }
+    token = (($("#mcpqToken") as HTMLInputElement | null)?.value ?? "").trim();
+    if (!token) { showToast({ tone: "warn", title: "Paste the token first", desc: `${e.name} needs an access token from ${e.vendor}. The official docs link shows where to create one.`, timeout: 4200 }); return; }
+  }
+  const saved = await bridge.mcpUpsert({ name: e.name, transport: e.transport, url: e.url, ...(token ? { token } : {}) }).catch(() => null);
+  if (!saved) { showToast({ tone: "danger", title: `${e.name} was not added`, desc: "The engine did not save the server. Try again, or add it by hand under MCP connectors.", timeout: 6000 }); return; }
+  mcpQuickTokenFor = "";
+  hydrateMcp();
+  showToast(e.auth === "oauth"
+    ? { title: `${e.name} added`, desc: MCP_OAUTH_HINT, meta: "omp owns the connection \u00b7 tool output is still scanned", actions: [{ label: "OK" }], timeout: 0 }
+    : { title: `${e.name} connected`, desc: "The agent picks it up on your next turn.", meta: "omp owns the connection \u00b7 tool output is still scanned", timeout: 4200 });
+}
+
+function secSettingsLayout(): string {
+  const opt = (v: SettingsLayout, label: string, d: string) => `<label class="set-toggle"><input type="radio" name="setLayout" value="${v}"${setLayout === v ? " checked" : ""}/><span><b>${label}</b> - ${d}</span></label>`;
+  return setCard("settingsLayout", "Settings window", "window or side panel",
+    opt("window", "Window", "a large window with the categories on the left (recommended)")
+    + opt("panel", "Side panel", "a full-height panel on the right, over the other panels"), true);
 }
 /** Re-fetch + swap each section IN PLACE (old content stays until fresh arrives - no flash). */
 function hydrateSettings(): void {
@@ -6845,8 +7359,13 @@ function hydrateSettings(): void {
     if (ws) { state.workspace = ws; renderWorkspaceBar(); }
     const el = document.querySelector(`#setBody [data-sec="workspace"]`);
     if (el) el.outerHTML = ws ? workspaceSection(ws) : `<div data-sec="workspace"></div>`;
+    setLoaded.add("workspace"); queueSetOverview();
   });
-  void bridge.embeddingsConfig().then((r) => fillSec("embeddings", secEmbeddings(r?.config ?? null, !!r?.active))); // ADR-0221
+  void bridge.embeddingsConfig().then((r) => { // ADR-0221
+    const emb = { cfg: r?.config ?? null, active: !!r?.active };
+    setEmbeddings = emb;
+    fillSec("embeddings", secEmbeddings(emb.cfg, emb.active));
+  });
   // Profile already painted from cache; refresh from disk only if it changed AND the user isn't typing.
   void bridge.getSettings().then((s) => {
     if (!s) return;
@@ -6863,7 +7382,7 @@ function hydrateSettings(): void {
     fillSec("providers", secProviders(a)); fillSec("others", secOthers(a));
     fillSec("asksage", secAsksage(state.asksage, null)); // inject the ASKSAGE_API_KEY row now that gateway auth is known
     // P-VOICE.1 (ADR-0115): the Voice card needs auth (ElevenLabs key state) + the voice settings, then loads voices.
-    void bridge.voiceSettings().then((vset) => { fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
+    void bridge.voiceSettings().then((vset) => { setVoice = vset; fillSec("voice", secVoice(a, vset)); void loadVoices(); void hydrateWhisper(); void hydrateVoiceEndpoints(); });
     void bridge.judgment().then((j) => { if (j) judgeBackend = j.effective; fillSec("judgment", secJudgment(a, j)); }); // P-JEV.1: key state + the clamped mode
     void bridge.perCallModel().catch(() => null).then((v) => fillSec("subagents", secSubagents(v))); // P-MODEL.11 (ADR-0602)
     renderStatus(); // a just-added/removed key flips the OAuth-vs-key budget-pill gate
@@ -6982,6 +7501,7 @@ async function hydrateLocalProviders(): Promise<void> {
     bridge.resultWindow().catch(() => null), // P-CTX.2b (ADR-0579): the tool-output window choice
   ]);
   state.localProviders = providers ?? [];
+  setLoaded.add("local");
   const vaultRefs = new Set((creds ?? []).map((c) => c.ref));
   // The fill must be the WHOLE card. fillSec swaps the element's outerHTML, so passing the bare body (as
   // this did before ADR-0579) dropped the card's title and its data-sec, and every later refresh of the
@@ -7237,27 +7757,156 @@ function secCui(p: import("./bridge.ts").PersonalStatus): string {
       ${destroy}</div>
     ${passphraseChangeHtml("cui")}</div>`;
 }
-function openSettings(): void {
-  closeKnowledge();
-  closeIde(); // P-IDE.4: right-edge surfaces are mutually exclusive
-  closeSkills(); // P-SKILL.4
-  closeMeetings(); // P-MEET.1
-  closeRemoteView(); // P-RS-VIEW.1
+// ── P-SETUX.1 (ADR-0615): Settings is an OVERLAY (a centered window by default, or a right panel) ─────────
+// It floats above every fixed panel (fleet dock, IDE, orbit) the way Ask Lucid does, so opening it no longer
+// closes the other right-edge surfaces, collapses the sidebar or hides the inspector: closing it returns the
+// user to exactly what was there. Those surfaces still close Settings when THEY open (closeSettings).
+const readSetPref = (key: string): string | null => { try { return localStorage.getItem(key); } catch { return null; } };
+const writeSetPref = (key: string, v: string): void => { try { localStorage.setItem(key, v); } catch { /* private mode */ } };
+let setCat: SettingsCatId = parseSettingsCat(readSetPref(SETTINGS_CAT_KEY)) ?? "overview";
+let setLayout: SettingsLayout = parseSettingsLayout(readSetPref(SETTINGS_LAYOUT_KEY));
+let setOpener: HTMLElement | null = null; // focus goes back here on close
+let setRailBefore: HTMLElement | null = null; // the rail button that was lit before Settings took it
+/** A child overlay Settings can open (or one opened over it) owns Esc while it is up. */
+const SET_CHILD_OVERLAYS = ".popover, .modal-ov, .fb, .ctx-menu, .palette.show, .coach-card, .figma-scrim, .mkt-scrim, .goal-scrim";
+
+/** Open Settings on a category (the remembered one when none is named). */
+function openSettings(cat: SettingsCatId = setCat): void {
+  const wasOpen = state.settingsOpen;
+  if (!wasOpen) {
+    setOpener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
+    setRailBefore = $(".rail-btn.active") as HTMLElement | null;
+  }
   state.settingsOpen = true;
-  if (!state.sidebarCollapsed) toggleSidebar(true); // give the chat room; reopen sessions via the hamburger
   $("#settings")!.hidden = false;
-  $("#inspector")!.hidden = true;
+  document.body.classList.add("set-open");
+  applySettingsLayout();
   $$(".rail-btn").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.rail === "settings"));
-  void renderSettings();
+  if (!wasOpen) renderSettings();
+  showSettingsCat(cat);
+  if (!wasOpen) requestAnimationFrame(() => ($("#setNav .set-nav-it.on") as HTMLElement | null)?.focus({ preventScroll: true }));
+}
+/** The one deep link: open Settings on the card's category, expand the card, scroll to it, flash it and
+ *  focus its header. A category id opens that category; anything unknown opens the Overview. */
+function openSettingsTo(target: string): void {
+  const { cat, sec } = resolveSettingsTarget(target);
+  if (sec) SET_OPEN.add(sec);
+  openSettings(cat);
+  if (!sec) return;
+  setTimeout(() => {
+    const card = document.querySelector<HTMLElement>(`#setBody [data-sec="${sec}"]`);
+    if (!card) return;
+    card.classList.add("open");
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    card.classList.add("set-flash");
+    setTimeout(() => card.classList.remove("set-flash"), 1600);
+    (card.querySelector(".set-coll-h, [data-set-jump], button") as HTMLElement | null)?.focus({ preventScroll: true });
+  }, 140);
 }
 function closeSettings(): void {
   if (!state.settingsOpen) return;
   state.settingsOpen = false;
   seasonPreview?.dispose(); seasonPreview = null; // P-SEASON.1: no hidden canvas keeps animating
-  $("#settings")!.hidden = true;
-  $("#inspector")!.hidden = false;
+  const aside = $("#settings")!;
+  const hadFocus = aside.contains(document.activeElement);
+  aside.hidden = true;
+  $("#setScrim")!.hidden = true;
+  document.body.classList.remove("set-open");
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
-  $('.rail-btn[data-rail="chat"]')?.classList.add("active");
+  (setRailBefore?.isConnected ? setRailBefore : $('.rail-btn[data-rail="chat"]'))?.classList.add("active");
+  const back = setOpener;
+  setOpener = null; setRailBefore = null;
+  if (hadFocus && back?.isConnected) back.focus({ preventScroll: true });
+}
+function showSettingsCat(cat: SettingsCatId): void {
+  setCat = cat;
+  writeSetPref(SETTINGS_CAT_KEY, cat);
+  $$("#setBody .set-cat").forEach((s) => { (s as HTMLElement).hidden = (s as HTMLElement).dataset.cat !== cat; });
+  const body = $("#setBody");
+  if (body) body.scrollTop = 0;
+  renderSetNav();
+}
+/** The category list, or (while the search box has text) the matching cards. */
+function renderSetNav(): void {
+  const nav = $("#setNav");
+  if (!nav) return;
+  const q = (($("#setSearch") as HTMLInputElement | null)?.value ?? "").trim();
+  nav.classList.toggle("searching", !!q);
+  if (q) {
+    const hits = searchSettings(q);
+    nav.innerHTML = hits.length
+      ? hits.map((s) => `<button class="set-nav-it set-nav-hit" type="button" data-set-jump="${s.sec}"><span class="set-nav-l">${esc(s.title)}</span><span class="set-nav-s">${esc(settingsCategory(s.cat)?.label ?? "")}</span></button>`).join("")
+      : `<div class="set-nav-empty">No setting matches \u201c${esc(q)}\u201d.</div>`;
+    return;
+  }
+  nav.innerHTML = SETTINGS_CATEGORIES.map((c) => `<button class="set-nav-it${c.id === setCat ? " on" : ""}" type="button" data-set-cat="${c.id}"${c.id === setCat ? ' aria-current="page"' : ""} data-tip="${esc(`${c.label}|${c.blurb}`)}" data-tip-side="right">${icon(c.icon, 15)}<span class="set-nav-l">${esc(c.label)}</span></button>`).join("");
+}
+/** Window (modal, scrim, focus trapped) or panel (a right flyout over the other panels, nothing dimmed). */
+function applySettingsLayout(): void {
+  const aside = $("#settings")!;
+  const win = setLayout === "window";
+  aside.dataset.layout = setLayout;
+  aside.setAttribute("role", "dialog");
+  if (win) aside.setAttribute("aria-modal", "true"); else aside.removeAttribute("aria-modal");
+  $("#setScrim")!.hidden = !(win && state.settingsOpen);
+  const btn = $("#setLayoutBtn")!;
+  btn.innerHTML = icon(win ? "sidebar" : "square", 15);
+  btn.setAttribute("aria-label", win ? "Show settings as a side panel" : "Show settings as a window");
+  btn.dataset.tip = win ? "Side panel|Dock Settings on the right, over the other panels" : "Window|Show Settings as a large window with the categories on the left";
+}
+function setSettingsLayout(next: SettingsLayout): void {
+  setLayout = next;
+  writeSetPref(SETTINGS_LAYOUT_KEY, next);
+  applySettingsLayout();
+  fillSec("settingsLayout", secSettingsLayout());
+}
+/** Wires the Settings chrome once at init: nav, search, layout, scrim, Esc and the window-mode focus trap. */
+function initSettingsChrome(): void {
+  const aside = $("#settings")!;
+  const scrim = $("#setScrim")!;
+  document.body.append(scrim, aside); // fixed layers live at the top level, like Ask Lucid's dock
+  const search = $("#setSearch") as HTMLInputElement;
+  $("#setClose")!.addEventListener("click", () => closeSettings());
+  $("#setLayoutBtn")!.addEventListener("click", () => setSettingsLayout(setLayout === "window" ? "panel" : "window"));
+  scrim.addEventListener("click", () => closeSettings());
+  search.addEventListener("input", () => renderSetNav());
+  search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = searchSettings(search.value)[0];
+    if (first) { e.preventDefault(); search.value = ""; openSettingsTo(first.sec); }
+  });
+  aside.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const cat = (t.closest("[data-set-cat]") as HTMLElement | null)?.dataset.setCat;
+    if (cat) { const c = parseSettingsCat(cat); if (c) showSettingsCat(c); return; }
+    const jump = (t.closest("[data-set-jump]") as HTMLElement | null)?.dataset.setJump;
+    if (jump) { search.value = ""; openSettingsTo(jump); return; }
+    const qcat = (t.closest("[data-mcpq-cat]") as HTMLElement | null)?.dataset.mcpqCat;
+    if (qcat) { mcpQuickCat = qcat; fillSec("mcpQuick", secMcpQuick()); return; }
+    const conn = (t.closest("[data-mcpq-connect]") as HTMLButtonElement | null);
+    if (conn) { conn.disabled = true; void mcpQuickConnect(conn.dataset.mcpqConnect!).finally(() => { conn.disabled = false; }); }
+  });
+  aside.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.target as HTMLElement).id === "mcpqToken") { e.preventDefault(); ((e.target as HTMLElement).parentElement?.querySelector("[data-mcpq-connect]") as HTMLElement | null)?.click(); return; }
+    if (e.key !== "Tab" || setLayout !== "window") return; // aria-modal: Tab stays inside the window
+    const f = [...aside.querySelectorAll<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((n) => !(n as HTMLButtonElement).disabled && n.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0]!, last = f[f.length - 1]!;
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+  aside.addEventListener("change", (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.name === "setLayout" && t.checked) setSettingsLayout(parseSettingsLayout(t.value));
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !state.settingsOpen || e.defaultPrevented) return;
+    // Esc inside Ask Lucid never gets here: its window capture-phase listener stops it first.
+    if (document.querySelector(SET_CHILD_OVERLAYS)) return; // an open child overlay owns this Esc
+    e.preventDefault();
+    if (document.activeElement === search && search.value) { search.value = ""; renderSetNav(); return; }
+    closeSettings();
+  });
 }
 
 // ── P-SKILL.4 (ADR-0097): the Skills directory + management fly-out ───────────────────────────────
@@ -9197,18 +9846,6 @@ async function runStudioCodify(btn: HTMLElement): Promise<void> {
   }
 }
 
-// P-IMP.2 (ADR-0035): open Settings with the Personalization section expanded + scrolled into view -
-// the nudge CTA, and the entry point for a brand-new user to enable + set a passphrase.
-function openPersonalizationSettings(): void {
-  SET_OPEN.add("personal");
-  openSettings();
-  setTimeout(() => {
-    const sec = $('[data-sec="personal"]') as HTMLElement | null;
-    sec?.classList.add("open");
-    sec?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 120);
-}
-
 // First-run onboarding: while personalization is UNCONFIGURED, keep the Personalization settings
 // section expanded (so enable→passphrase is discoverable, not buried in a collapsed accordion), and
 // show a one-time nudge toast guiding the user to import their ChatGPT/Claude/Gemini history.
@@ -9225,7 +9862,7 @@ async function maybeOnboardPersonal(): Promise<void> {
     desc: "Import your ChatGPT, Claude, or Gemini history to tailor replies. It's encrypted on this device, scanned by the security gate, and you can forget or export anything anytime.",
     meta: "Private · on-device · opt-in",
     tone: "info",
-    actions: [{ label: "Set up personalization", kind: "ok", run: () => openPersonalizationSettings() }, { label: "Later" }],
+    actions: [{ label: "Set up personalization", kind: "ok", run: () => openSettingsTo("personal") }, { label: "Later" }],
     timeout: 0,
   }), 1500);
 }
@@ -9900,8 +10537,32 @@ let previewOpen = false;
 let agentPreviewRevision = 0;
 let pendingAgentPreviewPath = "";
 const dismissedAgentPreviews = new Set<string>();
+// P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies OVER it (#preview.over-viz, z 94, one above
+// .viz-view) with its resize edge and saved width; Visualize keeps running behind it and stops being modal. The
+// Agent Worlds chip that opened it gets focus back when it slides away.
+let previewOverViz = false;
+let previewReturn: HTMLElement | null = null;
+/** The slide-back in flight (closePreview over Visualize); a reopen cuts it short. */
+let previewLeaveTimer = 0;
+/** Raise the open panel over Visualize, or let it down. The class stays through a slide-back (endPreviewLeave). */
+function syncPreviewCover(): void {
+  const over = previewOpen && vizIsOpen();
+  if (over !== previewOverViz) { previewOverViz = over; setVizPreviewCover(over); }
+  if (!previewLeaveTimer) $("#preview")?.classList.toggle("over-viz", over);
+}
+/** End a slide-back now: the panel hides unless it is open again, and its leave and layer classes go. */
+function endPreviewLeave(): void {
+  if (!previewLeaveTimer) return;
+  window.clearTimeout(previewLeaveTimer);
+  previewLeaveTimer = 0;
+  const panel = $("#preview");
+  if (!panel) return;
+  panel.classList.remove("pchip-leave", "pchip-calm", "over-viz");
+  if (!previewOpen) panel.hidden = true;
+}
 function openPreview(opts?: { reveal?: PrevLane }): void {
   previewOpen = true;
+  endPreviewLeave(); // P-PREVIEW.CHIP1: a slide-back still running is cut short; the panel is wanted again
   closeSettings();
   closeIde();
   closeKnowledge();
@@ -9922,6 +10583,10 @@ function openPreview(opts?: { reveal?: PrevLane }): void {
   if (reveal === "yours" && !prevPathByLane.yours) ($("#prevPath") as HTMLInputElement | null)?.focus();
   startPreviewShotLoop(); // keep the agent's preview_screenshot shot fresh while the panel is open
   startPreviewInspectRelay(); // P-PREVIEW.6b: serve the agent's preview_inspect queries while the panel is open
+  // P-PREVIEW-CURTAIN.1: the panel is open, so every ready invitation is now a tab in front of the user.
+  curtainEntries = curtainEntries.filter((e) => e.phase !== "ready");
+  paintCurtainChip();
+  syncPreviewCover(); // P-PREVIEW.CHIP1: opened while Visualize is up, the panel flies out over it
   // Screenshot capture is an Electron-only seam; disable the button in a plain browser.
   const shot = $("#prevShot") as HTMLButtonElement | null;
   if (shot && !bridge.isElectron) { shot.disabled = true; setTip(shot, "Screenshots are available in the desktop app"); }
@@ -10035,19 +10700,41 @@ function openPreviewFile(path: string): void {
   loadPreview(path, "yours");
 }
 function closePreview(): void {
-  if (document.querySelector(".plg-layer")) pluginsFlyout.close(); // P-PLUGINS.1: the drawer belongs to the panel
+  // P-PLUGINS.1: another right-edge surface opening (this runs then) or the Preview panel it sits beside closing
+  // also closes the drawer. P-WORLDS.STORE1: the drawer no longer opens Preview to anchor itself.
+  if (document.querySelector(".plg-layer")) pluginsFlyout.close();
   closeArcadeMenu?.();
   setPreviewPan(false);
-  if (pendingAgentPreviewPath) dismissedAgentPreviews.add(pendingAgentPreviewPath);
-  if (prevPathByLane.agent) dismissedAgentPreviews.add(prevPathByLane.agent);
-  ++agentPreviewRevision;
-  pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): closing no longer dismisses the agent's document or cancels its pending
+  // check. Nothing auto-opens any more, so there is no hijack to guard against, and this runs whenever ANY
+  // other right-edge surface opens: a page still loading behind the curtain must survive that. The chip's
+  // "Not now" is the dismissal.
   clearPreviewTesting();
   if (!previewOpen) return;
   previewOpen = false;
   stopPreviewShotLoop();
-  stopPreviewInspectRelay(); // P-PREVIEW.6b
-  $("#preview")!.hidden = true;
+  // P-PREVIEW.6b. P-PREVIEW-CURTAIN.1: the agent's page now lives behind the curtain with the panel closed,
+  // so its preview_inspect keeps working while the Agent tab holds one.
+  if (!prevPathByLane.agent) stopPreviewInspectRelay();
+  const panel = $("#preview")!;
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  // P-PREVIEW.CHIP1: over Visualize the panel slides back into the chip that opened it (still over the world until
+  // it is gone, and deaf to the pointer meanwhile), then focus goes back to that chip.
+  const back = previewOverViz ? previewReturn : null;
+  previewReturn = null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (previewOverViz && motion !== "still") {
+    const o = swingOrigin(back?.isConnected ? back.getBoundingClientRect() : null, panel.getBoundingClientRect());
+    panel.style.setProperty("--pchip-ox", `${o.x}px`);
+    panel.style.setProperty("--pchip-oy", `${o.y}px`);
+    panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
+    panel.classList.add("pchip-leave");
+    if (motion === "calm") panel.classList.add("pchip-calm");
+    previewLeaveTimer = window.setTimeout(endPreviewLeave, CURTAIN.swingMs);
+  } else panel.hidden = true;
+  syncPreviewCover();
+  if (back) window.setTimeout(() => { if (!previewOpen && back.isConnected && !back.hidden) back.focus({ preventScroll: true }); }, 0);
+  paintCurtainChip(); // a page still loading behind the curtain shows its chip again
   document.body.classList.remove("preview-open");
   $("#inspector")!.hidden = false;
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
@@ -10080,38 +10767,310 @@ function closeTrainer(): void {
   $$(".rail-btn").forEach((b) => b.classList.remove("active"));
   $('.rail-btn[data-rail="chat"]')?.classList.add("active");
 }
-/** Auto-open only a verified, current target that the user has not dismissed. */
-function onPreviewAvailable(path: string): void {
+/** An agent's previewable write (or preview_open). P-PREVIEW-CURTAIN.1 (ADR-0621): the target passes the
+ *  curtain gate first and NEVER opens the panel by itself; a page that renders loads into the Agent tab in
+ *  the background and earns the "Preview ready" chip, a blank or failed one retires quietly. `open` is for a
+ *  target the USER just asked for through this path (the Figma import): it swings out once ready, and a
+ *  failure says so. */
+function onPreviewAvailable(path: string, opts: { open?: boolean } = {}): void {
+  if (opts.open) dismissedAgentPreviews.delete(path); // asking for it opts the document back in
   if (!path || dismissedAgentPreviews.has(path)) return;
   const revision = ++agentPreviewRevision;
   const owner = turnViewEpoch;
   pendingAgentPreviewPath = path;
   state.lastPreviewablePath = "";
-  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview.
-  const ready = resolvePreview(path).kind === "remote"
-    ? bridge.previewEgressAllows(path).then((allowed) => canPreviewRemote(path, allowed))
-    : bridge.previewProbe(path);
-  void ready.catch(() => false).then((resolves) => {
+  curtainBegin("agent", path);
+  // File errors are served as HTML with HTTP 200, so loading is not proof of a valid preview: the gate is.
+  curtainGate("agent", path, (r) => {
     const current = revision === agentPreviewRevision && owner === turnViewEpoch;
-    if (!current || dismissedAgentPreviews.has(path)) return;
+    if (!current || dismissedAgentPreviews.has(path)) { curtainRetire("agent", path, null); return; }
     pendingAgentPreviewPath = "";
-    if (!resolves) {
-      showToast({ tone: "warn", title: "Preview unavailable", desc: "The requested document could not be verified. Preview was not opened." });
+    if (r.verdict !== "ready") {
+      curtainRetire("agent", path, r);
+      if (opts.open) showToast({ tone: "warn", title: "Preview unavailable", desc: `It ${r.verdict === "blank" ? "rendered nothing" : "could not be shown"}: ${r.reason}.` });
       return;
     }
-    if (!previewOpen) openPreview({ reveal: "agent" });
     loadPreview(path, "agent");
+    if (previewOpen) curtainHiddenLoads.delete("agent"); else curtainHiddenLoads.add("agent");
     state.lastPreviewablePath = path;
     schedulePhoneAutoSend(path);
     kickPreviewShotSoon();
+    recordCurtainLaneShot("agent", path, r); // P-LANESHOTS.1: the main composer's picture while its tab is hidden
+    startPreviewInspectRelay(); // the agent can still preview_inspect its page before the user opens it
+    curtainReady("agent", path, r, opts.open === true);
   });
+}
+
+// ── P-PREVIEW-CURTAIN.1 (ADR-0621): the loading curtain ─────────────────────────────────────────
+// Auto previews (agent and lane writes) load in a hidden PROBE frame first; preview_curtain.ts decides
+// ready / blank / error from the engine probe plus the page's own paint looks. Only `ready` earns an
+// invitation: the "Preview ready" chip at the chat column's top-right edge (and the mini chip on the lane's
+// fleet card and orbit spoke). Clicking it swings the panel out on that preview's own tab.
+type CurtainResult = { verdict: "ready" | "blank" | "error"; reason: string; title: string; thumb: string };
+let curtainEntries: CurtainEntry[] = [];
+let curtainSeq = 0;
+/** The gate in flight per tab key ("agent" / "lane:<id>"); a newer write to the same tab cancels it. */
+const curtainRuns = new Map<string, () => void>();
+/** Tabs loaded while the panel was CLOSED: their frame never laid out, so its first reveal reloads it. */
+const curtainHiddenLoads = new Set<string>();
+/** Gates waiting for a probe-frame slot (probeConcurrency: the perf tier's throttle). */
+const curtainWaiting: Array<() => void> = [];
+let curtainSlots = 0;
+const isLoopbackUrl = (u: string): boolean => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(u.trim());
+const reducedMotionNow = (): boolean => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+perfWatch.onChange(() => paintCurtainChip()); // the chip's motion follows the perf tier live
+
+/** Run the gate for `path` on tab `key`. `done` is called exactly once, unless a newer gate for the same tab
+ *  (or a session reset) cancels this one first. */
+function curtainGate(key: string, path: string, done: (r: CurtainResult) => void): void {
+  curtainRuns.get(key)?.();
+  const timers: number[] = [];
+  let live = true, holdsSlot = false;
+  let frame: HTMLIFrameElement | null = null;
+  let waiter: (() => void) | null = null;
+  const cleanup = (): void => {
+    live = false;
+    for (const t of timers) window.clearTimeout(t);
+    if (frame) { frame.removeAttribute("src"); frame.remove(); frame = null; }
+    if (waiter) { const at = curtainWaiting.indexOf(waiter); if (at >= 0) curtainWaiting.splice(at, 1); waiter = null; }
+    if (holdsSlot) { holdsSlot = false; curtainSlots--; curtainWaiting.shift()?.(); }
+    if (curtainRuns.get(key) === cleanup) curtainRuns.delete(key);
+  };
+  curtainRuns.set(key, cleanup);
+  const finish = (r: CurtainResult): void => { if (!live) return; cleanup(); done(r); };
+  const remote = resolvePreview(path).kind === "remote";
+  const ask = (): Promise<CurtainProbe> => remote
+    ? bridge.previewEgressAllows(path).then((allowed): CurtainProbe | Promise<CurtainProbe> => {
+      if (!canPreviewRemote(path, allowed)) return { resolves: false, error: "the site is not approved for preview" };
+      // A loopback dev server is asked by the engine (connection refused, HTTP errors); any other approved
+      // site is cross-origin to us and only its approval can be checked.
+      return isLoopbackUrl(path) ? bridge.previewProbeInfo(path, true) : { resolves: true, kind: "remote" };
+    })
+    : bridge.previewProbeInfo(path);
+  const probe = (attempt: number): void => {
+    void ask().catch((): CurtainProbe => ({ resolves: false, error: "the engine did not answer" })).then((p) => {
+      if (!live) return;
+      // The write was announced when its tool call OPENED: give a missing or empty file time to land.
+      if (shouldReprobe(p, attempt)) { timers.push(window.setTimeout(() => probe(attempt + 1), CURTAIN.probeRetryMs)); return; }
+      const first = classifyCurtain({ probe: p, paint: null, looks: 0, loaded: false, elapsedMs: 0 });
+      if (first.verdict !== "loading") { finish({ verdict: first.verdict, reason: first.reason, title: "", thumb: "" }); return; }
+      const start = (): void => {
+        waiter = null;
+        if (!live) return;
+        holdsSlot = true; curtainSlots++;
+        frame = curtainProbeFrame(path, p, timers, () => live, (r) => finish(r));
+      };
+      if (curtainSlots < probeConcurrency(perfWatch.tier())) start();
+      else { waiter = start; curtainWaiting.push(start); }
+    });
+  };
+  probe(0);
+}
+
+/** The hidden probe frame: the same served document and sandbox as the real tab, mounted where it is laid
+ *  out and rendered (requestAnimationFrame runs, so a canvas app draws) yet invisible and inert. No
+ *  `allow` grants, so a page with audio stays silent here. Then up to two paint looks. */
+function curtainProbeFrame(path: string, p: CurtainProbe, timers: number[], isLive: () => boolean, settle: (r: CurtainResult) => void): HTMLIFrameElement {
+  const t0 = Date.now();
+  let host = $("#prevProbeHost") as HTMLElement | null;
+  if (!host) { host = el(`<div id="prevProbeHost" class="pcur-probe-host" aria-hidden="true" inert></div>`) as HTMLElement; document.body.appendChild(host); }
+  const f = document.createElement("iframe");
+  f.className = "pcur-probe";
+  f.setAttribute("sandbox", PREVIEW_SANDBOX);
+  f.setAttribute("referrerpolicy", "no-referrer");
+  f.tabIndex = -1;
+  f.title = "Preview check";
+  let loaded = false, looks = 0;
+  let paint: PaintStats | null = null;
+  const judge = () => classifyCurtain({ probe: p, paint, looks, loaded, elapsedMs: Date.now() - t0 });
+  const close = (v: CurtainDecision): void => {
+    if (v.verdict === "loading") return;
+    settle({ verdict: v.verdict, reason: v.reason, title: paint?.title ?? "", thumb: thumbFor(paint) });
+  };
+  const look = async (): Promise<void> => {
+    if (!isLive()) return;
+    const answer = parsePaint(await runInspectOnFrame(f, `pcur-${++curtainSeq}`, paintCommand(), CURTAIN.lookTimeoutMs));
+    if (!isLive()) return;
+    looks++;
+    paint = answer ?? paint; // a look that times out keeps what the previous one saw
+    const v = judge();
+    if (v.verdict === "loading") timers.push(window.setTimeout(() => void look(), CURTAIN.secondLookMs - CURTAIN.firstLookMs));
+    else close(v);
+  };
+  f.addEventListener("load", () => {
+    if (loaded || !isLive()) return;
+    loaded = true;
+    timers.push(window.setTimeout(() => void look(), CURTAIN.firstLookMs));
+  });
+  timers.push(window.setTimeout(() => { if (isLive() && !loaded) close(judge()); }, CURTAIN.loadTimeoutMs));
+  f.src = bridge.previewServeUrl(path); // set BEFORE insertion, so the first load event is the real document
+  host.appendChild(f);
+  return f;
+}
+
+/** A gate started: the composer chip (and the target's own chip: a lane's card, spoke and Worlds node, or Main's
+ *  Worlds hub) shows the loading curtain. */
+function curtainBegin(key: string, path: string): void {
+  curtainEntries = upsertCurtain(curtainEntries, { key, path, label: curtainLabel(path), seq: ++curtainSeq });
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "loading", label: curtainLabel(path), path });
+  paintCurtainChip();
+}
+/** A blank or failed page (or a superseded one): retire quietly. One dev-log line, no toast, no panel. */
+function curtainRetire(key: string, path: string, r: CurtainResult | null): void {
+  const had = curtainEntries.some((e) => e.key === key && e.path === path);
+  curtainEntries = settleCurtain(curtainEntries, key, path, "error");
+  const target = chipTarget(key);
+  if (had && target) setTargetChip(target, null);
+  if (r) console.info(`[preview-curtain] ${key} ${curtainLabel(path)}: ${r.verdict} (${r.reason}); not shown`);
+  paintCurtainChip();
+}
+/** A page that renders: with the panel closed the chip turns into the invitation; with it open the tab is
+ *  already there (badged), so the chip has nothing to add. `open` swings straight out. The target's own chip
+ *  stays ready either way: it is how that agent's page is reached again. */
+function curtainReady(key: string, path: string, r: CurtainResult, open: boolean): void {
+  const target = chipTarget(key);
+  if (target) setTargetChip(target, { phase: "ready", label: curtainLabel(path), path, ...(r.title ? { title: r.title } : {}), ...(r.thumb ? { thumb: r.thumb } : {}) });
+  if (open || previewOpen) {
+    const chip = $("#prevCurtainChip") as HTMLElement | null;
+    const from = chip && !chip.closest("[hidden]") ? chip : null;
+    curtainEntries = dropCurtain(curtainEntries, key);
+    paintCurtainChip();
+    if (open) swingOutPreview(key, from);
+    return;
+  }
+  curtainEntries = settleCurtain(curtainEntries, key, path, "ready", { title: r.title, thumb: r.thumb });
+  paintCurtainChip();
+}
+/** P-PREVIEW.CHIP1: one target's own chip: a lane's (its fleet card, orbit spoke and Agent Worlds node) or Main's
+ *  ("main", the Agent Worlds hub; the composer has its own chip, paintCurtainChip). */
+function setTargetChip(target: string, v: ChipState | null): void {
+  if (target !== "main") {
+    if (v) laneChipState.set(target, v); else laneChipState.delete(target);
+    // P-PREVIEW.CHIPX1: a chip the user closed stays away while the lane's page is the one it showed (its reload or
+    // a second gate on the same file included); a different page brings the chip back.
+    const after = chipAfterHide(dismissedLaneChips.get(target), v);
+    if (after.hidden === undefined) dismissedLaneChips.delete(target);
+    v = after.show;
+    paintLanePreview(target, v);
+    paintSpokePreview(target, v);
+  }
+  paintVizPreview(target, v);
+}
+
+/** P-PREVIEW.CHIPX1: lanes whose chip was closed with its red x, and the page it showed. In memory, like the
+ *  composer's dismissedAgentPreviews: a restart starts with no lane chips anyway. */
+const dismissedLaneChips = new Map<string, string>();
+/** Each lane's chip as the curtain last set it (shown or not), so Undo can put it back. */
+const laneChipState = new Map<string, ChipState>();
+
+/** P-PREVIEW.CHIPX1: the red x on a lane's chip (its fleet card or orbit spoke). The chip leaves the card, the
+ *  spoke and the lane's Agent Worlds node together; the toast offers Undo. */
+function dismissLaneChip(laneId: string): void {
+  const v = laneChipState.get(laneId);
+  if (!v) return;
+  dismissedLaneChips.set(laneId, v.path);
+  setTargetChip(laneId, v);
+  showToast({
+    title: "Preview chip hidden",
+    desc: "It comes back when this agent makes a different page. A page that rendered stays on its tab in the Preview panel.",
+    timeout: 6000,
+    actions: [{ label: "Undo", run: () => {
+      if (dismissedLaneChips.get(laneId) === v.path) dismissedLaneChips.delete(laneId);
+      const cur = laneChipState.get(laneId);
+      if (cur) setTargetChip(laneId, cur);
+    } }],
+  });
+}
+
+/** The composer chip: the one preview chip (preview_chip.ts, size "full") at the chat column's top-right edge,
+ *  nearest the panel it opens, with its "Not now" X. Mounted on first use. It also sets the motion every chip
+ *  follows (html[data-pchip-motion]): the perf tier and reduced motion, live. */
+function paintCurtainChip(): void {
+  let dock = $("#prevCurtain") as HTMLElement | null;
+  const head = headChip(curtainEntries);
+  if (!dock) {
+    if (!head) return;
+    const center = document.querySelector("main.center");
+    if (!center) return;
+    dock = el(`<div class="pchip-dock" id="prevCurtain" hidden aria-live="polite">
+      ${previewChipHtml("full", `id="prevCurtainChip"`)}
+      <button type="button" class="pchip-x" id="prevCurtainX" aria-label="Dismiss these previews" data-tip="Not now|Hide these invitations. A page that rendered stays on its Preview tab; open the panel from the rail any time.">${icon("close", 11)}</button>
+    </div>`) as HTMLElement;
+    center.appendChild(dock);
+    $("#prevCurtainChip", dock)?.addEventListener("click", (ev) => {
+      const cur = chipView(curtainEntries).head;
+      if (!cur || cur.phase !== "ready") return;
+      swingOutPreview(cur.key, ev.currentTarget as HTMLElement);
+    });
+    $("#prevCurtainX", dock)?.addEventListener("click", () => {
+      for (const e of curtainEntries) if (e.key === "agent") dismissedAgentPreviews.add(e.path); // no chip for this file again until you open it
+      if (curtainEntries.some((e) => e.key === "agent")) setTargetChip("main", null); // Main's Worlds chip goes with it
+      curtainEntries = [];
+      paintCurtainChip();
+    });
+  }
+  // Every chip (composer, lanes, spokes, Agent Worlds) moves the same way: set with the first chip ever shown
+  // (curtainBegin lands here) and on every perf tier change; prefers-reduced-motion is also honored in CSS.
+  document.documentElement.dataset.pchipMotion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  // The panel being open is the invitation accepted: nothing to show over it.
+  dock.hidden = !head || previewOpen;
+  paintPreviewChip($("#prevCurtainChip", dock) as HTMLElement, head);
+}
+
+/** Open the Preview panel on tab `key` with the swing: a 3D unfold hinged at the point of the panel nearest
+ *  the chip the user clicked (reduced motion or the minimal tier: instant). */
+function swingOutPreview(key: string, from: HTMLElement | null): void {
+  const fromRect = from?.getBoundingClientRect() ?? null;
+  // P-PREVIEW.CHIP1: a panel left open under Visualize is not in front of the user: it swings out over it too.
+  const wasShown = previewOpen && (previewOverViz || !vizIsOpen());
+  if (!previewOpen) openPreview({ reveal: key });
+  else { switchPrevLane(key); syncPreviewCover(); }
+  curtainEntries = dropCurtain(curtainEntries, key);
+  paintCurtainChip();
+  // The phone mirror photographs on-screen pixels, so the agent's page reaches connected phones once it is
+  // actually shown (it no-ops without a live share).
+  if (key === "agent" && prevPathByLane.agent) schedulePhoneAutoSend(prevPathByLane.agent);
+  for (const b of document.querySelectorAll<HTMLElement>(".prev-tab")) if (b.dataset.lane === key) { b.focus({ preventScroll: true }); break; }
+  const panel = $("#preview") as HTMLElement | null;
+  const motion = curtainMotion(perfWatch.tier(), reducedMotionNow());
+  if (wasShown || !panel || motion === "still") return;
+  const o = swingOrigin(fromRect, panel.getBoundingClientRect());
+  panel.style.setProperty("--pchip-ox", `${o.x}px`);
+  panel.style.setProperty("--pchip-oy", `${o.y}px`);
+  panel.style.setProperty("--pchip-ms", `${CURTAIN.swingMs}ms`);
+  // The class stays until closePreview: removing it would hand animation-name back to .kg's slideInR, which
+  // restarts that animation (a second entrance right after the swing). A panel raised from under Visualize may
+  // still carry it from its first swing, so the animation is restarted on purpose.
+  panel.classList.remove("pchip-swing", "pchip-calm");
+  void panel.offsetWidth;
+  panel.classList.add("pchip-swing");
+  if (motion === "calm") panel.classList.add("pchip-calm");
+}
+/** The fleet card's / orbit spoke's chip (FleetGridDeps / FleetOrbitDeps.openLanePreview), and an Agent Worlds
+ *  lane node's (openTargetPreviewFrom). */
+function openLanePreviewFrom(laneId: string, from: HTMLElement | null): void {
+  const id = laneTabId(laneId);
+  if (!prevLaneTabs.some((t) => t.id === id) || !prevPathByLane[id]) { setTargetChip(laneId, null); return; } // the tab was closed or evicted
+  swingOutPreview(id, from);
+}
+/** P-PREVIEW.CHIP1: an Agent Worlds chip (VizDeps.preview.open): a lane's tab, or for "main" the composer's Agent
+ *  tab. Visualize is up, so the panel flies out over it; the chip gets focus back when it slides away. */
+function openTargetPreviewFrom(target: string, from: HTMLElement): void {
+  if (target !== "main") openLanePreviewFrom(target, from);
+  else if (prevPathByLane.agent) swingOutPreview("agent", from);
+  else { setTargetChip("main", null); return; } // the agent's page went with its conversation
+  if (previewOverViz) previewReturn = from;
 }
 // P-PREVIEW.3a-shot: capture a couple of times right after the agent lane loads (the frame paints async), so
 // the agent's preview_screenshot finds a FRESH shot the moment it retries after preview_open — instead of
 // waiting up to a full 1.5s freshness tick. cacheRenderedPreviewShot no-ops when the agent lane isn't the
 // visible one, so this is a cheap no-op when the user is on their own tab.
+// P-LANESHOTS.1: the 700ms pass also takes the agent's strip snapshot (the panel's 380ms swing-out is over by
+// then); fleet lane tabs kick it too when shown.
 function kickPreviewShotSoon(): void {
-  for (const ms of [250, 700]) setTimeout(() => void cacheRenderedPreviewShot(), ms);
+  setTimeout(() => void cacheRenderedPreviewShot(), 250);
+  setTimeout(() => void cacheRenderedPreviewShot("now"), 700);
 }
 
 // ── P-PREVIEW.6a (ADR-0153): live "reviewing / testing" indicator ────────────────────────────────
@@ -10189,7 +11148,7 @@ function openFigmaForm(): void {
       const res = await bridge.figmaImport(url, pat || undefined).catch(() => null);
       if (res && res.path) {
         fileName = res.fileName ?? "the design";
-        onPreviewAvailable(res.path); // open + load the design board in the Preview panel
+        onPreviewAvailable(res.path, { open: true }); // you asked for it: load the design board, then swing the panel out (P-PREVIEW-CURTAIN.1)
         modal.innerHTML = figmaNextStepsHtml(res); // guided next step (review / DESIGN.md)
       } else {
         status(res?.error ?? "Couldn't import. Check the file URL and token.", true);
@@ -10228,12 +11187,22 @@ type PrevLane = string;
 let prevLane: PrevLane = "yours";
 /** The dynamic lane tabs' iframes, keyed by tab id - created on demand, removed with their tab. */
 const laneTabFrames = new Map<string, HTMLIFrameElement>();
+/** P-LANESHOTS.1: preview frames between `src` and `load`; no strip snapshot is taken of them. */
+const laneShotLoading = new WeakSet<HTMLIFrameElement>();
+/** P-LANESHOTS.1: how long after `load` the strip snapshot is taken (the page paints asynchronously). */
+const LANE_SHOT_PAINT_MS = 900;
 const laneFrame = (l: PrevLane = prevLane): HTMLIFrameElement | null =>
   l.startsWith("lane:") || l.startsWith("plugin:") || l === ASK_LUCID_TAB_ID ? (laneTabFrames.get(l) ?? null) : $(l === "agent" ? "#prevFrameA" : "#prevFrame") as HTMLIFrameElement | null; // P-ASKLUCID.9: the Ask Lucid tab has its own frame too
 const prevPathByLane: Record<string, string> = { yours: "", agent: "" };
 const prevKindByLane: Record<string, string> = { yours: "", agent: "" };
 const prevZoomByLane = new Map<PrevLane, number>();
 const prevWheelZoomByLane = new Set<PrevLane>();
+// P-PREVIEW.FIT1: each tab fits an oversized document by default (a 1920 px video card in a 780 px panel was cut off
+// at 100% with no way to pan). The document reports its own size (preview_bridge PREVIEW_ZOOM_JS); a tab leaves fit
+// mode once the user picks a zoom, and Fit puts it back. `grows` bounds a page sized in vw that widens with its frame.
+const prevContentByLane = new Map<PrevLane, PreviewContentSize & { grows: number }>();
+const prevManualZoomLanes = new Set<PrevLane>();
+let prevEffectiveZoom = 1;
 let previewPanEnabled = false;
 let previewPanPointer: number | null = null;
 let previewPanX = 0, previewPanY = 0;
@@ -10247,7 +11216,7 @@ function endPreviewPan(): void {
 }
 function setPreviewPan(enabled: boolean): void {
   endPreviewPan();
-  previewPanEnabled = enabled && prevLane === "yours" && !!prevPathByLane.yours;
+  previewPanEnabled = enabled && !!prevPathByLane[prevLane]; // P-PREVIEW.FIT1: every tab pans, not only Yours
   if (previewPanEnabled) setDrawTool("off");
   const surface = $("#prevPanSurface");
   if (surface) surface.hidden = !previewPanEnabled;
@@ -10306,11 +11275,15 @@ function wirePreviewPan(): void {
 }
 const previewWheelSteps = new PreviewWheelSteps();
 const previewZoom = (): number => prevZoomByLane.get(prevLane) ?? 1;
+/** P-PREVIEW.FIT1: the zoom on screen (fit or picked) in the desktop mode; the picked zoom in a device frame. */
+const shownPreviewZoom = (): number => (prevDevice === "desktop" ? prevEffectiveZoom : previewZoom());
 function syncPreviewZoomControls(): void {
   const pan = $("#prevPan") as HTMLButtonElement | null;
-  if (pan) { pan.hidden = prevLane !== "yours"; pan.disabled = !prevPathByLane.yours; }
-  const zoom = previewZoom();
+  if (pan) { pan.hidden = false; pan.disabled = !prevPathByLane[prevLane]; }
+  // P-PREVIEW.FIT1: the readout and the step buttons follow the zoom on screen (a fitted page reads, say, 41%).
+  const zoom = shownPreviewZoom();
   const label = $("#prevZoomReset"); if (label) label.textContent = `${Math.round(zoom * 100)}%`;
+  const fit = $("#prevZoomFit"); if (fit) fit.setAttribute("aria-pressed", String(!prevManualZoomLanes.has(prevLane)));
   const minus = $("#prevZoomOut") as HTMLButtonElement | null; if (minus) minus.disabled = zoom <= PREVIEW_ZOOM_MIN;
   const plus = $("#prevZoomIn") as HTMLButtonElement | null; if (plus) plus.disabled = zoom >= PREVIEW_ZOOM_MAX;
   const wheelOn = prevWheelZoomByLane.has(prevLane);
@@ -10322,12 +11295,13 @@ function sendPreviewZoomMode(): void {
 }
 function setPreviewZoom(value: number): void {
   if (!Number.isFinite(value)) return;
-  const old = previewZoom();
+  const old = shownPreviewZoom();
   const zoom = Math.max(PREVIEW_ZOOM_MIN, Math.min(PREVIEW_ZOOM_MAX, value));
   const viewport = $("#prevViewport");
   const x = viewport ? (viewport.scrollLeft + viewport.clientWidth / 2) / old : 0;
   const y = viewport ? (viewport.scrollTop + viewport.clientHeight / 2) / old : 0;
   prevZoomByLane.set(prevLane, zoom);
+  prevManualZoomLanes.add(prevLane); // a picked zoom leaves fit mode until Fit is pressed
   applyDeviceScale();
   if (viewport) { viewport.scrollLeft = x * zoom - viewport.clientWidth / 2; viewport.scrollTop = y * zoom - viewport.clientHeight / 2; }
   syncPreviewZoomControls();
@@ -10336,15 +11310,43 @@ function wheelPreviewZoom(delta: unknown, mode: unknown): void {
   if (typeof delta !== "number" || !Number.isFinite(delta) || !delta || (mode !== 0 && mode !== 1 && mode !== 2)) return;
   const pixels = Math.max(-120, Math.min(120, delta * (mode === 1 ? 16 : mode === 2 ? 120 : 1)));
   // Whole 10% steps: wheel travel accumulates, and each notch's worth moves one step on the grid.
-  let zoom = previewZoom();
+  let zoom = shownPreviewZoom();
   for (let n = previewWheelSteps.feed(pixels); n !== 0; n -= Math.sign(n)) zoom = stepPreviewZoom(zoom, n > 0 ? 1 : -1);
-  if (zoom !== previewZoom()) setPreviewZoom(zoom);
+  if (zoom !== shownPreviewZoom()) setPreviewZoom(zoom);
 }
+/** P-PREVIEW.FIT1: which preview tab's frame posted a message (null: not one of ours). */
+function previewLaneOf(source: MessageEventSource | null): PrevLane | null {
+  if (!source) return null;
+  for (const l of ["yours", "agent"]) if (laneFrame(l)?.contentWindow === source) return l;
+  for (const [id, f] of laneTabFrames) if (f.contentWindow === source) return id;
+  return null;
+}
+
+/** P-PREVIEW.FIT1: a document said how big it is. Only content that overflows its frame counts (a responsive page
+ *  that fills whatever frame it gets has no size of its own). The largest overflow seen for this document is kept,
+ *  since once the frame is widened to it the page no longer overflows; a fresh document (zoom-ready) starts over. */
+function notePreviewContent(lane: PrevLane, d: { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown }): void {
+  if (d.__lucid === "preview-zoom-ready") { prevContentByLane.delete(lane); if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); } return; }
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  if (num(d.vw) < 40 || num(d.vh) < 40) return; // a hidden tab's frame has no layout yet; it reports again on show
+  const fixed = d.fixed === true;
+  const w = num(d.w) > num(d.vw) + 1 ? num(d.w) : 0;
+  const h = fixed && num(d.h) > num(d.vh) + 1 ? num(d.h) : 0;
+  const prev = prevContentByLane.get(lane);
+  if (!w && !h && !prev) return;
+  const next = { w: Math.max(prev?.w ?? 0, w), h: Math.max(prev?.h ?? 0, h), fixed: fixed || !!prev?.fixed, grows: prev?.grows ?? 0 };
+  if (prev && next.w === prev.w && next.h === prev.h) return;
+  if (prev && ++next.grows > 3) return; // a page sized in vw/vh grows with its frame: stop chasing it
+  prevContentByLane.set(lane, next);
+  if (lane === prevLane) { applyDeviceScale(); syncPreviewZoomControls(); }
+}
+
 function wirePreviewZoom(): void {
   wirePreviewPan();
-  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), -1)));
+  $("#prevZoomOut")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), -1)));
   $("#prevZoomReset")?.addEventListener("click", () => setPreviewZoom(1));
-  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(previewZoom(), 1)));
+  $("#prevZoomIn")?.addEventListener("click", () => setPreviewZoom(stepPreviewZoom(shownPreviewZoom(), 1)));
+  $("#prevZoomFit")?.addEventListener("click", () => { prevManualZoomLanes.delete(prevLane); applyDeviceScale(); syncPreviewZoomControls(); }); // P-PREVIEW.FIT1
   $("#prevWheelZoom")?.addEventListener("click", () => {
     if (prevWheelZoomByLane.has(prevLane)) prevWheelZoomByLane.delete(prevLane); else prevWheelZoomByLane.add(prevLane);
     syncPreviewZoomControls(); sendPreviewZoomMode();
@@ -10357,6 +11359,12 @@ function wirePreviewZoom(): void {
   $("#prevZoomControls")?.addEventListener("wheel", onWheel, { passive: false });
   $("#prevViewport")?.addEventListener("wheel", onWheel, { passive: false });
   window.addEventListener("message", (event) => {
+    // P-PREVIEW.FIT1: a document reports its size from any tab (hidden ones too), so switching to it lands fitted.
+    const sized = event.data as { __lucid?: unknown; w?: unknown; h?: unknown; vw?: unknown; vh?: unknown; fixed?: unknown } | null;
+    if (sized && typeof sized === "object" && (sized.__lucid === "preview-size" || sized.__lucid === "preview-zoom-ready")) {
+      const lane = previewLaneOf(event.source);
+      if (lane !== null) notePreviewContent(lane, sized);
+    }
     const frame = laneFrame();
     if (!frame || frame.hidden || event.source !== frame.contentWindow) return;
     const data = event.data;
@@ -10377,13 +11385,16 @@ function switchPrevLane(l: PrevLane): void {
   for (const [id, f] of laneTabFrames) f.hidden = l !== id || !prevPathByLane[id]; // P-PREVIEW.10: lane tab frames follow the same rule
   $$(".prev-tab").forEach((b) => b.classList.toggle("active", (b as HTMLElement).dataset.lane === l));
   if (l === "agent") { const d = $("#prevAgentDot"); if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing the agent lane clears the "new" badge + refreshes the shot cache for preview_screenshot
-  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; } // viewing a lane tab clears the rail badge
+  if (l.startsWith("lane:")) { const d = $("#railPreviewDot") as HTMLElement | null; if (d) d.hidden = true; kickPreviewShotSoon(); } // viewing a lane tab clears the rail badge + takes its strip snapshot (P-LANESHOTS.1)
   syncPrevPathField(prevPathByLane[l] ?? "");
   const kind = $("#prevKind"); if (kind) kind.textContent = prevKindByLane[l] ?? "";
   const empty = $("#prevEmpty") as HTMLElement | null; if (empty) empty.hidden = !!prevPathByLane[l];
   const notice = $("#prevNotice") as HTMLElement | null; if (notice) { notice.hidden = true; notice.innerHTML = ""; } // health is per-page, re-derived on load
   applyDeviceScale(); syncPreviewZoomControls(); sendPreviewZoomMode();
   syncPreviewCanvas();
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): a tab the curtain loaded while the panel was closed laid out at no size
+  // (a canvas app sized itself to 0x0); its first real reveal reloads it at the size it is shown at.
+  if (previewOpen && curtainHiddenLoads.delete(l) && prevPathByLane[l]) loadPreview(prevPathByLane[l]!, l);
 }
 // ── P-PREVIEW.9: device viewports ────────────────────────────────────────────────────────────────
 // Review a PWA / mobile / responsive layout at real device sizes. Applies to BOTH lanes; the visible frame is
@@ -10416,11 +11427,20 @@ function applyDeviceScale(): void {
   const viewport = $("#prevViewport"), stage = $("#prevStage") as HTMLElement | null;
   if (!viewport || !stage || !viewport.clientWidth || !viewport.clientHeight) return;
   const device = prevDevice !== "desktop", d = PREV_DEVICES[prevDevice];
-  const w = Math.max(1, viewport.clientWidth - (device ? 28 : 0));
-  const h = Math.max(1, viewport.clientHeight - (device ? 28 : 0));
-  const fit = device ? Math.max(0.2, Math.min(1, w / d.w, h / d.h)) : 1;
-  stage.style.width = `${device ? d.w : w}px`;
-  stage.style.height = `${device ? d.h : h}px`;
+  if (!device) {
+    // P-PREVIEW.FIT1: the desktop frame is as large as the content needs, and fits the panel unless a zoom was picked.
+    const L = previewLayout({ viewportW: viewport.clientWidth, viewportH: viewport.clientHeight, content: prevContentByLane.get(prevLane) ?? null, fit: !prevManualZoomLanes.has(prevLane), manualZoom: previewZoom() });
+    stage.style.width = `${L.stageW}px`;
+    stage.style.height = `${L.stageH}px`;
+    stage.style.zoom = String(L.zoom);
+    prevEffectiveZoom = L.zoom;
+    return;
+  }
+  const w = Math.max(1, viewport.clientWidth - 28);
+  const h = Math.max(1, viewport.clientHeight - 28);
+  const fit = Math.max(0.2, Math.min(1, w / d.w, h / d.h));
+  stage.style.width = `${d.w}px`;
+  stage.style.height = `${d.h}px`;
   stage.style.zoom = String(fit * previewZoom());
 }
 function applyDevice(device: PrevDevice): void {
@@ -10500,7 +11520,15 @@ function loadPreview(target: string, lane: PrevLane = prevLane): void {
     if (active) { empty.hidden = true; clearPreviewCanvas(); } // P-PREVIEW.5: a fresh file starts with a clean markup layer
     // P-PREVIEW.3a-shot: once it paints, cache a PNG so the agent's preview_screenshot sees what it built
     // (cacheRenderedPreviewShot targets the AGENT lane and no-ops when that lane isn't the visible one).
-    frame.onload = () => { if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); } window.setTimeout(() => void cacheRenderedPreviewShot(), 150); };
+    // P-LANESHOTS.1: the strip snapshot waits until the page has had time to paint, and none is taken while
+    // the frame is still loading (it would be the old page or a white flash).
+    laneShotLoading.add(frame);
+    frame.onload = () => {
+      laneShotLoading.delete(frame);
+      if (lane === prevLane) { wirePreviewCanvas(); syncPreviewCanvas(); }
+      window.setTimeout(() => void cacheRenderedPreviewShot(), 150);
+      window.setTimeout(() => void cacheRenderedPreviewShot("now"), LANE_SHOT_PAINT_MS);
+    };
   } else if (r.kind === "remote") {
     // P-PREVIEW.3b (ADR-0096): a remote URL only loads if the egress allow-list already approves the site
     // (honoring the managed ceiling); else it stays gated. The iframe is opaque-origin (no allow-same-origin),
@@ -10561,7 +11589,7 @@ function renderPrevTabs(): void {
       kindIcon +
       `<span class="prev-tab-lbl">${esc(t.label)}</span>` +
       // P-TIP.1 (ADR-0599): aria-label keeps the name the native title used to give the close glyph.
-      `<span class="prev-tab-x" data-close="${esc(t.id)}" aria-label="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}" data-tip="${plugin ? "Close this tab and stop the plugin" : "Close this lane's preview tab"}">${icon("close", 10)}</span>` +
+      `<span class="prev-tab-x" data-close="${esc(t.id)}" aria-label="${plugin ? "Close this tab and stop the plugin" : "Close this agent's preview tab"}" data-tip="${plugin ? "Close this tab and stop the plugin" : "Close this agent's preview tab"}">${icon("close", 10)}</span>` +
       `</button>`;
   }).join("");
   strip.innerHTML =
@@ -10580,7 +11608,7 @@ function ensureLaneTabFrame(tabId: string): void {
   f.setAttribute("sandbox", PREVIEW_SANDBOX);
   f.setAttribute("allow", PREVIEW_ALLOW);
   f.setAttribute("referrerpolicy", "no-referrer");
-  f.title = "A fleet lane's app preview";
+  f.title = "A fleet agent's app preview";
   f.hidden = true;
   if (prevDevice !== "desktop") { const d = PREV_DEVICES[prevDevice]; f.style.width = `${d.w}px`; f.style.height = `${d.h}px`; }
   stage.appendChild(f);
@@ -10593,6 +11621,14 @@ function dropLaneTabFrame(tabId: string): void {
   delete prevKindByLane[tabId];
   prevZoomByLane.delete(tabId);
   prevWheelZoomByLane.delete(tabId);
+  // P-PREVIEW-CURTAIN.1: the invitations to this tab go with it, unless a newer write is still behind the
+  // curtain (that one re-creates the tab if it renders).
+  curtainHiddenLoads.delete(tabId);
+  if (!curtainRuns.has(tabId)) {
+    curtainEntries = dropCurtain(curtainEntries, tabId);
+    if (tabId.startsWith("lane:")) setTargetChip(tabId.slice(5), null);
+    paintCurtainChip();
+  }
 }
 /** Close a lane tab (the X): registry + iframe + per-lane state go together; if it was the active tab,
  *  fall back the same way openPreview picks its reveal (yours-with-content, else agent, else yours). */
@@ -10607,20 +11643,28 @@ function closeLaneTab(tabId: string): void {
   renderPrevTabs();
 }
 /** P-PREVIEW.10 entry (threaded into fleet_grid as the previewLaneFile dep): a lane wrote a previewable
- *  file. Upsert its tab, load the file through the normal serve path, and badge the preview rail icon
- *  (the agent-dot pattern). NEVER steals the user's current tab: only when the panel is CLOSED does it
- *  auto-open on the lane tab - mirroring onPreviewAvailable's auto-show. */
+ *  file. P-PREVIEW-CURTAIN.1 (ADR-0621): it passes the curtain gate first (the lane's fleet card and orbit
+ *  spoke show the mini loading chip meanwhile). Only a page that renders upserts the lane's tab, loads it
+ *  through the normal serve path in the background, badges the rail icon and turns the mini chip into a
+ *  clickable "Preview"; a blank or failed page leaves no tab and no chip. NEVER opens the panel and never
+ *  steals the user's current tab. */
 export function previewShowLaneFile(laneId: string, laneName: string, path: string): void {
   if (!laneId || !path) return;
   const id = laneTabId(laneId);
-  const prior = prevLaneTabs;
-  prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
-  for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
-  renderPrevTabs();
-  ensureLaneTabFrame(id);
-  loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
-  const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
-  if (!previewOpen) openPreview({ reveal: id }); // closed → auto-open ON the lane tab; open → focus nothing
+  curtainBegin(id, path);
+  curtainGate(id, path, (r) => {
+    if (r.verdict !== "ready") { curtainRetire(id, path, r); return; }
+    const prior = prevLaneTabs;
+    prevLaneTabs = upsertLaneTab(prevLaneTabs, laneId, laneName, path);
+    for (const t of prior) if (!prevLaneTabs.some((n) => n.id === t.id)) dropLaneTabFrame(t.id); // cap-evicted
+    renderPrevTabs();
+    ensureLaneTabFrame(id);
+    loadPreview(path, id); // background load when the tab isn't active; the &v= nonce defeats a same-URL no-op
+    if (previewOpen) curtainHiddenLoads.delete(id); else curtainHiddenLoads.add(id);
+    const dot = $("#railPreviewDot") as HTMLElement | null; if (dot) dot.hidden = false; // cleared when a lane tab is viewed
+    recordCurtainLaneShot(id, path, r); // P-LANESHOTS.1: a hidden tab's picture (canvas pages only)
+    curtainReady(id, path, r, false);
+  });
 }
 /** P-ASKLUCID.9 (ADR-0600): show an image Ask Lucid edited in the Preview's own "Ask Lucid" tab: the lane-tab
  *  pattern (its own iframe, loaded through the normal serve route), opened and focused because the user just
@@ -10673,17 +11717,80 @@ window.addEventListener("message", (ev) => {
 });
 /** P-PREVIEW.3a-shot: after the preview paints, cache a PNG of it desktop-side so the agent's
  *  `preview_screenshot` tool can fetch what it built. Electron-only (capturePage); a silent no-op in a
- *  plain browser or when the frame has no size. Never throws — a failed cache just means no shot this turn. */
-async function cacheRenderedPreviewShot(): Promise<void> {
-  // The agent's preview_screenshot reads THIS cache, so always capture the AGENT lane. Screen capture only sees
-  // on-screen pixels, so it no-ops unless the agent lane is the one currently shown (its DOM stays inspectable
+ *  plain browser or when the frame has no size. Never throws: a failed cache just means no shot this turn.
+ *
+ *  P-LANESHOTS.1: the same capture also feeds the per-agent snapshot strip (lane_shots.ts) that Agent Worlds
+ *  shows: the agent tab records under lane "main", a fleet lane's tab under its lane id. `strip` says whether
+ *  this pass may record one: "skip" (engine cache only, the default), "tick" (the freshness loop: at most one
+ *  per LANE_SHOT_TICK_MS per lane, so an animated page cannot churn the ring) or "now" (a load or a reveal).
+ *  Capture reads on-screen pixels, so a strip snapshot needs the panel open on that tab, the window visible,
+ *  the frame done loading and nothing of LUCID's drawn over it (see previewFrameUnobstructed). */
+async function cacheRenderedPreviewShot(strip: "skip" | "tick" | "now" = "skip"): Promise<void> {
+  // The agent's preview_screenshot reads THIS cache, so the engine copy is only ever the AGENT lane. Screen capture
+  // only sees on-screen pixels, so it no-ops unless that lane is the one currently shown (its DOM stays inspectable
   // while hidden via preview_inspect, which is the agent's primary review path when you're on your own tab).
-  const frame = laneFrame("agent");
-  if (!frame || prevLane !== "agent" || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const tab = prevLane;
+  const laneId = shotLaneOf(tab);
+  const frame = laneFrame(tab);
+  if (!laneId || !frame || frame.hidden || !bridge.isElectron || !bridge.capturePreview) return;
+  const forEngine = tab === "agent";
+  const now = Date.now();
+  const stripDue = strip === "now" || (strip === "tick" && now - (laneShotTakenAt.get(laneId) ?? 0) >= LANE_SHOT_TICK_MS);
+  const wantStrip = stripDue && previewOpen && document.visibilityState === "visible" && !laneShotLoading.has(frame);
+  if (!forEngine && !wantStrip) return;
   const rect = frame.getBoundingClientRect();
   if (rect.width < 2 || rect.height < 2) return;
+  const forStrip = wantStrip && previewFrameUnobstructed(frame, rect);
+  if (!forEngine && !forStrip) return;
+  const path = prevPathByLane[tab] ?? "";
+  if (forStrip) laneShotTakenAt.set(laneId, now);
   const png = await bridge.capturePreview({ x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }).catch(() => null);
-  if (png) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+  if (!png) return;
+  if (forStrip && prevLane === tab && prevPathByLane[tab] === path) void recordCapturedLaneShot(laneId, path, png);
+  if (forEngine) await bridge.cachePreviewShot(png).catch(() => { /* best-effort */ });
+}
+// ── P-LANESHOTS.1: per-agent preview snapshots for Agent Worlds ──────────────────────────────────
+// HOW CAPTURE WORKS. capturePage photographs the window's on-screen pixels, so a preview tab can only be
+// photographed while it is the tab showing in the open panel. A hidden tab's frame is `display:none` (or the
+// whole panel is closed), and making it visible for a capture would flash it at the user, so there is no
+// off-screen capture of a DOM page. What a hidden tab DOES get is the loading curtain's thumbnail: the curtain
+// already renders every auto preview in an invisible probe frame and reads back its largest canvas as a small
+// PNG (thumbFor), so a canvas or WebGL page records a picture the moment it is judged ready, tab shown or not.
+// Everything else is photographed when its tab is shown (switchPrevLane kicks it), after each load, and on
+// the panel's 1.5s freshness loop at most once per LANE_SHOT_TICK_MS. All of it stays in renderer memory.
+/** The lane a preview tab's snapshots belong to: the agent tab is the main composer ("main"), a fleet lane's
+ *  tab is that lane. Yours, plugin and Ask Lucid tabs are not an agent's preview and take none. */
+const shotLaneOf = (tab: PrevLane): string | null => (tab === "agent" ? "main" : tab.startsWith("lane:") ? tab.slice(5) || null : null);
+const LANE_SHOT_TICK_MS = 5000;
+/** When each lane's last strip snapshot was taken (throttles the freshness loop). */
+const laneShotTakenAt = new Map<string, number>();
+/** True when every sampled point of the frame's box hits the frame itself (or the preview's own markup
+ *  canvas / pan surface, which are part of what the user sees there). A toast, popover, the Agent Worlds
+ *  dialog, the reviewing pill or any other LUCID chrome over the frame would be photographed into the agent's
+ *  snapshot, so that pass records nothing. Nine elementFromPoint calls; no layout is forced beyond the rect. */
+function previewFrameUnobstructed(frame: HTMLIFrameElement, r: DOMRect): boolean {
+  const own: Element[] = [frame];
+  for (const sel of ["#prevCanvas", "#prevPanSurface"]) { const e = $(sel); if (e) own.push(e); }
+  const inset = Math.min(12, r.width / 4, r.height / 4);
+  for (const x of [r.left + inset, r.left + r.width / 2, r.right - inset]) {
+    for (const y of [r.top + inset, r.top + r.height / 2, r.bottom - inset]) {
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || !own.includes(hit)) return false;
+    }
+  }
+  return true;
+}
+/** Scale a capture to a thumbnail and record it for `laneId` (title = the file name or host, like the chip). */
+async function recordCapturedLaneShot(laneId: string, path: string, png: string): Promise<void> {
+  const dataUrl = await makeLaneThumb(document, png);
+  if (dataUrl) recordLaneShot({ laneId, at: Date.now(), dataUrl, title: curtainLabel(path), path });
+}
+/** A hidden tab's only picture: the curtain's canvas thumbnail (already validated by thumbFor). Skipped when
+ *  the tab is the one showing, since the real capture after its load is the better picture. */
+function recordCurtainLaneShot(tab: PrevLane, path: string, r: CurtainResult): void {
+  const laneId = shotLaneOf(tab);
+  if (!laneId || !r.thumb || (previewOpen && prevLane === tab)) return;
+  recordLaneShot({ laneId, at: Date.now(), dataUrl: r.thumb, title: r.title || curtainLabel(path), path });
 }
 // P-PREVIEW.3a-shot freshness: the single on-load capture froze the shot at load+150ms, so the agent's
 // preview_screenshot saw an empty/early/stale frame the moment the previewed app animated or the file was
@@ -10695,7 +11802,7 @@ function startPreviewShotLoop(): void {
   if (previewShotTimer !== null) return;
   void cacheRenderedPreviewShot(); // refresh immediately on open, then keep it current
   previewShotTimer = window.setInterval(() => {
-    if (document.visibilityState === "visible") void cacheRenderedPreviewShot();
+    if (document.visibilityState === "visible") void cacheRenderedPreviewShot("tick"); // P-LANESHOTS.1: also a throttled strip snapshot
   }, 1500);
 }
 function stopPreviewShotLoop(): void {
@@ -10876,7 +11983,7 @@ async function captureCurrentPreview(): Promise<void> {
   const frame = laneFrame();
   const path = prevPathByLane[prevLane] ?? "";
   if (!frame || !path) {
-    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this spoke first.", actions: [{ label: "OK" }], timeout: 4200 });
+    showToast({ tone: "danger", title: "Capture", desc: "Open a local page in this agent first.", actions: [{ label: "OK" }], timeout: 4200 });
     return;
   }
   const btn = $("#prevCapture") as HTMLButtonElement | null;
@@ -11902,7 +13009,7 @@ async function openResourcePanelLive(): Promise<void> {
  *  The same bridge calls and toasts as Settings' #personalToggle and #personalSetup; the view re-renders to the
  *  next step, and Settings (if open) follows through hydratePersonal. */
 function bindKgPersonalGate(canvas: HTMLElement): void {
-  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openPersonalizationSettings());
+  $("#kgPersonalSettings", canvas)?.addEventListener("click", () => openSettingsTo("personal"));
   $("#kgPersonalOn", canvas)?.addEventListener("click", async (e) => {
     (e.currentTarget as HTMLButtonElement).disabled = true;
     const r = await bridge.personalEnable(true).catch(() => null);
@@ -12361,6 +13468,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <div class="ws-name">${icon(ws.isGit ? "git" : "folder", 15)} ${esc(ws.name)} ${ws.isGit ? `<span class="abadge ok">git</span>` : ""}</div>
       <div class="ws-path">${esc(ws.current)}</div>
     </div>
+    <div class="prov-grid" style="--prov-trail:2">
     <div class="prov-row">
       <input class="prov-key" id="wsPath" placeholder="Paste a folder path…" />
       <button class="btn-mini ok" id="wsBrowse">${icon("folder", 13)} Browse</button>
@@ -12374,6 +13482,7 @@ function workspaceSection(ws: WorkspaceInfo): string {
       <input class="prov-key" id="wsGitPat" type="password" placeholder="Git access token - for private repo clones" autocomplete="off" spellcheck="false" />
       <button class="btn-mini ok" id="wsGitPatSave">${icon("shield", 13)} Save</button>
       ${gitPatSaved ? `<button class="btn-mini danger" id="wsGitPatClear">Remove</button>` : ""}
+    </div>
     </div>
     <div class="set-sub ws-gitpat-note">${gitPatSaved
       ? `${icon("check", 11)} A token is saved in the OS-encrypted vault - used only to clone private repos, never sent to the agent.`
@@ -12419,9 +13528,10 @@ function renderWorkspaceBar(): void {
   if (!bar) return;
   if (!w) { bar.hidden = true; return; }
   bar.hidden = false;
+  agentBuddies?.sync(); // P-BUDDY.1: Main's buddy follows Main's folder
   if (state.workspace) {
     setCachedWorkspace(state.workspace); // P-BOOTPERF.1: the next launch paints this before the engine answers
-    void offerVaultEnvImport(w.current, openSettings); // P-VAULT-ENV.1: once per workspace with a .env
+    void offerVaultEnvImport(w.current, () => openSettingsTo(VAULT_ENV_SEC)); // P-VAULT-ENV.1: once per workspace with a .env
   }
   // P-REPO.1 (ADR-0406): under the workspace name, the repo Main actually works in (it can be a checkout
   // inside the workspace folder) and where its commits go - ONLY when it pushes to a hosted remote. A plain
@@ -12552,7 +13662,7 @@ async function recoverMasterTurn(): Promise<void> {
     if (owner !== turnViewEpoch || isLaneTarget(state.composerTarget)) return;
     if (promoted?.lane) {
       state.streaming = false; setSendEnabled();
-      showTurnReconnect("A fleet lane owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
+      showTurnReconnect("A fleet agent owns the composer. Reopen it to follow its activity.", () => void promoteLane(promoted.lane!.id));
       return;
     }
     // A reachable engine with no adoptable turn is the NORMAL fresh-open outcome: clear both surfaces.
@@ -12621,11 +13731,22 @@ async function settleStartupIncident(inc: IncidentView, previousId: string | nul
     return;
   }
   showRecoveryNotice(`${headline} Restoring your previous session\u2026`);
-  const r = await bridge.recoveryResume(previousId);
+  // P-SPINUP.1 (ADR-0668): Main's walker paces over the composer while the restore runs (until the notice settles).
+  restoringSession = true;
+  spinup?.sync();
+  const r = await (async () => {
+    try {
+      const res = await bridge.recoveryResume(previousId);
+      if (res?.ok) await resumeSession(res.sessionId ?? previousId, { loaded: true });
+      return res;
+    } finally {
+      restoringSession = false;
+      spinup?.sync();
+    }
+  })();
   // A failed resume records its own session-unrecoverable incident; the startup notice below covers it.
   if (r?.incidentId && r.incidentId !== inc.id) void bridge.incidentSeen(r.incidentId);
   if (r?.ok) {
-    await resumeSession(r.sessionId ?? previousId, { loaded: true });
     await settle("recovered", "The previous chat session was restored after launch.", `${headline} Your previous session was restored.`);
     return;
   }
@@ -12729,7 +13850,7 @@ async function openSession(id: string): Promise<void> {
   const [main, fleet] = pre;
   const plan = planSessionSwitch({ busy: main?.busy ?? null, mainSessionId: main?.sessionId ?? null, targetId: id, lanes: fleet?.lanes ?? [] });
   if (plan.kind === "promote") { void promoteLane(plan.laneId); return; }
-  if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in a spoke", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
+  if (plan.kind === "refuse") { showToast({ tone: "warn", title: "This session is running in an agent", desc: plan.reason, actions: [{ label: "OK" }], timeout: 8000 }); return; }
   if (plan.kind === "ask") { showSwitchSheet(id, plan.reason, main?.sessionId ?? null); return; }
   void resumeSession(id);
 }
@@ -12808,7 +13929,7 @@ async function openInSpoke(node: HTMLElement, targetId: string | null, target: S
   if (switchSheet !== node) return; // closed (Esc) while the spoke was starting: the spoke still exists in the fleet
   if (!r?.ok || !r.lane) {
     for (const b of buttons) b.disabled = false;
-    err.textContent = `The spoke could not start: ${r?.reason ?? "the engine did not answer"}.`;
+    err.textContent = `The agent could not start: ${r?.reason ?? "the engine did not answer"}.`;
     err.hidden = false;
     return;
   }
@@ -12848,7 +13969,7 @@ async function forgetRecentWorkspace(path: string): Promise<void> {
   const info = await bridge.removeRecentWorkspace(path).catch(() => null);
   if (info) state.workspace = info;
   const el = document.querySelector(`#setBody [data-sec="workspace"]`);
-  if (el && state.workspace) el.outerHTML = `<div data-sec="workspace">${workspaceSection(state.workspace)}</div>`;
+  if (el && state.workspace) el.outerHTML = workspaceSection(state.workspace); // the card carries its own data-sec (a wrapper nested a second one)
   renderWorkspaceBar();
 }
 // P-WSSETUP: the workspace-initialization offer. When the opened folder has no .agents framework
@@ -12888,6 +14009,7 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept(purpose, false));
   };
 
+  const agentPurpose = (() => { try { return purposeOf(loadAgentsDoc(localStorage.getItem(AGENTS_KEY)), state.workspace?.current); } catch { return null; } })();
   if (!prof.isEmpty && prof.hasCode) {
     // Existing code repo: a single step - offer the scan + scaffold directly.
     const detected = prof.stack.length ? ` (detected: ${esc(prof.stack.join(", "))})` : "";
@@ -12903,6 +14025,9 @@ async function maybeOfferWorkspaceSetup(): Promise<void> {
       </div>`;
     $("#wsSetupNo", box)!.addEventListener("click", dismiss);
     $("#wsSetupGo", box)!.addEventListener("click", () => void accept("app", true));
+  } else if (agentPurpose) {
+    // P-RAIL.AGENTS1c: the user already said what this folder is for when they added it as an Agent: skip the question.
+    frameworkStep(agentPurpose);
   } else {
     // Empty folder (or non-empty without code): ask what the folder is FOR first. Documents
     // leads the list when the folder already holds non-code content.
@@ -13412,7 +14537,7 @@ function renderStatus(): void {
   // already shows it) and the gate-active pill retired (the gate's WORK surfaces in the Security
   // panel + rail badge); the cache/session-cost pills live on in the Memory panel.
   $("#statusbar")!.innerHTML = `
-    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This spoke has not reported its context fill yet. It fills in with the spoke's next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this spoke's own sample" : " · live this session" : ""}`}">
+    <div class="seg ctx" data-tip="${noSample ? `Context window · ${esc(tgt.name)}|This agent has not reported its context fill yet. It fills in with its next reply.` : `Context window${onLane ? ` · ${esc(tgt.name)}` : ""}|${fmtNum(curTok)} / ${fmtNum(winTok)} tokens used (${ctxPct}%)${lu ? onLane ? " · this agent's own sample" : " · live this session" : ""}`}">
       <svg class="ctx-ring" viewBox="0 0 22 22" width="17" height="17" aria-hidden="true">
         <circle class="ctx-track" cx="11" cy="11" r="8"/>
         <circle class="ctx-arc" pathLength="100" cx="11" cy="11" r="8" style="stroke:${loadColor(ctx)};stroke-dashoffset:${100 - Math.min(100, Math.max(0, ctxPct))}"/>
@@ -13943,21 +15068,17 @@ const tidyDataset = (d: string) => d.replace(/^user_custom_\d+_/, "").replace(/_
 function updateDatasetButton(): void {
   const btn = $("#ctDataset") as HTMLElement | null; if (!btn) return;
   const span = $("#ctDatasetName", btn);
-  btn.hidden = false; // ADR-0220: gov → AskSage datasets; non-gov → local Knowledge (the non-AskSage RAG entry)
-  if (state.asksage?.configured) {
-    const n = state.asksage?.datasets?.length ?? 0;
-    if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
-    btn.classList.toggle("on", n > 0);
-    btn.setAttribute("data-tip", "Datasets|AskSage RAG datasets that ground answers. Short name shown; full name on hover.");
-  } else {
-    if (span) span.textContent = "Knowledge";
-    btn.classList.remove("on");
-    btn.setAttribute("data-tip", "Knowledge|Ground the agent on your OWN notes/docs. Add an Obsidian vault or folder; the agent searches it via knowledge_search.");
-  }
+  // P-SETUX.1 (ADR-0620): only the AskSage gateway gets a titlebar chip (its RAG datasets). Local Knowledge is no
+  // longer a titlebar chip: it lives in the composer "+" menu (Knowledge) and the left rail's Knowledge graph.
+  btn.hidden = !state.asksage?.configured;
+  if (btn.hidden) return;
+  const n = state.asksage?.datasets?.length ?? 0;
+  if (span) span.textContent = n ? `${n} dataset${n === 1 ? "" : "s"}` : "Datasets";
+  btn.classList.toggle("on", n > 0);
 }
-// ADR-0220: for a non-AskSage user the chip becomes "Knowledge" - the entry to local RAG (their own notes/docs
-// compiled into a KG, searched by the agent's knowledge_search tool). Routes to the existing self-contained
-// importKgFlow (add an Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
+// ADR-0220: the entry to local RAG (the user's own notes/docs compiled into a KG, searched by the agent's
+// knowledge_search tool), opened from the "+" menus. Routes to the existing self-contained importKgFlow (add an
+// Obsidian vault / folder) + the Knowledge panel; no new ingest/retrieval code.
 function openKnowledgeMenu(anchor: HTMLElement): void {
   cfgClose?.();
   const html = `<div class="cfg-sec"><div class="cfg-lbl">Knowledge <span class="cur">ground on your own notes</span></div>
@@ -14107,18 +15228,19 @@ function openRagPersonaDropdown(anchor: HTMLElement): void {
 }
 
 // P-IDE.2 (ADR-0029): skills come from TWO sources behind one picker - BUNDLED (skills.ts, trusted
-// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The
-// Skills button is always available (bundled skills always exist).
+// guidance delivered in the user turn) and PROJECT (omp-discovered, invoked via /skill:<name>). The picker
+// opens from the composer "+" menu (Skills) and the command palette; the left rail holds the directory.
 async function loadSkills(): Promise<void> {
   state.skills = (await bridge.skills()) ?? [];
-  const btn = $("#ctSkill"); if (btn) (btn as HTMLElement).hidden = false;
   updateSkillButton();
 }
-/** Reflect the active bundled skill on the composer's Skills button. */
+/** P-SETUX.1 (ADR-0620): the titlebar no longer carries a permanent Skills chip. It appears only while a skill
+ *  is active, named after it, so an active skill stays visible and one click away from being cleared. */
 function updateSkillButton(): void {
-  const btn = $("#ctSkill"); if (!btn) return;
+  const btn = $("#ctSkill") as HTMLElement | null; if (!btn) return;
   const span = btn.querySelector("span"); if (span) span.textContent = state.activeSkill?.name ?? "Skills";
   btn.classList.toggle("on", !!state.activeSkill);
+  btn.hidden = !state.activeSkill;
 }
 /** Project (omp-native) skill: prepend /skill:<name> to the composer (omp expands it server-side). */
 function useSkill(name: string): void {
@@ -14402,7 +15524,7 @@ const speech = new SpeechQueue({
     tone: "warn",
     title: "Nothing came back from the speech engine",
     desc: note || "Pick an engine and voice from the composer's voice button, or add that provider's API key.",
-    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsToVoice() }, { label: "OK" }],
+    actions: [{ label: "Voice settings", kind: "ok", run: () => openSettingsTo("voice") }, { label: "OK" }],
     timeout: 7000,
   }),
   onChange: () => updateVoiceChip(),
@@ -14828,7 +15950,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
     const dead = (t.closest("[data-vunavail]") as HTMLElement | null)?.dataset.vunavail;
     if (dead) {
       const row = data?.engines?.find((x) => x.id === dead);
-      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsToVoice(); } }, { label: "OK" }], timeout: 9000 });
+      showToast({ tone: "warn", title: `${row?.label ?? "That engine"} isn't ready`, desc: row?.reason ?? "It needs setting up first.", actions: [{ label: "Voice settings", kind: "ok", run: () => { close(); openSettingsTo("voice"); } }, { label: "OK" }], timeout: 9000 });
       return;
     }
     const eng = (t.closest("[data-vprov]") as HTMLElement | null)?.dataset.vprov;
@@ -14845,7 +15967,7 @@ async function openVoiceDropdown(anchor: HTMLElement): Promise<void> {
       return;
     }
     if (t.closest("#voicePopTest")) { void speakText("This is the voice I'll use to read replies aloud."); return; }
-    if (t.closest("#voicePopMore")) { close(); openSettingsToVoice(); }
+    if (t.closest("#voicePopMore")) { close(); openSettingsTo("voice"); }
   });
   await reload();
 }
@@ -14976,7 +16098,7 @@ async function warnSttFailure(sess: DictationSession, r: { text: string; note: s
   if (v?.sttProvider !== "elevenlabs" && ws && !ws.running && ws.capable && ws.binAvailable) {
     actions.push({ label: "Start local Whisper", kind: "ok", run: () => { void startManagedWhisperFromMic(); } });
   }
-  actions.push({ label: "Voice settings", run: () => { openSettingsToVoice(); } });
+  actions.push({ label: "Voice settings", run: () => { openSettingsTo("voice"); } });
   showToast({ tone: "warn", title: "Heard you, but nothing transcribed", desc: msg, actions, timeout: 12000 });
 }
 /** Start the managed offline Whisper from the dictation-failure toast (same flow as the Voice card's
@@ -15138,9 +16260,9 @@ function openGoalForm(): void {
         </div>
         <div class="goal-ckr-why" id="goalCkrWhy"></div>
         <details class="goal-dial" id="goalDial">
-          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) ALWAYS block, whatever the dial.")}</summary>
+          <summary>${icon("shield", 13)} Speed vs risk <span class="goal-opt">per-command auto-run ceiling for this unattended run</span> ${goalInfoDot("Speed ↔ risk dial|The loop runs with no human to ask, so you set a STANDING posture per command type: how risky a command may be before it auto-runs. Slide left (green) for the safest, most-blocking run; right (red) to let more through. Anything past the dial is BLOCKED and logged in the After-Action Report. Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only with the dial at T4, full auto; your organization's policy can still block them.")}</summary>
           <div class="goal-dial-grid" id="goalDialGrid"></div>
-          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) always block. Default is the safest (T0) posture.</div>
+          <div class="goal-dial-foot">${icon("info", 11)} Catastrophic commands (rm -rf, sudo, pipe-to-shell…) run only at T4, full auto. Default is the safest (T0) posture.</div>
         </details>
       </section>
       <section class="goal-step" data-step="5">
@@ -16319,8 +17441,11 @@ const GOAL_DIAL_ROWS: [keyof NonNullable<GoalDial>, string][] = [
   ["shell", "Shell"], ["edit", "Edit files"], ["delete", "Delete"],
   ["web-fetch", "Web fetch"], ["web-search", "Web search"], ["subagent", "Subagents"],
 ];
-const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3"] as const;
-const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive" };
+// P-AUTO.FULL1 (ADR-0639): T4 is "full auto": the loop runs everything, sudo and other catastrophic commands
+// included; only the organization's managed policy (its loop ceiling and denylist) still stops a command.
+const GOAL_DIAL_TIERS = ["T0", "T1", "T2", "T3", "T4"] as const;
+const GOAL_DIAL_TIER_LABEL: Record<string, string> = { T0: "read-only", T1: "local", T2: "reach-out", T3: "destructive", T4: "full auto" };
+const GOAL_DIAL_MAX = GOAL_DIAL_TIERS.length - 1;
 function loadGoalDial(): GoalDial {
   try { const v = JSON.parse(localStorage.getItem("lucid.goalDial") || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
 }
@@ -16335,7 +17460,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const idx = Math.max(0, GOAL_DIAL_TIERS.indexOf(tierOf(k)));
     return `<div class="goal-dial-row">
       <span class="goal-dial-name">${esc(label)}</span>
-      <input type="range" class="goal-dial-slider" min="0" max="3" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / 3}" aria-label="${esc(label)} auto-run ceiling"/>
+      <input type="range" class="goal-dial-slider" min="0" max="${GOAL_DIAL_MAX}" step="1" value="${idx}" data-dk="${esc(String(k))}" style="--dial:${idx / GOAL_DIAL_MAX}" aria-label="${esc(label)} auto-run ceiling"/>
       <span class="goal-dial-tier" data-dt="${esc(String(k))}">${GOAL_DIAL_TIERS[idx]}<i>${GOAL_DIAL_TIER_LABEL[GOAL_DIAL_TIERS[idx]!]}</i></span>
     </div>`;
   }).join("");
@@ -16346,7 +17471,7 @@ function buildGoalDial(ov: HTMLElement): () => GoalDial {
     const tier = GOAL_DIAL_TIERS[Number(s.value)] ?? "T0";
     dial[k] = tier;
     try { localStorage.setItem("lucid.goalDial", JSON.stringify(dial)); } catch { /* private mode */ }
-    s.style.setProperty("--dial", String(Number(s.value) / 3));
+    s.style.setProperty("--dial", String(Number(s.value) / GOAL_DIAL_MAX));
     const badge = $(`[data-dt="${k}"]`, ov) as HTMLElement | null;
     if (badge) badge.innerHTML = `${tier}<i>${GOAL_DIAL_TIER_LABEL[tier]}</i>`;
   });
@@ -16370,6 +17495,7 @@ async function runGoalLoop(
   let iterEl: HTMLElement | null = null, streamEl: HTMLElement | null = null, buf = "";
   const onEvent = (e: ChatEvent) => {
     if (owner !== turnViewEpoch) return;
+    vizBus.emit("main", "chat", e); // P-VIZ.1 (ADR-0622): a /goal loop is Main working too
     if (e.type === "goal-memory") { wrap.appendChild(el(`<div class="goal-mem">${icon("folder", 12)} loop memory: <code>${esc(e.path)}</code></div>`)); scrollChat(); }
     else if (e.type === "goal-iter") {
       buf = "";
@@ -16672,6 +17798,10 @@ function dockSec(id: string, title: string, defaultOpen: boolean, inner: string,
     + `<div class="dock-sec-b">${inner}</div></details>`;
 }
 
+/** P-SHARE.ICON1 (ADR-0613): the first-party hosted relay (P-REMOTE.7). The engine treats it as gated (Google sign-in)
+ *  and sends phone invites to the LUCID web app; the same URL desktop/scripts/configure_remote_relay.ts writes. */
+const LUCID_HOSTED_RELAY = "wss://relay.aiworkshopapps.com";
+
 function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | null, auth?: { gated: boolean; signedIn: boolean; email?: string }, collapsed: Record<string, boolean> = {}, ui?: { allowEdit: boolean; preferDirect: boolean }): string {
   if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
   if (st.active) {
@@ -16732,8 +17862,9 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
   }
   if (!st.relay) {
     return dockSec("sec-relay-setup", "Relay setup", true, `
-      <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. LUCID defaults to a <b>self-hosted</b> relay for a sovereign, air-gapped posture - point it at your own relay, or opt into the public one.</span></div>
-      <label class="share-lbl">Self-hosted relay URL</label>
+      <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. Pick one: the <b>LUCID relay</b> (sign in with Google once; a phone can open the invite in the LUCID web app and, if you allow it, drive), or your own <b>self-hosted</b> relay for a sovereign, air-gapped posture.</span></div>
+      <div class="dock-foot"><button class="btn-mini ok" data-share-relay-hosted>${icon("shareLive", 12)} Use the LUCID relay</button></div>
+      <label class="share-lbl">Or a self-hosted relay URL</label>
       <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
       <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
       <div id="shareRelayErr" class="modal-err" hidden></div>`, collapsed)
@@ -16748,7 +17879,7 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
   const signedIn = auth?.signedIn ?? false;
   if (gated && !signedIn) {
     return dockSec("sec-relay", "Relay", true, `${relayReady}<div class="share-setup-note">${icon("shield", 13)}<span>To share with your phone, sign in so this desktop can authorize with the secure relay. You only need to do this once.</span></div>`, collapsed)
-      + `<div class="dock-foot"><button class="btn-mini ok" data-share-signin>${icon("share", 12)} Sign in with Google</button></div>`;
+      + `<div class="dock-foot"><button class="btn-mini ok" data-share-signin>${icon("shareLive", 12)} Sign in with Google</button></div>`;
   }
   const authChip = signedIn
     ? `<div class="share-ready-note">${icon("check", 13)}<span>Signed in as <b>${esc(auth?.email ?? "your account")}</b></span></div>`
@@ -16775,7 +17906,7 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
     + `<div class="dock-foot">
       <button class="btn-mini" data-share-relay-change>${icon("sliders", 12)} Change relay</button>
       ${signedIn ? `<button class="btn-mini" data-share-signout>Sign out</button>` : ""}
-      <button class="btn-mini ok" data-share-start>${icon("share", 12)} Start sharing</button>
+      <button class="btn-mini ok" data-share-start>${icon("shareLive", 12)} Start sharing</button>
     </div>
     <div id="shareProg" class="share-prog" hidden><span class="share-prog-dot"></span><div class="share-prog-tx"><div id="shareProgL1"></div><div id="shareProgL2"></div></div></div>`;
 }
@@ -16925,6 +18056,7 @@ async function refreshShareDot(st?: CollabShareStatus | null): Promise<void> {
   const s = st !== undefined ? st : await currentShareStatus();
   const dot = $("#railShareDot");
   if (dot) (dot as HTMLElement).hidden = !s?.active;
+  $("#railShare")?.classList.toggle("sharing", !!s?.active); // P-SHARE.ICON1: the glyph's arcs pulse while live
   // Resume/stop the guest-prompt poller to match reality (e.g. after a reload while a relay edit share is live).
   // A DIRECT-P2P edit share delivers guest prompts via a callback, not the inbox - so it never polls.
   if (s?.active && s.allowEdit && !s.direct) startCollabHostPoll(); else if (!s?.active) stopCollabHostPoll();
@@ -17043,12 +18175,12 @@ function reconnectSectionHtml(st: CollabShareStatus | null, collapsed: Record<st
   const inner = `
     <label class="share-check"><input type="checkbox" id="reconnEnable" ${reconnEnabled() ? "checked" : ""} /> <span><b>Save a reconnect code to Google Drive</b> - writes the current invite link to a single <code>lucid_relay_codes</code> file in <b>your</b> Drive (scope: only that file) so you can rejoin after a disconnect.</span></label>
     <div class="share-reconn-status" id="reconnStatus">${authorized ? `${icon("check", 12)} Google Drive authorized` : `${icon("shield", 12)} Not authorized`}</div>
-    ${authorized ? "" : `<div class="dock-foot"><button class="btn-mini ok" data-reconn-auth>${icon("share", 12)} Authorize Google Drive</button></div>`}
+    ${authorized ? "" : `<div class="dock-foot"><button class="btn-mini ok" data-reconn-auth>${icon("shield", 12)} Authorize Google Drive</button></div>`}
     <label class="share-lbl">PIN (optional - encrypts the codes at rest)</label>
     <div class="share-field"><input class="share-link-input" id="reconnPin" type="password" placeholder="blank = no encryption" spellcheck="false" autocomplete="off" inputmode="numeric" /></div>
     ${active ? `<div class="dock-foot"><button class="btn-mini ok" data-reconn-save${authorized ? "" : " disabled"}>${icon("link", 12)} Save a reconnect code now</button></div>` : ""}
     <label class="share-lbl">Share the codes file with a teammate</label>
-    <div class="share-linkrow"><input class="share-link-input" id="reconnShareEmail" type="email" placeholder="teammate@example.com" spellcheck="false" /><button class="btn-mini" data-reconn-share${authorized ? "" : " disabled"}>${icon("share", 12)} Share</button></div>`;
+    <div class="share-linkrow"><input class="share-link-input" id="reconnShareEmail" type="email" placeholder="teammate@example.com" spellcheck="false" /><button class="btn-mini" data-reconn-share${authorized ? "" : " disabled"}>${icon("link", 12)} Share</button></div>`;
   return dockSec("sec-reconnect", "Reconnect (Google Drive)", false, inner, collapsed);
 }
 
@@ -17060,7 +18192,7 @@ function openSharePanel(): void {
   const dockState: DockState = loadDockState(dockStorage(), window.innerWidth, window.innerHeight);
   const ov = el(`<div id="shareModal" class="share-dock side-${dockState.side}" role="dialog" aria-label="Session Share">
     <div class="share-dock-head" data-dock-drag>
-      <span class="share-dock-grip">${icon("share", 14)}</span>
+      <span class="share-dock-grip">${icon("shareLive", 14)}</span>
       <span class="share-dock-title">Session Share</span>
       <span class="share-dock-updating" id="shareUpdating" hidden>${icon("refresh", 11)} updating\u2026</span>
       <button class="share-dock-count" data-dock-people aria-haspopup="true" aria-expanded="false" data-tip="Connected participants"><span class="sd-live-dot"></span><span id="shareDockCount">0</span></button>
@@ -17396,6 +18528,19 @@ function openSharePanel(): void {
       return;
     }
     if (t.closest("[data-share-relay-change]")) { body.innerHTML = shareBodyHtml({ active: false, participantCount: 0, participants: [], relay: null }); return; }
+    // P-SHARE.ICON1 (ADR-0613): the first-party hosted relay was reachable only through a provisioning script
+    // (desktop/scripts/configure_remote_relay.ts), so a fresh install never offered Sign in with Google. The engine
+    // marks this URL gated and points phone invites at the LUCID web app (dev.ts effectiveRelay).
+    if (t.closest("[data-share-relay-hosted]")) {
+      const r = await bridge.collabSetRelay({ url: LUCID_HOSTED_RELAY, publicOptIn: false });
+      if (r?.relay?.wsBase !== LUCID_HOSTED_RELAY) {
+        const err = $("#shareRelayErr", ov) as HTMLElement | null;
+        if (err) { err.textContent = "The LUCID relay was not saved (your organization may allow only its own relays)."; err.hidden = false; }
+        return;
+      }
+      await draw();
+      return;
+    }
     if (t.closest("[data-share-relay-save]")) {
       const url = ($("#shareRelayUrl", ov) as HTMLInputElement | null)?.value.trim() ?? "";
       const pub = ($("#shareRelayPublic", ov) as HTMLInputElement | null)?.checked ?? false;
@@ -17614,9 +18759,9 @@ function openJoinPanel(): void {
   if (dockState.minimized) { dockState.minimized = false; persist(); } // a fresh open always SHOWS the dock
 }
 
-// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge, so every entry
-// point opens the Preview panel first. The ADR-0158 marketplace modal is gone; its rail button and palette
-// entry now open the drawer on FREE, where its catalog lives.
+// P-PLUGINS.1 (ADR-0461): the Plugins drawer. It slides out of the Preview panel's left edge when that panel is
+// open, else out of the main work area's right edge (P-WORLDS.STORE1). The ADR-0158 marketplace modal is gone;
+// its rail button and palette entry now open the drawer on FREE, where its catalog lives.
 const pluginsFlyout = createPluginsFlyout({
   provider: getMarketProvider,
   user: marketUser,
@@ -17635,15 +18780,29 @@ const pluginsFlyout = createPluginsFlyout({
   // P-RS-WINDOW.1 (ADR-0543): Remote Spokes' panel opens in its own window, not as one more Preview tab.
   openPluginTab: (id, name, url) => (id === REMOTE_SPOKES_PLUGIN ? void openRemoteAdmin(url) : openPluginTab(id, name, url)),
   toast: showToast,
-  anchor: () => $("#preview") as HTMLElement | null,
+  // P-WORLDS.STORE1: an open Preview panel anchors the drawer on its left edge; with it closed, the drawer sits on
+  // the right edge of the main work area (between the title bar and the status bar, never under the rail).
+  anchor: () => {
+    const prev = $("#preview") as HTMLElement | null;
+    const work = $("#app-inner > .body") as HTMLElement | null;
+    return drawerAnchor(previewOpen && prev && !prev.hidden ? prev.getBoundingClientRect() : null, work?.getBoundingClientRect() ?? null);
+  },
   minLeft: railWidth,
   storage: localStorage,
   now: Date.now,
+  // P-WORLDS.1 (ADR-0648): Lucid Agent Worlds install from a signed file, export their package, open in Visualize.
+  worldImport: (bytes, filename) => bridge.worldImport(bytes, filename),
+  worldExportUrl: (id) => bridge.worldExportUrl(id),
+  // P-WORLDS.HEAL1: purchases that went missing or got damaged come back (engine backup first, then the store).
+  pluginsHealth: () => bridge.pluginsHealth(),
+  pluginsRestore: () => bridge.pluginsRestore(),
+  worldsPending: setPendingWorldRestores,
+  openWorld: (id) => { void openVizWorld(id).then((ok) => { if (!ok) showToast({ tone: "warn", title: "This world is not ready", desc: "Open Visualize, then Worlds, to see why (not installed, not yet unlocked for this account, or failed to load)." }); }); },
 });
 function openPluginsDrawer(tier?: "premium" | "free" | "installed"): void {
-  const from = document.activeElement as HTMLElement | null; // openPreview may move focus; Esc returns here
-  if (!previewOpen) openPreview();
-  pluginsFlyout.open(tier, from);
+  // P-WORLDS.STORE1: never open the Preview panel just to anchor the drawer (it flew out behind the drawer and
+  // stayed open after the drawer closed); pluginsFlyout anchors to the work area when Preview is closed.
+  pluginsFlyout.open(tier, document.activeElement as HTMLElement | null); // Esc returns focus here
 }
 /** ADR-0542: once after start, tell the user what the move from a dev build to this release removed (data kept)
  *  and which dev settings it now ignores. Shown once: acknowledged as soon as it appears. */
@@ -17659,6 +18818,22 @@ async function showReleaseCleanupNotice(): Promise<void> {
   showToast({
     tone: "info", title: "Development changes removed", desc: lines.join(" "), timeout: 0,
     actions: [...(r.removed.length ? [{ label: "Open Installed", kind: "ok" as const, run: () => openPluginsDrawer("installed") }] : []), { label: "OK" }],
+  });
+}
+/** P-HOLDER.2 (ADR-0574): once after start, remind that lanes which kept running across an update still run the
+ *  previous version (they pick this one up when started again). Read after the engine has reattached its lanes. */
+async function showPreviousVersionLanes(): Promise<void> {
+  const wait = Promise.withResolvers<void>();
+  setTimeout(wait.resolve, 15_000);
+  await wait.promise;
+  const s = await bridge.fleetStatus().catch(() => null);
+  const old = (s?.lanes ?? []).filter((l) => l.heldRuntime === "previous" && l.status !== "stopped");
+  if (!old.length) return;
+  const shown = old.slice(0, 4).map((l) => `"${l.name}"`).join(", ");
+  showToast({
+    tone: "info", title: `${old.length} ${old.length === 1 ? "agent runs" : "agents run"} the previous version`, timeout: 0,
+    desc: `${shown}${old.length > 4 ? ` and ${old.length - 4} more` : ""} kept running through the update. Stop and respawn ${old.length === 1 ? "it" : "them"} when idle to use this version.`,
+    actions: [{ label: "OK" }],
   });
 }
 /** Scripts, same-origin storage, forms, popups and downloads: what a real app needs. Safe to combine because the
@@ -17773,6 +18948,7 @@ function wire(): void {
     if (r === "settings" && state.settingsOpen) return closeSettings();
     if (r === "skills" && skillsOpen) return closeSkills(); // P-SKILL.4
     if (r === "trainer" && trainerOpen) return closeTrainer(); // P-TRAINER.7
+    if (r === "settings") return openSettings(); // P-SETUX.1: an overlay, so whatever is open stays open beneath it
     if (r !== "knowledge") closeKnowledge();
     if (r !== "meetings") closeMeetings(); // P-MEET.1
     if (r !== "remote") closeRemoteView(); // P-RS-VIEW.1
@@ -17783,7 +18959,6 @@ function wire(): void {
     if (r === "security" || r === "memory") focusInspector(r);
     else if (r === "dev") { focusInspector("dev"); void loadDev(); } // ADR-0009 Phase D
     else if (r === "chat") { closeSettings(); $("#input")?.focus(); $$(".rail-btn").forEach((x) => x.classList.toggle("active", x === b)); }
-    else if (r === "settings") openSettings();
     else if (r === "knowledge") openKnowledge();
     else if (r === "meetings") openMeetings(); // P-MEET.1
     else if (r === "remote") openRemoteView(); // P-RS-VIEW.1
@@ -17851,6 +19026,13 @@ function wire(): void {
   $("#skillsBody")?.addEventListener("click", (e) => void onSkillAction(e));
   // P-PREVIEW.1 (ADR-0096): preview panel - open a local file, reload, screenshot to chat, close.
   $("#prevClose")?.addEventListener("click", () => closePreview());
+  // P-PREVIEW.CHIP1: over Visualize the panel is the layer above the world, so Esc with focus in it slides it back
+  // (Visualize's own Esc then waits for the next press). An Esc a menu inside it already took is left alone.
+  $("#preview")?.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || e.defaultPrevented || !previewOverViz || (e.target as HTMLElement).closest("#prevMore")) return;
+    e.preventDefault();
+    closePreview();
+  });
   $("#prevOpen")?.addEventListener("click", () => openPreviewFile((($("#prevPath") as HTMLInputElement | null)?.value ?? "").trim()));
   $("#prevPath")?.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") openPreviewFile(($("#prevPath") as HTMLInputElement).value.trim()); });
   $("#prevReload")?.addEventListener("click", () => { const f = laneFrame(); if (f && !f.hidden && f.src) f.src = f.src; }); // reload the visible lane
@@ -17988,24 +19170,26 @@ function wire(): void {
     hideKgResults();
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
-  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal; auto follows battery/CPU.
+  // P-PERF.2: the performance-mode chip - cycle auto -> full -> reduced -> minimal (-> ultra -> cinematic, P-VIZ.GPU1:
+  // the graph treats both as full); auto follows battery, CPU and GPU.
   $("#kgPerf")?.addEventListener("click", () => {
     const m = perfWatch.cycleMode();
     paintPerfChip();
     kgForceRender = false; // a mode change re-evaluates the minimal-tier pause
     showToast({
       title: `Performance mode: ${m}`,
-      desc: m === "auto" ? `Following battery + CPU (now: ${perfWatch.tier()}).`
+      desc: m === "auto" ? `Following battery, CPU and GPU (now: ${perfWatch.tier()}).`
         : m === "minimal" ? "Graph visualization pauses; the agent keeps full knowledge access."
         : m === "reduced" ? "Calm graph: no particle flow, shorter settle, capped nodes."
-        : "Full fidelity.",
+        : m === "full" ? "Full fidelity."
+        : `Full fidelity here; Visualize renders its ${m} tier.`,
       timeout: 2600,
     });
     if (kgOpen) void (kbGraphMode ? renderKbGraph() : kgCodeMode ? renderCodeGraph(false) : renderKnowledge());
   });
   // Auto-tier flips (plug/unplug, battery level) repaint the chip and calm/wake a LIVE graph in place -
   // no remount, so the layout the user is looking at never jumps.
-  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || perfWatch.tier() !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
+  perfWatch.onChange(() => { paintPerfChip(); kgHandle?.setCalm(kbGraphMode || baseTier(perfWatch.tier()) !== "full"); seasonBackdrop?.setMotion(backdropMotion()); });
   paintPerfChip();
   $("#kgData")?.addEventListener("click", (e) => openKgDataMenu(e.currentTarget as HTMLElement)); // P-KGUI.2 dropdown
   // P-KGMARKET.5 (ADR-0333): the storefront gets a button. It was previously reachable only by typing
@@ -18072,7 +19256,13 @@ function wire(): void {
   $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
+  // P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp disables while LUCID sits in the background shows up on return.
+  window.addEventListener("focus", () => void refreshRelogin());
+  window.addEventListener("resize", () => placeReloginNotice());
+  void refreshRelogin(true); // at boot, not only once omp's model list lands: a cold omp can take a while
+
   void showReleaseCleanupNotice(); // ADR-0542
+  void showPreviousVersionLanes(); // P-HOLDER.2 (ADR-0574)
   // CREATOR-0 (ADR-0282): the Creator Studio rail entry + its whole delegated surface.
   $("#railStudio")?.addEventListener("click", () => openCreatorStudio());
   $("#studioClose")?.addEventListener("click", () => closeCreatorStudio());
@@ -18408,7 +19598,9 @@ function wire(): void {
       askLucid().toggle();
       return;
     }
-    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald")) {
+    // P-ASKPLUS.1: a menu opened from Ask Lucid (the "+" Knowledge picker leaves focus on the "+") is the
+    // topmost overlay, so Escape closes that menu first (ui.ts popover() consumes it) and Ask Lucid stays.
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && (e.target as Element | null)?.closest?.(".ald") && !document.querySelector(".popover.show")) {
       e.preventDefault(); e.stopImmediatePropagation();
       askLucidPanel?.close();
     }
@@ -18427,6 +19619,13 @@ function wire(): void {
   $("#zoomIn")!.addEventListener("click", () => nudgeZoom(0.1));
   $("#zoomOut")!.addEventListener("click", () => nudgeZoom(-0.1));
   $("#zoomLvl")!.addEventListener("click", () => resetZoom());
+  // P-SETUX.1 (ADR-0620): hover shows the controls (CSS); a click or Enter pins them open for keyboard and touch,
+  // and a click elsewhere or Esc unpins.
+  const zoomWrap = $("#zoomWrap")!, zoomBtn = $("#zoomBtn")!;
+  const pinZoom = (open: boolean): void => { zoomWrap.classList.toggle("open", open); zoomBtn.setAttribute("aria-expanded", String(open)); };
+  zoomBtn.addEventListener("click", () => pinZoom(!zoomWrap.classList.contains("open")));
+  document.addEventListener("pointerdown", (e) => { if (zoomWrap.classList.contains("open") && !zoomWrap.contains(e.target as Node)) pinZoom(false); });
+  zoomWrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && zoomWrap.classList.contains("open")) { e.stopPropagation(); pinZoom(false); zoomBtn.focus(); } });
   window.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     if (e.key === "=" || e.key === "+") { e.preventDefault(); nudgeZoom(0.1); }
@@ -18443,6 +19642,46 @@ function wire(): void {
   // inspector collapse ↔ metrics rail
   $("#inspCollapse")!.addEventListener("click", () => setInspectorRail(true));
   $("#railExpand")!.addEventListener("click", () => setInspectorRail(false));
+  // P-RAIL.AGENTS1: the Agents view of the rail. It polls fleet status itself (only while it is on screen) and
+  // reads Main's folder, busy flag and the recents from state on its own clock.
+  agentsRail = mountAgentsRail({
+    inspector: $("#inspector")!, toggle: $<HTMLButtonElement>("#railAgents")!, host: $("#railAgentsView")!,
+    getRecent: () => state.workspace?.recent ?? null,
+    getMainFolder: () => state.workspace?.current ?? null,
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    pickFolder: () => pickFolderDialog({ title: "Choose a folder to add as an Agent", confirm: "Add agent" }),
+    toast: showToast,
+    activate: (kind, folder, name) => activateAgentFolder(kind, folder, name),
+    // P-SCHED.AGENT1: Schedule this Agent writes the engine's scheduled jobs; the Jobs tile repaints after.
+    jobs: { list: () => bridge.jobsList(), create: (spec) => bridge.jobsCreate(spec), update: (id, patch) => bridge.jobsUpdate(id, patch), remove: (id) => bridge.jobsDelete(id), changed: () => { void refreshJobs(); } },
+    perfTier: () => perfWatch.tier(),
+  });
+  // P-BUDDY.1 (ADR-0667): floating Agent buddies over the main composer and each Fleet card (Agent Worlds attaches its
+  // own through initViz). They poll fleet status only while the grid or Agent Worlds is on screen.
+  agentBuddies = mountAgentBuddies({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    getMainFolder: () => state.workspace?.current ?? null,
+    getMainSession: () => ($(".sess.active") as HTMLElement | null)?.dataset.sid ?? null, // P-BUDDY.HIDE1: the sidebar's active session
+    isMainBusy: () => state.streaming && !isLaneTarget(state.composerTarget),
+    fleetStatus: () => bridge.fleetStatus(),
+    suggest: (req) => bridge.buddySuggest(req),
+    runInWorktree: runBuddyIdea,
+    askLucid: (text) => askLucid().prefill(text),
+    toast: showToast,
+    perfTier: () => perfWatch.tier(),
+  });
+  // P-SPINUP.1 (ADR-0668): while Main or a lane is starting, a mini Lucid walks over its composer (Agent Worlds attaches
+  // its own through initViz) with a bubble of status lines. Synced from the boot, takeover, restore and warm signals.
+  spinup = mountSpinupWalkers({
+    mainCanvas: () => $("main.center"),
+    mainAnchor: () => $(".composer-wrap"),
+    fleetGrid: () => $("#fleetGrid"),
+    mainSpinup,
+    perfTier: () => perfWatch.tier(),
+  });
 
   // composer agent controls → focused per-control dropdowns
   // (model / mode / thinking dropdowns are reached from the top #modelBadge picker - not duplicated here)
@@ -18452,7 +19691,7 @@ function wire(): void {
   // P-TITLEBAR.1 (ADR-0603): the model name stays whole; the optional chips fold into More when the bar is full.
   $("#tbMore")!.addEventListener("click", () => openTitlebarMore($("#tbMore")!));
   installTitlebarFit({
-    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $(".titlebar .zoom"),
+    bar: $(".titlebar")!, foldable: TB_FOLD.map((f) => $(`#${f.id}`)!), more: $("#tbMore")!, zoom: $("#zoomWrap"),
     keep: $("#modelName")!, shrinkFirst: $("#tbRepo"), shrinkFloorPx: 240, spacer: $(".titlebar .tb-spacer"),
   });
   $("#modeToggle")!.addEventListener("click", (e) => { // ADR-0219: CUI/Search segmented toggle
@@ -18489,12 +19728,22 @@ function wire(): void {
     fleetQueueTake: bridge.fleetQueueTake, // P-QUEUE-IMG.1: Update pulls a staged item + its images back
     fleetQueueMove: bridge.fleetQueueMove,
     fleetDrain: bridge.fleetDrain, // P-FLEET.L3: stream the next staged prompt when idle
-    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving
+    fleetWatch: bridge.fleetWatch, // P-FLEET.L11: the card FOLLOWS a lane the main composer is driving (P-FLEET.DOCK1: or any turn it did not start)
+    fleetTranscript: bridge.fleetTranscript, // P-FLEET.DOCK1: a card seeds from the lane's recorded turns
     fleetAnswer: bridge.fleetAnswer, // scope "session" also allows every same-kind ask for the lane's session
     fleetAuto: bridge.fleetAuto, // full auto-mode: risk-gated ON, per-lane or all-lanes
     fleetCancel: bridge.fleetCancel,
     fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, // P-FLEET.L10: dismiss a stopped lane so its card leaves the grid
+    // P-FLEET-BOARDS.1 (ADR-0601): boards live in the engine.
+    fleetBoards: bridge.fleetBoards,
+    fleetBoardCreate: bridge.fleetBoardCreate,
+    fleetBoardRename: bridge.fleetBoardRename,
+    fleetBoardRemove: bridge.fleetBoardRemove,
+    fleetBoardMove: bridge.fleetBoardMove,
+    fleetBoardAgents: bridge.fleetBoardAgents,
+    fleetBoardLayout: bridge.fleetBoardLayout,
+    fleetBoardsPrune: bridge.fleetBoardsPrune,
     fleetSetModel: bridge.fleetSetModel,
     interject: bridge.interject, // P-INTERJECT.2: Steer running turn on staged chips (P-PUSH.PAR1) + the per-lane Check in ask
     stopCall: bridge.stopCall, // P-LIVENESS.1: Stop command on a lane call marked likely stuck
@@ -18506,8 +19755,10 @@ function wire(): void {
     attach: bridge,
     openKnowledge: (anchor) => openKnowledgeMenu(anchor),
     openSkills: (anchor) => openSkillDropdown(anchor),
-    openConnectors: openSettingsToMcp,
+    openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the card's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
     // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
@@ -18559,11 +19810,12 @@ function wire(): void {
     remoteSpokes: bridge.remoteSpokes,
     remoteSpokeRecall: bridge.remoteSpokeRecall,
     remoteSpokeApprovals: bridge.remoteSpokeApprovals,
+    remoteSpokeStatus: bridge.remoteSpokeStatus,
     remoteSpokeDecide: bridge.remoteSpokeDecide,
     remoteSpokeAct: bridge.remoteSpokeAct,
     startRemoteSpokes: async () => {
       const r = await bridge.pluginsStart(REMOTE_SPOKES_PLUGIN);
-      if (!r || !r.ok) showToast({ title: "Remote Spokes did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
+      if (!r || !r.ok) showToast({ title: "Remote Agents did not start", desc: r ? r.error : "The engine did not answer.", tone: "danger" });
     },
     openRemoteView: (at) => openRemoteView(at), // P-RS-VIEW.1 (ADR-0539)
     openRemoteAdmin: () => void openRemoteAdmin(), // P-RS-WINDOW.1 (ADR-0543): the plugin's panel in its own window
@@ -18572,6 +19824,8 @@ function wire(): void {
     repoGithub: bridge.repoGithub,
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
+    openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the spoke's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
@@ -18623,7 +19877,17 @@ function wire(): void {
   // header links to the other, so neither choice ever strands you. One fleet view at a time: the orbit
   // closes the grid whenever it opens (fleet_orbit closeGrid dep), so with the orbit pinned the grid
   // appears only when the user switches to it.
-  $("#ctFleet")?.addEventListener("click", () => { if (fleetHome() === "grid") toggleFleetGrid(); else toggleFleetOrbit(); });
+  // P-FLEET.DOCK1: the pin alone used to route the press, so with the orbit pinned a MINIMIZED grid was destroyed
+  // (opening the orbit closes the grid) and never came back. What is on screen decides first: a minimized grid is
+  // restored, a shown view closes, and only with nothing up does the pin pick what opens. The grid is brought up
+  // with the orbit closed, so it is never left underneath it.
+  $("#ctFleet")?.addEventListener("click", () => {
+    const act = fleetButtonAction({ home: fleetHome(), grid: fleetGridState(), orbit: fleetOrbitShown() });
+    if (act === "restore-grid" || act === "open-grid") { closeFleetOrbit(); openFleetGrid(); }
+    else if (act === "close-grid") closeFleetGrid();
+    else if (act === "close-orbit") closeFleetOrbit();
+    else openFleetOrbit();
+  });
   // P-STUCK-SHOW.1 (ADR-0519): a spoke whose open call is marked likely stuck says so from anywhere, with the
   // fleet closed too: the Fleet button turns red and names the spokes in its tip, and one toast per stall
   // offers to open the spoke. Marking only, as ADR-0418: stopping it stays the user's decision.
@@ -18637,23 +19901,63 @@ function wire(): void {
     stuckIds = now;
     const names = st.lanes.filter((l) => now.has(l.id)).map((l) => l.name);
     fleetBtn.classList.toggle("fleet-stuck", names.length > 0);
-    const tip = names.length ? `Likely stuck|${names.join(", ")}: a running tool call shows no activity. Open the spoke to Stop the turn or Restart the agent; LUCID will not stop it on its own.` : fleetTip;
+    const tip = names.length ? `Likely stuck|${names.join(", ")}: a running tool call shows no activity. Open the agent to Stop the turn or Restart it; LUCID will not stop it on its own.` : fleetTip;
     if (fleetBtn.getAttribute("data-tip") !== tip) fleetBtn.setAttribute("data-tip", tip);
     for (const l of fresh) {
       showToast({
         tone: "warn",
-        title: `Spoke "${l.name}" is likely stuck`,
+        title: `Agent "${l.name}" is likely stuck`,
         desc: `${l.progress?.liveness.label ?? "No activity on its running tool call"}. Open it to Stop the turn or Restart the agent; LUCID will not stop it on its own.`,
-        actions: [{ label: "Open spoke", run: () => void promoteLane(l.id) }, { label: "Dismiss" }],
+        actions: [{ label: "Open agent", run: () => void promoteLane(l.id) }, { label: "Dismiss" }],
       });
     }
   })(), 10_000);
   // P-FLEET.L5: the reviewable timeline dock.
   initTimelineDock({ timelineList: bridge.timelineList, timelineSession: bridge.timelineSession });
   $("#ctTimeline")?.addEventListener("click", () => toggleTimelineDock());
+  // P-VIZ.1 (ADR-0622): Visualize. The hub's "Stop the main turn" is the composer's own Stop path.
+  // P-VIZ.4 (ADR-0625): the node panel talks to an agent like its grid card (prompt idle, stage busy) and to
+  // Main through the composer's own send path; Main's recent output is the chat thread's last turn.
+  initViz({
+    fleetStatus: bridge.fleetStatus, fleetWatch: bridge.fleetWatch, fleetCancel: bridge.fleetCancel, fleetStop: bridge.fleetStop,
+    fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
+    fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
+    mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
+      // an assistant's prose is .text > .stream; its siblings are the turn HUD and hidden restart banners, whose
+      // button labels would glue into the panel's text ("Restart agentStop command")
+      role: m.classList.contains("user") ? "user" as const : "assistant" as const,
+      text: chatProse(m.querySelector(".text > .stream") ?? m.querySelector(".text")),
+    })),
+    sendMain: (text) => {
+      if (isLaneTarget(state.composerTarget)) return "The main composer is attached to an agent right now. Detach it to talk to Main.";
+      const ta = $("#input") as HTMLTextAreaElement;
+      if (ta.value.trim()) return "Your main composer already has a draft. Send or clear it first, so nothing is lost.";
+      ta.value = text; autosize(ta);
+      void send();
+      return null;
+    },
+    openFleet: () => openFleetGrid(),
+    focusMain: () => ($("#input") as HTMLTextAreaElement | null)?.focus(),
+    openStore: () => openPluginsDrawer("premium"), // P-WORLDS.1 (ADR-0648): "Get" and "Get more worlds"
+    // P-VIZ.APPROVE1 (ADR-0655): the approval pop-out answers a lane like its grid card (fleetAnswer; Auto through the
+    // grid's own risk modal) and Main through its chat card (a card already gone: the same engine route the card posts).
+    fleetAnswer: bridge.fleetAnswer, fleetAuto: bridge.fleetAuto, autoRiskModal,
+    respondMain: (id, oid) => { const pick = chatAsks.get(id); if (pick) pick(oid); else void bridge.respondPermission(id, oid); },
+    // P-PREVIEW.CHIP1: a node's preview chip flies the Preview panel out over Visualize; Visualize closing under it
+    // leaves the panel open on its side-panel tier.
+    preview: {
+      open: (target, chip) => openTargetPreviewFrom(target, chip),
+      close: () => closePreview(),
+      isOver: () => previewOverViz,
+      viewClosed: () => { previewReturn = null; syncPreviewCover(); },
+    },
+    attachBuddies: (stage, src) => agentBuddies?.attachWorlds(stage, src) ?? (() => {}), // P-BUDDY.1 (ADR-0667)
+    attachSpinup: (stage, src) => spinup?.attachWorlds(stage, src) ?? (() => {}), // P-SPINUP.1 (ADR-0668)
+  });
+  $("#ctViz")?.addEventListener("click", () => toggleViz());
 
   // settings page actions (delegated)
-  $("#setClose")!.addEventListener("click", () => closeSettings());
+  initSettingsChrome(); // P-SETUX.1 (ADR-0615): close, layout, nav, search, scrim, Esc, focus trap
   // P-IDE.1c: enable the China-unlock button only when exactly ACKNOWLEDGE is typed.
   $("#setBody")!.addEventListener("input", (e) => {
     const t = e.target as HTMLElement;
@@ -18701,6 +20005,14 @@ function wire(): void {
     // P-MINI.2 (ADR-0583): "Lucid may suggest things".
     if (t0.id === "lucidSuggest") { setSuggestEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; }
     if (t0.id === "lucidPicture") { setPictureEnabled(miniStore(), (t0 as HTMLInputElement).checked); return; } // P-ASKLUCID.7 (ADR-0588)
+    // P-BUDDY.1 (ADR-0667): the Floating Agents switches apply at once.
+    if (t0.id === "buddyShow" || t0.id === "buddyAuto") {
+      const on = (t0 as HTMLInputElement).checked;
+      const s = readBuddySettings(miniStore()?.getItem(BUDDY_SETTINGS_KEY));
+      try { miniStore()?.setItem(BUDDY_SETTINGS_KEY, saveBuddySettings(t0.id === "buddyShow" ? { ...s, show: on } : { ...s, auto: on })); } catch { /* storage blocked: this window only */ }
+      agentBuddies?.sync();
+      return;
+    }
     // P-MINI.1 (ADR-0580): the Mini Lucid preference. Turning him off also ends a visit in progress.
     if ((t0 as HTMLInputElement).name === "miniPresence") {
       const next = parsePresence((t0 as HTMLInputElement).value);
@@ -18799,7 +20111,7 @@ function wire(): void {
       const next = await bridge.setPerCallModel((t0 as HTMLSelectElement).value as PerCallModelSetting).catch(() => null);
       if (!next) { showToast({ tone: "warn", title: "Couldn't save per-call model choice", desc: "The engine didn't answer; the previous setting stands.", timeout: 4000 }); return; }
       fillSec("subagents", secSubagents(next));
-      showToast({ title: `Per-call model choice: ${next.effective}`, desc: next.clamp ? "Saved, but it stays off while the limit above applies." : "The agent restarts with it; lanes take it at their next start.", timeout: 4000 });
+      showToast({ title: `Per-call model choice: ${next.effective}`, desc: next.clamp ? "Saved, but it stays off while the limit above applies." : "The agent restarts with it; fleet agents take it at their next start.", timeout: 4000 });
       return;
     }
     const vs = t0.closest("[data-voice-set]") as HTMLInputElement | HTMLSelectElement | null;
@@ -19586,7 +20898,7 @@ function wire(): void {
       folder: true,
       knowledge: (anchor) => openKnowledgeMenu(anchor),
       skills: (anchor) => openSkillDropdown(anchor),
-      connectors: openSettingsToMcp,
+      connectors: () => openSettingsTo("mcpQuick"),
     }));
     syncPlusButton(plusBtn, bridge, ta);
   }
@@ -19689,7 +21001,7 @@ function wire(): void {
   // sidebar collapse (rail toggle + header collapse), mirroring the right panel
   $("#sideToggle")!.addEventListener("click", () => toggleSidebar());
   $("#sideCollapse")!.addEventListener("click", () => toggleSidebar(true));
-  $("#wsBar")!.addEventListener("click", () => openSettings());
+  $("#wsBar")!.addEventListener("click", () => openSettingsTo("workspace")); // P-SETUX.1: the workspace pill lands on its card
   $("#sessList")!.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     if (t.closest("[data-ingest-clear]")) { e.stopPropagation(); confirmClearIngest(); return; } // P-KG-INGEST.2
@@ -19807,6 +21119,12 @@ function newSession(force = false): void {
 function resetAgentPreviewLane(): void {
   ++agentPreviewRevision; // Invalidate pending probes even when the lane is already empty.
   pendingAgentPreviewPath = "";
+  // P-PREVIEW-CURTAIN.1: the agent's page behind the curtain belongs to the conversation that ended too.
+  curtainRuns.get("agent")?.();
+  curtainHiddenLoads.delete("agent");
+  curtainEntries = dropCurtain(curtainEntries, "agent");
+  setTargetChip("main", null); // P-PREVIEW.CHIP1: Main's Agent Worlds chip belonged to that conversation too
+  paintCurtainChip();
   const { lanes, changed } = previewAfterNewSession({
     yours: prevPathByLane.yours ?? "",
     agent: prevPathByLane.agent ?? "",
@@ -19839,7 +21157,7 @@ const palette = createPalette(() => {
     { id: "mkt", title: "Open Plugins", icon: "plugins", hint: "drawer", run: () => openPluginsDrawer() }, // P-PLUGINS.1 (ADR-0461)
     { id: "kgpacks", title: "Browse Role KG Packs", icon: "package", hint: "popup", run: () => openKgPacks() }, // P-KGPACK.5 (ADR-0205)
     { id: "sysres", title: "Open System resources", icon: "gauge", hint: "popup", run: () => void openResourcePanelLive() }, // P-SYSRES.1
-    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet lane while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
+    { id: "jobs", title: "Scheduled jobs", icon: "calendar", hint: "wake a Fleet agent while you are away", run: () => void openJobsSheet() }, // P-SCHED.2 (ADR-0443)
     // P-LOC.3 (ADR-0095): a discoverable entry point for the AI-authored code ledger — opens Memory with
     // the section expanded, so it no longer has to be hunted for inside the panel.
     { id: "ailoc", title: "Open AI-authored code ledger", icon: "savings", hint: "panel", run: () => { OPEN.add("mem.ailoc"); focusInspector("memory"); } },
@@ -20011,11 +21329,16 @@ async function loadConfig(newCycle = true): Promise<void> {
       state.configCached = false;
       state.configWarming = false;
     }
+    // P-SPINUP.1: Main's boot walk ends when its first warm cycle ends, adopted or given up: a boot that never
+    // gets a model list (an offline or wedged agent) must not keep a walker saying it is almost there.
+    if (step.action !== "repoll") bootSpinDone = true;
+    spinup?.sync(); // P-SPINUP.1 (ADR-0668): a warm cycle is Main spinning up
     const model = state.config.find((c) => c.id === "model");
     if (model) { state.model = model.currentValue; const mn = $("#modelName"); if (mn) mn.textContent = modelLabel(model.currentValue); }
     if (step.action === "adopt") {
       if (state.userRole === "lucid-agent") void applyAgentTier().catch(() => {});
       else void maybeApplyDefaultModel(model);
+      void refreshRelogin(); // P-AUTH.RELOGIN1: boot, respawn and refresh all re-check for a lost sign-in
     } // P-MODELDEF: default to the provider's highest-level model (once, unless the user chose)
     updateComposerTools();
     void syncMode();
@@ -20112,10 +21435,20 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       // built at spawn, and a broker that lingers instead of exiting never triggers the server-side
       // respawn. A plain loadConfig() would then show a stale picker underneath a toast claiming the
       // models updated. refreshConfig() respawns first; loadConfig() then applies the fresh state.
+      // P-AUTH.RELOGIN1 (ADR-0640): the respawned session lands on the sticky pick (startup_model.ts), so the
+      // model this sign-in's loss displaced goes there BEFORE the respawn; the pick made during the outage is kept
+      // for the toast's "Keep" and put back if the displaced model is not offered.
+      const restoring = prov.restoreModel && state.userRole !== "lucid-agent" ? prov.restoreModel : "";
+      const kept = restoring ? await bridge.chosenModel().catch(() => "") : "";
+      if (restoring) await bridge.setChosenModel(restoring).catch(() => null);
       try { await bridge.refreshConfig(); } catch { /* fall through: loadConfig still refreshes what it can */ }
+      // P-AUTH.RELOGIN1 (ADR-0640): adopt THIS snapshot. Before, the success path left state.auth stale, so
+      // claudeAuthed() kept the API-only Claude rows greyed and the re-login notice stayed up after a good login.
+      if (a) state.auth = a;
       await loadConfig();
       if (state.settingsOpen) renderSettings();
-      showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
+      renderReloginNotice();
+      if (!(restoring && (await restoreDisplacedModel(prov.oauthId, providerShortName(prov.name), restoring, kept)))) showToast({ title: "Connected - models updated", desc: `${prov.name} is ready in the model picker.`, actions: [{ label: "OK" }], timeout: 6000 });
       return true;
     }
     return false;
@@ -20130,6 +21463,99 @@ async function pollOauthThenRefresh(oauthId: string): Promise<void> {
       if (await check()) return;
     }
   } finally { document.removeEventListener("visibilitychange", onVisible); }
+}
+
+// ── P-AUTH.RELOGIN1 (ADR-0640): a sign-in that used to work and is gone. The engine flags it on /api/auth
+// (`relogin`); the titlebar shows a callout under the model pill with a Login button, the pill's dot turns
+// amber, and the picker leads with the same Login. "Not now" hides it for this launch only.
+const reloginDismissed = new Set<string>();
+let reloginNode: HTMLElement | null = null;
+let reloginCheckedAt = 0;
+
+/** Re-read the auth snapshot and repaint the notice. Throttled: boot, every config adopt and window focus call it. */
+async function refreshRelogin(force = false): Promise<void> {
+  if (!force && Date.now() - reloginCheckedAt < 15_000) return;
+  reloginCheckedAt = Date.now();
+  const a = await bridge.auth().catch(() => null);
+  if (!a) return;
+  state.auth = a;
+  renderReloginNotice();
+}
+
+function placeReloginNotice(): void {
+  const badge = $("#modelBadge");
+  if (!reloginNode || !badge) return;
+  const r = badge.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - reloginNode.offsetWidth - 8));
+  reloginNode.style.top = `${Math.round(r.bottom + 10)}px`;
+  reloginNode.style.left = `${Math.round(left)}px`;
+  reloginNode.style.setProperty("--arrow-x", `${Math.round(Math.max(14, r.left + r.width / 2 - left - 5))}px`);
+}
+
+function renderReloginNotice(): void {
+  const targets = reloginTargets(state.auth, reloginDismissed);
+  $("#modelBadge")?.classList.toggle("needs-login", reloginTargets(state.auth, new Set()).length > 0);
+  // An open picker already leads with the same Login; the callout would sit on top of it.
+  if (!targets.length || cfgClose) { reloginNode?.remove(); reloginNode = null; return; }
+  // The lost provider's models are not in the picker, so a catalog name is usually missing: read the id instead.
+  const restoreName = (v: string) => (state.config.find((c) => c.id === "model")?.options.some((o) => o.value === v) ? modelLabel(v) : humanModelId(v));
+  const { title, body } = reloginCopy(targets, state.auth?.upgradedFrom, (p) => (p.restoreModel ? restoreName(p.restoreModel) : undefined));
+  const html = `<div class="relogin-h">${icon("alertBadge", 15)}<span id="reloginTitle">${esc(title)}</span><button class="relogin-x" type="button" data-relogin-later aria-label="Not now">${icon("close", 13)}</button></div>
+    <p class="relogin-b">${esc(body)}</p>
+    <div class="relogin-acts">${targets.map((p) => `<button class="btn-mini ok" type="button" data-relogin="${esc(p.oauthId)}" data-tip="${esc(LOGIN_TIP)}" data-tip-side="bottom">${icon("user", 12)} ${esc(targets.length > 1 ? `Log in to ${providerShortName(p.name)}` : "Log in")}</button>`).join("")}<button class="btn-mini" type="button" data-relogin-later>Not now</button></div>`;
+  if (!reloginNode) {
+    // Non-modal: it never takes focus from the composer, so it is a labelled live region, not a dialog.
+    reloginNode = el(`<div class="relogin-notice" role="region" aria-live="polite" aria-labelledby="reloginTitle"></div>`);
+    const later = () => {
+      for (const p of reloginTargets(state.auth, reloginDismissed)) reloginDismissed.add(p.oauthId);
+      renderReloginNotice();
+      $("#modelBadge")?.focus(); // focus returns to the control the callout belongs to
+    };
+    reloginNode.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      const go = t.closest("[data-relogin]") as HTMLElement | null;
+      if (go) { loginWithProvider(go.dataset.relogin!); return; }
+      if (t.closest("[data-relogin-later]")) later();
+    });
+    reloginNode.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); later(); } });
+    document.body.appendChild(reloginNode);
+  }
+  if (reloginNode.dataset.html !== html) { reloginNode.innerHTML = html; reloginNode.dataset.html = html; }
+  placeReloginNotice();
+}
+
+/** One Login click, from the notice or the picker. Flows that need the card's code box (device codes, the
+ *  Copilot enterprise prompt) open the provider's card in the Provider Hub; the rest go straight to the browser. */
+function loginWithProvider(oauthId: string): void {
+  reloginDismissed.add(oauthId); // the sign-in is under way; the amber pill dot and the picker row stay until it lands
+  cfgClose?.();
+  renderReloginNotice();
+  const prov = [...(state.auth?.majors ?? []), ...(state.auth?.others ?? []), ...(state.auth?.gateway ?? [])].find((p) => p.oauthId === oauthId);
+  if (oauthId === "github-copilot" || DEVICE_FLOW_IDS[oauthId] || SHOW_CODE_FLOW_IDS[oauthId]) { openProviderHub(undefined, prov?.id); return; }
+  void startProviderOauth(oauthId, null, () => renderReloginNotice());
+}
+
+/** After a sign-in lands: put the user back on `target`, the model that sign-in's loss displaced (the "stuck
+ *  on Terra after I logged back into Claude" fix). Logging back in IS the deliberate choice, so it stays the
+ *  sticky pick (the caller wrote it before the respawn); `kept`, the pick made during the outage, is one click
+ *  away in the toast. True when it announced a switch (the caller skips its own toast). */
+async function restoreDisplacedModel(oauthId: string, provName: string, target: string, kept: string): Promise<boolean> {
+  const offered = !!state.config.find((c) => c.id === "model")?.options.some((o) => o.value === target);
+  if (!offered || unavailableReason(target)) {
+    // Not offered (retired, or omp still warming): give the outage pick back, keep the memory for next time.
+    if (kept) void bridge.setChosenModel(kept).catch(() => {});
+    return false;
+  }
+  void bridge.reloginRestored(oauthId).catch(() => {});
+  if (state.model !== target) await applyConfig("model", target, { system: true });
+  if (!kept || kept === target) return false; // never left it: nothing to announce
+  showToast({
+    title: `Back on ${modelLabel(target)}`,
+    desc: `You logged in to ${provName} again, so new turns use the model you had before.`,
+    actions: [{ label: "OK", kind: "ok" }, { label: `Keep ${modelLabel(kept)}`, run: () => void applyConfig("model", kept) }],
+    timeout: 10_000,
+  });
+  return true;
 }
 
 async function applyConfig(configId: string, value: string, opts: { system?: boolean; confirm?: boolean } = {}): Promise<void> {
@@ -20790,7 +22216,7 @@ function hubLocalSectionHtml(): string {
   return `<div class="provhub-sec"><div class="provhub-sec-h"><b>Local &amp; self-hosted</b><span>your hardware \u00b7 unified NGINX endpoint</span></div>
     <div class="provhub-grid">${configured}${presets}${addTile}</div></div>`;
 }
-function openProviderHub(onClose?: () => void): void {
+function openProviderHub(onClose?: () => void, focusId?: string): void {
   hubClose?.();
   const ov = el(`<div id="provHub" class="modal-ov">
     <div class="modal provhub" role="dialog" aria-modal="true" aria-labelledby="provHubTitle">
@@ -20809,7 +22235,12 @@ function openProviderHub(onClose?: () => void): void {
   // pointer) and names the /providers command. `.set-note` = block prose, single text child per line.
   const onboardHtml = `<div class="provhub-sec"><div class="set-note">${icon("spark", 12)} <b>New here?</b> Open the <b>guided setup</b> for a walkthrough: what each provider costs, which free tiers exist, and which plan fits your work. Or type <code>/providers</code> plus what you are trying to do, and the agent walks you through it live.</div>
     <div class="prov-row"><button class="btn-mini ok" data-guide="choosing">${icon("expand", 12)} Guided setup: choose a provider</button></div></div>`;
-  const redraw = () => { body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml(); };
+  // P-AUTH.RELOGIN1 (ADR-0640): `focusId` opens one provider's card (a Login click for a flow that needs the
+  // card's code box). The background redraws below would collapse it, so it re-opens until the user clicks a tile.
+  const redraw = () => {
+    body.innerHTML = providerQuotaNotice() + onboardHtml + buildHubSections(state.auth, { thirdPartyAck: state.thirdPartyAck }).map(hubSectionHtml).join("") + hubLocalSectionHtml();
+    if (focusId) (body.querySelector(`[data-hub-tile="${CSS.escape(focusId)}"]`) as HTMLElement | null)?.click();
+  };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
   const close = () => { ov.remove(); hubClose = null; document.removeEventListener("keydown", onKey); onClose?.(); };
   hubClose = close;
@@ -20892,11 +22323,12 @@ function openProviderHub(onClose?: () => void): void {
     // P-LOCAL.4: a preset tile pre-fills the add form (via pendingLocalPreset); a configured tile / the
     // "Add a custom endpoint" tile just opens Settings -> Local Providers. All route to the one add form.
     const lpPresetTile = t.closest("[data-hub-local-preset]") as HTMLElement | null;
-    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsToLocalProviders(); return; }
-    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsToLocalProviders(); return; }
+    if (lpPresetTile) { pendingLocalPreset = lpPresetTile.dataset.hubLocalPreset!; close(); openSettingsTo("localProviders"); return; }
+    if (t.closest("[data-hub-local-add]") || t.closest("[data-hub-local-open]")) { close(); openSettingsTo("localProviders"); return; }
     // Expand/collapse a tile's inline config (ignore clicks already inside an expanded config).
     const tile = t.closest("[data-hub-tile]") as HTMLElement | null;
     if (tile && !t.closest(".provhub-config")) {
+      if (e.isTrusted) focusId = undefined; // the user took over: later redraws leave the accordion alone
       const wrap = tile.closest(".provhub-item") as HTMLElement;
       const opening = !wrap.classList.contains("open");
       for (const other of $$(".provhub-item.open", body)) other.classList.remove("open"); // accordion
@@ -20909,6 +22341,24 @@ function openProviderHub(onClose?: () => void): void {
       }
     }
   });
+  if (focusId) redraw(); // the first redraw ran before the click handler existed
+}
+
+/** P-AUTH.RELOGIN1 (ADR-0640): the Login row under the picker's model name. A lost sign-in leads as an amber
+ *  "Log in to X again"; "Login" opens every subscription sign-in with its state. Open by default for a new
+ *  user with nothing connected, so the first thing the picker offers is a way to get models. */
+function loginRowHtml(): string {
+  const choices = loginChoices(state.auth);
+  if (!choices.length) return "";
+  const open = configuredProviderCount(state.auth) === 0;
+  const tip = `data-tip="${esc(LOGIN_TIP)}" data-tip-side="right"`;
+  const lost = choices.filter((c) => c.state === "relogin").map(({ provider: p }) =>
+    `<button class="cfg-login-btn warn" type="button" data-login="${esc(p.oauthId)}" ${tip}>${icon("alertBadge", 13)}<span>Log in to ${esc(providerShortName(p.name))} again</span></button>`).join("");
+  const rows = choices.map(({ provider: p, state: st }) => `<div class="cfg-login-row"><span class="nm">${esc(providerShortName(p.name))}</span>${st === "signed-in"
+    ? `<span class="cfg-login-st">${icon("check", 11)}<span>Signed in</span></span>`
+    : `<button class="btn-mini ${st === "relogin" ? "warn" : "ok"}" type="button" data-login="${esc(p.oauthId)}" ${tip}>${st === "relogin" ? "Log in again" : "Login"}</button>`}</div>`).join("");
+  return `<div class="cfg-login">${lost}<button class="cfg-login-btn" type="button" data-login-toggle aria-expanded="${open}" ${tip}>${icon("user", 13)}<span>Login</span>${icon("chevronDown", 12)}</button>
+    <div class="cfg-login-list"${open ? "" : " hidden"}>${rows}</div></div>`;
 }
 
 function openConfigPopover(anchor: HTMLElement): void {
@@ -20928,6 +22378,7 @@ function openConfigPopover(anchor: HTMLElement): void {
   const modelPh = models.length ? `Search ${models.length} models…` : "Search models…";
   const modelSec = showModel ? `<div class="cfg-sec">
       <div class="cfg-lbl">Model <span class="cur">${esc(modelCur)}</span><span class="cfg-loading" id="cfgLoading"${modelsPending ? "" : " hidden"}><span class="cfg-spin"></span>updating…</span></div>
+      ${loginRowHtml()}
       <div class="cfg-search">${icon("search", 15)}<input id="cfgModelSearch" placeholder="${esc(modelPh)}" /></div>
       <div class="cfg-list" id="cfgModelList"></div>
       <button class="cfg-provhub" id="cfgAddProv" type="button" data-tip="Connect a provider|Open the Provider Hub - sign in (OAuth) or paste a key. New providers' models show up here." data-tip-side="top">${icon("expand", 13)} Add or manage providers</button></div>` : "";
@@ -20942,8 +22393,20 @@ function openConfigPopover(anchor: HTMLElement): void {
           `<div class="cfg-dd-item ${o.value === think.currentValue ? "on" : ""}" data-val="${esc(o.value)}" data-tip="${esc(prettyLevel(o.name))} thinking|${esc(THINK_DESC[o.value] ?? "")}" data-tip-side="right"><span class="tick">${icon("check", 13)}</span><span>${esc(prettyLevel(o.name))}</span></div>`).join("")}</div>
       </div></div>` : "";
 
-  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); });
+  const { node, close } = popover(anchor, modelSec + modeSec + thinkSec, () => { cfgClose = null; pickerRedraw = null; hideModelTip(true); renderReloginNotice(); });
   cfgClose = close;
+  renderReloginNotice(); // the picker leads with the same Login, so the titlebar callout steps aside
+  // P-AUTH.RELOGIN1: the Login row under the model name (a lost sign-in leads; "Login" opens the provider list).
+  node.querySelector(".cfg-login")?.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const go = t.closest("[data-login]") as HTMLElement | null;
+    if (go) { loginWithProvider(go.dataset.login!); return; }
+    const tg = t.closest("[data-login-toggle]") as HTMLElement | null;
+    if (tg) {
+      const list = node.querySelector(".cfg-login-list") as HTMLElement | null;
+      if (list) { list.hidden = !list.hidden; tg.setAttribute("aria-expanded", String(!list.hidden)); }
+    }
+  });
 
   // searchable model list
   if (showModel) {
@@ -21182,6 +22645,8 @@ onNetChange(() => {
   netModelKickAt = Date.now();
   void loadConfig(true).then(renderStatus);
 });
+// P-SPINUP.1 (ADR-0668): the boot standby is Main spinning up; its walker leaves the moment the boot ends.
+onNetChange(() => { if (!bootSpinDone) spinup?.sync(); });
 // P-BOOTPERF.1 (ADR-pending): the quiet Reconnect button heals itself. The net monitor's engine probe going
 // from silent to answering while the button shows re-runs the status probe, whose success hides it.
 let engineWasAnswering = false;
@@ -21195,6 +22660,9 @@ onNetChange(() => {
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
 initMarket(readMarketBootConfig());
+// P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
+// (the engine's backup restore, then the store) and say so.
+void pluginsFlyout.restorePurchases("auto");
 // P-KGBIO.1 (ADR-0454): main ran the launch-time Windows Hello / Touch ID check. Refresh whatever shows the
 // store's state; a cancel is quiet (the passphrase field is still there), any other failure says why.
 bridge.onKgDeviceUnlocked((r) => {

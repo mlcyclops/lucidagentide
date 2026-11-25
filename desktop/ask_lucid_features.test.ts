@@ -44,7 +44,7 @@ describe("the catalog", () => {
   test("a view a feature names has an opener in the app, and a setting has an apply branch", () => {
     const app = src("renderer/app.ts");
     for (const v of ASK_VIEWS) expect(app.includes(`v === "${v}"`) || v === "voice").toBe(true); // voice is the final else
-    expect(app).toContain("else openSettingsToVoice();");
+    expect(app).toContain('else openSettingsTo("voice");');
     for (const k of ASK_SETTING_KEYS.filter((k) => k !== "toolOutput.window")) expect(app).toContain(`if (key === "${k}")`); // the window is the final branch
     expect(app).toContain("bridge.setResultWindow(value === \"auto\" ? \"auto\" : Number(value))");
   });
@@ -84,8 +84,8 @@ describe("the fallback suggestion", () => {
   const recs: Rec[] = unusedFeatures(NEW_USER).map((f) => ({ id: `feature:${f.id}`, kind: "feature", label: `Try: ${f.title}`, question: featureQuestion(f) }));
   test("with nothing going on, features fill the row instead of an empty one", () => {
     const r = rank(QUIET, NO_MEMORY, { fallback: recs });
-    expect(r.map((x) => x.label)).toEqual(["Try: Fleet lanes", "Try: The knowledge graph", "Try: The Preview panel"]);
-    expect(r[0]!.question).toBe("Tell me about Fleet lanes: what it would do for what I am working on. If it makes sense, propose opening it or setting it up.");
+    expect(r.map((x) => x.label)).toEqual(["Try: Fleet agents", "Try: The knowledge graph", "Try: The Preview panel"]);
+    expect(r[0]!.question).toBe("Tell me about Fleet agents: what it would do for what I am working on. If it makes sense, propose opening it or setting it up.");
   });
   test("a feature the user passed over is not offered again in that run", () => {
     const r = rank(QUIET, { ...NO_MEMORY, misses: 1, missedIds: ["feature:fleet", "feature:knowledge", "feature:preview"] }, { fallback: recs });

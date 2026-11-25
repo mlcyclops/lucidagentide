@@ -18,6 +18,7 @@ import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { initAutoUpdate } from "./updater.ts";
+import { parseUpdateCheck } from "./update_lanes.ts";
 import { askLucidImagesDir, saveAsSource } from "./ask_lucid_images.ts"; // P-ASKLUCID.9 (ADR-0600): Save image as
 import { ensureRuntimes, findBun, needsBootstrap, ompResolution } from "./runtime.ts";
 import { ompUnavailableReport } from "./omp_bin.ts"; // P-OMP-BOOT.1 (ADR-0357): the one-shot loud boot report
@@ -100,6 +101,12 @@ let PORT = IDENTITY_PORT;
 // makes them never share a lock. The default-port instance keeps the canonical identity, so the lucid://
 // OAuth deep-link still re-focuses the primary app rather than spawning an engine.
 // Must run before requestSingleInstanceLock() and before anything resolves a userData path.
+// P-FLEET.CONN1: Chromium allows six HTTP/1.1 connections per host, and every running agent holds one open for
+// its whole turn (its NDJSON stream), as do Main's turn and each Visualize watch. With four agents working the
+// window's other requests to the engine (fleet status, health, sessions) queued forever: Visualize showed
+// "0 agents" and the status bar sat on "Checking". The engine is this machine's own loopback server, so the cap
+// protects nothing here; it is lifted for the loopback hosts only, before app-ready as Chromium requires.
+app.commandLine.appendSwitch("ignore-connections-limit", "127.0.0.1,localhost");
 const CANONICAL_USER_DATA = app.getPath("userData"); // the unsuffixed install identity - owns the one true safeStorage key
 if (IDENTITY_PORT !== DEFAULT_PORT) app.setPath("userData", `${app.getPath("userData")}-${IDENTITY_PORT}`);
 // safeStorage on Windows is Chromium os_crypt: its AES key lives in `<userData>/Local State`, so the
@@ -667,8 +674,8 @@ let rendererWatch = freshRendererWatch();
 function createWindow(): void {
   rendererWatch = freshRendererWatch();
   // Runtime window icon (taskbar/dev). Packaged Win/mac use the exe/app icon
-  // baked in by electron-builder; this covers the dev run and Linux.
-  const iconPath = join(app.getAppPath(), "build", "icon.png");
+  // baked in by electron-builder; this covers the dev run and Linux. Creator has its own icon (ADR-0618).
+  const iconPath = join(app.getAppPath(), "build", BUILD.creatorBuild ? "icon-creator.png" : "icon.png");
   win = new BrowserWindow({
     width: 1320, height: 860, minWidth: 940, minHeight: 600,
     frame: false, backgroundColor: "#0a0b0f", show: false, title: BUILD.displayName,
@@ -1032,6 +1039,31 @@ ipcMain.handle("lucid:capturePreview", async (e, rect: unknown) => {
   try {
     const img = crop.width > 0 && crop.height > 0 ? await w.webContents.capturePage(crop) : await w.webContents.capturePage();
     return img.isEmpty() ? null : img.toDataURL();
+  } catch { return null; }
+});
+
+// P-VIZ.GPU1 (ADR-0651): read-only GPU facts for the renderer's quality tier (renderer/gpu_probe.ts classifies
+// them with the page's WebGL string). Only the fields the classifier reads leave main: the feature status strings,
+// each device's PCI vendor/device id and whether Chromium uses it, and the GL strings when the basic info has them.
+// Null on any failure (the WebGL string alone then decides).
+ipcMain.handle("lucid:gpuInfo", async () => {
+  try {
+    const featureStatus: Record<string, string> = {};
+    for (const [k, v] of Object.entries(app.getGPUFeatureStatus() as unknown as Record<string, unknown>)) if (typeof v === "string") featureStatus[k] = v;
+    const info = (await app.getGPUInfo("basic")) as { gpuDevice?: unknown; auxAttributes?: { glRenderer?: unknown; glVendor?: unknown } } | null;
+    const devices: { vendorId: number; deviceId: number; active: boolean }[] = [];
+    const gpuDevice = info?.gpuDevice;
+    if (Array.isArray(gpuDevice)) {
+      for (const d of gpuDevice as ({ vendorId?: unknown; deviceId?: unknown; active?: unknown } | null)[]) {
+        if (typeof d?.vendorId === "number" && typeof d.deviceId === "number") devices.push({ vendorId: d.vendorId, deviceId: d.deviceId, active: d.active === true });
+      }
+    }
+    const aux = info?.auxAttributes;
+    return {
+      featureStatus, devices,
+      glRenderer: typeof aux?.glRenderer === "string" ? aux.glRenderer.slice(0, 200) : null,
+      glVendor: typeof aux?.glVendor === "string" ? aux.glVendor.slice(0, 200) : null,
+    };
   } catch { return null; }
 });
 
@@ -1670,7 +1702,23 @@ app.whenReady().then(async () => {
     }
     dialog.showErrorBox(report.title, detail);
   }
-  initAutoUpdate(() => win); // packaged-only; checks GitHub Releases, prompts on download
+  // Packaged-only; checks GitHub Releases, prompts on download. P-HOLDER.2 (ADR-0574): the prompt names the lanes
+  // that run and offers to stop the idle and stuck ones first.
+  initAutoUpdate(() => win, {
+    check: async () => parseUpdateCheck(await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/update-check`, { headers: { "x-lucid-token": MAIN_TOKEN }, signal: AbortSignal.timeout(5000) }).catch(() => null))),
+    stop: async (laneIds) => {
+      const d = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/stop-for-update`, {
+        method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ laneIds }), signal: AbortSignal.timeout(20_000),
+      }).catch(() => null));
+      return d && Array.isArray(d.stopped) ? { stopped: d.stopped.filter((x): x is string => typeof x === "string") } : null;
+    },
+    commit: async (on) => {
+      const d = await engineData(await fetch(`http://127.0.0.1:${PORT}/api/fleet/commit-install`, {
+        method: "POST", headers: { "x-lucid-token": MAIN_TOKEN, "content-type": "application/json" }, body: JSON.stringify({ on }), signal: AbortSignal.timeout(5000),
+      }).catch(() => null));
+      return d && d.committed === on && typeof d.pending === "number" ? { pending: d.pending } : null;
+    },
+  });
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 } // end single-instance guard (P-KGMARKET.4)

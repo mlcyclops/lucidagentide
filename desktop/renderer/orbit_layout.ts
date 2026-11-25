@@ -12,6 +12,7 @@ import { spokeRepo, type SpokeRepo } from "./spoke_repo.ts"; // P-HUB-PICK.1 (AD
 import { humanMs } from "../turn_progress.ts"; // P-STUCK-SHOW.1: the same duration words as the liveness pill
 import { LANE_ATTENTION, displayStatus } from "../collab/fleet_status.ts"; // P-SWITCH.3: one rule for "waiting on you", shared with the dock pill and the phone bar
 import { promoteRefusal } from "./composer_target.ts";
+import { SOFTWARE_GL } from "./gpu_probe.ts"; // P-VIZ.GPU1 (ADR-0651): one software-rasterizer rule for orbit and Visualize
 
 /** One spoke's resting place, in stage coordinates relative to the hub (0,0 = stage center). `ring` is
  *  0-based from the innermost occupied ring; `angle` is degrees with -90 at 12 o'clock, clockwise.
@@ -123,8 +124,8 @@ export function spokeGlance(l: { status: LaneStatus; turns: number; queued: read
 export type SpokeClose = { act: "stop" | "dismiss"; label: string; tip: string };
 export function spokeClose(status: LaneStatus): SpokeClose {
   return status === "stopped"
-    ? { act: "dismiss", label: "Dismiss this spoke", tip: "Dismiss|Take this stopped spoke off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
-    : { act: "stop", label: "Stop this spoke", tip: "Stop|Stop this spoke. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
+    ? { act: "dismiss", label: "Dismiss this agent", tip: "Dismiss|Take this stopped agent off the orbit and the grid. Its conversation stays in the Timeline and on the Recover list." }
+    : { act: "stop", label: "Stop this agent", tip: "Stop|Stop this agent. Its card stays so you can read it, and Respawn revives it in place. Click again once stopped to dismiss it." };
 }
 
 /** P-FLEET.L17: motion vs Lite. The orbit is decorative physics on top of plain data; a machine that
@@ -152,8 +153,6 @@ export interface OrbitEnv {
   /** Mean fps over the guard window, when one has been measured this session. */
   measuredFps?: number;
 }
-
-const SOFTWARE_GL = /swiftshader|llvmpipe|softpipe|software|basic render/i;
 
 export function orbitMode(env: OrbitEnv): OrbitMode {
   if (env.override) return env.override;

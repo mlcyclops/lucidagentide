@@ -18,6 +18,7 @@ import { $, el } from "./dom.ts";
 import { gitAuthHint, parseGitRemote, providerLabel } from "../git_url.ts"; // P-FLEET.L18: the on-orbit form clones too
 import { ageStr, esc } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
+import { webglRenderer } from "./gpu_probe.ts"; // P-VIZ.GPU1 (ADR-0651): one shared GPU probe
 import { popover, setTip, showToast } from "./ui.ts";
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import { openRepoDetails, paintRepoChip } from "./repo_chip.ts"; // P-REPO.1 (ADR-0406): repo + push target per spoke
@@ -31,8 +32,11 @@ import { fleetModelOptions, rememberedSpokeModel, rememberSpokeModel, spawnModel
 import { statusEta } from "./status_prefs.ts"; // P-PROGRESS.3: the experimental estimate is opt-in
 import { LANE_STATUS_ORDER, LANE_STATUS_WORDS, displayStatus } from "../collab/fleet_status.ts"; // P-STUCK-SHOW.1 (ADR-0519)
 import { openHubFrom } from "./hub_button.ts"; // P-TUI.2
+import { laneChipHostHtml, paintPreviewChip } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip
+import type { ChipState } from "./preview_curtain.ts"; // P-PREVIEW-CURTAIN.1 (ADR-0621)
 import { closeDeployPanel, closeRemotePanel, initOrbitRemote, layoutRemote, onDeployPanelClick, onRemoteHubClick, onRemotePanelClick, paintDeployPanel, paintRemotePanel, reconcileRemote, refreshDeployPanel, refreshRemote, refreshRemotePanel, orbitRemoteList, remoteCounts, remoteDeployVisible, remoteHubSectionHtml, remoteHubVisible, remotePanelNode, type OrbitRemoteDeps } from "./orbit_remote.ts"; // P-IDE-SPOKES.1 (ADR-0506), ADR-0508, P-RS-VIEW.1 (ADR-0539)
 import { beatLine, goalButtonHtml, goalButtonTip, goalPanelHtml, goalSnapshot, onGoalPanelClick, paintHubGoal, refreshGoal, stalledLanes, taskFormHtml, type OrbitGoalDeps } from "./orbit_goal.ts"; // P-AOS.1 (ADR-0452), P-AOS.2 (ADR-0453)
+import { openViz } from "./viz_view.ts"; // P-VIZ.1 (ADR-0622): the header's Visualize swaps to the 3D view
 
 export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   /** P-TUI.2: open `lucid hub` in a new terminal window (app.ts toasts a refusal). */
@@ -53,6 +57,11 @@ export interface FleetOrbitDeps extends OrbitGoalDeps, OrbitRemoteDeps {
   repoGithub: LucidBridge["repoGithub"];
   repoContext: LucidBridge["repoContext"];
   openUrl: (url: string) => void;
+  /** P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's ready mini "Preview" chip was clicked; swing the Preview panel
+   *  out on this lane's tab, from `from` (the orbit closes right after, since it covers the panel). */
+  openLanePreview?: (laneId: string, from: HTMLElement) => void;
+  /** P-PREVIEW.CHIPX1: the spoke chip's red x (the same hide as the fleet card's). */
+  dismissLanePreview?: (laneId: string) => void;
   /** The P-FLEET.L8 attach/release pair, owned by app.ts (thread park/seed lives there). */
   promoteLane: (laneId: string) => void;
   demoteLane: () => void;
@@ -148,25 +157,13 @@ function writeModeStore(patch: { user?: OrbitMode | null; measured?: number }): 
   try { localStorage.setItem(MODE_KEY, JSON.stringify(next)); } catch { /* degrade to per-session memory */ }
 }
 
-/** The unmasked WebGL renderer, or null when WebGL itself is unavailable (a software signal too).
- *  Probed once: context creation is not free and the answer does not change mid-session. */
-let webglRenderer: string | null | undefined;
-function probeWebgl(): string | null {
-  if (webglRenderer !== undefined) return webglRenderer;
-  try {
-    const gl = document.createElement("canvas").getContext("webgl") as WebGLRenderingContext | null;
-    const dbg = gl?.getExtension("WEBGL_debug_renderer_info");
-    webglRenderer = gl ? String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : null;
-  } catch { webglRenderer = null; }
-  return webglRenderer;
-}
-
 function resolveMode(): OrbitMode {
   const stored = readModeStore();
+  const gl = webglRenderer(); // P-VIZ.GPU1 (ADR-0651): the shared, once-per-session probe (gpu_probe.ts)
   return orbitMode({
     override: stored.user ?? null,
     reducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
-    webglRenderer: probeWebgl(),
+    webglRenderer: gl.missing ? null : (gl.renderer ?? ""), // no WebGL at all is itself a software signal
     deviceMemoryGB: "deviceMemory" in navigator && typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : undefined,
     measuredFps: stored.measured,
   });
@@ -409,8 +406,8 @@ function paintHubsBadge(): void {
   // An empty ring with spokes elsewhere must say so, or a new session reads as "my spokes are gone".
   const msg = $("[data-orbit-empty-msg]", view) as HTMLElement | null;
   const text = n === 0
-    ? "No spokes yet. The hub is all alone out here."
-    : `No spokes under this session yet. ${spokes} ${spokes === 1 ? "spoke keeps" : "spokes keep"} running under ${n === 1 ? "your other session" : `${n} other sessions`}.`;
+    ? "No agents yet. The hub is all alone out here."
+    : `No agents under this session yet. ${spokes} ${spokes === 1 ? "agent keeps" : "agents keep"} running under ${n === 1 ? "your other session" : `${n} other sessions`}.`;
   if (msg && msg.textContent !== text) msg.textContent = text;
   if (openedPanel === "hubs") paintHubsPanel();
 }
@@ -423,13 +420,13 @@ function paintHubsPanel(): void {
   const remote = remoteHubSectionHtml();
   const head = `<div class="orbit-panel-h">${icon("share", 14)}<b>Hubs</b><span>${hubList.length + (remote ? 1 : 0)}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
   const note = hubList.length < 2
-    ? `<div class="orbit-ghosts-empty">Every running local spoke belongs to this hub. A new session starts its own hub; spokes started there stay with it and show up here.</div>`
+    ? `<div class="orbit-ghosts-empty">Every running local agent belongs to this hub. A new session starts its own hub; agents started there stay with it and show up here.</div>`
     : "";
   box.innerHTML = head + remote + hubList.map((h, i) => `<div class="orbit-hubrow${h.current ? " current" : ""}" data-hub-i="${i}" data-tip="${esc(tipEsc(h.sessionId))}">
-      <span class="orbit-ghost-id"><b>${esc(hubTitle(h.sessionId))}</b><small>${h.lanes.length} ${h.lanes.length === 1 ? "spoke" : "spokes"}${h.waiting ? ` \u00b7 ${h.waiting} waiting on you` : ""}</small></span>
+      <span class="orbit-ghost-id"><b>${esc(hubTitle(h.sessionId))}</b><small>${h.lanes.length} ${h.lanes.length === 1 ? "agent" : "agents"}${h.waiting ? ` \u00b7 ${h.waiting} waiting on you` : ""}</small></span>
       ${h.current
         ? `<i class="spoke-sw-here">this hub</i>`
-        : `<button class="btn-mini orbit-btn" data-hub-open data-tip="Open this hub|Makes this session Main and shows its spokes on the orbit. Nothing here stops: if Main is busy you get the choice first.">${icon("restore", 12)} Open</button>`}
+        : `<button class="btn-mini orbit-btn" data-hub-open data-tip="Open this hub|Makes this session Main and shows its agents on the orbit. Nothing here stops: if Main is busy you get the choice first.">${icon("restore", 12)} Open</button>`}
     </div>
     ${h.repos.length ? `<div class="orbit-hubrow-repos">${h.repos.map(repoTag).join("")}</div>` : ""}
     <div class="orbit-hubrow-lanes">${h.lanes.map((l) => `<span class="fleet-pip lane-${esc(l.status)}" style="--repo-hue:${l.repo.hue}" data-tip="${esc(l.name)}|${esc(l.status)} \u00b7 ${esc(l.repo.name)}"><i></i>${esc(l.name)}</span>`).join("")}</div>`).join("") + note;
@@ -437,7 +434,7 @@ function paintHubsPanel(): void {
 
 /** Which list a row belongs to: active, archived ("z"), or hidden. */
 type GhostList = "a" | "z" | "h";
-const HIDE_BTN = `<button class="orbit-ghost-x" data-ghost-hide data-tip="Hide|Takes this spoke off the Recover list. Nothing is deleted: its conversation stays in the Timeline, and the Hidden section below brings it back. A future run also resurfaces it.">${icon("minus", 12)}</button>`;
+const HIDE_BTN = `<button class="orbit-ghost-x" data-ghost-hide data-tip="Hide|Takes this agent off the Recover list. Nothing is deleted: its conversation stays in the Timeline, and the Hidden section below brings it back. A future run also resurfaces it.">${icon("minus", 12)}</button>`;
 
 /** A ghost row. Addressed by list + INDEX, never by key: the key embeds a NUL separator, and the HTML
  *  parser rewrites U+0000 in attribute values to U+FFFD, so a key round-tripped through the DOM would
@@ -445,10 +442,10 @@ const HIDE_BTN = `<button class="orbit-ghost-x" data-ghost-hide data-tip="Hide|T
 function ghostRow(g: GhostSpoke, i: number, list: GhostList): string {
   const actions = list === "h"
     ? `<button class="btn-mini orbit-btn" data-ghost-unhide data-tip="Unhide|Back on the Recover list.">${icon("eye", 12)} Unhide</button>`
-    : `<button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Brings this spoke back with its old name, folder, model and conversation: the agent loads the recorded session and continues where it left off.">${icon("restore", 12)} Recover</button>
+    : `<button class="btn-mini orbit-btn" data-ghost-recover data-tip="Recover|Brings this agent back with its old name, folder, model and conversation: it loads the recorded session and continues where it left off.">${icon("restore", 12)} Recover</button>
       ${list === "z"
         ? `<button class="orbit-ghost-x" data-ghost-unarchive data-tip="Unarchive|Back to the main list.">${icon("archive", 12)}</button>`
-        : `<button class="orbit-ghost-x" data-ghost-archive data-tip="Archive|Tucks this spoke into the archived section. Reversible; a future run also resurfaces it.">${icon("archive", 12)}</button>`}
+        : `<button class="orbit-ghost-x" data-ghost-archive data-tip="Archive|Tucks this agent into the archived section. Reversible; a future run also resurfaces it.">${icon("archive", 12)}</button>`}
       ${HIDE_BTN}`;
   return `<div class="orbit-ghost${list === "a" ? "" : " archived"}" data-ghost-i="${i}" data-ghost-list="${list}" data-tip="${esc(tipEsc(g.cwd))}\n${esc(tipEsc(g.model))}">
       <i class="orbit-ghost-dot"></i>
@@ -469,9 +466,9 @@ function paintGhostPanel(): void {
   const box = $("[data-orbit-panel-body]", view) as HTMLElement | null;
   if (!box) return;
   const { active, archived, hidden } = ghostLists;
-  const head = `<div class="orbit-panel-h">${icon("restore", 14)}<b>Historical spokes</b><span>${active.length + archived.length}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
+  const head = `<div class="orbit-panel-h">${icon("restore", 14)}<b>Past agents</b><span>${active.length + archived.length}</span><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>`;
   if (active.length === 0 && archived.length === 0 && hidden.length === 0) {
-    box.innerHTML = `${head}<div class="orbit-ghosts-empty">No historical spokes yet. Every spoke that runs is remembered here, and hiding one is always reversible.</div>`;
+    box.innerHTML = `${head}<div class="orbit-ghosts-empty">No past agents yet. Every agent that runs is remembered here, and hiding one is always reversible.</div>`;
     return;
   }
   box.innerHTML = head
@@ -573,8 +570,8 @@ function paintSpawnPanel(): void {
   // catalog does not list (not loaded yet) is still shown, so the form never silently lands on row one.
   const pick = spawnModelDefault(offered, rememberedSpokeModel(), deps.getMasterModel());
   const models = fleetModelOptions(!pick || offered.some((o) => o.value === pick) ? offered : [{ value: pick, label: pick }, ...offered]);
-  box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New spoke</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
-    <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this spoke works in">
+  box.innerHTML = `<div class="orbit-panel-h">${icon("plus", 14)}<b>New agent</b><button class="orbit-ghost-x" data-orbit-panel-close>${icon("close", 12)}</button></div>
+    <label class="orbit-spawn-l"><span data-spawnp-cwd-lbl>folder</span><span class="orbit-spawn-row"><input type="text" data-spawnp-cwd value="${esc(deps.getMasterCwd())}" placeholder="the folder this agent works in">
       <button class="btn-mini orbit-btn" data-spawnp-browse data-tip="Browse|Open the OS folder dialog - browse anywhere on this machine, or create a new folder">${icon("folder", 12)} Browse</button></span></label>
     ${repoPickerHtml()}
     <small class="orbit-spawn-note" data-spawnp-repo-note hidden></small>
@@ -586,10 +583,10 @@ function paintSpawnPanel(): void {
       <input type="password" data-spawnp-pat autocomplete="off" spellcheck="false" placeholder="Personal access token (private repos)">
       <label class="orbit-spawn-save"><input type="checkbox" data-spawnp-save checked><span data-spawnp-save-txt>Remember this token for this host</span></label>
     </div>
-    <label class="orbit-spawn-save orbit-spawn-wt" data-tip="Own worktree|The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the spoke closes."><input type="checkbox" data-spawnp-wt><span>Own worktree: this spoke gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
-    <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this spoke is for (defaults to the folder name)" maxlength="64"></label>
+    <label class="orbit-spawn-save orbit-spawn-wt" data-tip="Own worktree|The worktree is created next to the repo, starts at its last commit (uncommitted edits in this folder are not copied), and is kept when the agent closes."><input type="checkbox" data-spawnp-wt><span>Own worktree: this agent gets a new branch and its own copy of the repo, so it runs beside other agents here. I accept that merging it back can conflict.</span></label>
+    <label class="orbit-spawn-l">name <i>optional</i><input type="text" data-spawnp-name placeholder="what this agent is for (defaults to the folder name)" maxlength="64"></label>
     <label class="orbit-spawn-l">model<select data-spawnp-model>${models.map((m) => `<option value="${esc(m.value)}"${m.value === pick ? " selected" : ""}>${esc(m.label)}</option>`).join("") || `<option value="">master's model</option>`}</select></label>
-    <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create spoke</button></div>
+    <div class="orbit-spawn-row"><button class="btn-mini orbit-btn orbit-spawn-go" data-spawnp-go>${icon("bolt", 13)} Create agent</button></div>
     <small class="orbit-ghost-err" data-spawnp-err></small>`;
   // P-REPO.1 (ADR-0406): the folder field (prefilled, with Browse) is enough to create a spoke; "Find repos"
   // is opt-in and fetches nothing until its Search button. A pick fills the same folder / URL fields the
@@ -660,7 +657,7 @@ function revealOrbitPathEnd(input: HTMLInputElement | null): void {
 
 async function browseSpawnPanelFolder(): Promise<void> {
   if (!deps || !view) return;
-  const picked = await deps.pickFolder({ title: "Choose or create the folder this spoke works in", confirm: "Use this folder" }).catch(() => null);
+  const picked = await deps.pickFolder({ title: "Choose or create the folder this agent works in", confirm: "Use this folder" }).catch(() => null);
   if (!picked) return; // cancel leaves whatever is typed alone - never clear, never re-prompt
   const input = $("[data-spawnp-cwd]", view) as HTMLInputElement | null;
   if (input) input.value = picked;
@@ -682,7 +679,7 @@ async function submitSpawnPanel(): Promise<void> {
   // workspaces folder), and a repo that does not parse is refused before anything runs.
   const remote = repoRaw ? parseGitRemote(repoRaw) : null;
   if (repoRaw && !remote) { if (err) err.textContent = "That is not a repo URL. Paste an https:// link, or a git@host:org/repo remote."; return; }
-  if (!repoRaw && !cwd) { if (err) err.textContent = "Pick the folder this spoke works in, or paste a repo URL to clone."; return; }
+  if (!repoRaw && !cwd) { if (err) err.textContent = "Pick the folder this agent works in, or paste a repo URL to clone."; return; }
   if (err) err.textContent = "";
   const go = $("[data-spawnp-go]", view) as HTMLButtonElement | null;
   if (go) { go.disabled = true; go.innerHTML = remote ? `${icon("git", 12)} Cloning\u2026` : `${icon("bolt", 13)} Spawning\u2026`; }
@@ -700,7 +697,7 @@ async function submitSpawnPanel(): Promise<void> {
   if (patInput) patInput.value = "";
   if (!r?.ok) {
     if (err) err.textContent = warn + (r?.reason ?? "The engine did not confirm the spawn.");
-    if (go) { go.disabled = false; go.innerHTML = `${icon("bolt", 13)} Create spoke`; }
+    if (go) { go.disabled = false; go.innerHTML = `${icon("bolt", 13)} Create agent`; }
     return;
   }
   rememberSpokeModel(model); // the picker's value, which is what the next form matches against
@@ -715,6 +712,11 @@ const folderTail = (p: string): string => p.replace(/[\\/]+$/, "").split(/[\\/]/
 
 let deps: FleetOrbitDeps | null = null;
 let view: HTMLElement | null = null;
+/** P-FLEET.DOCK1: open as far as the user is concerned. `view.hidden` lags a close by its 220 ms fade, so it cannot
+ *  answer "is the orbit up": a press during the fade closed the closing view again and opened nothing. */
+let shown = false;
+/** The fade's pending hide, cancelled by a reopen: left running, it hid the orbit that had just opened. */
+let hideTimer = 0;
 let pollTimer: number | null = null;
 let lastStatus: FleetStatusView | null = null;
 /** This hub's lanes from the last poll (the ring's local half; remote spokes take the slots after them). */
@@ -760,7 +762,12 @@ function onSpokeHotkey(e: KeyboardEvent): void {
 }
 
 export function toggleFleetOrbit(): void {
-  if (view && !view.hidden) closeFleetOrbit(); else openFleetOrbit();
+  if (shown) closeFleetOrbit(); else openFleetOrbit();
+}
+
+/** P-FLEET.DOCK1: whether the orbit is up (or opening), for the Fleet button's decision in app.ts. */
+export function fleetOrbitShown(): boolean {
+  return shown;
 }
 
 export function openFleetOrbit(): void {
@@ -769,6 +776,8 @@ export function openFleetOrbit(): void {
   deps.closeRemoteView();
   if (!view) view = buildView();
   if (!view.isConnected) document.body.appendChild(view);
+  window.clearTimeout(hideTimer); hideTimer = 0;
+  shown = true;
   view.hidden = false;
   canvas?.setVisible(true);
   applyMode(resolveMode());
@@ -787,12 +796,13 @@ export function openFleetOrbit(): void {
 }
 
 export function closeFleetOrbit(): void {
-  if (!view || view.hidden) return;
+  if (!view || !shown) return;
+  shown = false;
   if (openedPanel) togglePanel(openedPanel); // a hidden map keeps no half-filled form (or typed token) behind
   if (fpsGuard === "measuring") { fpsGuard = "armed"; fpsGen++; } // abandon a straddling measurement; the next open re-measures
   view.classList.remove("open");
   const v = view;
-  window.setTimeout(() => { v.hidden = true; canvas?.setVisible(false); }, 220);
+  hideTimer = window.setTimeout(() => { hideTimer = 0; v.hidden = true; canvas?.setVisible(false); }, 220);
   if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null; }
   if (beatTimer != null) { window.clearInterval(beatTimer); beatTimer = null; }
   window.removeEventListener("resize", onResize);
@@ -814,21 +824,22 @@ function buildView(): HTMLElement {
   const v = el(`<div id="orbitView" class="orbit-view" hidden>
     <div class="orbit-nebula" aria-hidden="true"></div>
     <header class="orbit-head">
-      <div class="orbit-title">${icon("share", 17)}<b>LUCID Fleet</b><span class="orbit-sub">hub &amp; spoke</span></div>
+      <div class="orbit-title">${icon("share", 17)}<b>LUCID Fleet</b><span class="orbit-sub">hub and agents</span></div>
       <div class="orbit-census" data-orbit-census></div>
-      <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW spokes; running ones are never touched."></div>
+      <div class="orbit-hud" data-orbit-hud data-tip="Fleet pressure|CPU and memory right now. A metric sustained over the line refuses NEW agents; running ones are never touched."></div>
       <span class="orbit-headgap"></span>
-      <button class="btn-mini orbit-btn orbit-hubpick" data-orbit-hubs hidden data-tip="Hubs|The hub on screen, and every other hub with spokes running. Each session is its own hub: a new session starts empty, and the spokes you started before stay with the session that started them. Pick a hub to make that session Main and see its spokes here.">${icon("share", 13)}<span class="orbit-hubpick-l" data-orbit-hubl>Hubs</span><b class="orbit-ghost-n" data-orbit-hubsn hidden></b>${icon("chevron", 10)}</button>
-      <button class="btn-mini orbit-btn" data-orbit-deploy hidden data-tip="Start a task on a remote spoke|Every remote spoke with how fast it answers, its models, free lanes and certificate region; pick one and start a task there.">${icon("bolt", 13)} Remote task</button>
-      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Historical spokes|Every spoke that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
+      <button class="btn-mini orbit-btn orbit-hubpick" data-orbit-hubs hidden data-tip="Hubs|The hub on screen, and every other hub with agents running. Each session is its own hub: a new session starts empty, and the agents you started before stay with the session that started them. Pick a hub to make that session Main and see its agents here.">${icon("share", 13)}<span class="orbit-hubpick-l" data-orbit-hubl>Hubs</span><b class="orbit-ghost-n" data-orbit-hubsn hidden></b>${icon("chevron", 10)}</button>
+      <button class="btn-mini orbit-btn" data-orbit-deploy hidden data-tip="Start a task on a remote agent|Every remote agent with how fast it answers, its models, free agent slots and certificate region; pick one and start a task there.">${icon("bolt", 13)} Remote task</button>
+      <button class="btn-mini orbit-btn" data-orbit-recover hidden data-tip="Past agents|Every agent that ever ran, remembered by the durable ledger. Recover one and it rejoins the orbit under its old name, folder and model, with its conversation loaded; hide one and it waits in the Hidden section.">${icon("restore", 13)} Recover <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       <button class="btn-mini orbit-btn orbit-goal-btn" data-orbit-goal></button>
-      <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New spoke|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} New spoke</button>
-      <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and spoke as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
-      <button class="btn-mini orbit-btn" data-orbit-hubterm data-tip="Terminal hub|Open lucid hub in a new terminal window: this fleet as tmux-style panes (Fleet, Security, Sessions, Audit, Usage and a live agent pane), attached to this app. Also runs as lucid hub from any terminal.">${icon("terminal", 13)} Terminal</button>
-      <button class="btn-mini orbit-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything on this map. He can read what is on your screen, every spoke and the orbit goal, and he opens on top of this view.">${icon("spark", 13)} Ask Lucid</button>
-      <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with per-spoke composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
+      <button class="btn-mini orbit-btn" data-orbit-spawn data-tip="New agent|Create it right here: name, folder (real OS browser) and model, or paste a repo URL to clone it first.">${icon("plus", 13)} Agent</button>
+      <button class="btn-mini orbit-btn" data-orbit-mode data-tip="Motion vs Lite|Lite is the SAME hub and agents as a still page: no motion, no blur - for machines without GPU compositing. Auto-picked (reduced-motion, software renderer, low memory, or a measured frame rate under 30); your click here overrules the probe both ways."></button>
+      <button class="btn-mini orbit-btn" data-orbit-hubterm data-tip="Open in terminal (classic hub)|Opens the classic hub in a new terminal window: your agents as panes (Fleet, Security, Sessions, Audit, Usage and a live agent), linked to this app. You can also type lucid hub in any terminal.">${icon("terminal", 13)} Classic hub</button>
+      <button class="btn-mini orbit-btn" data-ask-lucid data-tip="Ask Lucid (Ctrl+Shift+L)|Ask about anything on this map. He can read what is on your screen, every agent and the orbit goal, and he opens on top of this view.">${icon("spark", 13)} Ask Lucid</button>
+      <button class="btn-mini orbit-btn" data-orbit-viz data-tip="Visualize|This same hub and its agents in 2D or 3D, with their subagents and estimated tokens flowing between them. Close it to come back to this map.">${icon("visualize", 13)} Visualize</button>
+      <button class="btn-mini orbit-btn" data-orbit-grid data-tip="Grid view|The classic fleet dashboard: streaming mini agent windows with their own composers, queues and transcripts.">${icon("layout", 13)} Grid</button>
       <button class="btn-mini orbit-btn orbit-pin" data-orbit-pin data-tip="Default view|Make ORBIT what the Fleet button opens instead of the grid. The grid header has the same pin to switch back."></button>
-      <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The spokes keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
+      <button class="btn-mini orbit-btn orbit-x" data-orbit-close data-tip="Close (Esc)|The agents keep running; this view is a map, not a lifecycle owner.">${icon("close", 13)}</button>
     </header>
     <div class="orbit-stage" data-orbit-stage>
       <div class="orbit-hub" data-orbit-hub role="button" tabindex="0">
@@ -844,10 +855,10 @@ function buildView(): HTMLElement {
         </div>
       </div>
       <div class="orbit-empty" data-orbit-empty hidden>
-        <p data-orbit-empty-msg>No spokes yet. The hub is all alone out here.</p>
-        <button class="btn-mini orbit-btn" data-orbit-spawn>${icon("plus", 13)} Spawn your first spoke</button>
+        <p data-orbit-empty-msg>No agents yet. The hub is all alone out here.</p>
+        <button class="btn-mini orbit-btn" data-orbit-spawn>${icon("plus", 13)} Start your first agent</button>
         <button class="btn-mini orbit-btn orbit-hubpick" data-orbit-hubs hidden>${icon("share", 13)}<span class="orbit-hubpick-l" data-orbit-hubl>Hubs</span><b class="orbit-ghost-n" data-orbit-hubsn hidden></b>${icon("chevron", 10)}</button>
-        <button class="btn-mini orbit-btn" data-orbit-recover hidden>${icon("restore", 13)} Recover a historical spoke <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
+        <button class="btn-mini orbit-btn" data-orbit-recover hidden>${icon("restore", 13)} Recover a past agent <b class="orbit-ghost-n" data-orbit-ghostn></b></button>
       </div>
       <aside class="orbit-panel" data-orbit-panel hidden><div class="orbit-panel-body" data-orbit-panel-body></div></aside>
     </div>
@@ -882,6 +893,8 @@ function onViewClick(ev: Event): void {
   // The on-orbit panel spawns (folder or repo clone + vault PAT, P-FLEET.L18), so creating a spoke never
   // leaves the screen; the grid stays one click away as the workbench.
   if (t.closest("[data-orbit-grid]")) { closeFleetOrbit(); deps?.openGrid(); return; }
+  // P-VIZ.1 (ADR-0622): swap to the 3D view of the same fleet; closing it brings this map back.
+  if (t.closest("[data-orbit-viz]")) { closeFleetOrbit(); openViz({ onClose: openFleetOrbit }); return; }
   const hubBtn = t.closest("[data-orbit-hubterm]") as HTMLButtonElement | null; // P-TUI.2
   if (hubBtn) { void openHubFrom(hubBtn, () => deps?.hubOpen()); return; }
   if (t.closest("[data-orbit-goal]")) { togglePanel("goal"); return; }
@@ -896,6 +909,20 @@ function onViewClick(ev: Event): void {
   if (deny) { void answer(deny.dataset.orbitDeny!, false); return; }
   const respawn = t.closest("[data-orbit-respawn]") as HTMLElement | null;
   if (respawn) { void deps?.fleetRespawn(respawn.dataset.orbitRespawn!); window.setTimeout(() => void refresh(false), 400); return; }
+  // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready preview chip opens the lane's preview, never a takeover. The orbit
+  // covers the panel, so it closes once the swing has its origin.
+  // P-PREVIEW.CHIPX1: the chip's x, checked before the card so it is never a takeover click.
+  const chipX = t.closest("[data-pchip-close]") as HTMLElement | null;
+  if (chipX) {
+    const laneId = chipX.closest<HTMLElement>(".orbit-node")?.dataset.laneId;
+    if (laneId) deps?.dismissLanePreview?.(laneId);
+    return;
+  }
+  const preview = t.closest("[data-orbit-preview]") as HTMLElement | null;
+  if (preview) {
+    if (preview.dataset.phase === "ready" && deps?.openLanePreview) { deps.openLanePreview(preview.dataset.orbitPreview!, preview); closeFleetOrbit(); }
+    return;
+  }
   // P-FLEET.L20: the node's own close. Checked BEFORE the card, or the X would also be a takeover click.
   const close = t.closest("[data-orbit-stop]") as HTMLElement | null;
   if (close) { void closeSpoke(close.dataset.orbitStop!, close.dataset.act === "dismiss" ? "dismiss" : "stop"); return; }
@@ -923,7 +950,7 @@ async function closeSpoke(laneId: string, act: SpokeClose["act"]): Promise<{ ok:
     out = (await deps.fleetStop(laneId).catch(() => null)) ?? { ok: false, reason: "The engine did not answer." };
   }
   // A refusal lands on the node's glance line (the next poll repaints it); the banner's caller shows its own.
-  if (!out.ok) { const card = nodes.get(laneId)?.card; if (card) setText(card, ".orbit-glance", out.reason ?? "could not close this spoke"); }
+  if (!out.ok) { const card = nodes.get(laneId)?.card; if (card) setText(card, ".orbit-glance", out.reason ?? "could not close this agent"); }
   void refresh(false); // the authority: a dismissed node falls back into the hub, a refused one stays
   void bannerRefresh();
   return out;
@@ -1137,6 +1164,7 @@ function buildNode(lane: LaneView): HTMLElement {
     <div class="orbit-node-float">
       <div class="orbit-node-card">
         <div class="orbit-node-head"><i class="orbit-led"></i><b class="orbit-name"></b><span class="orbit-incomposer" hidden>${icon("arrowRight", 11)} composer</span><button class="orbit-node-x" data-orbit-stop="${esc(lane.id)}">${icon("close", 11)}</button></div>
+        ${laneChipHostHtml("spoke", `data-orbit-preview="${esc(lane.id)}"`)}
         <div class="orbit-glance"></div>
         <div class="repo-chip orbit-repo" hidden></div>
         <div class="orbit-meta"><span class="spoke-repo-tag orbit-repo-tag"></span><span class="orbit-model"></span></div>
@@ -1144,7 +1172,7 @@ function buildNode(lane: LaneView): HTMLElement {
           <span class="orbit-approve-sum"></span>
           <span class="orbit-approve-btns">
             <button class="btn-mini orbit-allow" data-orbit-allow="${esc(lane.id)}" data-tip="Allow once|Approve only this ask. The next one asks again.">${icon("check", 12)} Once</button>
-            <button class="btn-mini orbit-allow" data-orbit-allow-session="${esc(lane.id)}" data-tip="Allow for session|Approve this ask and every same-kind ask for the rest of this spoke's session.">${icon("check", 12)} Session</button>
+            <button class="btn-mini orbit-allow" data-orbit-allow-session="${esc(lane.id)}" data-tip="Allow for session|Approve this ask and every same-kind ask for the rest of this agent's session.">${icon("check", 12)} Session</button>
             <button class="btn-mini orbit-deny" data-orbit-deny="${esc(lane.id)}">${icon("close", 12)} Deny</button>
           </span>
         </div>
@@ -1197,6 +1225,21 @@ function paintNode(card: HTMLElement, lane: LaneView): void {
   const x = card.querySelector("[data-orbit-stop]") as HTMLElement;
   const step = spokeClose(lane.status);
   if (x.dataset.act !== step.act) { x.dataset.act = step.act; x.setAttribute("aria-label", step.label); x.dataset.tip = step.tip; }
+  paintSpokeMini(card, lane.id); // P-PREVIEW-CURTAIN.1
+}
+
+// P-PREVIEW-CURTAIN.1 (ADR-0621): the spoke's preview chip, the same one the fleet card carries. app.ts owns the
+// verdict; a blank or failed page leaves no entry, so the spoke shows nothing. P-PREVIEW.CHIP1: the composer's own
+// chip (preview_chip.ts), floating over the card's upper-right corner instead of crowding its header row.
+const spokePreviews = new Map<string, ChipState>();
+export function paintSpokePreview(laneId: string, v: ChipState | null): void {
+  if (v) spokePreviews.set(laneId, v); else spokePreviews.delete(laneId);
+  const card = nodes.get(laneId)?.card;
+  if (card) paintSpokeMini(card, laneId);
+}
+function paintSpokeMini(card: HTMLElement, laneId: string): void {
+  const btn = card.querySelector("[data-orbit-preview]") as HTMLElement | null; if (!btn) return;
+  paintPreviewChip(btn, deps?.openLanePreview ? spokePreviews.get(laneId) ?? null : null);
 }
 
 function setText(root: HTMLElement, sel: string, text: string): void {
@@ -1212,6 +1255,9 @@ function hash(s: string): number {
   return h;
 }
 
+/** Px the ring gives up at its top (and, to stay centered, its bottom) for a spoke's floating preview chip and x. */
+const SPOKE_CHIP_ROOM = 14;
+
 /** Position every card from the pure layout and hand the spokes and rings to the canvas. Cards transition
  *  on --tx/--ty; lines land at once, which is invisible in practice because the poll repositions both together. */
 function layoutStage(lanes: LaneView[]): void {
@@ -1219,7 +1265,9 @@ function layoutStage(lanes: LaneView[]): void {
   const stage = $("[data-orbit-stage]", view) as HTMLElement;
   const w = stage.clientWidth, h = stage.clientHeight;
   if (w === 0 || h === 0) return;
-  const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
+  // P-PREVIEW.CHIPX1: a spoke's preview chip floats above its card (and its red x above the chip), so the ring is a
+  // little flatter: the top spoke's chip and x stay clear of the orbit header (they sat under it at 12 o'clock).
+  const slots = orbitSlots(lanes.length + orbitRemoteList().length, w, h - 2 * SPOKE_CHIP_ROOM); // P-IDE-SPOKES.1: remote spokes share the ring; P-RS-VIEW.1: only those holding a task
   // Decorative ring ellipses for each occupied ring, dash-drifting slowly (pure ornament, one per ring).
   // One sample slot per occupied ring carries that ring's radii (orbit_layout.ts ringRx/ringRy), so the canvas
   // draws each ring exactly on its spokes, and a stage resize re-sizes it on the next pass.
@@ -1272,21 +1320,21 @@ export function renderSpokeBanner(target: ComposerTarget): void {
   if (!banner) {
     banner = el(`<div id="spokeBanner" class="spoke-banner" role="status">
       <span class="spoke-beacon" aria-hidden="true"></span>
-      <span class="spoke-kicker">on spoke</span>
+      <span class="spoke-kicker">on agent</span>
       <b class="spoke-name"></b>
-      <button class="repo-chip spoke-repo" type="button" hidden aria-label="This spoke's repository and push target"></button>
+      <button class="repo-chip spoke-repo" type="button" hidden aria-label="This agent's repository and push target"></button>
       <span class="spoke-vitals">
-        <button class="spoke-chip spoke-chip-mem" data-tip="Spoke memory|THIS spoke's own measured context fill and session cost - never the master's. Click for the full vitals.">${icon("brain", 12)}<b class="spoke-ctx">ctx --</b></button>
-        <button class="spoke-chip spoke-chip-sec" data-tip="Spoke security|Approval mode, pending asks and session-allowed tools for THIS spoke. Click for the full vitals.">${icon("shield", 12)}<b class="spoke-sec">\u2026</b></button>
+        <button class="spoke-chip spoke-chip-mem" data-tip="Agent memory|THIS agent's own measured context fill and session cost - never the master's. Click for the full vitals.">${icon("brain", 12)}<b class="spoke-ctx">ctx --</b></button>
+        <button class="spoke-chip spoke-chip-sec" data-tip="Agent security|Approval mode, pending asks and session-allowed tools for THIS agent. Click for the full vitals.">${icon("shield", 12)}<b class="spoke-sec">\u2026</b></button>
       </span>
-      <button class="spoke-menu-btn" data-tip="Switch|Back to Main, the whole fleet in orbit, or any other spoke by name. Keyboard: Ctrl+Alt+Left/Right cycles spokes, Ctrl+Alt+Up returns to Main, Ctrl+Alt+Down opens the orbit.">${icon("share", 13)} Switch ${icon("chevronDown", 11)}</button>
-      <button class="spoke-close-btn" data-spoke-close aria-label="Close this spoke" data-tip="Close spoke|Stop this spoke and return the composer to Main. Its card stays in the orbit and the grid, readable, with Respawn; a second close there dismisses it. Just leaving? Switch, or Ctrl+Alt+Up.">${icon("close", 13)}</button>
+      <button class="spoke-menu-btn" data-tip="Switch|Back to Main, the whole fleet in orbit, or any other agent by name. Keyboard: Ctrl+Alt+Left/Right cycles agents, Ctrl+Alt+Up returns to Main, Ctrl+Alt+Down opens the orbit.">${icon("share", 13)} Switch ${icon("chevronDown", 11)}</button>
+      <button class="spoke-close-btn" data-spoke-close aria-label="Close this agent" data-tip="Close agent|Stop this agent and return the composer to Main. Its card stays in the orbit and the grid, readable, with Respawn; a second close there dismisses it. Just leaving? Switch, or Ctrl+Alt+Up.">${icon("close", 13)}</button>
     </div>`);
     ($(".spoke-menu-btn", banner) as HTMLElement).addEventListener("click", () => void openSwitchMenu());
     ($(".spoke-close-btn", banner) as HTMLElement).addEventListener("click", () => void closeFromBanner());
     for (const chip of banner.querySelectorAll(".spoke-chip")) chip.addEventListener("click", () => void openVitals());
     const repoBtn = $(".spoke-repo", banner) as HTMLElement;
-    repoBtn.addEventListener("click", () => { if (bannerLane?.repo) openRepoDetails(repoBtn, bannerLane.repo, `spoke ${bannerLane.name}`, (u) => deps?.openUrl(u)); });
+    repoBtn.addEventListener("click", () => { if (bannerLane?.repo) openRepoDetails(repoBtn, bannerLane.repo, `agent ${bannerLane.name}`, (u) => deps?.openUrl(u)); });
     banner.classList.toggle("static", resolveMode() === "static"); // Lite reaches the banner's ornaments too
     document.body.appendChild(banner);
     requestAnimationFrame(() => banner?.classList.add("show"));
@@ -1321,7 +1369,7 @@ async function closeFromBanner(): Promise<void> {
   if (!deps || bannerLaneId === null) return;
   const laneId = bannerLaneId;
   const before = deps.getTarget();
-  const name = isLaneTarget(before) ? before.name : "this spoke";
+  const name = isLaneTarget(before) ? before.name : "this agent";
   const r = await closeSpoke(laneId, spokeClose(bannerLane?.status ?? "working").act);
   if (!r.ok) { showToast({ tone: "warn", title: `Couldn't close ${name}`, desc: r.reason ?? "The engine refused.", actions: [{ label: "OK" }], timeout: 9000 }); return; }
   const after = deps.getTarget();
@@ -1401,14 +1449,14 @@ function paintAskDock(laneId: string | null, name: string, ask: { summary: strin
   if (!wrap) return;
   askDock?.remove();
   askKey = key;
-  const node = el(`<div id="spokeAskDock" role="alertdialog" aria-label="Spoke approval">
+  const node = el(`<div id="spokeAskDock" role="alertdialog" aria-label="Agent approval">
     <div class="perm perm-egress perm-exec">
       <div class="perm-eg-head">${icon("shield", 13)}<span class="spoke-ask-title"></span></div>
       <div class="perm-egress-target"><code class="perm-url spoke-ask-sum"></code></div>
       <div class="perm-exec-why"><code class="perm-prog spoke-ask-kind"></code><span>Stays here until you answer. Clicking elsewhere never dismisses it.</span></div>
       <div class="perm-actions perm-actions-col">
         <button class="perm-btn eg-allow" data-spoke-ask="once">Allow once</button>
-        <button class="perm-btn eg-allow" data-spoke-ask="session">Allow for this session (every ${esc(ask.kind)} ask on this spoke)</button>
+        <button class="perm-btn eg-allow" data-spoke-ask="session">Allow for this session (every ${esc(ask.kind)} ask on this agent)</button>
         <button class="perm-btn eg-block" data-spoke-ask="deny">Deny</button>
       </div>
     </div>
@@ -1459,7 +1507,7 @@ function paintVitals(node: HTMLElement): void {
   const box = $(".spoke-vit", node) as HTMLElement | null;
   if (!box) return;
   const l = bannerLane;
-  if (!l) { box.innerHTML = `<div class="spoke-vit-dim">The fleet has not reported this spoke yet.</div>`; return; }
+  if (!l) { box.innerHTML = `<div class="spoke-vit-dim">The fleet has not reported this agent yet.</div>`; return; }
   const u = deps?.getLaneUsage() ?? null;
   const pct = u && u.size > 0 ? Math.min(100, Math.round((u.used / u.size) * 100)) : null;
   const fmtK = (n: number): string => (n >= 1e6 ? `${(n / 1e6).toFixed(2)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
@@ -1468,7 +1516,7 @@ function paintVitals(node: HTMLElement): void {
     : `<span class="spoke-vit-dim">none</span>`;
   box.innerHTML = `
     <div class="spoke-vit-h"><b>${esc(l.name)}</b><span>${esc(l.model || "model not reported")}</span></div>
-    <div class="spoke-vit-s"><h4>${icon("shield", 13)} Security \u00b7 this spoke</h4>
+    <div class="spoke-vit-s"><h4>${icon("shield", 13)} Security \u00b7 this agent</h4>
       <div class="spoke-vit-row"><span>approval mode</span><b>${l.autoApprove ? "full auto (risk accepted)" : "ask me each time"}</b></div>
       ${l.pendingApproval ? `<div class="spoke-vit-ask"><span>${esc(l.pendingApproval.summary)}</span>
         <span class="spoke-vit-btns"><button class="btn-mini orbit-allow" data-vit-answer="once">${icon("check", 12)} Allow once</button>
@@ -1478,7 +1526,7 @@ function paintVitals(node: HTMLElement): void {
       <div class="spoke-vit-row"><span>open tool calls</span><b>${l.openCalls}</b></div>
       ${l.lastHealth ? `<div class="spoke-vit-row"><span>harness ${esc(l.lastHealth.action)}</span><b>${esc(l.lastHealth.reason)} \u00b7 ${ageStr(l.lastHealth.at)}</b></div>` : ""}
     </div>
-    <div class="spoke-vit-s"><h4>${icon("brain", 13)} Memory &amp; context \u00b7 this spoke</h4>
+    <div class="spoke-vit-s"><h4>${icon("brain", 13)} Memory &amp; context \u00b7 this agent</h4>
       <div class="spoke-vit-row"><span>context window</span><b>${pct == null ? "no sample yet" : `${pct}% \u00b7 ${fmtK(u!.used)} / ${fmtK(u!.size)}`}</b></div>
       <div class="spoke-vit-bar"><i style="width:${pct ?? 0}%" class="${pct != null && pct >= 90 ? "hot" : pct != null && pct >= 70 ? "warn" : ""}"></i></div>
       <div class="spoke-vit-row"><span>session spend</span><b>${u ? `$${u.cost.toFixed(2)}` : "no sample yet"}</b></div>
@@ -1504,11 +1552,11 @@ async function openSwitchMenu(): Promise<void> {
   const repoById = new Map(mine.map((l) => [l.id, spokeRepo(l)]));
   const others = s ? hubEntries(s.lanes, s.hub).filter((h) => !h.current) : [];
   const hubRows = others.length
-    ? `<div class="spoke-sw-div" aria-hidden="true"></div><div class="spoke-sw-sec">Other hubs</div>${others.map((h) => `<button class="spoke-sw-row" data-sw="hub" data-hub-id="${esc(h.sessionId)}" data-tip="Open this hub|Makes this session Main and shows its spokes. If Main is busy you get the choice first.">${icon("share", 14)}<span>${esc(hubTitle(h.sessionId))}</span><i class="spoke-sw-st">${h.lanes.length} ${h.lanes.length === 1 ? "spoke" : "spokes"}${h.waiting ? ` \u00b7 ${h.waiting} waiting` : ""}</i></button>${h.repos.length ? `<div class="spoke-sw-repos">${h.repos.map(repoTag).join("")}</div>` : ""}`).join("")}`
+    ? `<div class="spoke-sw-div" aria-hidden="true"></div><div class="spoke-sw-sec">Other hubs</div>${others.map((h) => `<button class="spoke-sw-row" data-sw="hub" data-hub-id="${esc(h.sessionId)}" data-tip="Open this hub|Makes this session Main and shows its agents. If Main is busy you get the choice first.">${icon("share", 14)}<span>${esc(hubTitle(h.sessionId))}</span><i class="spoke-sw-st">${h.lanes.length} ${h.lanes.length === 1 ? "agent" : "agents"}${h.waiting ? ` \u00b7 ${h.waiting} waiting` : ""}</i></button>${h.repos.length ? `<div class="spoke-sw-repos">${h.repos.map(repoTag).join("")}</div>` : ""}`).join("")}`
     : "";
   const html = `<div class="spoke-switch">${rows.map((r) => rowHtml(r, repoById)).join("")}${hubRows}
     <div class="spoke-sw-div" aria-hidden="true"></div>
-    <div class="spoke-sw-keys">Ctrl+Alt+\u2190/\u2192 cycle spokes \u00b7 Ctrl+Alt+\u2191 Main \u00b7 Ctrl+Alt+\u2193 orbit</div></div>`;
+    <div class="spoke-sw-keys">Ctrl+Alt+\u2190/\u2192 cycle agents \u00b7 Ctrl+Alt+\u2191 Main \u00b7 Ctrl+Alt+\u2193 orbit</div></div>`;
   const p = popover(anchor, html, () => { menuPop = null; });
   menuPop = p;
   p.node.addEventListener("click", (ev) => {

@@ -36,11 +36,17 @@ export interface ProviderAuth {
   /** Why the LAST OAuth attempt died after the browser said "success" (broker exited without a
    *  credential). Set by dev.ts from the drained broker output; absent once a login lands. */
   oauthError?: { message: string; at: number };
+  /** P-AUTH.RELOGIN1 (ADR-0640): this sign-in used to work and is gone (omp disabled it after a failed
+   *  refresh, or it vanished); set by dev.ts from oauth_relogin.ts. Never set on a deliberate sign-out. */
+  relogin?: { reason: "expired" | "missing"; detail?: string };
+  /** P-AUTH.RELOGIN1: the model the user was on when this sign-in was lost, to go back to once it returns. */
+  restoreModel?: string;
 }
 
 /** The full per-section auth snapshot `/api/auth` returns (mirrored as AuthStatus in bridge.ts). `vault`
- *  (P-VAULT-KEYS.1, ADR-0472) says where saved keys live: custody + state only, never a secret. */
-export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault: VaultStatus }
+ *  (P-VAULT-KEYS.1, ADR-0472) says where saved keys live: custody + state only, never a secret.
+ *  `upgradedFrom` (P-AUTH.RELOGIN1): the version the previous engine start ran, when it differs. */
+export interface ProviderAuthSnapshot { gateway: ProviderAuth[]; majors: ProviderAuth[]; others: ProviderAuth[]; vault: VaultStatus; upgradedFrom?: string }
 
 // The AskSage gov gateway (ADR-0007): API-key only, key in keys.ASKSAGE_API_KEY. Surfaced ABOVE the
 // Providers section in its own card (it routes through an accredited gov proxy, not a direct provider).
@@ -162,12 +168,15 @@ export const OTHERS: Provider[] = [
   { id: "typesafe", name: "TypeSafe · Jev judgment", env: "TYPESAFE_API_KEY", oauthId: "", canOauth: false },
 ];
 
-function vaultRows(): any[] {
+/** One omp vault row, metadata only (the token blob is never read here). */
+export interface VaultRow { provider: string; credential_type: string; identity_key: string | null; disabled_cause: string | null }
+
+export function vaultRows(): VaultRow[] {
   const p = join(homedir(), ".omp", "agent", "agent.db");
   if (!existsSync(p)) return [];
   try {
     const db = new Database(p, { readonly: true });
-    try { return db.query("select provider, credential_type, identity_key, disabled_cause from auth_credentials").all() as any[]; }
+    try { return db.query("select provider, credential_type, identity_key, disabled_cause from auth_credentials").all() as VaultRow[]; }
     finally { db.close(); }
   } catch { return []; }
 }

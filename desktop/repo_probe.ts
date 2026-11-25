@@ -4,53 +4,33 @@
 // desktop/repo_probe.ts
 //
 // P-REPO.1 (ADR-0406): the engine half of "which repo, and where do commits go". Three jobs:
-//   1. probe a folder with git (top-level, branch, HEAD, push target), cached, non-blocking;
+//   1. probe a folder (top-level, branch, HEAD, push target), cached, non-blocking;
 //   2. track, per ACP session id, the repos that session's tool calls touched (Main and every lane feed
 //      the same tracker from their session/update stream, replayed history included);
 //   3. list repos the user can start a spoke on without typing: local ones LUCID already knows or can
 //      see next to the workspace, and the user's GitHub repos.
 //
-// This is a FIRST-PARTY control-plane action like repo_collect.ts and workspace.ts cloneRepo: host git
-// spawned by the engine behind the loopback + token gate, never routed through the agent's tool gate.
-// Every git call here is READ-ONLY (rev-parse, symbolic-ref, config --get-regexp, remote get-url), none
-// of them runs hooks or reads the index, and core.fsmonitor is forced off anyway. `safe.directory=*` is
-// passed because the owner's repos live on a NAS share whose files git sees as owned by another SID; a
-// command-line value is protected config, so a repository cannot set it for itself.
+// P-PERF.IDLE1: no git process is spawned to read a repo's identity. repo_fs.ts reads .git/HEAD, the ref
+// files and the config directly, so opening the app and polling fleet status run zero git processes and
+// a probe is a few small file reads (which also sidesteps git's safe.directory refusal on the owner's NAS
+// share). The only processes left here are the `gh` CLI calls behind the GitHub picker, which run when
+// the user opens it.
 
 import { readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { gitExe } from "../harness/runs/sandbox_exec.ts";
 import { emitSecurityEvent, type SecurityEventInput } from "./audit_export.ts";
 import type { GitProvider } from "./git_url.ts";
-import { parseGitConfigZ, pushFrom, pushSlug, pushTarget, PUSH_CONFIG_REGEXP, toolCallTouches, type RepoContext, type RepoView } from "./repo_identity.ts";
+import { findRepoRoot, keyOf, readRepoView } from "./repo_fs.ts";
+import { pushSlug, toolCallTouches, type RepoContext, type RepoView } from "./repo_identity.ts";
 
-const GIT_TIMEOUT_MS = 6_000;
-/** A repo's branch and push target change when the user or the agent runs git; 15 s keeps a chip honest
- *  without a git spawn per poll. */
-const VIEW_TTL_MS = 15_000;
+/** A repo's branch and push target change when the user or the agent runs git. P-PERF.IDLE1: a probe is
+ *  now a few file reads, not git spawns, so 5 s keeps a chip honest cheaply. */
+const VIEW_TTL_MS = 5_000;
 /** Which repo a folder belongs to almost never changes. */
 const ROOT_TTL_MS = 120_000;
 const MAX_TRACKED_SESSIONS = 200;
 const MAX_OTHERS = 4;
-const FORCED = ["-c", "safe.directory=*", "-c", "core.fsmonitor=false"];
-
-/** Run one read-only git command in `dir`. Never throws; a timeout kills the child. The process cwd is
- *  the temp dir and the repo is named with -C, so a folder on a UNC share is never a process cwd. */
-async function git(dir: string, args: string[]): Promise<{ ok: boolean; out: string }> {
-  try {
-    const p = Bun.spawn([gitExe(), ...FORCED, "-C", dir, ...args], { cwd: tmpdir(), stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true });
-    const timer = setTimeout(() => { try { p.kill(); } catch { /* already exited */ } }, GIT_TIMEOUT_MS);
-    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-    clearTimeout(timer);
-    return { ok: code === 0, out };
-  } catch {
-    return { ok: false, out: "" };
-  }
-}
-
-/** Case-folded on Windows, where `C:\X` and `c:\x` are one folder. */
-function keyOf(p: string): string { return process.platform === "win32" ? p.toLowerCase() : p; }
 
 // ---------------------------------------------------------------------------------------- probing
 
@@ -82,40 +62,13 @@ export async function repoRootOf(path: string): Promise<string | null> {
   const hit = roots.get(k);
   if (hit?.pending) return hit.pending;
   if (hit && Date.now() - hit.at < ROOT_TTL_MS) return hit.root;
-  const pending = git(dir, ["rev-parse", "--show-toplevel"]).then((r) => {
-    // git prints `C:/a/b` and `//host/share/x`; resolve() gives the native spelling the engine uses.
-    const root = r.ok && r.out.trim() ? resolve(r.out.trim()) : null;
+  // P-PERF.IDLE1: a `.git` lookup up the folder chain, not `git rev-parse --show-toplevel`.
+  const pending = findRepoRoot(dir).catch(() => null).then((root) => {
     roots.set(k, { at: Date.now(), root });
     return root;
   });
   roots.set(k, { at: hit?.at ?? 0, root: hit?.root ?? null, pending });
   return pending;
-}
-
-async function probeView(root: string): Promise<RepoView | null> {
-  const [dirs, branchR, headR, cfgR] = await Promise.all([
-    git(root, ["rev-parse", "--absolute-git-dir", "--git-common-dir"]),
-    git(root, ["symbolic-ref", "-q", "--short", "HEAD"]),
-    git(root, ["rev-parse", "--short", "HEAD"]),
-    git(root, ["config", "-z", "--get-regexp", PUSH_CONFIG_REGEXP]),
-  ]);
-  if (!dirs.ok) return null;
-  const [gitDir = "", commonRaw = ""] = dirs.out.split(/\r?\n/);
-  const common = commonRaw ? resolve(root, commonRaw.trim()) : "";
-  const worktree = !!gitDir && !!common && keyOf(resolve(gitDir.trim())) !== keyOf(common);
-  const branch = branchR.ok ? branchR.out.trim() : "";
-  const head = headR.ok ? headR.out.trim() : "";
-  const cfg = parseGitConfigZ(cfgR.out);
-  const target = pushTarget(cfg, branch);
-  let push = null;
-  if (target) {
-    // `remote get-url --push` applies pushurl and url.<base>.pushInsteadOf the way `git push` will.
-    const u = await git(root, ["remote", "get-url", "--push", target.remote]);
-    const conf = cfg.remotes.get(target.remote);
-    const url = u.ok && u.out.trim() ? u.out.trim() : (conf?.pushUrl ?? conf?.url ?? "");
-    push = pushFrom(target.remote, target.branch, url);
-  }
-  return { root, name: basename(root) || root, branch, head, worktree, remotes: cfg.remotes.size, push };
 }
 
 /** A repo's view, at most `maxAgeMs` old. Concurrent callers share one probe. */
@@ -124,7 +77,8 @@ export async function repoView(root: string, maxAgeMs = VIEW_TTL_MS): Promise<Re
   const hit = views.get(k);
   if (hit?.pending) return hit.pending;
   if (hit && Date.now() - hit.at < maxAgeMs) return hit.view;
-  const pending = probeView(root).then((view) => { views.set(k, { at: Date.now(), view }); return view; });
+  // P-PERF.IDLE1: file reads only (repo_fs.ts); a read error is "not a repo", like a failed git call was.
+  const pending = readRepoView(root).catch(() => null).then((view) => { views.set(k, { at: Date.now(), view }); return view; });
   views.set(k, { at: hit?.at ?? 0, view: hit?.view ?? null, pending });
   return pending;
 }
@@ -177,7 +131,7 @@ export function observeToolCall(sessionId: string | null | undefined, update: un
   })();
 }
 
-/** The repo a session is working on, fresh (probes git as needed). */
+/** The repo a session is working on, fresh (probes the repo files as needed). */
 export async function repoContext(sessionId: string | null | undefined, cwd: string): Promise<RepoContext> {
   const t = sessionId ? tracks.get(sessionId) : undefined;
   const active = t?.strong?.root ?? t?.weak?.root ?? null;
@@ -196,7 +150,7 @@ export async function repoContext(sessionId: string | null | undefined, cwd: str
 
 const peeked = new Map<string, { at: number; version: number; ctx?: RepoContext; pending?: Promise<void> }>();
 
-/** Synchronous, for status polls that must not wait on git: the last computed context for this session
+/** Synchronous, for status polls that must not wait on a probe: the last computed context for this session
  *  (undefined before the first one lands), refreshed in the background when it is stale. */
 export function peekRepoContext(sessionId: string | null | undefined, cwd: string): RepoContext | undefined {
   const k = `${sessionId ?? ""}\u0001${keyOf(cwd)}`;

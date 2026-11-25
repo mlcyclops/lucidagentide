@@ -18,6 +18,8 @@
 // Run with: bun run harness/scripts/demo_ptask5.ts
 
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { listSubagentRuns, parseSubagentTranscript, subagentArtifactsDir, type SubagentIo } from "../../desktop/subagent_activity.ts";
 
 function fail(m: string): never { console.error(`FAIL: ${m}`); process.exit(1); }
@@ -78,7 +80,7 @@ ok("artifacts dir mirrors omp's sessionFile-minus-.jsonl rule");
 
 // [4] LIVE: a real past delegation on this machine (the four-games run), when present
 {
-  const real = "C:/Users/neorc/.omp/agent/sessions/-Music/2026-07-02T01-55-30-330Z_019f2089-cfa0-7000-9278-e90aec0813d9.jsonl";
+  const real = join(homedir(), ".omp", "agent", "sessions", "-Music", "2026-07-02T01-55-30-330Z_019f2089-cfa0-7000-9278-e90aec0813d9.jsonl");
   if (existsSync(real)) {
     const runs = listSubagentRuns(real);
     console.log(`  info  LIVE: ${runs.length} real subagent run(s):`);
