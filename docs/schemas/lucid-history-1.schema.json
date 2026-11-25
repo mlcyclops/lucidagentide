@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lucid-agents.com/schemas/lucid-history-1.schema.json",
+  "title": "LUCID session history file (lucid-history/1)",
+  "description": "One portable file of LUCID Agent IDE session history (P-SESSXFER.1, ADR-0682). The file is UTF-8 JSON whose bytes are all printable 7-bit ASCII (0x20-0x7E) or LF (0x0A): non-ASCII text is written as \\uXXXX escapes. Keys are sorted at every level. No property outside this schema is allowed anywhere. Integrity: manifest.sessions[i].sha256 is the SHA-256 (hex) of sessions[i] serialized as canonical JSON (keys sorted, no whitespace, non-ASCII as \\uXXXX); manifest.payload_sha256 is the SHA-256 of the sessions array serialized the same way. See docs/SESSION-HISTORY-TRANSFER.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "manifest", "sessions"],
+  "properties": {
+    "format": { "const": "lucid-history/1" },
+    "manifest": { "$ref": "#/$defs/manifest" },
+    "sessions": { "type": "array", "items": { "$ref": "#/$defs/session" } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "timestamp": { "type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$", "description": "ISO 8601 UTC with milliseconds, exactly this spelling, e.g. 2026-11-25T12:00:00.000Z" },
+    "sessionId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["marking", "created_at", "app", "app_version", "project", "scope", "include_images", "content", "session_count", "sessions", "payload_sha256"],
+      "properties": {
+        "marking": { "type": "string", "maxLength": 200, "pattern": "^[ -~]*$", "description": "Optional classification or handling marking typed by the exporting user (one line of printable ASCII). Empty when none." },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "app": { "type": "string", "description": "The exporting application, \"LUCID Agent IDE\"." },
+        "app_version": { "type": "string" },
+        "project": { "type": "string", "description": "The project folder's name only, never a path." },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "enum": ["project", "lane", "sessions"] },
+            "lane": { "type": "string", "description": "The agent (fleet lane) name when kind is lane." }
+          }
+        },
+        "include_images": { "type": "boolean", "description": "False unless the user turned images on. CDS profiles keep it false." },
+        "content": {
+          "type": "array",
+          "description": "The content kinds the file may carry. A guard can require this exact list without image.",
+          "items": { "enum": ["text", "thinking", "tool_call", "tool_result", "timestamp", "model", "image"] },
+          "uniqueItems": true
+        },
+        "session_count": { "type": "integer", "minimum": 1 },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "sha256", "messages"],
+            "properties": {
+              "id": { "$ref": "#/$defs/sessionId" },
+              "sha256": { "$ref": "#/$defs/sha256" },
+              "messages": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "payload_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "created_at", "model", "messages"],
+      "properties": {
+        "id": { "$ref": "#/$defs/sessionId" },
+        "title": { "type": "string" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "model": { "type": "string", "description": "The last model id the session used, as provider/model when known." },
+        "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } }
+      }
+    },
+    "message": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "at", "parts"],
+          "properties": {
+            "role": { "const": "user" },
+            "at": { "$ref": "#/$defs/timestamp" },
+            "parts": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/textPart" }, { "$ref": "#/$defs/imagePart" }, { "$ref": "#/$defs/omittedPart" }] } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "at", "model", "parts"],
+          "properties": {
+            "role": { "const": "assistant" },
+            "at": { "$ref": "#/$defs/timestamp" },
+            "model": { "type": "string" },
+            "parts": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/textPart" }, { "$ref": "#/$defs/thinkingPart" }, { "$ref": "#/$defs/toolCallPart" }] } }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "at", "tool_call_id", "tool_name", "is_error", "parts"],
+          "properties": {
+            "role": { "const": "tool_result" },
+            "at": { "$ref": "#/$defs/timestamp" },
+            "tool_call_id": { "type": "string" },
+            "tool_name": { "type": "string" },
+            "is_error": { "type": "boolean" },
+            "parts": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/textPart" }, { "$ref": "#/$defs/imagePart" }, { "$ref": "#/$defs/omittedPart" }] } }
+          }
+        }
+      ]
+    },
+    "textPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": { "type": { "const": "text" }, "text": { "type": "string" } }
+    },
+    "thinkingPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "text"],
+      "properties": { "type": { "const": "thinking" }, "text": { "type": "string" } }
+    },
+    "toolCallPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "name", "arguments"],
+      "properties": {
+        "type": { "const": "tool_call" },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "arguments": { "type": "string", "description": "The call's arguments as JSON object text (keys sorted). Text, never executed." }
+      }
+    },
+    "imagePart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "mime", "data"],
+      "description": "Only when manifest.include_images is true. Base64, at most 2 MiB decoded per image and 16 MiB per session; the importer checks the magic bytes against the type.",
+      "properties": {
+        "type": { "const": "image" },
+        "mime": { "enum": ["image/png", "image/jpeg", "image/webp"] },
+        "data": { "type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$" }
+      }
+    },
+    "omittedPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "what"],
+      "properties": { "type": { "const": "omitted" }, "what": { "const": "image" } }
+    }
+  }
+}

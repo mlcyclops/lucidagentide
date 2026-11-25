@@ -1297,6 +1297,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-del.sess-arch:hover{background:color-mix(in srgb,var(--accent-2) 16%,transparent);color:var(--accent-2)}
 .sess:hover .t,.sess:focus-within .t{padding-right:52px}
 .sess .sess-archived{color:var(--txt-4)}
+.sess .sess-imported{color:var(--amber-txt)} /* P-SESSXFER.1 (ADR-0682) */
 .sess-group-clear.sess-arch-rule{opacity:.6}
 .sess-group-clear.sess-arch-rule:hover{color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 16%,transparent)}
 .arch-pop{display:block;width:300px;padding:4px 2px;font-size:12px;color:var(--txt-2)}
@@ -4690,6 +4691,26 @@ body.preview-open .thread{font-size:.9em}
 .secret-modal .modal-actions{flex-wrap:wrap;justify-content:flex-end}
 .secret-dest-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
 .secret-dest-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+/* P-SESSXFER.1 (ADR-0682): Export / Import history. Same .modal chrome and grid rows as the secret dialog. */
+.popover.sx-pop{width:230px}
+.sx-menu{display:block}
+.cfg-opt[data-sx] .tick{opacity:.85}
+.modal.sx-modal{width:min(520px,92vw);text-align:left}
+.sx-modal .modal-icon{margin-left:0}
+.sx-modal .modal-desc{margin-left:0;max-width:none}
+.sx-row{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
+.sx-lab{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+.sx-row .prov-key{text-align:left}
+.sx-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--txt-2);cursor:pointer}
+.sx-check input{flex:none;margin:0}
+.sx-check span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-modal .modal-actions{justify-content:flex-end}
+.sx-list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:4px 0}
+.sx-item{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:10px;padding:5px 11px;font-size:11.5px}
+.sx-id,.sx-note{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-id{font-family:var(--mono);color:var(--txt-2)}
+.sx-note{color:var(--txt-3)}
+.sx-counts{color:var(--txt-2)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */
@@ -4738,6 +4759,13 @@ body.preview-open .thread{font-size:.9em}
 .about-site{position:relative;display:block;width:max-content;margin:10px auto 0;font-size:12px;
   color:var(--accent-2);text-decoration:none;letter-spacing:.2px;transition:color var(--t) var(--ease)}
 .about-site:hover{color:var(--accent);text-decoration:underline}
+.about-site.about-docs{margin-top:6px}
+/* P-DOCS.2 (ADR-0681): docs links inside onboarding modals and the tour closer card. */
+.modal-docs,.coach-link{display:block;width:max-content;max-width:100%;overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis;font-size:12px;color:var(--accent-2);text-decoration:none}
+.modal-docs{margin:12px auto 0}
+.coach-link{margin:0 0 10px}
+.modal-docs:hover,.coach-link:hover{color:var(--accent);text-decoration:underline}
 
 .about-blurb{font-size:13px;line-height:1.65;color:var(--txt-2);margin:0 2px 16px}
 .about-blurb b{color:var(--txt)}
@@ -4770,8 +4798,36 @@ body.preview-open .thread{font-size:.9em}
 .about-fine{margin:12px 0 0;font-size:10.5px;line-height:1.6;color:var(--txt-4)}
 .about-fine b{color:var(--txt-3)}
 .about-mono{font-family:var(--mono);color:var(--txt-3)}
-.about-actions{display:flex;justify-content:center;margin-top:18px}
+.about-actions{display:flex;justify-content:center;gap:10px;margin-top:18px}
 .about-actions .btn-mini{padding:7px 26px}
+
+/* P-WHATSNEW.1 (ADR-0686): the What's new popup. The About shell (.about-modal/.about-hero/.about-x) with
+   cards in the website's feature-card idiom: picture, a mono uppercase "New in" tag, a title and a line. */
+.wn-modal{width:min(760px,94vw)}
+.wn-hero{padding:26px 48px 16px}
+.wn-title{position:relative;margin:0;font-size:22px;font-weight:800;letter-spacing:.4px;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-sub{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.wn-group{margin:0 0 16px}
+.wn-gh{margin:0 2px 10px;font:600 10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.wn-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line-soft);border-radius:13px;overflow:hidden;
+  background:linear-gradient(180deg,var(--bg-1),color-mix(in srgb,var(--bg-1) 90%,var(--shade)));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .03),0 1px 2px rgb(var(--sh-rgb) / .3)}
+.wn-shot{aspect-ratio:16/9;background:var(--bg-2);border-bottom:1px solid var(--line-soft);overflow:hidden}
+.wn-shot img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+.wn-body{display:flex;flex-direction:column;gap:5px;padding:11px 13px 13px;min-width:0}
+.wn-tag{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-h{margin:0;font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-p{margin:0;font-size:12px;line-height:1.55;color:var(--txt-2)}
+.wn-more{align-self:flex-start;max-width:100%;margin-top:2px;font-size:12px;color:var(--accent-2);text-decoration:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color var(--t) var(--ease)}
+.wn-more:hover{color:var(--accent);text-decoration:underline}
+/* Dismiss stays in view while the cards scroll beneath it (the modal scrolls; a long release must not hide it). */
+.wn-actions{position:sticky;bottom:-22px;z-index:1;margin:4px -24px -22px;padding:14px 24px 18px;
+  background:linear-gradient(180deg,transparent,var(--bg-1) 38%);border-top:1px solid var(--line-soft)}
 
 @media (prefers-reduced-motion:reduce){
   .rail-about .about-book,.rail-about .about-spark,.about-glow,.about-lucid,.about-pi{animation:none}
@@ -9223,7 +9279,17 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-cast-note{align-self:stretch;margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
 .viz-look{min-width:260px}
 .viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px}
-.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row>.viz-world-pick{grid-column:1}
+.viz-world-row>.viz-world-export{grid-column:3}
+/* P-WORLDS.UPDATE1 (ADR-0685): a purchased world's Update, beside Export..., one line, within the row's height */
+.btn-mini.viz-world-upd{grid-column:2;padding:2px 8px;white-space:nowrap;color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.btn-mini.viz-world-upd:hover{border-color:var(--accent);color:var(--accent-2);background:color-mix(in srgb,var(--accent) 12%,var(--bg-2))}
+.btn-mini.viz-world-upd:disabled{cursor:progress;color:var(--txt-3);border-color:var(--line);background:var(--bg-2)}
+.btn-mini.viz-world-upd:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* the dot on the Worlds button (and the Visualize toolbar button) while a purchased world has an update */
+.has-upd{position:relative}
+.has-upd::after{content:"";position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1);pointer-events:none}
 .viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
 .viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font:inherit;font-size:12.5px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
 .viz-world-pick b{min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

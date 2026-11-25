@@ -118,7 +118,8 @@ import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
 import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { engineReceipts, loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { rowUpdate, type WorldUpdates } from "./world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
 import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
 
@@ -150,6 +151,9 @@ export interface VizDeps {
   /** P-WORLDS.1 (ADR-0648): open the Plugins drawer on its premium store ("Get" on a world, "Get more worlds");
    *  `packId` names the world the user asked for. */
   openStore: (packId?: string) => void;
+  /** P-WORLDS.UPDATE1 (ADR-0685): purchased worlds with a newer store version (world_updates.createWorldUpdates):
+   *  each row's Update, the Worlds button's dot, and a refresh once a new version is on disk. */
+  worldUpdates: Pick<WorldUpdates, "pending" | "busy" | "update" | "reconcile" | "onChange">;
   /** P-VIZ.APPROVE1 (ADR-0655): the approval pop-out's answers: a lane's like its grid card (fleetAnswer, and Auto
    *  through the grid's risk modal then fleetAuto), Main's through its chat card (null option = deny). */
   fleetAnswer: LucidBridge["fleetAnswer"];
@@ -271,6 +275,8 @@ function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringif
 // cast exactly when it changes), and the Worlds menu.
 
 const worldHost = createWorldHost();
+/** P-MARKET.AUTH2 (ADR-0684): receipts live in the engine vault, not this origin's localStorage (moved once). */
+const worldReceipts = engineReceipts(bridge, typeof localStorage === "undefined" ? undefined : localStorage);
 let worlds: WorldEntry[] = [];
 let curWorld: SceneWorld | null = null;
 let worldsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
@@ -343,13 +349,15 @@ async function refreshWorlds(): Promise<void> {
     importModule: (url: string): Promise<unknown> => import(/* @vite-ignore */ url),
     host: worldHost,
     provider: getMarketProvider(),
-    storage: localStorage,
+    receipts: worldReceipts,
     now: Date.now,
     previous: worlds,
   });
   if (seq !== worldsSeq) return; // a newer refresh (an import) owns the list
   worlds = list;
   worldsListed = true;
+  // P-WORLDS.UPDATE1: an update installed from the store drawer (or a removed world) no longer offers Update.
+  deps?.worldUpdates.reconcile(list.map((e) => ({ id: e.installed.id, version: e.installed.version })));
   resolveWorld();
   if (isOpen()) applyStyle();
   if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
@@ -366,6 +374,9 @@ function openWorldsMenu(anchor: HTMLElement): void {
   p.reposition(); // popover() measured the empty shell: size and place it for the rows just painted
   p.node.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
+    // P-WORLDS.UPDATE1: the store card's install path; the row shows Updating, then the result toasts.
+    const upd = t.closest<HTMLButtonElement>("[data-viz-world-update]");
+    if (upd) { if (!upd.disabled && deps) void deps.worldUpdates.update([upd.dataset.vizWorldUpdate ?? ""]); return; }
     const pick = t.closest<HTMLElement>("[data-viz-world-pick]");
     if (pick) {
       const e = worlds.find((w) => w.style === pick.dataset.vizWorldPick);
@@ -402,10 +413,19 @@ function paintWorldsMenu(node: HTMLElement): void {
     const why = e.access === "signin" ? "Sign in with the Google account that bought it, or get it in the store." : "Not purchased on this account yet: get it in the store.";
     const tip = e.error ? tipAttr(e.label, `This world cannot be shown: ${e.error}.`) : locked ? tipAttr(e.label, `${e.tagline} ${why}`) : tipAttr(e.label, e.tagline);
     const exportName = `${e.installed.id}-${e.installed.version}.lplugin.zip`;
+    // P-WORLDS.UPDATE1: a purchased world (usable here; a broken one too, a new version may fix it) whose store
+    // version is newer offers Update beside Export...; it shows Updating while the install runs.
+    const upd = deps ? rowUpdate(e.installed.id, e.installed.version, e.access === "allowed", deps.worldUpdates.pending()) : null;
+    const updating = !!upd && !!deps?.worldUpdates.busy(e.installed.id);
+    const to = upd ? upd.to.replace(/^v/, "") : "";
+    const updBtn = upd
+      ? `<button type="button" class="btn-mini viz-world-upd" data-viz-world-update="${esc(e.installed.id)}" aria-label="${esc(`Update ${e.label} to version ${to}`)}"${updating ? ` disabled aria-busy="true"` : ""} data-tip="${tipAttr(updating ? `Updating to v${to}` : `Update to v${to}`, `Installed: v${e.installed.version.replace(/^v/, "")}. The new version downloads from the LUCID store and passes the same signature, checksum and security scan checks as a purchase.`)}">${updating ? "Updating" : "Update"}</button>`
+      : "";
     return `<div class="viz-world-row${on ? " on" : ""}${e.error ? " broken" : ""}">
       <button type="button" class="viz-world-pick" data-viz-world-pick="${esc(e.style)}" aria-pressed="${on}"${e.error ? " disabled" : ""} data-tip="${tip}">
         <b>${esc(e.label)}</b>${locked ? `<span class="viz-world-get">${LOCK_SVG}Get</span>` : ""}
       </button>
+      ${updBtn}
       <a class="viz-world-export" href="${esc(bridge.worldExportUrl(e.installed.id))}" download="${esc(exportName)}" data-tip="${tipAttr("Export...", "Save the signed world file, to install it on another machine (Import world file there). It still needs your purchase to show.")}">Export...</a>
       ${e.error ? `<p class="viz-world-err" role="note">${esc(e.error)}</p>` : ""}
     </div>`;
@@ -661,6 +681,13 @@ let headRo: ResizeObserver | null = null;
 /** Called once from app.ts with the bridge seam. */
 export function initViz(d: VizDeps): void {
   deps = d;
+  // P-WORLDS.UPDATE1 (ADR-0685): the Worlds button's dot and the open menu follow the pending updates; a new version
+  // on disk is loaded at once (its module URL names the version, so the world is rebuilt from it).
+  d.worldUpdates.onChange((why) => {
+    paintWorldsBadge();
+    if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
+    if (why === "installed" && isOpen()) void refreshWorlds();
+  });
   // P-VIZ.NOFLASH1: the scene on screen takes the new tier's lighter settings at once (live, same context) while the
   // new tier's scene builds beneath it; the swap happens on that scene's first whole frame.
   d.perf.onChange((tier) => {
@@ -1129,6 +1156,16 @@ function paintToggles(): void {
     wb.classList.toggle("on", !!curWorld);
     ($("[data-viz-worlds-label]", wb) as HTMLElement).textContent = curWorld ? curWorld.def.label : "Worlds";
   }
+  paintWorldsBadge();
+}
+
+/** P-WORLDS.UPDATE1 (ADR-0685): a dot on the Worlds button while a purchased world has an update. */
+function paintWorldsBadge(): void {
+  const wb = view ? ($("[data-viz-worlds]", view) as HTMLElement | null) : null;
+  if (!wb) return;
+  const n = deps?.worldUpdates.pending().length ?? 0;
+  wb.classList.toggle("has-upd", n > 0);
+  if (n > 0) wb.dataset.worldUpdates = String(n); else delete wb.dataset.worldUpdates;
 }
 
 /** The View menu's layout toggle and quality button (only while the menu is open). */
