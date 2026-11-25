@@ -91,9 +91,10 @@ export async function verifyVizLane(page, base) {
     await page.goto(new URL("?vizScript=1", base).href, { waitUntil: "domcontentloaded" });
     await page.waitForSelector("#ctViz", { timeout: 30_000 });
     // A fresh QA profile shows first-run gates; clear them with their own skip controls.
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0, idle = 0; i < 40 && idle < 8; i++) { // gates can appear late on a cold engine
       const skip = await page.$("#roleGateSkip, #emailGateSkip, #govGate [data-gov=no], #provChoice [data-prov=later], .coach-card [data-coach-skip]");
-      if (!skip) { await pause(500); continue; }
+      if (!skip) { idle++; await pause(500); continue; }
+      idle = 0;
       await skip.click().catch(() => {});
       await pause(400);
     }
@@ -106,6 +107,9 @@ export async function verifyVizLane(page, base) {
     const nodeBox = () => page.evaluate((id) => window.__vizProbe?.nodes?.().find((n) => n.id === id)?.box ?? null, laneId);
     const openPanel = async () => {
       for (let i = 0; i < 20; i++) {
+        // onboarding can still raise a gate (the work email step) after Visualize opened: skip it, then click
+        const gate = await page.$("#roleGateSkip, #emailGateSkip, #govGate [data-gov=no], #provChoice [data-prov=later], .coach-card [data-coach-skip]");
+        if (gate) { await gate.click().catch(() => {}); await pause(400); continue; }
         const b = await nodeBox();
         if (b) {
           await page.mouse.click(b.x, b.y);
