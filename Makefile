@@ -1855,6 +1855,12 @@ demo-P-VIZ.FLEET1: ## P-VIZ.FLEET1 (ADR-0680): Visualize draws every running fle
 	node --check desktop/scripts/demo_p_viz_fleet_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_fleet_1.mjs; else echo "demo-P-VIZ.FLEET1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-VIZ.STYLEOPT1
+demo-P-VIZ.STYLEOPT1: ## P-VIZ.STYLEOPT1 (ADR-0688): the built-in Anime and Professional styles have their own options in the View menu (seven backgrounds, stars, drift, accent, particles, lighting, name tags; Professional floor grid and desk floor; Anime floor plate), stored like a world's, with Reset. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_styleopt_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_builtin_options.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_styleopt_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_styleopt_1.mjs; else echo "demo-P-VIZ.STYLEOPT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WORLDS.2
 demo-P-WORLDS.2: ## P-WORLDS.2 (ADR-0679): eleven new world cards (Field Exercise, Flight Deck, Flight Line, Boot Camp, Sea Rescue, Orbital Ops, Cyber Ops, Special Operations, Florida, Texas, California), each with its own loop and poster, and the world package QA harness: import, draw, every throwable, the storm, a commit, every option value and the sample mini game with no page error, stills per world, and an optional filmed short for the card media. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/?vizDemo=1 LUCID_DEMO_WORLDS=<zip>;<zip> [LUCID_DEMO_OUT=<dir>] [LUCID_DEMO_FILM=1] node desktop/scripts/demo_p_worlds_2.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts

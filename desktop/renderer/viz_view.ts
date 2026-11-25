@@ -108,7 +108,7 @@ import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledger
 import {
   applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
   isBuiltinStyle, isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
-  type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
+  type BuiltinStyle, type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountApprovals, type ApprovalsView } from "./viz_approvals.ts"; // P-VIZ.APPROVE1 (ADR-0655)
@@ -117,8 +117,9 @@ import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
 import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
-import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { worldKey, type InstalledWorld, type WorldOption, type WorldOptionValues } from "./viz_world_api.ts";
+import { loadOptions, loadWorlds, parseStyle, resetOptions, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type OptionOwner, type WorldEntry } from "./viz_worlds.ts";
+import { BUILTIN_OPTIONS, builtinLook, builtinTheme, scaleParticles, type BuiltinLook } from "./viz_builtin_options.ts"; // P-VIZ.STYLEOPT1 (ADR-0688)
 import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
 import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
 
@@ -280,6 +281,19 @@ let pendingRestores: ReadonlySet<string> = new Set();
 /** The installed worlds were listed at least once (before that, a saved world is not "missing", just loading). */
 let worldsListed = false;
 
+/** P-VIZ.STYLEOPT1 (ADR-0688): each built-in style's option values, stored like a world's (ids builtin:<style>). */
+const builtinVals: Record<BuiltinStyle, WorldOptionValues> = {
+  anime: loadOptions(localStorage, BUILTIN_OPTIONS.anime),
+  professional: loadOptions(localStorage, BUILTIN_OPTIONS.professional),
+};
+
+/** The built-in style drawn (anime under a world, whose look is not drawn then) and its look. */
+function builtinOf(): BuiltinStyle { const s = effStyle(); return isBuiltinStyle(s) ? s : "anime"; }
+function curLook(): BuiltinLook { const s = builtinOf(); return builtinLook(s, builtinVals[s]); }
+
+/** What a mounted scene cannot change live: its theme, and the built-in Particles budget. A change remounts. */
+function sceneSig(theme: VizTheme): string { return `${JSON.stringify(theme)}|${curWorld ? 1 : curLook().particles}`; }
+
 /** P-WORLDS.HEAL1: the restore flow says which worlds are still on their way back. The saved style is left alone, so
  *  an open view re-lists the worlds and takes the saved one back the moment it is installed again. */
 export function setPendingWorldRestores(ids: readonly string[]): void {
@@ -316,7 +330,8 @@ function applyStyle(): void {
   paintWorldOptions();
   if (!scene || !view) return;
   const theme = sceneTheme(view);
-  if (JSON.stringify(theme) !== themeSig) { remount(); return; }
+  if (sceneSig(theme) !== themeSig) { remount(); return; }
+  scene.setBuiltinLook(curLook()); // P-VIZ.STYLEOPT1 (ADR-0688): before the style, so the new figures stand on its floor
   scene.setStyle(style, curWorld);
   rememberBackdrop(theme.bg); // P-VIZ.NOFLASH1: the next open's spinner wears this world's backdrop
 }
@@ -436,13 +451,21 @@ async function importWorldFile(file: File): Promise<void> {
   await refreshWorlds();
 }
 
-/** The View menu's World options (the selected world's colors, choices, toggles and swatch ramps). A change
- *  saves the value and rebuilds the figures with it. */
+/** Whose options the View menu shows: the selected world's, else (P-VIZ.STYLEOPT1, ADR-0688) the drawn built-in
+ *  style's, with their current values and the section's heading. */
+function optionsPanel(): { owner: OptionOwner; values: WorldOptionValues; title: string; builtin: boolean } {
+  if (curWorld) return { owner: curWorld.def, values: curWorld.options, title: "World options", builtin: false };
+  const s = builtinOf();
+  return { owner: BUILTIN_OPTIONS[s], values: builtinVals[s], title: `${BUILTIN_OPTIONS[s].label} options`, builtin: true };
+}
+
+/** The View menu's World options (the selected world's colors, choices, toggles and swatch ramps), or the built-in
+ *  style's options with a Reset row. A change saves the value and redraws with it. */
 function worldOptionsHtml(): string {
-  const w = curWorld;
-  if (!w || !w.def.options.length) return "";
+  const w = optionsPanel();
+  if (!w.owner.options.length) return "";
   const row = (o: WorldOption): string => {
-    const v = w.options[o.key];
+    const v = w.values[o.key];
     const k = esc(o.key);
     const name = `<span title="${esc(o.label)}">${esc(o.label)}</span>`; // P-VIZ.UI1: a long label ellipsizes, the title has it all
     if (o.type === "color") return `<label class="viz-wopt">${name}<input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
@@ -453,7 +476,10 @@ function worldOptionsHtml(): string {
     }
     return `<label class="viz-wopt">${name}<select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
   };
-  return `<div class="viz-vmenu-h">World options</div><div class="viz-wopts" data-viz-wopts>${w.def.options.map(row).join("")}</div>`;
+  const reset = w.builtin
+    ? `<div class="viz-wopt"><span title="Back to this style's defaults">Defaults</span><button type="button" class="btn-mini orbit-btn" data-viz-wopt-reset>Reset</button></div>`
+    : "";
+  return `<div class="viz-vmenu-h" title="${esc(w.title)}">${esc(w.title)}</div><div class="viz-wopts" data-viz-wopts>${w.owner.options.map(row).join("")}${reset}</div>`;
 }
 
 /** "#abc" -> "#aabbcc" (a color input takes only the long form). */
@@ -470,17 +496,28 @@ function paintWorldOptions(): void {
 }
 
 function onWorldOption(input: HTMLInputElement | HTMLSelectElement): void {
-  const o = curWorld?.def.options.find((x) => x.key === input.dataset.vizWopt);
+  const o = optionsPanel().owner.options.find((x) => x.key === input.dataset.vizWopt);
   if (o) setWorldOption(o.key, o.type === "toggle" ? (input as HTMLInputElement).checked : input.value);
 }
 
-function setWorldOption(key: string, value: string | boolean): void {
+/** Save one option of the panel's owner (`value` null: every option back to its default) and redraw with it. */
+function setWorldOption(key: string, value: string | boolean | null): void {
   const w = curWorld;
-  if (!w || !w.def.options.some((x) => x.key === key)) return;
-  curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+  if (w) {
+    if (value === null || !w.def.options.some((x) => x.key === key)) return;
+    curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+  } else {
+    // P-VIZ.STYLEOPT1 (ADR-0688): the built-in style's options, stored the same way
+    const s = builtinOf(), def = BUILTIN_OPTIONS[s];
+    if (value === null) builtinVals[s] = resetOptions(localStorage, def);
+    else if (def.options.some((x) => x.key === key)) builtinVals[s] = saveOption(localStorage, def, key, value);
+    else return;
+  }
   if (!scene) return;
-  if (view && JSON.stringify(sceneTheme(view)) !== themeSig) { remount(); return; } // ADR-0652: an option turned the sky light or dark
-  scene.setStyle(effStyle(), curWorld);
+  // ADR-0652: an option turned the sky light or dark (P-VIZ.STYLEOPT1: or changed the backdrop, accent or particle budget)
+  if (view && sceneSig(sceneTheme(view)) !== themeSig) { remount(); return; }
+  if (curWorld) scene.setStyle(effStyle(), curWorld);
+  else scene.setBuiltinLook(curLook());
 }
 
 // ---------------------------------------------------------------------------------------------- P-WORLDS.CAST2 (ADR-0650)
@@ -637,8 +674,8 @@ function onLookPick(id: string, field: string, value: string): void {
  *  for the user's options (P-WORLDS.FX1, ADR-0652: environmentFor). */
 function sceneTheme(at: HTMLElement): VizTheme {
   const t = readTheme(at);
-  const env = curWorld ? worldEnvironment(curWorld.def, curWorld.options) : null;
-  if (!env) return t;
+  if (!curWorld) return builtinTheme(t, curLook()); // P-VIZ.STYLEOPT1 (ADR-0688): the built-in Background and Accent
+  const env = worldEnvironment(curWorld.def, curWorld.options);
   return { ...t, light: env.light, bg: toHex(env.fog.color, t.bg), txt: env.light ? "#1a1d26" : "#e8eaf2" };
 }
 
@@ -769,6 +806,8 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // (plasma-light, a token) merged as if its environmentFor returned them, for packs not yet migrated to v2.
     fx: () => scene?.edgeFxInfo() ?? null,
     fxPreview: (edges: Parameters<VizSceneHandle["previewEdges"]>[0]): boolean => scene?.previewEdges(edges) ?? false,
+    // P-VIZ.STYLEOPT1 (ADR-0688): what the built-in look draws (background, stars, drift, grid, name tags...), read-only.
+    builtinLook: () => scene?.builtinInfo() ?? null,
     // P-WORLDS.CAST2 (ADR-0650): the cast preferences in effect (a frozen copy of lucid.viz.cast.v1).
     castPrefs: (): CastPrefs => castPrefs,
     // P-WORLDS.KIT2 (ADR-0654): the character kit's lineup (presets, hair at every tier, the sleeve coverage pass
@@ -1060,6 +1099,7 @@ function openViewMenu(anchor: HTMLElement): void {
     // P-WORLDS.CAST2 (ADR-0650): a world's swatch option, and the Cast section.
     const sw = t.closest<HTMLElement>("[data-viz-wopt-sw]");
     if (sw) { setWorldOption(sw.dataset.vizWoptSw ?? "", sw.dataset.value ?? ""); paintWorldOptions(); return; }
+    if (t.closest("[data-viz-wopt-reset]")) { setWorldOption("", null); paintWorldOptions(); return; } // P-VIZ.STYLEOPT1 (ADR-0688)
     const cb = t.closest<HTMLElement>("[data-viz-cast]");
     if (cb) onCastPick(cb.dataset.vizCast ?? "", cb.dataset.value ?? "");
   });
@@ -1218,12 +1258,13 @@ function mount(failMsg: string | null = null): void {
   const stage = $("[data-viz-stage]", view) as HTMLElement;
   const loading = $("[data-viz-loading]", view) as HTMLElement;
   const theme = sceneTheme(view); // P-WORLDS.1: a world's sky decides light
-  themeSig = JSON.stringify(theme);
+  themeSig = sceneSig(theme);
   if (outgoing) ($("[data-viz-error]", view) as HTMLElement).hidden = true;
   else showStarting(theme.bg);
   let s: VizSceneHandle;
   try {
-    s = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
+    // P-VIZ.STYLEOPT1 (ADR-0688): a built-in style's Particles option scales the tier's budgets
+    s = mountVizScene(stage, scaleParticles(vizTierOpts(deps.perf.tier(), !!motionMq?.matches), curWorld ? 1 : curLook().particles), theme, prefs.view, autoCam);
   } catch (e) {
     scene = null;
     retireOutgoing();
@@ -1237,6 +1278,7 @@ function mount(failMsg: string | null = null): void {
   s.onDoublePick(onDoublePick);
   s.onUserCamera(onUserCamera);
   s.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
+  s.setBuiltinLook(curLook()); // P-VIZ.STYLEOPT1 (ADR-0688)
   s.setStyle(effStyle(), curWorld);
   tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   s.onLost(() => onSceneLost(s));
@@ -1454,7 +1496,7 @@ function onTick(): void {
     if (hover) paintTip(hover.hit, hover.x, hover.y);
     syncScaffolds(); // P-WORLDS.BUILD1: a style, view or tier change rebuilds them; a gone node's build goes
     if (panel) paintPanel();
-    if (view && themeSig && JSON.stringify(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
+    if (view && themeSig && sceneSig(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
   }
 }
 
