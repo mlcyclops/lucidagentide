@@ -197,6 +197,10 @@ export interface GuiSettings {
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
+  // P-WHATSNEW.1 (ADR-0686): the APP_VERSION whose What's new notes the user has seen (or that a fresh install
+  // recorded silently). Engine-side on purpose: the renderer's localStorage is per origin and a port-rolled
+  // launch (ADR-0458) starts empty. Unset = an install from before the popup existed.
+  whatsNewSeen?: string;
   // P-GOVCUI.1: the first-run "are you a Government/GovCon user handling CUI?" answer. Cosmetic onboarding
   // state (like userRole/tourSeen). `undefined` = not asked yet (drives the first-run gov step); `true` = the
   // user is on the CUI (gov gateway) path; `false` = standard use. It NEVER weakens the gate; the actual
@@ -553,6 +557,13 @@ export function setUserRole(role: UserRole): GuiSettings {
 export function tourSeen(): boolean { return !!load().tourSeen; }
 export function setTourSeen(seen: boolean): GuiSettings {
   const s = load(); s.tourSeen = !!seen; save(s); return s;
+}
+/** P-WHATSNEW.1 (ADR-0686): the version whose What's new notes were last seen, or null when never recorded. */
+export function whatsNewSeen(): string | null { return load().whatsNewSeen ?? null; }
+/** Records `version` as seen. Only a semver string is stored; anything else is refused (returns false). */
+export function setWhatsNewSeen(version: string): boolean {
+  if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.-]{1,40})?$/.test(version)) return false;
+  const s = load(); s.whatsNewSeen = version; save(s); return true;
 }
 /** P-GOVCUI.1: whether the first-run Government/CUI question has been answered (either way) yet. Drives the
  *  first-run gov step so it asks exactly once. */

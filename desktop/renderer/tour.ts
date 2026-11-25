@@ -18,6 +18,7 @@
 //  - stepsForRole()     the ordered subset of steps that matter to a role (mirrors ADR-0088).
 //  - coachHtml()        the inner HTML of one coach card (header · body · tip · dots · controls).
 
+import { docsLinkHtml, type DocsPage } from "./docs_links.ts";
 import { icon } from "./icons.ts";
 import { modCombo } from "./platform.ts";
 import type { UserRole } from "./bridge.ts";
@@ -77,6 +78,8 @@ export interface TourStep {
   body: string;
   /** Optional emphasized one-liner (rendered as the "tip" chip). */
   tip?: string;
+  /** Optional documentation page linked under the body (P-DOCS.2, ADR-0681). */
+  docs?: { page: DocsPage; label: string };
 }
 
 // Master catalog. Every target is a STABLE selector that exists in the assembled shell (rails,
@@ -141,6 +144,7 @@ export const TOUR_STEPS: Record<string, TourStep> = {
     id: "closer", target: "", icon: "check",
     title: "You're all set",
     body: `Your view just leads with what your role needs - the rest is one ${modCombo("K")} away. Change role in Settings, or replay this tour from About whenever you like.`,
+    docs: { page: "getStarted", label: "Read the Get started guide ↗" },
   },
 };
 
@@ -178,6 +182,7 @@ export function coachHtml(step: TourStep, idx: number, total: number): string {
       <span class="coach-count">${idx + 1} / ${total}</span>
     </div>
     <p class="coach-body">${e(step.body)}</p>
+    ${step.docs ? docsLinkHtml(step.docs.page, step.docs.label, "coach-link", "Opens in your browser") : ""}
     ${tip}
     <div class="coach-nav">
       <div class="coach-dots" aria-hidden="true">${dots}</div>

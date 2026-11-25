@@ -118,7 +118,7 @@ import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
 import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { engineReceipts, loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
 import { rowUpdate, type WorldUpdates } from "./world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
 import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
@@ -275,6 +275,8 @@ function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringif
 // cast exactly when it changes), and the Worlds menu.
 
 const worldHost = createWorldHost();
+/** P-MARKET.AUTH2 (ADR-0684): receipts live in the engine vault, not this origin's localStorage (moved once). */
+const worldReceipts = engineReceipts(bridge, typeof localStorage === "undefined" ? undefined : localStorage);
 let worlds: WorldEntry[] = [];
 let curWorld: SceneWorld | null = null;
 let worldsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
@@ -347,7 +349,7 @@ async function refreshWorlds(): Promise<void> {
     importModule: (url: string): Promise<unknown> => import(/* @vite-ignore */ url),
     host: worldHost,
     provider: getMarketProvider(),
-    storage: localStorage,
+    receipts: worldReceipts,
     now: Date.now,
     previous: worlds,
   });
