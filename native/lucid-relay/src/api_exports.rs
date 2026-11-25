@@ -316,13 +316,37 @@ fn request(desk: &dyn Desk, req: &Req) -> Result<Answer, Refused> {
         idem::Begin::Refused(r) => return Err(no(r.status, r.code, r.why())),
         idem::Begin::Fresh => {}
     }
-    let out = request_fresh(desk, req, json);
-    let kept = match &out {
-        Ok(a) => desk.idempotency().finish(req.org, req.client, &key, a.status, &a.body).is_ok(),
-        Err(_) => false,
-    };
-    if !kept {
-        desk.idempotency().abandon(req.org, req.client, &key);
+    let sha256 = idem::body_sha256(json);
+    // the key of a job kept before a restart (as the holds route): its record carries the key, the body hash and, once
+    // answered, the answer; records without `idem` are not matched
+    let kept_before = jobs(desk, req.org).into_iter().find_map(|r| {
+        let i = r.get("idem")?;
+        (s(&r, "client") == req.client && i.get("client").and_then(Value::as_str) == Some(req.client) && i.get("key").and_then(Value::as_str) == Some(key.as_str())).then(|| i.clone())
+    });
+    if let Some(i) = kept_before.filter(|i| i.get("at").and_then(Value::as_i64).is_some_and(|at| req.now - at < idem::KEEP_S)) {
+        let at = i.get("at").and_then(Value::as_i64).unwrap_or(req.now);
+        let was = i.get("sha256").and_then(Value::as_str).unwrap_or_default().to_string();
+        let answer = i.get("status").and_then(Value::as_u64).map(|st| (st as u16, i.get("body").cloned().unwrap_or(Value::Null)));
+        desk.idempotency().recover(req.org, req.client, &key, &was, at, answer.clone());
+        return match answer {
+            _ if was != sha256 => Err(no(idem::MISMATCH.status, idem::MISMATCH.code, idem::MISMATCH.why())),
+            Some((status, body)) => Ok(Answer { replayed: true, ..ok(status, body) }),
+            None => Err(no(idem::BUSY.status, idem::BUSY.code, idem::BUSY.why())),
+        };
+    }
+    let mut kept = false;
+    let out = request_fresh(desk, req, json, &json!({ "client": req.client, "key": key, "sha256": sha256, "at": req.now }), &mut kept);
+    match &out {
+        // the job record already carries the answer: a failed key write leaves the key running here and replayable
+        // after a restart, never free for a second job
+        Ok(a) => {
+            if desk.idempotency().finish(req.org, req.client, &key, a.status, &a.body).is_err() {
+                return Err(no(503, "unavailable", "The console could not keep the answer of this request; try again later with the same Idempotency-Key."));
+            }
+        }
+        // a job record carries the key: it stays running, so a retry cannot create a second job
+        Err(_) if kept => {}
+        Err(_) => desk.idempotency().abandon(req.org, req.client, &key),
     }
     out
 }
@@ -396,7 +420,9 @@ fn relay_refusal(e: &LinkError) -> Refused {
     }
 }
 
-fn request_fresh(desk: &dyn Desk, req: &Req, json: &Value) -> Result<Answer, Refused> {
+/// `key_entry` is the request's idempotency entry (client, key, body hash, time), kept in the job record with the
+/// answer; `kept` is true while a job record of this request is on disk.
+fn request_fresh(desk: &dyn Desk, req: &Req, json: &Value, key_entry: &Value, kept: &mut bool) -> Result<Answer, Refused> {
     let o = json.as_object().ok_or_else(|| bad("The body is a JSON object."))?;
     if let Some(k) = o.keys().find(|k| !["matter", "reason", "scope", "reviewers"].contains(&k.as_str())) {
         return Err(bad(format!("{k} is not a field of an export request.")));
@@ -448,7 +474,7 @@ fn request_fresh(desk: &dyn Desk, req: &Req, json: &Value) -> Result<Answer, Ref
     let rec = json!({
         "job": job, "org": req.org, "client": req.client, "client_name": st.name, "owner": st.owner, "matter": matter, "reason": reason,
         "scope": scope, "format": FORMAT, "recipient": recipient, "max_bytes": st.max_bytes, "ceiling": st.ceiling, "map_seq": st.map_seq,
-        "reviewers": reviewers, "requested_at": req.now, "state": "waiting", "relay": relay, "releases": 0,
+        "reviewers": reviewers, "requested_at": req.now, "state": "waiting", "relay": relay, "releases": 0, "idem": key_entry,
     });
     // audited and kept before the archive relay is asked
     let e = json!({ "rid": req.rid, "route": req.route_name, "action": "compliance.export.requested", "result": "ok", "job": job, "client": req.client,
@@ -457,6 +483,7 @@ fn request_fresh(desk: &dyn Desk, req: &Req, json: &Value) -> Result<Answer, Ref
     {
         let _one = LOCK.lock();
         save(desk, req.org, &rec).map_err(|_| no(503, "export-storage", "The console could not keep the job; try again."))?;
+        *kept = true;
     }
     // 2.5: the request fields only; the archive derives the rest itself (Rev4Review R4-2)
     let wire = json!({ "job": job, "client": req.client, "matter": matter, "reason": reason, "scope": scope, "reviewers": reviewers, "requested_at": req.now });
@@ -464,15 +491,25 @@ fn request_fresh(desk: &dyn Desk, req: &Req, json: &Value) -> Result<Answer, Ref
         let r = relay_refusal(&err);
         if let Some(dir) = job_dir(desk, req.org, &job) {
             let _one = LOCK.lock();
-            let _ = std::fs::remove_dir_all(dir);
+            *kept = std::fs::remove_dir_all(dir).is_err();
         }
         let _ = desk.record(req.org, json!({ "action": "compliance.export.ended", "result": "refused", "job": job, "state": "refused", "code": r.code }), req.now);
         publish_jobs(desk, req.org);
         return Err(r);
     }
+    let answer = json!({ "job": job, "state": "waiting", "reviewers_needed": REVIEWERS_MIN, "expires_waiting": req.now + WAITING_S });
+    // the answer joins the key in the job record, so a retry after a restart replays it
+    {
+        let _one = LOCK.lock();
+        if let Some(mut r) = load(desk, req.org, &job) {
+            r["idem"]["status"] = json!(202);
+            r["idem"]["body"] = answer.clone();
+            save_logged(desk, req.org, &r);
+        }
+    }
     publish_jobs(desk, req.org);
     desk.emit(req.org, "export.requested", json!({ "job": job, "client": req.client, "state": "waiting" }), req.now);
-    Ok(ok(202, json!({ "job": job, "state": "waiting", "reviewers_needed": REVIEWERS_MIN, "expires_waiting": req.now + WAITING_S })))
+    Ok(ok(202, answer))
 }
 
 /// 5.3.7 `GET v1/compliance/exports?after&limit`: this client's jobs, newest first.
@@ -1197,6 +1234,36 @@ mod tests {
         // readable, without a preview while waiting
         let one = call(&m, RouteId::ComplianceExport, a.body["job"].as_str(), None, None, None, NOW).unwrap();
         assert!(one.body.get("preview").is_none() && one.body["state"] == "waiting");
+        let _ = std::fs::remove_dir_all(&m.dir);
+    }
+
+    #[test]
+    fn a_retry_after_a_restart_finds_the_key_in_the_job_record() {
+        let m = mock("restart", waiting());
+        let a = post(&m, request_body(), KEY).unwrap();
+        let job = a.body["job"].as_str().unwrap().to_string();
+        // a restart: the key is gone from memory, the job record stays on disk
+        let after = || Mock { dir: m.dir.clone(), ..mock("restart-fresh", waiting()) };
+        let r = after();
+        let again = post(&r, request_body(), KEY).unwrap();
+        assert!(again.replayed && again.body == a.body, "the kept answer is replayed: {}", again.body);
+        assert!(r.sent.lock().is_empty(), "nothing sent again");
+        let r = after();
+        let mut other = request_body();
+        other["matter"] = json!("2026-115");
+        let e = post(&r, other.clone(), KEY).err().unwrap();
+        assert_eq!((e.status, e.code), (422, idem::MISMATCH.code));
+        // a crash between the job save and the answer: the record has the key without the answer, so a retry is busy
+        let mut rec = load(&m, ORG, &job).unwrap();
+        rec["idem"].as_object_mut().unwrap().retain(|k, _| !["status", "body"].contains(&k.as_str()));
+        save(&m, ORG, &rec).unwrap();
+        let r = after();
+        let e = post(&r, request_body(), KEY).err().unwrap();
+        assert_eq!((e.status, e.code), (idem::BUSY.status, idem::BUSY.code));
+        assert!(r.sent.lock().is_empty());
+        let r = after();
+        assert_eq!(post(&r, other, KEY).err().unwrap().status, 422);
+        assert_eq!(jobs(&m, ORG).len(), 1, "never a second job");
         let _ = std::fs::remove_dir_all(&m.dir);
     }
 
