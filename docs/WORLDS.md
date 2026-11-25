@@ -222,6 +222,13 @@ An installed world keeps its original signed package beside the install
 (`GET /api/worlds/export?id=...`), and **Import world file** installs them on another machine with no internet. The
 signature, hashes and scan are checked again there.
 
+## 8. Updates (ADR-0685)
+
+Publish a new version of a world as a new signed package with a higher `version`; the store reports it as the
+entitlement's `latestVersion`. A signed-in user who owns the world then sees one "World updates available" notice
+(once per world and version), a dot on the Worlds button, and **Update** on the world's row in the Worlds menu. Update
+installs the new package through the same verified store path as a purchase, and Visualize switches to it at once.
+
 ## Engine routes
 
 | Route | What it does |
@@ -231,6 +238,7 @@ signature, hashes and scan are checked again there.
 | `POST /api/worlds/import` | raw package bytes (sent with a JSON content type, as the origin guard requires), header `x-lucid-filename` |
 | `GET /api/worlds/export?id=` | the kept signed package as an attachment |
 | `POST /api/worlds/uninstall` | `{ id }` removes the world |
+| `GET/POST /api/worlds/update-notices` | `{ announced: ["<id>@<version>"] }`: the world updates already announced (ADR-0685), kept in the engine settings; POST replaces the list (sanitized, newest 200) |
 | `POST /api/viz/artifact` | `{ html }` runs a build artifact through the security gate (fail-closed); `{ ok: true, id, trust: "untrusted" }` or `{ ok: false, reason, trust: "quarantined" }` (a block is audited) |
 | `GET /api/viz/artifact/frame?id=&t=` | the passed artifact's sandboxed frame (its own CSP, the artifact in a `srcdoc` child); UI token only, as a query param |
 | `POST /api/viz/artifact/discard` | `{ id }` drops a passed artifact (they also expire after 30 minutes) |

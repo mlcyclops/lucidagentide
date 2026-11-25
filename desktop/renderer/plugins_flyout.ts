@@ -42,7 +42,7 @@ import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
 import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
-  BLACK_ARROW, FREE_PLUGINS, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PREMIUM_PLUGINS, SPONSOR_CREDITS, SPONSOR_PACK_ID, SPONSOR_PICKS, WORLDS_GROUP, WORLD_PACKS_GROUP,
+  BLACK_ARROW, FREE_PLUGINS, GATE_TEXT, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PREMIUM_PLUGINS, SPONSOR_CREDITS, SPONSOR_PACK_ID, SPONSOR_PICKS, WORLDS_GROUP, WORLD_PACKS_GROUP,
   addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, isBundle, isWorldPlugin, matchesQuery, ownedPackMeta, parseCageOrUei, parseTierPref,
   provenanceChip, sortFree, storeInstalledVersion,
   type AddonAction, type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
@@ -51,7 +51,7 @@ import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
 import { isEntitled, type AuthState, type Entitlement, type GovAccessStatus } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider, RedeemResult } from "./market_gate.ts";
 import type {
-  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginGate, PluginHealthItem, PluginHealthView, PluginInstallView, PluginKind, PluginLicenseView,
+  InstalledPluginView, PluginActionView, PluginFileInspectView, PluginHealthItem, PluginHealthView, PluginInstallView, PluginKind, PluginLicenseView,
   PluginRepairView, PluginStartView, PluginsListView,
 } from "./bridge.ts";
 import {
@@ -60,6 +60,7 @@ import {
 } from "./plugin_restore.ts";
 import type { ToastOpts } from "./ui.ts";
 import type { InstalledWorld } from "./viz_world_api.ts";
+import { installFromStore } from "./world_updates.ts";
 
 export const TIER_PREF_KEY = "lucid.plugins-tier";
 const MEDIA_DIR = "assets/plugins";
@@ -448,17 +449,6 @@ export interface PluginsFlyout {
    *  the engine and the store again about everything and always says the outcome. */
   restorePurchases(mode: "auto" | "manual"): Promise<void>;
 }
-
-/** Plain-language reasons for each install gate (ADR-0462), so a refusal says what failed. */
-const GATE_TEXT: Record<PluginGate, string> = {
-  manifest: "The package manifest is not valid",
-  hash: "A file in the package does not match its recorded checksum",
-  signature: "The package is not signed by a trusted publisher",
-  authenticode: "A program in the package is not signed by TECHLEAD 187 LLC",
-  scan: "The security scan stopped the package",
-  download: "The package could not be downloaded",
-  private: "This package cannot be installed from a file",
-};
 
 /** The optional add-ons on the Free tab (ADR-0541): the rows whose card installs, opens and removes. */
 const ADDON_PLUGINS = FREE_PLUGINS.filter((p) => p.status === "add-on");
@@ -1025,15 +1015,12 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     busy.add(p.id);
     setNote(p.id, { tone: "info", text: "Downloading the signed package." });
     try {
-      const url = await deps.provider().downloadUrl(p.id).catch(() => null);
-      if (!url) { setNote(p.id, { tone: "danger", text: "No download link came back. The purchase may still be processing, or the package is not published yet." }); return false; }
-      setNote(p.id, { tone: "info", text: "Checking the signature, checksums, and security scan." });
-      const r = await deps.installFromUrl(url, p.id);
-      if (!r) { setNote(p.id, { tone: "danger", text: "The install service did not answer. Is the LUCID engine running?" }); return false; }
+      // P-WORLDS.UPDATE1 (ADR-0685): the one store install path, shared with the Worlds menu's Update.
+      const r = await installFromStore(p.id, { provider: deps.provider(), installFromUrl: deps.installFromUrl },
+        () => setNote(p.id, { tone: "info", text: "Checking the signature, checksums, and security scan." }));
       if (!r.ok) {
-        const why = `${GATE_TEXT[r.gate]}: ${r.reason}`;
-        setNote(p.id, { tone: "danger", text: `Not installed. ${why}` });
-        deps.toast({ tone: "danger", title: `${p.name} was not installed`, desc: why, timeout: 0, actions: [{ label: "OK" }] });
+        setNote(p.id, { tone: "danger", text: r.refused ? `Not installed. ${r.reason}` : r.reason });
+        if (r.refused) deps.toast({ tone: "danger", title: `${p.name} was not installed`, desc: r.reason, timeout: 0, actions: [{ label: "OK" }] });
         return false;
       }
       const list = await deps.pluginsList().catch(() => null);

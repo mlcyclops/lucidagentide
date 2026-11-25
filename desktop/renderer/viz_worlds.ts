@@ -15,16 +15,20 @@
 // A world that fails to load or validate is still listed, with its error, and is never offered.
 //
 // Activation (the store's rule, market_gate's provider): with no provider configured a world is allowed. With one,
-// a fresh receipt (an entitlement seen active within RECEIPT_TTL_MS, kept in localStorage RECEIPTS_KEY so an
-// offline machine keeps working) allows it without asking; otherwise the signed-in user's entitlement is checked
-// once (harness/market/entitlement.decidePackAction) and an active one writes the receipt. Not signed in or not
-// entitled: the world shows as "Get" (the view opens the store) instead of being selected.
+// a receipt (an entitlement seen active) answers. ADR-0684: receipts live in a ReceiptStore, in the app the engine
+// vault (engineReceipts over /api/market/receipts), so a port-rolled origin, a restart or an update still finds
+// them; an older version's localStorage RECEIPTS_KEY moves there once. A receipt younger than RECEIPT_RENEW_MS
+// allows the world without asking. An older one that is still fresh (RECEIPT_TTL_MS) asks the signed-in user's
+// entitlement (harness/market/entitlement.decidePackAction): active renews it; a definitive "not entitled" from the
+// store drops it (fail-closed); no answer (offline, the store unreachable, signed out) keeps the world allowed until
+// the receipt expires. Without a fresh receipt only an active entitlement allows it, and writes the receipt. Not
+// signed in or not entitled: the world shows as "Get" (the view opens the store) instead of being selected.
 //
 // A world's option values persist per world id under OPTIONS_KEY; mergeOptions keeps only values valid for the
 // option (a saved color, a choice or swatch still offered, a boolean), anything else falls back to the default.
 // Pure helpers are exported for viz_worlds.test.ts; only loadWorlds and the storage helpers touch the outside.
 
-import { decidePackAction, type AuthState, type Entitlement } from "../../harness/market/entitlement.ts";
+import { decidePackAction, isEntitled, type AuthState, type Entitlement } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
 import type { VizStyle } from "./viz_model.ts";
 import { isTrayReactionKind, TRAY_REACTION_KINDS } from "./viz_tray_reactions.ts";
@@ -37,6 +41,8 @@ export const RECEIPTS_KEY = "lucid.worlds.receipts.v1";
 export const OPTIONS_KEY = "lucid.worlds.options.v1";
 /** An entitlement seen active keeps the world usable this long without asking again (offline machines). */
 export const RECEIPT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** ADR-0684: a receipt younger than this answers without asking the store; an older fresh one is renewed. */
+export const RECEIPT_RENEW_MS = 24 * 60 * 60 * 1000;
 
 /** SVG path data only: commands, numbers, separators. No markup, no exponents, no units. */
 const ICON_RE = /^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-]+$/;
@@ -102,7 +108,9 @@ const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim().
 const isFn = (v: unknown): boolean => typeof v === "function";
 const isIcon = (v: unknown): boolean => typeof v === "string" && v.trim().length > 0 && ICON_RE.test(v);
 
-function checkOption(o: unknown, i: number): string | null {
+/** What is wrong with option `i` (a WorldOption), or null. P-VIZ.STYLEOPT1 (ADR-0688): the built-in styles' options
+ *  are held to the same rules. */
+export function checkOption(o: unknown, i: number): string | null {
   if (!isRec(o)) return `option ${i + 1} is not an object`;
   if (!nonEmpty(o.key)) return `option ${i + 1} has no key`;
   if (!nonEmpty(o.label)) return `option "${o.key}" has no label`;
@@ -308,13 +316,24 @@ function writeJson(storage: Store, key: string, v: Rec): void {
   try { storage.setItem(key, JSON.stringify(v)); } catch { /* still applies for this session */ }
 }
 
+/** Whose options are stored: a world (by its id), or a built-in style (P-VIZ.STYLEOPT1, ADR-0688: `builtin:<style>`). */
+export type OptionOwner = Pick<WorldDefinition, "id" | "options">;
+
 /** A world's option values on this machine (by world id), merged over its defaults. */
-export function loadOptions(storage: Store, def: WorldDefinition): WorldOptionValues {
+export function loadOptions(storage: Store, def: OptionOwner): WorldOptionValues {
   return mergeOptions(def.options, readJson(storage, OPTIONS_KEY)[def.id]);
 }
 
+/** P-VIZ.STYLEOPT1 (ADR-0688): forget every saved value of `def`; returns its defaults. */
+export function resetOptions(storage: Store, def: OptionOwner): WorldOptionValues {
+  const all = readJson(storage, OPTIONS_KEY);
+  delete all[def.id];
+  writeJson(storage, OPTIONS_KEY, all);
+  return optionDefaults(def.options);
+}
+
 /** Save one option value; returns the world's merged values after it. */
-export function saveOption(storage: Store, def: WorldDefinition, key: string, value: string | boolean): WorldOptionValues {
+export function saveOption(storage: Store, def: OptionOwner, key: string, value: string | boolean): WorldOptionValues {
   const all = readJson(storage, OPTIONS_KEY);
   const prev = all[def.id];
   const cur = isRec(prev) ? prev : {};
@@ -342,17 +361,84 @@ export function decideWorldAccess(configured: boolean, receipt: unknown, auth: A
   return action === "pull" ? "allowed" : action;
 }
 
-/** Whether this machine may use the world now; asks the provider only when there is no fresh receipt, and keeps
- *  a receipt when the entitlement is active. */
-export async function worldAccess(packageId: string, provider: EntitlementProvider, storage: Store, now: number): Promise<WorldAccess> {
+/** ADR-0684: where receipts are kept, by world package id. A store that cannot be reached reads as no receipt and
+ *  drops a write (the decision still applies this session). */
+export interface ReceiptStore {
+  get(packageId: string): Promise<unknown>;
+  put(packageId: string, r: WorldReceipt): Promise<void>;
+  drop(packageId: string): Promise<void>;
+}
+
+/** Receipts in page memory (tests, and a store with no engine behind it). */
+export function memoryReceipts(): ReceiptStore {
+  const held = new Map<string, WorldReceipt>();
+  return {
+    get: async (id) => held.get(id),
+    put: async (id, r) => { held.set(id, r); },
+    drop: async (id) => { held.delete(id); },
+  };
+}
+
+/** The engine routes as bridge.ts exposes them (null / false: the engine did not answer or refused). */
+export interface ReceiptsApi {
+  marketReceipts(): Promise<Record<string, number> | null>;
+  marketReceiptsPut(patch: { set?: Record<string, number>; drop?: string[] }): Promise<boolean>;
+}
+
+/** The app's receipts: the engine vault, read once and cached; writes go through. `legacy` (this origin's
+ *  localStorage) is merged in once and its RECEIPTS_KEY deleted after the engine kept it; while the engine does
+ *  not answer, its receipts still count and it is kept for the next launch. */
+export function engineReceipts(api: ReceiptsApi, legacy?: Pick<Storage, "getItem" | "removeItem">): ReceiptStore {
+  let cache: Promise<Map<string, number>> | null = null;
+  const load = async (): Promise<Map<string, number>> => {
+    const old: Record<string, number> = {};
+    if (legacy) {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(legacy.getItem(RECEIPTS_KEY) ?? "null"); } catch { /* unreadable: nothing to move */ }
+      if (isRec(parsed)) for (const [id, r] of Object.entries(parsed)) if (isRec(r) && typeof r.at === "number" && Number.isFinite(r.at) && r.at > 0) old[id] = r.at;
+    }
+    const held = await api.marketReceipts().catch(() => null);
+    if (!held) { cache = null; return new Map(Object.entries(old)); } // ask the engine again next time
+    const merged = new Map(Object.entries(held));
+    const moving = Object.entries(old).filter(([id, at]) => { const prev = merged.get(id); return prev === undefined || prev < at; });
+    for (const [id, at] of moving) merged.set(id, at);
+    if (legacy && (!moving.length || (await api.marketReceiptsPut({ set: Object.fromEntries(moving) }).catch(() => false)))) {
+      try { legacy.removeItem(RECEIPTS_KEY); } catch { /* ignore */ }
+    }
+    return merged;
+  };
+  const all = (): Promise<Map<string, number>> => {
+    if (!cache) cache = load();
+    return cache;
+  };
+  return {
+    get: async (id) => { const at = (await all()).get(id); return at === undefined ? undefined : { at }; },
+    put: async (id, r) => { (await all()).set(id, r.at); await api.marketReceiptsPut({ set: { [id]: r.at } }).catch(() => false); },
+    drop: async (id) => { (await all()).delete(id); await api.marketReceiptsPut({ drop: [id] }).catch(() => false); },
+  };
+}
+
+/** Whether this machine may use the world now (see the header: a young receipt answers without asking; an older
+ *  fresh one is renewed, dropped on a definitive "not entitled", kept when the store does not answer). */
+export async function worldAccess(packageId: string, provider: EntitlementProvider, receipts: ReceiptStore, now: number): Promise<WorldAccess> {
   if (!provider.configured()) return "allowed";
-  const receipts = readJson(storage, RECEIPTS_KEY);
-  if (receiptFresh(receipts[packageId], now)) return "allowed";
+  const held = await receipts.get(packageId).catch(() => undefined);
+  const fresh = receiptFresh(held, now);
+  if (fresh && now - (held as WorldReceipt).at < RECEIPT_RENEW_MS) return "allowed";
   const auth = await provider.auth().catch((): AuthState | null => null);
   const ent = auth?.signedIn ? await provider.entitlement(packageId).catch((): Entitlement | null => null) : null;
   const access = decideWorldAccess(true, null, auth, ent, now);
-  if (access === "allowed") { receipts[packageId] = { at: now } satisfies WorldReceipt; writeJson(storage, RECEIPTS_KEY, receipts); }
-  return access;
+  if (access === "allowed") {
+    await receipts.put(packageId, { at: now }).catch(() => {});
+    return access;
+  }
+  if (!fresh) return access;
+  // The store answered for this account, and the entitlement is not active: the receipt is no longer true.
+  if (ent && !isEntitled(ent, new Date(now).toISOString())) {
+    await receipts.drop(packageId).catch(() => {});
+    return access;
+  }
+  return "allowed"; // no answer: the fresh receipt keeps it usable
 }
 
 // ------------------------------------------------------------------------------------------ loading
@@ -364,7 +450,8 @@ export interface WorldsDeps {
   importModule(url: string): Promise<unknown>;
   host: WorldHost;
   provider: EntitlementProvider;
-  storage: Store;
+  /** ADR-0684: the receipts (the app: engineReceipts, the engine vault). */
+  receipts: ReceiptStore;
   now(): number;
   /** The last load's entries: a world whose module URL (id and version) is unchanged keeps its definition
    *  (a selected world is not rebuilt by a refresh); access is checked again. */
@@ -381,7 +468,7 @@ async function loadOne(w: InstalledWorld, d: WorldsDeps): Promise<WorldEntry> {
   if (!(w.apiVersion <= WORLD_API_VERSION)) return broken(`built for a newer Visualize (world API ${w.apiVersion}, this app has ${WORLD_API_VERSION}); update LUCID`);
   const prev = d.previous?.find((p) => p.installed.id === w.id && p.installed.module === w.module && p.def);
   if (prev?.def) {
-    const access = await worldAccess(w.id, d.provider, d.storage, d.now());
+    const access = await worldAccess(w.id, d.provider, d.receipts, d.now());
     return { ...base, label: prev.def.label, tagline: prev.def.tagline, def: prev.def, error: null, access };
   }
   let raw: unknown;
@@ -395,7 +482,7 @@ async function loadOne(w: InstalledWorld, d: WorldsDeps): Promise<WorldEntry> {
   }
   const v = validateWorld(raw, w);
   if (!v.ok) return broken(v.error);
-  const access = await worldAccess(w.id, d.provider, d.storage, d.now());
+  const access = await worldAccess(w.id, d.provider, d.receipts, d.now());
   return { ...base, label: v.def.label, tagline: v.def.tagline, def: v.def, error: null, access };
 }
 

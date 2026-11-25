@@ -9,7 +9,7 @@
 // the fragment) that carries the write token when sharing EDIT — so scanning the QR opens the PWA and can
 // drive. Without a pwaBase, the browser link stays the legacy relay-host form (unchanged).
 
-import { MarketAuth, type AuthStorage } from "../../desktop/renderer/market_auth.ts";
+import { MarketAuth, memoryAuthStorage, storageCustody } from "../../desktop/renderer/market_auth.ts";
 import { CollabManager, type CollabManagerDeps, type RelayTarget } from "../../desktop/collab/manager.ts";
 import type { HostTransport } from "../../desktop/collab/host.ts";
 import type { LucidCollabFrame } from "../../desktop/collab/frames.ts";
@@ -23,23 +23,23 @@ console.log("== P-REMOTE.2b: token refresh custody + PWA-pointing invite links =
 
 // (A) refresh custody: a near-expiry token is renewed via the securetoken exchange (injected fetch)
 const NOW = 1_800_000_000_000;
-const mem = (): AuthStorage => { let v: string | null = null; return { get: () => v, set: (x) => { v = x; }, remove: () => { v = null; } }; };
-const auth = new MarketAuth(mem(), () => NOW);
-auth.applyCallback("lucid://auth?token=old&refresh=r0&email=operator%40example.com&exp=1800000030"); // expires in 30s
 let exchanged = false;
 const fakeSecuretoken = (async (url: string) => {
   if (!String(url).includes("securetoken.googleapis.com")) fail("did not call the securetoken endpoint");
   exchanged = true;
   return new Response(JSON.stringify({ id_token: "renewed", refresh_token: "r1", expires_in: "3600" }), { status: 200 });
 }) as unknown as typeof fetch;
-const fresh = await auth.freshIdToken({ apiKey: "public-web-key", fetchImpl: fakeSecuretoken });
+// ADR-0684: the record is held by a custody (the engine vault in the app; a page-memory slot here).
+const auth = new MarketAuth(storageCustody(memoryAuthStorage(), { fetchImpl: fakeSecuretoken, now: () => NOW }), () => NOW, { apiKey: "public-web-key" });
+auth.applyCallback("lucid://auth?token=old&refresh=r0&email=operator%40example.com&exp=1800000030"); // expires in 30s
+const fresh = await auth.getIdToken();
 if (fresh !== "renewed" || !exchanged) fail("near-expiry token was not refreshed");
-if (await auth.getIdToken() !== "renewed") fail("refreshed token was not persisted");
-pass("MarketAuth renews a near-expiry ID token via the securetoken refresh exchange (persisted)");
+if (await auth.getIdToken() !== "renewed") fail("refreshed token was not kept");
+pass("MarketAuth renews a near-expiry ID token via the securetoken refresh exchange (kept by the custody)");
 
-const signedOut = new MarketAuth(mem(), () => NOW);
-if (await signedOut.freshIdToken({ apiKey: "k" }) !== null) fail("signed-out freshIdToken must be null");
-pass("freshIdToken fails closed to null when signed out / no refresh token");
+const signedOut = new MarketAuth(storageCustody(memoryAuthStorage()), () => NOW, { apiKey: "k" });
+if (await signedOut.getIdToken() !== null) fail("signed-out getIdToken must be null");
+pass("getIdToken fails closed to null when signed out");
 
 // (B) PWA-pointing invite links via a mock-transport CollabManager
 class MockTransport implements HostTransport {

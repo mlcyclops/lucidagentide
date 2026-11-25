@@ -11,8 +11,8 @@ import type { VizBusEvent } from "./viz_bus.ts";
 import { createDemo, DEMO_ASK_MS, DEMO_CYCLE_MS } from "./viz_demo.ts";
 import {
   ASK_POLL_GRACE_MS, askChoice, askTypeOf, drainNewApprovals, LANE_ASK_MS, MAIN_ASK_MS, pendingApprovals, resolveApproval, triage,
-  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, COMMIT_HOLD_MS, COMMIT_MAX_MS, committing, createOutput, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, foldOutput, frameInterval,
-  GONE_MS, HUB_ID, idleSeconds, OUT_CHARS, OUT_TURNS, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
+  applyEvent, applyFleet, applyLaneStatus, applyRuns, census, COMMIT_HOLD_MS, COMMIT_MAX_MS, committing, createVizState, cubeHalf, describeNode, drainEvents, edgesOf, fmtRate, frameInterval,
+  GONE_MS, HUB_ID, idleSeconds, layoutPositions, LOG_MAX, markAsked, personaFor, shortLabel, superviseText, teamOf, tick, vizTierOpts,
   type PowerKind, type VizApproval, type VizEvent, type VizState,
 } from "./viz_model.ts";
 
@@ -218,35 +218,6 @@ describe("subagents", () => {
     const kid = [...s.nodes.values()].find((n) => n.kind === "subagent")!;
     expect(kid.status).toBe("killed");
     expect(powers(drainEvents(s))).toEqual([{ node: "L1", power: "tool-failed" }, { node: kid.id, power: "killed" }]);
-  });
-});
-
-describe("P-VIZ.4 node panel output", () => {
-  test("a watch seed, the live stream, a sent prompt and a turn end read like the card's transcript", () => {
-    const o = createOutput();
-    foldOutput(o, { type: "watch-seed", turns: [{ role: "user", text: "Fix app.py" }, { role: "assistant", text: "Done." }, { role: "system", text: "x" }] });
-    expect(o.seeded).toBe(true);
-    expect(o.turns).toEqual([{ role: "user", text: "Fix app.py" }, { role: "assistant", text: "Done." }]);
-    foldOutput(o, { type: "user", text: "Now add tests" });
-    foldOutput(o, { type: "token", text: "Reading" });
-    foldOutput(o, { type: "tool", id: "c1", name: "read", detail: "app.py", status: "open" });
-    foldOutput(o, { type: "tool", id: "c1", name: "read", detail: "app.py", status: "done" });
-    foldOutput(o, { type: "token", text: "Wrote them." });
-    expect(o.live).toBe("Reading\n> app.py\nWrote them.");
-    foldOutput(o, { type: "done" });
-    expect(o.live).toBe("");
-    expect(o.turns.slice(-2)).toEqual([{ role: "user", text: "Now add tests" }, { role: "assistant", text: "Reading\n> app.py\nWrote them." }]);
-    foldOutput(o, { type: "error", message: "boom" });
-    expect(o.turns.at(-1)).toEqual({ role: "assistant", text: "Error: boom" });
-  });
-  test("bounded: the newest turns and the newest text are kept", () => {
-    const o = createOutput();
-    for (let i = 0; i < OUT_TURNS + 3; i++) foldOutput(o, { type: "user", text: `p${i}` });
-    expect(o.turns).toHaveLength(OUT_TURNS);
-    expect(o.turns.at(-1)!.text).toBe(`p${OUT_TURNS + 2}`);
-    foldOutput(o, { type: "token", text: "a".repeat(OUT_CHARS) + "END" });
-    expect(o.live).toHaveLength(OUT_CHARS);
-    expect(o.live.endsWith("END")).toBe(true);
   });
 });
 
