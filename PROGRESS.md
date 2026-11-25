@@ -6581,3 +6581,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** `viz_view.pollFleet` takes every lane of fleet/status instead of `hubLanes` (ADR-0410's hub scope stays the orbit's), so lanes born under an earlier Main session (New session, Activate, an upgrade's restart) are drawn and counted again; `demo_p_viz_fleet_1.mjs` failed on the old bundle (0 agents) and passes on the rebuilt one; demo-P-VIZ.FLEET1.
 - **stubbed:** none.
 - **next:** ship it in the next release (installed v2.7.1 keeps the old filter until then).
+## P-WORLDS.FORGE (ADR-0689, Proposed): World Forge, guided remixes of purchased worlds, community review and resale at a 30% share
+- **shipped (2026-11-25):** the ADR only: tiers (data-only Remix `world-remix/1`, sandboxed Extend, Code deferred), the guided Forge wizard on the user's own provider, Creator Agreement and Community World License, automated plus human review with a kind-scoped Community Publisher key, Stripe Connect Express destination charges (70/30, $1.99 to $29.99, 14-day hold), versioning, trust and safety, privacy, phases and stop conditions.
+- **stubbed:** everything; no code, schema, store function, admin view or legal text exists yet.
+- **next:** Phase 0: accept the ADR, counsel drafts the Creator Agreement, Community World License and DMCA policy, register the DMCA agent, enable Stripe Connect and scope Stripe Tax, fix the Sponsor credit conflict and the bundle copy.

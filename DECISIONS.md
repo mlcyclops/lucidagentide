@@ -28524,3 +28524,157 @@ The dock gains `rightOf`: a right dock sits against that panel's left edge (foll
 **Decision.** `viz_view.pollFleet` passes every lane of `fleet/status` to the scene, the ledger, the buddies, the preview chips and the lane streams. Hub scope stays the orbit's (ADR-0410 unchanged); the grid already lists every lane. Nothing new opens: lane streams stay capped at `WATCH_MAX` (3) by status and recency.
 
 **Consequences.** Visualize shows the whole running fleet around Main whatever session Main holds, and its census matches the ledger. `demo_p_viz_fleet_1.mjs` (isolated QA engine) starts hub A with two lanes, starts hub B, asserts the engine reports both lanes under the older hub, opens Visualize with the real control and asserts both lanes are drawn and counted; it failed on the old bundle ("0 agents") and passes on the rebuilt one, whose served `/app.js` carries `const mine = st.lanes` and no `hubLanes(st.lanes`.
+
+## ADR-0689 -- P-WORLDS.FORGE: World Forge, guided customization of purchased Agent Worlds, community review and resale with a 30% marketplace share (2026-11-25, Proposed)
+
+**Status:** Proposed. Design only; nothing here is built. Phase 0 (this ADR plus legal) gates every later phase.
+
+**Context.** The owner asked whether a user can customize a purchased Lucid Agent World with a guided prompt on their own tokens, submit the result for review and resell it to others, with the Marketplace keeping 30%. Nothing in the three repos supports a third-party seller today:
+- A world is ONE signed ES module that runs with renderer privileges (ADR-0648 Consequences). The engine serves it same-origin under `/worlds/<id>/<version>/` and `viz_worlds.ts` loads it with `import()`. Its only gates are the Ed25519 publisher signature and the text scanner (`desktop/plugins/install.ts` gate chain: manifest, per-file sha256, signature, authenticode for daemons, scan, fail-closed; `installWorldBytes` requires kind `world` and a valid signature). Declared permissions are not enforced in the renderer.
+- Exactly one publisher key is trusted: `PLUGIN_PUBLISHER_SPKI_B64` in `harness/plugins/publisher_key.ts`, whose private half lives only on the owner's machine. `trustedPluginKeys()` already returns `TrustedPackKey[]` (`harness/kb/pack.ts:24`, the KG pack multi-key verifier), but that type has no notion of which package kinds a key may sign.
+- The world contract (`desktop/renderer/viz_world_api.ts`, WORLD_API_VERSION 2, frozen) already exposes the data a remix needs: `options: WorldOption[]` (`color | select | toggle | swatch`) with `WorldOptionValues` persisted per world in `lucid.worlds.options.v1`; text in `label`, `tagline`, `throws[3].label/tip`, `storm.label/tip`, build site and mini-game labels; throw icons as SVG path data the host sets with `setAttribute`; the data parts of `WorldEnvironment` (`light`, `fog`, `edges` colors, style and built-in `token`, `chargeColor`); `environmentFor(options)` (ADR-0652); cast preferences in `lucid.viz.cast.v1` (ADR-0650); and `miniGames` whose HTML only ever runs in the ADR-0653 sandbox (`POST /api/viz/artifact` over `scanAndDecideLarge`, strict policy, fail-closed; an `allow-scripts`-only iframe under `default-src 'none'`).
+- The store (`../lucid-tl187-store/entitlements/functions/src/index.ts`): `createCheckout` builds a Checkout Session from a static `PACKS` catalog by `lookup_key` with no Connect account, no `application_fee_amount` and no `transfer_data`, so every dollar lands in TL187's Stripe account (which also serves L.E.A.P.S.); `stripeWebhook` writes `entitlements/{uid}/packs/{id}` and `purchases/{eventId}`; `entitlement.ts:56` expires a one-time purchase on `charge.refunded`; no `charge.dispute.*` handler, no DMCA or takedown process and no refund window exist anywhere. `PREMIUM_ALL` covers every premium plugin id, worlds included, and ADR-0673 gives owner accounts every store item.
+- The only approval queue is government access (ADR-0465, `gov.ts`: `govAccess/{uid}` with pending/approved/declined, decided by owners in `/admin/marketplace`, ADR-0466, through `assertOwner()` callables that write `adminAudit`).
+- ADR-0464's LUCID Premium Plugin License forbids redistribution and resale, so a remix cannot be sold under it.
+- A world sells at $9.99 (ADR-0648, ADR-0679, `PLG-WORLD-<KEY>-OTF`); Sponsor is $49.99 and Patron $99.99, and the Sponsor credit count disagrees between `buy/catalog.js` (6) and `admin/marketplace/config.js` (12).
+- Untrusted text reaches a model only through `fenceUntrusted` (`harness/prompt/untrusted.ts`, AGENTS.md invariant 5, ADR-0147; the request's "ADR-0490 pattern"). Cost estimation has building blocks in `desktop/model_pricing.ts` (`priceFor`) and `harness/metrics/token_speed.ts` (`estimateTokens`).
+
+The core tension: anything that changes a world's code inherits renderer privileges, and anything a stranger writes must never get them. The design below keeps every community contribution as data or as sandboxed HTML.
+
+**Decision.**
+
+(1) **What a customization is: three tiers, safest first.**
+- **Tier 1, Remix (data only), Phase 1.** A remix is a closed JSON manifest, `world-remix/1`, plus at most four images. It references its base as `baseId@baseVersion` (the exact version it was forged and validated against; it pins that version's major). Its fields, all optional except identity, base and provenance:
+  - option `defaults` and up to six named `presets`, each a `WorldOptionValues` validated against the base's own `options`: a key must exist; the type must match; a `select` value must be one of its `choices`; a `swatch` value must be one of its `swatches`; a `color` is `#rrggbb`. A remix cannot add option keys or choices, because only the base's code knows what they mean.
+  - `text` overlays for `label`, `tagline`, the three throws' `label`/`tip`, `storm.label`/`tip`, and build site and mini-game labels, each length-capped.
+  - throw `icons` as SVG path data matching `^[MmLlHhVvCcSsQqTtAaZz0-9 ,.\-]+$`, at most 2 KB.
+  - an `environment` patch limited to data: `light`, `fog`, `edges.style`/`colorA`/`colorB`/`tokenColor`, `edges.token` other than `custom`, and `chargeColor`. No `paintSky`, `paintToken` or any function.
+  - a `backdrop` image that the host paints into the sky canvas in place of `paintSky`.
+  - `cast` preferences in the ADR-0650 fleet shape.
+  - `provenance` (Forge version, provider kind local or cloud, model id, date) and a host-computed `changes` list.
+
+  Unknown keys are refused (additionalProperties false at every level). Images are PNG, JPEG or WebP by magic bytes, decoded and re-encoded to WebP at most 2048 px and 512 KB with metadata stripped. The existing scanner reads text, so re-encoding is what drops embedded payloads and polyglots, and Phase 2 adds an image policy classifier. Every text field goes through `scanAndDecide`. The host applies a remix in a fixed order: base `environment`, then `environmentFor(values)`, then the remix patch, with text overlays last. A key the base no longer has is dropped and noted, never guessed. Remixes of remixes are refused in Phases 1 to 3, because chained derivatives would need chained revenue shares.
+- **Tier 2, Extend, Phase 3 as `world-remix/2`.** It is the second tier to ship but lands after Tier 1 commerce (Phase 2), so review, signing and payouts are proven on data before sandboxed games are sold. This adds a `reactions` table and `games`. A reaction is data mapping a host event onto a closed catalog of host-owned effects, with a cooldown. The events are `hit:<throwKind>`, `storm`, `stare`, `outburst`, `state:<WorldState>` and `build:reveal`. The effects are replaying the figure's own `stare` or `outburst` (the base's `WorldReaction`), a particle burst in a built-in token shape with a capped count and color, and a short caption. "New actions" are up to three node-panel buttons that fire a reaction set. They are not new throws, since `throws` is exactly three in base code. Games are up to three additional `WorldMiniGame`-shaped entries (`label`, `brief`, `sample` at most 64 KB) that only ever open through the ADR-0653 gate and sandbox, exactly like a signed pack's sample, which is never trusted for having shipped. A v1 host refuses a `/2` remix the way it refuses a newer `apiVersion`.
+- **Tier 3, Code (scene code), deferred to its own ADR.** No phase of this ADR runs community JavaScript in the renderer. If it is ever allowed, it runs only in a capability-limited sandbox: a dedicated Worker with OffscreenCanvas and its own three.js copy, or a sandboxed iframe, with no DOM, no network (`connect-src 'none'`) and no host objects, talking to the host only through a typed message API. It is never signed by the Community key.
+- **Rejected alternative:** letting the Forge edit `world.js`. That gives AI-written, stranger-sold code the renderer's privileges behind only a scanner.
+- **API note:** `viz_world_api.ts` is unchanged; WORLD_API_VERSION stays 2. The remix schema is a new host-side contract (`desktop/renderer/viz_remix_api.ts`, `REMIX_SCHEMA = "world-remix/1"`). The addon repo's `worlds/_api/` needs a mirrored `viz_remix_api.d.ts` (follow-up there, not edited here).
+
+(2) **The guided prompt: the World Forge wizard.** "Customize this world" in the Visualize View menu opens a step wizard, shown only for an installed world: Goal (one sentence), Mood (chips), Palette, Cast, Backdrop, Actions (Phase 1: throw and storm names, tips and icons; Phase 3: reactions), Games (Phase 3), Review.
+- Each step makes ONE model call that returns only the JSON slice for that step. The provider's structured output or tool-call mode is used when it has one; otherwise the first JSON object is parsed strictly.
+- The system prompt states the step's JSON schema, the allowed values and caps, and that any other output is discarded.
+- Base world facts (option keys, labels, choices, current values, tagline and README text) are supplied as structured data inside `fenceUntrusted`. The user's own goal text is fenced too.
+- **Validation and repair:** the validator returns path-level errors. Up to two repair calls feed back only those host-written errors. A slice still invalid after that is discarded, and the step falls back to its manual controls (the same color pickers, swatches and selects the View menu already draws). A partial slice is never applied.
+- **Scanner and images:** every generated string runs through the scanner, and a scanner error, timeout or malformed verdict blocks the step (fail-closed). Images come from the user's file or from a configured image provider and pass the re-encode gate.
+- **Live preview:** the scene re-renders with the draft remix before anything is saved, and Undo returns to the base.
+- **Cost:** before each run the wizard shows the model, an estimated token count from `estimateTokens` over the exact prompt plus the slice's output cap, and a cost from `priceFor`, or "local, no charge". A per-run output cap is enforced, and nothing runs without the user's click.
+- **Own tokens:** calls go through the user's configured provider and key, so a local model works. The Forge therefore works offline and in the Tahiti edition, where Submit, the creator dashboard and every store call are absent (the Tahiti overlay disables them; private use only).
+- **Clarity:** the Review step's plain-language summary ("Palette: snow white to pine green. Storm renamed 'Aurora'. 2 presets.") is computed by the host from the diff against the base, not written by the model. Rejected: a model-written summary that could misdescribe the change.
+- The Forge never touches the base package files. A remix is saved beside them under `plugins/remixes/<remixId>/<rev>/` with the base's `current.json` untouched.
+
+(3) **Ownership and licensing.**
+- Only a user holding the base world can forge it: an installed base, plus the online entitlement check when online.
+- A remix needs its base to run. A buyer without the base is offered base and remix in one Checkout, and TL187 keeps 100% of the base price.
+- A new **Creator Agreement** covers warranties of rights (including for AI-assisted content), content policy, the 30% share, the payout hold, clawback, the repeat-infringer policy and termination. Creators keep copyright in their additions and grant TL187 a worldwide, non-exclusive licence to host, review, sign, distribute and market the remix.
+- A new **Community World License** for buyers is personal, non-transferable, LUCID only, and no resale of the remix itself. It replaces ADR-0464's no-resale clause for remixes only: the base world stays under ADR-0464, and the remix licence is a derivative permission over it.
+- Attorney review is required before Phase 2. Rejected: reusing ADR-0464 with an exception, because a licence that forbids resale cannot also authorize it.
+
+(4) **Review pipeline.**
+- A submission is the remix package plus listing copy, price and screenshots, written to `remixSubmissions/{id}` (state `submitted`).
+- **Automated gates** run server-side before any human sees it:
+  - schema and caps (package at most 2 MB, at most 4 images);
+  - the text scanner on every string;
+  - image re-encode verification and an image policy classifier;
+  - a content policy classifier on text;
+  - trademark and real-person checks: a blocklist of marks and living public figures, plus look-alikes of TL187 world names and "official" claims, extending ADR-0679's no-branch-names rule;
+  - a headless render smoke run against the pinned base (the `demo_p_worlds_2.mjs` harness, isolated QA engine);
+  - from Phase 3, a sandbox smoke run of each game in the ADR-0653 frame: renders non-blank in 10 s, zero network attempts, under a CPU budget.
+
+  Any gate failure returns path-level reasons and never reaches a human.
+- **Human review** happens in a new Submissions view of `/admin/marketplace`, modeled on the gov queue:
+  - Reviewers are the `assertOwner()` allowlist, then a separate `reviewer` role that can decide but cannot grant, refund or take down. Decisions use `adminListSubmissions` / `adminDecideSubmission` callables, each writing `adminAudit`.
+  - The outcomes are approve, request changes or reject, with reasons from a fixed list (policy, IP, quality, misleading listing, broken) plus a note.
+  - One appeal per version is heard by a different reviewer.
+  - The SLA is 5 business days to a decision. Intake pauses (new submissions wait, with a notice) when more than 200 are pending or the median wait exceeds 10 business days.
+  - Review is per version: every update is a new submission.
+- **Signing:** an approved remix is signed by a separate **Community Publisher key**, an Ed25519 key in Cloud KMS (`EC_SIGN_ED25519`) that only the approve callable may use. It signs only after re-hashing the exact bytes the reviewer saw. It never sits on a laptop.
+- **Trust list:** the app's list becomes kind-scoped: `TrustedPublisherKey extends TrustedPackKey { kinds: readonly PackageKind[] }`. TL187's key covers every kind; the Community key covers ONLY `world-remix`, and in Phase 3 the same kind's sandboxed games. The installer checks the signer's `kinds` before any other gate, so a Community-signed `world`, daemon or panel is refused.
+- **Package format:** remixes ship as a new `world-remix` kind of the existing `.lplugin.zip` format (manifest, per-file sha256, signature, LICENSE). The installer refuses any `.js`, `.mjs`, `.wasm` or `.html` in it, except `games/*.html` from Phase 3, which load only through the artifact gate.
+- **Rotation:** the trust list carries the current and next Community keys.
+- Rejected: signing remixes with the TL187 publisher key. One leaked or misused approval would then be able to ship renderer code.
+
+(5) **Payments: Stripe Connect Express, TL187 as merchant of record.**
+- Creators onboard to Express accounts through `createCreatorAccountLink` (KYC, bank details, W-9 or W-8BEN collected by Stripe). A paid listing needs `charges_enabled` and `payouts_enabled`. Phase 2 starts with US creators only; buyers are anywhere the store sells.
+- A remix sale is a **destination charge**: `payment_intent_data.transfer_data.destination = acct_...` and `application_fee_amount` = 30% of the pre-tax remix price, plus the full base price when bought together, plus all tax collected. The creator therefore receives exactly 70% of the remix's list price.
+- TL187 pays Stripe processing and Express's account and payout fees from its share. No `on_behalf_of`: TL187 is the merchant of record and settles disputes, refunds and tax. Rejected: direct charges, because buyers would face hundreds of tiny merchants and TL187 could not enforce refunds.
+- **Price floor $1.99, ceiling $29.99** in $1 steps ending .99. The floor keeps TL187's 30% above processing cost: at $1.99 the share is about $0.60 against roughly $0.36 of card fees, while $0.99 loses money on every sale. The ceiling equals a premium plugin (ADR-0463), caps refund and fraud exposure, and keeps a remix from costing three times its $9.99 base.
+- Free listings are deferred to Phase 3, once review cost per submission is measured.
+- **Refunds:** a new 14-day remix refund window (none exists today). Each creator account's payout schedule is set by the platform to `delay_days: 14`, weekly, so a refund inside the window never claws back money already paid out. Refunds call `refunds.create({ reverse_transfer: true, refund_application_fee: true })`, which reverses the creator's share and TL187's share proportionally. The existing `charge.refunded` path expires the entitlement.
+- **Disputes:** `charge.dispute.created` reverses the creator's transfer, held pending the outcome. A won dispute (`charge.dispute.closed`, status won) re-transfers; a lost one keeps the reversal and expires the entitlement. TL187 bears the dispute fee unless the Creator Agreement's fraud or misrepresentation clause applies, and a negative creator balance is offset against future payouts.
+- **Tax:** Stripe Tax (`automatic_tax`) on remix Checkouts, with TL187 collecting and remitting as marketplace facilitator. The GSA "no sales tax" note in `invoice.ts` does not apply to community items, which are not sold to government buyers in Phase 2.
+- **Tax forms:** 1099-K for US creators above the IRS threshold is filed through Connect's tax reporting. W-8BEN is in place for later non-US onboarding.
+- **Webhooks:** remix events carry `kind: "remix"` metadata so the shared account's other products (L.E.A.P.S.) are untouched. A Connect endpoint (`stripeConnectWebhook`) takes `account.updated` and `transfer.reversed`.
+- **Bundles do NOT include community remixes:** Patron, Sponsor and `premium-all` stay TL187-only, and ADR-0673's "owners hold every store item" does not extend to remixes. Reviewers see a remix through the queue, not an entitlement. Rejected: a pooled bundle payout, which would pay creators a share of an opaque pool, invite gaming, and need a second revenue model before the first has data. Bundle copy must say so; Phase 0 also fixes the Sponsor credit conflict.
+
+(6) **Versioning.**
+- A remix pins its base's major version and records the exact validated version.
+- When `upload_packs.ts` publishes a new base version, a revalidation job reruns the automated gates and render smoke against it:
+  - **Pass:** the listing's compatible range grows (same signed bytes, no re-review).
+  - **Fail, or a major bump:** the listing is paused (no new sales), and the creator is notified with the failing paths and offered Rebase in the Forge, which reruns validation and repair and submits a new version.
+- Buyers keep the last working version. The installer retains the newest base version within each installed remix's validated range beside the current one, and Visualize runs the remix on that retained base (both are TL187-signed) until a compatible remix version arrives.
+
+(7) **Trust and safety.**
+- **Reporting:** a Report button on every community card and in the View menu while a remix is active. Categories are offensive, infringing, misleading, broken and malicious, written to `reports/{id}`. Triage within 2 business days, and within 24 hours for malicious.
+- **DMCA:** TL187 registers a DMCA designated agent with the US Copyright Office and publishes a notice and counter-notice form at `/legal/dmca`. A valid notice delists at once, and the repeat-infringer policy terminates a creator after three upheld notices.
+- **Delisting vs revocation:** delisting stops sales but keeps buyers' copies. Entitlements are revoked, and installed copies disabled, only for malware or adjudicated infringement (an uncountered DMCA notice or a court order). Those buyers are refunded, and the creator's share is clawed back. Revocation reaches clients as a revoked `remixId@version` list signed by the TL187 key and fetched at store refresh; the host refuses a listed remix. Rejected: revoking for taste or policy disputes after sale, which would make every purchase provisional.
+- **Creator verification:** a verified email, an account at least 7 days old, completed Express KYC for paid listings, and a public creator name that is not confusable with TL187 or a protected mark.
+- **Rate limits:** at most 3 submissions per creator per 7 days, one pending version per listing, 24 hours after a rejection before resubmitting, and 20 active listings in Phase 2.
+- **Fraud signals:** self-purchase or a shared card fingerprint with the creator (excluded from rankings, and the creator is flagged); Radar risk; sales velocity spikes; a buyer with 3 refunds in 90 days (later refunds go to manual review). A listing whose refund rate passes 10% is paused for review, and a creator whose dispute rate passes 0.75% has payouts frozen.
+
+(8) **Data and privacy.**
+- A Tier 1 remix carries no code, so it cannot send telemetry. Tier 2 games run under `default-src 'none'` and cannot either.
+- The host reports nothing about which remix is in use beyond the existing entitlement and download calls.
+- Forge prompts, drafts and outputs go only to the user's chosen provider, never to TL187. A submission uploads the manifest, images and listing copy, and `provenance` names the model, not the prompts.
+- Creators see aggregate sales counts and revenue, never buyer identities or emails.
+- Bank details, tax IDs and identity documents stay in Stripe. Firestore keeps only the `acct_` id and the enabled flags.
+
+(9) **Phased rollout, with exit criteria and increments per repo.**
+- **Phase 0, decision and legal.**
+  - Scope: this ADR accepted; counsel drafts the Creator Agreement, the Community World License, the DMCA policy and the Terms and Privacy updates; DMCA agent registered; Stripe Connect platform profile approved and Stripe Tax registrations scoped; the Sponsor credit conflict and the bundle copy fixed.
+  - Exit criteria: signed-off legal texts, and Connect enabled in sandbox.
+- **Phase 1, local Forge, Tier 1, private only.**
+  - This repo: `viz_remix_api.ts` (schema, validator, host-computed diff summary, pure and unit-tested); remix storage and apply in `viz_worlds.ts`/`viz_scene.ts` (presets, text overlays, environment patch, backdrop plate, cast); the Forge wizard (UI rule 11, `auditBoxes` clean) with its step prompts, fencing, repair loop, scanner gate and cost line; image re-encode; and personal export and import as an unsigned `world-remix` file that installs only beside its base after an explicit accept (the ADR-0505 private pattern). Real-UI proof is `desktop/scripts/demo_p_worlds_forge_1.mjs` on a QA engine with a scripted model. Tahiti overlay: no store surface.
+  - Addon repo: the `viz_remix_api.d.ts` mirror.
+  - Store repo: nothing.
+  - Exit criteria: at least 80% of step calls valid on the first try and at least 98% after repair on the default cloud model and one local model; a median cost per completed remix of at most $0.05 on the default cloud model; zero scanner bypasses in a red-team set of injected READMEs, option labels and goals.
+- **Phase 2, submission, review and Connect payouts for Tier 1.**
+  - This repo: the `world-remix` package kind, the kind-scoped trust list with the Community key, the `installRemixBytes` path and revocation list, Submit and creator dashboard, a "Community Worlds" store group in `plugin_catalog.ts` with the creator name, the base-plus-remix offer, and Report.
+  - Store repo: a pure `remix.ts` core (submission state machine, price and rate-limit checks, fee math); callables `submitRemix`, `adminListSubmissions`, `adminDecideSubmission`, `appealSubmission`, `createCreatorAccountLink`, `getCreatorDashboard`, `reportListing`, `adminTakedown`; a Firestore `listings` collection replacing static rows for remixes (lookup key `RMX-<ID>-OTF` created on approval); `createCheckout`'s destination-charge branch with Stripe Tax; webhook dispute and refund handling plus `stripeConnectWebhook`; the KMS signer; the `remixes/` bucket prefix through `getPackDownload`; and the automated gate and revalidation jobs.
+  - Addon repo: the `/admin/marketplace` Submissions, Reports and Takedowns views; `/legal/creators`, `/legal/community-worlds` and `/legal/dmca`; and community listing pages.
+  - Exit criteria: a 20-creator invite beta where the median review takes 3 business days or less, refunds stay at or below 5%, disputes at or below 0.5%, every payout reconciles to 70%, and there are zero signed-remix security incidents. Then general availability.
+- **Phase 3, Tier 2 (`world-remix/2`: reactions, actions, sandboxed games) and free listings.**
+  - Exit criteria: the game smoke gate in CI, and zero sandbox escapes in a red-team pass.
+- **Tier 3:** a separate ADR, not before Phase 3 has run for one quarter.
+- **Success metrics:** Forge completion rate (wizard started to remix saved); share of saved remixes submitted; approval rate; time to decision; remix GMV and base worlds sold through base-plus-remix offers; refund and dispute rates; reports per 1,000 sales; review cost per submission against TL187's share.
+
+(10) **Open risks, and what would make us stop.**
+- **IP in AI-generated content:** purely AI-generated material may not be copyrightable, and a model can echo protected work. Mitigations are creator warranties, the trademark and real-person gates, provenance and an "AI-assisted" listing label, DMCA, and clawback.
+- **Moderation load:** every listing needs a human. Mitigations are automated gates first, rate limits, intake pause and paid-only listings.
+- **Model cost on the user:** mitigated by per-step calls, the cost line before every run, output caps and local models. Review classifier cost on TL187 is capped per submission.
+- **Refund abuse:** data is easy to copy once downloaded. Mitigations are the window, per-buyer refund limits and the dispute and refund thresholds.
+- **Stop conditions.** Phase 2 is paused, or the program wound down, if any of these happens:
+  - a Community-signed package executes code with renderer privileges, or a sandbox escape is confirmed;
+  - the platform dispute rate exceeds 0.75% for two consecutive months;
+  - review cost exceeds TL187's 30% net of processing for a quarter;
+  - counsel finds the AI-content or facilitator liability unmanageable;
+  - Stripe declines or restricts the Connect platform.
+
+**Consequences.**
+- Creators get a guided, cheap and safe way to make a world theirs, and the store gets a long tail of variants that also sell base worlds.
+- The security model is unchanged: renderer-privileged code stays TL187-signed only. A second, kind-scoped trust root appears whose worst case is bad data or a sandboxed page.
+- TL187 takes on merchant-of-record duties for third-party goods (tax, disputes, takedowns, payouts) and a standing review workload. These are real operating costs, which is why the floor price, rate limits and stop conditions exist.
+- The frozen world contract is untouched; the new `world-remix/1` contract follows the same rule (grow only through `/2` and an ADR).
+- Follow-ups outside this repo:
+  - store repo: Connect, listings, review, signer, tax;
+  - addon repo: the `viz_remix_api.d.ts` mirror, admin views, legal pages, Tahiti overlay disabling submission.
+
+**Relates to.** ADR-0147 (untrusted fencing), ADR-0205/0206 (signed KG packs, `TrustedPackKey[]`), ADR-0462 (package and gates), ADR-0463 (plugin rails, $29.99), ADR-0464 (licence, amended for remixes only), ADR-0465 (approval queue precedent), ADR-0466 (owner dashboard, `assertOwner`, `adminAudit`), ADR-0505 (private install), ADR-0648 to ADR-0654 (worlds contract, cast, swatches, FX, sandboxed artifacts, kit), ADR-0673 (owner items, not extended to remixes), ADR-0679 (no branch names, world QA harness).
