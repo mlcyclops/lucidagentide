@@ -9128,14 +9128,6 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-panel-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .viz-panel-st{font-family:var(--mono);font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-panel-st:empty{display:none}
-.viz-panel-out{max-height:168px;min-height:44px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:7px 8px;border-radius:9px;
-  background:var(--bg-0);border:1px solid var(--line-soft);scrollbar-width:thin}
-.viz-panel-turn{display:flex;flex-direction:column;gap:2px;min-width:0}
-.viz-panel-turn b{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-panel-turn.user b{color:var(--viz-c,var(--accent))}
-.viz-panel-turn p{margin:0;font-family:var(--mono);font-size:11px;line-height:1.45;color:var(--txt-2);white-space:pre-wrap;overflow-wrap:anywhere}
-.viz-panel-turn.live p{color:var(--txt)}
-.viz-panel-empty{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
 .viz-panel-acts{display:flex;flex-wrap:wrap;gap:6px}
 .viz-panel-acts:empty{display:none}
 .viz-panel-act{font:inherit;font-size:11.5px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt);cursor:pointer;
@@ -9145,16 +9137,42 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-panel-act.danger{color:var(--red)}
 .viz-panel-act.danger.armed{background:rgb(var(--red-rgb) / .14);border-color:rgb(var(--red-rgb) / .55)}
 .viz-panel-why{margin:0;font-size:11px;line-height:1.45;color:var(--txt-2)}
-.viz-panel-ask{display:flex;align-items:flex-end;gap:6px;margin:0}
-.viz-panel-in{flex:1;min-width:0;resize:none;max-height:96px;padding:6px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg-2);
-  color:var(--txt);font:inherit;font-size:12px;line-height:1.4}
-.viz-panel-in::placeholder{color:var(--txt-4)}
-.viz-panel-in:focus-visible{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
-.viz-panel-in:disabled{opacity:.7;cursor:not-allowed}
-.viz-panel-send{flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:1px solid rgb(var(--accent-rgb) / .5);
-  background:rgb(var(--accent-rgb) / .16);color:var(--txt);cursor:pointer}
-.viz-panel-send:disabled{opacity:.45;cursor:not-allowed}
-.viz-panel-send:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* P-VIZ.LANE1 (ADR-0683): the node panel is a Fleet lane card body: lane_view's .fleet-* markup and rules for the
+   transcript pane (live thinking, tool chips, markdown turns, the catch-up pair), the staged strip, the pasted-image
+   chips and the lane composer. Scoped here only for the frame: the pane is boxed like the old output box (no card
+   resize strip beside it, so no right inset) and its rows keep the 6px spacing rule (ADR-0633); the composer sits
+   flush in the card's padding. A user size (.sized: inline width and height from viz_panel_size) flattens the tilt so
+   a long read is not skewed, and the transcript takes every spare pixel. The card is flat at every size: a lane transcript
+   under the old 3D lean skewed its rows (auditBoxes measured the projected boxes touching). The resize strips sit on the panel's outer
+   edge (away from the node) and its bottom, inside the card's padding, never over a control; the grip is the outer
+   bottom corner. No new layer: all of it is inside the panel (z 5 in .viz-stage). */
+.viz-panel{width:min(380px,calc(100% - 16px))}
+.viz-panel .viz-panel-card{transform:none}
+.viz-panel .fleet-out-wrap{flex:none;margin-right:0;border-radius:9px;background:var(--bg-0);border:1px solid var(--line-soft);overflow:hidden}
+.viz-panel .fleet-out{min-height:64px;max-height:260px;gap:6px}
+.viz-panel [data-lane-turn],.viz-panel [data-lane-live]{gap:6px}
+.viz-panel .fleet-jump{right:12px}
+.viz-panel .fleet-queue{padding:5px 8px;border:1px solid var(--line-soft);border-radius:8px}
+.viz-panel .fleet-attach{gap:8px;padding:8px 6px 2px;border-top:0}
+.viz-panel .fleet-compose{align-items:flex-end;gap:6px;padding:0;border-top:0;margin:0}
+.viz-panel .fleet-input{min-height:30px;max-height:120px;font-size:12px}
+.viz-panel .fleet-compose .fleet-card-btn{width:28px;height:28px}
+.viz-panel .fleet-compose .fleet-card-btn:disabled{opacity:.45;cursor:not-allowed}
+.viz-panel .fleet-compose .fleet-card-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-panel.sized .viz-panel-card{height:100%;box-sizing:border-box;transform:none}
+.viz-panel.sized .viz-panel-card>*{flex-shrink:0}
+.viz-panel.sized .viz-panel-card>.fleet-out-wrap{flex:1 1 0;min-height:0}
+.viz-panel.sized .fleet-out{flex:1;max-height:none;min-height:0}
+.viz-panel.resizing,.viz-panel.resizing *{user-select:none}
+.viz-panel.resizing .viz-panel-card{transition:none}
+.viz-panel-rz{position:absolute;z-index:2;touch-action:none}
+.viz-panel-rz[data-viz-panel-rz=x]{top:18px;bottom:18px;right:-5px;width:10px;cursor:ew-resize}
+.viz-panel[data-side=left] .viz-panel-rz[data-viz-panel-rz=x]{right:auto;left:-5px}
+.viz-panel-rz[data-viz-panel-rz=y]{left:18px;right:18px;bottom:-5px;height:10px;cursor:ns-resize}
+.viz-panel-grip{position:absolute;z-index:3;right:2px;bottom:2px;width:12px;height:12px;padding:0;border:0;border-radius:3px;cursor:nwse-resize;touch-action:none;background-color:transparent;
+  background-image:linear-gradient(135deg,transparent 46%,var(--txt-2) 46% 52%,transparent 52% 64%,var(--txt-2) 64% 70%,transparent 70% 82%,var(--txt-2) 82% 88%,transparent 88%)}
+.viz-panel[data-side=left] .viz-panel-grip{right:auto;left:2px;cursor:nesw-resize;transform:scaleX(-1)}
+.viz-panel-grip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .viz-panel-note{margin:0;font-size:11px;line-height:1.4;color:var(--txt-2)}
 .viz-panel-note:empty,.viz-panel-note[hidden]{display:none}
 /* P-WORLDS.BUILD1 (ADR-0653): the node panel's Mini game row; the artifact chip over a node (z 3 in .viz-stage: over

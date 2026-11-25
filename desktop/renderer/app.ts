@@ -5813,8 +5813,9 @@ function expireSuggestedTheme(): void {
 }
 
 function maybeSuggest(): void {
-  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   expireSuggestedTheme();
+  // ^ an expired holiday theme comes off on every launch, a What's new launch included
+  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   const store = miniStore();
   const prefs = seasonPrefs();
   const enabled = suggestEnabled(store);
@@ -20022,6 +20023,11 @@ function wire(): void {
     fleetStatus: bridge.fleetStatus, fleetWatch: bridge.fleetWatch, fleetCancel: bridge.fleetCancel, fleetStop: bridge.fleetStop,
     fleetRemove: bridge.fleetRemove, subagents: bridge.subagents, perf: perfWatch, stopMain: stopTurn, mainBusy: () => state.streaming,
     fleetTranscript: bridge.fleetTranscript, fleetPrompt: bridge.fleetPrompt, fleetQueueAdd: bridge.fleetQueueAdd,
+    // P-VIZ.LANE1 (ADR-0683): the node panel's staged strip and drain are the grid card's calls; the open (or
+    // minimized) Fleet dock drains the queues itself, so the panel only drains while there is none.
+    fleetQueuePeek: bridge.fleetQueuePeek, fleetQueueRemove: bridge.fleetQueueRemove, fleetQueueMove: bridge.fleetQueueMove,
+    fleetQueueTake: bridge.fleetQueueTake, interject: bridge.interject, fleetDrain: bridge.fleetDrain,
+    fleetDrains: () => fleetGridState() !== "none",
     mainRecent: () => [...document.querySelectorAll<HTMLElement>("#thread .msg")].slice(-2).map((m) => ({
       // an assistant's prose is .text > .stream; its siblings are the turn HUD and hidden restart banners, whose
       // button labels would glue into the panel's text ("Restart agentStop command")

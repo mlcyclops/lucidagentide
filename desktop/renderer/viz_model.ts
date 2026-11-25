@@ -925,63 +925,9 @@ export function askChoice(options: readonly AskOption[], choice: "once" | "alway
 
 // ------------------------------------------------------------------------------ an agent's output
 
-/** P-VIZ.4 (ADR-0625): the recent output the node panel shows for an agent, folded from the same lane events
- *  the grid card renders (a watch's history seed, then the live stream). Bounded: OUT_TURNS settled turns and
- *  OUT_CHARS of each turn's text, the newest kept. */
+/** P-VIZ.4 (ADR-0625): one turn of Main's chat as the node panel shows it (app.ts reads the thread). A lane's output is
+ *  the Fleet card's own transcript, drawn by lane_view.ts (P-VIZ.LANE1, ADR-0683). */
 export interface VizTurn { role: "user" | "assistant"; text: string }
-export interface VizOutput { turns: VizTurn[]; live: string; seeded: boolean }
-export const OUT_TURNS = 6;
-export const OUT_CHARS = 4000;
-
-export function createOutput(): VizOutput { return { turns: [], live: "", seeded: false }; }
-
-const tail = (text: string): string => (text.length > OUT_CHARS ? text.slice(text.length - OUT_CHARS) : text);
-
-function settle(o: VizOutput, turn: VizTurn): void {
-  o.turns.push({ role: turn.role, text: tail(turn.text) });
-  if (o.turns.length > OUT_TURNS) o.turns.splice(0, o.turns.length - OUT_TURNS);
-}
-
-/** Fold one lane event (or a prompt the user sent from the panel, `{ type: "user", text }`) into `o`. */
-export function foldOutput(o: VizOutput, ev: { readonly type: string; readonly [k: string]: unknown }): void {
-  const e = ev as Loose; // a lane event: every field read below is narrowed first
-  switch (e.type) {
-    case "watch-seed":
-      if (!Array.isArray(e.turns)) return;
-      o.turns = [];
-      for (const t of e.turns as unknown[]) {
-        if (!t || typeof t !== "object" || !("role" in t) || !("text" in t)) continue;
-        if ((t.role === "user" || t.role === "assistant") && typeof t.text === "string") settle(o, { role: t.role, text: t.text });
-      }
-      o.live = ""; o.seeded = true;
-      return;
-    case "user":
-      if (typeof e.text !== "string" || !e.text.trim()) return;
-      if (o.live.trim()) settle(o, { role: "assistant", text: o.live });
-      o.live = "";
-      settle(o, { role: "user", text: e.text });
-      return;
-    case "token":
-      if (typeof e.text === "string") o.live = tail(o.live + e.text);
-      return;
-    case "tool": {
-      if (e.status !== undefined && e.status !== "open") return; // a settle repaints nothing here
-      const line = typeof e.detail === "string" && e.detail ? e.detail : typeof e.name === "string" ? e.name : "tool";
-      o.live = tail(`${o.live}${o.live && !o.live.endsWith("\n") ? "\n" : ""}> ${line.slice(0, 160)}\n`);
-      return;
-    }
-    case "done":
-      if (o.live.trim()) settle(o, { role: "assistant", text: o.live });
-      o.live = "";
-      return;
-    case "error":
-      settle(o, { role: "assistant", text: `${o.live}${o.live ? "\n" : ""}Error: ${typeof e.message === "string" ? e.message : "the turn failed"}` });
-      o.live = "";
-      return;
-    default:
-      return;
-  }
-}
 
 // ------------------------------------------------------------------------------------------ layout
 
