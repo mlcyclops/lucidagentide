@@ -152,10 +152,13 @@ async function stats(page, s) {
     const x = c.getContext("2d");
     x.drawImage(bmp, 0, 0);
     const d = x.getImageData(0, 0, c.width, c.height).data;
-    let r = 0, g = 0, b = 0;
+    // Per-channel medians, not means: the sky band also crosses bright token arcs, particles and figures, which would
+    // swamp a mean; the median reads the backdrop that fills most of the band.
     const n = d.length / 4;
-    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
-    r /= n; g /= n; b /= n;
+    const R = new Uint8Array(n), G = new Uint8Array(n), Bl = new Uint8Array(n);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) { R[j] = d[i]; G[j] = d[i + 1]; Bl[j] = d[i + 2]; }
+    const med = (a) => a.sort()[a.length >> 1];
+    const r = med(R), g = med(G), b = med(Bl);
     return { r, g, b, lum: 0.2126 * r + 0.7152 * g + 0.0722 * b };
   }, s.b64);
 }
