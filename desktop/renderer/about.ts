@@ -96,6 +96,10 @@ export function aboutHtml(version: string): string {
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l11-6.5z"/></svg>
         Take the tour
       </button>
+      <button class="btn-mini" data-about-whatsnew data-tip="Review the latest release notes">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.3 5.2 5.2 2.3-5.2 2.3L12 18.5l-2.3-5.2L4.5 11l5.2-2.3z"/></svg>
+        What's new
+      </button>
       <button class="btn-mini ok" data-about-close>Close</button>
     </div>
   </div>`;

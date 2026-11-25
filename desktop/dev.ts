@@ -208,7 +208,7 @@ import { mkdir as mkdirAsync, rm as rmAsync, writeFile as writeFileAsync } from 
 import { realpathSync } from "node:fs"; // P-ASKLUCID.9: Save image as / download containment
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, setWhatsNewSeen, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, whatsNewSeen, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -218,9 +218,10 @@ import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreato
 // picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
 // P-THEME.1: `theme` rides here too - it is the same class of state (cosmetic, policy-free, per-user).
 // "" means never chosen, which the renderer folds to the OS light/dark preference.
+// P-WHATSNEW.1 (ADR-0686): `whatsNewSeen` is the version whose What's new notes were seen (null = never recorded).
 function settingsData() {
   const s = loadSettings();
-  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId() };
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId(), whatsNewSeen: whatsNewSeen() };
 }
 
 // P-STT.2b: the real WhisperRuntimeDeps for the managed offline-Whisper lifecycle - os specs, the model dir,
@@ -5551,11 +5552,13 @@ return Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown; whatsNewSeen?: unknown }>(req);
           // ADR-0088/0089 + P-GOVCUI.1: role + first-run-tour + gov/CUI answer are cosmetic onboarding state,
           // policy-free — set them up front, independent of the email-attribution policy gate below.
           if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
           if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
+          // P-WHATSNEW.1 (ADR-0686): cosmetic too; a non-semver value is refused by setWhatsNewSeen.
+          if (typeof b.whatsNewSeen === "string" && !setWhatsNewSeen(b.whatsNewSeen)) return json({ ok: false, error: "whatsNewSeen must be a version like 2.7.1", data: settingsData() });
           if (typeof b.govconCui === "boolean") setGovconCui(b.govconCui);
           // P-THEME.1: stored as an opaque string and NOT validated against a theme list here. The
           // renderer's THEMES registry is the single source of truth for which ids exist, and resolveTheme

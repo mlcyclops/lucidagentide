@@ -47,6 +47,8 @@ import { restoredTurnHtml } from "./steps_restore.ts"; // P-RESUME.1 (ADR-0171):
 import { ageStr, esc, fmtUSD, goodColor, loadColor } from "./format.ts";
 import { icon, piMark } from "./icons.ts";
 import { aboutHtml, readmeMark } from "./about.ts";
+import { latestNotes, notesSince, type ReleaseNotes } from "./release_notes.ts"; // P-WHATSNEW.1 (ADR-0686)
+import { shouldShowWhatsNew, WHATS_NEW_HINT, whatsNewHtml } from "./whats_new.ts";
 import { createTriviaGame, isTriviaQuestion, triviaExplainHtml, triviaQuestionHtml, triviaVisible, type TriviaGame, type TriviaQuestion } from "./trivia.ts"; // P-TRIV.1 (ADR-0174)
 import { bankForRole } from "./trivia_roles.ts"; // P-TRIV.2 (ADR-0175): role-aware banks
 import { isIntelNewsItem, newsLineHtml } from "./trivia_news.ts"; // P-TRIV.3 (ADR-0176): the executive INTEL WIRE
@@ -5161,7 +5163,7 @@ function promptForEmailIfMissing(onDone?: () => void): void {
 // First-login flow as a chain: pick a role (if unchosen) → email/attribution → the tour. Each step
 // is cosmetic - none gate or weaken the security path (invariant #3).
 function runOnboarding(): void {
-  const afterProv = () => { if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
+  const afterProv = () => { onboardingSettled = true; if (!state.tourSeen) startTour(state.userRole ?? "developer"); };
   const afterGov = () => void promptForProviderIfNeeded(afterProv); // P-PROV.2: connect a provider, then the tour
   const afterEmail = () => promptForGovCuiIfNeeded(afterGov); // P-GOVCUI.1: gov/CUI setup
   if (state.userRole) { promptForEmailIfMissing(afterEmail); return; }
@@ -5792,6 +5794,7 @@ function expireSuggestedTheme(): void {
 }
 
 function maybeSuggest(): void {
+  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   expireSuggestedTheme();
   const store = miniStore();
   const prefs = seasonPrefs();
@@ -17777,10 +17780,63 @@ function openAbout(): void {
   ov.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
     if (t.closest("[data-about-tour]")) { close(); startTour(state.userRole ?? "developer"); return; } // ADR-0089: replay
+    if (t.closest("[data-about-whatsnew]")) { close(); openWhatsNew(latestNotes(APP_VERSION), false); return; } // ADR-0686: read-only replay
     if (t === ov || t.closest("[data-about-close]")) close(); // backdrop or a close control
   });
   document.addEventListener("keydown", onKey);
   document.body.append(ov);
+}
+
+// ── P-WHATSNEW.1 (ADR-0686): the one-time What's new popup after an upgrade ──────────────────────────
+// Decided once per launch by whats_new.ts against the engine-side seen version (never localStorage alone: a
+// port-rolled launch has an empty store). A fresh install records the version silently; an upgrade shows the
+// notes once, after onboarding, the tour and any other modal, and takes the launch's one notice slot so
+// Lucid's suggestion toast never stacks on it. About > What's new replays it without touching the seen state.
+let whatsNewPending = false; // a popup is due this launch: Lucid's suggestion toast stands down
+let onboardingSettled = false; // runOnboarding reached its last step (the tour, when unseen, starts there)
+
+/** Single instance; Dismiss, the X, a backdrop click and Esc all close it. `hint` (the upgrade popup only)
+ *  then tells the user where to find it again. */
+function openWhatsNew(notes: readonly ReleaseNotes[], hint: boolean): void {
+  if ($("#whatsNewModal") || !notes.length) return;
+  const ov = el(`<div id="whatsNewModal" class="modal-ov about-ov">${whatsNewHtml(notes)}</div>`);
+  const close = () => {
+    ov.remove();
+    document.removeEventListener("keydown", onKey);
+    if (hint) showToast({ ...WHATS_NEW_HINT, tone: "info", timeout: 9000, actions: [{ label: "Open About", kind: "ok", run: openAbout }, { label: "Got it" }] });
+  };
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") { ev.preventDefault(); close(); } };
+  ov.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (t === ov || t.closest("[data-wn-close], [data-wn-dismiss]")) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.append(ov);
+  ($("[data-wn-dismiss]", ov) as HTMLElement | null)?.focus();
+}
+
+/** Boot: `seenAtBoot` is the engine's whatsNewSeen; `firstRun` a fresh install (nothing seen, no role yet). */
+function maybeWhatsNew(seenAtBoot: string | null, firstRun: boolean): void {
+  const decide = (): void => {
+    // An install from before the popup has no seen version: the engine's previous-run version stands in.
+    const seen = seenAtBoot ?? state.auth?.upgradedFrom ?? null;
+    const d = shouldShowWhatsNew({
+      seen,
+      current: APP_VERSION,
+      firstRun,
+      onboardingActive: !onboardingSettled || tourActive || !!document.querySelector(".modal-ov, .coach-card, .goal-scrim, #bootCine"),
+      noticeShownThisLaunch: suggestionsShown > 0,
+    });
+    whatsNewPending = d === "wait";
+    if (d === "wait") { window.setTimeout(decide, 1500); return; }
+    if (d === "none") return;
+    void bridge.setWhatsNewSeen(APP_VERSION).catch(() => null); // record or show: once per version
+    if (d !== "show") return;
+    suggestionsShown += 1;
+    openWhatsNew(notesSince(seen, APP_VERSION), true);
+  };
+  whatsNewPending = !firstRun && seenAtBoot !== APP_VERSION; // hold the suggestion toast until decided
+  window.setTimeout(decide, 1200);
 }
 
 // ── P-COLLAB.3 (ADR-0192): the live-session Share window ───────────────────────────────────────
@@ -22738,6 +22794,9 @@ void bridge.getSettings().then((s) => { // your saved name → the "You" label o
   }
   if (state.userRole) applyRoleDefault(state.userRole); // returning user lands on their role's surface
   syncImmersiveWithRole(state.userRole); // P-AVATAR.1: a returning lucid-agent boots straight onto the stage
+  // P-WHATSNEW.1 (ADR-0686): decided before Lucid's suggestion is scheduled, so the two never stack. A fresh
+  // install (nothing seen, no role chosen yet) records the version silently.
+  if (s) maybeWhatsNew(s.whatsNewSeen ?? null, !s.whatsNewSeen && !s.role);
   // P-MINI.1 (ADR-0580): a launch that opens on an empty chat counts as a new session; one that is already
   // showing a restored conversation does not.
   if (document.getElementById("chatHint")) noteNewSessionForMini(); else syncMiniLucid();
