@@ -468,6 +468,13 @@ pub const CODE_FAILS: u32 = 5;
 pub const TO_RELAY_MAX: usize = 512 * 1024;
 pub const TO_CONSOLE_MAX: usize = 1024 * 1024;
 pub const PARTS_TOTAL: usize = 64 * 1024 * 1024;
+/// The bytes of answer text in one part (3.8). JSON escaping of a slice can at most double it (quotes, backslashes;
+/// controls as \u00XX take more), so slices stay at a quarter of the frame limit. `answer_frames` cuts with it and
+/// `parse_frame` bounds `of` with `PARTS_MAX`, so both sides agree on how many parts a 64 MiB answer takes.
+pub const PART_CHUNK: usize = TO_CONSOLE_MAX / 4;
+/// The most parts one answer may take: a slice ends up to 3 bytes short of `PART_CHUNK` at a UTF-8 boundary, so every
+/// part but the last carries at least `PART_CHUNK - 3` bytes of at most `PARTS_TOTAL`.
+pub const PARTS_MAX: usize = PARTS_TOTAL.div_ceil(PART_CHUNK - 3);
 pub const IN_FLIGHT: usize = 16;
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 pub const EXPORT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -776,7 +783,7 @@ pub fn parse_frame(text: &str, at: Side) -> Result<Frame, FrameError> {
                 Some(Value::Bool(true)) if exact(&o, &["t", "id", "ok", "part", "data"]) && at == Side::Console => {
                     let p = o["part"].as_object().filter(|p| exact(p, &["i", "of"]));
                     let (i, of) = match p.map(|p| (p["i"].as_u64(), p["of"].as_u64())) {
-                        Some((Some(i), Some(of))) if of >= 2 && i < of && of <= (PARTS_TOTAL / (TO_CONSOLE_MAX / 2)) as u64 => (i as u32, of as u32),
+                        Some((Some(i), Some(of))) if of >= 2 && i < of && of <= PARTS_MAX as u64 => (i as u32, of as u32),
                         _ => return bad(None, "part"),
                     };
                     let Some(data) = o["data"].as_str() else { return bad(None, "part") };
@@ -823,13 +830,10 @@ pub fn answer_frames(id: u32, body: Value) -> Vec<String> {
     if text.len() > PARTS_TOTAL {
         return vec![res_err_text(id, &Refusal::of("fleet-op"))];
     }
-    // JSON escaping of a slice can at most double it (quotes, backslashes, controls as \u00XX take more, so slices stay
-    // at a quarter of the frame limit).
-    let chunk = TO_CONSOLE_MAX / 4;
     let mut parts = Vec::new();
     let mut rest = text.as_str();
     while !rest.is_empty() {
-        let mut end = chunk.min(rest.len());
+        let mut end = PART_CHUNK.min(rest.len());
         while !rest.is_char_boundary(end) {
             end -= 1;
         }
@@ -1374,6 +1378,28 @@ mod tests {
         // out of order is refused
         let mut p = Parts::default();
         assert!(p.push(1, 1, 3, "x").is_err());
+    }
+
+    #[test]
+    fn answers_up_to_64_mib_travel_in_parts() {
+        // 3-byte characters make every slice end short of `PART_CHUNK` at a UTF-8 boundary, so this answer of just under
+        // 64 MiB takes more parts than `PARTS_TOTAL / PART_CHUNK`; the console must take them all (3.8)
+        let body = json!({"blob": "\u{20ac}".repeat(PARTS_TOTAL / 3 - 10)});
+        let frames = answer_frames(3, body.clone());
+        assert!(frames.len() > PARTS_TOTAL / PART_CHUNK && frames.len() <= PARTS_MAX, "{}", frames.len());
+        let mut parts = Parts::default();
+        let mut done = None;
+        for f in &frames {
+            assert!(f.len() <= TO_CONSOLE_MAX);
+            match parse_frame(f, Side::Console).unwrap() {
+                Frame::Part { id, i, of, data } => done = parts.push(id, i, of, &data).unwrap(),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(done, Some(body));
+        let part = |of: usize| stringify(&json!({"t": "res", "id": 1, "ok": true, "part": {"i": 0, "of": of}, "data": "x"}));
+        assert!(matches!(parse_frame(&part(PARTS_MAX), Side::Console), Ok(Frame::Part { .. })));
+        assert_eq!(parse_frame(&part(PARTS_MAX + 1), Side::Console).err().unwrap().why, "part");
     }
 
     #[test]

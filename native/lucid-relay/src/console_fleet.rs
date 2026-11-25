@@ -5637,7 +5637,8 @@ pub fn write_serve_file(cfg: &ServeConfig) -> Result<(), String> {
 
 // ── The browser port of the console role (5.2, 10.1) ───────────────────────────────────────────────────────
 
-/// The browser port's limits: connections in all and per address, the handshake and idle times, a request body.
+/// The browser port's limits: connections in all and per address, the handshake and idle times, a request body (the
+/// MDS3 upload: `console::MDS_BODY_MAX`).
 pub const BROWSER_CONNECTIONS: usize = 256;
 pub const BROWSER_PER_ADDRESS: usize = 16;
 pub const BROWSER_BODY_MAX: usize = crate::fleet_people::CHECK_BODY_MAX;
@@ -5768,7 +5769,11 @@ impl BrowserPort {
         use std::io::Read;
         let Some(head) = read_head(reader)? else { return Ok(false) };
         let length = head.header("content-length").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(0);
-        if head.header("transfer-encoding").is_some() || length > BROWSER_BODY_MAX {
+        // The MDS3 upload takes up to 16 MiB (AC-1 3.5), as on the relay's main port (server.rs); the console checks each
+        // route's own limit after this.
+        let mds = head.target.split(['?', '#']).next() == Some("/console/api/settings/mds");
+        let cap = if mds { crate::console::MDS_BODY_MAX.max(BROWSER_BODY_MAX) } else { BROWSER_BODY_MAX };
+        if head.header("transfer-encoding").is_some() || length > cap {
             write_reply(reader.get_mut(), &simple(413, "too-large", "Request too large."), true)?;
             return Ok(false);
         }
@@ -8518,6 +8523,48 @@ mod tests {
             let r = ConsoleRequest { method: "GET", pathname: &format!("/console/api/{p}"), query: "", cookie: "", origin: Some("https://relay.example.org"), marker: Some("1"), activity: false, content_type: "application/json", user_agent: "", peer: "10.0.0.7".parse().unwrap(), forwarded: &[], body: "", dialed: &dialed, host_ok: true };
             assert_eq!(rc.http(&r, crate::codec::now_ms()).status, 404, "{p}");
         }
+    }
+
+    #[test]
+    fn the_browser_port_lets_only_the_mds_upload_past_1_mib() {
+        use std::io::{Read as _, Write as _};
+        // the request bytes in, the answer bytes out
+        struct Pipe {
+            input: std::io::Cursor<Vec<u8>>,
+            output: Vec<u8>,
+        }
+        impl std::io::Read for Pipe {
+            fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+                self.input.read(b)
+            }
+        }
+        impl std::io::Write for Pipe {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.output.write(b)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let d = dir("browser-mds");
+        let (c, _) = open(&d);
+        let port = BrowserPort { console: c, public: PUBLIC.into(), public_host: PUBLIC.into(), public_port: 443, behind_front: false, open: Mutex::new(HashMap::new()) };
+        // POST to `path` declaring `length` bytes and sending `body`; the status line of the answer
+        let ask = |path: &str, length: usize, body: &[u8]| -> String {
+            let head = format!("POST {path} HTTP/1.1\r\nHost: {PUBLIC}\r\nOrigin: {ORIGIN}\r\n{}: 1\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n\r\n", crate::console::MARKER_HEADER);
+            let mut input = head.into_bytes();
+            input.extend_from_slice(body);
+            let mut reader = std::io::BufReader::new(Pipe { input: std::io::Cursor::new(input), output: Vec::new() });
+            let _ = port.one(&mut reader, "10.0.0.7".parse().unwrap(), false);
+            String::from_utf8_lossy(&reader.get_ref().output).lines().next().unwrap_or("").to_owned()
+        };
+        // AC-1 3.5: `settings/mds` takes up to 16 MiB (the shipped blob is about 10.6 MB); the console answers it itself
+        let blob = stringify(&json!({ "blob": "a".repeat(2 * BROWSER_BODY_MAX) }));
+        let status = ask("/console/api/settings/mds", blob.len(), blob.as_bytes());
+        assert!(status.starts_with("HTTP/1.1 ") && !status.starts_with("HTTP/1.1 413 "), "{status}");
+        // every other route keeps the browser port's cap, and the MDS route its own 16 MiB
+        assert!(ask("/console/api/settings/banner", BROWSER_BODY_MAX + 1, b"").starts_with("HTTP/1.1 413 "));
+        assert!(ask("/console/api/settings/mds", crate::console::MDS_BODY_MAX + 1, b"").starts_with("HTTP/1.1 413 "));
     }
 
     #[test]

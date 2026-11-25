@@ -933,6 +933,8 @@ fn one_shot(dir: &Path, kind: &str, args: Value, out: &mut dyn Write) -> Result<
 
 fn trust_ca_cli(dir: &Path, fingerprint: &str, out: &mut dyn Write) -> Result<(), String> {
     let m = link_map(dir).ok_or(NOT_ENROLLED)?;
+    // No pending generation after `fleet-ca replace` (3.11, 3.12): 0, and the relay learns the CA with that fingerprint
+    // from the console (`fleet_agent::trust_ca`).
     let generation = m
         .get("pins")
         .and_then(Value::as_array)
@@ -941,7 +943,7 @@ fn trust_ca_cli(dir: &Path, fingerprint: &str, out: &mut dyn Write) -> Result<()
         .filter(|p| str_of(p.get("state")) == Some("pending"))
         .filter_map(|p| p.get("generation").and_then(Value::as_u64))
         .max()
-        .ok_or_else(|| Refused::of("fingerprint").error)?;
+        .unwrap_or(0);
     say(out, &trust_ca_words(fingerprint));
     one_shot(dir, "trust-ca", json!({ "generation": generation, "fingerprint": fingerprint }), out)
 }

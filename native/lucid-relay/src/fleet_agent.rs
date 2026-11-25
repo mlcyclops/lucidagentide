@@ -3204,15 +3204,56 @@ pub fn console_call(op: &str, body: Value, timeout: Duration) -> Result<Value, R
 // ── trust-ca and trusted time commands (F17, F21) ───────────────────────────────────────────────────────────
 
 /// `fleet trust-ca <fingerprint>` (3.11), consumed by f-trust's one-shot: the matching pending generation becomes
-/// active. Err when none matches (f-trust answers `fingerprint`).
+/// active. After `fleet-ca replace --compromised` or `--lost` (3.11, 3.12) no manifest the relay can verify names the
+/// new CA, so when no pending generation matches, the relay learns it from the console (`replacement_ca`) and
+/// activates it only when it is newer than every generation it pins; the agent then takes the restricted recovery
+/// path. Err when none matches (f-trust answers `fingerprint`); the link is then unchanged.
 pub fn trust_ca(state_dir: &Path, generation: u64, fingerprint: &str) -> Result<(), String> {
+    let refused = || "no pending CA generation has that fingerprint".to_owned();
+    let pending = load_link_json(state_dir)?.is_some_and(|m| confirm_pin(&pins_of(m.get("pins")), Some(generation), fingerprint).is_ok());
+    let learned = if pending { None } else { Some(replacement_ca(state_dir, fingerprint).ok_or_else(refused)?) };
     update_link(state_dir, |m| {
-        let pins = confirm_pin(&pins_of(m.get("pins")), Some(generation), fingerprint).map_err(|_| "no pending CA generation has that fingerprint".to_owned())?;
+        let mut pins = pins_of(m.get("pins"));
+        let generation = match learned {
+            Some(p) if pins.iter().all(|q| q.generation < p.generation) => {
+                let g = p.generation;
+                pins.push(p);
+                g
+            }
+            Some(_) => return Err(refused()),
+            None => generation,
+        };
+        let pins = confirm_pin(&pins, Some(generation), fingerprint).map_err(|_| refused())?;
         m.insert("pins".into(), pins_value(&pins, true));
         Ok(())
     })?;
     wake(state_dir);
     Ok(())
+}
+
+/// The replacement CA of a compromise or loss recovery (3.11, 3.12) as the console presents it, never on an old CA's
+/// signature: the enrollment anchor (`Anchor::Code`) admits only the CA in the server's chain whose SPKI SHA-256 is
+/// exactly the operator's fingerprint, and the manifest read on that connection must be signed by that CA for this
+/// console and list that server leaf (3.10). Its generation as a `pending` pin; None on any failure.
+fn replacement_ca(state_dir: &Path, fingerprint: &str) -> Option<Pin> {
+    let link = load_link_json(state_dir).ok().flatten().map(|map| Link { map }).filter(Link::usable)?;
+    let typed: String = fingerprint.chars().filter(|c| !c.is_whitespace() && *c != ':').collect();
+    let pin: [u8; 32] = w::unhex(&typed)?.try_into().ok()?;
+    let proxy = std::env::var(PROXY_ENV).ok();
+    run_blocking(async {
+        let wall = now_ms();
+        let (tls, leaf, ca) = dial(link.fleet_url(), proxy.as_deref(), Anchor::Code(pin), wall, None).await.ok()?;
+        let mut http = Http::over(tls, link.fleet_url()).await.ok()?;
+        let (status, m) = http.call("GET", "/fleet/v1/trust", None).await.ok()?;
+        if status != 200 {
+            return None;
+        }
+        let generation = m.get("caGeneration").and_then(Value::as_u64)?;
+        let leaf_hash = crate::meet_x509::Cert::from_der(&leaf).map(|c| hex(&sha256(&c.spki)))?;
+        let candidate = Pin { generation, pin: hex(&pin), state: "active".into(), ca_cert: Some(ca.clone()) };
+        accept_manifest(&m, &[candidate], &|_| None, Some(link.console_id()), link.stored().as_ref(), Mode::Refresh, link.trust_time().unwrap_or(0), wall, Some(&leaf_hash)).ok()?;
+        Some(Pin { generation, pin: hex(&pin), state: "pending".into(), ca_cert: Some(ca) })
+    })
 }
 
 /// `trustTimeMs` as stored.
@@ -5052,6 +5093,59 @@ mod tests {
             assert!(!matches!(call_with(&url, &new_ca, cert, key.pkcs8(), "POST", "/fleet/v1/recover-cert", Some(&body)).await, Ok((200, _))));
             assert!(upgrade_with(&url, &new_ca, cert, key.pkcs8()).await.is_err());
         }
+    }
+
+    /// 3.11, 3.12 the operators' path after `fleet-ca replace --compromised`: the relay holds no pending pin, so
+    /// `trust-ca` with the fingerprint the replacement printed learns the new CA from the console (the enrollment
+    /// anchor), and `recover-cert` then succeeds with the CA the relay learned. A wrong fingerprint changes nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn trust_ca_after_a_replacement_learns_the_new_ca_from_the_console() {
+        let (state, desk, vault) = port::test_port("trust-ca-op");
+        let url = listen(&state).await;
+        let (id, key, cert) = port::enrolled(&state, &desk);
+        let old_ca = state.ca.lock().issuing_cert().unwrap().cert.clone();
+        let old_pin = x509::pin_hex(&old_ca).unwrap();
+        let relay_dir = crate::fleet_ca::tests_dir("trust-ca-relay");
+        let mut link = Map::new();
+        link.insert("consoleId".into(), json!(port::CID));
+        link.insert("relayId".into(), json!(id));
+        link.insert("fleetUrl".into(), json!(url));
+        link.insert("cert".into(), json!(b64u(&cert)));
+        link.insert("pins".into(), pins_value(&[Pin { generation: 1, pin: old_pin.clone(), state: "active".into(), ca_cert: Some(old_ca.clone()) }], true));
+        write_link_file(&relay_dir, &link).unwrap();
+        let dir = state.ca.lock().dir().to_owned();
+        let t = now_ms();
+        let seeds: Vec<crate::fleet_ca::RelaySeed> = vec![(id.clone(), vec![(x509::serial_hex(&cert).unwrap(), t + 90 * DAY, true, key.spki())])];
+        let words = vault_do(&*vault, |v| crate::fleet_ca::replace_with(&dir, v, "compromised", &seeds, t)).unwrap();
+        *state.ca.lock() = vault_do(&*vault, |v| crate::fleet_ca::FleetCa::open(&dir, v, port::CID, "console.example.com", &["localhost".into()], t));
+        state.reload_server_key();
+        // the fingerprint the console's operator reads to the relay's operator
+        let fingerprint = words.split("fingerprint ").nth(1).and_then(|s| s.split('.').next()).unwrap().to_owned();
+        let trust = |fp: String| {
+            let d = relay_dir.clone();
+            tokio::task::spawn_blocking(move || trust_ca(&d, 0, &fp))
+        };
+        let before = std::fs::read(link_path(&relay_dir)).unwrap();
+        let typo = format!("{}{}", &fingerprint[..63], if fingerprint.ends_with('0') { '1' } else { '0' });
+        for wrong in [old_pin.clone(), typo, fingerprint[..60].to_owned(), String::new()] {
+            assert!(trust(wrong.clone()).await.unwrap().is_err(), "{wrong}");
+            assert_eq!(std::fs::read(link_path(&relay_dir)).unwrap(), before, "a wrong fingerprint changes nothing: {wrong}");
+        }
+        // typed as an operator may: upper case, in groups of 4
+        let typed = fingerprint.to_ascii_uppercase().as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect::<Vec<_>>().join(" ");
+        trust(typed).await.unwrap().unwrap();
+        let link = Link { map: load_link_json(&relay_dir).unwrap().unwrap() };
+        let learned = link.pins().into_iter().find(|p| p.generation == 2 && p.active()).and_then(|p| p.ca_cert).expect("generation 2 active");
+        assert_eq!(x509::pin_hex(&learned).as_deref(), Some(fingerprint.as_str()));
+        assert_eq!((cert_generation(&link), newest_active(&link)), (Some(1), Some(2)), "the agent's recovery case");
+        // the restricted recovery path with the CA the relay learned
+        let new = Key::generate(Curve::P256).unwrap();
+        let input = w::recover_input(port::CID, &id, &x509::serial_hex(&cert).unwrap(), &new.spki(), 2).unwrap();
+        let body = json!({ "relayId": id, "spkiNew": b64u(&new.spki()), "sigOld": b64u(&key.sign(&input).unwrap()), "sigNew": b64u(&new.sign(&input).unwrap()) });
+        let (s, a) = call_with(&url, &learned, &cert, key.pkcs8(), "POST", "/fleet/v1/recover-cert", Some(&body)).await.unwrap();
+        assert_eq!(s, 200, "{a}");
+        let new_cert = unb64u(a["cert"].as_str().unwrap()).unwrap();
+        assert!(upgrade_with(&url, &learned, &new_cert, new.pkcs8()).await.is_ok());
     }
 
     /// 3.6 and 3.8 on the real channel: a binary frame closes it with 1003, a frame over the console's message cap with

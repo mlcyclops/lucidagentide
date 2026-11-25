@@ -3,8 +3,9 @@
 // by /64). At `accept`, in this order: the source list first (a connection from outside it is closed without a
 // handshake and never takes a slot; the peer is logged in `console.refused`, `why: "source"`, at most once per
 // address per minute), then the slot, then HANDSHAKE_TIMEOUT for the TLS handshake. HTTP/1.1 only, request bodies at
-// most BODY_MAX, IDLE_TIMEOUT between requests. The source is always the TCP peer: no proxy may stand in front
-// (decision 25). Everything under /console goes to the core console (src/console.rs); nothing else is served here.
+// most BODY_MAX (the MDS3 upload at most MDS_BODY_MAX), IDLE_TIMEOUT between requests. The source is always the TCP
+// peer: no proxy may stand in front (decision 25). Everything under /console goes to the core console
+// (src/console.rs); nothing else is served here.
 
 use crate::console::{ConsoleReply, ConsoleRequest};
 use crate::meet::{address_of, http_date, log_info, quiet_end, read_head, reason_phrase, Settings, Tls, BODY_MAX, SERVER_VERSION};
@@ -301,7 +302,10 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
     let (path, query) = head.path_query();
     let mut close = head.close;
     let length = head.header("content-length").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(0);
-    if head.header("transfer-encoding").is_some() || length > BODY_MAX {
+    // The MDS3 upload takes up to 16 MiB (contract 3.1, 3.5), as on the main port (server.rs); the console checks each
+    // route's own limit after this.
+    let cap = if path == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_MAX) } else { BODY_MAX };
+    if head.header("transfer-encoding").is_some() || length > cap {
         // 413 without reading the body; the connection closes
         write_reply(reader.get_mut(), &plain(413, "The request is too large."), true)?;
         return Ok(false);
@@ -551,6 +555,52 @@ pub(crate) mod tests {
         }
         assert!(!server.is_handshaking() && !client.is_handshaking());
         assert!(server.peer_certificates().is_none());
+    }
+
+    #[test]
+    fn the_mds_upload_alone_passes_the_64_kib_body_cap() {
+        // contract 3.1 and 3.5: 64 KiB request bodies, `settings/mds` up to 16 MiB (the shipped blob is about 10.6 MB)
+        let mut s = settings(json!({}));
+        let (cert, key) = self_signed("console.example.org");
+        s.console_cert = temp("mds.crt", &cert);
+        s.console_key = temp("mds.key", &key);
+        let conf = check_settings(&s, &[]).unwrap().unwrap();
+        let tls = crate::meet_tls::console_tls_config(&s).unwrap();
+        let handler: Handler = Arc::new(|r: &ConsoleRequest<'_>, _: i64| ConsoleReply { status: 200, content_type: "application/json", body: json!({"bytes": r.body.len()}).to_string().into_bytes(), headers: Vec::new(), close: false });
+        let source_ok: SourceCheck = Arc::new(|ip: IpAddr| ip.is_loopback());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let at = listener.local_addr().unwrap();
+        let port = Port::new(conf, tls, handler, source_ok);
+        std::thread::spawn(move || port.run(listener));
+        let mut roots = rustls::RootCertStore::empty();
+        for c in rustls_pemfile::certs(&mut cert.as_bytes()) {
+            roots.add(c.unwrap()).unwrap();
+        }
+        let client_cfg = Arc::new(rustls::ClientConfig::builder_with_provider(Arc::new(crate::server::provider())).with_safe_default_protocol_versions().unwrap().with_root_certificates(roots).with_no_client_auth());
+        // POST `size` bytes to `path` (only the head when `send_body` is false) and read the whole answer
+        let post = |path: &str, size: usize, send_body: bool| -> String {
+            let tcp = TcpStream::connect(at).unwrap();
+            tcp.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+            tcp.set_write_timeout(Some(Duration::from_secs(20))).unwrap();
+            let name = rustls::pki_types::ServerName::try_from("console.example.org").unwrap();
+            let mut tls = rustls::StreamOwned::new(rustls::ClientConnection::new(client_cfg.clone(), name).unwrap(), tcp);
+            let head = format!("POST {path} HTTP/1.1\r\nHost: console.example.org\r\nContent-Type: application/json\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n");
+            tls.write_all(head.as_bytes()).unwrap();
+            if send_body {
+                let _ = tls.write_all(&vec![b' '; size]);
+            }
+            let _ = tls.flush();
+            let mut out = Vec::new();
+            let _ = tls.read_to_end(&mut out);
+            String::from_utf8_lossy(&out).into_owned()
+        };
+        let blob = 11 * 1024 * 1024;
+        let answer = post("/console/api/settings/mds", blob, true);
+        assert!(answer.starts_with("HTTP/1.1 200 ") && answer.ends_with(&json!({"bytes": blob}).to_string()), "{answer}");
+        // every other route keeps 64 KiB, and the MDS route its own 16 MiB
+        assert!(post("/console/api/settings/banner", BODY_MAX + 1, false).starts_with("HTTP/1.1 413 "));
+        assert!(post("/console/api/settings/mds", crate::console::MDS_BODY_MAX + 1, false).starts_with("HTTP/1.1 413 "));
+        assert!(post("/console/api/settings/banner", BODY_MAX, true).starts_with("HTTP/1.1 200 "));
     }
 
     #[test]
