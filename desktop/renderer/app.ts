@@ -74,7 +74,8 @@ import { CURTAIN, chipAfterHide, chipTarget, chipView, classifyCurtain, curtainL
 import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
 import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
-import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
+import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut, startMarketKeepFresh } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect + P-MARKET.AUTH2 keep-fresh
+import { engineCustody, localAuthStorage } from "./market_auth.ts"; // P-MARKET.AUTH2 (ADR-0684): the engine holds the store sign-in
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
 import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRelayFile } from "../collab/drive_file.ts";
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
@@ -22672,7 +22673,12 @@ onNetChange(() => {
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
-initMarket(readMarketBootConfig());
+// P-MARKET.AUTH2 (ADR-0684): the sign-in is held by the engine vault (not this origin's localStorage, which a rolled
+// port empties), an older version's localStorage copy moves there once, and it is renewed before it lapses.
+initMarket(readMarketBootConfig(), { custody: engineCustody(bridge), legacy: localAuthStorage() });
+startMarketKeepFresh();
+// Read-only diagnostic for the real-UI proof (demo_p_market_auth_2.mjs): who is signed in, never a token.
+(window as unknown as { __lucidMarketUser?: typeof marketUser }).__lucidMarketUser = marketUser;
 // P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
 // (the engine's backup restore, then the store) and say so.
 void pluginsFlyout.restorePurchases("auto");

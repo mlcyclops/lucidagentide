@@ -6585,3 +6585,11 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** `docs_links.ts` single-sources the docs URLs; About shows a Documentation link, the Connect a provider modal links `/connect/`, the tour closer links `/get-started/`, and the palette has "Help: open the documentation"; `demo_p_docs_2.mjs` proves each link visible, safe and hit-testable with auditBoxes; demo-P-DOCS.2.
 - **stubbed:** none.
 - **next:** contextual Learn how links on Worlds, Fleet and the Security sandbox card (ADR-0660 item 5).
+## P-MARKET.AUTH2 (ADR-0684): the store sign-in and world receipts live with the install, and the sign-in renews itself
+- **shipped (2026-11-25):** the store sign-in (refresh token included) and the world receipts move from the renderer origin's localStorage into the engine vault (`market_auth_store.ts`, `market:auth` / `market:receipts`) behind UI-token-only routes (`market_auth_routes.ts`: GET/POST /api/market/auth, /renew, /clear, GET/POST /api/market/receipts; the refresh token never comes back out); the engine renews the ID token in its last 5 minutes (`market_token.renewRecord`) and only Google's INVALID_REFRESH_TOKEN / TOKEN_EXPIRED / USER_DISABLED / USER_NOT_FOUND signs out, offline never does; `MarketAuth` holds only the view, counts a refresh token as signed in, renews on every provider call plus a keep-fresh timer, focus and online, and moves a legacy localStorage record once; the public Firebase web key ships by default; receipts renew daily, survive offline for 30 days and drop on a definitive "not entitled"; `demo_p_market_auth_2.mjs` proves a restart on another origin with an expired token and the store offline keeps both worlds unlocked; demo-P-MARKET.AUTH2.
+- **stubbed:** none.
+- **next:** ship it in the next release; installed builds move their localStorage sign-in into the engine on first launch.
+## P-VIZ.FLASH1 (ADR-0687): no black flash in 3D Visualize while agents work
+- **shipped (2026-11-25):** an HDR sanitize ShaderPass after the RenderPass (NaN/Inf to 0, clamp to 256) so stacked additive glows can no longer overflow half-float into a NaN frame through bloom and ACES; `demo_p_viz_flash_1.mjs` failed on the old bundle (4 empty frames on ultra) and passes on the rebuilt one; demo-P-VIZ.FLASH1.
+- **stubbed:** none.
+- **next:** ship it in the next release.
