@@ -6569,3 +6569,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** `viz_view.pollFleet` takes every lane of fleet/status instead of `hubLanes` (ADR-0410's hub scope stays the orbit's), so lanes born under an earlier Main session (New session, Activate, an upgrade's restart) are drawn and counted again; `demo_p_viz_fleet_1.mjs` failed on the old bundle (0 agents) and passes on the rebuilt one; demo-P-VIZ.FLEET1.
 - **stubbed:** none.
 - **next:** ship it in the next release (installed v2.7.1 keeps the old filter until then).
+## P-VIZ.LANE1 (ADR-0683): the Agent Worlds node panel is a Fleet lane card body
+- **shipped (2026-11-25):** one lane renderer (`lane_view.ts`, rules in `lane_view_model.ts`) used by the Fleet card and the Agent Worlds panel: live thinking, tool chips and markdown turns stream in the panel; its composer takes pasted, dropped or picked images as mini chips with an x (the composer's limits), stages while the lane is busy with the staged strip on the engine's queue (Update, Steer, reorder, remove), and drains its lane while no Fleet dock does; the panel resizes by its edges, a corner grip and the grip's keys (`viz_panel_size.ts`, saved in `lucid.viz.panelSize.v1`); `viz_model.foldOutput` removed; `demo_p_viz_lane_1.mjs`; demo-P-VIZ.LANE1.
+- **stubbed:** none; the panel keeps no file bar (a staged prompt's files stay on the engine; add files from the Fleet card).
+- **next:** ship it in the next release.
