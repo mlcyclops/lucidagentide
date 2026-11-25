@@ -156,6 +156,13 @@ fn license_needed() -> ApiError {
     ApiError::with("license-needed", format!("This needs a license that includes {PRODUCT_WORDS}."))
 }
 
+/// A refused clock confirmation: a disagreeing browser is `clock-disagree`; a confirmation the relay could not save
+/// (and so did not make) is `write-failed`.
+fn clock_refusal(words: &'static str) -> ApiError {
+    let code = if words == crate::meet_time::CLOCK_UNSAVED { "write-failed" } else { "clock-disagree" };
+    ApiError::with(code, words)
+}
+
 /// A Hub or Relay function's refusal as the console answers it (8.3): its own words under `invalid`, `role`,
 /// `not-found` or `stale`.
 fn from_hub(e: E) -> ApiError {
@@ -1056,7 +1063,7 @@ impl MeetSection {
             "meet.clock.confirm" => {
                 // approved (or sole-admin path): the browser time of the request, checked again now
                 let browser = p.get("browserTime").and_then(Value::as_i64).ok_or_else(|| invalid("browserTime is a time in milliseconds."))?;
-                let done = Self::gate(&relay)?.confirm_clock(browser).map_err(|w| ApiError::with("clock-disagree", w))?;
+                let done = Self::gate(&relay)?.confirm_clock(browser).map_err(clock_refusal)?;
                 Ok(json!({"ok": true, "old": done.old, "new": done.new, "credited": done.credited}))
             }
             "meet.ai.save" => Self::ai_save_run(&relay, &p, &who.principal, t),
@@ -1287,7 +1294,7 @@ impl ProductSection for MeetSection {
                 if gate.time.confirm_goes_back() {
                     return Ok(SectionAnswer::Second { target: "-".into(), params: call.body.clone(), detail: json!({"back": true}) });
                 }
-                let done = gate.confirm_clock(browser).map_err(|w| ApiError::with("clock-disagree", w))?;
+                let done = gate.confirm_clock(browser).map_err(clock_refusal)?;
                 Ok(SectionAnswer::Done { answer: json!({"ok": true}), target: "-".into(), detail: json!({"old": done.old, "new": done.new, "credited": done.credited}) })
             }
             ("GET", "meet/support") => {

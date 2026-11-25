@@ -1730,6 +1730,8 @@ pub mod apns {
     const QUEUE: usize = 1000;
     /// Connecting, the TLS handshake and one request each.
     const TIMEOUT: Duration = Duration::from_secs(10);
+    /// The largest answer read from Apple, Google's token endpoint or FCM (small JSON documents); past it the call fails.
+    pub const ANSWER_MAX: usize = 64 * 1024;
     /// Apple refuses a provider token older than an hour and one renewed more often than every 20 minutes.
     pub const JWT_EVERY: Duration = Duration::from_secs(50 * 60);
 
@@ -1938,6 +1940,15 @@ pub mod apns {
         }
     }
 
+    /// An answer's body, at most ANSWER_MAX bytes: a larger one fails while it is read, never held whole.
+    pub async fn answer_body<B>(body: B) -> Result<Bytes, String>
+    where
+        B: hyper::body::Body<Data = Bytes>,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        Ok(http_body_util::Limited::new(body, ANSWER_MAX).collect().await.map_err(|e| e.to_string())?.to_bytes())
+    }
+
     /// AC-1 4.9 `meet/push`: pushes sent and failed (by reason) in the last 24 hours, kept in memory.
     static OUTCOMES: std::sync::Mutex<std::collections::VecDeque<(f64, Option<String>)>> = std::sync::Mutex::new(std::collections::VecDeque::new());
     const OUTCOMES_KEEP: usize = 100_000;
@@ -1990,7 +2001,7 @@ pub mod apns {
             conn.ready().await.map_err(|e| e.to_string())?;
             let res = conn.send_request(req).await.map_err(|e| e.to_string())?;
             let status = res.status().as_u16();
-            let body = res.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
+            let body = answer_body(res.into_body()).await?;
             Ok::<_, String>((status, body))
         };
         let answer = tokio::time::timeout(TIMEOUT, work).await.unwrap_or_else(|_| Err("timed out".to_string()));
@@ -2018,13 +2029,13 @@ pub mod apns {
 /// is gone (404 UNREGISTERED, 400 INVALID_ARGUMENT about the token) drops the registration; anything else (429, 5xx)
 /// is logged and the push dropped, as APNs failures are.
 pub mod fcm {
-    use super::apns::{dial, note, Conn, Outcome};
+    use super::apns::{answer_body, dial, note, Conn, Outcome};
     use crate::meet::log_warn;
     use crate::meet_json::{self as pj, obj};
     use aws_lc_rs::rand::SystemRandom;
     use aws_lc_rs::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
     use bytes::Bytes;
-    use http_body_util::{BodyExt, Full};
+    use http_body_util::Full;
     use rustls::ClientConfig;
     use serde_json::Value;
     use std::sync::Arc;
@@ -2045,6 +2056,8 @@ pub mod fcm {
     const ASSERTION_SECONDS: i64 = 3600;
     /// An access token is used until this long before it expires.
     pub const RENEW_BEFORE: Duration = Duration::from_secs(5 * 60);
+    /// The longest access token lifetime kept, whatever `expires_in` says (Google's tokens last an hour).
+    const TOKEN_SECONDS_MAX: u64 = 3600;
     /// FCM's limit on a message's data: its keys and values, in bytes.
     pub const DATA_LIMIT: usize = 4096;
 
@@ -2113,10 +2126,11 @@ pub mod fcm {
             self.access.lock().as_ref().filter(|(_, until)| Instant::now() < *until).map(|(t, _)| t.clone())
         }
 
-        /// Keep an access token Google gave for `expires_in` seconds, until RENEW_BEFORE before it expires.
+        /// Keep an access token Google gave for `expires_in` seconds (at most TOKEN_SECONDS_MAX: the token endpoint's
+        /// number is never trusted past it), until RENEW_BEFORE before it expires.
         pub fn keep(&self, token: &str, expires_in: u64) {
-            let until = Instant::now() + Duration::from_secs(expires_in).saturating_sub(RENEW_BEFORE);
-            *self.access.lock() = Some((token.to_string(), until));
+            let life = Duration::from_secs(expires_in.min(TOKEN_SECONDS_MAX)).saturating_sub(RENEW_BEFORE);
+            *self.access.lock() = Instant::now().checked_add(life).map(|until| (token.to_string(), until));
         }
 
         /// FCM refused the access token: the next push gets a new one.
@@ -2229,7 +2243,7 @@ pub mod fcm {
             conn.ready().await.map_err(|e| e.to_string())?;
             let res = conn.send_request(req).await.map_err(|e| e.to_string())?;
             let status = res.status().as_u16();
-            let body = res.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
+            let body = answer_body(res.into_body()).await?;
             Ok::<_, String>((status, body))
         };
         tokio::time::timeout(TIMEOUT, work).await.unwrap_or_else(|_| Err("timed out".to_string()))
@@ -3894,6 +3908,24 @@ mod tests {
             assert!(fcm::Account::load(path.to_str().unwrap()).is_ok());
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn an_endless_expires_in_is_kept_for_an_hour_at_most_and_never_overflows() {
+        let (file, _) = service_account();
+        let account = fcm::Account::from_json(file.as_bytes()).unwrap();
+        for huge in [u64::MAX, u64::MAX / 1000, 10 * 365 * 86_400] {
+            account.keep("ya29.long", huge);
+            assert_eq!(account.cached().as_deref(), Some("ya29.long"), "{huge}");
+        }
+    }
+
+    #[tokio::test]
+    async fn push_answers_past_64_kib_fail_while_read() {
+        let full = |n: usize| http_body_util::Full::new(bytes::Bytes::from(vec![b'x'; n]));
+        assert_eq!(apns::answer_body(full(apns::ANSWER_MAX)).await.unwrap().len(), apns::ANSWER_MAX);
+        assert!(apns::answer_body(full(apns::ANSWER_MAX + 1)).await.is_err());
+        assert!(apns::answer_body(full(16 << 20)).await.is_err());
     }
 
     /// A fake Google: `/token` answers a new access token each time (`ya29.test-<n>`); FCM's send answers a token

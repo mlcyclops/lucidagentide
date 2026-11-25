@@ -79,10 +79,15 @@ impl Query {
         let int = |k: &str| p.get(k).map(|v| v.as_i64().ok_or_else(|| refused("bad-request", &format!("{k} is a number of seconds.")))).transpose();
         let (from, to) = (int("from")?, int("to")?);
         let now = pj::now() as i64;
+        let span = || refused("bad-request", "from and to span at most 400 days, from first.");
+        // Caller-controlled seconds: checked arithmetic so an extreme from or to is refused, never wrapped past the span limit.
         let to = to.unwrap_or(now);
-        let from = from.unwrap_or(to - 30 * 86_400);
-        if from > to || to - from > SPAN_MAX_S {
-            return Err(refused("bad-request", "from and to span at most 400 days, from first."));
+        let from = match from {
+            Some(f) => f,
+            None => to.checked_sub(30 * 86_400).ok_or_else(span)?,
+        };
+        if from > to || to.checked_sub(from).is_none_or(|d| d > SPAN_MAX_S) {
+            return Err(span());
         }
         let limit = match p.get("limit") {
             None => 100,
@@ -717,5 +722,15 @@ mod tests {
         assert_eq!(Query::of(&base(json!({"limit": 501}))).err().unwrap().code, "bad-request");
         assert_eq!(Query::of(&json!({"org": "acme", "kind": "messages"})).err().unwrap().code, "bad-request");
         assert!(Query::of(&json!({"org": "acme", "kind": "attendance", "after": "nonsense"})).is_err());
+    }
+
+    #[test]
+    fn extreme_spans_are_refused_not_wrapped() {
+        let base = |params: Value| json!({"org": "acme", "kind": "attendance", "params": params});
+        for params in [json!({"to": i64::MIN}), json!({"from": i64::MIN, "to": 0}), json!({"from": i64::MIN, "to": i64::MAX}), json!({"to": i64::MIN + 30 * 86_400 - 1})] {
+            let r = Query::of(&base(params.clone())).err().unwrap_or_else(|| panic!("{params} passed"));
+            assert_eq!((r.status, r.code.as_str()), (400, "bad-request"), "{params}");
+        }
+        assert!(Query::of(&base(json!({"from": i64::MAX - SPAN_MAX_S, "to": i64::MAX}))).is_ok());
     }
 }

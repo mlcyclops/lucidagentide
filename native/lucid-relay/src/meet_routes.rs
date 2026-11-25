@@ -11,6 +11,11 @@ use std::panic::AssertUnwindSafe;
 
 type Route = fn(&mut Ctx) -> R<Obj>;
 
+/// SE-1 7: a support ticket's body is at most 20,000 characters (title 200, version 40), counted as characters, so
+/// the bytes that carry them are bounded by the worst JSON escaping: 12 bytes (a `\uXXXX\uXXXX` surrogate pair) per
+/// character, 243,000 bytes with the keys and the case, rounded up.
+const SUPPORT_TICKET_BODY_MAX: usize = 256 * 1024;
+
 fn get_route(path: &str) -> Option<Route> {
     let route: Route = match path {
         // SE-1 (meet_support.rs): a person's own support tickets and the admins' answers
@@ -306,7 +311,7 @@ fn post_route(path: &str) -> Option<Route> {
     let route: Route = match path {
         // SE-1 (meet_support.rs): a person files a support ticket for the org's Admin Console
         "/v1/support/tickets" => |c: &mut Ctx| {
-            let (who, b) = (c.who(false)?, c.body_max(64 * 1024)?);
+            let (who, b) = (c.who(false)?, c.body_max(SUPPORT_TICKET_BODY_MAX)?);
             crate::meet_support::device_file(c.relay, &who, &b)
         },
         "/v1/join" => join,
@@ -1479,5 +1484,15 @@ mod tests {
         for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
             assert!(post_route(p).is_some(), "{p}");
         }
+    }
+
+    #[test]
+    fn the_largest_valid_support_ticket_fits_the_route_cap() {
+        // SE-1 7: 20,000 characters of body, 200 of title and 40 of version, every one an escaped surrogate pair
+        let escaped = |n: usize| "\\ud83d\\ude00".repeat(n);
+        let worst = format!("{{\"case\": \"c_0123456789ab\", \"title\": \"{}\", \"body\": \"{}\", \"version\": \"{}\"}}", escaped(200), escaped(20_000), escaped(40));
+        let parsed: Value = serde_json::from_str(&worst).unwrap();
+        assert_eq!(parsed["body"].as_str().unwrap().chars().count(), 20_000);
+        assert!(worst.len() <= SUPPORT_TICKET_BODY_MAX, "{} bytes", worst.len());
     }
 }

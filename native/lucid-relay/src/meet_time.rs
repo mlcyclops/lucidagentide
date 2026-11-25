@@ -46,6 +46,8 @@ pub const CONFIRM_MAX_MS: i64 = 5 * 60_000;
 pub const SAVE_EVERY_MS: i64 = 60_000;
 /// 8.3 `clock-disagree`.
 pub const CLOCK_DISAGREE: &str = "The relay's clock and your browser differ by more than 5 minutes. Fix the relay's clock first.";
+/// A confirmation that could not be written to meet-time.json changes nothing (fail closed).
+pub const CLOCK_UNSAVED: &str = "The relay could not save the confirmed time, so nothing was changed. Check the relay's disk, then try again.";
 const KEYS: [&str; 5] = ["highWater", "seatElapsed", "seatUncertain", "uncertainSince", "uncertainRunning"];
 /// R4-M1: uncertain time holds the would-be overage after this much running time.
 pub const HOLD_AFTER_MS: i64 = 72 * 3_600_000;
@@ -211,6 +213,7 @@ pub struct Confirmed {
     pub credited: i64,
 }
 
+#[derive(Clone)]
 struct Inner {
     /// The effective time at `base_mono`.
     base_eff: i64,
@@ -437,16 +440,25 @@ impl TrustedTime {
     pub fn save(&self) -> Result<(), String> {
         let mut inner = self.inner.lock();
         self.tick(&mut inner);
-        let (eff, seat) = self.snapshot(&inner);
+        let body = self.record(&mut inner);
+        drop(inner);
+        self.write(&body)
+    }
+
+    /// The file's body for the state now, marking it saved.
+    fn record(&self, inner: &mut Inner) -> Value {
+        let (eff, seat) = self.snapshot(inner);
         let mono = self.clock.mono_ms();
         inner.saved_mono = mono;
-        let (uncertain, since, running, reset) = (inner.uncertain, inner.since, inner.running(mono), inner.reset);
-        drop(inner);
-        let Some(file) = &self.file else { return Ok(()) };
-        let mut body = json!({"highWater": eff, "seatElapsed": seat, "seatUncertain": uncertain, "uncertainSince": since, "uncertainRunning": running});
-        if let Some((before, after)) = reset {
+        let mut body = json!({"highWater": eff, "seatElapsed": seat, "seatUncertain": inner.uncertain, "uncertainSince": inner.since, "uncertainRunning": inner.running(mono)});
+        if let Some((before, after)) = inner.reset {
             body["reset"] = json!({"before": before, "after": after});
         }
+        body
+    }
+
+    fn write(&self, body: &Value) -> Result<(), String> {
+        let Some(file) = &self.file else { return Ok(()) };
         crate::store::write_private(file, format!("{body}\n").as_bytes()).map_err(|e| format!("{TIME_FILE} cannot be written: {e}"))
     }
 
@@ -471,14 +483,17 @@ impl TrustedTime {
 
     /// `meet.clock.confirm`: accepted only when the relay's wall clock and the browser's time agree within 5
     /// minutes; then the effective time is the wall clock, the held gap is credited to the seat clock, and
-    /// `clock-uncertain` and `clock-back` clear.
+    /// `clock-uncertain` and `clock-back` clear. The confirmed state is written before it counts: when the file cannot
+    /// be written the change is rolled back and nothing is released (fail closed).
     pub fn confirm(&self, browser_ms: i64) -> Result<Confirmed, &'static str> {
         let mut inner = self.inner.lock();
         self.tick(&mut inner);
         let (wall, mono) = (self.clock.wall_ms(), self.clock.mono_ms());
-        if (wall - browser_ms).abs() > CONFIRM_MAX_MS {
+        // browserTime comes from the network: abs_diff never overflows
+        if wall.abs_diff(browser_ms) > CONFIRM_MAX_MS.unsigned_abs() {
             return Err(CLOCK_DISAGREE);
         }
+        let before = inner.clone();
         let (old, seat) = self.snapshot(&inner);
         // the seat clock gets the held gap (not while it is paused: R42-1)
         let credited = if inner.seat_paused { 0 } else { inner.held_gap };
@@ -491,10 +506,15 @@ impl TrustedTime {
         inner.back = wall < old - BEHIND_MAX_MS;
         inner.since = None;
         inner.unc_base = 0;
-        drop(inner);
-        if let Err(e) = self.save() {
+        // written under the lock so no other save can land between the change and its rollback
+        let body = self.record(&mut inner);
+        if let Err(e) = self.write(&body) {
+            *inner = before;
+            drop(inner);
             crate::meet::log_error(&e);
+            return Err(CLOCK_UNSAVED);
         }
+        drop(inner);
         Ok(Confirmed { old, new: wall.max(old), credited })
     }
 }
@@ -680,6 +700,43 @@ mod tests {
         assert_eq!(done.credited, 2 * DAY_MS);
         assert!(!t.view().uncertain);
         assert_eq!(t.seat_elapsed(), HOUR + 2 * DAY_MS);
+    }
+
+    #[test]
+    fn an_extreme_browser_time_is_refused_not_overflowed() {
+        let c = FakeClock::new(T0);
+        let t = TrustedTime::open(None, c.clone()).unwrap();
+        c.shift_wall(2 * DAY_MS);
+        t.now();
+        for browser in [i64::MIN, i64::MIN + 1, i64::MAX] {
+            assert_eq!(t.confirm(browser), Err(CLOCK_DISAGREE), "{browser}");
+        }
+        assert!(t.view().uncertain, "nothing confirmed");
+    }
+
+    #[test]
+    fn a_confirmation_that_cannot_be_written_changes_nothing() {
+        let d = dir("confirm-unsaved");
+        let c = FakeClock::new(T0);
+        let t = TrustedTime::open(Some(&d), c.clone()).unwrap();
+        c.run(HOUR);
+        c.shift_wall(2 * DAY_MS);
+        t.now();
+        let held = t.view();
+        assert!(held.uncertain);
+        // meet-time.json becomes a non-empty folder: the write fails
+        std::fs::remove_file(d.join(TIME_FILE)).unwrap();
+        std::fs::create_dir_all(d.join(TIME_FILE).join("x")).unwrap();
+        assert_eq!(t.confirm(c.wall_ms()), Err(CLOCK_UNSAVED));
+        let after = t.view();
+        assert!(after.uncertain && after.held_gap_ms == held.held_gap_ms && after.uncertain_since == held.uncertain_since, "rolled back");
+        assert_eq!(t.seat_elapsed(), HOUR, "the held gap is not credited");
+        // once the file can be written again the confirmation goes through and is kept
+        std::fs::remove_dir_all(d.join(TIME_FILE)).unwrap();
+        let done = t.confirm(c.wall_ms()).unwrap();
+        assert_eq!(done.credited, 2 * DAY_MS);
+        let saved: Value = serde_json::from_slice(&std::fs::read(d.join(TIME_FILE)).unwrap()).unwrap();
+        assert_eq!(saved["seatUncertain"], false);
     }
 
     #[test]
