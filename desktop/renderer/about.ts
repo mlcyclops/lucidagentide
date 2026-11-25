@@ -12,6 +12,7 @@
 //  - techLeadLogo()    the TechLead 187 emblem (gradient rounded square + "187" monogram).
 //  - aboutHtml(ver)    the full panel inner HTML; `ver` comes from APP_VERSION (single source).
 
+import { docsLinkHtml } from "./docs_links.ts"; // P-DOCS.2 (ADR-0681): the docs site link
 import { TECHLEAD_AVATAR_URI } from "./techlead_avatar.ts"; // the brand emblem, inlined so it paints with the panel
 
 // Small HTML escape for any interpolated value (version string is ours, but stay disciplined).
@@ -62,6 +63,7 @@ export function aboutHtml(version: string): string {
       <div class="about-tag">Secure agentic IDE · provenance · memory</div>
       <div class="about-ver" data-tip="App version">v${v}</div>
       <a class="about-site" href="https://lucid-agents.com/" target="_blank" rel="noopener noreferrer" data-tip="Open the LUCID Agent website">lucid-agents.com ↗</a>
+      ${docsLinkHtml("home", "Documentation ↗", "about-site about-docs", "Open the LUCID documentation in your browser")}
     </div>
 
     <p class="about-blurb">

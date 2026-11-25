@@ -76,7 +76,8 @@ import { CURTAIN, chipAfterHide, chipTarget, chipView, classifyCurtain, curtainL
 import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
 import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
-import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect
+import { initMarket, beginSignIn, beginDriveSignIn, freshDriveToken, handleAuthCallback, readMarketBootConfig, marketFreshCredential, marketUser, marketSignOut, startMarketKeepFresh } from "./market_boot.ts"; // P-KGMARKET.4 (ADR-0206) + P-REMOTE.2c relay-token push + P-REMOTE.10b drive reconnect + P-MARKET.AUTH2 keep-fresh
+import { engineCustody, localAuthStorage } from "./market_auth.ts"; // P-MARKET.AUTH2 (ADR-0684): the engine holds the store sign-in
 import { chooseReconnectLink, buildCode, appendCode, buildFileContent, readFileContent, RELAY_FILE_NAME } from "../collab/drive_relay_codes.ts"; // P-REMOTE.10b (ADR-0233): Drive reconnect codes
 import { findRelayFile, createRelayFile, readRelayFile, updateRelayFile, shareRelayFile } from "../collab/drive_file.ts";
 import { toolfailGroupHtml, type ToolFailEntry } from "./toolfail_group.ts"; // P-TOOLFAIL.2 (ADR-0163)
@@ -138,6 +139,10 @@ import { webrtcLoopbackSelfTest, webrtcRelaySelfTest, webrtcP2PModuleSelfTest } 
 (window as unknown as { __lucidWebrtcSelfTest?: typeof webrtcLoopbackSelfTest }).__lucidWebrtcSelfTest = webrtcLoopbackSelfTest;
 (window as unknown as { __lucidWebrtcRelaySelfTest?: typeof webrtcRelaySelfTest }).__lucidWebrtcRelaySelfTest = webrtcRelaySelfTest;
 (window as unknown as { __lucidP2PModuleSelfTest?: typeof webrtcP2PModuleSelfTest }).__lucidP2PModuleSelfTest = webrtcP2PModuleSelfTest;
+// P-DOCS.2 (ADR-0681): shows the onboarding Connect a provider modal regardless of the configured-provider gate, so
+// demo_p_docs_2.mjs can prove its docs link on a QA engine that already has a provider. Cosmetic, never gates.
+(window as unknown as { __lucidShowProviderPrompt?: () => void }).__lucidShowProviderPrompt = () => showProviderPrompt();
+import { docsUrl, docsLinkHtml } from "./docs_links.ts"; // P-DOCS.2 (ADR-0681): docs.lucid-agents.com, single source
 // P-COLLAB.17 (ADR-0202): renderer-side direct-P2P share/join (RTCPeerConnection is renderer-only) - the "prefer
 // direct connection" toggle runs the share peer-to-peer over WebRTC, with the relay used only to signal + fall back.
 import { startP2PHost, stopP2PHost, p2pHostActive, p2pHostStatus, setP2PHostOptions, teeEvent as p2pTeeEvent, teeUserTurn as p2pTeeUserTurn, startP2PGuest, stopP2PGuest, p2pGuestActive, p2pGuestSendPrompt, p2pLinkEndpoint } from "./collab_p2p.ts";
@@ -5182,6 +5187,13 @@ async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
   let auth = state.auth;
   try { const a = await bridge.auth(); if (a) { auth = a; state.auth = a; } } catch { /* offline: still offer */ }
   if (configuredProviderCount(auth) > 0) { onDone?.(); return; } // already has a provider connected
+  showProviderPrompt(onDone);
+}
+
+/** The Connect a provider modal itself (the gates live in promptForProviderIfNeeded). The docs anchor is a plain
+ *  target=_blank link (navigation_policy.ts opens it in the system browser); only [data-prov] buttons close it. */
+function showProviderPrompt(onDone?: () => void): void {
+  if (document.getElementById("provChoice")) return;
   const ov = el(`<div id="provChoice" class="modal-ov">
     <div class="modal role-modal" role="dialog" aria-modal="true" aria-labelledby="provChoiceTitle">
       <div class="modal-icon">${icon("spark", 24)}</div>
@@ -5191,6 +5203,7 @@ async function promptForProviderIfNeeded(onDone?: () => void): Promise<void> {
         <button class="gov-choice ok" type="button" data-prov="yes">${icon("expand", 18)}<span class="gov-choice-tx"><b>Connect a provider</b><span class="gov-choice-sub">Open the provider list - OAuth or API key.</span></span></button>
         <button class="gov-choice" type="button" data-prov="later">${icon("clock", 18)}<span class="gov-choice-tx"><b>I'll do it later</b><span class="gov-choice-sub">Add one from the model picker or Settings any time.</span></span></button>
       </div>
+      ${docsLinkHtml("connect", "How to connect your AI ↗", "modal-docs", "Step-by-step guide in your browser")}
     </div></div>`);
   document.body.appendChild(ov);
   $$("[data-prov]", ov).forEach((b) => b.addEventListener("click", () => {
@@ -21208,6 +21221,7 @@ const palette = createPalette(() => {
   const acts: Action[] = [
     { id: "cfg", title: "Choose model · mode · thinking…", icon: "spark", hint: "config", run: () => openConfigPopover($("#modelBadge")!) },
     { id: "prov", title: "Connect a provider…", icon: "expand", hint: "providers", run: () => openProviderHub() }, // P-PROV.2: Provider Hub
+    { id: "docs", title: "Help: open the documentation", icon: "info", hint: "docs.lucid-agents.com", run: () => void openAuthUrl(docsUrl()) }, // P-DOCS.2 (ADR-0681)
     { id: "sec", title: "Open Security panel", icon: "shield", hint: "panel", run: () => focusInspector("security") },
     { id: "mem", title: "Open Memory & context panel", icon: "savings", hint: "panel", run: () => focusInspector("memory") },
     { id: "mkt", title: "Open Plugins", icon: "plugins", hint: "drawer", run: () => openPluginsDrawer() }, // P-PLUGINS.1 (ADR-0461)
@@ -22715,7 +22729,12 @@ onNetChange(() => {
 // P-KGMARKET.4 (ADR-0206): register the entitlement provider for this build (firebase / dev stub / off) and
 // listen for the lucid://auth deep link the OS forwards after hosted sign-in. A plain public build has no
 // config → "off" → the fail-closed nullProvider, so nothing here changes the storefront's behavior.
-initMarket(readMarketBootConfig());
+// P-MARKET.AUTH2 (ADR-0684): the sign-in is held by the engine vault (not this origin's localStorage, which a rolled
+// port empties), an older version's localStorage copy moves there once, and it is renewed before it lapses.
+initMarket(readMarketBootConfig(), { custody: engineCustody(bridge), legacy: localAuthStorage() });
+startMarketKeepFresh();
+// Read-only diagnostic for the real-UI proof (demo_p_market_auth_2.mjs): who is signed in, never a token.
+(window as unknown as { __lucidMarketUser?: typeof marketUser }).__lucidMarketUser = marketUser;
 // P-WORLDS.HEAL1: once the store provider is registered, bring back any purchase that went missing or got damaged
 // (the engine's backup restore, then the store) and say so.
 void pluginsFlyout.restorePurchases("auto");

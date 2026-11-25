@@ -13,13 +13,14 @@
 //   • mode "off" — public build with no config: the fail-closed nullProvider stays; the storefront is a hint.
 //
 // The mode decision + the sign-in URL construction are PURE (below) and unit-tested; the imperative init keeps
-// only the singletons + the platform calls (localStorage, opening a browser), which are dependency-injected so
-// the whole module is testable without Electron.
+// only the singletons + the platform calls (the sign-in custody, the legacy localStorage record, opening a browser),
+// which are dependency-injected so the whole module is testable without Electron. ADR-0684: the app's custody is the
+// engine vault (market_auth.engineCustody), and startMarketKeepFresh renews the sign-in before it lapses.
 
 import { registerMarketProvider } from "./market_gate.ts";
 import { registerFirebaseMarketProvider } from "./firebase_market_provider.ts";
 import { makeStubMarketProvider, memoryLedger, type StubLedger } from "./market_stub_provider.ts";
-import { MarketAuth, localAuthStorage, type AuthStorage } from "./market_auth.ts";
+import { MarketAuth, memoryAuthStorage, storageCustody, type AuthCustody, type AuthStorage } from "./market_auth.ts";
 import type { AuthState } from "../../harness/market/entitlement.ts";
 
 export type MarketMode = "firebase" | "stub" | "off";
@@ -31,8 +32,8 @@ export interface MarketBootConfig {
   functionsBaseUrl?: string;
   /** The hosted sign-in page (e.g. https://lucid-agent.web.app/signin). Required for firebase sign-in. */
   signInUrl?: string;
-  /** P-REMOTE.2c: PUBLIC Firebase web apiKey for silent ID-token refresh (securetoken exchange) so the desktop
-   *  relay reconnect stays authenticated past +1h. Public (identifies the project); absent -> no refresh. */
+  /** P-REMOTE.2c, ADR-0684: PUBLIC Firebase web apiKey the engine custody renews the ID token with (securetoken
+   *  exchange), so a sign-in lasts past +1h. Public (identifies the project); absent -> no renewal. */
   firebaseApiKey?: string;
 }
 
@@ -69,8 +70,12 @@ export interface BeginSignInResult {
 }
 
 export interface MarketBootDeps {
-  /** Token-store backing (defaults to localStorage). */
+  /** ADR-0684: where the sign-in is held. The app passes engineCustody(bridge) (the engine vault). */
+  custody?: AuthCustody;
+  /** Without a custody: hold the sign-in in this slot (tests, demos; defaults to page memory). */
   storage?: AuthStorage;
+  /** The legacy localStorage record to move into the custody once (the app passes localAuthStorage()). */
+  legacy?: AuthStorage;
   /** Opens the hosted sign-in page (defaults to window.open in a new tab). */
   openExternal?: (url: string) => void;
   /** Clock (defaults to Date.now) — injected so tests are deterministic. */
@@ -94,9 +99,12 @@ export function initMarket(cfg: MarketBootConfig | null | undefined, deps: Marke
   signInBase = cfg?.signInUrl ?? "";
   firebaseApiKey = cfg?.firebaseApiKey ?? "";
   if (deps.openExternal) openExternalFn = deps.openExternal;
-  auth = new MarketAuth(deps.storage ?? localAuthStorage(), deps.now ?? (() => Date.now()));
+  const now = deps.now ?? (() => Date.now());
+  const custody = deps.custody ?? storageCustody(deps.storage ?? memoryAuthStorage(), { now });
+  const a = new MarketAuth(custody, now, { apiKey: firebaseApiKey, legacy: deps.legacy });
+  auth = a;
 
-  const authView = { getUser: () => auth!.getUser(), getIdToken: () => auth!.getIdToken() };
+  const authView = { getUser: () => a.getUser(), getIdToken: () => a.getIdToken(), ready: () => a.ready() };
   if (mode === "firebase") {
     registerFirebaseMarketProvider({ functionsBaseUrl: cfg!.functionsBaseUrl!, auth: authView });
   } else if (mode === "stub") {
@@ -156,14 +164,36 @@ export function readMarketBootConfig(): MarketBootConfig {
 export function marketSignOut(): void { auth?.signOut(); }
 
 /** P-REMOTE.2c: a fresh Firebase credential (token + expiry) for the desktop relay's token push, silently
- *  renewed via the securetoken exchange when near expiry (needs the public apiKey; without it, only the
- *  still-valid stored token is returned). Null when signed out or unrenewable (fail-closed). */
+ *  renewed by the custody when near expiry. Null when signed out or not renewable right now (fail-closed). */
 export async function marketFreshCredential(): Promise<{ idToken: string; expiresAt: number } | null> {
   if (!auth) return null;
-  const idToken = await auth.freshIdToken({ apiKey: firebaseApiKey });
+  const idToken = await auth.getIdToken();
   if (!idToken) return null;
   return { idToken, expiresAt: auth.currentExpiresAt() };
 }
 
+/** ADR-0684: how often the background check runs; it renews only inside the ID token's last REFRESH_SKEW_MS. */
+export const KEEP_FRESH_EVERY_MS = 60_000;
+let stopKeepFresh: (() => void) | null = null;
+
+/** ADR-0684: renew the sign-in before it lapses, and right away when the window regains focus, becomes visible
+ *  (a resume from sleep) or comes back online. Idempotent: a second call replaces the first. */
+export function startMarketKeepFresh(): void {
+  stopKeepFresh?.();
+  const tick = (): void => { void auth?.keepFresh(); };
+  const onVisible = (): void => { if (document.visibilityState === "visible") tick(); };
+  const timer = setInterval(tick, KEEP_FRESH_EVERY_MS);
+  window.addEventListener("focus", tick);
+  window.addEventListener("online", tick);
+  document.addEventListener("visibilitychange", onVisible);
+  stopKeepFresh = () => {
+    clearInterval(timer);
+    window.removeEventListener("focus", tick);
+    window.removeEventListener("online", tick);
+    document.removeEventListener("visibilitychange", onVisible);
+    stopKeepFresh = null;
+  };
+}
+
 /** Test-only: drop the singletons so a fresh init starts clean. */
-export function __resetMarketBootForTest(): void { auth = null; mode = "off"; signInBase = ""; registerMarketProvider(null); }
+export function __resetMarketBootForTest(): void { stopKeepFresh?.(); auth = null; mode = "off"; signInBase = ""; registerMarketProvider(null); }

@@ -4738,6 +4738,13 @@ body.preview-open .thread{font-size:.9em}
 .about-site{position:relative;display:block;width:max-content;margin:10px auto 0;font-size:12px;
   color:var(--accent-2);text-decoration:none;letter-spacing:.2px;transition:color var(--t) var(--ease)}
 .about-site:hover{color:var(--accent);text-decoration:underline}
+.about-site.about-docs{margin-top:6px}
+/* P-DOCS.2 (ADR-0681): docs links inside onboarding modals and the tour closer card. */
+.modal-docs,.coach-link{display:block;width:max-content;max-width:100%;overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis;font-size:12px;color:var(--accent-2);text-decoration:none}
+.modal-docs{margin:12px auto 0}
+.coach-link{margin:0 0 10px}
+.modal-docs:hover,.coach-link:hover{color:var(--accent);text-decoration:underline}
 
 .about-blurb{font-size:13px;line-height:1.65;color:var(--txt-2);margin:0 2px 16px}
 .about-blurb b{color:var(--txt)}

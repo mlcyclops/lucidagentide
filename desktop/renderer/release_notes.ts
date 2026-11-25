@@ -11,10 +11,12 @@
 // release_notes.test.ts fails a version bump that adds neither an entry nor a quiet marker, and any
 // highlight whose image is not in the bundle.
 
+import { DOCS_BASE_URL } from "./docs_links.ts";
 import { isNewerVersion } from "./plugin_catalog.ts";
 
-/** The public docs site (ADR-0660). Defined here until a shared docs-link module lands on master. */
-export const DOCS_BASE = "https://docs.lucid-agents.com";
+/** The public docs site (ADR-0660), from the one place its URL lives (docs_links.ts, P-DOCS.2), without the trailing
+ *  slash so page paths read `${DOCS_BASE}/agents/`. */
+export const DOCS_BASE = DOCS_BASE_URL.replace(/\/$/, "");
 /** The product website, the same link About shows. */
 export const SITE_URL = "https://lucid-agents.com/";
 
