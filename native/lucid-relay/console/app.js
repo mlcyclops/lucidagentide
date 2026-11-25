@@ -5197,7 +5197,8 @@
     return out;
   }
   function missingLine(names) {
-    return names.length ? el("p", { class: "banner warn", role: "status" }, fill(FW["fleet.missing"], { names: names.join(", ") })) : null;
+    // one span: the banner is a flex row, and loose text pieces would each get the flex gap
+    return names.length ? el("p", { class: "banner warn", role: "status" }, el("span", null, fill(FW["fleet.missing"], { names: names.join(", ") }))) : null;
   }
   function asOfLines(answers) {
     return el("ul", { class: "plain asof" }, answers.filter((x) => !x.error).map((x) => el("li", null, u(x.relay.name), ": ", fill(FW["fleet.as-of"], { time: when(x.at) }))));
@@ -6275,7 +6276,7 @@
       }
       return out;
     };
-    const missing = (d.missing || []).map((m) => relayName(m.relay || m));
+    const missing = (d.missing || []).map((m) => (m && m.name) || relayName(m.relay || m));
     const asOf = [...new Map(rows.filter((p) => p.relay && p.asOf).map((p) => [p.relay, p.asOf])).entries()];
     const kids = [head(FW["people.title"], isManager() ? btn(FW["people.invite"], () => inviteFleet(relays, stopped), "primary") : null),
       missingLine(missing),
