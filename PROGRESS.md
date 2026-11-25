@@ -6581,6 +6581,10 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** `viz_view.pollFleet` takes every lane of fleet/status instead of `hubLanes` (ADR-0410's hub scope stays the orbit's), so lanes born under an earlier Main session (New session, Activate, an upgrade's restart) are drawn and counted again; `demo_p_viz_fleet_1.mjs` failed on the old bundle (0 agents) and passes on the rebuilt one; demo-P-VIZ.FLEET1.
 - **stubbed:** none.
 - **next:** ship it in the next release (installed v2.7.1 keeps the old filter until then).
+## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade, replayable from About
+- **shipped (2026-11-25):** bundled manifest `release_notes.ts` (2.7.1 entry with docs screenshots and world posters, Learn more to lucid-agents.com and docs.lucid-agents.com); seen version kept engine-side (`whatsNewSeen` via /api/settings); pure `shouldShowWhatsNew` (fresh install records silently, never over onboarding, the tour or the suggestion toast); `#whatsNewModal` with New features and Agent Worlds cards, Dismiss shows the About > What's new hint; About gains What's new (read-only) and a 10px action gap; demo_p_whatsnew_1.mjs, demo-P-WHATSNEW.1.
+- **stubbed:** none.
+- **next:** the release that ships this adds its own entry (the eleven P-WORLDS.2 worlds and P-VIZ.FLEET1 first); the test fails a bump without one.
 ## P-DOCS.2 (ADR-0681): About, onboarding and the palette link docs.lucid-agents.com
 - **shipped (2026-11-25):** `docs_links.ts` single-sources the docs URLs; About shows a Documentation link, the Connect a provider modal links `/connect/`, the tour closer links `/get-started/`, and the palette has "Help: open the documentation"; `demo_p_docs_2.mjs` proves each link visible, safe and hit-testable with auditBoxes; demo-P-DOCS.2.
 - **stubbed:** none.

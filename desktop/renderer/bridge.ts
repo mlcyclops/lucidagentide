@@ -843,6 +843,8 @@ export interface ProfileSettings {
   // P-THEME.1: the chosen app theme id, or "" when never chosen (then the OS light/dark preference
   // decides). An opaque string on purpose: theme.ts's THEMES registry is the only place ids are defined.
   theme?: string;
+  // P-WHATSNEW.1 (ADR-0686): the version whose What's new notes were seen; null = never recorded.
+  whatsNewSeen?: string | null;
 }
 export interface ManagedPolicy {
   managed: boolean; orgName: string;
@@ -1442,6 +1444,8 @@ export interface LucidBridge {
   // ADR-0088/0089 (P-ROLE.1/.1b): persist the onboarding role + the first-run-tour replay guard.
   saveRole(role: UserRole): Promise<ProfileSettings | null>;
   setTourSeen(seen: boolean): Promise<ProfileSettings | null>;
+  // P-WHATSNEW.1 (ADR-0686): record the version whose What's new notes were seen (engine settings, durable).
+  setWhatsNewSeen(version: string): Promise<ProfileSettings | null>;
   // P-GOVCUI.1: persist the first-run Government/CUI answer (so the gov onboarding step asks exactly once).
   setGovconCui(govconCui: boolean): Promise<ProfileSettings | null>;
   // P-THEME.1: persist the chosen app theme id ("" clears it back to following the OS preference).
@@ -2503,6 +2507,7 @@ export const bridge: LucidBridge = {
   skipEmail: () => post("/api/settings", { skip: true }),
   saveRole: (role) => post("/api/settings", { role }),
   setTourSeen: (seen) => post("/api/settings", { tourSeen: seen }),
+  setWhatsNewSeen: (version) => post("/api/settings", { whatsNewSeen: version }),
   setGovconCui: (govconCui) => post("/api/settings", { govconCui }),
   setTheme: (theme) => post("/api/settings", { theme }), // P-THEME.1
   managed: () => getData("/api/managed"),

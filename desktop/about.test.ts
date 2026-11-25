@@ -56,6 +56,19 @@ describe("aboutHtml", () => {
     expect(html).toContain("Take the tour");
   });
 
+  test("offers a 'What's new' replay of the release notes (ADR-0686), between the tour and Close", () => {
+    expect(html).toContain("data-about-whatsnew");
+    expect(html).toContain("What's new");
+    const tour = html.indexOf("data-about-tour"), wn = html.indexOf("data-about-whatsnew"), close = html.lastIndexOf("data-about-close");
+    expect(tour).toBeLessThan(wn);
+    expect(wn).toBeLessThan(close);
+  });
+
+  test("About actions keep a 10px gap so the buttons never touch", () => {
+    const css = readFileSync(join(import.meta.dir, "renderer", "styles.css"), "utf8");
+    expect(css).toMatch(/\.about-actions\{[^}]*gap:10px/);
+  });
+
   test("links the product website, opening safely in the OS browser", () => {
     expect(html).toContain('href="https://lucid-agents.com/"');
     expect(html).toContain("lucid-agents.com");
