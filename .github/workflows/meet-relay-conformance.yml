@@ -45,7 +45,11 @@ jobs:
 
       - uses: actions/checkout@v7
         if: env.HAVE_TOKEN == 'true'
+        with:
+          persist-credentials: false
 
+      # The token reads a private repository: never leave it in meet/.git/config, where the PR's own code
+      # (the cargo build below) could read it.
       - uses: actions/checkout@v7
         if: env.HAVE_TOKEN == 'true'
         with:
@@ -53,6 +57,7 @@ jobs:
           ref: ${{ inputs.meet_ref || 'main' }}
           token: ${{ secrets.MEET_CONFORMANCE_TOKEN }}
           path: meet
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         if: env.HAVE_TOKEN == 'true'

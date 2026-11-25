@@ -812,8 +812,10 @@ fn main() {
     // or license (exit 78 on `cli.profile-locked` or `cli.deploy-no-root`).
     let raw = |flag: &str, var: &str| flags.get(flag).filter(|v| !v.is_empty()).cloned().or_else(|| std::env::var(var).ok().filter(|v| !v.is_empty()));
     let (start_state, start_profile, start_root, start_license) = (raw("state", "LUCID_RELAY_STATE"), raw("console-profile", "LUCID_RELAY_CONSOLE_PROFILE"), raw("root", "LUCID_RELAY_ROOT_PUB"), raw("license", "LUCID_RELAY_LICENSE"));
+    // A spoke's LAN mailbox (--owner) has no Admin Console link: no fleet.lock, handoff or agent in its state folder.
+    let lan_mailbox = flags.get("owner").is_some_and(|v| !v.is_empty());
     let locked = server::spokes_start(server::SpokesStart {
-        state_dir: start_state.as_deref().map(Path::new),
+        state_dir: start_state.as_deref().filter(|_| !lan_mailbox).map(Path::new),
         profile: start_profile.as_deref(),
         root: start_root.as_deref(),
         license: start_license.as_deref(),
@@ -911,7 +913,7 @@ fn main() {
             hosts.extend(c.public_host.clone());
             console_fleet::start_with_console(Path::new(dir), license::Product::Spokes, &hosts, c.state.as_deref().map(Path::new), logger.clone()).unwrap_or_else(|e| die(&e));
         }
-        let _fleet_link = server::fleet_start(server::FleetStart { state_dir: c.state.as_deref().map(std::path::PathBuf::from), console: console_handle.clone(), relay: relay.clone(), logger: logger.clone(), api_listen: c.api_listen.clone(), tls: c.tls.clone() }).unwrap_or_else(|e| die(&e));
+        let _fleet_link = server::fleet_start(server::FleetStart { state_dir: c.state.as_deref().filter(|_| c.owner.is_none()).map(std::path::PathBuf::from), console: console_handle.clone(), relay: relay.clone(), logger: logger.clone(), api_listen: c.api_listen.clone(), tls: c.tls.clone() }).unwrap_or_else(|e| die(&e));
         let shown = if c.hostname.contains(':') { format!("[{}]", c.hostname) } else { c.hostname.clone() };
         let url = format!("{}://{shown}:{port}/", if c.tls.is_some() { "https" } else { "http" });
         logger.ops("listening", &Fields::new().with("url", url).with("licensed", licensed).with("store", has_store).with("owner", c.owner.clone()), Level::Info);
