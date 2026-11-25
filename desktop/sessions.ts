@@ -8,7 +8,7 @@
 // and derive a title (first user message), model, turn count, and last-modified.
 // New GUI chats write new files here, so they appear on the next poll.
 
-import { closeSync, constants, copyFileSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, copyFileSync, existsSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -89,7 +89,14 @@ export interface SessionInfo {
   spoke?: string;
   /** P-SESS-ARCHIVE.1: the file lives in the archive folder (set only when true). */
   archived?: true;
+  /** P-SESSXFER.1 (ADR-0682): written by a history import, so its content is untrusted (set only when true). */
+  imported?: true;
 }
+
+/** P-SESSXFER.1 (ADR-0682): the `customType` of the `{ type: "custom" }` entry a history import writes into each
+ *  session it creates: the provenance marker (untrusted, which file, which hashes). omp keeps custom entries out
+ *  of the model's context. */
+export const IMPORTED_SESSION_TYPE = "lucid-history-import";
 // P-KG-INGEST.1b (ADR-0076): the chat list, with throwaway extraction sessions split into their own group.
 // P-SESS-SEARCH.1: `hiddenSpokes` counts the spoke sessions a SpokeFilter held back (set only when filtered).
 // P-SESS-ARCHIVE.1: `archived` counts this workspace's archived chats (the sidebar's Archived group).
@@ -180,12 +187,14 @@ function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<S
   indexParses++;
   let id = "", scwd = "", model = "", title = "", turns = 0;
   let kind: "chat" | "kg-ingest" | "ask-lucid" = "chat";
+  let imported = false;
   const said: string[] = [];
   for (const ln of text.split("\n")) {
     if (!ln) continue;
     let o: any;
     try { o = JSON.parse(ln); } catch { continue; }
     if (o.type === "session") { id = o.id ?? f; scwd = o.cwd ?? ""; }
+    else if (o.type === "custom" && o.customType === IMPORTED_SESSION_TYPE) imported = true; // P-SESSXFER.1
     else if (o.type === "model_change" && o.model) model = o.model;
     else if (o.type === "message" && o.message) {
       if (o.message.role === "user" && !title) {
@@ -210,7 +219,7 @@ function parseSessionText(text: string, f: string): { scwd: string; meta: Omit<S
     }
   }
   if (!title && turns === 0) return { scwd, meta: null, text: "" }; // empty/probe session - remembered, skipped
-  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model || "-", turns, kind }, text: said.join("\n") };
+  return { scwd, meta: { id: id || f, title: title || "Untitled session", model: model || "-", turns, kind, ...(imported ? { imported: true as const } : {}) }, text: said.join("\n") };
 }
 
 /** The model as omp's `session/set_config_option` accepts it: `provider/model`. A `model_change` row
@@ -242,7 +251,7 @@ function indexedEntry(p: string, f: string, st: { mtimeMs: number; size: number 
 // changed. The session files stay the only truth: an entry is used only while its mtime+size still match,
 // and a missing, unreadable, foreign-version or malformed index file is simply rebuilt.
 /** Bump whenever parseSessionText's output changes, or old titles and search text would outlive the fix. */
-const INDEX_FILE_VERSION = 1;
+const INDEX_FILE_VERSION = 2; // 2: P-SESSXFER.1 (ADR-0682) adds meta.imported
 /** At most one write per this long: the session in use changes every turn. */
 const INDEX_SAVE_DELAY_MS = 30_000;
 /** Which root the index file covers (its archive sibling too). undefined = the default, not yet resolved;
@@ -798,4 +807,30 @@ export function deleteSession(id: string, cwd: string = currentWorkspace(), root
   markDirty(p);
   allScans.clear();
   return { ok: true };
+}
+
+// ── P-SESSXFER.1 (ADR-0682): session history export and import ─────────────────────────────────────────────
+
+/** The transcript file of session `id`: the sessions folder first, then the archive. Null = no such session. */
+export function sessionFilePath(id: string, root: string = sessionsRoot()): string | null {
+  return findSessionPath(id, root) ?? findSessionPath(id, archiveRootFor(root));
+}
+
+/** Every chat session of `cwd` (archived ones included, throwaways never), uncapped: what a project export takes. */
+export async function workspaceChatIds(cwd: string = currentWorkspace(), root: string = sessionsRoot()): Promise<string[]> {
+  const rows = [...await workspaceSessions(cwd, root), ...await archivedRows(cwd, root, true)];
+  return [...new Set(rows.filter((r) => isChatRow(r.row)).map((r) => r.row.id))];
+}
+
+/** Write a NEW transcript at `p` under `root` (never replaces a file: an existing name throws EEXIST), date it
+ *  `mtimeMs` when given, and make the next listing see it. */
+export function writeNewSessionFile(p: string, content: string, root: string, mtimeMs?: number): void {
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, content, { encoding: "utf8", flag: "wx" });
+  if (mtimeMs !== undefined && Number.isFinite(mtimeMs)) {
+    const t = mtimeMs / 1000;
+    try { utimesSync(p, t, t); } catch { /* the import time stands */ }
+  }
+  noteSessionFileChanged(p);
+  allScans.delete(root);
 }

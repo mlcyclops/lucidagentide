@@ -18,6 +18,7 @@ import { canAdoptTurn, canonicalTurnAnswer, priorTurnContext, shouldReprobeStatu
 // P-RECOVER.1 (ADR-0385): the pure recovery supervisor + the thread-tail recovery notice / incident Submit dialog.
 import { afterProbe, afterRemedy, doneText, giveUpText, incidentHeadline, mayStartRun, progressText, startRecovery, type IncidentView, type RecoveryStep, type RecoveryTrigger } from "./recovery_supervisor.ts";
 import { REPORT_SAVED, clearRecoveryNotice, openIncidentSubmit, showIncidentNotice, showRecoveryNotice, type NoticeAction } from "./incident_notice.ts";
+import { openHistoryMenu } from "./session_transfer_ui.ts"; // P-SESSXFER.1 (ADR-0682): Export / Import history
 import { mountSecretIntake, showSecretRequest } from "./secret_intake.ts"; // P-SECRET-INTAKE.1 (ADR-0476): the agent's secret dialog
 import { ROLE_META, USER_ROLE_LIST, coachHtml, roleDefaultTab, stepsForRole, type TourStep } from "./tour.ts";
 import { externalHttpUrl } from "../navigation_policy.ts";
@@ -524,6 +525,7 @@ function buildShell(): void {
         <div class="side-head"><span>Sessions</span>
           <div class="side-actions">
             <button class="side-new" id="newSession" data-tip="New session">${icon("plus", 15)}</button>
+            <button class="side-new" id="sessHistory" type="button" aria-haspopup="menu" aria-label="Export or import session history" data-tip="History|Export this project's sessions to one plain-text file, or import one. Works offline." data-tip-side="bottom">${icon("download", 15)}</button>
             <button class="side-new" id="sideCollapse" data-tip="Collapse panel" data-tip-side="bottom">${icon("expand", 15)}</button>
           </div></div>
         <!-- P-SESS-SEARCH.1 (ADR-0515): search every session of this workspace; spoke sessions hidden by default -->
@@ -826,17 +828,20 @@ function sessRow(s: SessionInfo & { snippet?: string }, active: boolean, query =
   const spokeLine = !badge && s.spoke ? `<div class="sess-live">agent "${esc(s.spoke)}"</div>` : "";
   // P-SESS-ARCHIVE.1 (ADR-0517): an archived row says so and offers Restore; a live row offers Archive.
   const archLine = s.archived ? `<div class="sess-live sess-archived">archived \u00b7 opening it restores it</div>` : "";
+  // P-SESSXFER.1 (ADR-0682): a session written by a history import is untrusted content; the row says so.
+  const impLine = s.imported ? `<div class="sess-live sess-imported">imported \u00b7 untrusted</div>` : "";
   const archBtn = s.archived
     ? `<button class="sess-del sess-arch" data-restore="${esc(s.id)}" data-tip="Restore|Back to the sessions list. Opening it does the same." aria-label="Restore session" tabindex="-1">${icon("restore", 13)}</button>`
     : `<button class="sess-del sess-arch" data-archive="${esc(s.id)}" data-tip="Archive|Moves it to the Archived group. Nothing is deleted: search still finds it, and opening it brings it back." aria-label="Archive session" tabindex="-1">${icon("archive", 13)}</button>`;
   // The row can come from the localStorage cache, so `turns` is untyped data: render it only as a number.
   const turns = Math.max(0, Math.trunc(Number(s.turns)) || 0);
   const turnsText = `${turns} turn${turns === 1 ? "" : "s"}`;
-  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}" data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${turnsText} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
+  return `<div class="sess ${active ? "active" : ""}" data-sid="${esc(s.id)}"${s.imported ? " data-imported" : ""} data-tip="${esc(s.title)}|${esc(modelLabel(s.model))} · ${turnsText} · ${relTime(s.updatedAt)}${badge ? ` · ${esc(badge.text)}` : ""}" data-tip-side="right">
       <div class="t">${query ? markTerms(s.title, query) : esc(s.title)}</div>
       <div class="m"><b>${esc(modelLabel(s.model))}</b> · ${turnsText} · ${relTime(s.updatedAt)}</div>
       ${badge ? `<div class="sess-live sess-live-${badge.tone}">${esc(badge.text)}</div>` : spokeLine}
       ${archLine}
+      ${impLine}
       ${s.snippet ? `<div class="sess-snip">${markTerms(s.snippet, query)}</div>` : ""}
       ${badge ? "" : archBtn}
       <button class="sess-del" data-del="${esc(s.id)}" data-tip="Delete session" aria-label="Delete session" tabindex="-1">${icon("trash", 13)}</button>
@@ -20984,8 +20989,23 @@ function wire(): void {
     const del = t.closest(".sess-del") as HTMLElement | null;
     if (del?.dataset.del) { e.stopPropagation(); confirmDeleteSession(del.dataset.del); return; }
     const s = t.closest(".sess") as HTMLElement | null;
-    if (s?.dataset.sid) void openSession(s.dataset.sid); // P-SWITCH.1: asks first when Main is working
+    if (!s?.dataset.sid) return;
+    const sid = s.dataset.sid;
+    // P-SESSXFER.1 (ADR-0682): an imported session came from a file; opening it hands its turns to the model as
+    // context, so the user says yes first (the import already scanned it, fail-closed).
+    if (s.hasAttribute("data-imported")) {
+      showToast({
+        tone: "warn",
+        title: "Open an imported session?",
+        desc: "It came from a history file, so its content is untrusted. It passed the scanner, but opening it gives its turns to the model as context.",
+        actions: [{ label: "Cancel" }, { label: "Open", run: () => void openSession(sid) }],
+        timeout: 0,
+      });
+      return;
+    }
+    void openSession(sid); // P-SWITCH.1: asks first when Main is working
   });
+  $("#sessHistory")?.addEventListener("click", (e) => openHistoryMenu(e.currentTarget as HTMLElement, () => void renderSessions()));
   // P-SESS-SEARCH.1 (ADR-0515): search box (debounced; Esc clears) and the persisted Spokes toggle.
   const sessSearch = $("#sessSearch") as HTMLInputElement | null;
   sessSearch?.addEventListener("input", () => onSessSearchInput(sessSearch.value));

@@ -553,7 +553,18 @@ export interface EvalReportResult { kind: string; id: string; rel: string | null
 export interface ModeOption { id: string; name: string; description?: string }
 export interface ModeState { available: ModeOption[]; current: string; ui?: "agent" | "creator" | "ask" | "plan"; permissionMode?: "auto" | "ask" }
 export interface OmpCommand { name: string; description?: string; hint?: string }
-export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true }
+export interface SessionInfo { id: string; title: string; model: string; updatedAt: number; turns: number; kind?: "chat" | "kg-ingest"; live?: SessionLive; spoke?: string; archived?: true; imported?: true }
+/** P-SESSXFER.1 (ADR-0682): mirrors desktop/session_transfer.ts and session_transfer_routes.ts. */
+export interface HistoryTransferInfo { project: string; sessions: number; lanes: { id: string; name: string; sessions: number }[] }
+export type HistoryExportScope = { kind: "project" } | { kind: "lane"; laneId: string } | { kind: "sessions"; ids: string[] };
+export interface HistoryExportView {
+  ok: boolean; error?: string; stage: string; file?: string; filename?: string; payloadSha256?: string; exported: number; blocked: number;
+  report: { id: string; title: string; status: "exported" | "blocked" | "skipped"; reason?: string }[];
+}
+export interface HistoryImportView {
+  ok: boolean; error?: string; stage: string; imported: string[]; skipped: string[]; conflicts: string[];
+  blocked: { id: string; reason: string }[]; failed: { id: string; reason: string }[]; project?: string; marking?: string; createdAt?: string;
+}
 // P-KG-INGEST.1b (ADR-0076): chats, with throwaway extraction sessions split into a collapsible group.
 // P-SESS-SEARCH.1 (ADR-0515): `hiddenSpokes` = spoke sessions held back while the Spokes toggle is off.
 // P-SESS-ARCHIVE.1 (ADR-0517): `archived` = this workspace's archived chats (the Archived group's count).
@@ -1419,6 +1430,10 @@ export interface LucidBridge {
   archivedSessions(): Promise<{ sessions: SessionInfo[] } | null>;
   archivePolicy(set?: ArchivePolicyView): Promise<ArchivePolicyState | null>;
   archiveNow(): Promise<ArchiveRunView | null>;
+  // P-SESSXFER.1 (ADR-0682): offline history export/import (UI token only). Null = the engine did not answer.
+  historyTransferInfo(): Promise<HistoryTransferInfo | null>;
+  exportHistory(scope: HistoryExportScope, marking: string, includeImages: boolean): Promise<HistoryExportView | null>;
+  importHistory(file: string): Promise<HistoryImportView | null>;
   /** Same refusal rule as resumeSession. */
   newSession(opts?: { force?: boolean }): Promise<SessionSwitchResult>;
   setZoom(factor: number): void;
@@ -2412,6 +2427,9 @@ export const bridge: LucidBridge = {
   archivedSessions: () => getData("/api/sessions/archived"),
   archivePolicy: (set) => (set ? post("/api/sessions/archive-policy", set) : getData("/api/sessions/archive-policy")),
   archiveNow: () => post("/api/sessions/archive-now", {}),
+  historyTransferInfo: () => getData("/api/sessions/transfer"), // P-SESSXFER.1
+  exportHistory: (scope, marking, includeImages) => post("/api/sessions/export", { scope, marking, includeImages }),
+  importHistory: (file) => post("/api/sessions/import", { file }),
   newSession: (opts) => postSessionSwitch("/api/newSession", { force: opts?.force === true }),
   // P-COLLAB.3 (ADR-0192): live session sharing.
   collabStatus: () => getData("/api/collab/status"),
