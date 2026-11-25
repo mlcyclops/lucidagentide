@@ -9267,6 +9267,8 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-wopt select:hover{background-color:var(--bg-3)}
 .viz-wopt select option{background:var(--bg-1);color:var(--txt)}
 .viz-wopt :is(input,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* P-VIZ.STYLEOPT1 (ADR-0688): the built-in options' Reset, at the end of their rows; keeps its size like the controls above. */
+.viz-wopt>[data-viz-wopt-reset]{flex:none;padding:5px 12px}
 /* P-WORLDS.CAST2 (ADR-0650): swatch ramps (a world's swatch options, the Cast section, a node's Customize look) and
    chips. Tracks of at least 220 px; a pressed swatch has an accent ring over a gap in the card's color, and the
    focus ring is two-tone (text color over the card color) so it reads on any swatch and any theme. */

@@ -1855,6 +1855,12 @@ demo-P-VIZ.FLEET1: ## P-VIZ.FLEET1 (ADR-0680): Visualize draws every running fle
 	node --check desktop/scripts/demo_p_viz_fleet_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_fleet_1.mjs; else echo "demo-P-VIZ.FLEET1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-VIZ.STYLEOPT1
+demo-P-VIZ.STYLEOPT1: ## P-VIZ.STYLEOPT1 (ADR-0688): the built-in Anime and Professional styles have their own options in the View menu (seven backgrounds, stars, drift, accent, particles, lighting, name tags; Professional floor grid and desk floor; Anime floor plate), stored like a world's, with Reset. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_styleopt_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_builtin_options.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_styleopt_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_styleopt_1.mjs; else echo "demo-P-VIZ.STYLEOPT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-VIZ.LANE1
 demo-P-VIZ.LANE1: ## P-VIZ.LANE1 (ADR-0683): the Agent Worlds node panel is a Fleet lane card body (one renderer, lane_view.ts): live thinking and tool chips stream in, pasted or dropped images become mini chips with an x, a busy lane's Send stages onto the engine's queue with the strip's Update, Steer, reorder and remove, and the panel resizes by its edges and grip (keyboard too), persisted. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_lane_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/lane_view_model.test.ts desktop/renderer/viz_panel_size.test.ts desktop/renderer/viz_panel_place.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/lane_transcript.test.ts desktop/renderer/fleet_dock_model.test.ts desktop/renderer/queue_model.test.ts harness/adr_numbering.test.ts

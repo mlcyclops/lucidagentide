@@ -105,7 +105,9 @@ const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim().
 const isFn = (v: unknown): boolean => typeof v === "function";
 const isIcon = (v: unknown): boolean => typeof v === "string" && v.trim().length > 0 && ICON_RE.test(v);
 
-function checkOption(o: unknown, i: number): string | null {
+/** What is wrong with option `i` (a WorldOption), or null. P-VIZ.STYLEOPT1 (ADR-0688): the built-in styles' options
+ *  are held to the same rules. */
+export function checkOption(o: unknown, i: number): string | null {
   if (!isRec(o)) return `option ${i + 1} is not an object`;
   if (!nonEmpty(o.key)) return `option ${i + 1} has no key`;
   if (!nonEmpty(o.label)) return `option "${o.key}" has no label`;
@@ -295,13 +297,24 @@ function writeJson(storage: Store, key: string, v: Rec): void {
   try { storage.setItem(key, JSON.stringify(v)); } catch { /* still applies for this session */ }
 }
 
+/** Whose options are stored: a world (by its id), or a built-in style (P-VIZ.STYLEOPT1, ADR-0688: `builtin:<style>`). */
+export type OptionOwner = Pick<WorldDefinition, "id" | "options">;
+
 /** A world's option values on this machine (by world id), merged over its defaults. */
-export function loadOptions(storage: Store, def: WorldDefinition): WorldOptionValues {
+export function loadOptions(storage: Store, def: OptionOwner): WorldOptionValues {
   return mergeOptions(def.options, readJson(storage, OPTIONS_KEY)[def.id]);
 }
 
+/** P-VIZ.STYLEOPT1 (ADR-0688): forget every saved value of `def`; returns its defaults. */
+export function resetOptions(storage: Store, def: OptionOwner): WorldOptionValues {
+  const all = readJson(storage, OPTIONS_KEY);
+  delete all[def.id];
+  writeJson(storage, OPTIONS_KEY, all);
+  return optionDefaults(def.options);
+}
+
 /** Save one option value; returns the world's merged values after it. */
-export function saveOption(storage: Store, def: WorldDefinition, key: string, value: string | boolean): WorldOptionValues {
+export function saveOption(storage: Store, def: OptionOwner, key: string, value: string | boolean): WorldOptionValues {
   const all = readJson(storage, OPTIONS_KEY);
   const prev = all[def.id];
   const cur = isRec(prev) ? prev : {};
