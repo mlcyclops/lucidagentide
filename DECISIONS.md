@@ -28514,3 +28514,14 @@ The dock gains `rightOf`: a right dock sits against that panel's left edge (foll
 **Decision.** `viz_view.pollFleet` passes every lane of `fleet/status` to the scene, the ledger, the buddies, the preview chips and the lane streams. Hub scope stays the orbit's (ADR-0410 unchanged); the grid already lists every lane. Nothing new opens: lane streams stay capped at `WATCH_MAX` (3) by status and recency.
 
 **Consequences.** Visualize shows the whole running fleet around Main whatever session Main holds, and its census matches the ledger. `demo_p_viz_fleet_1.mjs` (isolated QA engine) starts hub A with two lanes, starts hub B, asserts the engine reports both lanes under the older hub, opens Visualize with the real control and asserts both lanes are drawn and counted; it failed on the old bundle ("0 agents") and passes on the rebuilt one, whose served `/app.js` carries `const mine = st.lanes` and no `hubLanes(st.lanes`.
+
+## ADR-0681 -- P-DOCS.2: About, onboarding and the palette link docs.lucid-agents.com (2026-11-25, Accepted)
+**Status.** Accepted. First in-app slice of ADR-0660's link plan.
+
+**Context.** The documentation site is live at docs.lucid-agents.com (`/`, `/get-started/`, `/connect/`, `/agents/`, `/worlds/`, `/glossary/`), but nothing in the app pointed at it. ADR-0660 planned one base URL constant, a "Help: open the documentation" palette command and links through the existing external opener.
+
+**Decision.** `desktop/renderer/docs_links.ts` is the single source: `DOCS_BASE_URL`, the page map, `docsUrl(page)` and `docsLinkHtml` (a `target="_blank" rel="noopener noreferrer"` anchor with a data-tip, escaped). About's hero gains a Documentation link under the lucid-agents.com link; the onboarding Connect a provider modal (built by the new `showProviderPrompt`, still gated by `promptForProviderIfNeeded`) gains "How to connect your AI" to `/connect/`; the tour closer card gains "Read the Get started guide" to `/get-started/` through an optional `TourStep.docs`. Anchors keep the existing path (desktop/navigation_policy.ts opens them in the system browser); only the modal's buttons close it and the tour ignores link clicks. The palette entry opens the root through `openAuthUrl` (bridge.openExternal, window.open fallback). `window.__lucidShowProviderPrompt` lets a demo show the modal on an engine that already has a provider.
+
+**Consequences.** A new user sees the docs at the provider step and at the end of the tour, and can reach them from About and the palette. Contextual Learn how links on other surfaces (ADR-0660 item 5) remain open. `demo_p_docs_2.mjs` asserts each link's href, safe attributes, nowrap and elementFromPoint hit, and runs auditBoxes on About, the closer card and the modal.
+
+**Relates to.** ADR-0660, ADR-0087, ADR-0089, P-PROV.2.
