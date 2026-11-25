@@ -84,13 +84,33 @@
 // preview, the agent's snapshots). A click flies the Preview panel out OVER this view (#preview.over-viz, z 94),
 // resizable as in the composer, while the world keeps running. Its X, Esc or a press back on the world slides it away
 // and focus returns to the chip; while it is up this dialog is not modal and Esc closes the panel before anything here.
+//
+// P-VIZ.LANE1 (ADR-0683): the node panel draws its lane through lane_view.ts, the Fleet card's own renderer: settled
+// turns with markdown, the live thinking, tool chips and prose as they stream, the follow-the-newest-line scroll and
+// the catch-up pair. Its composer is the lane's: a multi-line box, pasted, dropped or picked images as mini chips with
+// an x (the composer's limits), Send, and Stage while the lane is busy, with the staged strip (Update, Steer,
+// reorder, remove, the item menu) on the engine's queue, so the Fleet card of the same lane shows the same prompts.
+// While no Fleet dock polls (fleet_grid drains the queue then), the panel runs its open lane's next staged prompt.
+// The panel is user-sized: drag its outer edge, bottom edge or corner grip (pointer capture), or the grip's arrow
+// keys; double-click or Home goes back to the natural size; clamped to the stage, persisted (viz_panel_size).
 
 import { $, el } from "./dom.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
-import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridge.ts";
+import { bridge, type LaneEvent, type LaneImage, type LaneView, type LucidBridge } from "./bridge.ts";
+import { bindFileDrop, clipboardFiles, pickFiles } from "./attach_ui.ts";
+import { MAX_ATTACHMENTS } from "./composer_attachments.ts";
+import { laneDrainReady, stageKeyFor, stageSignature } from "./queue_model.ts";
+import { turnReplyText } from "./lane_transcript.ts";
+// P-VIZ.LANE1 (ADR-0683): the Fleet card's lane renderer and its rules, and the panel's user size.
+import {
+  applySeed, autosizeLaneInput, bindQueueMenu, clearLaneOutput, copyOut, foldLaneStream, foldPending, laneOutHtml, newLaneLog, nextId, onLaneJumpClick,
+  onLaneScroll, onQueueClick, paintAttachStrip, paintLaneOutput, paintQueueStrip, readLaneImages, steerStaged, toggleLaneChip, type LaneLog, type LaneQueueHost,
+} from "./lane_view.ts";
+import { laneStages, stagedChip } from "./lane_view_model.ts";
+import { clampPanelSize, dragPanelSize, loadPanelSize, savePanelSize, stepPanelSize, type PanelEdge, type PanelSize } from "./viz_panel_size.ts";
 import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
@@ -106,9 +126,9 @@ import { vizBrandFor } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641): the demo pr
 import { mountLedger, type LedgerView } from "./viz_ledger.ts";
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
-  applyEvent, applyFleet, applyRuns, census, committing, createOutput, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, foldOutput, HUB_ID, idleSeconds,
+  applyEvent, applyFleet, applyRuns, census, committing, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, HUB_ID, idleSeconds,
   isBuiltinStyle, isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
-  type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizOutput, type VizState, type VizStyle, type VizTurn,
+  type BuiltinStyle, type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
 import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountApprovals, type ApprovalsView } from "./viz_approvals.ts"; // P-VIZ.APPROVE1 (ADR-0655)
@@ -117,8 +137,10 @@ import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
 import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
-import { worldKey, type InstalledWorld, type WorldOption } from "./viz_world_api.ts";
-import { loadOptions, loadWorlds, parseStyle, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type WorldEntry } from "./viz_worlds.ts";
+import { worldKey, type InstalledWorld, type WorldOption, type WorldOptionValues } from "./viz_world_api.ts";
+import { engineReceipts, loadOptions, loadWorlds, parseStyle, resetOptions, saveOption, savedWorldState, worldEnvironment, worldStyle, worldUsable, type OptionOwner, type WorldEntry } from "./viz_worlds.ts";
+import { BUILTIN_OPTIONS, builtinLook, builtinTheme, scaleParticles, type BuiltinLook } from "./viz_builtin_options.ts"; // P-VIZ.STYLEOPT1 (ADR-0688)
+import { rowUpdate, type WorldUpdates } from "./world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { HAIR_STYLES, HAIR_SWATCHES, SKIN_NAMES, SKIN_RAMP, skinTone, UNDERTONES, type HairStyle, type Presentation, type Undertone } from "./viz_cast.ts"; // P-WORLDS.CAST2 (ADR-0650)
 import { loadCastPrefs, pinOf, PRESENTATIONS, saveCastPrefs, withFleet, withPin, type CastPin, type CastPrefs, type FleetCast } from "./viz_cast_prefs.ts";
 
@@ -139,6 +161,15 @@ export interface VizDeps {
   fleetTranscript: LucidBridge["fleetTranscript"];
   fleetPrompt: LucidBridge["fleetPrompt"];
   fleetQueueAdd: LucidBridge["fleetQueueAdd"];
+  /** P-VIZ.LANE1 (ADR-0683): the staged strip's controls (the grid card's own calls) and the drain. */
+  fleetQueuePeek: LucidBridge["fleetQueuePeek"];
+  fleetQueueRemove: LucidBridge["fleetQueueRemove"];
+  fleetQueueMove: LucidBridge["fleetQueueMove"];
+  fleetQueueTake: LucidBridge["fleetQueueTake"];
+  interject: LucidBridge["interject"];
+  fleetDrain: LucidBridge["fleetDrain"];
+  /** The Fleet dock polls and drains the lanes' queues (it is open or minimized); the panel then leaves it to it. */
+  fleetDrains: () => boolean;
   /** Main's recent turn from the chat thread (oldest first). */
   mainRecent: () => VizTurn[];
   /** Send `text` to Main through the composer's own send path; a reason string when it could not. */
@@ -150,6 +181,9 @@ export interface VizDeps {
   /** P-WORLDS.1 (ADR-0648): open the Plugins drawer on its premium store ("Get" on a world, "Get more worlds");
    *  `packId` names the world the user asked for. */
   openStore: (packId?: string) => void;
+  /** P-WORLDS.UPDATE1 (ADR-0685): purchased worlds with a newer store version (world_updates.createWorldUpdates):
+   *  each row's Update, the Worlds button's dot, and a refresh once a new version is on disk. */
+  worldUpdates: Pick<WorldUpdates, "pending" | "busy" | "update" | "reconcile" | "onChange">;
   /** P-VIZ.APPROVE1 (ADR-0655): the approval pop-out's answers: a lane's like its grid card (fleetAnswer, and Auto
    *  through the grid's risk modal then fleetAuto), Main's through its chat card (null option = deny). */
   fleetAnswer: LucidBridge["fleetAnswer"];
@@ -238,13 +272,30 @@ const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced
 /** P-VIZ.4 (ADR-0625): lanes whose background subagent runs are polled per cycle, at most. */
 const LANE_RUNS_MAX = 4;
 /** The node panel: which node, the frame that keeps it beside its node, where the node was last seen (stage
- *  pixels) and which side the panel is on (P-VIZ.5), and what it last painted. */
-interface Panel { id: string; raf: number; outSig: string; headSig: string; note: string; box: NodeBox | null; side: PanelSide | null; flipTimer: number }
+ *  pixels) and which side the panel is on (P-VIZ.5), and what it last painted (P-VIZ.LANE1: `logSig` names the log
+ *  its transcript pane shows; a different one empties the pane first). */
+interface Panel { id: string; raf: number; logSig: string; headSig: string; note: string; box: NodeBox | null; side: PanelSide | null; flipTimer: number }
 let panel: Panel | null = null;
-/** Each lane's recent output (viz_model.foldOutput), from the same events the model takes. */
-const outputs = new Map<string, VizOutput>();
+/** P-VIZ.LANE1 (ADR-0683): what the panel holds for one lane: the lane_view log the Fleet card's renderer draws
+ *  (folded from the same events the model takes), the images pasted for its next prompt, its staged prompts as last
+ *  polled (or as this panel changed them since), and the stage request in flight. */
+interface PanelLane extends LaneLog {
+  seeded: boolean;
+  attached: LaneImage[];
+  queued: LaneView["queued"];
+  /** When this panel last changed `queued` itself (or drained it); a poll asked before that does not undo it. */
+  queuedAt: number;
+  staging: boolean;
+  /** P-FLEET.STAGE1 (ADR-0609): the stage id of the last draft not confirmed staged, reused for the same draft. */
+  stageKey: { id: string; sig: string } | null;
+}
+const laneLogs = new Map<string, PanelLane>();
 /** Lanes with a prompt from the panel in flight (a second send stages instead). */
 const sending = new Set<string>();
+/** P-VIZ.LANE1: the panel's user size (null: its natural size), as saved; applied clamped to the stage. */
+let panelSize: PanelSize | null = loadPanelSize(localStorage);
+/** How tall (px) the panel's prompt box grows with its text before it scrolls (a Fleet card's stops at 64). */
+const PANEL_INPUT_CAP = 120;
 let lastLanes: readonly LaneView[] = [];
 /** P-VIZ.6 (ADR-0635): the session ledger. It outlives a close (reopening keeps this hub session's totals; it
  *  counts what streams while Visualize is open) and starts over on a new hub session, or between demo and real. */
@@ -271,6 +322,8 @@ function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringif
 // cast exactly when it changes), and the Worlds menu.
 
 const worldHost = createWorldHost();
+/** P-MARKET.AUTH2 (ADR-0684): receipts live in the engine vault, not this origin's localStorage (moved once). */
+const worldReceipts = engineReceipts(bridge, typeof localStorage === "undefined" ? undefined : localStorage);
 let worlds: WorldEntry[] = [];
 let curWorld: SceneWorld | null = null;
 let worldsPop: { node: HTMLElement; close: () => void; reposition: () => void } | null = null;
@@ -279,6 +332,19 @@ let worldsSeq = 0;
 let pendingRestores: ReadonlySet<string> = new Set();
 /** The installed worlds were listed at least once (before that, a saved world is not "missing", just loading). */
 let worldsListed = false;
+
+/** P-VIZ.STYLEOPT1 (ADR-0688): each built-in style's option values, stored like a world's (ids builtin:<style>). */
+const builtinVals: Record<BuiltinStyle, WorldOptionValues> = {
+  anime: loadOptions(localStorage, BUILTIN_OPTIONS.anime),
+  professional: loadOptions(localStorage, BUILTIN_OPTIONS.professional),
+};
+
+/** The built-in style drawn (anime under a world, whose look is not drawn then) and its look. */
+function builtinOf(): BuiltinStyle { const s = effStyle(); return isBuiltinStyle(s) ? s : "anime"; }
+function curLook(): BuiltinLook { const s = builtinOf(); return builtinLook(s, builtinVals[s]); }
+
+/** What a mounted scene cannot change live: its theme, and the built-in Particles budget. A change remounts. */
+function sceneSig(theme: VizTheme): string { return `${JSON.stringify(theme)}|${curWorld ? 1 : curLook().particles}`; }
 
 /** P-WORLDS.HEAL1: the restore flow says which worlds are still on their way back. The saved style is left alone, so
  *  an open view re-lists the worlds and takes the saved one back the moment it is installed again. */
@@ -316,7 +382,8 @@ function applyStyle(): void {
   paintWorldOptions();
   if (!scene || !view) return;
   const theme = sceneTheme(view);
-  if (JSON.stringify(theme) !== themeSig) { remount(); return; }
+  if (sceneSig(theme) !== themeSig) { remount(); return; }
+  scene.setBuiltinLook(curLook()); // P-VIZ.STYLEOPT1 (ADR-0688): before the style, so the new figures stand on its floor
   scene.setStyle(style, curWorld);
   rememberBackdrop(theme.bg); // P-VIZ.NOFLASH1: the next open's spinner wears this world's backdrop
 }
@@ -343,13 +410,15 @@ async function refreshWorlds(): Promise<void> {
     importModule: (url: string): Promise<unknown> => import(/* @vite-ignore */ url),
     host: worldHost,
     provider: getMarketProvider(),
-    storage: localStorage,
+    receipts: worldReceipts,
     now: Date.now,
     previous: worlds,
   });
   if (seq !== worldsSeq) return; // a newer refresh (an import) owns the list
   worlds = list;
   worldsListed = true;
+  // P-WORLDS.UPDATE1: an update installed from the store drawer (or a removed world) no longer offers Update.
+  deps?.worldUpdates.reconcile(list.map((e) => ({ id: e.installed.id, version: e.installed.version })));
   resolveWorld();
   if (isOpen()) applyStyle();
   if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
@@ -366,6 +435,9 @@ function openWorldsMenu(anchor: HTMLElement): void {
   p.reposition(); // popover() measured the empty shell: size and place it for the rows just painted
   p.node.addEventListener("click", (ev) => {
     const t = ev.target as HTMLElement;
+    // P-WORLDS.UPDATE1: the store card's install path; the row shows Updating, then the result toasts.
+    const upd = t.closest<HTMLButtonElement>("[data-viz-world-update]");
+    if (upd) { if (!upd.disabled && deps) void deps.worldUpdates.update([upd.dataset.vizWorldUpdate ?? ""]); return; }
     const pick = t.closest<HTMLElement>("[data-viz-world-pick]");
     if (pick) {
       const e = worlds.find((w) => w.style === pick.dataset.vizWorldPick);
@@ -402,10 +474,19 @@ function paintWorldsMenu(node: HTMLElement): void {
     const why = e.access === "signin" ? "Sign in with the Google account that bought it, or get it in the store." : "Not purchased on this account yet: get it in the store.";
     const tip = e.error ? tipAttr(e.label, `This world cannot be shown: ${e.error}.`) : locked ? tipAttr(e.label, `${e.tagline} ${why}`) : tipAttr(e.label, e.tagline);
     const exportName = `${e.installed.id}-${e.installed.version}.lplugin.zip`;
+    // P-WORLDS.UPDATE1: a purchased world (usable here; a broken one too, a new version may fix it) whose store
+    // version is newer offers Update beside Export...; it shows Updating while the install runs.
+    const upd = deps ? rowUpdate(e.installed.id, e.installed.version, e.access === "allowed", deps.worldUpdates.pending()) : null;
+    const updating = !!upd && !!deps?.worldUpdates.busy(e.installed.id);
+    const to = upd ? upd.to.replace(/^v/, "") : "";
+    const updBtn = upd
+      ? `<button type="button" class="btn-mini viz-world-upd" data-viz-world-update="${esc(e.installed.id)}" aria-label="${esc(`Update ${e.label} to version ${to}`)}"${updating ? ` disabled aria-busy="true"` : ""} data-tip="${tipAttr(updating ? `Updating to v${to}` : `Update to v${to}`, `Installed: v${e.installed.version.replace(/^v/, "")}. The new version downloads from the LUCID store and passes the same signature, checksum and security scan checks as a purchase.`)}">${updating ? "Updating" : "Update"}</button>`
+      : "";
     return `<div class="viz-world-row${on ? " on" : ""}${e.error ? " broken" : ""}">
       <button type="button" class="viz-world-pick" data-viz-world-pick="${esc(e.style)}" aria-pressed="${on}"${e.error ? " disabled" : ""} data-tip="${tip}">
         <b>${esc(e.label)}</b>${locked ? `<span class="viz-world-get">${LOCK_SVG}Get</span>` : ""}
       </button>
+      ${updBtn}
       <a class="viz-world-export" href="${esc(bridge.worldExportUrl(e.installed.id))}" download="${esc(exportName)}" data-tip="${tipAttr("Export...", "Save the signed world file, to install it on another machine (Import world file there). It still needs your purchase to show.")}">Export...</a>
       ${e.error ? `<p class="viz-world-err" role="note">${esc(e.error)}</p>` : ""}
     </div>`;
@@ -436,13 +517,21 @@ async function importWorldFile(file: File): Promise<void> {
   await refreshWorlds();
 }
 
-/** The View menu's World options (the selected world's colors, choices, toggles and swatch ramps). A change
- *  saves the value and rebuilds the figures with it. */
+/** Whose options the View menu shows: the selected world's, else (P-VIZ.STYLEOPT1, ADR-0688) the drawn built-in
+ *  style's, with their current values and the section's heading. */
+function optionsPanel(): { owner: OptionOwner; values: WorldOptionValues; title: string; builtin: boolean } {
+  if (curWorld) return { owner: curWorld.def, values: curWorld.options, title: "World options", builtin: false };
+  const s = builtinOf();
+  return { owner: BUILTIN_OPTIONS[s], values: builtinVals[s], title: `${BUILTIN_OPTIONS[s].label} options`, builtin: true };
+}
+
+/** The View menu's World options (the selected world's colors, choices, toggles and swatch ramps), or the built-in
+ *  style's options with a Reset row. A change saves the value and redraws with it. */
 function worldOptionsHtml(): string {
-  const w = curWorld;
-  if (!w || !w.def.options.length) return "";
+  const w = optionsPanel();
+  if (!w.owner.options.length) return "";
   const row = (o: WorldOption): string => {
-    const v = w.options[o.key];
+    const v = w.values[o.key];
     const k = esc(o.key);
     const name = `<span title="${esc(o.label)}">${esc(o.label)}</span>`; // P-VIZ.UI1: a long label ellipsizes, the title has it all
     if (o.type === "color") return `<label class="viz-wopt">${name}<input type="color" data-viz-wopt="${k}" value="${esc(fullHex(typeof v === "string" ? v : o.default))}"></label>`;
@@ -453,7 +542,10 @@ function worldOptionsHtml(): string {
     }
     return `<label class="viz-wopt">${name}<select data-viz-wopt="${k}">${o.choices.map((c) => `<option value="${esc(c.value)}"${c.value === v ? " selected" : ""}>${esc(c.label)}</option>`).join("")}</select></label>`;
   };
-  return `<div class="viz-vmenu-h">World options</div><div class="viz-wopts" data-viz-wopts>${w.def.options.map(row).join("")}</div>`;
+  const reset = w.builtin
+    ? `<div class="viz-wopt"><span title="Back to this style's defaults">Defaults</span><button type="button" class="btn-mini orbit-btn" data-viz-wopt-reset>Reset</button></div>`
+    : "";
+  return `<div class="viz-vmenu-h" title="${esc(w.title)}">${esc(w.title)}</div><div class="viz-wopts" data-viz-wopts>${w.owner.options.map(row).join("")}${reset}</div>`;
 }
 
 /** "#abc" -> "#aabbcc" (a color input takes only the long form). */
@@ -470,17 +562,28 @@ function paintWorldOptions(): void {
 }
 
 function onWorldOption(input: HTMLInputElement | HTMLSelectElement): void {
-  const o = curWorld?.def.options.find((x) => x.key === input.dataset.vizWopt);
+  const o = optionsPanel().owner.options.find((x) => x.key === input.dataset.vizWopt);
   if (o) setWorldOption(o.key, o.type === "toggle" ? (input as HTMLInputElement).checked : input.value);
 }
 
-function setWorldOption(key: string, value: string | boolean): void {
+/** Save one option of the panel's owner (`value` null: every option back to its default) and redraw with it. */
+function setWorldOption(key: string, value: string | boolean | null): void {
   const w = curWorld;
-  if (!w || !w.def.options.some((x) => x.key === key)) return;
-  curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+  if (w) {
+    if (value === null || !w.def.options.some((x) => x.key === key)) return;
+    curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+  } else {
+    // P-VIZ.STYLEOPT1 (ADR-0688): the built-in style's options, stored the same way
+    const s = builtinOf(), def = BUILTIN_OPTIONS[s];
+    if (value === null) builtinVals[s] = resetOptions(localStorage, def);
+    else if (def.options.some((x) => x.key === key)) builtinVals[s] = saveOption(localStorage, def, key, value);
+    else return;
+  }
   if (!scene) return;
-  if (view && JSON.stringify(sceneTheme(view)) !== themeSig) { remount(); return; } // ADR-0652: an option turned the sky light or dark
-  scene.setStyle(effStyle(), curWorld);
+  // ADR-0652: an option turned the sky light or dark (P-VIZ.STYLEOPT1: or changed the backdrop, accent or particle budget)
+  if (view && sceneSig(sceneTheme(view)) !== themeSig) { remount(); return; }
+  if (curWorld) scene.setStyle(effStyle(), curWorld);
+  else scene.setBuiltinLook(curLook());
 }
 
 // ---------------------------------------------------------------------------------------------- P-WORLDS.CAST2 (ADR-0650)
@@ -637,8 +740,8 @@ function onLookPick(id: string, field: string, value: string): void {
  *  for the user's options (P-WORLDS.FX1, ADR-0652: environmentFor). */
 function sceneTheme(at: HTMLElement): VizTheme {
   const t = readTheme(at);
-  const env = curWorld ? worldEnvironment(curWorld.def, curWorld.options) : null;
-  if (!env) return t;
+  if (!curWorld) return builtinTheme(t, curLook()); // P-VIZ.STYLEOPT1 (ADR-0688): the built-in Background and Accent
+  const env = worldEnvironment(curWorld.def, curWorld.options);
   return { ...t, light: env.light, bg: toHex(env.fog.color, t.bg), txt: env.light ? "#1a1d26" : "#e8eaf2" };
 }
 
@@ -661,6 +764,13 @@ let headRo: ResizeObserver | null = null;
 /** Called once from app.ts with the bridge seam. */
 export function initViz(d: VizDeps): void {
   deps = d;
+  // P-WORLDS.UPDATE1 (ADR-0685): the Worlds button's dot and the open menu follow the pending updates; a new version
+  // on disk is loaded at once (its module URL names the version, so the world is rebuilt from it).
+  d.worldUpdates.onChange((why) => {
+    paintWorldsBadge();
+    if (worldsPop) { paintWorldsMenu(worldsPop.node); worldsPop.reposition(); }
+    if (why === "installed" && isOpen()) void refreshWorlds();
+  });
   // P-VIZ.NOFLASH1: the scene on screen takes the new tier's lighter settings at once (live, same context) while the
   // new tier's scene builds beneath it; the swap happens on that scene's first whole frame.
   d.perf.onChange((tier) => {
@@ -743,7 +853,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
   requestAnimationFrame(() => view?.classList.add("open"));
   const now = Date.now();
   model = createVizState(now);
-  outputs.clear(); sending.clear(); lastLanes = [];
+  laneLogs.clear(); sending.clear(); lastLanes = [];
   demo = new URLSearchParams(location.search).get("vizDemo") === "1" ? createDemo(now) : null; // the DEMO feed: only ever through the URL
   demoPrev = now;
   ($("[data-viz-demo]", view) as HTMLElement).hidden = !demo;
@@ -769,6 +879,8 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // (plasma-light, a token) merged as if its environmentFor returned them, for packs not yet migrated to v2.
     fx: () => scene?.edgeFxInfo() ?? null,
     fxPreview: (edges: Parameters<VizSceneHandle["previewEdges"]>[0]): boolean => scene?.previewEdges(edges) ?? false,
+    // P-VIZ.STYLEOPT1 (ADR-0688): what the built-in look draws (background, stars, drift, grid, name tags...), read-only.
+    builtinLook: () => scene?.builtinInfo() ?? null,
     // P-WORLDS.CAST2 (ADR-0650): the cast preferences in effect (a frozen copy of lucid.viz.cast.v1).
     castPrefs: (): CastPrefs => castPrefs,
     // P-WORLDS.KIT2 (ADR-0654): the character kit's lineup (presets, hair at every tier, the sleeve coverage pass
@@ -885,7 +997,7 @@ export function closeViz(): void {
   retireOutgoing();
   scene?.destroy(); scene = null;
   model = null; demo = null; hover = null;
-  outputs.clear(); sending.clear(); lastLanes = [];
+  laneLogs.clear(); sending.clear(); lastLanes = [];
   window.removeEventListener("keydown", onKey, true);
   document.removeEventListener("visibilitychange", onVisibility);
   motionMq?.removeEventListener("change", remount);
@@ -942,14 +1054,20 @@ function buildView(): HTMLElement {
             <button type="button" class="viz-panel-btn" data-viz-panel-close aria-label="Close this panel" data-tip="${tipAttr("Close (Esc)", "The agent keeps working.")}">${icon("close", 12)}</button>
           </div>
           <div class="viz-panel-st" data-viz-panel-st></div>
-          <div class="viz-panel-out" data-viz-panel-out></div>
+          ${laneOutHtml()}
           <div class="viz-panel-acts" data-viz-panel-acts></div>
-          <form class="viz-panel-ask" data-viz-panel-form>
-            <textarea class="viz-panel-in" data-viz-panel-input rows="2" aria-label="Message this agent"></textarea>
-            <button type="submit" class="viz-panel-send" data-viz-panel-send aria-label="Send">${icon("send", 13)}</button>
+          <div class="fleet-queue" data-fleet-queue data-viz-panel-queue hidden></div>
+          <div class="fleet-attach" data-viz-panel-attach hidden></div>
+          <form class="fleet-compose viz-panel-ask" data-viz-panel-form>
+            <button type="button" class="fleet-card-btn fleet-plus" data-viz-panel-img aria-label="Add images" data-tip="${tipAttr("Add images", `PNG, JPEG, WebP or GIF, up to ${MAX_ATTACHMENTS} per prompt. You can also paste them (Ctrl+V) or drop them on this panel.`)}">${icon("plus", 13)}</button>
+            <textarea class="fleet-input" data-viz-panel-input rows="1" spellcheck="false" aria-label="Message this agent"></textarea>
+            <button type="submit" class="fleet-card-btn fleet-send" data-viz-panel-send aria-label="Send">${icon("send", 13)}</button>
           </form>
           <p class="viz-panel-note" data-viz-panel-note role="status"></p>
         </div>
+        <div class="viz-panel-rz" data-viz-panel-rz="x" aria-hidden="true"></div>
+        <div class="viz-panel-rz" data-viz-panel-rz="y" aria-hidden="true"></div>
+        <button type="button" class="viz-panel-grip" data-viz-panel-rz="xy" aria-label="Resize this panel: arrow keys change its size, Home resets it" data-tip="${tipAttr("Resize", "Drag to show more of the transcript. Arrow keys work too; double-click or Home goes back to the natural size.")}"></button>
       </div>
       <div class="viz-player" data-viz-player hidden>
         <div class="viz-player-head"><b data-viz-player-title>Recording</b><span class="viz-player-meta" data-viz-player-meta></span><span class="orbit-headgap"></span>
@@ -979,7 +1097,35 @@ function buildView(): HTMLElement {
   v.addEventListener("keydown", (ev) => {
     const t = ev.target as HTMLElement;
     if (t.matches("[data-viz-panel-input]") && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); void sendFromPanel(); }
+    if (t.matches(".viz-panel-grip")) onGripKey(ev);
   });
+  // P-VIZ.LANE1 (ADR-0683): the lane composer's habits. The box grows with its text; a pasted image (Ctrl+V) or one
+  // dropped anywhere on the panel joins the next prompt as a mini chip; the transcript's catch-up pair follows its
+  // scroll (scroll does not bubble, so it is captured); the edges and the grip resize the panel.
+  v.addEventListener("input", (ev) => {
+    const t = ev.target;
+    if (t instanceof HTMLTextAreaElement && t.matches("[data-viz-panel-input]")) autosizeLaneInput(t, PANEL_INPUT_CAP);
+  });
+  v.addEventListener("paste", (ev) => {
+    const t = ev.target as HTMLElement;
+    if (!t.matches("[data-viz-panel-input]")) return;
+    const files = clipboardFiles(ev as ClipboardEvent);
+    if (!files.length) return; // a text paste falls through untouched
+    ev.preventDefault();
+    addPanelImages(files);
+  });
+  v.addEventListener("scroll", onLaneScroll, true);
+  v.addEventListener("pointerdown", (ev) => {
+    const h = (ev.target as HTMLElement).closest<HTMLElement>("[data-viz-panel-rz]");
+    if (h) onPanelResizeDown(ev, h);
+  });
+  v.addEventListener("dblclick", (ev) => {
+    if ((ev.target as HTMLElement).closest("[data-viz-panel-rz]")) setPanelSize(null);
+  });
+  bindFileDrop($("[data-viz-panel]", v) as HTMLElement, (files, folders) => {
+    if (folders) setPanelNote("Folders are not added here: drop the images themselves.");
+    if (files.length) addPanelImages(files);
+  }, "Drop images to attach");
   tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, effStyle(), curWorld?.def ?? null); // P-VIZ.6 (ADR-0636)
   return v;
 }
@@ -1004,6 +1150,7 @@ function onViewClick(ev: Event): void {
   if (t.closest("[data-viz-player-save]")) { const r = recordings.find((x) => x.id === playingId); if (r) saveRec(r); return; }
   if (t.closest("[data-viz-panel-close]")) { closePanel(); return; }
   if (t.closest("[data-viz-panel-expand]")) { expandPanel(); return; }
+  if (panel && t.closest("[data-viz-panel]") && onPanelLaneClick(ev, t)) return; // P-VIZ.LANE1 (ADR-0683)
   const act = t.closest("[data-viz-act]") as HTMLElement | null;
   if (act) { void runAction(act.dataset.vizNode ?? "", act.dataset.vizAct as VizAsk, act); return; }
   const look = t.closest<HTMLElement>("[data-viz-look-open]");
@@ -1060,6 +1207,7 @@ function openViewMenu(anchor: HTMLElement): void {
     // P-WORLDS.CAST2 (ADR-0650): a world's swatch option, and the Cast section.
     const sw = t.closest<HTMLElement>("[data-viz-wopt-sw]");
     if (sw) { setWorldOption(sw.dataset.vizWoptSw ?? "", sw.dataset.value ?? ""); paintWorldOptions(); return; }
+    if (t.closest("[data-viz-wopt-reset]")) { setWorldOption("", null); paintWorldOptions(); return; } // P-VIZ.STYLEOPT1 (ADR-0688)
     const cb = t.closest<HTMLElement>("[data-viz-cast]");
     if (cb) onCastPick(cb.dataset.vizCast ?? "", cb.dataset.value ?? "");
   });
@@ -1129,6 +1277,16 @@ function paintToggles(): void {
     wb.classList.toggle("on", !!curWorld);
     ($("[data-viz-worlds-label]", wb) as HTMLElement).textContent = curWorld ? curWorld.def.label : "Worlds";
   }
+  paintWorldsBadge();
+}
+
+/** P-WORLDS.UPDATE1 (ADR-0685): a dot on the Worlds button while a purchased world has an update. */
+function paintWorldsBadge(): void {
+  const wb = view ? ($("[data-viz-worlds]", view) as HTMLElement | null) : null;
+  if (!wb) return;
+  const n = deps?.worldUpdates.pending().length ?? 0;
+  wb.classList.toggle("has-upd", n > 0);
+  if (n > 0) wb.dataset.worldUpdates = String(n); else delete wb.dataset.worldUpdates;
 }
 
 /** The View menu's layout toggle and quality button (only while the menu is open). */
@@ -1218,12 +1376,13 @@ function mount(failMsg: string | null = null): void {
   const stage = $("[data-viz-stage]", view) as HTMLElement;
   const loading = $("[data-viz-loading]", view) as HTMLElement;
   const theme = sceneTheme(view); // P-WORLDS.1: a world's sky decides light
-  themeSig = JSON.stringify(theme);
+  themeSig = sceneSig(theme);
   if (outgoing) ($("[data-viz-error]", view) as HTMLElement).hidden = true;
   else showStarting(theme.bg);
   let s: VizSceneHandle;
   try {
-    s = mountVizScene(stage, vizTierOpts(deps.perf.tier(), !!motionMq?.matches), theme, prefs.view, autoCam);
+    // P-VIZ.STYLEOPT1 (ADR-0688): a built-in style's Particles option scales the tier's budgets
+    s = mountVizScene(stage, scaleParticles(vizTierOpts(deps.perf.tier(), !!motionMq?.matches), curWorld ? 1 : curLook().particles), theme, prefs.view, autoCam);
   } catch (e) {
     scene = null;
     retireOutgoing();
@@ -1237,6 +1396,7 @@ function mount(failMsg: string | null = null): void {
   s.onDoublePick(onDoublePick);
   s.onUserCamera(onUserCamera);
   s.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
+  s.setBuiltinLook(curLook()); // P-VIZ.STYLEOPT1 (ADR-0688)
   s.setStyle(effStyle(), curWorld);
   tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   s.onLost(() => onSceneLost(s));
@@ -1378,10 +1538,53 @@ function onBus(ev: VizBusEvent): void {
   if (!model || !applyEvent(model, ev, Date.now())) return;
   noteLedger(ev);
   noteBuild(ev.source, ev.e); // P-WORLDS.BUILD1 (ADR-0653)
-  if (ev.source === HUB_ID) return;
-  let out = outputs.get(ev.source);
-  if (!out) { out = createOutput(); outputs.set(ev.source, out); }
-  foldOutput(out, ev.e);
+  if (ev.source !== HUB_ID) foldPanelLane(ev.source, ev.e);
+}
+
+/** P-VIZ.LANE1 (ADR-0683): fold an event the model took into its lane's log, the way the Fleet card folds its stream
+ *  (lane_view), and repaint the panel's transcript when it shows that lane. A lane's stream can be the composer's
+ *  when it is attached to the lane (chat events), so every field is checked before it is read. */
+function foldPanelLane(id: string, raw: { readonly type: string }): void {
+  const e = raw as { readonly type: string; readonly [k: string]: unknown };
+  const lg = laneLog(id);
+  const text = typeof e.text === "string" ? e.text : null;
+  switch (e.type) {
+    case "watch-seed":
+      if (!Array.isArray(e.turns)) return;
+      applySeed(lg, (raw as unknown as Extract<LaneEvent, { type: "watch-seed" }>).turns);
+      lg.pending = ""; lg.pendingThinking = ""; lg.pendingTools = [];
+      lg.seeded = true;
+      break;
+    case "token": case "thinking":
+      if (text === null) return;
+      foldLaneStream(lg, { type: e.type === "token" ? "token" : "thinking", text });
+      break;
+    case "tool":
+      if (typeof e.name !== "string" || typeof e.detail !== "string") return;
+      if (e.status !== undefined && e.status !== "open" && e.status !== "done" && e.status !== "failed") return; // not a lane step
+      if (!foldLaneStream(lg, raw as unknown as Extract<LaneEvent, { type: "tool" }>)) return;
+      break;
+    case "auto-approved": {
+      const summary = typeof e.summary === "string" ? e.summary : "";
+      foldLaneStream(lg, { type: "auto-approved", summary, mode: e.mode === "session" ? "session" : "auto" });
+      break;
+    }
+    case "done": foldPending(lg); break;
+    case "error": foldPending(lg, typeof e.message === "string" ? e.message : "the turn failed"); break;
+    default: return;
+  }
+  if (panel?.id === id) paintPanelLane();
+}
+
+/** The open lane's transcript pane, repainted from its log (lane_view.paintLaneOutput). */
+function paintPanelLane(): void {
+  if (!view || !model || !panel) return;
+  const n = model.nodes.get(panel.id);
+  if (!n) return;
+  const out = panelEl("[data-viz-panel] [data-fleet-out]");
+  const shown = panelLog(n);
+  if (shown.sig !== panel.logSig) { panel.logSig = shown.sig; clearLaneOutput(out); }
+  paintLaneOutput(out, shown.log, () => shown.empty);
 }
 
 /** P-VIZ.APPROVE1 (ADR-0655): new asks pulse their badges; with Fly to approvals on, the camera flies to the newest
@@ -1454,7 +1657,7 @@ function onTick(): void {
     if (hover) paintTip(hover.hit, hover.x, hover.y);
     syncScaffolds(); // P-WORLDS.BUILD1: a style, view or tier change rebuilds them; a gone node's build goes
     if (panel) paintPanel();
-    if (view && themeSig && JSON.stringify(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
+    if (view && themeSig && sceneSig(sceneTheme(view)) !== themeSig) remount(); // a theme switch while open
   }
 }
 
@@ -1475,6 +1678,7 @@ async function pollFleet(): Promise<void> {
     return;
   }
   fleetBusy = true;
+  const askedAt = Date.now(); // P-VIZ.LANE1: a staged-prompt change the panel made after this is newer than the reply
   // P-FLEET.CONN1: a reply that never comes (the window's connections to the engine all held by streams) must not
   // stop the poll chain for good; after FLEET_WAIT_MS this cycle counts as offline and the next one asks again.
   const st = await Promise.race([deps.fleetStatus().catch(() => null), new Promise<null>((r) => window.setTimeout(() => r(null), FLEET_WAIT_MS))]);
@@ -1495,6 +1699,9 @@ async function pollFleet(): Promise<void> {
     ledgerFleet(ledger, mine.map((l) => ({ id: l.id, session: l.sessionId, folder: l.repo?.repo?.root ?? l.cwd, ...(l.usage ? { usage: l.usage } : {}) })), now);
     lastLanes = mine;
     syncWatches(mine);
+    // P-VIZ.LANE1 (ADR-0683): the engine's queue is the truth for the staged strip, as on the Fleet card.
+    for (const l of mine) { const lg = laneLogs.get(l.id); if (lg && askedAt >= lg.queuedAt) lg.queued = l.queued; }
+    maybeDrainPanel();
   }
   fleetTimer = window.setTimeout(() => void pollFleet(), pollDelay(POLL_MS, tier, document.hidden));
 }
@@ -1646,15 +1853,17 @@ function openPanel(id: string): void {
   if (panel?.id !== id) {
     if (panel) { cancelAnimationFrame(panel.raf); window.clearTimeout(panel.flipTimer); }
     killArm = null;
-    panel = { id, raf: 0, outSig: "", headSig: "", note: "", box: null, side: null, flipTimer: 0 };
-    (panelEl("[data-viz-panel-input]") as HTMLTextAreaElement).value = "";
-    panelEl("[data-viz-panel-out]").scrollTop = 0;
+    panel = { id, raf: 0, logSig: "", headSig: "", note: "", box: null, side: null, flipTimer: 0 };
+    const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
+    input.value = "";
+    input.style.height = "";
   }
   panelEl("[data-viz-panel]").hidden = false;
   paintPanel();
+  paintPanelAttach(); // this agent's pasted images (none for anyone else)
   if (n.kind === "agent" && !demo) {
     syncWatches(lastLanes); // this lane's stream first
-    if (!outputs.get(id)?.seeded) void loadTranscript(id);
+    if (!laneLogs.get(id)?.seeded) void loadTranscript(id);
   }
   followPanel();
   const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
@@ -1670,24 +1879,53 @@ function closePanel(): void {
   killArm = null;
   const box = panelEl("[data-viz-panel]");
   box.hidden = true;
-  box.classList.remove("flip");
-  panelEl("[data-viz-panel-out]").innerHTML = "";
+  box.classList.remove("flip", "resizing");
+  clearLaneOutput(panelEl("[data-viz-panel] [data-fleet-out]"));
   panelEl("[data-viz-panel-acts]").innerHTML = "";
   if (box.contains(document.activeElement)) scene?.canvas.focus({ preventScroll: true });
 }
 
-/** A lane nobody streamed yet: its bounded history (the grid card's catch-up seed), kept under any live text. */
+/** A lane nobody streamed yet: its recorded turns (the Fleet card's catch-up seed, lane_view.applySeed), appended
+ *  under nothing the panel already shows. */
 async function loadTranscript(id: string): Promise<void> {
   if (!deps) return;
   const t = await deps.fleetTranscript(id).catch(() => null);
   if (!t || panel?.id !== id) return;
-  let out = outputs.get(id);
-  if (!out) { out = createOutput(); outputs.set(id, out); }
-  if (out.seeded) return;
-  const live = out.live;
-  foldOutput(out, { type: "watch-seed", turns: t.turns });
-  out.live = live;
+  const lg = laneLog(id);
+  if (lg.seeded) return;
+  applySeed(lg, t.turns);
+  lg.seeded = true;
   paintPanel();
+}
+
+/** The panel's state for lane `id`, made empty (its staged prompts as last polled) the first time it is asked for. */
+function laneLog(id: string): PanelLane {
+  let lg = laneLogs.get(id);
+  if (!lg) {
+    lg = { ...newLaneLog(), seeded: false, attached: [], queued: lastLanes.find((l) => l.id === id)?.queued ?? [], queuedAt: 0, staging: false, stageKey: null };
+    laneLogs.set(id, lg);
+  }
+  return lg;
+}
+
+/** What the panel's transcript pane shows for a node, all through the lane renderer: a lane's own log; Main's last
+ *  chat turn and a subagent's task as a log built from them (`sig` changes when they do, which repaints the pane).
+ *  `empty` is the pane's line when there is nothing to show. */
+function panelLog(n: VizNode): { log: LaneLog; sig: string; empty: string } {
+  const fixed = (sig: string, turns: readonly VizTurn[], empty: string): { log: LaneLog; sig: string; empty: string } => {
+    const log = newLaneLog();
+    for (const t of turns) if (t.text.trim()) log.turns.push({ id: nextId(log, "t"), role: t.role, text: t.text, tools: [] });
+    return { log, sig: `${sig}:${JSON.stringify(turns)}`, empty };
+  };
+  if (n.kind === "subagent") return fixed(`sub:${n.id}`, n.assignment ? [{ role: "user", text: n.assignment }] : [], "This subagent's task was not reported.");
+  if (demo) return fixed(`demo:${n.id}`, [], "DEMO: these agents are simulated and have no output.");
+  if (n.kind === "hub") return fixed("hub", deps?.mainRecent() ?? [], "No chat in this session yet.");
+  const lg = laneLog(n.id);
+  const busy = n.status === "active" || n.status === "waiting";
+  return {
+    log: lg, sig: `lane:${n.id}`,
+    empty: !lg.seeded ? "Loading this agent's recent output\u2026" : busy ? "Working on a turn. Its output shows here as it arrives\u2026" : "No output yet. Send a prompt below.",
+  };
 }
 
 function setPanelNote(text: string): void {
@@ -1696,18 +1934,6 @@ function setPanelNote(text: string): void {
   const note = panelEl("[data-viz-panel-note]");
   note.textContent = text;
   note.hidden = !text;
-}
-
-/** What a node's panel shows of its output: Main's last chat turn, a lane's folded stream, a subagent's task. */
-function panelTurns(n: VizNode): { turns: VizTurn[]; live: string; empty: string } {
-  if (n.kind === "subagent") {
-    const what = n.assignment ? [{ role: "user" as const, text: n.assignment }] : [];
-    return { turns: what, live: "", empty: "This subagent's task was not reported." };
-  }
-  if (demo) return { turns: [], live: "", empty: "DEMO: these agents are simulated and have no output." };
-  if (n.kind === "hub") return { turns: deps?.mainRecent() ?? [], live: "", empty: "No chat in this session yet." };
-  const out = outputs.get(n.id);
-  return { turns: out?.turns.slice(-3) ?? [], live: out?.live ?? "", empty: out?.seeded ? "No output yet. Send a prompt below." : "Loading this agent's recent output..." };
 }
 
 function paintPanel(): void {
@@ -1724,10 +1950,12 @@ function paintPanel(): void {
   const armed = !!killArm && killArm.id === id && now < killArm.until;
   const parent = n.parent ? model.nodes.get(n.parent) : undefined;
   const ended = n.goneAt !== null || n.laneStatus === "stopped";
-  const busy = n.status === "active" || n.status === "waiting" || sending.has(id);
+  // P-VIZ.LANE1 (ADR-0683): a busy agent's Send becomes Stage (the Fleet card's rule); it waits while a stage is in flight.
+  const busy = n.kind === "agent" && panelStages(n);
+  const staging = n.kind === "agent" && !!laneLogs.get(id)?.staging;
   // P-WORLDS.CAST2 (ADR-0650): a world's human figure (the hub or a lane) can have its look pinned.
   const castable = n.kind !== "subagent" && !!curWorld && !!scene?.castOf(id);
-  const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, demo ? 1 : 0, parent?.name, castable, buildWorld()?.id ?? ""].join("|"); // P-WORLDS.BUILD1: the templates follow the world
+  const headSig = [n.name, n.persona, n.kind, n.status, n.laneStatus, n.goneAt, mainBusy, armed, busy, staging, demo ? 1 : 0, parent?.name, castable, buildWorld()?.id ?? ""].join("|"); // P-WORLDS.BUILD1: the templates follow the world
   const stEl = $("[data-viz-panel-st]", box) as HTMLElement;
   if (stEl.textContent !== status) stEl.textContent = stEl.title = status; // ellipsizes; the title has the full line
   if (headSig !== panel.headSig) {
@@ -1772,32 +2000,148 @@ function paintPanel(): void {
       : n.kind === "agent" && ended ? "This agent has ended. Respawn it from the Fleet panel to talk to it."
       : "";
     const place = off || (n.kind === "hub" ? (mainBusy ? "Message Main (it waits for the running turn, like the composer)" : "Message Main (sent from the main composer)")
-      : busy ? `Stage a prompt for ${n.name} (it runs when this turn ends)` : `Message ${n.name}`);
-    input.disabled = !!off; send.disabled = !!off;
+      : busy ? `Stage the next prompt for ${n.name}\u2026` : `Prompt ${n.name}\u2026`);
+    const img = panelEl("[data-viz-panel-img]") as HTMLButtonElement;
+    input.disabled = !!off; send.disabled = !!off || staging;
+    img.hidden = n.kind !== "agent"; img.disabled = !!off; // images ride a lane prompt; Main takes text from here
     input.placeholder = place;
     input.setAttribute("aria-label", place);
-    send.setAttribute("aria-label", n.kind === "agent" && busy ? "Stage" : "Send");
-    send.setAttribute("data-tip", tipValue(n.kind === "agent" && busy ? "Stage" : "Send", off || (n.kind === "agent" && busy ? `${n.name} is busy: the prompt waits in its queue and runs next.` : "Enter sends, Shift+Enter is a new line.")));
+    send.setAttribute("aria-busy", staging ? "true" : "false");
+    send.classList.toggle("staging", busy); // P-FLEET.L3: tinted, so the mode change reads at a glance
+    send.setAttribute("aria-label", busy ? "Stage" : "Send");
+    send.setAttribute("data-tip", staging ? tipValue("Staging\u2026", "Waiting for the engine to confirm")
+      : tipValue(busy ? "Stage for later" : "Send", off || (busy ? `${n.name} is busy: the prompt waits in its queue and runs in order when it goes idle.` : "Enter sends, Shift+Enter is a new line.")));
   }
-  // The output: repainted only when it changed, and kept pinned to the newest line unless you scrolled up.
-  const o = panelTurns(n);
-  const who = (t: VizTurn): string => (t.role === "user" ? (n.kind === "subagent" ? "Task" : "You") : n.kind === "hub" ? "Main" : n.name);
-  const html = o.turns.length || o.live
-    ? o.turns.map((t) => `<div class="viz-panel-turn ${t.role}"><b>${esc(who(t))}</b><p>${esc(t.text.length > 1200 ? `\u2026${t.text.slice(-1200)}` : t.text)}</p></div>`).join("")
-      + (o.live ? `<div class="viz-panel-turn assistant live"><b>${esc(n.kind === "hub" ? "Main" : n.name)}</b><p>${esc(o.live.length > 1600 ? `\u2026${o.live.slice(-1600)}` : o.live)}</p></div>` : "")
-    : `<p class="viz-panel-empty">${esc(o.empty)}</p>`;
-  if (html !== panel.outSig) {
-    panel.outSig = html;
-    const out = panelEl("[data-viz-panel-out]");
-    const pinned = out.scrollTop + out.clientHeight >= out.scrollHeight - 12;
-    out.innerHTML = html;
-    if (pinned) out.scrollTop = out.scrollHeight;
-  }
+  // P-VIZ.LANE1 (ADR-0683): the transcript (the Fleet card's renderer) and the staged strip. The pasted images repaint
+  // when they change (paintPanelAttach), never on this timer: their strip carries every image's bytes.
+  paintPanelLane();
+  const lg = n.kind === "agent" && !demo ? laneLog(id) : null;
+  const q = panelEl("[data-viz-panel-queue]");
+  bindQueueMenu(q, () => (panel ? panelQueueHost(panel.id) : null));
+  paintQueueStrip(q, lg?.queued ?? [], { kind: "steer", running: busy });
   setPanelNote(panel.note);
 }
 
+/** The open lane's pasted images as mini chips with an x (lane_view's strip); none for anything but a lane. */
+function paintPanelAttach(): void {
+  if (!view || !panel) return;
+  paintAttachStrip(panelEl("[data-viz-panel-attach]"), laneLogs.get(panel.id)?.attached ?? []);
+}
+
+/** The open lane's Send stages instead (lane_view_model.laneStages, the Fleet card's rule): a prompt from this panel
+ *  in flight, the node streaming or waiting on an approval, or the lane working by the engine's last word. */
+function panelStages(n: VizNode): boolean {
+  return laneStages({ streaming: sending.has(n.id) || n.status === "active" || n.status === "waiting", status: n.laneStatus ?? "" });
+}
+
+/** Images for the open lane's next prompt (pasted, dropped or picked), within the composer's limits. */
+function addPanelImages(files: readonly File[]): void {
+  if (!model || !panel) return;
+  const id = panel.id;
+  const n = model.nodes.get(id);
+  if (!n || n.kind !== "agent" || demo) { setPanelNote("Images ride a prompt to an agent. Open an agent's panel to add them."); return; }
+  const images = files.filter((f) => f.type.startsWith("image/"));
+  if (images.length < files.length) setPanelNote("Only images can be added here. Add other files from the agent's Fleet card.");
+  const lg = laneLog(id);
+  readLaneImages(images, () => lg.attached, () => { if (panel?.id === id) paintPanelAttach(); }, (why) => { if (panel?.id === id) setPanelNote(`Image not added: ${why}.`); });
+}
+
+/** P-VIZ.LANE1 (ADR-0683): this panel as the host of lane_view's staged-prompt controls for lane `id`. The queue is
+ *  the engine's (the Fleet card of the same lane shows the same prompts); a change shows at once and the next poll
+ *  is the truth. The panel has no file bar, so a staged prompt's files stay with it on the engine. */
+function panelQueueHost(id: string): LaneQueueHost | null {
+  const d = deps;
+  if (!d) return null;
+  const lg = laneLog(id);
+  const input = (): HTMLTextAreaElement | null => (view && panel?.id === id ? (panelEl("[data-viz-panel-input]") as HTMLTextAreaElement) : null);
+  const note = (text: string): void => { if (panel?.id === id) setPanelNote(text); };
+  return {
+    id, bridge: d,
+    queued: () => lg.queued,
+    setQueued: (next) => { lg.queued = next; lg.queuedAt = Date.now(); paintPanel(); },
+    busy: () => { const n = model?.nodes.get(id); return !!n && panelStages(n); },
+    note,
+    refresh: () => { lg.queuedAt = 0; void pollFleet(); },
+    // Another agent's panel (or none) open now counts as a draft: Update then puts the prompt back on the queue.
+    hasDraft: () => { const t = input(); return !t || !!t.value.trim() || lg.attached.length > 0; },
+    loadDraft: async (text, images, fileIds) => {
+      const t = input();
+      if (t) { t.value = text; autosizeLaneInput(t, PANEL_INPUT_CAP); t.focus(); }
+      lg.attached = images.slice(0, MAX_ATTACHMENTS);
+      paintPanelAttach();
+      return fileIds.length ? `Its ${fileIds.length} file${fileIds.length === 1 ? " was" : "s were"} not brought back here; add ${fileIds.length === 1 ? "it" : "them"} from the agent's Fleet card.` : null;
+    },
+    appendDraft: async (text, images, fileIds) => {
+      const t = input();
+      if (t) t.value = [t.value.trim(), text].filter(Boolean).join("\n\n");
+      lg.attached = [...lg.attached, ...images].slice(0, MAX_ATTACHMENTS);
+      paintPanelAttach();
+      return fileIds.length ? `Its ${fileIds.length} file${fileIds.length === 1 ? " was" : "s were"} not brought back here.` : null;
+    },
+    restoreFiles: async (ids) => ({ ready: 0, note: ids.length ? `Its ${ids.length} file${ids.length === 1 ? " was" : "s were"} removed with it; add ${ids.length === 1 ? "it" : "them"} again from the agent's Fleet card.` : null }),
+  };
+}
+
+/** A click inside the panel on the lane renderer's controls: a tool chip's chevron, a turn's copy button, the
+ *  catch-up pair, the staged strip (Steer is its go button), an image's x, and Add images. True when it was one. */
+function onPanelLaneClick(ev: Event, t: HTMLElement): boolean {
+  if (!panel || !model) return false;
+  const id = panel.id;
+  const n = model.nodes.get(id);
+  const lg = n?.kind === "agent" && !demo ? laneLog(id) : null;
+  if (t.closest("[data-lane-jump]")) { onLaneJumpClick(ev); return true; }
+  const chip = t.closest<HTMLElement>("[data-fleet-chip]");
+  if (chip) { if (lg) toggleLaneChip(chip, lg); return true; }
+  const copy = t.closest<HTMLElement>("[data-fleet-turn-copy]");
+  if (copy) {
+    const turn = lg?.turns.find((x) => x.id === copy.dataset.fleetTurnCopy) ?? (n ? panelLog(n).log.turns.find((x) => x.id === copy.dataset.fleetTurnCopy) : undefined);
+    if (turn) void copyOut(copy, turnReplyText(turn));
+    return true;
+  }
+  if (lg) {
+    const h = panelQueueHost(id);
+    if (h && onQueueClick(t, h, (i) => {
+      const go = panelEl("[data-viz-panel-queue]").querySelector<HTMLElement>(`[data-q-go="${i}"]`);
+      if (go?.getAttribute("aria-disabled") === "true") { setPanelNote(go.dataset.tip?.split("|")[1] ?? "Steer is not available for this prompt."); return; }
+      void steerStaged(h, i);
+    })) return true;
+    const ax = t.closest<HTMLElement>("[data-attach-x]");
+    if (ax) { lg.attached.splice(Number(ax.dataset.attachX), 1); paintPanelAttach(); return true; }
+  }
+  if (t.closest("[data-viz-panel-img]")) {
+    void pickFiles().then((files) => {
+      (panelEl("[data-viz-panel-input]") as HTMLTextAreaElement).focus({ preventScroll: true });
+      if (files.length && panel?.id === id) addPanelImages(files);
+    });
+    return true;
+  }
+  return false;
+}
+
+/** P-VIZ.LANE1 (ADR-0683): run the open lane's next staged prompt when it is idle, as the Fleet card does, but only
+ *  while no Fleet dock polls (it drains then, and two drains would race for the same prompt). The turn reaches the
+ *  panel through the lane's watch like any other; this stream only reports a refusal. */
+function maybeDrainPanel(): void {
+  if (!deps || !panel || demo || deps.fleetDrains()) return;
+  const id = panel.id;
+  const lane = lastLanes.find((l) => l.id === id);
+  const lg = laneLogs.get(id);
+  if (!lane || !lg || sending.has(id) || !laneDrainReady({ streaming: lg.streaming, queued: lg.queued.length, status: lane.status, pushing: false })) return;
+  const next = lg.queued[0]!;
+  const extras = [next.images ? `${next.images} image${next.images === 1 ? "" : "s"}` : "", next.files ? `${next.files} file${next.files === 1 ? "" : "s"}` : ""].filter(Boolean);
+  lg.queued = lg.queued.slice(1);
+  lg.queuedAt = Date.now(); // a poll asked before this still lists the head the drain popped (P-FLEET.DRAIN1)
+  lg.turns.push({ id: nextId(lg, "t"), role: "user", text: next.text + (extras.length ? ` [${extras.join(", ")}]` : ""), tools: [] });
+  lg.streaming = true;
+  sending.add(id);
+  paintPanel();
+  void deps.fleetDrain(id, (e) => { if (e.type === "error" && panel?.id === id) setPanelNote(`The staged prompt did not run: ${e.message}`); })
+    .catch(() => { /* the next poll shows the queue as the engine has it */ })
+    .finally(() => { lg.streaming = false; sending.delete(id); if (panel?.id === id) { panel.headSig = ""; paintPanel(); } });
+}
+
 /** P-VIZ.5 (ADR-0629): keep the panel BESIDE its node every frame (the camera moves, the auto camera glides),
- *  on the side with more room, tilted toward the node, its tail aimed at it (viz_panel_place). A node off screen
+ *  on the side with more room, its tail aimed at it (viz_panel_place; P-VIZ.LANE1 keeps the card flat). A node off screen
  *  docks the panel at the nearest edge, dimmed, its tail pointing out toward the node; it never leaves the view.
  *  A side change glides (.flip) instead of jumping. */
 function followPanel(): void {
@@ -1809,6 +2153,7 @@ function followPanel(): void {
     if (panel !== p || !view) return;
     const box = panelEl("[data-viz-panel]");
     const stage = panelEl("[data-viz-stage]").getBoundingClientRect();
+    applyPanelSize(box, stage); // P-VIZ.LANE1: the user's size, clamped to the stage as it is this frame
     const seen = scene?.screenBoxOf(p.id) ?? null;
     if (seen) p.box = { x: seen.x - stage.left, y: seen.y - stage.top, r: seen.r };
     const node = p.box ?? { x: stage.width / 2, y: stage.height / 2, r: 0 }; // behind the camera since it opened
@@ -1832,6 +2177,69 @@ function followPanel(): void {
     p.raf = requestAnimationFrame(step);
   };
   step(); // placed before the first paint, not a frame late at the stage's corner
+}
+
+/** P-VIZ.LANE1 (ADR-0683): put the user's size on the panel, clamped to the stage (a smaller window shrinks it, a
+ *  larger one gives the saved size back), or none: its natural size. `.sized` lets the transcript take the height. */
+function applyPanelSize(box: HTMLElement, stage: { width: number; height: number }): void {
+  const s = panelSize ? clampPanelSize(panelSize, { w: stage.width, h: stage.height }) : null;
+  const w = s ? `${s.w}px` : "", h = s ? `${s.h}px` : "";
+  if (box.style.width !== w) box.style.width = w;
+  if (box.style.height !== h) box.style.height = h;
+  box.classList.toggle("sized", !!s);
+}
+
+/** A new user size (null: back to the natural size), saved for the next open and applied at once. */
+function setPanelSize(s: PanelSize | null): void {
+  panelSize = s;
+  savePanelSize(localStorage, s);
+  if (view && panel) applyPanelSize(panelEl("[data-viz-panel]"), panelEl("[data-viz-stage]").getBoundingClientRect());
+}
+
+/** The stage's size, the room a panel size is clamped to. */
+function panelRoom(): { w: number; h: number } {
+  const r = panelEl("[data-viz-stage]").getBoundingClientRect();
+  return { w: r.width, h: r.height };
+}
+
+/** Drag an edge or the grip: the pointer is captured, so a fast drag off the panel keeps resizing; the size is saved
+ *  when the drag ends. The panel stays beside its node (followPanel) while it changes size. */
+function onPanelResizeDown(ev: PointerEvent, handle: HTMLElement): void {
+  if (ev.button !== 0 || !panel || !view) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const box = panelEl("[data-viz-panel]");
+  const start = { w: box.offsetWidth, h: box.offsetHeight };
+  const edge = (handle.dataset.vizPanelRz ?? "xy") as PanelEdge;
+  const side = panel.side ?? "right";
+  const x0 = ev.clientX, y0 = ev.clientY;
+  handle.setPointerCapture(ev.pointerId);
+  box.classList.add("resizing");
+  const move = (e: PointerEvent): void => {
+    panelSize = dragPanelSize(start, edge, side, e.clientX - x0, e.clientY - y0, panelRoom());
+    applyPanelSize(box, panelEl("[data-viz-stage]").getBoundingClientRect());
+  };
+  const up = (): void => {
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    handle.removeEventListener("pointercancel", up);
+    box.classList.remove("resizing");
+    if (panelSize) setPanelSize(panelSize);
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+  handle.addEventListener("pointercancel", up);
+}
+
+/** The grip's keyboard: arrows resize (Shift: bigger steps), Home goes back to the natural size. */
+function onGripKey(ev: KeyboardEvent): void {
+  if (!view || !panel) return;
+  if (ev.key === "Home") { ev.preventDefault(); setPanelSize(null); return; }
+  const box = panelEl("[data-viz-panel]");
+  const next = stepPanelSize({ w: box.offsetWidth, h: box.offsetHeight }, ev.key, ev.shiftKey, panelRoom());
+  if (!next) return;
+  ev.preventDefault();
+  setPanelSize(next);
 }
 
 /** Expand: the agent's real card in the Fleet panel (or back to the orbit it came from), Main's chat. */
@@ -1859,45 +2267,88 @@ function revealCard(id: string, until: number): void {
   window.setTimeout(() => card.removeAttribute("data-fleet-flash"), 1600);
 }
 
-/** The panel's prompt box: Main through the composer, an idle agent gets the prompt, a busy one stages it. */
-async function sendFromPanel(): Promise<void> {
+/** The panel's prompt box: Main through the composer; an agent the Fleet card's way (P-VIZ.LANE1, ADR-0683): an idle
+ *  one gets the prompt with its pasted images, a busy one stages them on the engine's queue (P-FLEET.STAGE1: one stage
+ *  request at a time, a stage id the engine dedups, and a failure keeps the draft). `images` false sends the text
+ *  alone (a mini game's brief). */
+async function sendFromPanel(images = true): Promise<void> {
   if (!view || !model || !deps || !panel) return;
+  const d = deps;
   const id = panel.id;
   const n = model.nodes.get(id);
   const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
   const text = input.value.trim();
-  if (!n || !text || input.disabled) return;
+  if (!n || input.disabled) return;
   if (n.kind === "hub") {
-    const why = deps.sendMain(text);
+    if (!text) return;
+    const why = d.sendMain(text);
     if (why) { setPanelNote(why); return; }
-    input.value = "";
+    input.value = ""; input.style.height = "";
     setPanelNote("Sent to Main from the main composer.");
     return;
   }
   if (n.kind !== "agent") return;
-  if (sending.has(id) || n.status === "active" || n.status === "waiting" || n.laneStatus === "starting") {
-    setPanelNote(`Staging for ${n.name}...`);
-    const r = await deps.fleetQueueAdd(id, text).catch(() => null);
+  const lg = laneLog(id);
+  const pics = images ? lg.attached.slice() : [];
+  if (!text && !pics.length) return;
+  if (lg.staging) { setPanelNote("Still staging your last prompt. It stays in the box until the engine confirms it."); return; }
+  const key = stageKeyFor(lg.stageKey, stageSignature(text, pics, []));
+  lg.stageKey = key;
+  // What went leaves the composer; text typed or images pasted meanwhile stay (and another agent's box is not touched).
+  const clearSent = (): void => {
+    lg.attached = lg.attached.filter((im) => !pics.includes(im));
     if (panel?.id !== id) return;
-    if (!r?.ok) { setPanelNote(r?.reason ? `Not staged: ${r.reason}. Your prompt is still in the box.` : "Not staged: the engine did not answer in time. Your prompt is still in the box."); return; }
-    if (input.value.trim() === text) input.value = "";
-    setPanelNote(`Staged: it runs when ${n.name} finishes this turn${r.queued ? ` (${r.queued} waiting)` : ""}.`);
+    if (input.value.trim() === text) { input.value = ""; input.style.height = ""; }
+    paintPanelAttach();
+  };
+  if (panelStages(n)) {
+    lg.staging = true;
+    setPanelNote(`Staging for ${n.name}\u2026`);
+    paintPanel();
+    const r = await d.fleetQueueAdd(id, text, pics, undefined, key.id).catch(() => null);
+    lg.staging = false;
+    if (panel?.id === id) panel.headSig = "";
+    if (!r?.ok) {
+      // Not a lane error: only this request failed. The draft stays and the next press reuses this stage id.
+      if (panel?.id === id) setPanelNote(r?.reason ? `Not staged: ${r.reason}. Your prompt is still in the box.` : "Not staged: the engine did not answer in time. Your prompt is still in the box; press Stage again and it is staged once.");
+      paintPanel();
+      return;
+    }
+    lg.stageKey = null;
+    if (!r.duplicate) { lg.queued = [...lg.queued, stagedChip(text, pics.length, 0)]; lg.queuedAt = Date.now(); }
+    clearSent();
+    if (panel?.id === id) setPanelNote(`Staged: it runs when ${n.name} finishes this turn${r.queued ? ` (${r.queued} waiting)` : ""}.`);
+    paintPanel();
     return;
   }
-  input.value = "";
-  let out = outputs.get(id);
-  if (!out) { out = createOutput(); outputs.set(id, out); }
-  foldOutput(out, { type: "user", text });
+  clearSent();
+  const turnId = nextId(lg, "t");
+  lg.turns.push({ id: turnId, role: "user", text, tools: [], ...(pics.length ? { images: pics.map((im) => `data:${im.mimeType};base64,${im.data}`) } : {}) });
+  lg.streaming = true;
   sending.add(id);
   panel.headSig = ""; // the box turns into Stage
   setPanelNote(`Sent to ${n.name}.`);
   paintPanel();
-  // The lane's own events reach the view through its watch (the panel's lane is watched first); this
-  // stream only reports a refusal.
+  // The lane's own events reach the panel through its watch (the panel's lane is watched first, and the model keeps
+  // one stream per lane, so a Fleet card following the same turn never makes it count twice); this stream reports a
+  // refusal, and P-FLEET.STAGE1's stage id lets the engine stage the prompt when the lane turned out to be busy.
   const fail = (msg: string): void => { if (panel?.id === id) setPanelNote(`${n.name} did not take the prompt: ${msg}`); };
-  void deps.fleetPrompt(id, text, (e: LaneEvent) => { if (e.type === "error") fail(e.message); })
-    .catch((e: unknown) => fail(e instanceof Error ? e.message : "the engine did not answer"))
-    .finally(() => { sending.delete(id); if (panel?.id === id) panel.headSig = ""; });
+  const sink = (e: LaneEvent): void => {
+    if (e.type === "staged") {
+      lg.stageKey = null;
+      lg.turns = lg.turns.filter((t) => t.id !== turnId);
+      if (view) view.querySelector(`[data-viz-panel] [data-lane-turn="${CSS.escape(turnId)}"]`)?.remove(); // the pane's node count is its cursor
+      lg.queued = [...lg.queued, stagedChip(text, pics.length, 0)]; lg.queuedAt = Date.now();
+      if (panel?.id === id) setPanelNote(`${n.name} was still busy, so your prompt was staged. It runs when the current turn ends.`);
+      paintPanel();
+      return;
+    }
+    if (e.type === "error") { fail(e.message); return; }
+    lg.stageKey = null;
+  };
+  void d.fleetPrompt(id, text, sink, pics, undefined, key.id)
+    .catch((err: unknown) => fail(err instanceof Error ? err.message : "the engine did not answer"))
+    .finally(() => { lg.streaming = false; sending.delete(id); if (panel?.id === id) { panel.headSig = ""; paintPanel(); } });
   void pollFleet();
 }
 
@@ -2269,10 +2720,10 @@ async function startMiniGame(id: string, gameId: string): Promise<void> {
   if (!n || n.kind === "subagent" || !game) return;
   const input = panelEl("[data-viz-panel-input]") as HTMLTextAreaElement;
   if (input.disabled) return;
-  const staged = n.kind === "hub" ? !!deps?.mainBusy() : sending.has(id) || n.status === "active" || n.status === "waiting" || n.laneStatus === "starting";
+  const staged = n.kind === "hub" ? !!deps?.mainBusy() : panelStages(n);
   applyBuildSteps(armTemplate(builds, id, game, staged, Date.now()));
   const draft = input.value;
   input.value = game.brief;
-  await sendFromPanel();
+  await sendFromPanel(false); // the brief alone: images pasted for the user's own prompt stay for it
   if (!input.value && draft) input.value = draft; // sent: the user's own draft comes back
 }

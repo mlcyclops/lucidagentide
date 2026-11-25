@@ -32,6 +32,7 @@ import { pluginMcpServers } from "./plugins/mcp.ts"; // P-PLUGINS.2 (ADR-0462)
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
+import { sanitizeAnnounced } from "./renderer/world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 import { parseResultWindowSetting, type ResultWindowSetting } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parsePerCallModelSetting, type PerCallModelSetting } from "./per_call_model.ts"; // P-MODEL.11 (ADR-0602)
@@ -170,6 +171,9 @@ export interface GuiSettings {
   // P-AUTH.RELOGIN1 (ADR-0640): OAuth providers LUCID has seen signed in, and the model each one displaced
   // when its sign-in was lost (desktop/oauth_relogin.ts). Lets a vanished login be told apart from a fresh install.
   oauthMemory?: { seen: string[]; displaced: Record<string, string> };
+  // P-WORLDS.UPDATE1 (ADR-0685): the purchased-world updates already announced, as "<id>@<version>" (newest last,
+  // bounded). Engine-side because renderer localStorage is per origin and a port-rolled launch starts empty.
+  worldUpdatesAnnounced?: string[];
   // P-IDE.1c (ADR-0029): the user acknowledged the data-sovereignty warning for China-origin models
   // (DeepSeek/Kimi/MiniMax/GLM/…). Until set, those models are hidden from the picker. Off by default.
   chinaModelsAcknowledged?: boolean;
@@ -193,6 +197,10 @@ export interface GuiSettings {
   // ADR-0089 (P-ROLE.1b): the first-run guided walkthrough has been shown (finished OR skipped).
   // Replay-guard so the tour never re-appears uninvited; the About "Take the tour" button ignores it.
   tourSeen?: boolean;
+  // P-WHATSNEW.1 (ADR-0686): the APP_VERSION whose What's new notes the user has seen (or that a fresh install
+  // recorded silently). Engine-side on purpose: the renderer's localStorage is per origin and a port-rolled
+  // launch (ADR-0458) starts empty. Unset = an install from before the popup existed.
+  whatsNewSeen?: string;
   // P-GOVCUI.1: the first-run "are you a Government/GovCon user handling CUI?" answer. Cosmetic onboarding
   // state (like userRole/tourSeen). `undefined` = not asked yet (drives the first-run gov step); `true` = the
   // user is on the CUI (gov gateway) path; `false` = standard use. It NEVER weakens the gate; the actual
@@ -549,6 +557,13 @@ export function setUserRole(role: UserRole): GuiSettings {
 export function tourSeen(): boolean { return !!load().tourSeen; }
 export function setTourSeen(seen: boolean): GuiSettings {
   const s = load(); s.tourSeen = !!seen; save(s); return s;
+}
+/** P-WHATSNEW.1 (ADR-0686): the version whose What's new notes were last seen, or null when never recorded. */
+export function whatsNewSeen(): string | null { return load().whatsNewSeen ?? null; }
+/** Records `version` as seen. Only a semver string is stored; anything else is refused (returns false). */
+export function setWhatsNewSeen(version: string): boolean {
+  if (!/^\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.-]{1,40})?$/.test(version)) return false;
+  const s = load(); s.whatsNewSeen = version; save(s); return true;
 }
 /** P-GOVCUI.1: whether the first-run Government/CUI question has been answered (either way) yet. Drives the
  *  first-run gov step so it asks exactly once. */
@@ -1103,6 +1118,16 @@ export function oauthMemory(): { seen: string[]; displaced: Record<string, strin
 }
 export function setOauthMemory(m: { seen: string[]; displaced: Record<string, string> }): void {
   const s = load(); s.oauthMemory = m; save(s);
+}
+/** P-WORLDS.UPDATE1 (ADR-0685): the world updates already announced ("<id>@<version>"), well-formed keys only. */
+export function worldUpdatesAnnounced(): string[] { return sanitizeAnnounced(load().worldUpdatesAnnounced); }
+/** Replace the announced keys (sanitized and bounded); returns what was stored. */
+export function setWorldUpdatesAnnounced(raw: unknown): string[] {
+  const s = load();
+  const keys = sanitizeAnnounced(raw);
+  s.worldUpdatesAnnounced = keys;
+  save(s);
+  return keys;
 }
 /** Every configured Local Provider's omp prefix, enabled or not (a disabled one is still LOCAL), for
  *  isLocalModel. The implicit engines (Ollama, llama.cpp, LM Studio, ...) are covered by isLocalModel itself. */

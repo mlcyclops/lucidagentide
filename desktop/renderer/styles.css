@@ -1297,6 +1297,7 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .sess-del.sess-arch:hover{background:color-mix(in srgb,var(--accent-2) 16%,transparent);color:var(--accent-2)}
 .sess:hover .t,.sess:focus-within .t{padding-right:52px}
 .sess .sess-archived{color:var(--txt-4)}
+.sess .sess-imported{color:var(--amber-txt)} /* P-SESSXFER.1 (ADR-0682) */
 .sess-group-clear.sess-arch-rule{opacity:.6}
 .sess-group-clear.sess-arch-rule:hover{color:var(--accent-2);background:color-mix(in srgb,var(--accent-2) 16%,transparent)}
 .arch-pop{display:block;width:300px;padding:4px 2px;font-size:12px;color:var(--txt-2)}
@@ -4690,6 +4691,26 @@ body.preview-open .thread{font-size:.9em}
 .secret-modal .modal-actions{flex-wrap:wrap;justify-content:flex-end}
 .secret-dest-row{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
 .secret-dest-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+/* P-SESSXFER.1 (ADR-0682): Export / Import history. Same .modal chrome and grid rows as the secret dialog. */
+.popover.sx-pop{width:230px}
+.sx-menu{display:block}
+.cfg-opt[data-sx] .tick{opacity:.85}
+.modal.sx-modal{width:min(520px,92vw);text-align:left}
+.sx-modal .modal-icon{margin-left:0}
+.sx-modal .modal-desc{margin-left:0;max-width:none}
+.sx-row{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;margin-top:8px}
+.sx-lab{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--txt-2)}
+.sx-row .prov-key{text-align:left}
+.sx-check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--txt-2);cursor:pointer}
+.sx-check input{flex:none;margin:0}
+.sx-check span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-modal .modal-actions{justify-content:flex-end}
+.sx-list{max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg-2);padding:4px 0}
+.sx-item{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:10px;padding:5px 11px;font-size:11.5px}
+.sx-id,.sx-note{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sx-id{font-family:var(--mono);color:var(--txt-2)}
+.sx-note{color:var(--txt-3)}
+.sx-counts{color:var(--txt-2)}
 @keyframes fade{from{opacity:0}to{opacity:1}}
 
 /* ───────────────────────── About panel (P-ABOUT.1 / ADR-0087) ───────────────────────── */
@@ -4738,6 +4759,13 @@ body.preview-open .thread{font-size:.9em}
 .about-site{position:relative;display:block;width:max-content;margin:10px auto 0;font-size:12px;
   color:var(--accent-2);text-decoration:none;letter-spacing:.2px;transition:color var(--t) var(--ease)}
 .about-site:hover{color:var(--accent);text-decoration:underline}
+.about-site.about-docs{margin-top:6px}
+/* P-DOCS.2 (ADR-0681): docs links inside onboarding modals and the tour closer card. */
+.modal-docs,.coach-link{display:block;width:max-content;max-width:100%;overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis;font-size:12px;color:var(--accent-2);text-decoration:none}
+.modal-docs{margin:12px auto 0}
+.coach-link{margin:0 0 10px}
+.modal-docs:hover,.coach-link:hover{color:var(--accent);text-decoration:underline}
 
 .about-blurb{font-size:13px;line-height:1.65;color:var(--txt-2);margin:0 2px 16px}
 .about-blurb b{color:var(--txt)}
@@ -4770,8 +4798,36 @@ body.preview-open .thread{font-size:.9em}
 .about-fine{margin:12px 0 0;font-size:10.5px;line-height:1.6;color:var(--txt-4)}
 .about-fine b{color:var(--txt-3)}
 .about-mono{font-family:var(--mono);color:var(--txt-3)}
-.about-actions{display:flex;justify-content:center;margin-top:18px}
+.about-actions{display:flex;justify-content:center;gap:10px;margin-top:18px}
 .about-actions .btn-mini{padding:7px 26px}
+
+/* P-WHATSNEW.1 (ADR-0686): the What's new popup. The About shell (.about-modal/.about-hero/.about-x) with
+   cards in the website's feature-card idiom: picture, a mono uppercase "New in" tag, a title and a line. */
+.wn-modal{width:min(760px,94vw)}
+.wn-hero{padding:26px 48px 16px}
+.wn-title{position:relative;margin:0;font-size:22px;font-weight:800;letter-spacing:.4px;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-sub{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.wn-group{margin:0 0 16px}
+.wn-gh{margin:0 2px 10px;font:600 10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.wn-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line-soft);border-radius:13px;overflow:hidden;
+  background:linear-gradient(180deg,var(--bg-1),color-mix(in srgb,var(--bg-1) 90%,var(--shade)));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .03),0 1px 2px rgb(var(--sh-rgb) / .3)}
+.wn-shot{aspect-ratio:16/9;background:var(--bg-2);border-bottom:1px solid var(--line-soft);overflow:hidden}
+.wn-shot img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+.wn-body{display:flex;flex-direction:column;gap:5px;padding:11px 13px 13px;min-width:0}
+.wn-tag{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-h{margin:0;font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-p{margin:0;font-size:12px;line-height:1.55;color:var(--txt-2)}
+.wn-more{align-self:flex-start;max-width:100%;margin-top:2px;font-size:12px;color:var(--accent-2);text-decoration:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color var(--t) var(--ease)}
+.wn-more:hover{color:var(--accent);text-decoration:underline}
+/* Dismiss stays in view while the cards scroll beneath it (the modal scrolls; a long release must not hide it). */
+.wn-actions{position:sticky;bottom:-22px;z-index:1;margin:4px -24px -22px;padding:14px 24px 18px;
+  background:linear-gradient(180deg,transparent,var(--bg-1) 38%);border-top:1px solid var(--line-soft)}
 
 @media (prefers-reduced-motion:reduce){
   .rail-about .about-book,.rail-about .about-spark,.about-glow,.about-lucid,.about-pi{animation:none}
@@ -9072,14 +9128,6 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-panel-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .viz-panel-st{font-family:var(--mono);font-size:10.5px;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .viz-panel-st:empty{display:none}
-.viz-panel-out{max-height:168px;min-height:44px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding:7px 8px;border-radius:9px;
-  background:var(--bg-0);border:1px solid var(--line-soft);scrollbar-width:thin}
-.viz-panel-turn{display:flex;flex-direction:column;gap:2px;min-width:0}
-.viz-panel-turn b{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--txt-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.viz-panel-turn.user b{color:var(--viz-c,var(--accent))}
-.viz-panel-turn p{margin:0;font-family:var(--mono);font-size:11px;line-height:1.45;color:var(--txt-2);white-space:pre-wrap;overflow-wrap:anywhere}
-.viz-panel-turn.live p{color:var(--txt)}
-.viz-panel-empty{margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-2)}
 .viz-panel-acts{display:flex;flex-wrap:wrap;gap:6px}
 .viz-panel-acts:empty{display:none}
 .viz-panel-act{font:inherit;font-size:11.5px;padding:5px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg-2);color:var(--txt);cursor:pointer;
@@ -9089,16 +9137,42 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-panel-act.danger{color:var(--red)}
 .viz-panel-act.danger.armed{background:rgb(var(--red-rgb) / .14);border-color:rgb(var(--red-rgb) / .55)}
 .viz-panel-why{margin:0;font-size:11px;line-height:1.45;color:var(--txt-2)}
-.viz-panel-ask{display:flex;align-items:flex-end;gap:6px;margin:0}
-.viz-panel-in{flex:1;min-width:0;resize:none;max-height:96px;padding:6px 8px;border-radius:9px;border:1px solid var(--line);background:var(--bg-2);
-  color:var(--txt);font:inherit;font-size:12px;line-height:1.4}
-.viz-panel-in::placeholder{color:var(--txt-4)}
-.viz-panel-in:focus-visible{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
-.viz-panel-in:disabled{opacity:.7;cursor:not-allowed}
-.viz-panel-send{flex:none;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;border:1px solid rgb(var(--accent-rgb) / .5);
-  background:rgb(var(--accent-rgb) / .16);color:var(--txt);cursor:pointer}
-.viz-panel-send:disabled{opacity:.45;cursor:not-allowed}
-.viz-panel-send:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* P-VIZ.LANE1 (ADR-0683): the node panel is a Fleet lane card body: lane_view's .fleet-* markup and rules for the
+   transcript pane (live thinking, tool chips, markdown turns, the catch-up pair), the staged strip, the pasted-image
+   chips and the lane composer. Scoped here only for the frame: the pane is boxed like the old output box (no card
+   resize strip beside it, so no right inset) and its rows keep the 6px spacing rule (ADR-0633); the composer sits
+   flush in the card's padding. A user size (.sized: inline width and height from viz_panel_size) flattens the tilt so
+   a long read is not skewed, and the transcript takes every spare pixel. The card is flat at every size: a lane transcript
+   under the old 3D lean skewed its rows (auditBoxes measured the projected boxes touching). The resize strips sit on the panel's outer
+   edge (away from the node) and its bottom, inside the card's padding, never over a control; the grip is the outer
+   bottom corner. No new layer: all of it is inside the panel (z 5 in .viz-stage). */
+.viz-panel{width:min(380px,calc(100% - 16px))}
+.viz-panel .viz-panel-card{transform:none}
+.viz-panel .fleet-out-wrap{flex:none;margin-right:0;border-radius:9px;background:var(--bg-0);border:1px solid var(--line-soft);overflow:hidden}
+.viz-panel .fleet-out{min-height:64px;max-height:260px;gap:6px}
+.viz-panel [data-lane-turn],.viz-panel [data-lane-live]{gap:6px}
+.viz-panel .fleet-jump{right:12px}
+.viz-panel .fleet-queue{padding:5px 8px;border:1px solid var(--line-soft);border-radius:8px}
+.viz-panel .fleet-attach{gap:8px;padding:8px 6px 2px;border-top:0}
+.viz-panel .fleet-compose{align-items:flex-end;gap:6px;padding:0;border-top:0;margin:0}
+.viz-panel .fleet-input{min-height:30px;max-height:120px;font-size:12px}
+.viz-panel .fleet-compose .fleet-card-btn{width:28px;height:28px}
+.viz-panel .fleet-compose .fleet-card-btn:disabled{opacity:.45;cursor:not-allowed}
+.viz-panel .fleet-compose .fleet-card-btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.viz-panel.sized .viz-panel-card{height:100%;box-sizing:border-box;transform:none}
+.viz-panel.sized .viz-panel-card>*{flex-shrink:0}
+.viz-panel.sized .viz-panel-card>.fleet-out-wrap{flex:1 1 0;min-height:0}
+.viz-panel.sized .fleet-out{flex:1;max-height:none;min-height:0}
+.viz-panel.resizing,.viz-panel.resizing *{user-select:none}
+.viz-panel.resizing .viz-panel-card{transition:none}
+.viz-panel-rz{position:absolute;z-index:2;touch-action:none}
+.viz-panel-rz[data-viz-panel-rz=x]{top:18px;bottom:18px;right:-5px;width:10px;cursor:ew-resize}
+.viz-panel[data-side=left] .viz-panel-rz[data-viz-panel-rz=x]{right:auto;left:-5px}
+.viz-panel-rz[data-viz-panel-rz=y]{left:18px;right:18px;bottom:-5px;height:10px;cursor:ns-resize}
+.viz-panel-grip{position:absolute;z-index:3;right:2px;bottom:2px;width:12px;height:12px;padding:0;border:0;border-radius:3px;cursor:nwse-resize;touch-action:none;background-color:transparent;
+  background-image:linear-gradient(135deg,transparent 46%,var(--txt-2) 46% 52%,transparent 52% 64%,var(--txt-2) 64% 70%,transparent 70% 82%,var(--txt-2) 82% 88%,transparent 88%)}
+.viz-panel[data-side=left] .viz-panel-grip{right:auto;left:2px;cursor:nesw-resize;transform:scaleX(-1)}
+.viz-panel-grip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .viz-panel-note{margin:0;font-size:11px;line-height:1.4;color:var(--txt-2)}
 .viz-panel-note:empty,.viz-panel-note[hidden]{display:none}
 /* P-WORLDS.BUILD1 (ADR-0653): the node panel's Mini game row; the artifact chip over a node (z 3 in .viz-stage: over
@@ -9193,6 +9267,8 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-wopt select:hover{background-color:var(--bg-3)}
 .viz-wopt select option{background:var(--bg-1);color:var(--txt)}
 .viz-wopt :is(input,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* P-VIZ.STYLEOPT1 (ADR-0688): the built-in options' Reset, at the end of their rows; keeps its size like the controls above. */
+.viz-wopt>[data-viz-wopt-reset]{flex:none;padding:5px 12px}
 /* P-WORLDS.CAST2 (ADR-0650): swatch ramps (a world's swatch options, the Cast section, a node's Customize look) and
    chips. Tracks of at least 220 px; a pressed swatch has an accent ring over a gap in the card's color, and the
    focus ring is two-tone (text color over the card color) so it reads on any swatch and any theme. */
@@ -9223,7 +9299,17 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-cast-note{align-self:stretch;margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
 .viz-look{min-width:260px}
 .viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px}
-.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row>.viz-world-pick{grid-column:1}
+.viz-world-row>.viz-world-export{grid-column:3}
+/* P-WORLDS.UPDATE1 (ADR-0685): a purchased world's Update, beside Export..., one line, within the row's height */
+.btn-mini.viz-world-upd{grid-column:2;padding:2px 8px;white-space:nowrap;color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.btn-mini.viz-world-upd:hover{border-color:var(--accent);color:var(--accent-2);background:color-mix(in srgb,var(--accent) 12%,var(--bg-2))}
+.btn-mini.viz-world-upd:disabled{cursor:progress;color:var(--txt-3);border-color:var(--line);background:var(--bg-2)}
+.btn-mini.viz-world-upd:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* the dot on the Worlds button (and the Visualize toolbar button) while a purchased world has an update */
+.has-upd{position:relative}
+.has-upd::after{content:"";position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1);pointer-events:none}
 .viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
 .viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font:inherit;font-size:12.5px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
 .viz-world-pick b{min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
