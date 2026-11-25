@@ -826,8 +826,15 @@ pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f6
 pub fn https_request_capped(
     cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>, cap: usize,
 ) -> Result<Response, Result<String, String>> {
+    https_request_via(cfg, host, host, port, timeout, method, path, headers, body, check, cap)
+}
+
+/// `https_request_capped` dialing `address` while the TLS name and Host stay `host` (a relay reached by its private
+/// address).
+#[allow(clippy::too_many_arguments)]
+pub fn https_request_via(cfg: &Arc<ClientConfig>, address: &str, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>, cap: usize) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
-    let mut tcp = connect(host, port, timeout)?;
+    let mut tcp = connect(address, port, timeout)?;
     let name = ServerName::try_from(host.to_string()).map_err(|_| Err("SSLError".to_string()))?;
     let mut conn = rustls::ClientConnection::new(cfg.clone(), name).map_err(|_| Err("SSLError".to_string()))?;
     while conn.is_handshaking() {

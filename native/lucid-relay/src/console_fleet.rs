@@ -1077,7 +1077,7 @@ pub static PROXY_POST: RouteSpec = RouteSpec { method: "POST", path: "fleet/rela
 /// The fleet route for a method and path: a 5.3 row, the relay detail or the proxy; with the relay id and the phase
 /// 1 path for the prefix routes.
 pub fn fleet_route(method: &str, path: &str) -> Option<(&'static RouteSpec, Option<(String, String)>)> {
-    if let Some(s) = FLEET_ROUTES.iter().chain(crate::console_wizard::WIZARD_ROUTES.iter()).find(|s| s.method == method && s.path == path) {
+    if let Some(s) = FLEET_ROUTES.iter().chain(crate::console_wizard::WIZARD_ROUTES.iter()).chain(crate::console_accounts::ROUTES.iter()).find(|s| s.method == method && s.path == path) {
         return Some((s, None));
     }
     if let Some(id) = path.strip_prefix("fleet/enrollments/") {
@@ -1697,6 +1697,10 @@ impl Fleet {
             ("GET", "fleet/licenses") => plain(self.licenses_view()),
             ("POST", "fleet/licenses/library") => self.library(c, r),
             (_, p) if p == "fleet/people" || p.starts_with("fleet/people/") => self.people_route(c, spec, r),
+            (_, p) if p == "meet/accounts" || p.starts_with("meet/accounts/") => {
+                let accounts = c.accounts().ok_or_else(|| ApiError::of("not-found"))?;
+                accounts.admin_route(spec, r.params, &r.who()?.email, t)
+            }
             ("GET", "settings/exports") => Ok(Done::plain(c.exports_view()?)),
             ("POST", "settings/exports/token") => c.exports_token(r.who()?, r.params, t),
             ("POST", "settings/exports/token/revoke") => c.exports_token_revoke(r.params),
@@ -3742,7 +3746,7 @@ impl Fleet {
         let lics: Vec<(String, String, Value)> = self.registry.lock().relays.values().filter(|r| r.state.live()).map(|r| (r.id.clone(), r.name.clone(), r.report.get("license").cloned().unwrap_or(Value::Null))).collect();
         for (id, name, lic) in lics {
             let Some(s) = pushed_service(&lic, t) else { continue };
-            let go = format!("#/licenses?relay={id}");
+            let go = format!("#/license?relay={id}");
             match s.state {
                 crate::console::ServiceState::Stopped => out.push(item("relay-license-stopped", "bad", json!({ "relay": clean(&name), "why": s.why }), go)),
                 crate::console::ServiceState::Grace | crate::console::ServiceState::UpgradePeriod => out.push(item("relay-license-grace", "bad", json!({ "relay": clean(&name), "date and time": s.stops_at }), go)),
@@ -5337,7 +5341,9 @@ impl crate::fleet_people::PeopleHost for PeopleBridge {
         let Some(f) = self.fleet() else { return Vec::new() };
         let two = f.book.lock().policy["twoPerson"] == "on";
         let recs: Vec<RelayRecord> = f.registry.lock().relays.values().cloned().collect();
+        // a relay that left or was removed is not part of the fleet: People must not list it as not answering
         recs.iter()
+            .filter(|r| r.state.live())
             .map(|r| crate::fleet_people::RelayView {
                 id: r.id.clone(),
                 name: r.name.clone(),
@@ -5756,8 +5762,9 @@ impl BrowserPort {
         }
     }
 
-    /// One request: Ok(false) when the connection closes after it.
-    fn one<S: std::io::Read + std::io::Write>(&self, reader: &mut std::io::BufReader<S>, peer: std::net::IpAddr) -> std::io::Result<bool> {
+    /// One request: Ok(false) when the connection closes after it. `public_only`: the peer was let in only as the Meet
+    /// account proxy, so only the public account paths answer.
+    fn one<S: std::io::Read + std::io::Write>(&self, reader: &mut std::io::BufReader<S>, peer: std::net::IpAddr, public_only: bool) -> std::io::Result<bool> {
         use std::io::Read;
         let Some(head) = read_head(reader)? else { return Ok(false) };
         let length = head.header("content-length").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(0);
@@ -5767,6 +5774,25 @@ impl BrowserPort {
         }
         let mut body = vec![0u8; length];
         reader.read_exact(&mut body)?;
+        // The Meet account pages and API (console_accounts): before the host check, as the Meet console served them.
+        let account = self.console.accounts().and_then(|a| {
+            let r = crate::console_accounts::PublicRequest {
+                method: &head.method,
+                target: &head.target,
+                peer,
+                forwarded: head.header("x-forwarded-for"),
+                origin: head.header("origin"),
+                content_type: head.header("content-type"),
+                content_length: head.header("content-length"),
+                body: &body,
+            };
+            a.front(&r, public_only)
+        });
+        if let Some(reply) = account {
+            let close = head.close || reply.close;
+            write_reply(reader.get_mut(), &reply, close)?;
+            return Ok(!close);
+        }
         let (path, query) = match head.target.split_once('?') {
             Some((p, q)) => (p.to_owned(), q.split('#').next().unwrap_or("").to_owned()),
             None => (head.target.split('#').next().unwrap_or("").to_owned(), String::new()),
@@ -5810,9 +5836,9 @@ impl BrowserPort {
         Ok(!close)
     }
 
-    fn serve<S: std::io::Read + std::io::Write>(&self, stream: S, peer: std::net::IpAddr) {
+    fn serve<S: std::io::Read + std::io::Write>(&self, stream: S, peer: std::net::IpAddr, public_only: bool) {
         let mut reader = std::io::BufReader::new(stream);
-        while let Ok(true) = self.one(&mut reader, peer) {}
+        while let Ok(true) = self.one(&mut reader, peer, public_only) {}
     }
 }
 
@@ -5835,6 +5861,10 @@ pub fn serve_browser(console: Arc<Console>, cfg: &ServeConfig) -> Result<(), Str
                     v4 => v4,
                 };
                 let admitted = if tls.is_some() { gate.source_allowed(ip) } else { crate::console_source::allowed(&fronts, ip) };
+                // The Meet account proxy reaches the public account paths, and only those, inside the console's
+                // networks or not.
+                let public_only = gate.accounts().is_some_and(|a| a.is_proxy(ip));
+                let admitted = admitted || public_only;
                 let key = crate::console_source::source_key(ip);
                 if !admitted || !port.take(&key) {
                     drop(tcp);
@@ -5856,7 +5886,7 @@ pub fn serve_browser(console: Arc<Console>, cfg: &ServeConfig) -> Result<(), Str
                                 })();
                                 if handshaken.is_ok() {
                                     let _ = stream.sock.set_read_timeout(Some(std::time::Duration::from_secs(30)));
-                                    port.serve(&mut stream, ip);
+                                    port.serve(&mut stream, ip, public_only);
                                     stream.conn.send_close_notify();
                                     let _ = std::io::Write::flush(&mut stream);
                                 }
@@ -5864,7 +5894,7 @@ pub fn serve_browser(console: Arc<Console>, cfg: &ServeConfig) -> Result<(), Str
                         }
                         None => {
                             let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)));
-                            port.serve(&tcp, ip);
+                            port.serve(&tcp, ip, public_only);
                         }
                     }
                     port.give(&key);

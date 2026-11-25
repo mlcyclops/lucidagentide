@@ -151,6 +151,9 @@ pub struct Settings {
     pub siem: Value,
     /// AC-2a 10.1: CIDRs that may call `/metrics` (None: the console's `--metrics-sources` or `--sources`).
     pub metrics_sources: Option<String>,
+    /// The Meet password-account service (`console_accounts::AccountSettings::to_value`, no secret), null when it
+    /// was never imported.
+    pub meet_accounts: Value,
 }
 
 /// One setup step's state (AC-2a 12.3).
@@ -276,6 +279,7 @@ impl Default for Settings {
             tokens: Vec::new(),
             siem: Value::Null,
             metrics_sources: None,
+            meet_accounts: Value::Null,
         }
     }
 }
@@ -383,6 +387,10 @@ impl Settings {
         if !self.tokens.is_empty() || !self.siem.is_null() || self.metrics_sources.is_some() {
             v["exports"] = json!({ "tokens": self.tokens, "siem": self.siem, "metricsSources": self.metrics_sources });
         }
+        // Only once imported, so every other book keeps its exact shape.
+        if !self.meet_accounts.is_null() {
+            v["meetAccounts"] = self.meet_accounts.clone();
+        }
         v
     }
 
@@ -442,6 +450,10 @@ impl Settings {
             s.tokens = x.get("tokens")?.as_array()?.clone();
             s.siem = x.get("siem").cloned().unwrap_or(Value::Null);
             s.metrics_sources = str_of(x.get("metricsSources")).map(str::to_owned);
+        }
+        if let Some(x) = o.get("meetAccounts") {
+            x.as_object()?;
+            s.meet_accounts = x.clone();
         }
         Some(s)
     }
