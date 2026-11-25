@@ -4,7 +4,7 @@
 // desktop/scripts/demo_p_worlds_build_2.mjs
 //
 // P-WORLDS.BUILD2 (ADR-0653): real-browser proof of template samples. On the ?vizDemo=1 feed, with real input:
-//   1. a node panel's Mini game row lists each template of the current world (else the host's two) with Build and
+//   1. a node panel's Mini game row lists each template of the current world (else the host's three) with Build and
 //      Play sample; the row passes auditBoxes (desktop/scripts/demo_p_spacing_1.mjs) and Play sample is topmost;
 //   2. a real click on Play sample opens the artifact popup: the engine's security gate answers first (verdict
 //      pass), it is labeled Untrusted, Sample and Demo, nothing runs before Play, and the game area is 16:10 inside
@@ -18,7 +18,7 @@
 //   6. Keep puts the sample on the node (a DEMO SAMPLE chip); Discard removes it; Close closes the popup;
 //   7. all of it again in a narrow window (820 x 640).
 // The caller owns the page and the engine. LUCID_DEMO_WORLD_KEY plays that installed world's samples (its templates
-// with a `sample`); default: the current style (the host's two samples).
+// with a `sample`); default: the current style (the host's three samples, P-WORLDS.GAMES3).
 //
 // Run: LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 [LUCID_DEMO_WORLD_KEY=<key>] node desktop/scripts/demo_p_worlds_build_2.mjs
 
@@ -90,7 +90,7 @@ export async function verifySamples(page, worldKey = null) {
   assert(rows.length >= 1 && rows.every((r) => r.label && r.build), `the Mini game rows are ${JSON.stringify(rows)}`);
   const withSample = rows.filter((r) => r.sample);
   assert(withSample.length >= 1, `no template offers Play sample: ${JSON.stringify(rows)}`);
-  if (!worldKey) assert(JSON.stringify(rows.map((r) => r.id)) === JSON.stringify(["target-tap", "memory-cards"]) && withSample.length === 2, `the host's templates are ${JSON.stringify(rows)}`);
+  if (!worldKey) assert(JSON.stringify(rows.map((r) => r.id)) === JSON.stringify(["target-tap", "memory-cards", "agent-runner"]) && withSample.length === 3, `the host's templates are ${JSON.stringify(rows)}`);
   await audit("#vizView [data-viz-panel]");
 
   // 2-5 on one template's sample

@@ -10,16 +10,30 @@ import {
   ARTIFACT_GONE_DOC, artifactFrameDoc, artifactFrameHeaders, artifactShapeProblem, gateVizArtifact, VIZ_ARTIFACT_CSP, VIZ_ARTIFACT_KEEP, VIZ_ARTIFACT_MAX_CHARS,
   VIZ_ARTIFACT_SANDBOX, VIZ_ARTIFACT_TTL_MS, VizArtifactStore,
 } from "./viz_artifact_gate.ts";
-import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./renderer/viz_sample_games.ts";
+import { SAMPLE_AGENT_RUNNER, SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./renderer/viz_sample_games.ts";
+import { DEFAULT_MINI_GAMES, SAMPLE_MAX_BYTES, validSample } from "./renderer/viz_build_model.ts";
 
 const DEMO_GAME = { html: SAMPLE_TARGET_TAP };
 
 const pass = async (): Promise<{ block: boolean; reason: string }> => ({ block: false, reason: "" });
 
 describe("gateVizArtifact (fail-closed)", () => {
-  test("a clean HTML game passes (both host samples)", async () => {
+  test("a clean HTML game passes (every host sample)", async () => {
     expect(await gateVizArtifact(DEMO_GAME.html, pass)).toEqual({ ok: true });
-    expect(await gateVizArtifact(SAMPLE_MEMORY_CARDS, pass)).toEqual({ ok: true });
+    for (const g of DEFAULT_MINI_GAMES) expect(await gateVizArtifact(g.sample, pass)).toEqual({ ok: true });
+  });
+
+  test("P-WORLDS.GAMES3: every host sample is a whole document under the cap with no network, storage, eval, frame or external URL", () => {
+    expect(DEFAULT_MINI_GAMES.map((g) => g.sample)).toEqual([SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS, SAMPLE_AGENT_RUNNER]);
+    for (const { sample } of DEFAULT_MINI_GAMES) {
+      const html = sample!;
+      expect(validSample(html)).toBe(html);
+      expect(new TextEncoder().encode(html).byteLength).toBeLessThanOrEqual(SAMPLE_MAX_BYTES);
+      expect(html.length).toBeLessThanOrEqual(VIZ_ARTIFACT_MAX_CHARS);
+      expect(html).not.toMatch(/\bfetch\b|XMLHttpRequest|WebSocket|EventSource|sendBeacon|localStorage|sessionStorage|indexedDB|document\.cookie|<iframe|\beval\s*\(|new Function|import\s*\(/i);
+      expect(html).not.toMatch(/\b(src|href|action|srcset)\s*=/i);
+      expect(html).not.toMatch(/https?:|\/\/[a-z0-9.-]+\.[a-z]{2,}|url\s*\(/i);
+    }
   });
 
   test("a scanner block blocks, with its reason", async () => {
