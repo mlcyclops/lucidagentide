@@ -3926,13 +3926,14 @@ body.lucid-capturing #toasts{visibility:hidden}
 /* P-BUDDY.HIDE1: a tiny red x on the brick's upper-right corner, only while the brick is hovered (or the x has keyboard
    focus): it hides this buddy for this session. Hidden, it takes no clicks, so the corner stays the brick's. */
 .abd-brick{position:relative;display:block;width:fit-content;margin:0 auto;line-height:0}
-.abd-x{position:absolute;top:-6px;right:-7px;z-index:3;width:14px;height:14px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;
+/* P-PREVIEW.CHIPX1: a floating lane or spoke preview chip wears the same x (.pchip-close, positioned with the chip rules). */
+.abd-x,.pchip-close{position:absolute;top:-6px;right:-7px;z-index:3;width:14px;height:14px;padding:0;border:0;border-radius:50%;display:grid;place-items:center;
   color:#fff;background:var(--red);box-shadow:0 0 0 1.5px var(--bg-1),0 1px 3px rgb(var(--sh-rgb) / .4);cursor:pointer;pointer-events:auto;
   visibility:hidden;opacity:0;transform:scale(.7);transition:opacity .12s,transform .12s,visibility 0s .12s}
-.abd-x svg{display:block;stroke-width:3}
-.abd-brick:hover .abd-x,.abd-x:focus-visible{visibility:visible;opacity:1;transform:none;transition:opacity .12s,transform .12s}
-.abd-x:hover{background:var(--red-mid)}
-.abd-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.abd-x svg,.pchip-close svg{display:block;stroke-width:3}
+.abd-brick:hover .abd-x,.abd-x:focus-visible,.pchip-wrap:hover .pchip-close,.pchip-wrap:focus-within .pchip-close{visibility:visible;opacity:1;transform:none;transition:opacity .12s,transform .12s}
+.abd-x:hover,.pchip-close:hover{background:var(--red-mid)}
+.abd-x:focus-visible,.pchip-close:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .abd-brick:hover .abd-badge{opacity:0}
 .abd-dragging .abd-x{visibility:hidden}
 .abd-chip{position:absolute;left:calc(100% + 6px);top:3px;padding:2px 7px;border-radius:9px;font-size:10.5px;font-weight:600;line-height:1.4;white-space:nowrap;
@@ -4758,6 +4759,13 @@ body.preview-open .thread{font-size:.9em}
 .about-site{position:relative;display:block;width:max-content;margin:10px auto 0;font-size:12px;
   color:var(--accent-2);text-decoration:none;letter-spacing:.2px;transition:color var(--t) var(--ease)}
 .about-site:hover{color:var(--accent);text-decoration:underline}
+.about-site.about-docs{margin-top:6px}
+/* P-DOCS.2 (ADR-0681): docs links inside onboarding modals and the tour closer card. */
+.modal-docs,.coach-link{display:block;width:max-content;max-width:100%;overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis;font-size:12px;color:var(--accent-2);text-decoration:none}
+.modal-docs{margin:12px auto 0}
+.coach-link{margin:0 0 10px}
+.modal-docs:hover,.coach-link:hover{color:var(--accent);text-decoration:underline}
 
 .about-blurb{font-size:13px;line-height:1.65;color:var(--txt-2);margin:0 2px 16px}
 .about-blurb b{color:var(--txt)}
@@ -4790,8 +4798,36 @@ body.preview-open .thread{font-size:.9em}
 .about-fine{margin:12px 0 0;font-size:10.5px;line-height:1.6;color:var(--txt-4)}
 .about-fine b{color:var(--txt-3)}
 .about-mono{font-family:var(--mono);color:var(--txt-3)}
-.about-actions{display:flex;justify-content:center;margin-top:18px}
+.about-actions{display:flex;justify-content:center;gap:10px;margin-top:18px}
 .about-actions .btn-mini{padding:7px 26px}
+
+/* P-WHATSNEW.1 (ADR-0686): the What's new popup. The About shell (.about-modal/.about-hero/.about-x) with
+   cards in the website's feature-card idiom: picture, a mono uppercase "New in" tag, a title and a line. */
+.wn-modal{width:min(760px,94vw)}
+.wn-hero{padding:26px 48px 16px}
+.wn-title{position:relative;margin:0;font-size:22px;font-weight:800;letter-spacing:.4px;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-sub{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+.wn-group{margin:0 0 16px}
+.wn-gh{margin:0 2px 10px;font:600 10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.wn-card{display:flex;flex-direction:column;min-width:0;border:1px solid var(--line-soft);border-radius:13px;overflow:hidden;
+  background:linear-gradient(180deg,var(--bg-1),color-mix(in srgb,var(--bg-1) 90%,var(--shade)));
+  box-shadow:inset 0 1px 0 rgb(var(--tint-rgb) / .03),0 1px 2px rgb(var(--sh-rgb) / .3)}
+.wn-shot{aspect-ratio:16/9;background:var(--bg-2);border-bottom:1px solid var(--line-soft);overflow:hidden}
+.wn-shot img{display:block;width:100%;height:100%;object-fit:cover;object-position:top center}
+.wn-body{display:flex;flex-direction:column;gap:5px;padding:11px 13px 13px;min-width:0}
+.wn-tag{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--txt-4);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-h{margin:0;font-size:13.5px;font-weight:700;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wn-p{margin:0;font-size:12px;line-height:1.55;color:var(--txt-2)}
+.wn-more{align-self:flex-start;max-width:100%;margin-top:2px;font-size:12px;color:var(--accent-2);text-decoration:none;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color var(--t) var(--ease)}
+.wn-more:hover{color:var(--accent);text-decoration:underline}
+/* Dismiss stays in view while the cards scroll beneath it (the modal scrolls; a long release must not hide it). */
+.wn-actions{position:sticky;bottom:-22px;z-index:1;margin:4px -24px -22px;padding:14px 24px 18px;
+  background:linear-gradient(180deg,transparent,var(--bg-1) 38%);border-top:1px solid var(--line-soft)}
 
 @media (prefers-reduced-motion:reduce){
   .rail-about .about-book,.rail-about .about-spark,.about-glow,.about-lucid,.about-pi{animation:none}
@@ -8923,15 +8959,19 @@ body.ald-dragging .ald-head{cursor:grabbing}
 .pchip[data-size="compact"] .pchip-name{font-size:11.5px;line-height:1.3;max-width:120px}
 /* A lane's or a spoke's chip floats: the host spans its corner and lets every press through but the chip's. */
 .pchip-host{position:absolute;z-index:4;display:flex;justify-content:flex-end;pointer-events:none;container-type:inline-size}
-.pchip-host>.pchip{pointer-events:auto;max-width:100%}
+.pchip-wrap{position:relative;display:flex;min-width:0;max-width:100%;pointer-events:auto}
+.pchip-wrap:has(>.pchip[hidden]){display:none}
+.pchip-wrap>.pchip{max-width:100%}
+/* The x sits on the chip's corner, pulled in a little so the lane transcript's edge never clips it. */
+.pchip-wrap>.pchip-close{top:-4px;right:-5px}
 /* In the lane's transcript: its upper-right corner, inset like the jump pair so the widened scrollbar stays free. */
 .pchip-host[data-where="lane"]{top:4px;left:8px;right:20px}
 /* On an orbit spoke: just above the card's upper-right corner, so it covers nothing on the card. */
 .pchip-host[data-where="spoke"]{left:0;right:0;bottom:calc(100% + 6px)}
 /* A narrow corner shows the miniature page alone; its tooltip and accessible name still say everything. */
 @container (max-width:299px){
-  .pchip-host>.pchip .pchip-txt,.pchip-host>.pchip .pchip-more{display:none}
-  .pchip-host>.pchip{padding-right:3px}
+  .pchip-host .pchip .pchip-txt,.pchip-host .pchip .pchip-more{display:none}
+  .pchip-host .pchip{padding-right:3px}
 }
 /* Agent Worlds: beside its node (preview_chip.ts moves it with `translate` every frame, so `transform` stays free
    for the hover lift and the entrance), and its hover card. */
@@ -9239,7 +9279,17 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-cast-note{align-self:stretch;margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
 .viz-look{min-width:260px}
 .viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px}
-.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row>.viz-world-pick{grid-column:1}
+.viz-world-row>.viz-world-export{grid-column:3}
+/* P-WORLDS.UPDATE1 (ADR-0685): a purchased world's Update, beside Export..., one line, within the row's height */
+.btn-mini.viz-world-upd{grid-column:2;padding:2px 8px;white-space:nowrap;color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.btn-mini.viz-world-upd:hover{border-color:var(--accent);color:var(--accent-2);background:color-mix(in srgb,var(--accent) 12%,var(--bg-2))}
+.btn-mini.viz-world-upd:disabled{cursor:progress;color:var(--txt-3);border-color:var(--line);background:var(--bg-2)}
+.btn-mini.viz-world-upd:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* the dot on the Worlds button (and the Visualize toolbar button) while a purchased world has an update */
+.has-upd{position:relative}
+.has-upd::after{content:"";position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1);pointer-events:none}
 .viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
 .viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font:inherit;font-size:12.5px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
 .viz-world-pick b{min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

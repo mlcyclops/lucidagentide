@@ -20,9 +20,10 @@
        its own localhost port and shown in a Preview tab. Loopback only, so it cannot frame a remote site.
        connect-src names the first-party marketplace callables (desktop/market_config.ts DEFAULT_FUNCTIONS_URL):
        firebase_market_provider.ts fetches them from this renderer for entitlement, checkout, download and
-       government access, and without the origin here every one of those calls is refused. -->
+       government access, and without the origin here every one of those calls is refused. The sign-in is renewed by
+       the engine (ADR-0684), so Google's token endpoint is not an origin this renderer reaches. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' http://localhost:* ws://localhost:* https://www.googleapis.com https://securetoken.googleapis.com https://us-central1-lucid-agent.cloudfunctions.net; frame-src 'self' http://localhost:* http://127.0.0.1:*; script-src 'self'; worker-src 'self' blob:" />
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' http://localhost:* ws://localhost:* https://www.googleapis.com https://us-central1-lucid-agent.cloudfunctions.net; frame-src 'self' http://localhost:* http://127.0.0.1:*; script-src 'self'; worker-src 'self' blob:" />
   <title>Lucid Agent</title>
   <link rel="stylesheet" href="vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="styles.css" />

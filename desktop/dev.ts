@@ -180,6 +180,7 @@ import { handleVaultRoutes } from "./vault_routes.ts"; // P-VAULT-V2.1 (ADR-0474
 import { applyVaultEnv, vaultRedactEnv } from "./vault_env.ts"; // P-VAULT-V2.1 (ADR-0474): engine-side credential env; security review: a lane's redaction names
 import { handleVaultBackupRoutes } from "./vault_backup_routes.ts"; // P-VAULT-UI.1 (ADR-0475): /api/vault/backup|restore
 import { handleSessionTransferRoutes } from "./session_transfer_routes.ts"; // P-SESSXFER.1 (ADR-0682): /api/sessions/transfer|export|import
+import { handleMarketAuthRoutes } from "./market_auth_routes.ts"; // P-MARKET.AUTH2 (ADR-0684): /api/market/auth*, /api/market/receipts
 import { configureSecretRequestEndpoint, handleSecretRoutes, SECRET_AGENT_ROUTE } from "./secret_routes.ts"; // P-SECRET-INTAKE.1 (ADR-0476): /api/secret/*
 import { workspaceSecretEnv } from "./vault_env_import.ts"; // P-VAULT-ENV.1 (ADR-0477): a lane's workspace-scoped secrets
 import { upsertVaultDestination } from "./vault_destinations.ts"; // ADR-0476 x ADR-0478: a remembered secrets manager becomes a destination
@@ -192,6 +193,7 @@ import { HeadedBrowserRevealer } from "./headed_browser_reveal.ts"; // P-BROWSER
 import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailableReport, resolveOmpBin } from "./omp_bin.ts"; // the omp binary, PROVEN runnable (fixes the v2.0.0 OAuth EPERM)
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { oauthMemory, setOauthMemory } from "./settings_store.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
+import { setWorldUpdatesAnnounced, worldUpdatesAnnounced } from "./settings_store.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
 import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
@@ -209,7 +211,7 @@ import { mkdir as mkdirAsync, rm as rmAsync, writeFile as writeFileAsync } from 
 import { realpathSync } from "node:fs"; // P-ASKLUCID.9: Save image as / download containment
 import { discoveryHeaders, MAX_DISCOVERY_BYTES, parseDiscoveredModels, providerEnvVar, providerModelsUrl, type LocalProviderDef } from "./local_providers.ts";
 import { listRemoteAgents, upsertRemoteAgent, removeRemoteAgent, setRemoteAgentEnabled } from "../harness/mcp/registry.ts";
-import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
+import { applyEnv, attribution, chinaModelsAcknowledged, chosenModel, govconCui, govconCuiChosen, listMcpServers, load as loadSettings, removeMcpServer, roleChosen, save as saveSettings, setAsksage, setChosenModel, setAttributionSkip, setChinaModelsAcknowledged, setCodeGraphAgent, setDeveloperMode, setGovconCui, setSandboxWindowsMode, setKey, setMcpServerEnabled, setPersonalAiExtract, setProfile, setRateLimitProbe, setThemeId, setThirdPartyProvidersAcknowledged, setTourSeen, setUserRole, setVoiceSettings, setWhatsNewSeen, themeId, thirdPartyProvidersAcknowledged, tourSeen, upsertMcpServer, whatsNewSeen, USER_ROLES, userRole, voiceSettings, type UserRole } from "./settings_store.ts";
 // CREATOR-0: Creator endpoint + remote-target declarations, and the personalization root the build-info
 // route reports (both flavors resolve it through the same seam).
 import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreatorEndpoint, removeCreatorTarget, upsertCreatorEndpoint, upsertCreatorTarget, type CreatorRemoteTargetDef } from "./settings_store.ts";
@@ -219,9 +221,10 @@ import { listCreatorEndpoints, listCreatorTargets, personalBaseDir, removeCreato
 // picker); once chosen it's the concrete role. tourSeen guards the first-run walkthrough replay.
 // P-THEME.1: `theme` rides here too - it is the same class of state (cosmetic, policy-free, per-user).
 // "" means never chosen, which the renderer folds to the OS light/dark preference.
+// P-WHATSNEW.1 (ADR-0686): `whatsNewSeen` is the version whose What's new notes were seen (null = never recorded).
 function settingsData() {
   const s = loadSettings();
-  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId() };
+  return { username: s.username ?? "", email: s.email ?? "", attribution: attribution(), role: roleChosen() ? userRole() : null, tourSeen: tourSeen(), govconCui: govconCuiChosen() ? govconCui() : null, theme: themeId(), whatsNewSeen: whatsNewSeen() };
 }
 
 // P-STT.2b: the real WhisperRuntimeDeps for the managed offline-Whisper lifecycle - os specs, the model dir,
@@ -2754,6 +2757,7 @@ return Bun.serve({
         },
       });
       if (sx) return sx;
+      const ma = await handleMarketAuthRoutes(req, p, { uiToken: TOKEN }); if (ma) return ma; // P-MARKET.AUTH2 (ADR-0684)
       const sr = await handleSecretRoutes(req, p, { uiToken: TOKEN, srv, emit: (r) => backend.requestSecretDialog(r), destinations: { upsert: upsertVaultDestination } }); if (sr) return sr; // P-SECRET-INTAKE.1 (ADR-0476)
       if (p === "/app.js") {
         const { js } = await bundleApp();
@@ -5566,11 +5570,13 @@ return Bun.serve({
       // settings + provider auth
       if (p === "/api/settings") {
         if (req.method === "POST") {
-          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown }>(req);
+          const b = await readBody<{ skip?: unknown; email?: unknown; username?: unknown; role?: unknown; tourSeen?: unknown; govconCui?: unknown; theme?: unknown; whatsNewSeen?: unknown }>(req);
           // ADR-0088/0089 + P-GOVCUI.1: role + first-run-tour + gov/CUI answer are cosmetic onboarding state,
           // policy-free — set them up front, independent of the email-attribution policy gate below.
           if (b.role != null && (USER_ROLES as string[]).includes(String(b.role))) setUserRole(String(b.role) as UserRole);
           if (b.tourSeen != null) setTourSeen(!!b.tourSeen);
+          // P-WHATSNEW.1 (ADR-0686): cosmetic too; a non-semver value is refused by setWhatsNewSeen.
+          if (typeof b.whatsNewSeen === "string" && !setWhatsNewSeen(b.whatsNewSeen)) return json({ ok: false, error: "whatsNewSeen must be a version like 2.7.1", data: settingsData() });
           if (typeof b.govconCui === "boolean") setGovconCui(b.govconCui);
           // P-THEME.1: stored as an opaque string and NOT validated against a theme list here. The
           // renderer's THEMES registry is the single source of truth for which ids exist, and resolveTheme
@@ -6319,6 +6325,16 @@ return Bun.serve({
         const id = String(b.id ?? "");
         if (readInstalled(id)?.manifest.kind !== "world") return json({ ok: true, data: { ok: false, error: "that world is not installed" } });
         return json({ ok: true, data: await plugins.uninstall(id, false) });
+      }
+      // P-WORLDS.UPDATE1 (ADR-0685): which purchased-world updates were already announced ("<id>@<version>"), kept in
+      // the engine settings so a port-rolled launch (a new renderer origin, an empty localStorage) never re-announces.
+      // UI token only (not in AGENT_ROUTES); POST replaces the list, sanitized and bounded.
+      if (p === "/api/worlds/update-notices") {
+        if (req.method === "POST") {
+          const b = await readBody<{ announced?: unknown }>(req);
+          return json({ ok: true, data: { announced: setWorldUpdatesAnnounced(b.announced) } });
+        }
+        return json({ ok: true, data: { announced: worldUpdatesAnnounced() } });
       }
       // ADR-0653 (P-WORLDS.BUILD1): a world build's HTML artifact passes the in-process gate (shape, then the scanner,
       // FAIL-CLOSED) before the Visualize popup may show it; a pass is held under a random id and served only as the
