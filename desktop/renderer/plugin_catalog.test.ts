@@ -71,6 +71,18 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   "world-extreme-sports": { section: "civilian", lookupKey: "PLG-WORLD-EXTREMESPORTS-OTF" },
   "world-wave-riders": { section: "civilian", lookupKey: "PLG-WORLD-WAVERIDERS-OTF" },
   "world-swim-dive": { section: "civilian", lookupKey: "PLG-WORLD-SWIMDIVE-OTF" },
+  // P-WORLDS.2 (ADR-0679): the service and state worlds.
+  "world-army": { section: "civilian", lookupKey: "PLG-WORLD-ARMY-OTF" },
+  "world-navy": { section: "civilian", lookupKey: "PLG-WORLD-NAVY-OTF" },
+  "world-usaf": { section: "civilian", lookupKey: "PLG-WORLD-USAF-OTF" },
+  "world-marines": { section: "civilian", lookupKey: "PLG-WORLD-MARINES-OTF" },
+  "world-coast-guard": { section: "civilian", lookupKey: "PLG-WORLD-COASTGUARD-OTF" },
+  "world-space-force": { section: "civilian", lookupKey: "PLG-WORLD-SPACEFORCE-OTF" },
+  "world-cyber-force": { section: "civilian", lookupKey: "PLG-WORLD-CYBERFORCE-OTF" },
+  "world-ussocom": { section: "civilian", lookupKey: "PLG-WORLD-USSOCOM-OTF" },
+  "world-florida": { section: "civilian", lookupKey: "PLG-WORLD-FLORIDA-OTF" },
+  "world-texas": { section: "civilian", lookupKey: "PLG-WORLD-TEXAS-OTF" },
+  "world-california": { section: "civilian", lookupKey: "PLG-WORLD-CALIFORNIA-OTF" },
   // P-WORLDS.STORE1: the two Lucid Agent World Packs, the backend's bundle catalog ids and Stripe lookup keys.
   "bundle-sponsor": { section: "civilian", lookupKey: "BND-WORLDS-SPONSOR-OTF" },
   "bundle-patron": { section: "civilian", lookupKey: "BND-WORLDS-PATRON-OTF" },
@@ -131,11 +143,12 @@ describe("decideCardAction", () => {
 
   test("only the packaged and verified plugins are on sale", () => {
     expect(sold.map((p) => p.id).sort()).toEqual([
-      "agentictrade187", "bundle-patron", "bundle-sponsor", "myhome", "pathfinder", "quantum-cloak", "world-baseball", "world-basketball", "world-bowling", "world-chef-showdown",
-      "world-christmas", "world-circus", "world-construction", "world-dog-show", "world-esports", "world-extreme-sports", "world-farm",
-      "world-figure-skating", "world-football", "world-golf", "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital",
-      "world-magic-show", "world-soccer", "world-st-patricks", "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis",
-      "world-university", "world-valentines", "world-wave-riders", "world-winter-games",
+      "agentictrade187", "bundle-patron", "bundle-sponsor", "myhome", "pathfinder", "quantum-cloak", "world-army", "world-baseball", "world-basketball", "world-bowling",
+      "world-california", "world-chef-showdown", "world-christmas", "world-circus", "world-coast-guard", "world-construction", "world-cyber-force",
+      "world-dog-show", "world-esports", "world-extreme-sports", "world-farm", "world-figure-skating", "world-florida", "world-football", "world-golf",
+      "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital", "world-magic-show", "world-marines", "world-navy", "world-soccer",
+      "world-space-force", "world-st-patricks", "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis", "world-texas",
+      "world-university", "world-usaf", "world-ussocom", "world-valentines", "world-wave-riders", "world-winter-games",
     ]);
     expect(unavailable.map((p) => p.id).sort()).toEqual(["homeschooltutor", "lucid-meeting-hub", "rapid-survey", "remote-spokes", "tactical-genai-trainer"]);
   });
@@ -206,13 +219,14 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
     for (const p of sold) expect(p.price).toBe(isBundle(p) ? packPrice[p.id]! : isWorldPlugin(p) ? "$9.99" : "$29.99");
   });
 
-  test("the twenty-nine worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
+  test("the forty worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {
     expect(worlds.map((p) => p.id).sort()).toEqual([
-      "world-baseball", "world-basketball", "world-bowling", "world-chef-showdown", "world-christmas", "world-circus", "world-construction",
-      "world-dog-show", "world-esports", "world-extreme-sports", "world-farm", "world-figure-skating", "world-football", "world-golf",
-      "world-grand-prix", "world-hockey", "world-horse-racing", "world-hospital", "world-magic-show", "world-soccer", "world-st-patricks",
-      "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis", "world-university", "world-valentines", "world-wave-riders",
-      "world-winter-games",
+      "world-army", "world-baseball", "world-basketball", "world-bowling", "world-california", "world-chef-showdown", "world-christmas",
+      "world-circus", "world-coast-guard", "world-construction", "world-cyber-force", "world-dog-show", "world-esports", "world-extreme-sports",
+      "world-farm", "world-figure-skating", "world-florida", "world-football", "world-golf", "world-grand-prix", "world-hockey",
+      "world-horse-racing", "world-hospital", "world-magic-show", "world-marines", "world-navy", "world-soccer", "world-space-force",
+      "world-st-patricks", "world-summer-games", "world-swim-dive", "world-talent-show", "world-tennis", "world-texas", "world-university",
+      "world-usaf", "world-ussocom", "world-valentines", "world-wave-riders", "world-winter-games",
     ]);
     for (const p of worlds) {
       expect(p.group).toBe(WORLDS_GROUP);
