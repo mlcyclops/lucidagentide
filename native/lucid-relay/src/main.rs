@@ -48,6 +48,7 @@ mod collab;
 mod collab_auth;
 mod collab_presence;
 mod console;
+mod console_accounts;
 mod console_ai;
 mod console_approvals;
 mod console_audit;
@@ -297,10 +298,20 @@ fn root_key(pem: &str) -> Result<der::P256Key, String> {
 /// `two-person off`, and `seal-setup [--service <name>]` (AC-1 3.11, R4-H2, R4-M2). Each but seal-setup is audited
 /// at the relay's next start (AC-1 3.2 "Offline").
 fn console_cli(args: &[String]) -> ! {
-    const USAGE: &str = "usage: lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] | reset --first-admin <email> | break-glass --email <email> [--replace] | two-person off | seal-setup [--role relay|console] [--service <name>] | fleet-ca replace --compromised|--lost | fleet-ca status  [--state <dir>] (or LUCID_RELAY_STATE), with the relay or console stopped; or lucid-relay console serve --state <dir> --public <host> ...";
+    const USAGE: &str = "usage: lucid-relay console remove-admin <email> | unsuspend <email> | approve-join <email> [--role admin] | reset --first-admin <email> | break-glass --email <email> [--replace] | two-person off | seal-setup [--role relay|console] [--service <name>] | fleet-ca replace --compromised|--lost | fleet-ca status  [--state <dir>] (or LUCID_RELAY_STATE), with the relay or console stopped; or lucid-relay console serve --state <dir> --public <host> ...; or lucid-relay console meet-accounts import|status --state-dir <dir> ...";
     // AC-2a 5.2: the console role.
     if args.first().map(String::as_str) == Some("serve") {
         console_serve(&args[1..]);
+    }
+    // The Meet password-account service moved from the Meet console (console_accounts.rs).
+    if args.first().map(String::as_str) == Some("meet-accounts") {
+        match console_accounts::cli(&args[1..]) {
+            Ok(done) => {
+                println!("{done}");
+                std::process::exit(0)
+            }
+            Err(e) => die(&e),
+        }
     }
     let mut state = std::env::var("LUCID_RELAY_STATE").ok();
     let mut role = None;

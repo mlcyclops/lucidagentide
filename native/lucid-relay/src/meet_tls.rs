@@ -680,8 +680,15 @@ pub struct Response {
 /// Err is the Python exception class name of the failure, or the message `check` gave.
 #[allow(clippy::too_many_arguments)]
 pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>) -> Result<Response, Result<String, String>> {
+    https_request_via(cfg, host, host, port, timeout, method, path, headers, body, check, usize::MAX)
+}
+
+/// `https_request` dialing `address` while the TLS name and Host stay `host` (a relay reached by its private address),
+/// an answer body over `max` bytes refused (`ResponseTooLarge`) before it is buffered.
+#[allow(clippy::too_many_arguments)]
+pub fn https_request_via(cfg: &Arc<ClientConfig>, address: &str, host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, check: &dyn Fn(&[u8]) -> Result<(), String>, max: usize) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
-    let mut tcp = connect(host, port, timeout)?;
+    let mut tcp = connect(address, port, timeout)?;
     let name = ServerName::try_from(host.to_string()).map_err(|_| Err("SSLError".to_string()))?;
     let mut conn = rustls::ClientConnection::new(cfg.clone(), name).map_err(|_| Err("SSLError".to_string()))?;
     while conn.is_handshaking() {
@@ -689,13 +696,13 @@ pub fn https_request(cfg: &Arc<ClientConfig>, host: &str, port: u16, timeout: f6
     }
     let peer = conn.peer_certificates().and_then(|c| c.first()).map(|c| c.to_vec()).unwrap_or_default();
     check(&peer).map_err(Ok)?;
-    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body)
+    exchange(rustls::StreamOwned::new(conn, tcp), host, port, method, path, headers, body, max)
 }
 
 /// One plain HTTP request on a fresh connection (a service on this machine); Err as https_request's.
 pub fn http_request(host: &str, port: u16, timeout: f64, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
     let tcp = connect(host, port, timeout)?;
-    exchange(tcp, host, port, method, path, headers, body)
+    exchange(tcp, host, port, method, path, headers, body, usize::MAX)
 }
 
 /// A TCP connection to the first address of `host` that answers, read and write bounded by `timeout`.
@@ -716,9 +723,12 @@ fn connect(host: &str, port: u16, timeout: f64) -> Result<TcpStream, Result<Stri
     Err(Err(last.map(|e| error_class(&e)).unwrap_or("gaierror").to_string()))
 }
 
-/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close).
-fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>) -> Result<Response, Result<String, String>> {
+/// One request on an open stream and its whole answer (Content-Length, chunked, or up to the close), a body over
+/// `max` bytes refused before it is allocated.
+#[allow(clippy::too_many_arguments)]
+fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str, path: &str, headers: &[(&str, String)], body: Option<&[u8]>, max: usize) -> Result<Response, Result<String, String>> {
     let io = |e: std::io::Error| -> Result<String, String> { Err(error_class(&e).to_string()) };
+    let too_large = || -> Result<String, String> { Err("ResponseTooLarge".to_string()) };
     let mut head = format!("{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nAccept-Encoding: identity\r\n");
     for (k, v) in headers {
         head.push_str(&format!("{k}: {v}\r\n"));
@@ -767,6 +777,9 @@ fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str,
             if n == 0 {
                 break;
             }
+            if n > max.saturating_sub(body.len()) {
+                return Err(too_large());
+            }
             let mut chunk = vec![0u8; n];
             reader.read_exact(&mut chunk).map_err(io)?;
             body.extend_from_slice(&chunk);
@@ -774,10 +787,16 @@ fn exchange<S: Read + Write>(mut stream: S, host: &str, port: u16, method: &str,
             reader.read_line(&mut crlf).map_err(io)?;
         }
     } else if let Some(n) = length {
+        if n > max {
+            return Err(too_large());
+        }
         body = vec![0u8; n];
         reader.read_exact(&mut body).map_err(|_| Err("IncompleteRead".to_string()))?;
     } else {
-        let _ = reader.read_to_end(&mut body);
+        let _ = reader.by_ref().take(max.saturating_add(1) as u64).read_to_end(&mut body);
+        if body.len() > max {
+            return Err(too_large());
+        }
     }
     Ok(Response { status, body })
 }
@@ -1209,6 +1228,37 @@ mod tests {
 
     fn now() -> i64 {
         pj::now() as i64
+    }
+
+    /// A server's answer as bytes to read; what the client writes is dropped.
+    struct Canned(std::io::Cursor<Vec<u8>>);
+
+    impl Read for Canned {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.0.read(buf)
+        }
+    }
+
+    impl Write for Canned {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A bounded exchange refuses an answer over `max` before it is buffered, whatever its framing.
+    #[test]
+    fn exchange_refuses_answers_over_max() {
+        let run = |answer: &str, max: usize| exchange(Canned(std::io::Cursor::new(answer.as_bytes().to_vec())), "h", 443, "GET", "/", &[], None, max).map(|r| r.body);
+        let too = Err(Err("ResponseTooLarge".to_string()));
+        assert_eq!(run("HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\n", 8), too);
+        assert_eq!(run("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabcde\r\n5\r\nfghij\r\n0\r\n\r\n", 8), too);
+        assert_eq!(run("HTTP/1.1 200 OK\r\n\r\n0123456789", 8), too);
+        assert_eq!(run("HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n01234567", 8), Ok(b"01234567".to_vec()));
+        assert_eq!(run("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n", 8), Ok(b"abcdefgh".to_vec()));
+        assert_eq!(run("HTTP/1.1 200 OK\r\n\r\n01234567", 8), Ok(b"01234567".to_vec()));
     }
 
     /// AC-2b-D 8.5 (H5) and 16.1 d-relay: the console's list, with a CRL number and an authority key identifier, is

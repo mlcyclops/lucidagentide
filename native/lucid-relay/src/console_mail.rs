@@ -1697,6 +1697,48 @@ impl Mailer {
         rx.recv_timeout(SESSION + Duration::from_secs(10)).unwrap_or_else(|_| Err("the mail server took too long".into()))
     }
 
+    /// Blocking send of a subject and body written whole by the caller (the Meet account emails keep the words the
+    /// Meet console sent, no 8.4 template or footer) through the configuration in force. Err as `send_now`.
+    pub fn send_text_now(&self, kind: &str, to: &str, subject: &str, body: &str) -> Result<(), String> {
+        let cfg = self.config();
+        let args = [("subject", subject.to_owned()), ("body", body.to_owned())];
+        let result = self.send_text_inner(&cfg, kind, to, subject, body, &args);
+        match &result {
+            Ok(()) => self.inner.delivered(),
+            Err(reason) => {
+                let fields = Fields::new().with("kind", kind).with("attempt", 1u64).with("final", true).with("direct", true).with("reason", reason.as_str());
+                self.inner.logger.security("console.mail-failed", &fields, Level::Warn);
+            }
+        }
+        result
+    }
+
+    fn send_text_inner(&self, cfg: &MailConfig, kind: &str, to: &str, subject: &str, body: &str, args: &[(&str, String)]) -> Result<(), String> {
+        #[cfg(test)]
+        {
+            let mut c = self.inner.capture.lock();
+            if let Some(reason) = c.fail_next.take() {
+                return Err(reason);
+            }
+            if c.on {
+                c.mails.push((kind.to_owned(), to.to_owned(), owned_args(args)));
+                return Ok(());
+            }
+        }
+        let _ = (kind, args);
+        if cfg.mode == Mode::Off {
+            return Err("email is off".into());
+        }
+        let to = parse_mailbox(to).map_err(|_| "the address cannot be mailed".to_string())?;
+        let handle = self.handle.as_ref().ok_or_else(|| "the mail sender is not running".to_string())?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let work = deliver(cfg.clone(), self.inner.ehlo.clone(), to, subject.to_owned(), body.to_owned());
+        handle.spawn(async move {
+            let _ = tx.send(work.await);
+        });
+        rx.recv_timeout(SESSION + Duration::from_secs(10)).unwrap_or_else(|_| Err("the mail server took too long".into()))
+    }
+
     /// `mail-failing`: 3 failed tries in a row (or `mark_failing`), until the next mail goes through.
     pub fn failing(&self) -> bool {
         self.inner.health.lock().failing

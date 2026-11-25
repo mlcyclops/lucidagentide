@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#04060a">
+<title>Lucid Meet</title>
+<link rel="stylesheet" href="/meet/static/account.css">
+<script src="/meet/static/account.js" defer></script>
+</head>
+<body>
+<!-- The Lucid emblem, as on the console and the Lucid Meeting Hub website -->
+<svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="prism-spec" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4fe08a"/><stop offset="0.5" stop-color="#54d6e6"/><stop offset="1" stop-color="#c86be0"/></linearGradient>
+    <g id="emblem"><path d="M 17 17 H 35 V 83 H 17 Z" fill="#eef3f7"/><path d="M 35 65 H 83 V 83 H 35 Z" fill="url(#prism-spec)"/></g>
+  </defs>
+</svg>
+
+<main id="main" class="card">
+  <header class="head">
+    <svg class="mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><use href="#emblem"/></svg>
+    <p class="eyebrow">Lucid Meet</p>
+    <h1 id="title" tabindex="-1">Lucid Meet</h1>
+  </header>
+
+  <p id="message" class="message" role="alert" hidden></p>
+  <p id="loading" class="lede">Loading...</p>
+
+  <!-- Accept an invite: choose a username and a password (or a new password) -->
+  <section id="join" hidden>
+    <p id="join-who" class="lede"></p>
+    <form id="join-form" class="stack" novalidate>
+      <label for="join-username">Username</label>
+      <input id="join-username" type="text" maxlength="32" required autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false" aria-describedby="join-username-hint">
+      <p id="join-username-hint" class="hint">3 to 32 characters: lower-case letters, digits, dots, dashes or underscores, starting with a letter or a digit.</p>
+
+      <label for="join-password">Password</label>
+      <input id="join-password" type="password" minlength="12" maxlength="256" required
+             autocomplete="new-password" aria-describedby="join-password-hint">
+      <p id="join-password-hint" class="hint">At least 12 characters. Not your username or your email address, and not a common password. A short sentence you remember works well.</p>
+
+      <label for="join-confirm">Type the password again</label>
+      <input id="join-confirm" type="password" maxlength="256" required autocomplete="new-password">
+
+      <label class="check"><input id="join-show" type="checkbox"> Show the password</label>
+      <button id="join-submit" type="submit" class="primary">Create my account</button>
+    </form>
+  </section>
+
+  <section id="join-done" hidden>
+    <p id="done-lede" class="lede"></p>
+    <ol class="steps">
+      <li>Install Lucid Meet. Check your invitation email for the download links (Windows and Mac) and for the TestFlight invitation (iPhone).</li>
+      <li>Open Lucid Meet and choose <strong>Sign in</strong>.</li>
+      <li>Type the organization <code id="done-org"></code>, your username <code id="done-username"></code> and your password.</li>
+    </ol>
+    <a id="done-open" class="button primary" href="/meet/signin">Open Lucid Meet</a>
+    <p class="hint">The button works once Lucid Meet is installed on this device.</p>
+    <p class="hint">Your Lucid Meet has no Sign in button yet? <a href="/meet/signin">Sign in here</a> and paste the code it shows into Lucid Meet (Join with an invite code).</p>
+  </section>
+
+  <!-- Sign in on the web: a code for an app without its own Sign in -->
+  <section id="signin" hidden>
+    <p class="lede">Sign in to get a code that sets up Lucid Meet on one of your devices.</p>
+    <form id="signin-form" class="stack">
+      <label for="signin-username">Username or email</label>
+      <input id="signin-username" type="text" maxlength="254" required autocomplete="username"
+             autocapitalize="none" autocorrect="off" spellcheck="false">
+
+      <label for="signin-password">Password</label>
+      <input id="signin-password" type="password" maxlength="256" required autocomplete="current-password">
+
+      <fieldset class="choice">
+        <legend>The code is for</legend>
+        <label class="check"><input type="radio" name="platform" value="computer" checked> My computer (Windows or Mac)</label>
+        <label class="check"><input type="radio" name="platform" value="iphone"> My iPhone</label>
+      </fieldset>
+      <button id="signin-submit" type="submit" class="primary">Sign in</button>
+    </form>
+  </section>
+
+  <section id="signin-done" hidden>
+    <p id="code-lede" class="lede"></p>
+    <label for="code">Your code</label>
+    <textarea id="code" rows="6" readonly spellcheck="false"></textarea>
+    <button id="copy" type="button" class="primary">Copy the code</button>
+    <ol class="steps">
+      <li>Open Lucid Meet on <span id="code-device">your device</span>.</li>
+      <li>Choose <strong>Join with an invite code</strong>.</li>
+      <li>Paste the code and continue.</li>
+    </ol>
+    <p id="code-approval" class="note"></p>
+    <p id="code-expires" class="hint"></p>
+    <button id="again" type="button">Get a code for another device</button>
+  </section>
+</main>
+</body>
+</html>

@@ -1026,6 +1026,60 @@
       caState: { ok: "OK", lost: "Key cannot be opened", unreadable: "Records do not read back" }, confirms: "Confirms", disagrees: "Disagrees",
       certPem: "The ended certificate (PEM)", dismiss: "Dismiss", saveDays: "Save", open: "Open",
     },
+    // ADR-0343: the Lucid Meet password accounts this console keeps (moved from the old Meet console, ADR-0347).
+    accounts: {
+      title: "Lucid Meet accounts",
+      signIn: "Password sign-in",
+      org: "Organization people enter",
+      howSignIn: "In Lucid Meet, people choose Sign in, enter the organization <org>, their username and password.",
+      relay: "Relay that approves devices",
+      relayNone: "Not set up; new devices wait",
+      testflight: "TestFlight invitations",
+      always: "Always approved",
+      approval: "New devices",
+      queue: "Approve each new device",
+      auto: "Approve automatically",
+      queueNote: "A device signed in with a password waits until an admin approves it.",
+      autoNote: "A device signed in with a password is approved at once.",
+      save: "Save",
+      off: "Password sign-in is not set up on this console.",
+      offHow: "An operator imports the accounts and invites of the old Meet console on this console's host, with the console stopped:",
+      offCheck: "To check what the console holds:",
+      importCmd: "lucid-relay console meet-accounts import --state-dir <console state dir> --old-state <state.json> --old-config <console.json> --relay-cert <pem> --relay-key <pem> --relay-ca <pem> [--asc-key <p8>]",
+      statusCmd: "lucid-relay console meet-accounts status --state-dir <console state dir>",
+      accounts: "Accounts",
+      invites: "Open invites",
+      cols: { name: "Name", username: "Username", email: "Email", last: "Last sign-in", state: "State", by: "Created by", sent: "Sent", expires: "Expires", kind: "Kind" },
+      active: "Active",
+      locked: "Locked",
+      lockedUntil: "Locked until <time>",
+      kindInvite: "Invite",
+      kindReset: "Reset",
+      inviteBtn: "Invite to Lucid Meet",
+      resetBtn: "Reset password",
+      unlock: "Unlock",
+      remove: "Remove",
+      inviteDlg: { title: "Invite a person to Lucid Meet?", body: ["They get a link to choose a username and password. The link works once."], button: ["Invite"] },
+      resetDlg: { title: "Reset the password of <name>?", body: ["They get a link to set a new password. Their username stays <username>, and the old password works until they set the new one."], button: ["Reset password"] },
+      removeDlg: { title: "Remove the account <name>?", body: ["They can no longer sign in with it. Devices it set up keep working until you revoke them."], button: ["Remove"] },
+      unlocked: "<name> can sign in again.",
+      saved: "New devices: <mode>.",
+      result: { invite: "Invite for <name>", reset: "Password reset for <name>" },
+      mailSent: "The email went to <email>.",
+      mailUnset: "This console has no email set up, so nothing was sent. Send this email to <email> yourself.",
+      mailFailed: "The email to <email> could not be sent. Send this email yourself.",
+      draft: "Email text",
+      to: "To",
+      subject: "Subject",
+      copyDraft: "Copy the email",
+      tf: {
+        added: "TestFlight: Apple emails <email> an invitation to install Lucid Meet.",
+        exists: "TestFlight: <email> is already a tester.",
+        off: "TestFlight is not set up on this console. Add <email> to TestFlight yourself.",
+        failed: "TestFlight could not add <email> (<message>). Add them to TestFlight yourself.",
+      },
+      expires: "The link works once, until <time>.",
+    },
   };
 
   const PAGES = {
@@ -3407,6 +3461,137 @@
     });
   }
 
+  // ---- Lucid Meet password accounts (ADR-0343) ----
+  // The accounts are the fleet console's own, not a relay's: every call is direct, never through the relay proxy, and
+  // the section shows above the relay picker whatever the relay page does.
+  const MA = FMSG.accounts;
+  const accountName = (x) => x.name || x.username || x.email;
+  const meetAccountsApi = (path, body) => api("POST", "meet/accounts/" + path, body, { direct: true });
+  function withMeetAccounts(fn) {
+    return async (c) => {
+      const [kids, acc] = await Promise.all([fn(c), meetAccounts()]);
+      const list = [].concat(kids).filter(Boolean);
+      list.splice(1, 0, acc);
+      return list;
+    };
+  }
+  // After a change the page reloads; focus goes to what the change produced, else to the section's heading.
+  function accountsRefresh(result) {
+    return render({ keepMessages: true }).then(() => {
+      const out = $("meet-accounts-out");
+      if (out && result) out.replaceChildren(...result());
+      const h = $("meet-accounts-result-h") || $("meet-accounts-h");
+      if (h) h.focus();
+    });
+  }
+  async function meetAccounts() {
+    let d;
+    try {
+      d = await api("GET", "meet/accounts", null, { direct: true });
+    } catch (e) {
+      if (e && e.status === 401) throw e;
+      if (e && e.status === 403) return null;
+      return section("meet-accounts-h", MA.title, el("p", { class: "dlg-error", role: "alert" }, clean(e && e.message ? e.message : String(e))));
+    }
+    if (!d.enabled) {
+      return section("meet-accounts-h", MA.title, el("p", null, MA.off), el("p", null, MA.offHow, " ", el("code", { class: "cmd" }, MA.importCmd)),
+        el("p", null, MA.offCheck, " ", el("code", { class: "cmd" }, MA.statusCmd)));
+    }
+    const admin = isAdmin();
+    const relay = d.relay || {};
+    const always = d.autoApprove || [];
+    const auto = d.approval === "auto";
+    const modeWord = (m) => (m === "auto" ? MA.auto : MA.queue);
+    let approval = null;
+    if (admin) {
+      const group = uid("appr");
+      const radio = (value, label, on) => {
+        const id = uid("appr");
+        const r = el("input", { type: "radio", id, name: group, value, checked: on ? true : null });
+        return [r, el("label", { class: "inline", for: id }, r, label)];
+      };
+      const queueR = radio("queue", MA.queue, !auto);
+      const autoR = radio("auto", MA.auto, auto);
+      approval = el("div", null, el("fieldset", { class: "choice" }, el("legend", null, MA.approval), queueR[1], autoR[1]),
+        el("p", { class: "note" }, MA.queueNote, " ", MA.autoNote),
+        btn(MA.save, async () => {
+          const r = await meetAccountsApi("approval", { mode: autoR[0].checked ? "auto" : "queue" });
+          say(fillText(MA.saved, { mode: modeWord(r.approval) }));
+          await accountsRefresh(null);
+        }));
+    }
+    const stateOf = (x) => (!x.locked ? MA.active : x.locked_until ? fillText(MA.lockedUntil, { time: whenAny(x.locked_until) }) : MA.locked);
+    return section("meet-accounts-h", MA.title,
+      el("p", null, fill(MA.howSignIn, { org: code(d.org) })),
+      pairs([[MA.signIn, onOff(true)], [MA.org, code(d.org)], [MA.relay, relay.configured ? relay.name : MA.relayNone],
+        [MA.testflight, onOff(d.testflight && d.testflight.on)], [MA.always, always.length ? always.join(", ") : undefined],
+        [MA.approval, admin ? undefined : modeWord(d.approval)]]),
+      approval,
+      admin ? el("div", { class: "page-head" }, btn(MA.inviteBtn, inviteAccount, "primary")) : null,
+      el("div", { id: "meet-accounts-out" }),
+      dataTable({
+        caption: MA.accounts, rows: d.accounts || [], empty: MSG.noneYet, name: accountName, text: (x) => [x.name, x.username, x.email].join(" "),
+        cols: [{ key: "name", label: MA.cols.name, cell: (x) => u(x.name || ""), sort: accountName }, { key: "username", label: MA.cols.username, cell: (x) => code(x.username) },
+          { key: "email", label: MA.cols.email }, { key: "last_signin", label: MA.cols.last, cell: (x) => whenAny(x.last_signin) },
+          { key: "locked", label: MA.cols.state, cell: (x) => el("span", { class: "st st-" + (x.locked ? "bad" : "ok") }, stateOf(x)), sort: stateOf },
+          { key: "by", label: MA.cols.by }],
+        actions: admin ? (x) => [{ label: MA.resetBtn, run: () => resetAccount(x) },
+          x.locked ? { label: MA.unlock, run: async () => {
+            await meetAccountsApi("unlock", { username: x.username });
+            say(fillText(MA.unlocked, { name: accountName(x) }));
+            await accountsRefresh(null);
+          } } : null,
+          { label: MA.remove, run: () => removeAccount(x) }] : null,
+      }),
+      dataTable({
+        caption: MA.invites, rows: d.invites || [], empty: MSG.noneYet, name: (i) => i.name || i.email,
+        cols: [{ key: "name", label: MA.cols.name, cell: (i) => u(i.name || "") }, { key: "email", label: MA.cols.email },
+          { key: "created", label: MA.cols.sent, cell: (i) => whenAny(i.created) }, { key: "expires", label: MA.cols.expires, cell: (i) => whenAny(i.expires) },
+          { key: "reset", label: MA.cols.kind, cell: (i) => (i.reset ? MA.kindReset : MA.kindInvite), sort: (i) => (i.reset ? MA.kindReset : MA.kindInvite) }],
+      }));
+  }
+  function inviteAccount() {
+    confirmDialog({
+      spec: MA.inviteDlg, vals: {}, plain: true,
+      fields: [{ kind: "text", key: "name", label: MA.cols.name, maxlength: "80", required: true },
+        { kind: "text", type: "email", key: "email", label: MA.cols.email, maxlength: "254", required: true }],
+      check: (v) => (!v.name ? MSG.need.personName : !/^[^@\s]+@[^@\s]+$/.test(v.email) ? MSG.emailNeeded : ""),
+      run: (v) => meetAccountsApi("invite", { name: v.name, email: v.email }),
+      done: (r) => accountsRefresh(() => accountResult(r, "invite")),
+    });
+  }
+  function resetAccount(x) {
+    const name = accountName(x);
+    confirmDialog({
+      spec: MA.resetDlg, vals: { name, username: x.username }, name, id: x.username, plain: true,
+      run: () => meetAccountsApi("reset", { username: x.username }),
+      done: (r) => accountsRefresh(() => accountResult(r, "reset")),
+    });
+  }
+  function removeAccount(x) {
+    const name = accountName(x);
+    confirmDialog({
+      spec: MA.removeDlg, vals: { name }, name, id: x.username, danger: true, plain: true,
+      run: () => meetAccountsApi("remove", { username: x.username }),
+      done: () => accountsRefresh(null),
+    });
+  }
+  // What an invite or reset did: the email sent, or its text to send by hand; TestFlight for an invite; the link's end.
+  function accountResult(r, kind) {
+    if (!r) return [];
+    const draft = r.mail !== "sent" ? r.email_draft : null;
+    const body = draft ? cleanLines(draft.body || "") : "";
+    const mail = r.mail === "sent" ? MA.mailSent : r.mail === "failed" ? MA.mailFailed : MA.mailUnset;
+    const tf = kind === "invite" && r.testflight ? MA.tf[r.testflight.status] : null;
+    return [el("div", { class: "subpanel" },
+      el("h4", { id: "meet-accounts-result-h", tabindex: "-1" }, fill(MA.result[kind], { name: r.name || r.username || r.email })),
+      el("p", null, fill(mail, { email: r.email })),
+      draft ? [pairs([[MA.to, draft.to], [MA.subject, draft.subject]]), el("p", { class: "note" }, MA.draft), el("pre", { class: "request-text" }, body),
+        copyButton(body, MA.copyDraft)] : null,
+      tf ? el("p", null, fill(tf, { email: r.email, message: r.testflight.message || "" })) : null,
+      r.expires ? el("p", null, fill(MA.expires, { time: whenAny(r.expires) })) : null)];
+  }
+
   // Seats (R4-2, 7.4): admins and user managers.
   pages.meet_seats = async (c) => {
     const [d, clockNow, lic] = await Promise.all([api("GET", "meet/seats"), isAdmin() ? api("GET", "meet/clock").catch(() => null) : null, meetLicense()]);
@@ -5077,6 +5262,7 @@
     const href = a === "relays" && (!b || /^r_/.test(b)) ? "#/relays" : "#/" + a + (b ? "/" + b : "");
     if (!canOpen(href)) return noPage(routeTitle({ parts: [a, b].filter(Boolean) }), FMSG.notAllowed);
     if (a === "people") return pages.fleetPeople;
+    if (a === "meet" && b === "people") return withMeetAccounts(await fleetProduct(a, b, r));
     if (a === "spokes" || a === "meet") return fleetProduct(a, b || "relays", r);
     if (a === "relays") {
       if (!b) return pages.fleetRelays;

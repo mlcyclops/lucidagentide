@@ -931,6 +931,8 @@ pub struct Console {
     headless: bool,
     /// AC-2a: the fleet section of a fleet console.
     fleet: OnceLock<Arc<crate::console_fleet::Fleet>>,
+    /// The Meet password-account service (fleet console only).
+    pub(crate) accounts: OnceLock<Arc<crate::console_accounts::Accounts>>,
     /// R42-3: `license-reminders.json`, read at the first check (None until then).
     reminders: Mutex<Option<crate::license_reminders::Book>>,
 }
@@ -1041,6 +1043,7 @@ pub fn open_fleet(cfg: crate::console_fleet::ServeConfig, logger: Logger, seal_i
     let console = Console::open_with(ccfg, logger.clone(), ring, ConsoleKind::Fleet, false, seal_id)?;
     let fleet = crate::console_fleet::Fleet::open(&console, cfg.fleet.clone())?;
     let _ = fleet_cell.set(Arc::downgrade(&fleet));
+    crate::console_accounts::attach(&console);
     Ok((logger, console))
 }
 
@@ -1124,6 +1127,7 @@ impl Console {
             kind,
             headless,
             fleet: OnceLock::new(),
+            accounts: OnceLock::new(),
             reminders: Mutex::new(None),
         });
         c.open_secrets(t);
@@ -1305,6 +1309,11 @@ impl Console {
     /// The fleet section of a fleet console (F7, F15).
     pub fn fleet(&self) -> Option<Arc<crate::console_fleet::Fleet>> {
         self.fleet.get().cloned()
+    }
+
+    /// The Meet password-account service of a fleet console (None until `open_fleet` attached it).
+    pub fn accounts(&self) -> Option<Arc<crate::console_accounts::Accounts>> {
+        self.accounts.get().cloned()
     }
 
     /// Attach the fleet section: as `fleet()` and as the console's product section (I9).
