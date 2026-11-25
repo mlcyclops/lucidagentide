@@ -44,7 +44,7 @@ pub const RELAY_URI: &str = "urn:lucid-meet:relay";
 pub const RELAY_NOT_PERSON: &str = "relay certificates are not people";
 pub const LEGACY_PREFIX: &str = "legacy-";
 pub const CLIENT_FIELD_MAX: usize = 40;
-pub const GATED_APPS: [&str; 2] = ["hub", "ios"];
+pub const GATED_APPS: [&str; 3] = ["hub", "ios", "android"];
 pub const UNGATED_APPS: [&str; 2] = ["bot", "console"];
 pub const VERSION_EXEMPT: [&str; 2] = ["console@meet.emertins.com", "testbot@emertins.com"];
 pub const SERVER_VERSION: &str = "LucidMeetRelay/5";
@@ -314,7 +314,8 @@ pub struct Settings {
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
-/// sandbox, voip}`. `voip`: calls ring CallKit iPhones through PushKit on `<topic>.voip` (NT-1 section 3.1).
+/// sandbox, voip, fcm}`. `voip`: calls ring CallKit iPhones through PushKit on `<topic>.voip` (NT-1 section 3.1).
+/// The APNs keys and `fcm` are each optional: push runs with APNs, FCM or both.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PushSettings {
     pub enabled: bool,
@@ -324,12 +325,28 @@ pub struct PushSettings {
     pub topic: String,
     pub sandbox: bool,
     pub voip: bool,
+    pub fcm: Option<FcmSettings>,
+}
+
+impl PushSettings {
+    /// APNs is configured: team_id, key_id, key_file and topic are all set.
+    pub fn apns(&self) -> bool {
+        [&self.team_id, &self.key_id, &self.key_file, &self.topic].iter().all(|t| !t.is_empty())
+    }
 }
 
 impl Default for PushSettings {
     fn default() -> PushSettings {
-        PushSettings { enabled: false, team_id: String::new(), key_id: String::new(), key_file: String::new(), topic: String::new(), sandbox: true, voip: false }
+        PushSettings { enabled: false, team_id: String::new(), key_id: String::new(), key_file: String::new(), topic: String::new(), sandbox: true, voip: false, fcm: None }
     }
+}
+
+/// relay.json `push.fcm` (NT-1 revision "Android (FCM)"): `{project_id, credentials_file}`, the Firebase project and
+/// its service account JSON (mode 600, never logged).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FcmSettings {
+    pub project_id: String,
+    pub credentials_file: String,
 }
 
 const SETTINGS_FIELDS: [&str; 72] = [
@@ -481,11 +498,11 @@ fn parity_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
     Ok(())
 }
 
-/// Parity wave B settings (contract PB-1 section 5): `enclave` (true or false) and `push` (only its six keys, the
-/// switches true or false and the rest text; on, it needs team_id, key_id, key_file and topic). Push never runs on
-/// an enclave relay (ADR-0174: never for T3/T4).
+/// Parity wave B settings (contract PB-1 section 5): `enclave` (true or false) and `push` (only its eight keys, the
+/// switches true or false, `fcm` an object and the rest text; on, it needs team_id, key_id, key_file and topic for
+/// APNs, `fcm` for Android, or both). Push never runs on an enclave relay (ADR-0174: never for T3/T4).
 fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
-    const SHAPE: &str = "push must be {enabled, team_id, key_id, key_file, topic, sandbox, voip}";
+    const SHAPE: &str = "push must be {enabled, team_id, key_id, key_file, topic, sandbox, voip, fcm}";
     match raw.get("notify_previews") {
         None => {}
         Some(Value::Bool(b)) => s.notify_previews = *b,
@@ -521,11 +538,16 @@ fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
                 ("key_id", Value::String(t)) => p.key_id = t.clone(),
                 ("key_file", Value::String(t)) => p.key_file = t.clone(),
                 ("topic", Value::String(t)) => p.topic = t.clone(),
+                ("fcm", v) => p.fcm = Some(fcm_settings(v)?),
                 _ => return Err(SHAPE.into()),
             }
         }
-        if p.enabled && [&p.team_id, &p.key_id, &p.key_file, &p.topic].iter().any(|t| t.is_empty()) {
+        let apns_any = [&p.team_id, &p.key_id, &p.key_file, &p.topic].iter().any(|t| !t.is_empty());
+        if p.enabled && !p.apns() && apns_any {
             return Err("push needs team_id, key_id, key_file and topic".into());
+        }
+        if p.enabled && !apns_any && p.fcm.is_none() {
+            return Err("push needs team_id, key_id, key_file and topic (APNs), fcm (Android), or both".into());
         }
         if p.voip && p.topic.ends_with(".voip") {
             return Err("push.topic is the app's bundle id; the relay adds .voip for calls".into());
@@ -535,6 +557,26 @@ fn push_settings(raw: &Obj, s: &mut Settings) -> Result<(), String> {
         return Err("push cannot be enabled when enclave is true".into());
     }
     Ok(())
+}
+
+/// `push.fcm`: exactly `{project_id, credentials_file}`, both set; the project id as Firebase makes them (6 to 30
+/// characters, a lower-case letter first, then lower-case letters, digits and hyphens).
+fn fcm_settings(v: &Value) -> Result<FcmSettings, String> {
+    const SHAPE: &str = "push.fcm must be {project_id, credentials_file}";
+    let Value::Object(o) = v else { return Err(SHAPE.into()) };
+    let text = |k: &str| match o.get(k) {
+        Some(Value::String(t)) if !t.is_empty() => Ok(t.clone()),
+        _ => Err(SHAPE.to_string()),
+    };
+    if o.len() != 2 {
+        return Err(SHAPE.into());
+    }
+    let (project_id, credentials_file) = (text("project_id")?, text("credentials_file")?);
+    let b = project_id.as_bytes();
+    if !(6..=30).contains(&b.len()) || !b[0].is_ascii_lowercase() || !b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-') {
+        return Err("push.fcm.project_id must be a Firebase project id (6 to 30 lower-case letters, digits and hyphens)".into());
+    }
+    Ok(FcmSettings { project_id, credentials_file })
 }
 
 impl Settings {
@@ -1117,18 +1159,18 @@ pub fn version_ok(t: &str) -> bool {
     version_like(t)
 }
 
-/// _minimum: `{hub, ios}` (each optional); {} when absent; Err names what is wrong.
+/// _minimum: `{hub, ios, android}` (each optional); {} when absent; Err names what is wrong.
 pub fn minimum(entry: Option<&Value>, what: &str) -> Result<Obj, String> {
     let o = match entry {
         None | Some(Value::Null) => return Ok(Obj::new()),
         Some(Value::Object(o)) if o.is_empty() => return Ok(Obj::new()),
         Some(Value::Object(o)) => o,
-        Some(_) => return Err(format!("{what} must be {{hub, ios}} versions, for example {{\"hub\": \"0.93.0\"}}")),
+        Some(_) => return Err(format!("{what} must be {{hub, ios, android}} versions, for example {{\"hub\": \"0.93.0\"}}")),
     };
     let mut out = Obj::new();
     for (app, value) in o {
         if !GATED_APPS.contains(&app.as_str()) {
-            return Err(format!("{what} may only name hub and ios"));
+            return Err(format!("{what} may only name hub, ios and android"));
         }
         if matches!(value, Value::Null) || value.as_str() == Some("") {
             continue;
@@ -1147,6 +1189,9 @@ pub fn update_message(info: &Obj) -> String {
     let (m, c) = (pj::py_str(info.get("minimum").unwrap_or(&Value::Null)), pj::py_str(info.get("current").unwrap_or(&Value::Null)));
     if info.get("app").and_then(Value::as_str) == Some("ios") {
         return format!("Lucid Meet {m} or newer is required (this one is {c}). Update it in TestFlight.");
+    }
+    if info.get("app").and_then(Value::as_str) == Some("android") {
+        return format!("Lucid Meet {m} or newer is required (this one is {c}). Update it from Google Play or your tester link.");
     }
     format!("Lucid Meeting Hub {m} or newer is required (this one is {c}). Update from the banner, or download it again from your invite email.")
 }
@@ -2403,7 +2448,7 @@ mod tests {
         assert!(s.push.sandbox && !s.push.enabled);
         let on = json!({"enabled": true, "team_id": "T", "key_id": "K", "key_file": "/k.p8", "topic": "com.x", "sandbox": false});
         let s = check(json!({"push": on})).unwrap();
-        assert_eq!(s.push, PushSettings { enabled: true, team_id: "T".into(), key_id: "K".into(), key_file: "/k.p8".into(), topic: "com.x".into(), sandbox: false, voip: false });
+        assert_eq!(s.push, PushSettings { enabled: true, team_id: "T".into(), key_id: "K".into(), key_file: "/k.p8".into(), topic: "com.x".into(), sandbox: false, voip: false, fcm: None });
         // NT-1 section 3.1: voip, with the app's bundle id as the topic; notify_previews
         let mut voip = on.clone();
         voip["voip"] = json!(true);
@@ -2419,13 +2464,35 @@ mod tests {
         assert!(check(json!({"push": {"enabled": false}, "enclave": true})).is_ok());
         assert!(check(json!({"push": {"topic": "com.x"}})).is_ok());
         for wrong in [json!([]), json!(null), json!({"enabled": 1}), json!({"sandbox": "yes"}), json!({"voip": "yes"}), json!({"topic": 1}), json!({"key_file": null}), json!({"url": "x"})] {
-            assert_eq!(check(json!({"push": wrong})).unwrap_err(), "push must be {enabled, team_id, key_id, key_file, topic, sandbox, voip}");
+            assert_eq!(check(json!({"push": wrong})).unwrap_err(), "push must be {enabled, team_id, key_id, key_file, topic, sandbox, voip, fcm}");
         }
         for missing in ["team_id", "key_id", "key_file", "topic"] {
             let mut p = on.clone();
             p[missing] = json!("");
             assert_eq!(check(json!({"push": p})).unwrap_err(), "push needs team_id, key_id, key_file and topic");
+            // a partly set APNs is refused even with FCM set
+            p["fcm"] = json!({"project_id": "lucid-meet-5c92c", "credentials_file": "/etc/lucid-relay/fcm.json"});
+            assert_eq!(check(json!({"push": p})).unwrap_err(), "push needs team_id, key_id, key_file and topic");
         }
+        // Android (FCM): alone, or with APNs
+        let fcm = json!({"project_id": "lucid-meet-5c92c", "credentials_file": "/etc/lucid-relay/fcm.json"});
+        let want = FcmSettings { project_id: "lucid-meet-5c92c".into(), credentials_file: "/etc/lucid-relay/fcm.json".into() };
+        let alone = check(json!({"push": {"enabled": true, "fcm": fcm}})).unwrap().push;
+        assert_eq!((alone.fcm.clone(), alone.apns()), (Some(want.clone()), false));
+        let mut both = on.clone();
+        both["fcm"] = fcm.clone();
+        let both = check(json!({"push": both})).unwrap().push;
+        assert_eq!((both.fcm.clone(), both.apns()), (Some(want), true));
+        assert!(check(json!({"push": on})).unwrap().push.apns());
+        assert_eq!(check(json!({"push": {"enabled": true}})).unwrap_err(), "push needs team_id, key_id, key_file and topic (APNs), fcm (Android), or both");
+        assert!(check(json!({"push": {"enabled": false}})).is_ok());
+        for wrong in [json!(null), json!("x"), json!({}), json!({"project_id": "lucid-meet-5c92c"}), json!({"project_id": "lucid-meet-5c92c", "credentials_file": ""}), json!({"project_id": "lucid-meet-5c92c", "credentials_file": 1}), json!({"project_id": "lucid-meet-5c92c", "credentials_file": "/f", "key": "x"})] {
+            assert_eq!(check(json!({"push": {"fcm": wrong}})).unwrap_err(), "push.fcm must be {project_id, credentials_file}");
+        }
+        for wrong in ["Lucid-meet", "1ucid-meet", "short", "lucid_meet_x", "a".repeat(31).as_str()] {
+            assert_eq!(check(json!({"push": {"fcm": {"project_id": wrong, "credentials_file": "/f"}}})).unwrap_err(), "push.fcm.project_id must be a Firebase project id (6 to 30 lower-case letters, digits and hyphens)");
+        }
+        assert_eq!(check(json!({"push": {"enabled": true, "fcm": fcm}, "enclave": true})).unwrap_err(), "push cannot be enabled when enclave is true");
         for wrong in [json!(1), json!("true"), Value::Null] {
             assert_eq!(check(json!({"enclave": wrong})).unwrap_err(), "enclave must be true or false");
         }
@@ -2435,7 +2502,10 @@ mod tests {
     #[test]
     fn minimum_and_update_message() {
         assert_eq!(minimum(Some(&json!({"hub": "0.93.0", "ios": ""})), "min_client").unwrap().len(), 1);
-        assert_eq!(minimum(Some(&json!({"mac": "1"})), "min_client").unwrap_err(), "min_client may only name hub and ios");
+        assert_eq!(minimum(Some(&json!({"mac": "1"})), "min_client").unwrap_err(), "min_client may only name hub, ios and android");
+        assert_eq!(minimum(Some(&json!({"android": "0.99.0"})), "minimum").unwrap(), json!({"android": "0.99.0"}).as_object().unwrap().clone());
+        let android = json!({"app": "android", "current": "0.98.0", "minimum": "0.99.0"});
+        assert_eq!(update_message(android.as_object().unwrap()), "Lucid Meet 0.99.0 or newer is required (this one is 0.98.0). Update it from Google Play or your tester link.");
         assert_eq!(minimum(Some(&json!({"hub": "x"})), "minimum").unwrap_err(), "minimum.hub must look like 0.92.0");
         let info = json!({"app": "hub", "current": "0.92.0", "minimum": "0.93.0"});
         assert_eq!(

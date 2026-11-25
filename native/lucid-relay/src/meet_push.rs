@@ -8,7 +8,10 @@
 // serial, seal, sk, seal_prev, sk_prev, voip, callkit}}} (the seal keys are guarded like push.secret) and the invite
 // records' `kind`, `ring`, `settled`, `settled_ts`; the thread-id secret is state_dir/push.secret (32 random bytes,
 // mode 0600; random per process without a state folder). The sender is HTTP/2 over rustls (hyper's http2 client) with
-// an ES256 JWT signed on AWS-LC, on its own thread.
+// an ES256 JWT signed on AWS-LC, on its own thread. Android devices (NT-1 revision "Android (FCM)") register with
+// `platform: "android"` and an FCM token (their rows add `platform`; a row without it is an iPhone's) and get the
+// same sealed pushes as FCM data messages through the FCM sender (HTTP v1, an OAuth 2.0 token from an RS256
+// service-account assertion), on its own thread.
 
 use super::*;
 use crate::meet_org_policy as op;
@@ -18,7 +21,13 @@ use aws_lc_rs::{aead, agreement, hkdf};
 const RATE_S: f64 = 30.0;
 const TOKEN_MIN: usize = 64;
 const TOKEN_MAX: usize = 200;
+/// An FCM registration token's length in characters (letters, digits, `:`, `_`, `-`).
+const FCM_TOKEN_MIN: usize = 100;
+const FCM_TOKEN_MAX: usize = 4096;
 const ENVS: [&str; 2] = ["sandbox", "production"];
+/// Registration `platform`: an iPhone (APNs, the default) or an Android device (FCM).
+const IOS: &str = "ios";
+const ANDROID: &str = "android";
 const SECRET_FILE: &str = "push.secret";
 /// The per-person key: HMAC-SHA256(secret, KEY_LABEL + principal).
 const KEY_LABEL: &str = "lucid-meet-push\n";
@@ -60,6 +69,10 @@ const BAD_SEAL: &str = "seal must be a P-256 public key (base64 of 65 bytes)";
 const BAD_SK: &str = "sk must name the seal key";
 const BAD_VOIP: &str = "voip_token must be 64 to 200 hex characters";
 const BAD_CALLKIT: &str = "callkit must be true or false";
+const BAD_PLATFORM: &str = "platform must be ios or android";
+const BAD_FCM_TOKEN: &str = "an android token must be 100 to 4096 letters, digits, colons, underscores or hyphens";
+const ANDROID_NO_VOIP: &str = "an android registration takes no voip_token, and callkit must be false";
+const PLATFORM_OFF: &str = "push notifications for this platform are off on this relay";
 pub const SETTLE_HOW: &str = "how must be declined";
 pub const SETTLE_NONE: &str = "no such invitation";
 pub const INBOX_WAIT_ERROR: &str = "wait must be 1 to 25 seconds";
@@ -72,7 +85,8 @@ pub fn inbox_wait(text: &str) -> R<f64> {
     }
 }
 
-/// The APNs push type a sealed push travels in; the seal names it, so a seal made for one does not open in another.
+/// The APNs push type a sealed push travels in (on Android, FCM data `ch`); the seal names it, so a seal made for one
+/// does not open in another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     Alert,
@@ -165,10 +179,12 @@ struct CrlPush {
     due: Option<(f64, i64)>,
 }
 
-/// In memory: the sender (None: push is off), the relay's push settings, the secret, the rate books, the ring buckets,
-/// the live-for-push polls, the wrap rider cursors and the delayed pushes.
+/// In memory: the senders (APNs for iPhones, FCM for Android devices; both None: push is off), the relay's push
+/// settings, the secret, the rate books, the ring buckets, the live-for-push polls, the wrap rider cursors and the
+/// delayed pushes.
 pub struct Push {
     sender: Option<apns::Sender>,
+    fcm: Option<fcm::Sender>,
     sandbox: bool,
     /// relay.json `push.voip` and `topic`, and `notify_previews`.
     voip: bool,
@@ -200,6 +216,7 @@ impl Push {
     pub fn new(state_dir: Option<&std::path::Path>) -> Push {
         Push {
             sender: None,
+            fcm: None,
             sandbox: true,
             voip: false,
             topic: String::new(),
@@ -295,6 +312,19 @@ fn token_of(v: Body) -> R<String> {
     }
 }
 
+/// An FCM registration token: FCM_TOKEN_MIN to FCM_TOKEN_MAX letters, digits, `:`, `_` or `-`, kept as sent.
+fn fcm_token(v: Option<&Value>) -> Option<String> {
+    match v {
+        Some(Value::String(t)) if (FCM_TOKEN_MIN..=FCM_TOKEN_MAX).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_alphanumeric() || b":_-".contains(&c)) => Some(t.clone()),
+        _ => None,
+    }
+}
+
+/// A row registered by an Android device (`platform: "android"`); any other is an iPhone's.
+fn android_row(row: &Obj) -> bool {
+    row.get("platform").and_then(Value::as_str) == Some(ANDROID)
+}
+
 /// An uncompressed P-256 point on the curve (65 bytes).
 pub fn seal_point(raw: &[u8]) -> bool {
     raw.len() == 65 && raw[0] == 4 && agreement::ParsedPublicKey::try_from(agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, raw)).is_ok()
@@ -311,10 +341,21 @@ fn stored_seal(seal: Option<&Value>, sk: Option<&Value>) -> bool {
     raw.filter(|r| seal_point(r)).map(|r| sk.and_then(Value::as_str) == Some(sk_of(&r).as_str())).unwrap_or(false)
 }
 
-/// _push_stored: one device's registration from state.json has the shape the relay keeps.
+/// _push_stored: one device's registration from state.json has the shape the relay keeps. An iPhone's row may lack
+/// `platform` (kept before Android); an Android row has `platform: "android"`, its FCM token, no `env`, no VoIP token,
+/// `callkit` false and a seal key.
 fn stored_entry(o: &Obj) -> bool {
-    let token_ok = o.get("token").and_then(Value::as_str).map(|t| t == t.to_ascii_lowercase() && hex_token(Some(&Value::from(t))).is_some()).unwrap_or(false);
-    let env_ok = o.get("env").and_then(Value::as_str).map(|e| ENVS.contains(&e)).unwrap_or(false);
+    let android = match o.get("platform") {
+        None => false,
+        Some(Value::String(p)) if p == IOS || p == ANDROID => p == ANDROID,
+        Some(_) => return false,
+    };
+    let token_ok = if android {
+        fcm_token(o.get("token")).is_some()
+    } else {
+        o.get("token").and_then(Value::as_str).map(|t| t == t.to_ascii_lowercase() && hex_token(Some(&Value::from(t))).is_some()).unwrap_or(false)
+    };
+    let env_ok = o.get("env").and_then(Value::as_str).map(|e| if android { e.is_empty() } else { ENVS.contains(&e) }).unwrap_or(false);
     let prev_ok = match (o.get("seal_prev").and_then(Value::as_str), o.get("sk_prev").and_then(Value::as_str)) {
         (Some(""), Some("")) => true,
         (Some(_), Some(_)) => stored_seal(o.get("seal_prev"), o.get("sk_prev")),
@@ -322,18 +363,22 @@ fn stored_entry(o: &Obj) -> bool {
     };
     let voip_ok = match o.get("voip").and_then(Value::as_str) {
         Some("") => true,
-        Some(t) => t == t.to_ascii_lowercase() && hex_token(Some(&Value::from(t))).is_some(),
+        Some(t) => !android && t == t.to_ascii_lowercase() && hex_token(Some(&Value::from(t))).is_some(),
         None => false,
     };
-    o.len() == 10
+    let callkit_ok = match o.get("callkit") {
+        Some(Value::Bool(c)) => !(android && *c),
+        _ => false,
+    };
+    o.len() == 10 + usize::from(o.contains_key("platform"))
         && token_ok
         && env_ok
         && pj::as_int(o.get("ts")).is_some()
         && o.get("serial").map(Value::is_string).unwrap_or(false)
-        && (stored_seal(o.get("seal"), o.get("sk")) || legacy_row(o))
+        && (stored_seal(o.get("seal"), o.get("sk")) || (!android && legacy_row(o)))
         && prev_ok
         && voip_ok
-        && o.get("callkit").map(Value::is_boolean).unwrap_or(false)
+        && callkit_ok
 }
 
 /// MV-1: a pre-NT-1 app's registration: no seal key (pushes go out as the PB-1 payload).
@@ -478,7 +523,6 @@ pub fn fit(inner: &mut Obj, channel: Channel) -> Option<Vec<u8>> {
 pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str, badge: i64, time_sensitive: bool, topic: &str, sent_s: i64) -> (Obj, Vec<(&'static str, String)>) {
     let kind = pj::text_of(inner, "k");
     let conv = pj::text_of(inner, "conv");
-    let id = pj::text_of(inner, "id");
     let o = origin(person_key, channel, sk, s);
     let sealed = |mut p: Obj| {
         p.insert("s".into(), Value::from(s));
@@ -486,10 +530,14 @@ pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str
         p.insert("o".into(), Value::from(o.clone()));
         p
     };
+    let expiration = match ttl(channel, &kind) {
+        0 => 0,
+        t => sent_s + t,
+    };
     match channel {
         Channel::Voip => {
             let payload = sealed(obj([("c", Value::from(tag(person_key, conv.as_bytes())))]));
-            let headers = vec![("apns-push-type", "voip".to_string()), ("apns-topic", format!("{topic}.voip")), ("apns-priority", "10".to_string()), ("apns-expiration", "0".to_string())];
+            let headers = vec![("apns-push-type", "voip".to_string()), ("apns-topic", format!("{topic}.voip")), ("apns-priority", "10".to_string()), ("apns-expiration", expiration.to_string())];
             (payload, headers)
         }
         Channel::Background => {
@@ -498,7 +546,7 @@ pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str
                 ("apns-push-type", "background".to_string()),
                 ("apns-topic", topic.to_string()),
                 ("apns-priority", "5".to_string()),
-                ("apns-expiration", (sent_s + CRL_TTL).to_string()),
+                ("apns-expiration", expiration.to_string()),
                 ("apns-collapse-id", tag(person_key, b"crl")),
             ];
             (payload, headers)
@@ -506,8 +554,7 @@ pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str
         Channel::Alert => {
             let (body, category, sound) = alert_words(&kind).unwrap_or(("New message", "msg", "msg-lucid.wav"));
             let call = kind == "call" || kind == "live";
-            let meeting = matches!(kind.as_str(), "invite" | "update" | "cancel");
-            let tid = tag(person_key, if meeting { b"meetings".as_slice() } else { conv.as_bytes() });
+            let tid = alert_thread(person_key, &kind, &conv);
             let level = if call || time_sensitive { "time-sensitive" } else { "active" };
             let aps = obj([
                 ("alert", Value::Object(obj([("title", Value::from(TITLE)), ("body", Value::from(body))]))),
@@ -519,24 +566,93 @@ pub fn build(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str
                 ("interruption-level", Value::from(level)),
             ]);
             let payload = sealed(obj([("aps", Value::Object(aps)), ("c", Value::from(tid))]));
-            let collapse = if call || kind == "missed" {
-                format!("invite:{id}")
-            } else if meeting {
-                format!("meeting:{id}:{}", pj::as_int(inner.get("start")).unwrap_or(0))
-            } else {
-                format!("msg:{id}")
-            };
-            let expiration = if call { 0 } else { sent_s + MESSAGE_TTL };
             let headers = vec![
                 ("apns-push-type", "alert".to_string()),
                 ("apns-topic", topic.to_string()),
                 ("apns-priority", "10".to_string()),
                 ("apns-expiration", expiration.to_string()),
-                ("apns-collapse-id", tag(person_key, collapse.as_bytes())),
+                ("apns-collapse-id", alert_collapse(person_key, inner)),
             ];
             (payload, headers)
         }
     }
+}
+
+/// How long a push may wait for the device (s; 0: now or never, 3.4): calls 0, the background `crl` push CRL_TTL,
+/// every other push MESSAGE_TTL.
+fn ttl(channel: Channel, kind: &str) -> i64 {
+    match channel {
+        Channel::Voip => 0,
+        Channel::Background => CRL_TTL,
+        Channel::Alert if kind == "call" || kind == "live" => 0,
+        Channel::Alert => MESSAGE_TTL,
+    }
+}
+
+/// An alert push's `thread-id` and `c` (3.4): the tag of its conversation, or of `meetings` for the meeting kinds.
+fn alert_thread(person_key: &[u8], kind: &str, conv: &str) -> String {
+    let meeting = matches!(kind, "invite" | "update" | "cancel");
+    tag(person_key, if meeting { b"meetings".as_slice() } else { conv.as_bytes() })
+}
+
+/// An alert push's collapse id (3.4): the tag of `invite:<id>` for calls and missed calls, `meeting:<id>:<start>`
+/// for the meeting kinds, else `msg:<id>`.
+fn alert_collapse(person_key: &[u8], inner: &Obj) -> String {
+    let (kind, id) = (pj::text_of(inner, "k"), pj::text_of(inner, "id"));
+    let collapse = match kind.as_str() {
+        "call" | "live" | "missed" => format!("invite:{id}"),
+        "invite" | "update" | "cancel" => format!("meeting:{id}:{}", pj::as_int(inner.get("start")).unwrap_or(0)),
+        _ => format!("msg:{id}"),
+    };
+    tag(person_key, collapse.as_bytes())
+}
+
+/// The FCM HTTP v1 request body of one sealed push to an Android device (NT-1 revision "Android (FCM)") and the size
+/// of its data as FCM counts it (keys and values, bytes). Data only, never a `notification` block: the app builds the
+/// notification from the sealed inner, so Google sees what Apple sees. `data` carries what the APNs payload carries
+/// outside `aps` (`c`, `s`, `sk`, `o`), the channel `ch` and, for alerts, the collapse tag `collapse` and the two
+/// `aps` fields the app needs before the seal opens: the category `cat` and the badge count `badge` (decimal);
+/// `android` carries the priority (HIGH for alerts and calls, NORMAL for background), the time to live of the APNs
+/// expiration rule and the APNs collapse id as `collapse_key` when there is one.
+pub fn build_fcm(person_key: &[u8], channel: Channel, inner: &Obj, s: &str, sk: &str, badge: i64, token: &str) -> (Value, usize) {
+    let kind = pj::text_of(inner, "k");
+    let mut data = obj([("ch", Value::from(channel.name()))]);
+    let collapse = match channel {
+        Channel::Alert => {
+            data.insert("c".into(), Value::from(alert_thread(person_key, &kind, &pj::text_of(inner, "conv"))));
+            Some(alert_collapse(person_key, inner))
+        }
+        Channel::Voip => {
+            data.insert("c".into(), Value::from(tag(person_key, pj::text_of(inner, "conv").as_bytes())));
+            None
+        }
+        Channel::Background => Some(tag(person_key, b"crl")),
+    };
+    data.insert("s".into(), Value::from(s));
+    data.insert("sk".into(), Value::from(sk));
+    data.insert("o".into(), Value::from(origin(person_key, channel, sk, s)));
+    if let (Channel::Alert, Some(c)) = (channel, &collapse) {
+        let (_, category, _) = alert_words(&kind).unwrap_or(("New message", "msg", "msg-lucid.wav"));
+        data.insert("collapse".into(), Value::from(c.as_str()));
+        data.insert("cat".into(), Value::from(category));
+        data.insert("badge".into(), Value::from(badge.to_string()));
+    }
+    let size = data.iter().map(|(k, v)| k.len() + v.as_str().map(str::len).unwrap_or_default()).sum();
+    let priority = if channel == Channel::Background { "NORMAL" } else { "HIGH" };
+    let mut android = obj([("priority", Value::from(priority)), ("ttl", Value::from(format!("{}s", ttl(channel, &kind))))]);
+    if let Some(c) = collapse {
+        android.insert("collapse_key".into(), Value::from(c));
+    }
+    let message = obj([("token", Value::from(token)), ("data", Value::Object(data)), ("android", Value::Object(android))]);
+    (Value::Object(obj([("message", Value::Object(message))])), size)
+}
+
+/// A push handed to its sender: true when queued; a full queue drops it with one line.
+fn queued(ok: bool, to: &str, device: &str, kind: &str) -> bool {
+    if !ok {
+        log_warn(&format!("push_dropped principal={to} device={} kind={kind} why=queue", kv(device)));
+    }
+    ok
 }
 
 /// The occurrence a meeting push names (3.3 `start`, `end`): the first with its end after `now` (within
@@ -597,9 +713,9 @@ impl State {
         self.pu.now()
     }
 
-    /// Push is on: enabled in relay.json, the key read and the sender running.
+    /// Push is on: enabled in relay.json, and the APNs key or the FCM service account read and its sender running.
     pub(super) fn pu_on(&self) -> bool {
-        self.pu.sender.is_some()
+        self.pu.sender.is_some() || self.pu.fcm.is_some()
     }
 
     /// _push_person_key: what register answers (`key`, base64): the app derives thread-ids, `c` and collapse ids and
@@ -705,8 +821,9 @@ impl State {
         as_obj(self.push_tokens.get(to)).into_iter().flatten().filter(|(d, _)| !self.pu_live(to, d)).filter_map(|(d, r)| r.as_object().map(|o| (d.clone(), o.clone()))).collect()
     }
 
-    /// Seal `inner` to one device and queue it on `channel`: `dev` added, the size rule, the outer payload and headers,
-    /// Apple's limit. True when queued.
+    /// Seal `inner` to one device and queue it on `channel`: `dev` added, the size rule, then for an iPhone the outer
+    /// payload and headers and Apple's limit, for an Android device the FCM message and FCM's data limit. True when
+    /// queued.
     fn nt_push(&mut self, to: &str, device: &str, row: &Obj, channel: Channel, mut inner: Obj, time_sensitive: bool) -> bool {
         let kind = pj::text_of(&inner, "k");
         let dropped = |why: &str| log_warn(&format!("push_dropped principal={to} device={} kind={kind} why={why}", kv(device)));
@@ -738,6 +855,17 @@ impl State {
         };
         let key = self.pu_person_key(to);
         let badge = if channel == Channel::Alert { self.pu_badge(to) } else { 0 };
+        if android_row(row) {
+            let token = pj::text_of(row, "token");
+            let (message, size) = build_fcm(&key, channel, &inner, &s, &sk, badge, &token);
+            if size > fcm::DATA_LIMIT {
+                dropped("size");
+                return false;
+            }
+            let job = fcm::Job { principal: to.to_string(), device: device.to_string(), token, kind: kind.clone(), body: pj::dumps_compact(&message).into_bytes() };
+            let Some(sender) = &self.pu.fcm else { return false };
+            return queued(sender.send(job), to, device, &kind);
+        }
         let sent_s = self.pu.now() as i64;
         let (payload, headers) = build(&key, channel, &inner, &s, &sk, badge, time_sensitive, &self.pu.topic, sent_s);
         let bytes = pj::dumps_compact(&Value::Object(payload)).into_bytes();
@@ -762,12 +890,7 @@ impl State {
             payload,
         };
         let Some(sender) = &self.pu.sender else { return false };
-        if sender.send(job) {
-            true
-        } else {
-            log_warn(&format!("push_dropped principal={to} device={} kind={kind} why=queue", kv(device)));
-            false
-        }
+        queued(sender.send(job), to, device, &kind)
     }
 
     // ── messages ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -939,8 +1062,9 @@ impl State {
     }
 
     /// _nt_call: a ringing invite (`kind` call or live, `ring` true) to the invitee's devices that are not live for
-    /// push: a CallKit iPhone (`voip` registered, push.voip on) through PushKit, any other as an alert; once per
-    /// invite and device; not under Do not disturb or a call level `off`.
+    /// push: a CallKit iPhone (`voip` registered, push.voip on) through PushKit, an Android device on the voip
+    /// channel through FCM (its one token), any other as an alert; once per invite and device; not under Do not
+    /// disturb or a call level `off`.
     pub(super) fn nt_call(&mut self, inv: &Obj, others: usize) {
         let (from, to, room, id, kind) = (pj::text_of(inv, "from"), pj::text_of(inv, "to"), pj::text_of(inv, "room"), pj::text_of(inv, "id"), pj::text_of(inv, "kind"));
         if !self.pu_on() || !self.push_tokens.contains_key(&to) || self.pu_dnd(&to) || self.nt_call_level(&from, &to, &room) == "off" {
@@ -967,7 +1091,7 @@ impl State {
                 continue;
             }
             let callkit = self.pu.voip && !pj::text_of(&row, "voip").is_empty() && row.get("callkit") == Some(&Value::Bool(true));
-            let channel = if callkit { Channel::Voip } else { Channel::Alert };
+            let channel = if callkit || android_row(&row) { Channel::Voip } else { Channel::Alert };
             if self.nt_push(&to, &device, &row, channel, inner.clone(), false) {
                 self.pu.once.insert(once, mono);
             }
@@ -1290,14 +1414,25 @@ impl State {
 
 impl Hub {
     /// _push_configure: relay.json `push` and `notify_previews`, once at start (enclave and the shape were checked when
-    /// relay.json was read). Anything wrong at run time turns push off with one line; the key's path and bytes are
-    /// never logged.
+    /// relay.json was read): the APNs sender when its keys are set, the FCM sender when `push.fcm` is set, each on its
+    /// own. Anything wrong at run time turns that sender off with one line; the key's and the service account's paths
+    /// and bytes are never logged.
     pub fn push_configure(self: &Arc<Self>, s: &m::Settings) {
         self.st.lock().pu.previews = s.notify_previews;
         if !s.push.enabled {
             return;
         }
-        let key = match apns::Key::load(&s.push.team_id, &s.push.key_id, &s.push.key_file) {
+        let previews = if s.notify_previews { "" } else { ", previews off" };
+        if s.push.apns() {
+            self.apns_configure(&s.push, previews);
+        }
+        if let Some(f) = &s.push.fcm {
+            self.fcm_configure(f, previews);
+        }
+    }
+
+    fn apns_configure(self: &Arc<Self>, p: &m::PushSettings, previews: &str) {
+        let key = match apns::Key::load(&p.team_id, &p.key_id, &p.key_file) {
             Ok(k) => k,
             Err(why) => return log_warn(&format!("push off: {why}")),
         };
@@ -1312,21 +1447,42 @@ impl Hub {
             Ok(sender) => {
                 let mut st = self.st.lock();
                 st.pu.sender = Some(sender);
-                st.pu.sandbox = s.push.sandbox;
-                st.pu.voip = s.push.voip;
-                st.pu.topic = s.push.topic.clone();
-                let kinds = if s.push.voip { "alert and voip" } else { "alert" };
-                let previews = if s.notify_previews { "" } else { ", previews off" };
-                log_info(&format!("push on: {kinds}{previews} topic={} sandbox={}", s.push.topic, if s.push.sandbox { "yes" } else { "no" }));
+                st.pu.sandbox = p.sandbox;
+                st.pu.voip = p.voip;
+                st.pu.topic = p.topic.clone();
+                let kinds = if p.voip { "alert and voip" } else { "alert" };
+                log_info(&format!("push on: {kinds}{previews} topic={} sandbox={}", p.topic, if p.sandbox { "yes" } else { "no" }));
             }
             Err(e) => log_warn(&format!("push off: {e}")),
         }
     }
 
-    /// push_register (`POST /v1/push/register {token, env, seal, sk, voip_token, callkit}`, section 3.2): this device's
-    /// APNs token and seal key (one per device, replaced by a new one; a token another device registered moves here; a
-    /// new seal key moves the old one to `seal_prev`). `{ok, key, voip}`: the person's push key (base64) and whether
-    /// this relay rings this device through PushKit.
+    fn fcm_configure(self: &Arc<Self>, f: &m::FcmSettings, previews: &str) {
+        let account = match fcm::Account::load(&f.credentials_file) {
+            Ok(a) => a,
+            Err(why) => return log_warn(&format!("push off for android: {why}")),
+        };
+        let weak = Arc::downgrade(self);
+        let gone: fcm::OnGone = Arc::new(move |job: &fcm::Job, why: &str| {
+            if let Some(hub) = weak.upgrade() {
+                hub.push_gone(&job.principal, &job.device, &job.token, why, false);
+            }
+        });
+        match fcm::Endpoint::google().and_then(|ep| fcm::Sender::start(account, ep, &f.project_id, gone)) {
+            Ok(sender) => {
+                self.st.lock().pu.fcm = Some(sender);
+                log_info(&format!("push on: android{previews} project={}", f.project_id));
+            }
+            Err(e) => log_warn(&format!("push off for android: {e}")),
+        }
+    }
+
+    /// push_register (`POST /v1/push/register {platform, token, env, seal, sk, voip_token, callkit}`, section 3.2 and
+    /// revision "Android (FCM)"): this device's APNs or FCM token and seal key (one per device, replaced by a new one; a
+    /// token another device registered moves here; a new seal key moves the old one to `seal_prev`). `platform` is
+    /// `ios` (the default) or `android`; an Android device sends its FCM token, no `env` (ignored), no `voip_token` and
+    /// `callkit` false or absent, and always a seal key. `{ok, key, voip}`: the person's push key (base64) and whether
+    /// calls ring this device on the voip channel (PushKit on an iPhone; always on Android).
     pub fn push_register(&self, who: &Identity, body: &Obj) -> R<Obj> {
         let mut st = self.st.lock();
         if !st.pu_on() {
@@ -1335,16 +1491,29 @@ impl Hub {
         if !who.own_device() {
             return forbidden(m::FINISH_SETUP);
         }
-        let token = token_of(body.get("token"))?;
-        let env = match body.get("env") {
-            Some(Value::String(e)) if ENVS.contains(&e.as_str()) => e.clone(),
-            _ => return bad(BAD_ENV),
+        let android = match body.get("platform") {
+            None | Some(Value::Null) => false,
+            Some(Value::String(p)) if p == IOS || p == ANDROID => p == ANDROID,
+            Some(_) => return bad(BAD_PLATFORM),
         };
-        if env == "sandbox" && !st.pu.sandbox {
-            return bad(NO_SANDBOX);
+        if (android && st.pu.fcm.is_none()) || (!android && st.pu.sender.is_none()) {
+            return Err(E::Unavailable(PLATFORM_OFF.into()));
         }
+        let (token, env) = if android {
+            (fcm_token(body.get("token")).map_or_else(|| bad(BAD_FCM_TOKEN), Ok)?, String::new())
+        } else {
+            let token = token_of(body.get("token"))?;
+            let env = match body.get("env") {
+                Some(Value::String(e)) if ENVS.contains(&e.as_str()) => e.clone(),
+                _ => return bad(BAD_ENV),
+            };
+            if env == "sandbox" && !st.pu.sandbox {
+                return bad(NO_SANDBOX);
+            }
+            (token, env)
+        };
         // MV-1: a pre-NT-1 app registers `{token, env}` only (PB-1): a legacy row, no seal, plain pushes
-        let legacy = !["seal", "sk", "voip_token", "callkit"].iter().any(|k| body.contains_key(*k));
+        let legacy = !android && !["seal", "sk", "voip_token", "callkit"].iter().any(|k| body.contains_key(*k));
         let (seal_b64, sk, voip_token, callkit) = if legacy {
             (String::new(), String::new(), String::new(), false)
         } else {
@@ -1353,15 +1522,22 @@ impl Hub {
             if body.get("sk").and_then(Value::as_str) != Some(sk.as_str()) {
                 return bad(BAD_SK);
             }
-            let voip_token = match body.get("voip_token") {
-                None | Some(Value::Null) => String::new(),
-                v => match hex_token(v) {
-                    Some(t) => t,
-                    None => return bad(BAD_VOIP),
-                },
-            };
-            let Some(Value::Bool(callkit)) = body.get("callkit") else { return bad(BAD_CALLKIT) };
-            (pj::b64(&seal), sk, voip_token, *callkit)
+            if android {
+                if !matches!(body.get("voip_token"), None | Some(Value::Null)) || !matches!(body.get("callkit"), None | Some(Value::Bool(false))) {
+                    return bad(ANDROID_NO_VOIP);
+                }
+                (pj::b64(&seal), sk, String::new(), false)
+            } else {
+                let voip_token = match body.get("voip_token") {
+                    None | Some(Value::Null) => String::new(),
+                    v => match hex_token(v) {
+                        Some(t) => t,
+                        None => return bad(BAD_VOIP),
+                    },
+                };
+                let Some(Value::Bool(callkit)) = body.get("callkit") else { return bad(BAD_CALLKIT) };
+                (pj::b64(&seal), sk, voip_token, *callkit)
+            }
         };
         // PR-1 1.4: whoever loses this token to the new registration, and the caller, may change presence
         let holds = |d: &Value| as_obj(Some(d)).map(|d| d.values().any(|e| e.get("token").and_then(Value::as_str) == Some(token.as_str()))).unwrap_or(false);
@@ -1380,7 +1556,8 @@ impl Hub {
         }
         st.push_tokens.retain(|_, d| d.as_object().map(|o| !o.is_empty()).unwrap_or(false));
         let voip = if callkit { voip_token } else { String::new() };
-        let rings = st.pu.voip && !voip.is_empty();
+        let rings = android || (st.pu.voip && !voip.is_empty());
+        let platform = if android { ANDROID } else { IOS };
         let entry = obj([
             ("token", Value::from(token)),
             ("env", Value::from(env.clone())),
@@ -1392,6 +1569,7 @@ impl Hub {
             ("sk_prev", Value::from(sk_prev)),
             ("voip", Value::from(voip)),
             ("callkit", Value::Bool(callkit)),
+            ("platform", Value::from(platform)),
         ]);
         let devices = st.push_tokens.entry(who.principal.clone()).or_insert_with(|| Value::Object(Obj::new()));
         if !devices.is_object() {
@@ -1405,7 +1583,7 @@ impl Hub {
         let key = st.pu_person_key(&who.principal);
         drop(st);
         self.wake();
-        log_info(&format!("push_register principal={} device={} env={env} voip={}", who.principal, kv(&who.device), if rings { "yes" } else { "no" }));
+        log_info(&format!("push_register principal={} device={} platform={platform} env={} voip={}", who.principal, kv(&who.device), kv(&env), if rings { "yes" } else { "no" }));
         Ok(obj([("ok", Value::Bool(true)), ("key", Value::from(pj::b64(&key))), ("voip", Value::Bool(rings))]))
     }
 
@@ -1436,8 +1614,9 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true)), ("removed", Value::Bool(removed))]))
     }
 
-    /// APNs said the token is no longer valid (410, or 400 BadDeviceToken): on a VoIP request only the device's VoIP
-    /// token goes, on an alert request the whole registration, unless the device registered another one meanwhile.
+    /// APNs said the token is no longer valid (410, or 400 BadDeviceToken), or FCM did (404 UNREGISTERED, or 400
+    /// INVALID_ARGUMENT about the token): on an APNs VoIP request only the device's VoIP token goes, on any other
+    /// request the whole registration, unless the device registered another one meanwhile.
     fn push_gone(&self, principal: &str, device: &str, token: &str, why: &str, voip: bool) {
         let mut st = self.st.lock();
         let field = if voip { "voip" } else { "token" };
@@ -1702,7 +1881,7 @@ pub mod apns {
         gone: OnGone,
     }
 
-    type Conn = SendRequest<Full<Bytes>>;
+    pub(super) type Conn = SendRequest<Full<Bytes>>;
 
     async fn run(ctx: Arc<Ctx>, mut rx: tokio::sync::mpsc::Receiver<Job>) {
         let mut conns: [Option<Conn>; 2] = [None, None];
@@ -1723,10 +1902,16 @@ pub mod apns {
     }
 
     async fn connect(ep: &Endpoint, sandbox: bool) -> Result<Conn, String> {
-        let (host, port) = ep.host(sandbox).clone();
+        dial(&ep.tls, ep.host(sandbox)).await
+    }
+
+    /// One HTTP/2 connection over TLS (ALPN h2) to `host`; connecting and the TLS handshake each within TIMEOUT (the
+    /// FCM sender's too).
+    pub(super) async fn dial(tls: &Arc<ClientConfig>, host: &(String, u16)) -> Result<Conn, String> {
+        let (host, port) = host.clone();
         let tcp = tokio::time::timeout(TIMEOUT, tokio::net::TcpStream::connect((host.as_str(), port))).await.map_err(|_| "connect timed out".to_string())?.map_err(|e| e.to_string())?;
         let name = ServerName::try_from(host).map_err(|e| e.to_string())?;
-        let tls = tokio::time::timeout(TIMEOUT, tokio_rustls::TlsConnector::from(ep.tls.clone()).connect(name, tcp)).await.map_err(|_| "TLS handshake timed out".to_string())?.map_err(|e| e.to_string())?;
+        let tls = tokio::time::timeout(TIMEOUT, tokio_rustls::TlsConnector::from(tls.clone()).connect(name, tcp)).await.map_err(|_| "TLS handshake timed out".to_string())?.map_err(|e| e.to_string())?;
         let (send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new()).handshake(TokioIo::new(tls)).await.map_err(|e| e.to_string())?;
         tokio::spawn(async move {
             let _ = conn.await;
@@ -1826,12 +2011,294 @@ pub mod apns {
     }
 }
 
+/// The FCM sender (NT-1 revision "Android (FCM)"): HTTP/2 over rustls to fcm.googleapis.com, the HTTP v1 API
+/// (`POST /v1/projects/<project_id>/messages:send`), authorized by an OAuth 2.0 access token that the service account
+/// gets from oauth2.googleapis.com with an RS256 assertion signed on AWS-LC, kept until RENEW_BEFORE before it
+/// expires. Jobs queue to its own thread, as the APNs sender's do; the hub never waits on Google. FCM saying the token
+/// is gone (404 UNREGISTERED, 400 INVALID_ARGUMENT about the token) drops the registration; anything else (429, 5xx)
+/// is logged and the push dropped, as APNs failures are.
+pub mod fcm {
+    use super::apns::{dial, note, Conn, Outcome};
+    use crate::meet::log_warn;
+    use crate::meet_json::{self as pj, obj};
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::{RsaKeyPair, RSA_PKCS1_SHA256};
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use rustls::ClientConfig;
+    use serde_json::Value;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    pub const SEND_HOST: &str = "fcm.googleapis.com";
+    pub const TOKEN_HOST: &str = "oauth2.googleapis.com";
+    /// The assertion's audience: Google's token endpoint.
+    pub const AUDIENCE: &str = "https://oauth2.googleapis.com/token";
+    pub const SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
+    /// `grant_type`, form encoded.
+    const GRANT: &str = "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer";
+    /// Pushes waiting for the sender; past it a push is dropped (and logged).
+    const QUEUE: usize = 1000;
+    /// Connecting, the TLS handshake and one request each.
+    const TIMEOUT: Duration = Duration::from_secs(10);
+    /// The assertion's lifetime (Google takes at most an hour).
+    const ASSERTION_SECONDS: i64 = 3600;
+    /// An access token is used until this long before it expires.
+    pub const RENEW_BEFORE: Duration = Duration::from_secs(5 * 60);
+    /// FCM's limit on a message's data: its keys and values, in bytes.
+    pub const DATA_LIMIT: usize = 4096;
+
+    /// One push for the sender thread: the device's FCM token and the request body the hub built.
+    pub struct Job {
+        pub principal: String,
+        pub device: String,
+        pub token: String,
+        /// The kind (for the log lines only).
+        pub kind: String,
+        pub body: Vec<u8>,
+    }
+
+    /// Called with the job and why when FCM says its token is no longer valid.
+    pub type OnGone = Arc<dyn Fn(&Job, &str) + Send + Sync>;
+
+    /// The service account (its email and RSA key) and the access token it was given.
+    pub struct Account {
+        email: String,
+        pair: RsaKeyPair,
+        access: parking_lot::Mutex<Option<(String, Instant)>>,
+    }
+
+    impl Account {
+        /// Read the service account key file: refused when it cannot be read, when group or others may read it
+        /// (POSIX), or when it is not a service account key. The reasons never name the file or show its bytes.
+        pub fn load(path: &str) -> Result<Account, String> {
+            let data = std::fs::read(path).map_err(|_| "credentials_file cannot be read".to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = std::fs::metadata(path).map_err(|_| "credentials_file cannot be read".to_string())?.permissions().mode();
+                if mode & 0o077 != 0 {
+                    return Err("credentials_file must be readable by the relay only (mode 600)".into());
+                }
+            }
+            Account::from_json(&data)
+        }
+
+        /// A service account key (JSON): `client_email` and `private_key` (PEM, PKCS#8 RSA).
+        pub fn from_json(data: &[u8]) -> Result<Account, String> {
+            let not_account = || "credentials_file is not a service account key (client_email, private_key)".to_string();
+            let v: Value = serde_json::from_slice(data).map_err(|_| not_account())?;
+            let email = v.get("client_email").and_then(Value::as_str).filter(|e| !e.is_empty()).ok_or_else(not_account)?;
+            let pem = v.get("private_key").and_then(Value::as_str).ok_or_else(not_account)?;
+            let pair = match rustls_pemfile::private_key(&mut pem.as_bytes()) {
+                Ok(Some(rustls::pki_types::PrivateKeyDer::Pkcs8(k))) => RsaKeyPair::from_pkcs8(k.secret_pkcs8_der()).map_err(|_| not_account())?,
+                _ => return Err(not_account()),
+            };
+            Ok(Account { email: email.to_string(), pair, access: parking_lot::Mutex::new(None) })
+        }
+
+        /// The RS256 assertion: header `{alg, typ}`, claims `{iss, scope, aud, iat, exp}` (an hour), signature
+        /// RSASSA-PKCS1-v1_5 with SHA-256, all base64url.
+        pub fn assertion(&self, iat: i64) -> Result<String, String> {
+            let header = obj([("alg", Value::from("RS256")), ("typ", Value::from("JWT"))]);
+            let claims = obj([("iss", Value::from(self.email.clone())), ("scope", Value::from(SCOPE)), ("aud", Value::from(AUDIENCE)), ("iat", Value::from(iat)), ("exp", Value::from(iat + ASSERTION_SECONDS))]);
+            let input = format!("{}.{}", crate::codec::b64u(pj::dumps_compact(&Value::Object(header)).as_bytes()), crate::codec::b64u(pj::dumps_compact(&Value::Object(claims)).as_bytes()));
+            let mut sig = vec![0u8; self.pair.public_modulus_len()];
+            self.pair.sign(&RSA_PKCS1_SHA256, &SystemRandom::new(), input.as_bytes(), &mut sig).map_err(|_| "cannot sign the FCM assertion".to_string())?;
+            Ok(format!("{input}.{}", crate::codec::b64u(&sig)))
+        }
+
+        /// The access token kept, while it is good for more than RENEW_BEFORE.
+        pub fn cached(&self) -> Option<String> {
+            self.access.lock().as_ref().filter(|(_, until)| Instant::now() < *until).map(|(t, _)| t.clone())
+        }
+
+        /// Keep an access token Google gave for `expires_in` seconds, until RENEW_BEFORE before it expires.
+        pub fn keep(&self, token: &str, expires_in: u64) {
+            let until = Instant::now() + Duration::from_secs(expires_in).saturating_sub(RENEW_BEFORE);
+            *self.access.lock() = Some((token.to_string(), until));
+        }
+
+        /// FCM refused the access token: the next push gets a new one.
+        pub fn forget(&self) {
+            *self.access.lock() = None;
+        }
+    }
+
+    /// Where pushes and token requests go: the TLS client (webpki roots, ALPN h2), the FCM host and the token host.
+    pub struct Endpoint {
+        tls: Arc<ClientConfig>,
+        send: (String, u16),
+        token: (String, u16),
+    }
+
+    impl Endpoint {
+        pub fn google() -> Result<Endpoint, String> {
+            Endpoint::new(None, (SEND_HOST.into(), 443), (TOKEN_HOST.into(), 443))
+        }
+
+        /// `ca`: a PEM file of the roots to trust instead of the webpki set.
+        pub fn new(ca: Option<&str>, send: (String, u16), token: (String, u16)) -> Result<Endpoint, String> {
+            let mut cfg = (*crate::meet_tls::client_config(ca, None)?).clone();
+            cfg.alpn_protocols = vec![b"h2".to_vec()];
+            Ok(Endpoint { tls: Arc::new(cfg), send, token })
+        }
+    }
+
+    fn authority(host: &(String, u16)) -> String {
+        match host {
+            (h, 443) => h.clone(),
+            (h, p) => format!("{h}:{p}"),
+        }
+    }
+
+    /// The handle the hub keeps: jobs go to the sender thread without waiting.
+    pub struct Sender {
+        tx: tokio::sync::mpsc::Sender<Job>,
+    }
+
+    impl Sender {
+        pub fn start(account: Account, ep: Endpoint, project_id: &str, gone: OnGone) -> Result<Sender, String> {
+            let (tx, rx) = tokio::sync::mpsc::channel(QUEUE);
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+            let ctx = Arc::new(Ctx { account, ep, path: format!("/v1/projects/{project_id}/messages:send"), gone });
+            std::thread::Builder::new().name("relay-fcm".into()).spawn(move || runtime.block_on(run(ctx, rx))).map_err(|e| e.to_string())?;
+            Ok(Sender { tx })
+        }
+
+        /// A sender whose jobs land in the receiver (tests of the send rules).
+        #[cfg(test)]
+        pub fn capture() -> (Sender, tokio::sync::mpsc::Receiver<Job>) {
+            let (tx, rx) = tokio::sync::mpsc::channel(QUEUE);
+            (Sender { tx }, rx)
+        }
+
+        /// Queue one push; false when the queue is full.
+        pub fn send(&self, job: Job) -> bool {
+            self.tx.try_send(job).is_ok()
+        }
+    }
+
+    struct Ctx {
+        account: Account,
+        ep: Endpoint,
+        path: String,
+        gone: OnGone,
+    }
+
+    /// One push that did not go: counted (`fcm-token` when no access token could be had) and logged.
+    fn failed(job: &Job, why: &str, counted: &str) {
+        note(Some(counted));
+        log_warn(&format!("push failed principal={} device={} kind={} why={}", job.principal, crate::meet::kv(&job.device), job.kind, crate::meet::kv(why)));
+    }
+
+    /// The jobs in order: the access token (kept, else fetched here, so one fetch serves every push waiting), then
+    /// each push on the one FCM connection.
+    async fn run(ctx: Arc<Ctx>, mut rx: tokio::sync::mpsc::Receiver<Job>) {
+        let mut conn: Option<Conn> = None;
+        while let Some(job) = rx.recv().await {
+            let bearer = match access(&ctx).await {
+                Ok(t) => t,
+                Err(e) => {
+                    failed(&job, &e, "fcm-token");
+                    continue;
+                }
+            };
+            if conn.as_ref().map(|c| c.is_closed()).unwrap_or(true) {
+                conn = match dial(&ctx.ep.tls, &ctx.ep.send).await {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        failed(&job, &e, "unreachable");
+                        continue;
+                    }
+                };
+            }
+            let Some(c) = conn.clone() else { continue };
+            tokio::spawn(deliver(ctx.clone(), c, job, bearer));
+        }
+    }
+
+    /// One POST on `conn` within TIMEOUT: the status and the body.
+    async fn post(mut conn: Conn, uri: String, bearer: Option<&str>, content_type: &str, body: Vec<u8>) -> Result<(u16, Bytes), String> {
+        let mut req = hyper::Request::builder().method("POST").uri(uri).header("content-type", content_type);
+        if let Some(b) = bearer {
+            req = req.header("authorization", format!("Bearer {b}"));
+        }
+        let req = req.body(Full::new(Bytes::from(body))).map_err(|e| e.to_string())?;
+        let work = async {
+            conn.ready().await.map_err(|e| e.to_string())?;
+            let res = conn.send_request(req).await.map_err(|e| e.to_string())?;
+            let status = res.status().as_u16();
+            let body = res.into_body().collect().await.map_err(|e| e.to_string())?.to_bytes();
+            Ok::<_, String>((status, body))
+        };
+        tokio::time::timeout(TIMEOUT, work).await.unwrap_or_else(|_| Err("timed out".to_string()))
+    }
+
+    /// The access token: the one kept, else a new one for the assertion from Google's token endpoint (`{access_token,
+    /// expires_in}`), kept until RENEW_BEFORE before it expires.
+    async fn access(ctx: &Ctx) -> Result<String, String> {
+        if let Some(t) = ctx.account.cached() {
+            return Ok(t);
+        }
+        let form = format!("grant_type={GRANT}&assertion={}", ctx.account.assertion(pj::now() as i64)?);
+        let conn = dial(&ctx.ep.tls, &ctx.ep.token).await?;
+        let (status, body) = post(conn, format!("https://{}/token", authority(&ctx.ep.token)), None, "application/x-www-form-urlencoded", form.into_bytes()).await?;
+        let answer: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        if status != 200 {
+            return Err(format!("token {status} {}", answer["error"].as_str().unwrap_or_default()).trim().to_string());
+        }
+        let token = answer["access_token"].as_str().filter(|t| !t.is_empty()).ok_or("the token answer has no access_token")?;
+        ctx.account.keep(token, answer["expires_in"].as_u64().unwrap_or(0));
+        Ok(token.to_string())
+    }
+
+    /// Read FCM's answer: 200 sent; 404 UNREGISTERED, or 400 INVALID_ARGUMENT about the registration token, gone;
+    /// anything else failed (`<status> <errorCode, else status>`).
+    pub fn outcome(status: u16, body: &[u8]) -> Outcome {
+        if status == 200 {
+            return Outcome::Sent;
+        }
+        let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+        let error = &v["error"];
+        let details = error["details"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let code = details.iter().find_map(|d| d["errorCode"].as_str()).or_else(|| error["status"].as_str()).unwrap_or_default();
+        let about_token = details.iter().flat_map(|d| d["fieldViolations"].as_array().into_iter().flatten()).any(|f| f["field"].as_str() == Some("message.token"))
+            || error["message"].as_str().is_some_and(|m| m.contains("registration token"));
+        match (status, code) {
+            (404, "UNREGISTERED") => Outcome::Gone("UNREGISTERED".into()),
+            (400, "INVALID_ARGUMENT") if about_token => Outcome::Gone("INVALID_ARGUMENT".into()),
+            _ => Outcome::Failed(format!("{status} {code}").trim().to_string()),
+        }
+    }
+
+    async fn deliver(ctx: Arc<Ctx>, conn: Conn, job: Job, bearer: String) {
+        let uri = format!("https://{}{}", authority(&ctx.ep.send), ctx.path);
+        match post(conn, uri, Some(&bearer), "application/json", job.body.clone()).await.map(|(status, body)| outcome(status, &body)) {
+            Ok(Outcome::Sent) => note(None),
+            Ok(Outcome::Gone(why)) => {
+                note(Some(&why));
+                (ctx.gone)(&job, &why)
+            }
+            Ok(Outcome::Failed(why)) => {
+                if why.starts_with("401") {
+                    ctx.account.forget();
+                }
+                failed(&job, &why, &why);
+            }
+            Err(e) => failed(&job, &e, "unreachable"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::apns::{Endpoint, Job, Key, Outcome, Sender};
     use super::*;
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
     use aws_lc_rs::rand::SystemRandom;
-    use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED_SIGNING};
+    use aws_lc_rs::rsa::KeySize;
+    use aws_lc_rs::signature::{EcdsaKeyPair, KeyPair, RsaKeyPair, UnparsedPublicKey, ECDSA_P256_SHA256_ASN1_SIGNING, ECDSA_P256_SHA256_FIXED, ECDSA_P256_SHA256_FIXED_SIGNING, ECDSA_P384_SHA384_FIXED_SIGNING, RSA_PKCS1_2048_8192_SHA256};
     use serde_json::json;
     use tokio::sync::mpsc::Receiver;
 
@@ -1844,6 +2311,11 @@ mod tests {
     const VOIP: &str = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
     const IPHONE: &str = "bbbbbbbbbbbbbbbb";
     const TOPIC: &str = "com.lucid.LucidMeet";
+    /// An FCM registration token shaped as Firebase makes them, and an Android device.
+    const FCM: &str = "dGVzdC1kZXZpY2UtdG9rZW4:APA91bH-sl_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRS";
+    const PIXEL: &str = "9999999999999999";
+    const PROJECT: &str = "lucid-meet-5c92c";
+    const EMAIL: &str = "lucid-relay@lucid-meet-5c92c.iam.gserviceaccount.com";
 
     fn who(p: &str, device: &str) -> Identity {
         Identity { principal: p.into(), name: p.to_uppercase(), device: device.into(), serial: "1A".into(), ..Default::default() }
@@ -2183,8 +2655,17 @@ mod tests {
         assert_eq!(pj::b64_strict(got["key"].as_str().unwrap()).unwrap().len(), 32);
         assert_eq!(got["voip"], json!(true));
         let entry = h.st.lock().push_tokens["ben@x"][IPHONE].clone();
-        assert_eq!(entry.as_object().unwrap().keys().collect::<Vec<_>>(), ["token", "env", "ts", "serial", "seal", "sk", "seal_prev", "sk_prev", "voip", "callkit"]);
-        assert_eq!((&entry["seal"], &entry["sk"], &entry["seal_prev"], &entry["voip"], &entry["callkit"]), (&json!(seal), &json!(sk), &json!(""), &json!(VOIP), &json!(true)));
+        assert_eq!(entry.as_object().unwrap().keys().collect::<Vec<_>>(), ["token", "env", "ts", "serial", "seal", "sk", "seal_prev", "sk_prev", "voip", "callkit", "platform"]);
+        assert_eq!((&entry["seal"], &entry["sk"], &entry["seal_prev"], &entry["voip"], &entry["callkit"], &entry["platform"]), (&json!(seal), &json!(sk), &json!(""), &json!(VOIP), &json!(true), &json!("ios")));
+        // platform ios is the default, said or not; anything else is refused
+        assert_eq!(h.push_register(&ben, &with("platform", json!("ios"))).unwrap()["voip"], json!(true));
+        for bad_platform in [json!("iOS"), json!("web"), json!(1), json!(true)] {
+            assert_eq!(error(h.push_register(&ben, &with("platform", bad_platform))), "400 platform must be ios or android");
+        }
+        // an FCM token is not an iPhone's
+        assert_eq!(error(h.push_register(&ben, &with("token", json!(FCM)))), "400 token must be 64 to 200 hex characters");
+        // FCM off: an Android device is told so
+        assert_eq!(error(h.push_register(&ben, &with("platform", json!("android")))), "501 push notifications for this platform are off on this relay");
         // a new seal key moves the old one to seal_prev; callkit false or no voip_token: no VoIP
         let (_, seal2, sk2) = seal_key_pair();
         let mut next = with("seal", json!(seal2.clone()));
@@ -2985,9 +3466,26 @@ mod tests {
 
     type Seen = (String, hyper::HeaderMap, bytes::Bytes);
 
-    /// A fake APNs: HTTP/2 over TLS (ALPN h2), recording every request. A token starting `dead` answers 410, one
-    /// starting `bad0` 400 BadDeviceToken, anything else 200.
+    /// What a fake server answers a request (path, body): the status and the body.
+    type Answer = Arc<dyn Fn(&str, &bytes::Bytes) -> (u16, String) + Send + Sync>;
+
+    /// A fake APNs: a token starting `dead` answers 410, one starting `bad0` 400 BadDeviceToken, anything else 200.
     async fn fake_apns(cert: &str, key: &str) -> (u16, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
+        let answer: Answer = Arc::new(|path: &str, _: &bytes::Bytes| {
+            let token = path.rsplit('/').next().unwrap_or_default();
+            if token.starts_with("dead") {
+                (410, "{\"reason\":\"Unregistered\"}".into())
+            } else if token.starts_with("bad0") {
+                (400, "{\"reason\":\"BadDeviceToken\"}".into())
+            } else {
+                (200, String::new())
+            }
+        });
+        fake_h2(cert, key, answer).await
+    }
+
+    /// A fake HTTP/2 server over TLS (ALPN h2), recording every request and answering it with `answer`.
+    async fn fake_h2(cert: &str, key: &str, answer: Answer) -> (u16, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
         use http_body_util::{BodyExt, Full};
         use hyper_util::rt::{TokioExecutor, TokioIo};
         let certs = rustls_pemfile::certs(&mut cert.as_bytes()).collect::<Result<Vec<_>, _>>().unwrap();
@@ -3000,26 +3498,18 @@ mod tests {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Seen>();
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
-                let (acceptor, tx) = (acceptor.clone(), tx.clone());
+                let (acceptor, tx, answer) = (acceptor.clone(), tx.clone(), answer.clone());
                 tokio::spawn(async move {
                     let Ok(tls) = acceptor.accept(tcp).await else { return };
                     let service = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                        let tx = tx.clone();
+                        let (tx, answer) = (tx.clone(), answer.clone());
                         async move {
                             let path = req.uri().path().to_string();
                             let headers = req.headers().clone();
                             let body = req.into_body().collect().await.map(|b| b.to_bytes()).unwrap_or_default();
-                            let token = path.rsplit('/').next().unwrap_or_default().to_string();
+                            let (status, text) = answer(&path, &body);
                             let _ = tx.send((path, headers, body));
-                            let (status, reason) = if token.starts_with("dead") {
-                                (410, "Unregistered")
-                            } else if token.starts_with("bad0") {
-                                (400, "BadDeviceToken")
-                            } else {
-                                (200, "")
-                            };
-                            let body = if status == 200 { bytes::Bytes::new() } else { bytes::Bytes::from(format!("{{\"reason\":\"{reason}\"}}")) };
-                            Ok::<_, std::convert::Infallible>(hyper::Response::builder().status(status).body(Full::new(body)).unwrap())
+                            Ok::<_, std::convert::Infallible>(hyper::Response::builder().status(status).body(Full::new(bytes::Bytes::from(text))).unwrap())
                         }
                     });
                     let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new()).serve_connection(TokioIo::new(tls), service).await;
@@ -3088,6 +3578,400 @@ mod tests {
         let mut got = gone.lock().clone();
         got.sort();
         assert_eq!(got, vec![("ben@x".to_string(), IPHONE.to_string(), bad, "BadDeviceToken".to_string(), false), ("ben@x".to_string(), IPHONE.to_string(), dead, "410".to_string(), true)]);
+        assert!(seen.try_recv().is_err());
+        let _ = std::fs::remove_file(ca);
+    }
+
+    // ── Android (FCM) ──
+
+    /// A hub with push on for iPhones (VoIP too) and Android devices, both senders' pushes caught.
+    fn hub_android() -> (Hub, Receiver<Job>, Receiver<fcm::Job>) {
+        let (h, rx) = hub_on();
+        let (sender, frx) = fcm::Sender::capture();
+        h.st.lock().pu.fcm = Some(sender);
+        (h, rx, frx)
+    }
+
+    /// Register an Android device; its seal key and the answer back.
+    fn register_android(h: &Hub, w: &Identity, token: &str) -> (agreement::PrivateKey, Obj) {
+        let (k, seal, sk) = seal_key_pair();
+        let answer = h.push_register(w, &row(json!({"session": "x", "platform": "android", "token": token, "seal": seal, "sk": sk}))).unwrap();
+        (k, answer)
+    }
+
+    fn fcm_sent(rx: &mut Receiver<fcm::Job>) -> Vec<fcm::Job> {
+        let mut out = Vec::new();
+        while let Ok(j) = rx.try_recv() {
+            out.push(j);
+        }
+        out
+    }
+
+    fn message_of(j: &fcm::Job) -> Value {
+        let body: Value = serde_json::from_slice(&j.body).unwrap();
+        assert_eq!(body.as_object().unwrap().keys().collect::<Vec<_>>(), ["message"]);
+        body["message"].clone()
+    }
+
+    fn keys_of(v: &Value) -> Vec<String> {
+        v.as_object().unwrap().keys().cloned().collect()
+    }
+
+    /// Open a caught FCM push with the device's seal key, as the Android app does (an alert's kind checked against
+    /// the data's `cat`).
+    fn fcm_inner_of(h: &Hub, j: &fcm::Job, key: &agreement::PrivateKey) -> Value {
+        let person = h.st.lock().pu_person_key(&j.principal);
+        let data = message_of(j)["data"].clone();
+        let channel = channel_of(data["ch"].as_str().unwrap());
+        let sk = data["sk"].as_str().unwrap().to_string();
+        let now_ms = (h.st.lock().pu.now() * 1000.0) as i64;
+        open(&[(sk, key)], &person, channel, data["cat"].as_str().unwrap_or_default(), &data, &mut HashSet::new(), now_ms, &j.device).unwrap()
+    }
+
+    #[test]
+    fn android_registers_its_fcm_token_with_the_seal_key_and_env_is_ignored() {
+        let (h, _rx, _frx) = hub_android();
+        let pixel = who("ben@x", PIXEL);
+        let (_, seal, sk) = seal_key_pair();
+        let good = row(json!({"platform": "android", "token": FCM, "seal": seal, "sk": sk}));
+        let with = |k: &str, v: Value| {
+            let mut b = good.clone();
+            b.insert(k.into(), v);
+            b
+        };
+        let without = |k: &str| {
+            let mut b = good.clone();
+            b.shift_remove(k);
+            b
+        };
+        for bad_token in [json!("a".repeat(99)), json!("a".repeat(4097)), json!(FCM.replace(':', "/")), json!(format!("{FCM} ")), json!(TOKEN), json!(1), Value::Null] {
+            assert_eq!(error(h.push_register(&pixel, &with("token", bad_token))), "400 an android token must be 100 to 4096 letters, digits, colons, underscores or hyphens");
+        }
+        assert_eq!(error(h.push_register(&pixel, &without("token"))), "400 an android token must be 100 to 4096 letters, digits, colons, underscores or hyphens");
+        assert!(h.push_register(&pixel, &with("token", json!("a".repeat(100)))).is_ok());
+        assert!(h.push_register(&pixel, &with("token", json!("a".repeat(4096)))).is_ok());
+        // the seal key exactly as an iPhone's; no voip_token, callkit false or absent
+        assert_eq!(error(h.push_register(&pixel, &without("seal"))), format!("400 {BAD_SEAL}"));
+        assert_eq!(error(h.push_register(&pixel, &without("sk"))), format!("400 {BAD_SK}"));
+        assert_eq!(error(h.push_register(&pixel, &with("sk", json!("00000000")))), format!("400 {BAD_SK}"));
+        for wrong in [("voip_token", json!(VOIP)), ("voip_token", json!("")), ("callkit", json!(true)), ("callkit", json!("no"))] {
+            assert_eq!(error(h.push_register(&pixel, &with(wrong.0, wrong.1))), "400 an android registration takes no voip_token, and callkit must be false");
+        }
+        assert!(h.push_register(&pixel, &with("callkit", json!(false))).is_ok());
+        assert!(h.push_register(&pixel, &with("voip_token", Value::Null)).is_ok());
+        // env is ignored, whatever it says, sandbox tokens off or not
+        h.st.lock().pu.sandbox = false;
+        let got = h.push_register(&pixel, &with("env", json!("dev"))).unwrap();
+        assert_eq!(got.keys().collect::<Vec<_>>(), ["ok", "key", "voip"]);
+        assert_eq!(got["voip"], json!(true));
+        let entry = h.st.lock().push_tokens["ben@x"][PIXEL].clone();
+        assert_eq!(keys_of(&entry), ["token", "env", "ts", "serial", "seal", "sk", "seal_prev", "sk_prev", "voip", "callkit", "platform"]);
+        assert_eq!(
+            (&entry["token"], &entry["env"], &entry["seal"], &entry["sk"], &entry["voip"], &entry["callkit"], &entry["platform"]),
+            (&json!(FCM), &json!(""), &json!(seal), &json!(sk), &json!(""), &json!(false), &json!("android"))
+        );
+        // the row loads back; an Android row with iPhone parts or without a seal key does not
+        let fresh = hub();
+        let mut wrong_rows = Vec::new();
+        for (k, v) in [("callkit", json!(true)), ("env", json!("production")), ("voip", json!(VOIP)), ("token", json!(TOKEN)), ("platform", json!("web")), ("seal", json!("")), ("sk", json!(""))] {
+            let mut r = entry.clone();
+            r[k] = v;
+            wrong_rows.push(r);
+        }
+        let mut both = Obj::new();
+        both.insert(PIXEL.into(), entry.clone());
+        for (i, r) in wrong_rows.into_iter().enumerate() {
+            both.insert(format!("{i:016}"), r);
+        }
+        fresh.st.lock().pu_load(&row(json!({"push_tokens": {"ben@x": both}})));
+        assert_eq!(Value::Object(fresh.st.lock().push_tokens.clone()), json!({"ben@x": {PIXEL: entry}}));
+        // FCM off: Android refused, iPhones still register; APNs off: the reverse
+        let sender = h.st.lock().pu.fcm.take();
+        assert_eq!(error(h.push_register(&pixel, &good)), "501 push notifications for this platform are off on this relay");
+        h.st.lock().pu.fcm = sender;
+        let sender = h.st.lock().pu.sender.take();
+        let iphone = row(json!({"token": TOKEN, "env": "production", "seal": seal, "sk": sk, "callkit": false}));
+        assert_eq!(error(h.push_register(&who("ben@x", IPHONE), &iphone)), "501 push notifications for this platform are off on this relay");
+        assert!(h.st.lock().pu_on());
+        assert!(h.push_register(&pixel, &good).is_ok());
+        h.st.lock().pu.sender = sender;
+        // unregister: the same for both
+        assert_eq!(h.push_unregister(&pixel).unwrap(), row(json!({"ok": true, "removed": true})));
+        assert!(!h.st.lock().push_tokens.contains_key("ben@x"));
+    }
+
+    #[test]
+    fn fcm_messages_per_channel_match_the_golden_json() {
+        let person = [7u8; 32];
+        let (s, sk) = ("U0VBTEVE", "d197f269");
+        let t = |d: &str| tag(&person, d.as_bytes());
+        let o = |c: Channel| origin(&person, c, sk, s);
+        let golden = |c: Channel, inner: Value| {
+            let (message, size) = build_fcm(&person, c, &row(inner), s, sk, 12, FCM);
+            (pj::dumps_compact(&message), size)
+        };
+        // a message: alert, HIGH, an hour, the collapse tag in the data and as the collapse key, category and badge
+        let (alert, size) = golden(Channel::Alert, json!({"v": 1, "k": "msg", "conv": "dm:ann@x", "id": "m-1"}));
+        assert_eq!(
+            alert,
+            format!(
+                r#"{{"message":{{"token":"{FCM}","data":{{"ch":"alert","c":"{}","s":"{s}","sk":"{sk}","o":"{}","collapse":"{}","cat":"msg","badge":"12"}},"android":{{"priority":"HIGH","ttl":"3600s","collapse_key":"{}"}}}}}}"#,
+                t("dm:ann@x"),
+                o(Channel::Alert),
+                t("msg:m-1"),
+                t("msg:m-1")
+            )
+        );
+        assert_eq!(size, 2 + 5 + 1 + 32 + 1 + s.len() + 2 + 8 + 1 + 32 + 8 + 32 + 3 + 3 + 5 + 2);
+        // a missed call and a meeting invite: their threads, collapse tags and categories as on the iPhone
+        let (missed, _) = golden(Channel::Alert, json!({"v": 1, "k": "missed", "conv": "dm:ann@x", "id": "i-1"}));
+        assert!(missed.contains(&format!(r#""collapse":"{}","cat":"missed","badge":"12"}},"android":{{"priority":"HIGH","ttl":"3600s","collapse_key":"{}"}}"#, t("invite:i-1"), t("invite:i-1"))));
+        let (meeting, _) = golden(Channel::Alert, json!({"v": 1, "k": "invite", "conv": "meeting:mt-1", "id": "mt-1", "start": 1_794_000_000}));
+        assert!(meeting.contains(&format!(r#""c":"{}""#, t("meetings"))) && meeting.contains(&format!(r#""collapse_key":"{}""#, t("meeting:mt-1:1794000000"))));
+        assert!(meeting.contains(r#""cat":"mtg""#));
+        // a call: voip, HIGH, now or never, no collapse key
+        let (voip, _) = golden(Channel::Voip, json!({"v": 1, "k": "call", "conv": "dm:ann@x", "id": "i-1"}));
+        assert_eq!(voip, format!(r#"{{"message":{{"token":"{FCM}","data":{{"ch":"voip","c":"{}","s":"{s}","sk":"{sk}","o":"{}"}},"android":{{"priority":"HIGH","ttl":"0s"}}}}}}"#, t("dm:ann@x"), o(Channel::Voip)));
+        // a new CRL: background, NORMAL, six hours, the crl collapse key
+        let (background, _) = golden(Channel::Background, json!({"v": 1, "k": "crl", "conv": "", "id": "1793996400", "from": ""}));
+        assert_eq!(
+            background,
+            format!(r#"{{"message":{{"token":"{FCM}","data":{{"ch":"background","s":"{s}","sk":"{sk}","o":"{}"}},"android":{{"priority":"NORMAL","ttl":"21600s","collapse_key":"{}"}}}}}}"#, o(Channel::Background), t("crl"))
+        );
+        // the sealed inner's one size fits FCM's data limit on every channel
+        for (c, b64) in [(Channel::Alert, 3540), (Channel::Voip, 1492), (Channel::Background, 1492)] {
+            let sealed = "A".repeat(b64);
+            let (_, size) = build_fcm(&person, c, &row(json!({"k": "msg", "conv": "x".repeat(300), "id": "y".repeat(64)})), &sealed, sk, 99_999, FCM);
+            assert!(size <= fcm::DATA_LIMIT, "{c:?} {size}");
+        }
+        assert_eq!(fcm::DATA_LIMIT, 4096);
+    }
+
+    #[test]
+    fn android_devices_get_data_only_fcm_pushes_for_messages_calls_and_crls() {
+        let (h, mut rx, mut frx) = hub_android();
+        let (ann, pixel) = (who("ann@x", "aaaaaaaaaaaaaaaa"), who("ben@x", PIXEL));
+        let sa = session(&h, &ann);
+        let sb = session(&h, &pixel);
+        h.bye(&sb, &pixel).unwrap();
+        let (key, answer) = register_android(&h, &pixel, FCM);
+        let person = pj::b64_strict(answer["key"].as_str().unwrap()).unwrap();
+        // a direct message: one alert, data only, no notification block, sealed like the iPhone's
+        dm(&h, "m-1", json!({}));
+        assert!(sent(&mut rx).is_empty());
+        let jobs = fcm_sent(&mut frx);
+        assert_eq!(jobs.len(), 1);
+        let j = &jobs[0];
+        assert_eq!((j.principal.as_str(), j.device.as_str(), j.token.as_str(), j.kind.as_str()), ("ben@x", PIXEL, FCM, "msg"));
+        let m = message_of(j);
+        assert_eq!(keys_of(&m), ["token", "data", "android"]);
+        assert_eq!(m["token"], json!(FCM));
+        assert_eq!(keys_of(&m["data"]), ["ch", "c", "s", "sk", "o", "collapse", "cat", "badge"]);
+        let collapse = tag(&person, b"msg:m-1");
+        assert_eq!((&m["data"]["ch"], &m["data"]["c"], &m["data"]["collapse"]), (&json!("alert"), &json!(tag(&person, b"dm:ann@x")), &json!(collapse)));
+        assert_eq!((&m["data"]["cat"], &m["data"]["badge"]), (&json!("msg"), &json!("1")));
+        assert_eq!(m["data"]["s"].as_str().unwrap().len(), 3540);
+        assert_eq!(m["android"], json!({"priority": "HIGH", "ttl": "3600s", "collapse_key": collapse}));
+        let inner = fcm_inner_of(&h, j, &key);
+        assert_eq!((&inner["k"], &inner["dev"], &inner["from"], &inner["id"]), (&json!("msg"), &json!(PIXEL), &json!("ann@x"), &json!("m-1")));
+        // a call rings on the voip channel with the one FCM token, whatever push.voip says
+        h.st.lock().pu.voip = false;
+        let room = dm_room("ann@x", "ben@x");
+        let got = h.invite(&sa, &ann, Some(&json!("ben@x")), Some(&json!(room)), None).unwrap();
+        let id = invites(&got)[0]["id"].as_str().unwrap().to_string();
+        let jobs = fcm_sent(&mut frx);
+        assert_eq!(jobs.len(), 1);
+        let m = message_of(&jobs[0]);
+        assert_eq!(keys_of(&m["data"]), ["ch", "c", "s", "sk", "o"]);
+        assert_eq!((&m["data"]["ch"], m["data"]["s"].as_str().unwrap().len()), (&json!("voip"), 1492));
+        assert_eq!(m["android"], json!({"priority": "HIGH", "ttl": "0s"}));
+        let inner = fcm_inner_of(&h, &jobs[0], &key);
+        assert_eq!((&inner["k"], &inner["id"], &inner["room"]), (&json!("call"), &json!(id), &json!(room)));
+        // a new CRL: background, normal priority (the ring has ended meanwhile: its missed call is an alert)
+        h.pc_tell_crl(1_793_996_400);
+        skew(&h, CRL_SPREAD + 1.0);
+        h.push_tick();
+        let jobs = fcm_sent(&mut frx);
+        let crl = jobs.iter().find(|j| message_of(j)["data"]["ch"] == json!("background")).unwrap();
+        let m = message_of(crl);
+        assert_eq!(keys_of(&m["data"]), ["ch", "s", "sk", "o"]);
+        assert_eq!(m["android"], json!({"priority": "NORMAL", "ttl": "21600s", "collapse_key": tag(&person, b"crl")}));
+        assert_eq!(fcm_inner_of(&h, crl, &key)["k"], json!("crl"));
+        for missed in jobs.iter().filter(|j| message_of(j)["data"]["ch"] == json!("alert")) {
+            assert_eq!(message_of(missed)["android"]["collapse_key"], json!(tag(&person, format!("invite:{id}").as_bytes())));
+            assert_eq!(fcm_inner_of(&h, missed, &key)["k"], json!("missed"));
+        }
+        assert!(sent(&mut rx).is_empty());
+    }
+
+    #[test]
+    fn fcm_unregistered_and_a_bad_token_clear_the_android_row() {
+        let answer = |status: u16, v: Value| fcm::outcome(status, v.to_string().as_bytes());
+        let fcm_error = |code: &str| json!({"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode": code});
+        assert_eq!(answer(200, json!({"name": "projects/p/messages/1"})), Outcome::Sent);
+        assert_eq!(answer(404, json!({"error": {"code": 404, "message": "Requested entity was not found.", "status": "NOT_FOUND", "details": [fcm_error("UNREGISTERED")]}})), Outcome::Gone("UNREGISTERED".into()));
+        let not_a_token = json!({"error": {"code": 400, "message": "The registration token is not a valid FCM registration token", "status": "INVALID_ARGUMENT", "details": [fcm_error("INVALID_ARGUMENT")]}});
+        assert_eq!(answer(400, not_a_token), Outcome::Gone("INVALID_ARGUMENT".into()));
+        let violation = |field: &str| json!({"error": {"code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.BadRequest", "fieldViolations": [{"field": field, "description": "x"}]}]}});
+        assert_eq!(answer(400, violation("message.token")), Outcome::Gone("INVALID_ARGUMENT".into()));
+        // a bad message is not a bad token; quota, outages and credentials are failures, never retried
+        assert_eq!(answer(400, violation("message.android.ttl")), Outcome::Failed("400 INVALID_ARGUMENT".into()));
+        assert_eq!(answer(429, json!({"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "details": [fcm_error("QUOTA_EXCEEDED")]}})), Outcome::Failed("429 QUOTA_EXCEEDED".into()));
+        assert_eq!(answer(401, json!({"error": {"code": 401, "status": "UNAUTHENTICATED"}})), Outcome::Failed("401 UNAUTHENTICATED".into()));
+        assert_eq!(fcm::outcome(503, b"nope"), Outcome::Failed("503".into()));
+        // the hub: FCM on an older token changes nothing; on the row's token the registration goes
+        let (h, _rx, _frx) = hub_android();
+        let pixel = who("ben@x", PIXEL);
+        register_android(&h, &pixel, FCM);
+        h.push_gone("ben@x", PIXEL, &format!("{FCM}x"), "UNREGISTERED", false);
+        assert_eq!(h.st.lock().push_tokens["ben@x"][PIXEL]["token"], json!(FCM));
+        h.push_gone("ben@x", PIXEL, FCM, "UNREGISTERED", false);
+        assert!(!h.st.lock().push_tokens.contains_key("ben@x"));
+        register_android(&h, &pixel, FCM);
+        h.push_gone("ben@x", PIXEL, FCM, "INVALID_ARGUMENT", false);
+        assert!(!h.st.lock().push_tokens.contains_key("ben@x"));
+    }
+
+    /// A service account key file (JSON) with a fresh RSA key, and the key's public half.
+    fn service_account() -> (String, Vec<u8>) {
+        let pair = RsaKeyPair::generate(KeySize::Rsa2048).unwrap();
+        let pkcs8 = AsDer::<Pkcs8V1Der>::as_der(&pair).unwrap();
+        let file = json!({
+            "type": "service_account", "project_id": PROJECT, "private_key_id": "0123abcd", "private_key": pem("PRIVATE KEY", pkcs8.as_ref()),
+            "client_email": EMAIL, "client_id": "1", "token_uri": "https://oauth2.googleapis.com/token"
+        });
+        (file.to_string(), pair.public_key().as_ref().to_vec())
+    }
+
+    /// Check an RS256 JWT with the public key; its header and claims.
+    fn rs256_parts(token: &str, public: &[u8]) -> (Value, Value) {
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        let sig = crate::codec::unb64u(parts[2]).unwrap();
+        UnparsedPublicKey::new(&RSA_PKCS1_2048_8192_SHA256, public).verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &sig).expect("an RS256 signature");
+        let part = |s: &str| serde_json::from_slice::<Value>(&crate::codec::unb64u(s).unwrap()).unwrap();
+        (part(parts[0]), part(parts[1]))
+    }
+
+    #[test]
+    fn the_fcm_assertion_is_rs256_and_its_access_token_is_kept_until_5_minutes_before_expiry() {
+        let (file, public) = service_account();
+        let account = fcm::Account::from_json(file.as_bytes()).unwrap();
+        let (header, claims) = rs256_parts(&account.assertion(1_794_000_000).unwrap(), &public);
+        assert_eq!(header, json!({"alg": "RS256", "typ": "JWT"}));
+        assert_eq!(keys_of(&claims), ["iss", "scope", "aud", "iat", "exp"]);
+        assert_eq!(
+            claims,
+            json!({"iss": EMAIL, "scope": "https://www.googleapis.com/auth/firebase.messaging", "aud": "https://oauth2.googleapis.com/token", "iat": 1_794_000_000, "exp": 1_794_003_600})
+        );
+        // the access token: kept while good for more than 5 minutes
+        assert_eq!(fcm::RENEW_BEFORE, std::time::Duration::from_secs(300));
+        assert!(account.cached().is_none());
+        account.keep("ya29.a", 3599);
+        assert_eq!(account.cached().as_deref(), Some("ya29.a"));
+        account.keep("ya29.b", 300);
+        assert!(account.cached().is_none());
+        account.keep("ya29.c", 0);
+        assert!(account.cached().is_none());
+        account.keep("ya29.d", 3599);
+        account.forget();
+        assert!(account.cached().is_none());
+        // what is not a service account key is refused, with words that never show the file
+        let (p256, _) = p8();
+        let key_of = |pem_text: &str| json!({"client_email": EMAIL, "private_key": pem_text}).to_string().into_bytes();
+        for wrong in [b"not json".to_vec(), json!({"client_email": EMAIL}).to_string().into_bytes(), json!({"client_email": "", "private_key": "x"}).to_string().into_bytes(), key_of(&p256), key_of(&pem("PRIVATE KEY", b"junk")), key_of("")] {
+            assert_eq!(fcm::Account::from_json(&wrong).err().unwrap(), "credentials_file is not a service account key (client_email, private_key)");
+        }
+        assert_eq!(fcm::Account::load("/no/such/fcm.json").err().unwrap(), "credentials_file cannot be read");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!("fcm-{}.json", pj::token_hex(4)));
+            std::fs::write(&path, &file).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(fcm::Account::load(path.to_str().unwrap()).err().unwrap(), "credentials_file must be readable by the relay only (mode 600)");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(fcm::Account::load(path.to_str().unwrap()).is_ok());
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// A fake Google: `/token` answers a new access token each time (`ya29.test-<n>`); FCM's send answers a token
+    /// starting `dead` 404 UNREGISTERED, `bad0` 400 INVALID_ARGUMENT, `busy` 429, anything else 200.
+    async fn fake_google(cert: &str, key: &str) -> (u16, tokio::sync::mpsc::UnboundedReceiver<Seen>) {
+        let issued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let answer: Answer = Arc::new(move |path: &str, body: &bytes::Bytes| {
+            if path == "/token" {
+                let n = issued.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                return (200, json!({"access_token": format!("ya29.test-{n}"), "expires_in": 3599, "token_type": "Bearer"}).to_string());
+            }
+            let sent: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let token = sent["message"]["token"].as_str().unwrap_or_default();
+            let error = |status: u16, code: &str, message: &str| (status, json!({"error": {"code": status, "message": message, "details": [{"@type": "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode": code}]}}).to_string());
+            if token.starts_with("dead") {
+                error(404, "UNREGISTERED", "Requested entity was not found.")
+            } else if token.starts_with("bad0") {
+                error(400, "INVALID_ARGUMENT", "The registration token is not a valid FCM registration token")
+            } else if token.starts_with("busy") {
+                error(429, "QUOTA_EXCEEDED", "Quota exceeded.")
+            } else {
+                (200, json!({"name": format!("projects/{PROJECT}/messages/1")}).to_string())
+            }
+        });
+        fake_h2(cert, key, answer).await
+    }
+
+    #[tokio::test]
+    async fn the_fcm_sender_gets_one_access_token_posts_http_v1_and_drops_gone_tokens() {
+        let (cert, cert_key) = fake_cert();
+        let (port, mut seen) = fake_google(&cert, &cert_key).await;
+        let ca = std::env::temp_dir().join(format!("fcm-ca-{}.pem", pj::token_hex(4)));
+        std::fs::write(&ca, &cert).unwrap();
+        let ep = fcm::Endpoint::new(Some(ca.to_str().unwrap()), ("127.0.0.1".into(), port), ("127.0.0.1".into(), port)).unwrap();
+        let (file, public) = service_account();
+        let account = fcm::Account::from_json(file.as_bytes()).unwrap();
+        type Gone = (String, String, String, String);
+        let gone: Arc<parking_lot::Mutex<Vec<Gone>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let heard = gone.clone();
+        let on_gone: fcm::OnGone = Arc::new(move |j: &fcm::Job, why: &str| heard.lock().push((j.principal.clone(), j.device.clone(), j.token.clone(), why.to_string())));
+        let sender = fcm::Sender::start(account, ep, PROJECT, on_gone).unwrap();
+        let body = |token: &str| json!({"message": {"token": token, "data": {"ch": "alert"}, "android": {"priority": "HIGH", "ttl": "3600s"}}}).to_string().into_bytes();
+        let job = |token: &str| fcm::Job { principal: "ben@x".into(), device: PIXEL.into(), token: token.into(), kind: "msg".into(), body: body(token) };
+        let wait = std::time::Duration::from_secs(10);
+        // the first push: the assertion for an access token, then the HTTP v1 send with it
+        assert!(sender.send(job(FCM)));
+        let (path, headers, form) = tokio::time::timeout(wait, seen.recv()).await.unwrap().unwrap();
+        let h = |headers: &hyper::HeaderMap, k: &str| headers.get(k).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+        assert_eq!((path.as_str(), h(&headers, "content-type").as_str()), ("/token", "application/x-www-form-urlencoded"));
+        let form = String::from_utf8(form.to_vec()).unwrap();
+        let assertion = form.strip_prefix("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=").unwrap();
+        let (_, claims) = rs256_parts(assertion, &public);
+        assert_eq!((&claims["iss"], &claims["scope"], &claims["aud"]), (&json!(EMAIL), &json!(fcm::SCOPE), &json!(fcm::AUDIENCE)));
+        let (path, headers, sent_body) = tokio::time::timeout(wait, seen.recv()).await.unwrap().unwrap();
+        assert_eq!(path, format!("/v1/projects/{PROJECT}/messages:send"));
+        assert_eq!((h(&headers, "authorization"), h(&headers, "content-type")), ("Bearer ya29.test-1".to_string(), "application/json".to_string()));
+        assert_eq!(sent_body.as_ref(), body(FCM).as_slice());
+        // the next push: the same access token, no new token request
+        assert!(sender.send(job(FCM)));
+        let (path, headers, _) = tokio::time::timeout(wait, seen.recv()).await.unwrap().unwrap();
+        assert_eq!((path, h(&headers, "authorization")), (format!("/v1/projects/{PROJECT}/messages:send"), "Bearer ya29.test-1".to_string()));
+        // UNREGISTERED and INVALID_ARGUMENT on the token report it gone; 429 does not
+        let (dead, bad, busy) = (format!("dead{}", &FCM[4..]), format!("bad0{}", &FCM[4..]), format!("busy{}", &FCM[4..]));
+        assert!(sender.send(job(&dead)) && sender.send(job(&bad)) && sender.send(job(&busy)));
+        for _ in 0..3 {
+            let (path, _, _) = tokio::time::timeout(wait, seen.recv()).await.unwrap().unwrap();
+            assert_eq!(path, format!("/v1/projects/{PROJECT}/messages:send"));
+        }
+        for _ in 0..100 {
+            if gone.lock().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let mut got = gone.lock().clone();
+        got.sort();
+        assert_eq!(got, vec![("ben@x".to_string(), PIXEL.to_string(), bad, "INVALID_ARGUMENT".to_string()), ("ben@x".to_string(), PIXEL.to_string(), dead, "UNREGISTERED".to_string())]);
         assert!(seen.try_recv().is_err());
         let _ = std::fs::remove_file(ca);
     }
