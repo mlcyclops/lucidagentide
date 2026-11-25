@@ -858,7 +858,10 @@ impl FleetCa {
         let key = self.ca_key(vault, generation).ok_or("the management CA key cannot be used")?;
         let serial = x509::new_serial()?;
         let not_after = t + x509::LEAF_DAYS * DAY_MS;
-        let cert = x509::issue(&Spec { profile: Profile::Relay { relay_id: relay_id.to_owned() }, serial: &serial, not_before_ms: t, not_after_ms: not_after, spki, issuer: Some(&g.cert) }, &key)?;
+        // backdated like Meet CA leaves: a relay whose clock runs a little behind the console's judges a leaf
+        // dated "now" as not yet valid, and refuses its own enrollment answer (seen live: `leaf: expired`)
+        let not_before = t - crate::meet_ca::BACKDATE_MS;
+        let cert = x509::issue(&Spec { profile: Profile::Relay { relay_id: relay_id.to_owned() }, serial: &serial, not_before_ms: not_before, not_after_ms: not_after, spki, issuer: Some(&g.cert) }, &key)?;
         Ok((cert, x509::serial_of_bytes(&serial), (not_after / 1000) * 1000))
     }
 
