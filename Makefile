@@ -1897,6 +1897,12 @@ demo-P-AUTH.RELOGIN1: ## P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp dropped (or t
 demo-P-DOCS.0: ## P-DOCS.0 (ADR-0660): the 2.6.1 docs release: every relative image README.md shows exists (markdown and <img> tags, fenced code skipped), README names v2.6.1 the current stable release, and ADR numbers stay unique with ADR-0660 (the docs.lucid-agents.com plan)
 	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts tools/readme_images.test.ts
 
+.PHONY: demo-P-DOCS.1
+demo-P-DOCS.1: ## P-DOCS.1 (ADR-0660): docs.lucid-agents.com. Recaptures every docs screenshot from the real app on an isolated QA engine (desktop/scripts/docs_capture_p_docs_1.mjs, steps in desktop/scripts/docs_shots/; a step that cannot find its element fails), then builds the docs repo checked out beside this one (../lucid-agent-docs, or DOCS_REPO=...) and fails on a broken link, an image without alt text, a video without captions, an em dash, a missing shot, or (P-DOCS.1b, in Chrome) a callout layer off its image or two callout numbers on top of each other. The worlds shots import signed world packages from ../lucidagentIDEaddon/worlds/dist (or LUCID_DOCS_WORLDS_DIR)
+	$(BUN) test $(TEST_IGNORES) harness/adr_numbering.test.ts
+	$(BUN) desktop/scripts/docs_capture_p_docs_1.mjs --docs $(or $(DOCS_REPO),../lucid-agent-docs)
+	cd $(or $(DOCS_REPO),../lucid-agent-docs) && bun install --frozen-lockfile && bun run check
+
 .PHONY: demo-P-PREVIEW.CHIP1
 demo-P-PREVIEW.CHIP1: ## P-PREVIEW.CHIP1: one preview chip (preview_chip.ts, .pchip) in the composer, inside each fleet lane's transcript (upper-right, out of the header, never over the lane's composer; the page alone on a narrow card), above each orbit spoke and beside each agent and Main in Agent Worlds (stacked over its artifact chip, hover card with title, path, Open preview and the agent's snapshots); an Agent Worlds chip flies the Preview out over Visualize (z 94, resizable), X, Esc or a press on the world slides it back to the chip, a second Esc closes Visualize. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, then bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7811/ --lanes 2 --no-main): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:7811/?vizScript=1 node desktop/scripts/demo_p_preview_chip_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts desktop/renderer/preview_tabs.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
@@ -1947,6 +1953,12 @@ demo-P-FLEET.CONN1: ## P-FLEET.CONN1: with several agents working, the window's 
 demo-P-FLEET.CONN1-live: ## P-FLEET.CONN1 live: real lanes on a real (local, zero-cost) model, their turns streamed by the window like the Fleet grid; every second the rail's working/idle tiles must match the engine within one poll cycle and the window must keep answering. LUCID_DEMO_BROWSER_URL=http://127.0.0.1:9340 LUCID_DEMO_URL=http://127.0.0.1:5401/ LUCID_DEMO_MODEL=dgx-spark/glm-5.3-flash LUCID_DEMO_LANES=5 node desktop/scripts/demo_p_rail_live_1.mjs
 	node --check desktop/scripts/demo_p_rail_live_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_live_1.mjs; else echo "demo-P-FLEET.CONN1-live: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL), LUCID_DEMO_URL and LUCID_DEMO_MODEL to run it"; fi
+
+.PHONY: demo-P-PREVIEW.CHIPX1
+demo-P-PREVIEW.CHIPX1: ## P-PREVIEW.CHIPX1 (ADR-0678): hovering a Fleet lane's preview chip (its card or its Orbit spoke) shows a tiny red x on its upper-right corner (no clicks until then); a click hides the chip on the card, spoke and Agent Worlds node without a takeover, a toast offers Undo, and the same page written again keeps it hidden. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, the page past first run): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_preview_chip_x1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_chip_x1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_preview_chip_x1.mjs; else echo "demo-P-PREVIEW.CHIPX1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
 .PHONY: demo-P-BUDDY.HIDE1
 demo-P-BUDDY.HIDE1: ## P-BUDDY.HIDE1: hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner (it takes no clicks until then); a click hides that buddy for that session (Main's chat, or the lane's), a toast offers Undo, a reload keeps it hidden, a new session brings it back; world buddies have no x. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_hide_1.mjs

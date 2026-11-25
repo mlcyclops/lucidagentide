@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  CURTAIN, canvasShows, canvasVerdict, chipCardAt, chipStackAt, chipTarget, chipText, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain,
+  CURTAIN, canvasShows, canvasVerdict, chipAfterHide, chipCardAt, chipStackAt, chipTarget, chipText, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain,
   headChip, paintCommand, paintContentful, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain,
   type CanvasSample, type CurtainInput, type PaintStats,
 } from "./preview_curtain.ts";
@@ -295,5 +295,22 @@ describe("P-PREVIEW.CHIP1: one chip on every surface", () => {
     expect(chipCardAt({ left: 0, top: 300, width: 120, height: 34 }, card, stage).left).toBe(8);
     expect(chipCardAt({ left: 760, top: 300, width: 120, height: 34 }, card, stage).left).toBe(492);
     expect(chipCardAt({ left: 60, top: 20, width: 120, height: 34 }, card, { width: 200, height: 100 })).toEqual({ left: 8, top: 8 });
+  });
+});
+
+describe("chipAfterHide: a lane chip closed with its red x (P-PREVIEW.CHIPX1)", () => {
+  const page = (path: string, phase: "loading" | "ready" = "ready") => ({ phase, label: path, path });
+  test("the same page stays hidden whether it loads again or turns ready again", () => {
+    expect(chipAfterHide("games/a.html", page("games/a.html", "loading"))).toEqual({ show: null, hidden: "games/a.html" });
+    expect(chipAfterHide("games/a.html", page("games/a.html"))).toEqual({ show: null, hidden: "games/a.html" });
+  });
+  test("a different page shows and ends the hide", () => {
+    expect(chipAfterHide("games/a.html", page("games/b.html"))).toEqual({ show: page("games/b.html"), hidden: undefined });
+  });
+  test("no chip to show keeps the hide, so the page coming back later stays hidden", () => {
+    expect(chipAfterHide("games/a.html", null)).toEqual({ show: null, hidden: "games/a.html" });
+  });
+  test("no hide paints what it is given", () => {
+    expect(chipAfterHide(undefined, page("games/a.html"))).toEqual({ show: page("games/a.html"), hidden: undefined });
   });
 });

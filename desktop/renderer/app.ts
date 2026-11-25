@@ -70,7 +70,7 @@ import { snapshotLabel, snapshotVerdict } from "./phone_snapshot.ts";
 // P-PREVIEW.19 (ADR-0339): the Preview panel does not follow you into the next conversation.
 import { previewAfterNewSession } from "./preview_session.ts";
 // P-PREVIEW-CURTAIN.1 (ADR-0621): auto previews load behind a curtain; only a page that renders earns a chip.
-import { CURTAIN, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
+import { CURTAIN, chipAfterHide, chipTarget, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain, headChip, paintCommand, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain, type ChipState, type CurtainDecision, type CurtainEntry, type CurtainProbe, type PaintStats } from "./preview_curtain.ts";
 import { paintPreviewChip, previewChipHtml } from "./preview_chip.ts"; // P-PREVIEW.CHIP1: the one preview chip, composer included
 import { makeLaneThumb, recordLaneShot } from "./lane_shots.ts"; // P-LANESHOTS.1: per-agent preview snapshots
 import { decidePackAction } from "../../harness/market/entitlement.ts"; // P-KGMARKET.1 (ADR-0206)
@@ -10958,10 +10958,41 @@ function curtainReady(key: string, path: string, r: CurtainResult, open: boolean
  *  ("main", the Agent Worlds hub; the composer has its own chip, paintCurtainChip). */
 function setTargetChip(target: string, v: ChipState | null): void {
   if (target !== "main") {
+    if (v) laneChipState.set(target, v); else laneChipState.delete(target);
+    // P-PREVIEW.CHIPX1: a chip the user closed stays away while the lane's page is the one it showed (its reload or
+    // a second gate on the same file included); a different page brings the chip back.
+    const after = chipAfterHide(dismissedLaneChips.get(target), v);
+    if (after.hidden === undefined) dismissedLaneChips.delete(target);
+    v = after.show;
     paintLanePreview(target, v);
     paintSpokePreview(target, v);
   }
   paintVizPreview(target, v);
+}
+
+/** P-PREVIEW.CHIPX1: lanes whose chip was closed with its red x, and the page it showed. In memory, like the
+ *  composer's dismissedAgentPreviews: a restart starts with no lane chips anyway. */
+const dismissedLaneChips = new Map<string, string>();
+/** Each lane's chip as the curtain last set it (shown or not), so Undo can put it back. */
+const laneChipState = new Map<string, ChipState>();
+
+/** P-PREVIEW.CHIPX1: the red x on a lane's chip (its fleet card or orbit spoke). The chip leaves the card, the
+ *  spoke and the lane's Agent Worlds node together; the toast offers Undo. */
+function dismissLaneChip(laneId: string): void {
+  const v = laneChipState.get(laneId);
+  if (!v) return;
+  dismissedLaneChips.set(laneId, v.path);
+  setTargetChip(laneId, v);
+  showToast({
+    title: "Preview chip hidden",
+    desc: "It comes back when this agent makes a different page. A page that rendered stays on its tab in the Preview panel.",
+    timeout: 6000,
+    actions: [{ label: "Undo", run: () => {
+      if (dismissedLaneChips.get(laneId) === v.path) dismissedLaneChips.delete(laneId);
+      const cur = laneChipState.get(laneId);
+      if (cur) setTargetChip(laneId, cur);
+    } }],
+  });
 }
 
 /** The composer chip: the one preview chip (preview_chip.ts, size "full") at the chat column's top-right edge,
@@ -19739,6 +19770,7 @@ function wire(): void {
     openConnectors: () => openSettingsTo("mcpQuick"),
     previewLaneFile: (laneId, laneName, path) => previewShowLaneFile(laneId, laneName, path), // P-PREVIEW.10: a lane's previewable write gets its own Preview tab
     openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the card's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     getMasterModel: () => state.model || state.config.find((c) => c.id === "model")?.currentValue || "",
     // The SAME curated list the composer picker offers (Bedrock/Vertex behind a saved key, gov and China
     // gates, deprecated and auxiliary rows pruned, lockdown, unavailable providers): omp's raw catalog lists
@@ -19805,6 +19837,7 @@ function wire(): void {
     repoContext: bridge.repoContext, // P-REPO.1: the hub names Main's repo
     openUrl: (url) => void openAuthUrl(url),
     openLanePreview: (laneId, from) => openLanePreviewFrom(laneId, from), // P-PREVIEW-CURTAIN.1: the spoke's mini chip
+    dismissLanePreview: (laneId) => dismissLaneChip(laneId), // P-PREVIEW.CHIPX1: the chip's red x
     promoteLane: (laneId) => void promoteLane(laneId),
     demoteLane: () => demoteLane(),
     openGrid: () => openFleetGrid(),
