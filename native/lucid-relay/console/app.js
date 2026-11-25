@@ -1041,6 +1041,7 @@
       auto: "Approve automatically",
       queueNote: "A device signed in with a password waits until an admin approves it.",
       autoNote: "A device signed in with a password is approved at once.",
+      noAccounts: "No accounts yet. People get one when they accept an invite.",
       save: "Save",
       off: "Password sign-in is not set up on this console.",
       offHow: "An operator imports the accounts and invites of the old Meet console on this console's host, with the console stopped:",
@@ -3505,15 +3506,15 @@
     let approval = null;
     if (admin) {
       const group = uid("appr");
-      const radio = (value, label, on) => {
+      // each hint sits under its own choice, so neither reads as the current behavior
+      const radio = (value, label, note, on) => {
         const id = uid("appr");
         const r = el("input", { type: "radio", id, name: group, value, checked: on ? true : null });
-        return [r, el("label", { class: "inline", for: id }, r, label)];
+        return [r, el("div", null, el("label", { class: "inline", for: id }, r, label), el("p", { class: "note" }, note))];
       };
-      const queueR = radio("queue", MA.queue, !auto);
-      const autoR = radio("auto", MA.auto, auto);
+      const queueR = radio("queue", MA.queue, MA.queueNote, !auto);
+      const autoR = radio("auto", MA.auto, MA.autoNote, auto);
       approval = el("div", null, el("fieldset", { class: "choice" }, el("legend", null, MA.approval), queueR[1], autoR[1]),
-        el("p", { class: "note" }, MA.queueNote, " ", MA.autoNote),
         btn(MA.save, async () => {
           const r = await meetAccountsApi("approval", { mode: autoR[0].checked ? "auto" : "queue" });
           say(fillText(MA.saved, { mode: modeWord(r.approval) }));
@@ -3530,7 +3531,7 @@
       admin ? el("div", { class: "page-head" }, btn(MA.inviteBtn, inviteAccount, "primary")) : null,
       el("div", { id: "meet-accounts-out" }),
       dataTable({
-        caption: MA.accounts, rows: d.accounts || [], empty: MSG.noneYet, name: accountName, text: (x) => [x.name, x.username, x.email].join(" "),
+        caption: MA.accounts, rows: d.accounts || [], empty: MA.noAccounts, name: accountName, text: (x) => [x.name, x.username, x.email].join(" "),
         cols: [{ key: "name", label: MA.cols.name, cell: (x) => u(x.name || ""), sort: accountName }, { key: "username", label: MA.cols.username, cell: (x) => code(x.username) },
           { key: "email", label: MA.cols.email }, { key: "last_signin", label: MA.cols.last, cell: (x) => whenAny(x.last_signin) },
           { key: "locked", label: MA.cols.state, cell: (x) => el("span", { class: "st st-" + (x.locked ? "bad" : "ok") }, stateOf(x)), sort: stateOf },
