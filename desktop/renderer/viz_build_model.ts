@@ -14,11 +14,13 @@
 // <!doctype html> document) is the artifact. The ?vizDemo=1 feed arms a labeled demo sample instead (armSample).
 // P-WORLDS.BUILD2: a template may carry a ready-made `sample` (validSample: a whole HTML document of at most 64 KB;
 // a malformed one is dropped, the template stays). The demo rotates through the current world's samples (else the
-// host's two, viz_sample_games.ts) and the node panel's Play sample opens one directly (sampleArtifact).
+// host's three, viz_sample_games.ts) and the node panel's Play sample opens one directly (sampleArtifact).
+// P-WORLDS.GAMES3 (ADR-0691): the host's briefs describe the samples' mechanics and the sandbox rules, so an
+// agent-built game matches the sample's depth and stays inside the frame policy.
 // Nothing here trusts the artifact: viz_artifact_popup.ts sends it through the engine's security gate first.
 
 import { COMMIT_CALL_RE } from "./viz_model.ts";
-import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
+import { SAMPLE_AGENT_RUNNER, SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
 import type { WorldBuildSite, WorldDefinition, WorldMiniGame, WorldScaffoldStyle, WorldTier } from "./viz_world_api.ts";
 
 /** Pieces a build holds at most (the scene's tier budget may draw fewer). */
@@ -293,14 +295,53 @@ export function buildSiteFor(def: WorldDefinition | null, role: "hub" | "agent",
   return { anchor: DEFAULT_SITE_ANCHOR, style: "holo", color: fallbackColor, label: "Build ring" };
 }
 
-const NO_NET = "Put everything in ONE self-contained HTML file: inline all CSS and JavaScript, no network requests, no external assets, "
-  + "no fonts or images from anywhere else, no storage. Keep it under 20 KB. You may split the work across subagents. "
-  + "End your reply with the complete file in a single ```html fenced block.";
+/** The frame policy and quality bar every host brief ends with (ADR-0653 sandbox, ADR-0691 quality bar). */
+const SANDBOX_RULES = "Sandbox rules: the game runs in an iframe sandboxed to scripts only, under a content security policy that refuses "
+  + "every network request, so anything else simply breaks. Put everything in ONE self-contained HTML document (<!doctype html> through "
+  + "</html>) with inline CSS and JavaScript; no network requests (no fetch, XMLHttpRequest, WebSocket or EventSource), no external "
+  + "scripts, styles, fonts or images (draw everything with canvas paths or CSS, no emoji), no storage (no localStorage, sessionStorage, "
+  + "IndexedDB or cookies; keep the session best in a variable), no eval or new Function, no iframes, popups or navigation. Sound only "
+  + "through WebAudio oscillators, created on the player's first input, with an M key and a button to mute. Plain ASCII, under 48 KB. "
+  + "Quality bar: a canvas that fills its frame at any size and is devicePixelRatio aware, smooth at 60 fps (requestAnimationFrame with "
+  + "a capped delta time), a start screen with a short how-to, pause on P or Esc and when the frame loses focus, an end screen with stats "
+  + "and the session best, R restarts, mouse, touch and keyboard play, and no screen shake under prefers-reduced-motion. "
+  + "You may split the work across subagents. End your reply with the complete file in a single ```html fenced block.";
 
 /** The host's templates for a world that declares none (and the two built-in styles). */
 export const DEFAULT_MINI_GAMES: readonly WorldMiniGame[] = [
-  { id: "target-tap", label: "Target tap game", brief: `Build a small target-tap mini game: targets pop up at random spots, the player taps them before they fade, a 30 second round, a score and a restart button. ${NO_NET}`, sample: SAMPLE_TARGET_TAP },
-  { id: "memory-cards", label: "Memory cards game", brief: `Build a small memory cards mini game: a 4 by 4 grid of face-down cards, flip two at a time to find pairs, count the moves, and offer a restart. ${NO_NET}`, sample: SAMPLE_MEMORY_CARDS },
+  {
+    id: "target-tap", label: "Target tap game", sample: SAMPLE_TARGET_TAP,
+    brief: "Build a target-tap arcade mini game with levels. Targets pop up at random spots and fade; hitting the level's goal count "
+      + "levels up (+5 seconds) and raises the spawn rate and speed. Target types unlock by level: normal (10 points), moving targets "
+      + "that bounce around (15), shrinking targets (20), armored targets that take two hits (30), decoys that cost 3 seconds when hit, "
+      + "rare golden targets (50 and +2 seconds) and a freeze power-up that stops the clock for 4 seconds. A combo meter refills on "
+      + "each hit and decays over time; it drives a multiplier up to x5, every 10-hit combo adds a second, misses drain it. A 30 second "
+      + "clock. Juice: particle bursts, floating score text, screen shake, a level banner and WebAudio blips. The end screen shows "
+      + "score, level reached, accuracy, best combo and targets hit. Aim with the arrow keys and Space as well as click or tap. "
+      + SANDBOX_RULES,
+  },
+  {
+    id: "memory-cards", label: "Memory cards game", sample: SAMPLE_MEMORY_CARDS,
+    brief: "Build a memory cards mini game with three levels: 4 by 3 (6 pairs), 4 by 4 (8 pairs) and 6 by 5 (15 pairs). Each level has "
+      + "its own icon theme drawn procedurally with canvas paths (geometric shapes; code icons such as braces, a gear, a bug, a terminal, "
+      + "a branch; agent icons such as a robot, a rocket, a planet). Cards flip with a squash animation and lift. Matches in a row raise "
+      + "a streak multiplier up to x5; every streak of 3 earns a Peek (Q or a button) that shows every card for about a second. Count "
+      + "moves and time per level and award 1 to 3 stars from moves per pair, plus a time bonus. On the last level, after each "
+      + "mistake the two missed cards swap places with other face-down cards, animated so the player can follow. A level clear card "
+      + "shows the stars, then the next level; the end screen totals score, stars, moves, time, accuracy and best streak. Sounds for "
+      + "flip, match, miss and clear. Arrow keys and Space as well as click or tap. " + SANDBOX_RULES,
+  },
+  {
+    id: "agent-runner", label: "Agent runner game", sample: SAMPLE_AGENT_RUNNER,
+    brief: "Build an endless three-lane runner mini game about a coding agent: a small robot runs down a build pipeline drawn in "
+      + "perspective (lanes vanish to a horizon with scrolling lane dashes and side pylons). Switch lanes with left and right (A and D, "
+      + "a tap on either side, or a swipe) and jump with up or Space (a tap in the middle, or a swipe up). Obstacles: bugs (jump or "
+      + "dodge), firewalls (cannot be jumped, change lanes) and two-lane merge conflicts (jump); every row leaves a lane open. Collect "
+      + "commits for points with a streak multiplier up to x5. Pickups: a review shield that absorbs one hit, a magnet that pulls "
+      + "nearby commits, a focus mode that slows time, and a green build that restores a life. Three lives with a short invulnerable "
+      + "blink after a hit. Speed and obstacle variety rise every 400 m sprint, announced by a banner. The end screen shows score, "
+      + "distance, sprint reached, commits, best streak and obstacles cleared. " + SANDBOX_RULES,
+  },
 ];
 
 /** The largest `sample` a template may carry, in UTF-8 bytes (WorldMiniGame.sample). */

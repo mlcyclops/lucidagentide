@@ -68,7 +68,7 @@
 // viz_build.createScaffold riding the node through scene.anchor), a settled tool locks one in, a failed one flickers
 // it red, and done or a commit reveals the build. A build with an artifact puts a chip over its node that opens the
 // artifact popup (viz_artifact_popup: the engine's security gate first, then a sandboxed frame). The node panel of
-// the hub or a live lane offers the world's mini-game templates (miniGames, else the host's two): one starts the
+// the hub or a live lane offers the world's mini-game templates (miniGames, else the host's three): one starts the
 // brief as an ordinary prompt through the panel's own send path, and only that run's output can become an artifact.
 // The ?vizDemo=1 feed plays one build per demo agent on a separate build channel, each ending in a labeled sample.
 // P-WORLDS.BUILD2: each template row has Build and, when the template carries a `sample`, Play sample (the popup,
@@ -1434,7 +1434,7 @@ function onTick(): void {
     for (const a of st.asks) markAsked(model, a.id, a.ask);
     for (const e of st.events) if (applyEvent(model, e, now)) { noteLedger(e); noteBuild(e.source, e.e); }
     // P-WORLDS.BUILD1 (ADR-0653): the demo's build channel; each build's spawn arms the labeled sample it ends in.
-    // P-WORLDS.BUILD2: the current world's template samples in turn (else the host's two).
+    // P-WORLDS.BUILD2: the current world's template samples in turn (else the host's three).
     for (const b of st.builds) {
       if (b.e.type === "subagent") armSample(builds, b.source, demoSampleAt(buildWorld(), demoSampleTurn++));
       noteBuild(b.source, b.e);

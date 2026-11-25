@@ -13,7 +13,7 @@ import {
 } from "./viz_build_model.ts";
 import type { WorldDefinition } from "./viz_world_api.ts";
 import { createDemo, DEMO_CYCLE_MS } from "./viz_demo.ts";
-import { SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
+import { SAMPLE_AGENT_RUNNER, SAMPLE_MEMORY_CARDS, SAMPLE_TARGET_TAP } from "./viz_sample_games.ts";
 
 /** What the demo's first build ends in (the host's first sample). */
 const DEMO_GAME = demoSampleAt(null, 0);
@@ -239,27 +239,48 @@ describe("the demo feed's builds", () => {
     }
     for (const a of [...b.builds.values()].map((x) => x.artifact)) if (a) titles.push(a.title);
     expect([...revealed].sort()).toEqual(["demo-1", "demo-2", "demo-3", "demo-4", "demo-5", "demo-6"]);
-    expect(new Set(titles)).toEqual(new Set(["Target tap game", "Memory cards game"]));
+    expect(new Set(titles)).toEqual(new Set(["Target tap game", "Memory cards game", "Agent runner game"]));
   });
 
-  test("the host's two samples are small self-contained canvas games with a score, restart, keyboard and pointer", () => {
-    for (const html of [SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS]) {
-      expect(new TextEncoder().encode(html).byteLength).toBeLessThan(12 * 1024);
+  test("the host's three samples are self-contained canvas games with a start screen, pause, sound, score, restart, keyboard and pointer", () => {
+    for (const html of [SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS, SAMPLE_AGENT_RUNNER]) {
+      expect(new TextEncoder().encode(html).byteLength).toBeLessThan(SAMPLE_MAX_BYTES);
       expect(validSample(html)).toBe(html);
       expect(html).toMatch(/^<!doctype html>/);
       expect(html).toContain("<canvas");
       expect(html).toContain("data-ready");
       expect(html).toContain('id="start"');
       expect(html).toContain('id="restart"');
+      expect(html).toContain('id="pause"');
+      expect(html).toContain('id="mute"');
+      expect(html).toContain('set("paused")');
+      expect(html).toContain("AudioContext");
       expect(html).toContain("keydown");
       expect(html).toContain("pointerdown");
       expect(html).toContain("data-score");
       expect(html).toContain("devicePixelRatio");
+      expect(html).toContain("requestAnimationFrame");
+      expect(html).toContain("prefers-reduced-motion");
+      expect(html).toContain("__sampleProbe");
       expect(html).not.toMatch(/https?:|src=|fetch\(|XMLHttpRequest|WebSocket|localStorage|sessionStorage|import\(|eval\(/);
       expect(html).not.toMatch(/[^\x09\x0a\x0d\x20-\x7e]/); // plain ASCII: nothing for the scanner to flag
+      expect(html).not.toMatch(/[`\\]|\$\{/); // the bytes the frame gets are the source's bytes
       expect(extractHtmlArtifact(`\`\`\`html\n${html}\n\`\`\``)).toBe(html);
     }
-    expect(DEFAULT_MINI_GAMES.map((g) => g.sample)).toEqual([SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS]);
+    expect(DEFAULT_MINI_GAMES.map((g) => g.sample)).toEqual([SAMPLE_TARGET_TAP, SAMPLE_MEMORY_CARDS, SAMPLE_AGENT_RUNNER]);
+    expect(DEFAULT_MINI_GAMES.map((g) => g.id)).toEqual(["target-tap", "memory-cards", "agent-runner"]);
+    expect(DEFAULT_MINI_GAMES.length).toBeLessThanOrEqual(MINI_GAMES_MAX);
+  });
+
+  test("the host's briefs describe the sample's mechanics and the sandbox rules", () => {
+    const [tap, memory, runner] = DEFAULT_MINI_GAMES;
+    for (const word of ["level", "moving", "shrinking", "armored", "decoy", "golden", "freeze", "combo"]) expect(tap!.brief).toContain(word);
+    for (const word of ["4 by 3", "4 by 4", "6 by 5", "procedurally", "Peek", "stars", "streak", "swap places"]) expect(memory!.brief).toContain(word);
+    for (const word of ["three-lane", "bugs", "firewalls", "merge conflicts", "commits", "shield", "magnet", "sprint"]) expect(runner!.brief).toContain(word);
+    for (const g of DEFAULT_MINI_GAMES) {
+      for (const rule of ["ONE self-contained HTML document", "no network requests", "no storage", "no eval", "WebAudio", "devicePixelRatio", "pause on P or Esc", "```html"]) expect(g.brief).toContain(rule);
+      expect(g.brief).not.toMatch(/[^\x20-\x7e]/);
+    }
   });
 });
 
@@ -304,7 +325,7 @@ describe("template samples (P-WORLDS.BUILD2)", () => {
     const none = def([{ id: "a", label: "A", brief: "x", sample: "<b>bad</b>" }]);
     expect(demoSampleGames(none)).toBe(DEFAULT_MINI_GAMES);
     expect(demoSampleGames(null)).toBe(DEFAULT_MINI_GAMES);
-    expect([0, 1, 2].map((i) => demoSampleAt(null, i).id)).toEqual(["target-tap", "memory-cards", "target-tap"]);
+    expect([0, 1, 2, 3].map((i) => demoSampleAt(null, i).id)).toEqual(["target-tap", "memory-cards", "agent-runner", "target-tap"]);
   });
 
   test("Play sample: a labeled sample artifact off the node until Keep adopts it", () => {
