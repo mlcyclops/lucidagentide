@@ -16,6 +16,10 @@ export interface MarketBootConfig { mode?: "firebase" | "stub" | "off"; function
 // back to `lucid://auth?token=...` (captured by the Electron main deep-link handler).
 const DEFAULT_FUNCTIONS_URL = "https://us-central1-lucid-agent.cloudfunctions.net";
 const DEFAULT_SIGNIN_URL = "https://lucid-agent.web.app/signin";
+// P-MARKET.AUTH2 (ADR-0684): the PUBLIC Firebase web apiKey of project lucid-agent (it ships in the hosted /signin and
+// /buy pages; it identifies the project, it is not a credential). Without it the ID token could never be renewed and
+// every installed build asked for a fresh Google sign-in each hour.
+const DEFAULT_FIREBASE_API_KEY = "AIzaSyC0YWHhH0BXGQawz7kZxLqUdBbfvGwubYE";
 
 /** Build the marketplace boot config from env overrides + the first-party defaults. PURE.
  *  - `LUCID_MARKET_MODE=off`   → disabled (packs open the storefront web page — the pre-wiring behavior).
@@ -32,9 +36,8 @@ export function marketBootConfig(env: Record<string, string | undefined> = proce
     mode: "firebase",
     functionsBaseUrl: (env.LUCID_MARKET_FUNCTIONS_URL || DEFAULT_FUNCTIONS_URL).replace(/\/+$/, ""),
     signInUrl: env.LUCID_MARKET_SIGNIN_URL || DEFAULT_SIGNIN_URL,
-    // P-REMOTE.2c: the PUBLIC Firebase web apiKey lets the renderer silently renew the ID token (securetoken
-    // refresh) for the gated relay past +1h. Public by design (identifies the project, not a credential);
-    // absent -> fail-closed to no-refresh (re-sign-in needed). Set via LUCID_FIREBASE_API_KEY for a provisioned build.
-    firebaseApiKey: env.LUCID_FIREBASE_API_KEY || undefined,
+    // P-REMOTE.2c, ADR-0684: the PUBLIC Firebase web apiKey the engine custody renews the ID token with (securetoken
+    // refresh), so a store sign-in lasts past +1h. LUCID_FIREBASE_API_KEY points it at another project.
+    firebaseApiKey: env.LUCID_FIREBASE_API_KEY || DEFAULT_FIREBASE_API_KEY,
   };
 }

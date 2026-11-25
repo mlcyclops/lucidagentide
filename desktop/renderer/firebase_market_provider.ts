@@ -23,6 +23,8 @@ export interface FirebaseMarketConfig {
     getUser: () => AuthState;
     /** A fresh Firebase ID token for the callable Authorization header, or null when signed out. */
     getIdToken: () => Promise<string | null>;
+    /** ADR-0684: resolves once the held sign-in has been read, so a boot-time check never reads as signed out. */
+    ready?: () => Promise<void>;
   };
 }
 
@@ -44,7 +46,7 @@ export function makeFirebaseMarketProvider(cfg: FirebaseMarketConfig): Entitleme
   const { functionsBaseUrl: base, auth } = cfg;
   return {
     configured: () => true,
-    auth: async () => auth.getUser(),
+    auth: async () => { await auth.ready?.(); return auth.getUser(); },
     entitlement: async (packId: string) => {
       const token = await auth.getIdToken();
       if (!token) return null;

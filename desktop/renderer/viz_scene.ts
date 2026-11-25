@@ -77,6 +77,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { BokehPass } from "three/examples/jsm/postprocessing/BokehPass.js"; // P-VIZ.GPU1 (ADR-0651): cinematic DOF
 import { Pass } from "three/examples/jsm/postprocessing/Pass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js"; // P-VIZ.FLASH1: the HDR sanitize pass
 import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js"; // P-VIZ.GPU1: cinematic SSAO
 import { createFrameGovernor, type GovernorStats, type PerfTier } from "./perf_tier.ts";
 import { angleDelta, createDirector, cue, directorStep, frameDistance, springStep } from "./viz_director.ts";
@@ -531,6 +532,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
   let renderPass: RenderPass | null = null;
   let bloom: UnrealBloomPass | null = null;
   let outputPass: OutputPass | null = null;
+  let sanitize: ShaderPass | null = null; // P-VIZ.FLASH1 (ADR-0687)
   let ssao: SSAOPass | null = null;
   let bokeh: BokehPass | null = null;
   let bokehFocus: THREE.IUniform<number> | null = null;
@@ -573,6 +575,12 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     composer = new EffectComposer(renderer, o.msaa ? new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: o.msaa }) : undefined);
     renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
+    // P-VIZ.FLASH1 (ADR-0687): additive particles, arcs and glows stacked in front of the auto camera can sum past
+    // half-float's max (65504) in the scene target. One Inf pixel becomes NaN in the bloom blur and the ACES tone map
+    // (Inf / Inf), which spreads over the whole frame: the canvas showed one empty frame, the "black flash" while
+    // agents work. Every pixel leaves this pass finite and bounded before bloom, SSAO, DOF and the tone map.
+    sanitize = new ShaderPass(HDR_SANITIZE_SHADER);
+    composer.addPass(sanitize);
     if (o.ssao) {
       ssao = new SSAOPass(scene, persp, 1, 1, 16);
       ssao.kernelRadius = 0.35; // world units: contact-scale occlusion (feet on a stage, a figure at a desk)
@@ -2395,6 +2403,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (ssao) { ssao.dispose(); ssao.ssaoMaterial.dispose(); ssao.noiseTexture.dispose(); }
       bokeh?.dispose();
       outputPass?.dispose();
+      sanitize?.dispose();
       contactMat?.dispose();
       contactTex?.dispose();
       composer?.dispose();
@@ -2406,6 +2415,30 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 }
 
 // ------------------------------------------------------------------------------------------ helpers
+
+/** P-VIZ.FLASH1 (ADR-0687): the brightest HDR value kept. Far above the bloom threshold (0.93) and what ACES maps
+ *  to near white, so nothing visible changes; it only keeps a sum of additive glows from overflowing to Inf. */
+export const HDR_SANITIZE_MAX = 256;
+
+/** P-VIZ.FLASH1 (ADR-0687): NaN and Inf pixels become black, every other channel is clamped to [0, HDR_SANITIZE_MAX]
+ *  (the ADR-0652 safeRgb rule, applied once to the whole scene target instead of per material, because blending
+ *  overflow happens after every material's own clamp). */
+export const HDR_SANITIZE_SHADER = {
+  name: "LucidHdrSanitize",
+  uniforms: { tDiffuse: { value: null as THREE.Texture | null } },
+  vertexShader: /* glsl */ `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `
+uniform sampler2D tDiffuse;
+varying vec2 vUv;
+void main() {
+  vec4 c = texture2D(tDiffuse, vUv);
+  vec3 rgb = (any(isnan(c.rgb)) || any(isinf(c.rgb))) ? vec3(0.0) : clamp(c.rgb, 0.0, ${HDR_SANITIZE_MAX.toFixed(1)});
+  float a = (isnan(c.a) || isinf(c.a)) ? 1.0 : clamp(c.a, 0.0, 1.0);
+  gl_FragColor = vec4(rgb, a);
+}`,
+};
 
 /** P-VIZ.GPU1 (ADR-0651): a pass that draws nothing and runs `fn` at its place in the chain (hide what an override
  *  render must not see before SSAO or the DOF depth, and put it back after). */

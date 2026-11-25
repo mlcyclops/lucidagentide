@@ -1861,6 +1861,43 @@ demo-P-VIZ.STYLEOPT1: ## P-VIZ.STYLEOPT1 (ADR-0688): the built-in Anime and Prof
 	node --check desktop/scripts/demo_p_viz_styleopt_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_styleopt_1.mjs; else echo "demo-P-VIZ.STYLEOPT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-VIZ.LANE1
+demo-P-VIZ.LANE1: ## P-VIZ.LANE1 (ADR-0683): the Agent Worlds node panel is a Fleet lane card body (one renderer, lane_view.ts): live thinking and tool chips stream in, pasted or dropped images become mini chips with an x, a busy lane's Send stages onto the engine's queue with the strip's Update, Steer, reorder and remove, and the panel resizes by its edges and grip (keyboard too), persisted. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_lane_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/lane_view_model.test.ts desktop/renderer/viz_panel_size.test.ts desktop/renderer/viz_panel_place.test.ts desktop/renderer/viz_model.test.ts desktop/renderer/lane_transcript.test.ts desktop/renderer/fleet_dock_model.test.ts desktop/renderer/queue_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_lane_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_lane_1.mjs; else echo "demo-P-VIZ.LANE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-SESSXFER.1
+demo-P-SESSXFER.1: ## P-SESSXFER.1 (ADR-0682): offline session history export and import in one CDS-inspectable file (lucid-history/1: printable ASCII and LF, sorted keys, sha256 per session and payload, home path scrubbed, secrets redacted, every text scanned fail-closed both ways); imports land in the current project as omp transcripts marked imported and untrusted, identical sessions skipped, id conflicts never overwritten. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_sessxfer_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/session_transfer.test.ts desktop/sessions_search.test.ts desktop/sessions_index.test.ts desktop/sessions_archive.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_sessxfer_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sessxfer_1.mjs; else echo "demo-P-SESSXFER.1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-WORLDS.UPDATE1
+demo-P-WORLDS.UPDATE1: ## P-WORLDS.UPDATE1 (ADR-0685): a purchased world with a newer store version gets one "World updates available" notice (remembered engine-side, so a port-rolled launch never repeats it), a dot on the Worlds and Visualize buttons, and a one-line Update beside Export... in the Worlds menu that installs through the store card's verified path. Real-UI proof (QA engine: [QA_PLUGIN_DEV_LOOPBACK=1] bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ [LUCID_DEMO_WORLD=<zip>] [LUCID_DEMO_WORLD_NEWER=<zip>] node desktop/scripts/demo_p_worlds_update_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/world_updates.test.ts desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_update_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_worlds_update_1.mjs; else echo "demo-P-WORLDS.UPDATE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-WHATSNEW.1
+demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/release_notes.test.ts desktop/renderer/whats_new.test.ts desktop/about.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_whatsnew_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_whatsnew_1.mjs; else echo "demo-P-WHATSNEW.1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-DOCS.2
+demo-P-DOCS.2: ## P-DOCS.2 (ADR-0681): docs.lucid-agents.com linked from About (Documentation), the tour closer (Get started), the onboarding Connect a provider modal (How to connect your AI) and the palette (Help: open the documentation). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_docs_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/docs_links.test.ts desktop/about.test.ts desktop/tour.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_about_1.ts
+	node --check desktop/scripts/demo_p_docs_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_docs_2.mjs; else echo "demo-P-DOCS.2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-VIZ.FLASH1
+demo-P-VIZ.FLASH1: ## P-VIZ.FLASH1 (ADR-0687): 3D Visualize never presents an empty frame while agents work (an HDR sanitize pass keeps stacked additive glows from overflowing half-float into Inf/NaN through bloom and the tone map). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821; Chrome with a GPU and a CDP port): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_flash_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_flash_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_flash_1.mjs; else echo "demo-P-VIZ.FLASH1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WORLDS.2
 demo-P-WORLDS.2: ## P-WORLDS.2 (ADR-0679): eleven new world cards (Field Exercise, Flight Deck, Flight Line, Boot Camp, Sea Rescue, Orbital Ops, Cyber Ops, Special Operations, Florida, Texas, California), each with its own loop and poster, and the world package QA harness: import, draw, every throwable, the storm, a commit, every option value and the sample mini game with no page error, stills per world, and an optional filmed short for the card media. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/?vizDemo=1 LUCID_DEMO_WORLDS=<zip>;<zip> [LUCID_DEMO_OUT=<dir>] [LUCID_DEMO_FILM=1] node desktop/scripts/demo_p_worlds_2.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
@@ -1970,3 +2007,10 @@ demo-P-SCHED.AGENT1: ## P-SCHED.AGENT1: an Agent's module on the right rail gets
 	$(BUN) test $(TEST_IGNORES) desktop/scheduled_jobs.test.ts desktop/renderer/agent_schedule.test.ts desktop/renderer/jobs_view.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_sched_agent_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sched_agent_1.mjs; else echo "demo-P-SCHED.AGENT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-MARKET.AUTH2
+demo-P-MARKET.AUTH2: ## P-MARKET.AUTH2 (ADR-0684): a store sign-in and its world receipts live in the engine vault (not the renderer origin's localStorage), the ID token renews silently before and after it lapses (only Google refusing the refresh token signs out; offline never does), and a fresh receipt keeps an owned world unlocked offline. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_market_auth_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/market_auth.test.ts desktop/renderer/market_boot.test.ts desktop/renderer/viz_worlds.test.ts desktop/market_auth_routes.test.ts desktop/market_config.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_premote2b.ts
+	node --check desktop/scripts/demo_p_market_auth_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_market_auth_2.mjs; else echo "demo-P-MARKET.AUTH2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi

@@ -12,6 +12,7 @@
 //  - techLeadLogo()    the TechLead 187 emblem (gradient rounded square + "187" monogram).
 //  - aboutHtml(ver)    the full panel inner HTML; `ver` comes from APP_VERSION (single source).
 
+import { docsLinkHtml } from "./docs_links.ts"; // P-DOCS.2 (ADR-0681): the docs site link
 import { TECHLEAD_AVATAR_URI } from "./techlead_avatar.ts"; // the brand emblem, inlined so it paints with the panel
 
 // Small HTML escape for any interpolated value (version string is ours, but stay disciplined).
@@ -62,6 +63,7 @@ export function aboutHtml(version: string): string {
       <div class="about-tag">Secure agentic IDE · provenance · memory</div>
       <div class="about-ver" data-tip="App version">v${v}</div>
       <a class="about-site" href="https://lucid-agents.com/" target="_blank" rel="noopener noreferrer" data-tip="Open the LUCID Agent website">lucid-agents.com ↗</a>
+      ${docsLinkHtml("home", "Documentation ↗", "about-site about-docs", "Open the LUCID documentation in your browser")}
     </div>
 
     <p class="about-blurb">
@@ -95,6 +97,10 @@ export function aboutHtml(version: string): string {
       <button class="btn-mini" data-about-tour>
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5.5v13l11-6.5z"/></svg>
         Take the tour
+      </button>
+      <button class="btn-mini" data-about-whatsnew data-tip="Review the latest release notes">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.3 5.2 5.2 2.3-5.2 2.3L12 18.5l-2.3-5.2L4.5 11l5.2-2.3z"/></svg>
+        What's new
       </button>
       <button class="btn-mini ok" data-about-close>Close</button>
     </div>
