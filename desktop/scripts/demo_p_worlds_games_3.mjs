@@ -99,8 +99,17 @@ export async function verifyGames(page, base) {
   await realClick("#vizView [data-viz-fit]");
   await pause(1500);
 
+  /** One pass over the first-run gates: a late one (the work email step) is skipped with its own control. */
+  const skipGate = async () => {
+    const hit = await page.evaluate((sel) => { const n = [...document.querySelectorAll(sel)].find((b) => b.getBoundingClientRect().width > 0); if (n) n.click(); return !!n; }, GATES).catch(() => false);
+    if (hit) await pause(450);
+    return hit;
+  };
+  /** On top at its center, after any late gate is skipped. */
+  const onTop = async (sel) => { for (let i = 0; i < 6; i++) { if (await topmost(sel)) return true; if (!(await skipGate())) await pause(300); } return topmost(sel); };
   const openPanel = async () => {
     for (let i = 0; i < 20; i++) {
+      await skipGate(); // onboarding can raise a gate (the work email step) after Visualize opened
       const nodes = ((await probe("nodes")) ?? []).filter((n) => n.kind !== "subagent" && n.box);
       nodes.sort((a, b) => (a.kind === "agent" ? 0 : 1) - (b.kind === "agent" ? 0 : 1));
       for (const n of nodes) {
@@ -125,8 +134,8 @@ export async function verifyGames(page, base) {
   })));
   assert(JSON.stringify(rows.map((r) => r.id)) === JSON.stringify(HOST_GAMES) && rows.every((r) => r.label && r.build && r.sample), `the Mini game rows are ${JSON.stringify(rows)}`);
   for (const r of rows) {
-    assert(await topmost(`#vizView [data-viz-panel] [data-viz-game-row="${r.id}"] [data-viz-game]`), `Build for ${r.id} is covered`);
-    assert(await topmost(`#vizView [data-viz-panel] [data-viz-game-sample="${r.id}"]`), `Play sample for ${r.id} is covered`);
+    assert(await onTop(`#vizView [data-viz-panel] [data-viz-game-row="${r.id}"] [data-viz-game]`), `Build for ${r.id} is covered`);
+    assert(await onTop(`#vizView [data-viz-panel] [data-viz-game-sample="${r.id}"]`), `Play sample for ${r.id} is covered`);
   }
   await audit("#vizView [data-viz-panel] .viz-panel-build");
 
