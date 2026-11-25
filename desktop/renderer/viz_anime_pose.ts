@@ -28,6 +28,7 @@
 import { mix32 } from "./viz_cast.ts"; // P-WORLDS.CAST1 (ADR-0649): moved there, unchanged
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
+import { isTrayReactionKind, type TrayReactionKind } from "./viz_tray_reactions.ts";
 
 export type AnimeState = "idle" | "working" | "paused" | "ended" | "killed" | "failed";
 export const ANIME_STATES: readonly AnimeState[] = ["idle", "working", "paused", "ended", "killed", "failed"];
@@ -178,6 +179,19 @@ export const POSES = {
   orbAbsorb: { emotion: "calm", spine: [-0.05, 0, 0], chest: [-0.12, 0, 0], head: [-0.12, 0, 0], shL: [-0.85, 0, 0.42], elL: [-2.2, 0, 0], shR: [-0.85, 0, -0.42], elR: [-2.2, 0, 0], hipL: [0, 0, -0.18], hipR: [0, 0, 0.18] },
   // Storm: a wide power-up stance, chest and face up to the sky, fists low and out
   stormSky: { emotion: "determined", rootY: -0.06, chest: [-0.28, 0, 0], neck: [-0.25, 0, 0], head: [-0.5, 0, 0], shL: [0.25, 0, -0.65], elL: [-0.55, 0, 0], shR: [0.25, 0, 0.65], elR: [-0.55, 0, 0], hipL: [-0.25, 0, -0.32], kneeL: [0.4, 0, 0], hipR: [-0.25, 0, 0.32], kneeR: [0.4, 0, 0] },
+
+  // ---- P-VIZ.TRAY2 (ADR-0690): the tray reactions (HIT_CLIPS celebrate, wave, coffee, dance)
+  // celebrate: a hop with both arms flung up in a V (between victoryCrouch landings)
+  cheerHop: { emotion: "happy", rootY: 0.12, chest: [-0.1, 0, 0], head: [-0.2, 0, 0], shL: [-2.9, 0, -0.4], elL: [-0.15, 0, 0], shR: [-2.9, 0, 0.4], elR: [-0.15, 0, 0], hipL: [-0.2, 0, -0.18], kneeL: [0.4, 0, 0], hipR: [-0.2, 0, 0.18], kneeR: [0.4, 0, 0] },
+  // wave: the right arm up, swinging out and in at the viewer, the left hand easy at the side
+  waveOut: { emotion: "happy", chest: [-0.04, 0, 0], head: [-0.08, 0, 0.12], shL: [0.1, 0, -0.3], elL: [-0.4, 0, 0], shR: [-2.6, 0, 0.6], elR: [-0.35, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  waveIn: { emotion: "happy", chest: [-0.04, 0, 0], head: [-0.08, 0, 0.08], shL: [0.1, 0, -0.3], elL: [-0.4, 0, 0], shR: [-2.6, 0, 0.15], elR: [-0.9, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  // coffee break: a long stretch overhead with sleepy eyes, then a sip (right hand at the lips, left under it)
+  stretchUp: { emotion: "tired", spine: [-0.2, 0, 0], chest: [-0.1, 0, 0], head: [-0.3, 0, 0], shL: [-3.0, 0, 0.2], elL: [-0.25, 0, 0], shR: [-3.0, 0, -0.2], elR: [-0.25, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  sipTea: { emotion: "calm", head: [-0.15, 0, 0], shL: [-0.6, 0, 0.35], elL: [-1.7, 0, 0], shR: [-1.25, 0, -0.35], elR: [-2.25, 0, 0], hipL: [0, 0, -0.12], hipR: [0, 0, 0.12] },
+  // dance: hips and shoulders swaying to one side and the other, the arm on that side pumping up
+  danceL: { emotion: "happy", rootY: -0.05, root: [0, 0.3, 0], hips: [0, -0.15, 0], spine: [0, 0, 0.1], head: [0, 0, -0.12], shL: [-1.7, 0, -0.5], elL: [-1.4, 0, 0], shR: [-0.4, 0, 0.3], elR: [-1.6, 0, 0], hipL: [-0.1, 0, -0.2], kneeL: [0.35, 0, 0], hipR: [0.05, 0, 0.18], kneeR: [0.15, 0, 0] },
+  danceR: { emotion: "happy", rootY: -0.05, root: [0, -0.3, 0], hips: [0, 0.15, 0], spine: [0, 0, -0.1], head: [0, 0, 0.12], shL: [-0.4, 0, -0.3], elL: [-1.6, 0, 0], shR: [-1.7, 0, 0.5], elR: [-1.4, 0, 0], hipL: [0.05, 0, -0.18], kneeL: [0.15, 0, 0], hipR: [-0.1, 0, 0.2], kneeR: [0.35, 0, 0] },
 
   // ---- P-VIZ.7 (ADR-0641): the variant weapons (always in the right hand; the figure shows the weapon in the hand
   // or on its mount from weaponAt) and the git commit
@@ -851,8 +865,14 @@ export function animeHitCharge(c: Charge, kind: HitKind, strength: number): Char
 //     block with the right forearm, block with the left (a dodge lean), catch the third, smug.
 //   bolt: struck rigid, then the power-up stance (the charge runs ~15 s). orb: hands out, absorb it to the chest,
 //   power up (and grow). storm: a power-up stance with the face to the sky (no turn).
+// P-VIZ.TRAY2 (ADR-0690): the tray reactions ride the same layer, turned to the viewer (the scene sends them "from"
+// the camera): celebrate, two hops with the arms up in a V and the victory pose; wave, the right arm swinging at the
+// viewer; coffee, a long stretch and a sip (no turn: a break, not a performance); dance, a sway side to side on the
+// beat (DANCE_BEAT_S, the same clock for every figure, so the team dances in sync). No charge, no shake.
 
-export type AnimeHit = "flinch" | "starBlockR" | "starBlockL" | "starCatch" | "bolt" | "orb" | "storm";
+export type AnimeHit = "flinch" | "starBlockR" | "starBlockL" | "starCatch" | "bolt" | "orb" | "storm" | TrayReactionKind;
+/** dance: one sway every this long. */
+export const DANCE_BEAT_S = 0.4;
 export const HIT_BLEND_S = 0.12;
 export const HIT_TURN_S = 0.3;
 export const HIT_OUT_S = 0.45;
@@ -876,6 +896,26 @@ export const HIT_CLIPS: Readonly<Record<AnimeHit, Clip>> = {
     keys: [K(0, "orbReach", "smooth", { emotion: "surprised" }), K(0.15, "orbReach", "snap"), K(0.7, "orbAbsorb"), K(1.35, "orbAbsorb"), K(1.55, "powerup", "snap", { emotion: "determined" }), K(2.4, "powerup", "smooth", { emotion: "determined" })],
   },
   storm: { len: 3.0, loop: false, keys: [K(0, "powerupWind"), K(0.3, "stormSky", "snap"), K(3.0, "stormSky")] },
+  celebrate: {
+    len: 2.6, loop: false,
+    keys: [K(0, "victoryCrouch"), K(0.18, "cheerHop", "snap"), K(0.48, "victoryCrouch"), K(0.68, "cheerHop", "snap"), K(1.0, "victoryCrouch"), K(1.2, "victory", "snap"), K(2.6, "victory")],
+  },
+  wave: {
+    len: 2.5, loop: false,
+    keys: [K(0, "portrait", "smooth", { emotion: "happy" }), K(0.25, "waveOut", "snap"), K(0.5, "waveIn"), K(0.75, "waveOut"), K(1.0, "waveIn"), K(1.25, "waveOut"), K(1.5, "waveIn"), K(1.75, "waveOut"), K(2.5, "portrait", "smooth", { emotion: "happy" })],
+  },
+  coffee: {
+    len: 4.0, loop: false,
+    keys: [K(0, "portrait", "smooth", { emotion: "calm" }), K(0.5, "stretchUp"), K(1.4, "stretchUp"), K(1.9, "sipTea"), K(3.0, "sipTea"), K(3.5, "portrait", "smooth", { emotion: "happy" }), K(4.0, "portrait", "smooth", { emotion: "happy" })],
+  },
+  dance: {
+    len: 3.2, loop: false,
+    keys: [
+      K(0, "portrait", "smooth", { emotion: "happy" }),
+      ...Array.from({ length: 6 }, (_, i) => K(0.2 + i * DANCE_BEAT_S, i % 2 === 0 ? "danceL" : "danceR", "snap")),
+      K(0.2 + 6 * DANCE_BEAT_S, "victory", "snap"), K(3.2, "victory"),
+    ],
+  },
 };
 
 export interface HitPlan {
@@ -925,9 +965,9 @@ export function planHit(kind: HitKind, strength: number, prev: HitPlan | null, p
   if (kind === "stars") {
     star = prev && prev.kind === "stars" && prevT >= 0 && prevT < STAR_CHAIN_S ? (prev.star + 1) % STAR_CHAIN.length : 0;
     play = STAR_CHAIN[star]!;
-  } else play = kind === "bolt" || kind === "orb" || kind === "storm" ? kind : "flinch";
+  } else play = kind === "bolt" || kind === "orb" || kind === "storm" || isTrayReactionKind(kind) ? kind : "flinch";
   const turnFrom = clamp01(Number.isFinite(prevTurn) ? prevTurn : 0);
-  return { kind, play, star, len: HIT_CLIPS[play].len, turns: play !== "storm", turnFrom, strength: s };
+  return { kind, play, star, len: HIT_CLIPS[play].len, turns: play !== "storm" && play !== "coffee", turnFrom, strength: s };
 }
 
 const HIT_SCRATCH = new Float32Array(POSE_LEN);
@@ -965,6 +1005,8 @@ export function sampleHit(p: HitPlan, t: number, out: HitSample, pose?: Float32A
     case "flinch":
       out.shake = tt < 0.25 ? 0.6 * s * (1 - tt / 0.25) : 0;
       break;
+    case "celebrate": case "wave": case "coffee": case "dance":
+      break; // P-VIZ.TRAY2: a reaction, not an impact
     default:
       out.shake = tt < 0.12 ? 0.4 * s * (1 - tt / 0.12) : 0;
   }

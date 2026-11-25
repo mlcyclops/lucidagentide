@@ -106,6 +106,33 @@ miniGames: [{ id: "scorekeeper", label: "Bowling scorekeeper", brief: "Build a b
 - `kit.scaffold({ style, color, tier, flat, seed })` returns the same scaffolding as a prop (`addPieces`, `lockIn`,
   `fail`, `reveal`, `reset`, `restore`, `update`, `dispose`); its piece, beam, panel and ring counts follow the tier.
 
+### Tray reactions (contract v2, ADR-0690)
+
+The throw tray has a chevron at its left end that folds out a reactions group: Celebrate (confetti and a cheer), Wave
+(everyone waves at the viewer, one after another), Coffee break (a stretch and a sip) and Dance (a few beats in sync).
+A reaction is a broadcast: every figure plays it, staggered left to right on screen, and each gets a light host
+effect (confetti, a greeting ring, steam, a beat pulse). Each button has its own cooldown. Every world gets the four
+built-ins with no change; two optional additions let a world make them its own:
+
+```ts
+reactions: [
+  { kind: "carol", base: "celebrate", label: "Carols", tip: "The workshop sings a carol.", icon: "<svg path data, 24x24>" },
+  { kind: "cocoa", base: "coffee", label: "Cocoa break", tip: "A mug of cocoa by the fire.", icon: "..." },
+],
+// on your WorldFigure:
+perform(kind, camera) { /* a short layer over the activity that hands back by itself, like react(); never setState */ },
+```
+
+- `reactions` (optional, at most four): each takes the slot of its `base` (`"celebrate" | "wave" | "coffee" |
+  "dance"`) and the host's effect for it; a slot you leave out stays the built-in. One reaction per base; `kind` is
+  unique, not `"storm"`, not one of your throwable kinds, and a built-in reaction kind only for its own base. `icon`
+  is plain SVG path data like a throwable's.
+- `perform(kind, camera)` (optional): the host calls it with your kind, or with the built-in base for a slot you left
+  to the host. Keep it short (2 to 4 seconds) and let the figure's state show again when it ends. Without `perform`
+  the host makes the figure turn and look at the viewer (`react("stare")`) under its effect, so every installed world
+  already reacts. Under reduced motion the host calls neither: the cells flash the reaction's color instead.
+- The host only sends the kinds your tray offers (like throwables), so `perform` never hears another world's kind.
+
 ## 2. Source layout
 
 ```

@@ -49,6 +49,8 @@
 // P-VIZ.6 (ADR-0636): the throw tray (viz_throw.mountThrowTray) sits at the stage's bottom center with the
 // style's three throwables and Storm. While one is armed a click on a node throws it (scene.throwAt) instead of
 // opening the panel, and Esc puts it down before it closes anything else.
+// P-VIZ.TRAY2 (ADR-0690): the tray's reactions group folds out from its chevron (persisted in prefs.reactions); the
+// next Esc folds it back in.
 //
 // P-WORLDS.1 (ADR-0648): the style toggle's Worlds button lists the installed Lucid Agent Worlds (viz_worlds:
 // loaded, validated, entitled), selects one (scene.setStyle(`world:<key>`), tray.setStyle), shows "Get" with a
@@ -114,6 +116,7 @@ import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountApprovals, type ApprovalsView } from "./viz_approvals.ts"; // P-VIZ.APPROVE1 (ADR-0655)
 import { mountVizScene, type SceneHit, type SceneNode, type SceneWorld, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
+import { parseReactionsOpen } from "./viz_tray_reactions.ts"; // P-VIZ.TRAY2 (ADR-0690)
 import { getMarketProvider } from "./market_gate.ts";
 import { createWorldHost } from "./viz_world_kit.ts";
 import { kitLineup, type KitLineupReport } from "./viz_world_character_lineup.ts"; // P-WORLDS.KIT2 (ADR-0654): the demo probe's lineup
@@ -254,13 +257,14 @@ let ledgerView: LedgerView | null = null;
 /** Main's folder (the current workspace), applied to Main's entry on every repaint. */
 let mainFolder: string | null = null;
 
-interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle }
+/** `reactions` (P-VIZ.TRAY2, ADR-0690): the throw tray's reactions group is folded out. */
+interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle; reactions: boolean }
 function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
     // P-WORLDS.1: a saved world style stays saved; until it loads (or if it is gone) the scene draws anime.
-    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style) };
-  } catch { return { view: "3d", layout: "orbit", style: "anime" }; }
+    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style), reactions: parseReactionsOpen(p.reactions) };
+  } catch { return { view: "3d", layout: "orbit", style: "anime", reactions: false }; }
 }
 let prefs: Prefs = loadPrefs();
 function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
@@ -804,6 +808,19 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     // P-VIZ.APPROVE1 (ADR-0655): the open asks with their badges, the strip and the pop-out, the Fly to approvals
     // setting, the flights it started and the node a flight is framing now. Read-only.
     approvals: () => (asks ? { ...asks.probe(), flyToApprovals: flyAsks, flights, flying: scene?.flying() ?? null } : null),
+    // P-VIZ.TRAY2 (ADR-0690): the tray's reactions group (open, the kinds it offers, those cooling down, the saved
+    // pref), the last tray reaction each figure started (node id -> { kind, startedAt } on performance.now's clock,
+    // kept after it ends) and the one each is playing now (node id -> kind). Read-only.
+    trayReactions: () => {
+      if (!tray) return null;
+      const all = scene?.trayReactions() ?? {};
+      const started: Record<string, { kind: string; startedAt: number }> = {}, playing: Record<string, string> = {};
+      for (const [id, r] of Object.entries(all)) {
+        started[id] = { kind: r.kind, startedAt: r.startedAt };
+        if (r.playing) playing[id] = r.kind;
+      }
+      return { ...tray.probe(), saved: prefs.reactions, started, playing };
+    },
   };
   // P-WORLDS.1: the worlds load; P-VIZ.NOFLASH1: a saved world not loaded yet holds the mount until they have (styleWait)
   styleWait = !isBuiltinStyle(prefs.style) && !curWorld;
@@ -980,7 +997,11 @@ function buildView(): HTMLElement {
     const t = ev.target as HTMLElement;
     if (t.matches("[data-viz-panel-input]") && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); void sendFromPanel(); }
   });
-  tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, effStyle(), curWorld?.def ?? null); // P-VIZ.6 (ADR-0636)
+  // P-VIZ.6 (ADR-0636); P-VIZ.TRAY2 (ADR-0690): the reactions group folds out as it was left (prefs.reactions)
+  tray = mountThrowTray($("[data-viz-stage]", v) as HTMLElement, () => scene, effStyle(), curWorld?.def ?? null, {
+    open: prefs.reactions,
+    onToggle(open) { prefs.reactions = open; savePrefs(); },
+  });
   return v;
 }
 
@@ -1238,11 +1259,13 @@ function mount(failMsg: string | null = null): void {
   s.onUserCamera(onUserCamera);
   s.setCast(castPrefs); // P-WORLDS.CAST2 (ADR-0650): before the first world figure is cast
   s.setStyle(effStyle(), curWorld);
-  tray?.attach(); // an armed throwable survives a remount (quality, theme, motion change)
   s.onLost(() => onSceneLost(s));
   s.onRestored(() => onSceneRestored(s));
   s.onFrameBudget((v, st) => { if (s === scene) onFrameBudget(v, st); }); // P-VIZ.GPU1 (ADR-0651): the 3 s frame-time check
   syncScene();
+  // an armed throwable survives a remount (quality, theme, motion change); P-VIZ.TRAY2 (ADR-0690): so does a reaction
+  // in flight, handed over once the new scene has its figures
+  tray?.attach();
   scaffoldSig = ""; syncScaffolds(); // P-WORLDS.BUILD1 (ADR-0653): every build stands again on the new scene
   s.onFirstFrame(() => {
     if (s !== scene) return;
@@ -1951,6 +1974,7 @@ function onKey(e: KeyboardEvent): void {
   if (playerOpen()) { closePlayer(); return; }
   if (recPop) { recPop.close(); recPop = null; return; }
   if (tray?.disarm()) return; // P-VIZ.6 (ADR-0636): Esc puts an armed throwable down first
+  if (tray?.collapse()) return; // P-VIZ.TRAY2 (ADR-0690): then folds the reactions group back in
   if (panel) { closePanel(); return; }
   closeViz();
 }

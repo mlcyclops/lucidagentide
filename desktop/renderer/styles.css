@@ -9047,6 +9047,25 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-stage:has(> .viz-throw) .viz-legend{max-width:calc(50% - 136px)}
 .viz-stage:has(> .viz-throw) .viz-caption{bottom:62px}
 @media (prefers-reduced-motion: no-preference){.viz-throw-b{transition:background-color .12s,border-color .12s,color .12s}}
+/* P-VIZ.TRAY2 (ADR-0690): the chevron at the tray's left end folds the reactions group out to the left of the
+   throwables (the tray stays centered, so it grows both ways, about 227px to 370px). Folded in, the group takes no
+   room (its gap is cancelled) and is invisible and inert. Open, its 3px padding (cancelled by its margin) keeps the
+   buttons' focus rings inside its clip. The legend and the ledger pill keep clear of the wider tray (half 185px;
+   both 15px or more away from 790px of stage up). .cool: a reaction in its cooldown. */
+.viz-throw.open{max-width:400px}
+.viz-throw.open .viz-throw-more .ic{transform:rotate(180deg)}
+.viz-react{flex:none;display:flex;align-items:center;gap:6px;box-sizing:border-box;max-width:0;padding:0;margin:0 -6px 0 0;overflow:hidden;opacity:0;visibility:hidden}
+.viz-throw.open .viz-react{max-width:150px;padding:3px;margin:-3px;opacity:1;visibility:visible}
+.viz-react-b,.viz-throw-more{cursor:pointer}
+.viz-react-b.cool{opacity:.5;cursor:default}
+/* The open tray is up to 400px wide around the center; each neighbor sits 14px from its edge and keeps the 6px gap
+   (ADR-0633): 50% - 200px (half the tray) - 14px (inset) - 8px (gap) = 50% - 222px. */
+.viz-stage:has(> .viz-throw.open) .viz-legend{max-width:calc(50% - 222px)}
+.viz-stage:has(> .viz-throw.open) .viz-ledger-pill{width:min(320px,calc(50% - 222px));min-width:160px}
+@media (prefers-reduced-motion: no-preference){
+  .viz-react{transition:max-width .2s var(--ease-out),padding .2s var(--ease-out),margin .2s var(--ease-out),opacity .16s,visibility .2s}
+  .viz-throw-more .ic{transition:transform .2s var(--ease-out)}
+}
 /* P-VIZ.4 (ADR-0625): the node panel (replaces the P-VIZ.1 node menu). z 5 in .viz-stage: over the canvas, legend,
    REC pill (2), the camera hint (3) and the hover tip (4); under the recording player (6). viz_view.followPanel puts
    it above its node every frame (left/top) and tilts it toward the middle of the view (--viz-ry) so it reads as a

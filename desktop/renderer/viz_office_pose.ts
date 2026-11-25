@@ -40,11 +40,12 @@
 // the tray (copiesStarted, copyProgress), a sip, and furtive looks around the office (commitLook).
 
 import {
-  addBoost, bump, clamp01, DRINK_CHARGE, DRINK_S, ease, fract, HIT_BLEND_S, HIT_OUT_S, HIT_TURN_S, seededGender, smoothEase, tapCurve,
+  addBoost, bump, clamp01, DANCE_BEAT_S, DRINK_CHARGE, DRINK_S, ease, fract, HIT_BLEND_S, HIT_OUT_S, HIT_TURN_S, seededGender, smoothEase, tapCurve,
   type AnimeState, type Charge, type Ease, type FigureGender,
 } from "./viz_anime_pose.ts";
 import { parseHex, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
+import { isTrayReactionKind, type TrayReactionKind } from "./viz_tray_reactions.ts";
 
 export type OfficeState = AnimeState;
 export const OFFICE_STATES: readonly OfficeState[] = ["idle", "working", "paused", "ended", "killed", "failed"];
@@ -640,6 +641,17 @@ export const OFFICE_POSES = {
   smoothHair: { emotion: "skeptical", spine: [0.02, 0, 0], head: [-0.05, 0, 0.1], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.7, 0, 0.25], elR: [-1.6, 0, 0] },
   smoothTie: { emotion: "content", head: [0.3, 0, 0], shL: [-0.6, 0, 0.35], elL: [-1.9, 0, 0], shR: [-0.6, 0, -0.35], elR: [-1.9, 0, 0] },
 
+  // ---- P-VIZ.TRAY2 (ADR-0690): the tray reactions (OFFICE_HIT_CLIPS celebrate, wave, coffee, dance), in the chair
+  // celebrate: both arms flung up in a V, then pumped (elbows bent) on the beat
+  cheer: { emotion: "happy", rootY: 0.02, spine: [-0.12, 0, 0], head: [-0.22, 0, 0], shL: [-2.8, 0, -0.4], elL: [-0.2, 0, 0], shR: [-2.8, 0, 0.4], elR: [-0.2, 0, 0] },
+  cheerPump: { emotion: "happy", spine: [-0.06, 0, 0], head: [-0.12, 0, 0], shL: [-2.5, 0, -0.45], elL: [-1.2, 0, 0], shR: [-2.5, 0, 0.45], elR: [-1.2, 0, 0] },
+  // wave: the right arm up, swinging out and in at the viewer, the left forearm on the armrest
+  waveOut: { emotion: "happy", spine: [-0.05, 0, 0], head: [-0.05, 0, 0.1], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.5, 0, 0.6], elR: [-0.4, 0, 0] },
+  waveIn: { emotion: "happy", spine: [-0.05, 0, 0], head: [-0.05, 0, 0.06], shL: [-0.45, 0, 0.12], elL: [-1.0, 0, 0], shR: [-2.5, 0, 0.15], elR: [-0.9, 0, 0] },
+  // dance: a swivel in the chair to one side and the other, the arm on that side pumping up
+  danceL: { emotion: "happy", root: [0, 0.3, 0], spine: [0, 0, 0.1], head: [0, 0, -0.12], shL: [-1.7, 0, -0.5], elL: [-1.4, 0, 0], shR: [-0.5, 0, 0.3], elR: [-1.5, 0, 0] },
+  danceR: { emotion: "happy", root: [0, -0.3, 0], spine: [0, 0, -0.1], head: [0, 0, 0.12], shL: [-0.5, 0, -0.3], elL: [-1.5, 0, 0], shR: [-1.7, 0, 0.5], elR: [-1.4, 0, 0] },
+
   // ---- P-VIZ.7 (ADR-0641): the commit, standing at the copier (COPY_HIPS), the mug in the left hand
   copyIdle: { emotion: "skeptical", ...AT_COPIER, spine: [0.04, 0, 0], head: [0.15, 0, 0] },
   copyReach: { emotion: "neutral", ...AT_COPIER, spine: [0.1, 0, 0], chest: [0.05, 0.1, 0], head: [0.35, 0.1, 0] },
@@ -1147,13 +1159,20 @@ export function lookAngles(dx: number, dy: number, dz: number, out: LookAngles):
 //   drink: caught overhead, chugged, a fist up; the charge (DRINK_CHARGE over DRINK_S) speeds the work up.
 //   storm: papers fly off the pile, he ducks and holds the desk, then smooths the hair and the tie (no turn).
 //   flinch: the anime throwables (stars, bolt, orb) here: a jolt and an annoyed look.
+// P-VIZ.TRAY2 (ADR-0690): the tray reactions, in the chair, the head turned to the viewer: celebrate, arms up in a V
+// and pumped; wave, the right arm swinging; coffee, the desk mug to the lips and a stretch (no turn: a break, the
+// mug in hand between COFFEE_GRAB_S and COFFEE_DROP_S); dance, a swivel side to side on viz_anime_pose.DANCE_BEAT_S.
 
-export type OfficeHit = "paper" | "band" | "drink" | "storm" | "flinch";
+export type OfficeHit = "paper" | "band" | "drink" | "storm" | "flinch" | TrayReactionKind;
 /** drink: the can is in the hand between these hit times; the chug tilts it over CHUG_AT..CHUG_END. */
 export const CAN_GRAB_S = 0.12;
 export const CAN_DROP_S = 2.1;
 const CHUG_AT = 0.7;
 const CHUG_END = 1.55;
+/** coffee: the desk mug is in the left hand between these hit times, tipped to the lips over COFFEE_SIP. */
+export const COFFEE_GRAB_S = 0.5;
+export const COFFEE_DROP_S = 2.5;
+const COFFEE_SIP: readonly [number, number] = [1.0, 2.0];
 /** storm: the papers leave the pile at this hit time. */
 export const STORM_PAPERS_AT = 0.1;
 
@@ -1172,6 +1191,26 @@ export const OFFICE_HIT_CLIPS: Readonly<Record<OfficeHit, OfficeClip>> = {
     keys: [K(0, "hitJolt"), K(0.12, "duck", "snap"), K(1.4, "duck"), K(1.8, "smoothHair"), K(2.3, "smoothTie"), K(3.0, "smoothTie")],
   },
   flinch: { len: 1.6, loop: false, keys: [K(0, "hitJolt"), K(0.08, "hitJolt", "snap"), K(0.6, "sitBack", "smooth", { emotion: "annoyed" }), K(1.6, "sitBack", "smooth", { emotion: "annoyed" })] },
+  celebrate: {
+    len: 2.6, loop: false,
+    keys: [K(0, "sitBack", "smooth", { emotion: "happy" }), K(0.15, "cheer", "snap"), K(0.45, "cheerPump"), K(0.7, "cheer", "snap"), K(1.0, "cheerPump"), K(1.25, "cheer", "snap"), K(2.0, "cheer"), K(2.6, "sitBack", "smooth", { emotion: "happy" })],
+  },
+  wave: {
+    len: 2.5, loop: false,
+    keys: [K(0, "sitBack", "smooth", { emotion: "happy" }), K(0.25, "waveOut", "snap"), K(0.5, "waveIn"), K(0.75, "waveOut"), K(1.0, "waveIn"), K(1.25, "waveOut"), K(1.5, "waveIn"), K(1.75, "waveOut"), K(2.5, "sitBack", "smooth", { emotion: "happy" })],
+  },
+  coffee: {
+    len: 4.2, loop: false,
+    keys: [K(0, "sitBack"), K(COFFEE_GRAB_S, "reachMug"), K(COFFEE_SIP[0], "sipUp"), K(COFFEE_SIP[1], "sipUp"), K(COFFEE_DROP_S, "reachMug"), K(3.0, "stretchUp"), K(3.5, "stretchUp"), K(4.2, "sitBack", "smooth", { emotion: "content" })],
+  },
+  dance: {
+    len: 3.2, loop: false,
+    keys: [
+      K(0, "sitBack", "smooth", { emotion: "happy" }),
+      ...Array.from({ length: 6 }, (_, i) => K(0.2 + i * DANCE_BEAT_S, i % 2 === 0 ? "danceL" : "danceR", "snap")),
+      K(0.2 + 6 * DANCE_BEAT_S, "cheerPump", "snap"), K(3.2, "sitBack", "smooth", { emotion: "happy" }),
+    ],
+  },
 };
 
 export interface OfficeHitPlan {
@@ -1186,8 +1225,9 @@ export interface OfficeHitPlan {
 export interface OfficeHitSample {
   body: number; blend: number; turn: number;
   emotion: OfficeEmotionName | null;
-  /** drink: the can is in the hand, and how far it is tipped up to drink (0..1). */
-  can: boolean; tilt: number;
+  /** drink: the can is in the hand; P-VIZ.TRAY2 coffee: the desk mug is (`mug`); how far either is tipped up to
+   *  drink (0..1). */
+  can: boolean; mug: boolean; tilt: number;
   /** storm: the flying papers' progress 0..1 (paperFlight), -1 when none fly. */
   papers: number;
   shake: number;
@@ -1195,16 +1235,16 @@ export interface OfficeHitSample {
 }
 
 export function clearOfficeHit(out: OfficeHitSample): OfficeHitSample {
-  out.body = 0; out.blend = 1; out.turn = 0; out.emotion = null; out.can = false; out.tilt = 0; out.papers = -1; out.shake = 0; out.done = true;
+  out.body = 0; out.blend = 1; out.turn = 0; out.emotion = null; out.can = false; out.mug = false; out.tilt = 0; out.papers = -1; out.shake = 0; out.done = true;
   return out;
 }
 
 export function newOfficeHitSample(): OfficeHitSample {
-  return clearOfficeHit({ body: 0, blend: 1, turn: 0, emotion: null, can: false, tilt: 0, papers: -1, shake: 0, done: true });
+  return clearOfficeHit({ body: 0, blend: 1, turn: 0, emotion: null, can: false, mug: false, tilt: 0, papers: -1, shake: 0, done: true });
 }
 
 export function officeHitPlay(kind: HitKind): OfficeHit {
-  return kind === "paper" || kind === "band" || kind === "drink" || kind === "storm" ? kind : "flinch";
+  return kind === "paper" || kind === "band" || kind === "drink" || kind === "storm" || isTrayReactionKind(kind) ? kind : "flinch";
 }
 
 /** Plans a hit; `prevTurn` is the turn weight of a hit still playing (0 when none), so the new one turns on
@@ -1213,7 +1253,7 @@ export function planOfficeHit(kind: HitKind, strength: number, prevTurn: number)
   const play = officeHitPlay(kind);
   const s = Number.isFinite(strength) ? clamp01(strength) : 1;
   const turnFrom = clamp01(Number.isFinite(prevTurn) ? prevTurn : 0);
-  return { kind, play, len: OFFICE_HIT_CLIPS[play].len, turns: play !== "storm", turnFrom, strength: s };
+  return { kind, play, len: OFFICE_HIT_CLIPS[play].len, turns: play !== "storm" && play !== "coffee", turnFrom, strength: s };
 }
 
 /** The office figure's charge from a hit: only the energy drink leaves one. */
@@ -1226,8 +1266,8 @@ const HIT_SCRATCH = new Float32Array(OFFICE_POSE_LEN);
 const HIT_INFO: OfficeClipSample = { emotion: "neutral", gaze: 0 };
 
 /** The hit `t` seconds in: weights and effects into `out`, the clip's pose into `pose` (when given). Past `len`
- *  it is cleared and `done`. */
-export function sampleOfficeHit(p: OfficeHitPlan, t: number, out: OfficeHitSample, pose?: Float32Array): OfficeHitSample {
+ *  it is cleared and `done`. `poses`: the build's table (officePoseTable), so the coffee's hand meets its own mug. */
+export function sampleOfficeHit(p: OfficeHitPlan, t: number, out: OfficeHitSample, pose?: Float32Array, poses: OfficePoseTable = OFFICE_POSE_VECTORS): OfficeHitSample {
   const tt = Number.isFinite(t) ? Math.max(0, t) : 0;
   if (tt >= p.len) return clearOfficeHit(out);
   out.done = false;
@@ -1237,13 +1277,15 @@ export function sampleOfficeHit(p: OfficeHitPlan, t: number, out: OfficeHitSampl
   const tu = smoothEase(tt / HIT_TURN_S);
   // the turn hands back with the body: holding it at full weight to the end snapped the figure round at `len`
   out.turn = (p.turns ? p.turnFrom + (1 - p.turnFrom) * tu : p.turnFrom * (1 - tu)) * out.body;
-  sampleOfficeClip(OFFICE_HIT_CLIPS[p.play], tt, pose ?? HIT_SCRATCH, HIT_INFO);
+  sampleOfficeClip(OFFICE_HIT_CLIPS[p.play], tt, pose ?? HIT_SCRATCH, HIT_INFO, poses);
   out.emotion = tt < p.len - HIT_OUT_S * 0.5 ? HIT_INFO.emotion : null;
   out.can = p.play === "drink" && tt >= CAN_GRAB_S && tt < CAN_DROP_S;
-  out.tilt = p.play === "drink" ? bump(tt, CHUG_AT, CHUG_AT + 0.2, CHUG_END - 0.15, CHUG_END) : 0;
+  out.mug = p.play === "coffee" && tt >= COFFEE_GRAB_S && tt < COFFEE_DROP_S;
+  out.tilt = p.play === "drink" ? bump(tt, CHUG_AT, CHUG_AT + 0.2, CHUG_END - 0.15, CHUG_END)
+    : p.play === "coffee" ? bump(tt, COFFEE_SIP[0] - 0.2, COFFEE_SIP[0], COFFEE_SIP[1], COFFEE_SIP[1] + 0.2) : 0;
   const pp = tt - STORM_PAPERS_AT;
   out.papers = p.play === "storm" && pp >= 0 && pp < PAPER_S ? pp / PAPER_S : -1;
-  const kick = p.play === "storm" ? 0.3 : p.play === "drink" ? 0.15 : 0.25;
+  const kick = isTrayReactionKind(p.play) ? 0 : p.play === "storm" ? 0.3 : p.play === "drink" ? 0.15 : 0.25; // P-VIZ.TRAY2: a reaction, not an impact
   out.shake = tt < kick ? (p.play === "drink" ? 0.3 : 0.7) * p.strength * (1 - tt / kick) : 0;
   return out;
 }

@@ -42,6 +42,9 @@
 // calls the figure's hit() on arrival; storm() plays the style's storm and hits every figure, staggered along
 // the storm front. A figure's `charge` (a drink, a bolt, absorbed energy balls) brightens its node's edges and
 // plate while it lasts. Reduced motion: no flight and no flashes, the hit lands at once.
+// P-VIZ.TRAY2 (ADR-0690): trayReact broadcasts a tray reaction (viz_tray_reactions) to every figure, staggered along
+// the same front (dance in sync): a built-in figure plays it as a hit turned to the camera, a world figure performs it
+// (or stares), each with a light effect from the shared pools; reduced motion flashes the cells' color only.
 //
 // P-WORLDS.1 (ADR-0648): setStyle(`world:<key>`, world) builds every node with an installed Lucid Agent World
 // (viz_world_api.WorldDefinition, loaded and validated by viz_worlds): its figures (hub, agent, subagent with its
@@ -89,6 +92,9 @@ import { edgeBow, edgeLift, edgeStyleFor } from "./viz_plasma_math.ts";
 import { createThrowFx, skyAbove } from "./viz_throw.ts";
 import { isThrowKind } from "./viz_throw_kinds.ts";
 import { launchPx, stormSchedule, volley } from "./viz_throw_math.ts";
+import {
+  reactionFx, reactionSchedule, TRAY_REACTION_CUE, TRAY_REACTION_CUE_MS, TRAY_REACTION_MS, trayReactionOf, trayReactionsFor, type TrayReactionKind,
+} from "./viz_tray_reactions.ts"; // P-VIZ.TRAY2 (ADR-0690)
 import { CUBE, frameInterval, IDLE_FPS, isBuiltinStyle, KIND_SCALE, PERSONAS, type Persona, type PowerKind, type Vec3, type VizEvent, type VizKind, type VizStatus, type VizStyle, type VizTierOpts } from "./viz_model.ts";
 import type { WorldAmbient, WorldAppearance, WorldDefinition, WorldEdges, WorldEnvironment, WorldFigure, WorldOptionValues, WorldStage, WorldStorm } from "./viz_world_api.ts";
 import { mergeEnvironment, worldEnvironment } from "./viz_worlds.ts"; // P-WORLDS.FX1 (ADR-0652)
@@ -191,6 +197,17 @@ export interface VizSceneHandle {
   /** P-VIZ.6: the style's storm (anime: dark sky and lightning strikes; professional: a gust of papers) and every
    *  figure hit("storm") as the front reaches it. The caller rate limits it (viz_throw tray). */
   storm(): void;
+  /** P-VIZ.TRAY2 (ADR-0690): a tray reaction, broadcast to every figure, staggered left to right (dance in sync):
+   *  a built-in figure plays it as a hit layer turned to the viewer; a world's figure performs it (or stares at the
+   *  viewer without perform()); each gets a light effect. Reduced motion: the cells flash the reaction's color only.
+   *  False when `kind` is not one the tray offers for this style (viz_tray_reactions.trayReactionsFor) or there are
+   *  no nodes. The caller rate limits it (viz_throw tray). `elapsed` (ms, default 0): the broadcast was started that
+   *  long ago on a scene this one replaced (a remount): figures whose part is over are left out, the rest start on
+   *  their turn or at once; false when nobody is left. */
+  trayReact(kind: string, elapsed?: number): boolean;
+  /** P-VIZ.TRAY2, for the demo probe: node id -> the last tray reaction its figure started, when (performance.now ms)
+   *  and whether it still plays. Kept after it ends; a remount starts empty. Read-only. */
+  trayReactions(): Record<string, { kind: string; startedAt: number; playing: boolean }>;
   /** P-VIZ.7 (ADR-0641): a scripted camera shot for recorded demos (the view exposes it only with ?vizScript=1).
    *  The camera springs to `offset` in the node's own frame (its desk, its stapler, the cloud above it) at `dist`,
    *  `polar` and `az` (radians; az relative to the way the figure faces), drifting `azSpeed` radians a second; the
@@ -295,6 +312,10 @@ const SPARK = new THREE.Color("#ffae42");
 /** P-VIZ.6: an energized node's edges lean toward these (anime: electric cyan; professional: warm gold). */
 const CHARGE_ANIME = new THREE.Color("#8fe3ff");
 const CHARGE_PRO = new THREE.Color("#ffd166");
+/** P-VIZ.TRAY2 (ADR-0690): the tray reactions' effects: confetti, coffee steam, the dance's two beat colors. */
+const CONFETTI = [new THREE.Color("#ff5d8f"), new THREE.Color("#ffd166"), new THREE.Color("#5ee0ff"), new THREE.Color("#8dff6a")] as const;
+const STEAM = new THREE.Color("#e8eef5");
+const DANCE = [new THREE.Color("#f472b6"), new THREE.Color("#a78bfa")] as const;
 
 // KIND_SCALE and CUBE (the glass cube's side before the kind's scale) live in viz_model: the layout spaces
 // the cubes by them.
@@ -350,7 +371,8 @@ const BURST_MS = 650;
 /** The hub's own stream: a closed loop this far out from its center, lifted a little. */
 const LOOP_R = 1.55, LOOP_LIFT = 0.1;
 
-interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number }
+/** `cue`/`cueUntil` (P-VIZ.TRAY2): a tray reaction's color on the cell under reduced motion. */
+interface NodeFx { flickerUntil: number; shakeUntil: number; shakeAmp: number; implodeAt: number; colorUntil: number; failUntil: number; cueUntil: number; cue: THREE.Color }
 
 /** What drives a node's figure (both modes): the figure, the holder it rides, and what it was last told. The
  *  anime and office figures have the same surface as a world's (viz_world_api.WorldFigure). `stage`
@@ -779,7 +801,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       status: n.status, glow: n.glow, power: n.glow,
       cur: new THREE.Vector3(...n.pos), target: new THREE.Vector3(...n.pos), placed: false,
       tone: { tint: 0, dim: 0, frost: 0 },
-      fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0 },
+      fx: { flickerUntil: 0, shakeUntil: 0, shakeAmp: 0, implodeAt: 0, colorUntil: 0, failUntil: 0, cueUntil: 0, cue: new THREE.Color() },
       team: n.team, idleSec: n.idleSec, idleTold: { fig: null, sec: -1 },
       brand: vizBrandFor(n.model), brandSig: "", committing: n.committing,
     };
@@ -1290,6 +1312,89 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     kick();
   }
 
+  /** The way a storm front (and a tray reaction's stagger) sweeps: left to right across the screen, on the ground. */
+  function sweepDir(out: THREE.Vector3): THREE.Vector3 {
+    out.set(1, 0, 0).applyQuaternion(camera.quaternion).setY(0);
+    if (out.lengthSq() < 1e-6) out.set(1, 0, 0);
+    return out.normalize();
+  }
+
+  // ------------------------------------------------------------------ P-VIZ.TRAY2 (ADR-0690): tray reactions
+  /** A figure's turn in a broadcast reaction: `at` on the frame clock; `i` its place in the order (the dance's colors). */
+  interface ReactionStart { id: string; kind: string; base: TrayReactionKind; at: number; i: number }
+  const reactQueue: ReactionStart[] = [];
+  /** Node id -> the last tray reaction its figure started, when (frame clock, performance.now's timeline) and until
+   *  when it plays (the demo probe's read; kept after it ends, so a slow reader never misses a start). */
+  const reacting = new Map<string, { kind: string; at: number; until: number }>();
+  /** A hit "from" no point: the figure turns to the camera (viz_anime / viz_office hitAtCam). */
+  const AT_CAMERA = new THREE.Vector3(Number.NaN, Number.NaN, Number.NaN);
+  const reactColor = new THREE.Color();
+
+  /** Start the figure's part: its layer (a built-in figure's hit clip, a world figure's perform or a stare) and the
+   *  light effect over it; under reduced motion the cell's color cue only. */
+  function startReaction(r: ReactionStart, now: number): void {
+    const obj = nodes.get(r.id);
+    const slot = obj?.d3 ?? obj?.d2;
+    // (a turn that comes after a style switch plays only if the new style offers the reaction too)
+    if (!obj || !slot || !trayReactionOf(trayReactionsFor(activeWorld?.def ?? null), r.kind)) return;
+    const plan = reactionFx(o.tier, o.motion);
+    if (plan.figure) {
+      if (!activeWorld) slot.fig.hit(r.base, AT_CAMERA, camera);
+      else if (slot.fig.perform) slot.fig.perform(r.kind, camera);
+      else slot.fig.react("stare", camera);
+      reactionEffect(obj, r.base, r.i, plan.particles, plan.ring);
+    }
+    if (plan.cue) { obj.fx.cueUntil = now + TRAY_REACTION_CUE_MS; obj.fx.cue.set(TRAY_REACTION_CUE[r.base]); }
+    const len = plan.figure ? TRAY_REACTION_MS[r.base] : TRAY_REACTION_CUE_MS;
+    reacting.set(r.id, { kind: r.kind, at: now, until: now + len });
+    effectsUntil = Math.max(effectsUntil, now + Math.max(len, plan.figure ? REACT_MS : 0) + 50);
+  }
+
+  /** The light effect over a figure, from the scene's own pools (the tier's particle budget covers it). */
+  function reactionEffect(obj: NodeObj, base: TrayReactionKind, i: number, particles: number, ring: boolean): void {
+    const s = obj.size;
+    nodeHead(obj, fxAt);
+    switch (base) {
+      case "celebrate": { // confetti popping up over the head and raining down
+        fxAt.y += 0.3 * s;
+        const per = Math.max(1, Math.round(particles / CONFETTI.length));
+        for (const c of CONFETTI) spawnFx(per, fxAt, c, { speed: 1.5 * s, up: 2.0 * s, spread: 0.25 * s, life: 1.3, size: 0.06, gravity: -4, drag: 1.2 });
+        if (ring) burstAt(fxAt, CONFETTI[1], 1.2 * s, 520);
+        return;
+      }
+      case "wave": // a soft greeting ring in the figure's color and a few sparkles
+        reactColor.copy(obj.base).lerp(WHITE, 0.5);
+        if (ring) burstAt(fxAt, reactColor, 1.3 * s, 600);
+        spawnFx(Math.ceil(particles / 2), fxAt, reactColor, { speed: 0.6 * s, up: 0.6 * s, spread: 0.3 * s, life: 0.9, size: 0.05, gravity: 0, drag: 1.5 });
+        return;
+      case "coffee": // steam rising slowly from the cup
+        fxAt.y += 0.2 * s;
+        spawnFx(particles, fxAt, STEAM, { speed: 0.12 * s, up: 0.45 * s, spread: 0.18 * s, life: 1.8, size: 0.08, gravity: 0.3, drag: 1.4 });
+        return;
+      case "dance": { // a beat pulse, the team in two alternating colors
+        const c = DANCE[i % DANCE.length]!;
+        if (ring) burstAt(fxAt, c, 1.5 * s, 450);
+        spawnFx(particles, fxAt, c, { speed: 1.0 * s, up: 0.8 * s, spread: 0.3 * s, life: 0.8, size: 0.06, gravity: -1.5, drag: 1.2 });
+        return;
+      }
+    }
+  }
+
+  /** Start every queued figure whose turn has come (called each frame and by trayReact). The due turns leave the
+   *  queue before any starts, so a figure that throws is reported once (frameFailed) and never stalls the rest, and
+   *  no turn ever starts twice. */
+  function drainReactions(t: number): void {
+    const due: ReactionStart[] = [];
+    let k = 0;
+    for (const r of reactQueue) if (r.at <= t) due.push(r); else reactQueue[k++] = r;
+    reactQueue.length = k;
+    let failed: unknown = null;
+    for (const r of due) {
+      try { startReaction(r, t); } catch (e) { failed ??= e; }
+    }
+    if (failed !== null) throw failed;
+  }
+
   /** Where a throw starting at stage px `px` begins in the world: along the view ray, a third of the way to the
    *  target (3D: from the viewer's side), or on a plane just above the target (2D). */
   function launchFrom(px: { x: number; y: number }, target: THREE.Vector3, out: THREE.Vector3): THREE.Vector3 {
@@ -1443,6 +1548,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     else if (st === "killed") level = 0.18;
     else if (st === "idle") level = 0.6;
     else level = 0.85 + 1.1 * obj.power;
+    if (t < obj.fx.cueUntil && !flicker) { tmpColor.copy(obj.fx.cue); level = 1.8; } // P-VIZ.TRAY2: a reaction under reduced motion (never over a failure)
     if (t < obj.fx.colorUntil) { tmpColor.copy(WHITE); level = 2; }
     const slot = obj.d3 ?? obj.d2;
     if (slot) {
@@ -1877,6 +1983,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     busyCam = false;
     if ((auto || shot || flight) && !interacting && nodes.size) { driveCamera(t, dt); busyCam = !rig.settled || !!flight; }
     controls.update();
+    if (reactQueue.length) drainReactions(t); // P-VIZ.TRAY2: the figures whose turn has come start before they update
     busyNodes = false;
     for (const n of nodes.values()) {
       updateNode(n, t, dt);
@@ -2193,9 +2300,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       if (!nodes.size) return;
       clock.now = performance.now();
       // The front sweeps left to right across the screen: the camera's right vector, on the ground.
-      stormDir.set(1, 0, 0).applyQuaternion(camera.quaternion).setY(0);
-      if (stormDir.lengthSq() < 1e-6) stormDir.set(1, 0, 0);
-      stormDir.normalize();
+      sweepDir(stormDir);
       const hits = stormSchedule([...nodes.values()].map((n) => ({ id: n.id, x: n.cur.x, z: n.cur.z })), stormDir);
       if (!o.motion) { // reduced motion: no sky, no strikes, no papers; every figure hit at once
         for (const h of hits) {
@@ -2220,6 +2325,34 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
       const until = throwFx.storm(style, hits, stormDir, stormCenter, sceneRadius(), clock.now);
       effectsUntil = Math.max(effectsUntil, until + REACT_MS);
       kick();
+    },
+    trayReact(kind, elapsed = 0) {
+      // P-WORLDS.1's rule for throws, for reactions: a figure only hears what the tray offers for this style
+      const look = trayReactionOf(trayReactionsFor(activeWorld?.def ?? null), kind);
+      if (stopped || !look || !nodes.size) return false;
+      clock.now = performance.now(); // the loop may have been parked: the stagger starts now, on the rAF timeline
+      const cues = reactionSchedule(look.base, [...nodes.values()].map((n) => ({ id: n.id, x: n.cur.x, z: n.cur.z })), sweepDir(stormDir), o.motion);
+      // a broadcast handed over `elapsed` ms in (a remount): figures whose part is over are left out, the rest start
+      // on their turn, or now when it has passed
+      const len = reactionFx(o.tier, o.motion).figure ? TRAY_REACTION_MS[look.base] : TRAY_REACTION_CUE_MS;
+      const since = Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0;
+      let last = -1;
+      cues.forEach((c, i) => {
+        if (c.at + len <= since) return;
+        const at = clock.now + Math.max(0, c.at - since);
+        reactQueue.push({ id: c.id, kind: look.kind, base: look.base, at, i });
+        last = Math.max(last, at);
+      });
+      if (last < 0) return false;
+      drainReactions(clock.now); // the first figure (every figure under reduced motion) starts at once
+      effectsUntil = Math.max(effectsUntil, last + 50);
+      kick();
+      return true;
+    },
+    trayReactions() {
+      const now = performance.now(), out: Record<string, { kind: string; startedAt: number; playing: boolean }> = {};
+      for (const [id, r] of reacting) if (nodes.has(id)) out[id] = { kind: r.kind, startedAt: r.at, playing: now < r.until };
+      return out;
     },
     nodeAt(x, y) {
       const hit = hitAt(x, y);

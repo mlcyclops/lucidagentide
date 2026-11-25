@@ -10,6 +10,8 @@
 // ADR-0649) and the factories). A module built for any apiVersion up to WORLD_API_VERSION loads. v2 (ADR-0652):
 // edges may be "plasma-light" with a packet token, and environmentFor(options) must be a function whose patch for
 // the default options validates; worldEnvironment merges it over the environment for the user's values.
+// P-VIZ.TRAY2 (ADR-0690): the optional tray `reactions` (at most four, one per built-in base, kinds of their own,
+// plain SVG path icons).
 // A world that fails to load or validate is still listed, with its error, and is never offered.
 //
 // Activation (the store's rule, market_gate's provider): with no provider configured a world is allowed. With one,
@@ -25,6 +27,7 @@
 import { decidePackAction, type AuthState, type Entitlement } from "../../harness/market/entitlement.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
 import type { VizStyle } from "./viz_model.ts";
+import { isTrayReactionKind, TRAY_REACTION_KINDS } from "./viz_tray_reactions.ts";
 import {
   WORLD_API_VERSION, worldKey, type InstalledWorld, type WorldDefinition, type WorldEdges, type WorldEnvironment, type WorldHost, type WorldOption,
   type WorldOptionValues,
@@ -218,6 +221,22 @@ export function validateWorld(def: unknown, installed: InstalledWorld): { ok: tr
   const storm = def.storm;
   if (!isRec(storm) || !nonEmpty(storm.label) || !nonEmpty(storm.tip)) return bad("the storm is missing its label or tip");
   if (!isIcon(storm.icon)) return bad("the storm icon is not plain SVG path data");
+  // P-VIZ.TRAY2 (ADR-0690): optional, up to four reactions, one per built-in base, kinds of their own
+  if (def.reactions !== undefined) {
+    if (!Array.isArray(def.reactions) || def.reactions.length > TRAY_REACTION_KINDS.length) return bad("reactions must be a list of at most four");
+    const bases = new Set<string>(), rkinds = new Set<string>();
+    for (const r of def.reactions as unknown[]) {
+      if (!isRec(r) || !nonEmpty(r.kind)) return bad("a reaction has no kind");
+      if (typeof r.base !== "string" || !isTrayReactionKind(r.base)) return bad(`reaction "${r.kind}" has no base (celebrate, wave, coffee or dance)`);
+      if (bases.has(r.base)) return bad(`two reactions take the "${r.base}" slot`);
+      bases.add(r.base);
+      if (r.kind === "storm" || kinds.has(r.kind) || rkinds.has(r.kind)) return bad(`the reaction kind "${r.kind}" is reserved or repeated`);
+      if (isTrayReactionKind(r.kind) && r.kind !== r.base) return bad(`the reaction kind "${r.kind}" is another slot's built-in`);
+      rkinds.add(r.kind);
+      if (!nonEmpty(r.label) || !nonEmpty(r.tip)) return bad(`reaction "${r.kind}" has no label or tip`);
+      if (!isIcon(r.icon)) return bad(`reaction "${r.kind}" icon is not plain SVG path data`);
+    }
+  }
   if (!Array.isArray(def.options)) return bad("options is not a list");
   const optKeys = new Set<string>();
   for (let i = 0; i < def.options.length; i++) {

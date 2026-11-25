@@ -10,13 +10,15 @@
 // are plain strings the world's figures understand. ThrowKind stays the built-in styles' closed set.
 
 import type { BuiltinStyle } from "./viz_model.ts";
+import type { TrayReactionKind } from "./viz_tray_reactions.ts";
 
 /** Professional: paper ball, rubber band, energy drink. Anime: a stream of three throwing stars, a lightning
  *  bolt that supercharges, an energy ball the figure absorbs and grows stronger from. */
 export type ThrowKind = "paper" | "band" | "drink" | "stars" | "bolt" | "orb";
 
-/** What a figure is told when something reaches it: a throwable, or Storm (every figure at once). */
-export type HitKind = ThrowKind | "storm";
+/** What a figure is told when something reaches it: a throwable, or Storm (every figure at once). P-VIZ.TRAY2
+ *  (ADR-0690): or a tray reaction (every figure, viz_tray_reactions), played through the same hit layer. */
+export type HitKind = ThrowKind | "storm" | TrayReactionKind;
 
 export interface ThrowLook { kind: ThrowKind; label: string; tip: string }
 

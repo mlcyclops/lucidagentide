@@ -87,6 +87,23 @@ describe("validateWorld", () => {
     expect(errOf({ ...goodDef(), storm: { label: "B", tip: "t", icon: "url(x)" } })).toContain("storm icon");
   });
 
+  test("reactions (ADR-0690): optional, at most four, one per base, kinds of their own, path icons", () => {
+    const r = (kind: string, base: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ kind, base, label: "L", tip: "T", icon: "M4 4h16", ...extra });
+    expect(validateWorld(goodDef(), INST).ok).toBe(true); // every world without them still loads
+    expect(validateWorld({ ...goodDef(), reactions: [] }, INST).ok).toBe(true);
+    expect(validateWorld({ ...goodDef(), reactions: [r("carol", "celebrate"), r("wave", "wave")] }, INST).ok).toBe(true);
+    expect(errOf({ ...goodDef(), reactions: "carol" })).toContain("at most four");
+    expect(errOf({ ...goodDef(), reactions: [r("a", "celebrate"), r("b", "wave"), r("c", "coffee"), r("d", "dance"), r("e", "dance")] })).toContain("at most four");
+    expect(errOf({ ...goodDef(), reactions: [r("carol", "sing")] })).toContain("no base");
+    expect(errOf({ ...goodDef(), reactions: [r("carol", "celebrate"), r("toast", "celebrate")] })).toContain("slot");
+    expect(errOf({ ...goodDef(), reactions: [r("snowball", "celebrate")] })).toContain("reserved or repeated"); // a throwable's kind
+    expect(errOf({ ...goodDef(), reactions: [r("storm", "celebrate")] })).toContain("reserved or repeated");
+    expect(errOf({ ...goodDef(), reactions: [r("carol", "celebrate"), r("carol", "wave")] })).toContain("reserved or repeated");
+    expect(errOf({ ...goodDef(), reactions: [r("dance", "celebrate")] })).toContain("another slot");
+    expect(errOf({ ...goodDef(), reactions: [r("carol", "celebrate", { label: "" })] })).toContain("label or tip");
+    expect(errOf({ ...goodDef(), reactions: [r("carol", "celebrate", { icon: "<svg/>" })] })).toContain("SVG path");
+  });
+
   test("options: unique keys and valid defaults", () => {
     const d = goodDef();
     const opts = d.options as WorldOption[];
