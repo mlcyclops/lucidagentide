@@ -22,6 +22,7 @@
 // now receives a mixed `seed`. v1 modules keep loading unchanged.
 // Also v2, additive: quality `tier` (ADR-0651), the `swatch` option type (ADR-0650), "plasma-light" edges with a
 // packet `token` and `environmentFor(options)` (ADR-0652), the character kit (ADR-0654) and build sites (ADR-0653).
+// Also v2, additive (ADR-0690): the tray's reactions group (`reactions`, WorldTrayReaction) and WorldFigure.perform.
 
 import type * as THREE_NS from "three";
 import type { MiniActivity, MiniLook } from "./viz_mini_look.ts";
@@ -118,6 +119,11 @@ export interface WorldFigure {
   react(kind: WorldReaction, camera: THREE_NS.Camera): void;
   /** A throwable (one of the world's WorldThrow kinds) or "storm" reached the figure from `from`. */
   hit(kind: string, from: THREE_NS.Vector3, camera: THREE_NS.Camera, strength?: number): void;
+  /** v2, optional (ADR-0690): play a tray reaction, a short layer over the current activity that hands back by
+   *  itself (like react()); never changes the state. `kind` is one of the world's `reactions` kinds, or a built-in
+   *  WorldTrayBase for a slot the world left to the host. Without it the host plays react("stare") (the figure turns
+   *  to the viewer) under the host's own effect for the reaction. */
+  perform?(kind: string, camera: THREE_NS.Camera): void;
   /** 0..1, how charged the figure is after hits; decays inside update(). The host tints the node with it. */
   readonly charge: number;
   setIdleSeconds(sec: number): void;
@@ -143,6 +149,16 @@ export interface WorldStageOptions { role: WorldRole; parentRole: WorldRole | nu
 /** A throwable on the tray. `icon` is SVG path data in a 24x24 box, drawn as a 1.8px round stroke in the tray's
  *  ink color (the host sets it with setAttribute, never as markup). */
 export interface WorldThrow { kind: string; label: string; tip: string; icon: string }
+
+/** v2 (ADR-0690): the host's four built-in tray reactions, every figure at once: confetti and a cheer, a wave at the
+ *  viewer, a coffee break (a stretch and a sip), a short dance in sync. */
+export type WorldTrayBase = "celebrate" | "wave" | "coffee" | "dance";
+
+/** v2 (ADR-0690): a world's own button in the tray's reactions group. It takes the slot (and the host's light scene
+ *  effect) of the built-in reaction `base`; the figures hear `kind` in perform(). `kind`: unique among the world's
+ *  reactions, not "storm", not one of its throwable kinds, and a built-in reaction kind only for its own base. `icon`
+ *  is SVG path data in a 24x24 box (as WorldThrow). */
+export interface WorldTrayReaction { kind: string; base: WorldTrayBase; label: string; tip: string; icon: string }
 
 /** A thrown object in flight. The host flies `object` from the thrower to the target on an arc and calls
  *  update every frame; on arrival it removes the object, calls dispose, and calls the target figure's hit(kind). */
@@ -303,6 +319,9 @@ export interface WorldDefinition {
   throws: readonly [WorldThrow, WorldThrow, WorldThrow];
   /** The storm button ("Blizzard"). */
   storm: { label: string; tip: string; icon: string };
+  /** v2, optional (ADR-0690): up to four of the world's own tray reactions, at most one per base. A slot the world
+   *  leaves out (or every slot, without this field) is the host's built-in reaction. */
+  reactions?: readonly WorldTrayReaction[];
   options: readonly WorldOption[];
   environment: WorldEnvironment;
   /** v2 (ADR-0652): the environment for the user's option values, merged over `environment`. */

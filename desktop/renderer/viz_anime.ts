@@ -58,6 +58,7 @@ import {
 import { drawEmblem, type VizBrand } from "./viz_brand.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
+import { isTrayReactionKind } from "./viz_tray_reactions.ts";
 
 export type { AnimeState, ReactionKind } from "./viz_anime_pose.ts";
 export type AnimeDetail = "full" | "reduced" | "minimal";
@@ -1360,7 +1361,7 @@ class Anime implements AnimeFigure {
   }
 
   hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength = 1): void {
-    if (this.disposed || this.state === "killed" || !HIT_KINDS.includes(kind)) return;
+    if (this.disposed || this.state === "killed" || !(HIT_KINDS.includes(kind) || isTrayReactionKind(kind))) return; // P-VIZ.TRAY2: or a tray reaction
     animeHitCharge(this.chg, kind, strength);
     this.chargeNow = chargeLevel(this.chg);
     // the new hit chains (throwing stars), turns on from the weight already on and blends in from the pose on
