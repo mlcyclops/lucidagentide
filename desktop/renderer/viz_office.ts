@@ -76,7 +76,7 @@ import {
   applyTyping, buttonPress, COMMIT_BLEND_S, commitLook, COPIER, COPY_HIPS, copiesStarted, copyProgress, DESK_MUG, DESK_PHONE, flickAt,
   HANDSET_AT, handsetHeld, HEADPHONE_STAND, HEADPHONE_STAND_H, KEYBOARD, MUG_GRIP, mugTilt, OFFICE_DESK_Y, OFFICE_RIG, officeDeskSet,
   officeFacing, OFFICE_POSE_VECTORS, officePoseTable, officeVariant, PHONE_DROP_S, PHONE_GRAB_S, PHONES_BACK_S, PHONES_GRAB_S, PHONES_OFF_S,
-  PHONES_ON_S, phonesAt, phonesGroove, SHOULDER_X, TRAY_TILT, workerOutfit,
+  PHONES_ON_S, phonesAt, phonesGroove, SHOULDER_X, SIP_TIP, TRAY_TILT, workerOutfit,
   type Crt, type DeskItem, type LookAngles, type ManagerCast, type ManagerMemo, type ManagerVariant, type MouthShape, type OfficeClipName,
   type OfficeClipSample, type OfficeEmotion, type OfficeHitPlan, type OfficePoseTable, type OfficeRole, type OfficeState, type Paper,
   type ReactKind, type ReactSample, type SwapSample, type WorkerCast, type WorkerHair, type WorkerOutfit, type Zed,
@@ -84,6 +84,7 @@ import {
 import { emblemCanvas, type VizBrand } from "./viz_brand.ts";
 import { MINI_ACTIVITIES, type MiniActivity, type MiniLook } from "./viz_mini_look.ts";
 import type { HitKind } from "./viz_throw_kinds.ts";
+import { isTrayReactionKind } from "./viz_tray_reactions.ts";
 
 export type { ManagerVariant, OfficeRole, OfficeState } from "./viz_office_pose.ts";
 export type OfficeDetail = "full" | "reduced" | "minimal";
@@ -1965,7 +1966,7 @@ class Office implements OfficeFigure {
 
   hit(kind: HitKind, from: THREE.Vector3, camera: THREE.Camera, strength = 1): void {
     // (mid-handover there is nobody at the desk to hit)
-    if (this.disposed || this.state === "killed" || this.swapT >= 0 || !HIT_KINDS.includes(kind)) return;
+    if (this.disposed || this.state === "killed" || this.swapT >= 0 || !(HIT_KINDS.includes(kind) || isTrayReactionKind(kind))) return; // P-VIZ.TRAY2: or a tray reaction
     officeHitCharge(this.chg, kind, strength);
     this.chargeNow = chargeLevel(this.chg);
     // the new hit turns on from the weight already on and blends in from the pose on screen, so nothing pops
@@ -2081,7 +2082,7 @@ class Office implements OfficeFigure {
     const hs = this.hs;
     if (this.hitPlan) {
       this.hitT += d;
-      if (sampleOfficeHit(this.hitPlan, this.hitT, hs, this.hitPose).done) this.endHit();
+      if (sampleOfficeHit(this.hitPlan, this.hitT, hs, this.hitPose, this.poses).done) this.endHit();
     }
     // (at the copier the desk's activity and its props are put away too)
     const live = this.shot === null && sw === null && hs.body < 0.5 && this.commitW < 0.5;
@@ -2503,11 +2504,12 @@ class Office implements OfficeFigure {
     // coffee: in the hand while sipping (and all through the copier scene), on the desk otherwise; held by the
     // handle, kept upright in the way he faces and tipped to the lips (P-VIZ.7); it sloshes when the desk is slammed
     const atCopier = this.commitW >= 0.5;
-    const held = atCopier || (live && mugHeld(base, baseT));
+    const coffee = motion && this.hs.mug && !atCopier; // P-VIZ.TRAY2: the coffee break takes the desk mug
+    const held = atCopier || coffee || (live && mugHeld(base, baseT));
     const yaw = officeFacing(this.out);
     this.handMug.visible = held;
     this.deskMug.visible = !held;
-    if (held) this.hang(this.handMug, atCopier ? mugTilt("copy", copyT) : mugTilt(base, baseT), yaw, 0, MUG_GRIP[0], MUG_GRIP[1], MUG_GRIP[2]);
+    if (held) this.hang(this.handMug, atCopier ? mugTilt("copy", copyT) : coffee ? SIP_TIP * this.hs.tilt : mugTilt(base, baseT), yaw, 0, MUG_GRIP[0], MUG_GRIP[1], MUG_GRIP[2]);
     // P-VIZ.7: the handset off the cradle to the ear (turning upright on the way) and back
     if (this.deskHandset && this.handHandset) {
       const inHand = live && handsetHeld(base, baseT);

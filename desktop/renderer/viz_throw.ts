@@ -24,6 +24,11 @@
 //     it down. A throwable can also be dragged from the tray and released over a node. Throwing is pointer
 //     only (the nodes take no keyboard focus); the tray buttons are focusable and say so. Storm is a plain
 //     button, rate limited (STORM_COOLDOWN_MS).
+//     P-VIZ.TRAY2 (ADR-0690): a chevron at the tray's left end folds out the reactions group (role=group) to the
+//     left of the throwables: Celebrate, Wave, Coffee break and Dance (or a world's own in their slots,
+//     viz_tray_reactions.trayReactionsFor). Each is a plain button that makes every figure react
+//     (scene.trayReact), with its own cooldown (TRAY_REACTION_COOLDOWN_MS). Collapsed by default; the view persists
+//     the state and its Esc folds the group back in (collapse()). Folded in, the group is inert.
 
 import * as THREE from "three";
 import { esc } from "./format.ts";
@@ -35,8 +40,9 @@ import { isThrowKind, STORM_TIP, throwsFor, type ThrowKind } from "./viz_throw_k
 import type { WorldDefinition, WorldProjectile } from "./viz_world_api.ts";
 import {
   arcApex, arcPoint, armState, armStep, createRateLimit, DRAG_PX, flightMs, rateLeft, rateTake, STORM_COOLDOWN_MS, stormFx, strikeTargets,
-  THROW_CAP, type ArmAction, type ArmState, type StormHit,
+  THROW_CAP, type ArmAction, type ArmState, type RateLimit, type StormHit,
 } from "./viz_throw_math.ts";
+import { TRAY_REACTION_COOLDOWN_MS, trayReactionsFor, type TrayReactionKind } from "./viz_tray_reactions.ts"; // P-VIZ.TRAY2 (ADR-0690)
 
 // ------------------------------------------------------------------------------------------ the scene side
 
@@ -572,6 +578,16 @@ const STORM_ICONS: Readonly<Record<BuiltinStyle, string>> = {
   professional: P("M3.5 9h8a2.5 2.5 0 1 0-2.5-2.5") + P("M3.5 13h12a2.5 2.5 0 1 1-2.5 2.5") + P("M15 3.5l4.5 1.2-1.2 4.5-4.5-1.2z"),
 };
 
+/** P-VIZ.TRAY2 (ADR-0690): the reactions group's icons (party popper, waving hand, coffee mug, music notes) and the
+ *  chevron that folds the group out to the left (turned round while it is open). */
+const REACT_ICONS: Readonly<Record<TrayReactionKind, string>> = {
+  celebrate: P("M4.5 19.5 9 8l7 7z") + P("M9 8c1.5 1.5 3.5 4.5 3.9 6.6") + P("M14 4.5l.6 2") + P("M18.5 5.5l-1.6 1.5") + P("M19.5 10l-2 .4") + P("M11.5 3.5l.3 1"),
+  wave: P("M7.5 12.5V7a1.5 1.5 0 0 1 3 0v4.5") + P("M10.5 11V5.5a1.5 1.5 0 0 1 3 0V11") + P("M13.5 11V7a1.5 1.5 0 0 1 3 0v6.5a6.5 6.5 0 0 1-6.5 6.5 5.5 5.5 0 0 1-4.6-2.5l-2.2-3.4a1.4 1.4 0 0 1 2.3-1.6l1.5 1.8") + P("M18.5 4.5c1 .6 1.7 1.5 2 2.5"),
+  coffee: P("M5 10h11v5a4.5 4.5 0 0 1-4.5 4.5h-2A4.5 4.5 0 0 1 5 15z") + P("M16 11.5h1.5a2.3 2.3 0 0 1 0 4.6H16") + P("M8.5 3.5c-.9 1 .9 2.2 0 3.3") + P("M12 3.5c-.9 1 .9 2.2 0 3.3"),
+  dance: P("M9 18V6.5l10-2.5v11.5") + P("M9 10l10-2.5") + `<circle cx="6.5" cy="18" r="2.5"/>` + `<circle cx="16.5" cy="15.5" r="2.5"/>`,
+};
+const CHEVRON = P("M14.5 6l-6 6 6 6");
+
 const svg = (body: string, size: number): string =>
   `<svg class="ic" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 
@@ -608,12 +624,22 @@ export interface ThrowTray {
   release(hit: SceneHit | null): boolean;
   /** Put down whatever is armed; false when nothing was (Esc then means what it always did). */
   disarm(): boolean;
-  /** A new scene was mounted: tell it what is armed. */
+  /** A new scene was mounted: tell it what is armed, and (P-VIZ.TRAY2) hand it the rest of a reaction in flight. */
   attach(): void;
+  /** P-VIZ.TRAY2 (ADR-0690): fold the reactions group back in (focus inside it goes to the chevron); false when it
+   *  was not open (Esc then means what it always did). */
+  collapse(): boolean;
+  /** P-VIZ.TRAY2, for the demo probe: whether the group is open, the reactions it offers, those cooling down. */
+  probe(): { open: boolean; kinds: string[]; cooling: string[] };
 }
 
+/** P-VIZ.TRAY2 (ADR-0690): the reactions group's fold-out state, owned by the view's prefs. */
+export interface TrayReactionsPref { open: boolean; onToggle(open: boolean): void }
+
+const REACT_HOW = "Every agent and subagent reacts at once; their work and status go on.";
+
 /** Mount the tray at the bottom center of `stage`. `scene` is read on every use (the view remounts it). */
-export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle | null, style: VizStyle, initialWorld: WorldDefinition | null = null): ThrowTray {
+export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle | null, style: VizStyle, initialWorld: WorldDefinition | null, reactPref: TrayReactionsPref): ThrowTray {
   const root = document.createElement("div");
   root.className = "viz-throw";
   root.setAttribute("role", "toolbar");
@@ -632,15 +658,109 @@ export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle |
   let coolTimer = 0;
   let press: { kind: string; btn: HTMLElement; x: number; y: number; pid: number; drag: boolean } | null = null;
   let eatClick = false;
+  // P-VIZ.TRAY2 (ADR-0690): the reactions group (folded out or not, persisted by the view) and each reaction's own
+  // cooldown, kept across repaints (a style switch) by kind
+  let open = reactPref.open;
+  const reactLimits = new Map<string, RateLimit>();
+  let reactTimer = 0;
+  /** The last broadcast (performance.now ms): a scene mounted while it runs (a quality step-down, a restored context)
+   *  takes over the figures that have not had their part yet (attach). */
+  let lastReact: { kind: string; at: number } | null = null;
 
   /** What the tray offers now: the built-in style's throwables, or the world's. */
   function looks(): readonly { kind: string; label: string; tip: string }[] {
     return world ? world.throws : isBuiltinStyle(st.style) ? throwsFor(st.style) : [];
   }
 
+  /** P-VIZ.TRAY2: the chevron and the reactions group (the built-ins, or the world's in their slots), built as DOM:
+   *  a world's labels and tips are text, its icons path data. They go in front of the throwables, so the group folds
+   *  out to their left and the chevron stays at the tray's left end. */
+  function reactionNodes(): HTMLElement[] {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "viz-throw-b viz-throw-more";
+    more.dataset.vizThrowMore = "";
+    more.setAttribute("aria-controls", "vizReactGroup");
+    more.innerHTML = svg(CHEVRON, 16);
+    const group = document.createElement("div");
+    group.className = "viz-react";
+    group.id = "vizReactGroup";
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-label", "Reactions");
+    for (const r of trayReactionsFor(world)) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "viz-throw-b viz-react-b";
+      b.dataset.vizReact = r.kind;
+      b.setAttribute("aria-label", `${r.label}: every agent reacts`);
+      b.setAttribute("data-tip", tipValue(r.label, `${r.tip} ${REACT_HOW} Once every ${TRAY_REACTION_COOLDOWN_MS / 1000} seconds.`));
+      if (r.icon !== null) b.appendChild(worldIcon(r.icon, 16));
+      else b.innerHTML = svg(REACT_ICONS[r.base], 16);
+      group.appendChild(b);
+    }
+    const sep = document.createElement("i");
+    sep.className = "viz-throw-sep";
+    sep.setAttribute("aria-hidden", "true");
+    group.appendChild(sep);
+    return [more, group];
+  }
+
+  function paintOpen(): void {
+    root.classList.toggle("open", open);
+    const more = root.querySelector<HTMLElement>("[data-viz-throw-more]");
+    if (more) {
+      more.setAttribute("aria-expanded", String(open));
+      more.setAttribute("aria-label", open ? "Hide reactions" : "Show reactions");
+      more.setAttribute("data-tip", tipValue(open ? "Hide reactions" : "Reactions", "Celebrate, wave, a coffee break or a dance: every agent and subagent reacts at once."));
+    }
+    root.querySelector<HTMLElement>("#vizReactGroup")?.toggleAttribute("inert", !open); // folded in: out of the Tab order and the pointer's reach
+  }
+
+  function paintReactions(): void {
+    const now = performance.now();
+    let next = Infinity;
+    for (const b of root.querySelectorAll<HTMLElement>("[data-viz-react]")) {
+      const lim = reactLimits.get(b.dataset.vizReact ?? "");
+      const left = lim ? rateLeft(lim, now) : 0;
+      b.classList.toggle("cool", left > 0);
+      b.setAttribute("aria-disabled", String(left > 0));
+      if (left > 0) next = Math.min(next, left);
+    }
+    window.clearTimeout(reactTimer);
+    reactTimer = next < Infinity ? window.setTimeout(paintReactions, next + 20) : 0;
+  }
+
+  function setOpen(next: boolean): void {
+    if (next === open) return;
+    const group = root.querySelector<HTMLElement>("#vizReactGroup");
+    // Folding takes focus back to the chevron when it was in the group, elsewhere on the tray, or nowhere (a click on
+    // the stage or a disabled button can leave it on <body>): a keyboard user keeps their place either way.
+    const active = document.activeElement;
+    const focusIn = !next && !!group && (group.contains(active) || root.contains(active) || !active || active === document.body);
+    open = next;
+    paintOpen();
+    if (focusIn) root.querySelector<HTMLElement>("[data-viz-throw-more]")?.focus();
+    reactPref.onToggle(open);
+  }
+
+  /** A reaction button: every figure reacts (the scene staggers them), then its own cooldown. */
+  function react(kind: string): void {
+    const sc = scene();
+    const look = trayReactionsFor(world).find((r) => r.kind === kind);
+    if (!sc || !look) return;
+    let lim = reactLimits.get(kind);
+    if (!lim) reactLimits.set(kind, (lim = createRateLimit(TRAY_REACTION_COOLDOWN_MS)));
+    const now = performance.now();
+    if (rateLeft(lim, now) > 0 || !sc.trayReact(kind)) return; // cooling down, or nobody to react
+    rateTake(lim, now);
+    lastReact = { kind, at: now };
+    paintReactions();
+    say(`${look.label}. Ready again in ${TRAY_REACTION_COOLDOWN_MS / 1000} seconds.`);
+  }
+
   /** P-WORLDS.1: a world's tray, built as DOM (its labels and tips are text, its icons path data). */
   function paintWorld(w: WorldDefinition): void {
-    root.replaceChildren();
+    root.replaceChildren(...reactionNodes());
     for (const t of w.throws) {
       const b = document.createElement("button");
       b.type = "button";
@@ -669,18 +789,20 @@ export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle |
     sr.dataset.vizThrowSr = "";
     sr.setAttribute("aria-live", "polite");
     root.append(sep, sb, sr);
-    paintArmed();
-    paintStorm();
   }
 
   function paint(): void {
-    if (world) { paintWorld(world); return; }
-    if (!isBuiltinStyle(st.style)) return;
-    const items = throwsFor(st.style).map((t) =>
-      `<button type="button" class="viz-throw-b" data-viz-throw="${t.kind}" aria-pressed="false" aria-label="${esc(`${t.label}: pick it, then click an agent or subagent`)}" data-tip="${esc(tipValue(t.label, `${t.tip} ${HOW}`))}">${svg(ICONS[t.kind], 16)}</button>`).join("");
-    root.innerHTML = `${items}<i class="viz-throw-sep" aria-hidden="true"></i>`
-      + `<button type="button" class="viz-throw-b viz-throw-storm" data-viz-storm aria-label="Storm" data-tip="${esc(tipValue("Storm", `${STORM_TIP[st.style]} Once every ${STORM_COOLDOWN_MS / 1000} seconds.`))}">${svg(STORM_ICONS[st.style], 15)}<span>Storm</span></button>`
-      + `<span class="viz-throw-sr" data-viz-throw-sr aria-live="polite"></span>`;
+    if (world) paintWorld(world);
+    else if (isBuiltinStyle(st.style)) {
+      const items = throwsFor(st.style).map((t) =>
+        `<button type="button" class="viz-throw-b" data-viz-throw="${t.kind}" aria-pressed="false" aria-label="${esc(`${t.label}: pick it, then click an agent or subagent`)}" data-tip="${esc(tipValue(t.label, `${t.tip} ${HOW}`))}">${svg(ICONS[t.kind], 16)}</button>`).join("");
+      root.innerHTML = `${items}<i class="viz-throw-sep" aria-hidden="true"></i>`
+        + `<button type="button" class="viz-throw-b viz-throw-storm" data-viz-storm aria-label="Storm" data-tip="${esc(tipValue("Storm", `${STORM_TIP[st.style]} Once every ${STORM_COOLDOWN_MS / 1000} seconds.`))}">${svg(STORM_ICONS[st.style], 15)}<span>Storm</span></button>`
+        + `<span class="viz-throw-sr" data-viz-throw-sr aria-live="polite"></span>`;
+      root.prepend(...reactionNodes());
+    } else return;
+    paintOpen();
+    paintReactions();
     paintArmed();
     paintStorm();
   }
@@ -765,6 +887,9 @@ export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle |
   root.addEventListener("click", (e) => {
     if (eatClick) { eatClick = false; return; }
     const t = e.target as HTMLElement;
+    if (t.closest("[data-viz-throw-more]")) { setOpen(!open); return; } // P-VIZ.TRAY2
+    const rb = t.closest<HTMLElement>("[data-viz-react]");
+    if (rb) { react(rb.dataset.vizReact ?? ""); return; }
     const b = t.closest<HTMLElement>("[data-viz-throw]");
     if (b) { step({ type: "arm", kind: b.dataset.vizThrow ?? "" }); return; }
     if (!t.closest("[data-viz-storm]")) return;
@@ -799,6 +924,24 @@ export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle |
       step({ type: "disarm" });
       return true;
     },
-    attach() { scene()?.setThrowArmed(st.armed ? cursorFor(st.armed, world) : null); },
+    attach() {
+      const sc = scene();
+      sc?.setThrowArmed(st.armed ? cursorFor(st.armed, world) : null);
+      // P-VIZ.TRAY2: a remount mid-broadcast drops the old scene's figures and its queue; the new one plays the rest
+      if (sc && lastReact && !sc.trayReact(lastReact.kind, performance.now() - lastReact.at)) lastReact = null;
+    },
+    collapse() {
+      if (!open) return false;
+      setOpen(false);
+      return true;
+    },
+    probe() {
+      const now = performance.now();
+      return {
+        open,
+        kinds: trayReactionsFor(world).map((r) => r.kind),
+        cooling: [...reactLimits].filter(([, lim]) => rateLeft(lim, now) > 0).map(([k]) => k),
+      };
+    },
   };
 }

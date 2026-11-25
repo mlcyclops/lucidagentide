@@ -1861,6 +1861,12 @@ demo-P-WORLDS.GAMES3: ## P-WORLDS.GAMES3 (ADR-0691): the built-in mini games get
 	node --check desktop/scripts/demo_p_worlds_games_3.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_worlds_games_3.mjs; else echo "demo-P-WORLDS.GAMES3: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-VIZ.TRAY2
+demo-P-VIZ.TRAY2: ## P-VIZ.TRAY2 (ADR-0690): a chevron at the throw tray's left end folds out four reactions (Celebrate, Wave, Coffee break, Dance) every figure plays, each with its own cooldown; collapsed by default, persisted, Esc folds it; worlds may bring their own (contract v2 `reactions`, `perform`). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, lanes: bun desktop/scripts/fleet_demo/seed_fleet.mjs http://127.0.0.1:7821/ --every 20 --lanes 6): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_tray_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_tray_reactions.test.ts desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_throw_math.test.ts desktop/renderer/viz_anime_pose.test.ts desktop/renderer/viz_office_pose.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_tray_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_tray_2.mjs; else echo "demo-P-VIZ.TRAY2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-VIZ.STYLEOPT1
 demo-P-VIZ.STYLEOPT1: ## P-VIZ.STYLEOPT1 (ADR-0688): the built-in Anime and Professional styles have their own options in the View menu (seven backgrounds, stars, drift, accent, particles, lighting, name tags; Professional floor grid and desk floor; Anime floor plate), stored like a world's, with Reset. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_styleopt_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_builtin_options.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts

@@ -563,7 +563,7 @@ describe("P-VIZ.6: hits", () => {
       }
       expect(hsample(p, p.len - 1e-4).body).toBeLessThan(1e-3);
       expect(hsample(p, p.len - HIT_OUT_S * 0.4).emotion).toBeNull();
-      expect(hsample(p, p.len)).toEqual({ body: 0, blend: 1, turn: 0, emotion: null, can: false, tilt: 0, papers: -1, shake: 0, done: true });
+      expect(hsample(p, p.len)).toEqual({ body: 0, blend: 1, turn: 0, emotion: null, can: false, mug: false, tilt: 0, papers: -1, shake: 0, done: true });
     }
   });
 
