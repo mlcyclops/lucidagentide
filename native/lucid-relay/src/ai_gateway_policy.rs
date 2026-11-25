@@ -226,17 +226,19 @@ impl Pins {
         Pins { path, st: Mutex::new(st) }
     }
 
-    fn save(&self, st: &PinState) {
-        let Some(p) = &self.path else { return };
+    fn save(&self, current: &Pinned, previous: Option<&Pair>) -> std::io::Result<()> {
+        let Some(p) = &self.path else { return Ok(()) };
         let v = json!({
-            "current": st.current.as_ref().map(|c| json!({"wires": c.pair.wires, "pinned_ms": c.pinned_ms})).unwrap_or(Value::Null),
-            "previous": st.previous.as_ref().map(|p| json!({"wires": p.wires})).unwrap_or(Value::Null),
+            "current": {"wires": current.pair.wires, "pinned_ms": current.pinned_ms},
+            "previous": previous.map(|p| json!({"wires": p.wires})).unwrap_or(Value::Null),
         });
-        let _ = crate::meet_tls::write_atomic(p, v.to_string().as_bytes());
+        crate::meet_tls::write_atomic(p, v.to_string().as_bytes())
     }
 
     /// Pin a newly verified pair: the same policy changes nothing; a lower policy or map `seq` (or the same policy
     /// `seq` with other bytes) is refused; otherwise the current pair becomes the previous one and the window starts.
+    /// The new pins are written to `pins.json` before they are taken: when they cannot be, Err and nothing changes
+    /// (a restart must never return to an older policy than the one in force).
     pub fn pin(&self, pair: Pair, now_ms: i64) -> Result<bool, String> {
         let mut st = self.st.lock();
         if let Some(cur) = &st.current {
@@ -250,10 +252,10 @@ impl Pins {
                 return Err(format!("the relay's AI map seq {} is lower than the pinned {}", pair.map.seq, cur.pair.map.seq));
             }
         }
-        let old = st.current.take().map(|c| c.pair);
-        st.previous = old;
-        st.current = Some(Pinned { pair, pinned_ms: now_ms });
-        self.save(&st);
+        let next = Pinned { pair, pinned_ms: now_ms };
+        self.save(&next, st.current.as_ref().map(|c| &c.pair)).map_err(|e| format!("cannot keep the pinned policy: {e}"))?;
+        st.previous = st.current.take().map(|c| c.pair);
+        st.current = Some(next);
         Ok(true)
     }
 
@@ -387,6 +389,36 @@ mod tests {
         // rollback
         let lower = pair(&"04".repeat(32), policy(4, &["org"], "none", &[], &[]), map(3, &[], &[]));
         assert!(again.pin(lower, t + 3000).is_err());
+    }
+
+    /// A pin that cannot be written to `pins.json` is refused and changes nothing, so the gateway never serves a policy
+    /// a restart would forget.
+    #[test]
+    fn a_pin_that_cannot_be_kept_is_refused_and_changes_nothing() {
+        let dir = crate::meet_tls::testpki::dir("ai-pins-unsaved");
+        let blocked = dir.join("blocked");
+        let path = blocked.join("pins.json");
+        let (old_hash, new_hash) = ("01".repeat(32), "02".repeat(32));
+        let old = pair(&old_hash, policy(3, &["org"], "none", &[], &[]), map(1, &[], &[]));
+        let new = pair(&new_hash, policy(4, &["org"], "none", &[], &[]), map(2, &[], &[]));
+        let reread = |v: &Value| -> Result<Pair, String> {
+            let p = v["policy"].as_object().ok_or("none")?.clone();
+            let hash = if p["seq"] == 3 { "01".repeat(32) } else { "02".repeat(32) };
+            Ok(pair(&hash, p, v["map"].clone()))
+        };
+        let pins = Pins::open(Some(path.clone()), &reread);
+        let t = 1_795_000_000_000;
+        assert!(pins.pin(old, t).unwrap());
+        // a file where the folder was: the next pin cannot be written
+        std::fs::remove_dir_all(&blocked).unwrap();
+        std::fs::write(&blocked, b"not a folder").unwrap();
+        assert!(pins.pin(new.clone(), t + 1000).is_err());
+        assert_eq!(pins.pairs_for(&old_hash, t + 2000).unwrap().len(), 1);
+        assert_eq!(pins.pairs_for(&new_hash, t + 2000).unwrap_err(), UNVERIFIED);
+        // writable again: the same pin is taken and survives a restart
+        std::fs::remove_file(&blocked).unwrap();
+        assert!(pins.pin(new, t + 3000).unwrap());
+        assert_eq!(Pins::open(Some(path), &reread).pairs_for(&new_hash, t + 4000).unwrap().len(), 2);
     }
 
     #[test]

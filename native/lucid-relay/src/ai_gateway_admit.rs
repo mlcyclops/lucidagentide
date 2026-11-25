@@ -171,10 +171,14 @@ struct Ledger {
     day: String,
     day_spent: HashMap<String, u64>,
     held: HashMap<String, Reservation>,
+    /// Settled spend not yet in `budgets.json` (its write failed): no reservation is made until it is written.
+    unsaved: bool,
 }
 
 /// The gateway's frontier spend: settled spend per UTC month and per person per UTC day (kept in `budgets.json`)
-/// and the reservations in flight (memory only: a restart releases them, as an expired one is).
+/// and the reservations in flight (memory only: a restart releases them, as an expired one is). Fail closed: a
+/// restart must never give back spent budget, so a settle whose spend cannot be written is an Err and every
+/// reservation is refused until the ledger is written.
 pub struct Budgets {
     path: Option<PathBuf>,
     ledger: Mutex<Ledger>,
@@ -215,21 +219,24 @@ impl Budgets {
         Budgets { path, ledger: Mutex::new(ledger) }
     }
 
-    fn save(&self, l: &Ledger) {
-        if let Some(p) = &self.path {
-            let v = json!({"month": l.month, "month_spent": l.month_spent, "day": l.day, "day_spent": l.day_spent});
-            let _ = crate::meet_tls::write_atomic(p, v.to_string().as_bytes());
-        }
+    fn save(&self, l: &Ledger) -> std::io::Result<()> {
+        let Some(p) = &self.path else { return Ok(()) };
+        let v = json!({"month": l.month, "month_spent": l.month_spent, "day": l.day, "day_spent": l.day_spent});
+        crate::meet_tls::write_atomic(p, v.to_string().as_bytes())
     }
 
     /// Reserve `amount` for `rid` against the month and `principal`'s day, atomically: Err(()) (`budget`) when either
     /// limit is zero or the spend plus every live reservation plus `amount` would cross it. The reservation lapses
-    /// at `now_ms + ttl_ms` (twice the activity's deadline).
+    /// at `now_ms + ttl_ms` (twice the activity's deadline). Also Err while settled spend cannot be written.
     pub fn reserve(&self, rid: &str, principal: &str, amount: u64, limits: Limits, now_ms: i64, ttl_ms: i64) -> Result<(), ()> {
         let mut l = self.ledger.lock();
         l.roll(now_ms);
         if limits.month_micro == 0 || limits.day_micro == 0 {
             return Err(());
+        }
+        if l.unsaved {
+            self.save(&l).map_err(|_| ())?;
+            l.unsaved = false;
         }
         let month_held: u64 = l.held.values().map(|r| r.amount).sum();
         let day_held: u64 = l.held.values().filter(|r| r.principal == principal && r.day == l.day).map(|r| r.amount).sum();
@@ -243,8 +250,9 @@ impl Budgets {
     }
 
     /// The answer came back: the reservation goes and the real cost is spent (on the reservation's day and month
-    /// when they are still current). A reservation that already lapsed is still charged with `principal`.
-    pub fn settle(&self, rid: &str, principal: &str, actual: u64, now_ms: i64) {
+    /// when they are still current). A reservation that already lapsed is still charged with `principal`. Err when
+    /// `budgets.json` cannot be written: the spend stays counted here and reservations are refused until it is.
+    pub fn settle(&self, rid: &str, principal: &str, actual: u64, now_ms: i64) -> Result<(), String> {
         let mut l = self.ledger.lock();
         let r = l.held.remove(rid);
         l.roll(now_ms);
@@ -255,7 +263,9 @@ impl Budgets {
         if day == l.day {
             *l.day_spent.entry(principal.to_string()).or_insert(0) += actual;
         }
-        self.save(&l);
+        let saved = self.save(&l);
+        l.unsaved = saved.is_err();
+        saved.map_err(|e| format!("cannot keep the AI budget ledger: {e}"))
     }
 
     /// The call failed before any spend: the reservation goes, nothing is charged.
@@ -424,7 +434,7 @@ mod tests {
         let now = 1_795_000_000_000;
         let limits = Limits { month_micro: 1_000_000_000, day_micro: 1_000_000 };
         b.reserve("seed", "ann@acme.example", 300_000, limits, now, 60_000).unwrap();
-        b.settle("seed", "ann@acme.example", 300_000, now);
+        b.settle("seed", "ann@acme.example", 300_000, now).unwrap();
         // 700000 remains for ann today; each request reserves 100000: at most 7 fit
         let threads: Vec<_> = (0..20)
             .map(|i| {
@@ -459,9 +469,32 @@ mod tests {
         let limits = Limits { month_micro: 1000, day_micro: 1000 };
         let b = Budgets::open(Some(path.clone()));
         b.reserve("a", "p@x.example", 900, limits, now, 1000).unwrap();
-        b.settle("a", "p@x.example", 800, now);
+        b.settle("a", "p@x.example", 800, now).unwrap();
         let again = Budgets::open(Some(path));
         assert!(again.reserve("b", "p@x.example", 201, limits, now, 1000).is_err());
         assert!(again.reserve("c", "p@x.example", 200, limits, now, 1000).is_ok());
+    }
+
+    /// Fail closed: a settle whose spend cannot be written is an Err, and no reservation is made until the ledger is
+    /// written, so a restart never gives back spent budget.
+    #[test]
+    fn unsaved_spend_fails_the_settle_and_refuses_reservations() {
+        let dir = crate::meet_tls::testpki::dir("ai-budgets-unsaved");
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, b"a file where the folder should be").unwrap();
+        let path = blocked.join("budgets.json");
+        let now = 1_795_000_000_000;
+        let limits = Limits { month_micro: 1000, day_micro: 1000 };
+        let b = Budgets::open(Some(path.clone()));
+        b.reserve("a", "p@x.example", 100, limits, now, 1000).unwrap();
+        assert!(b.settle("a", "p@x.example", 100, now).is_err());
+        assert!(b.reserve("b", "p@x.example", 1, limits, now, 1000).is_err(), "nothing is reserved while the spend is not kept");
+        // the folder can be written again: the next reservation writes the ledger first
+        std::fs::remove_file(&blocked).unwrap();
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(b.reserve("c", "p@x.example", 900, limits, now, 1000).is_ok());
+        let again = Budgets::open(Some(path));
+        assert!(again.reserve("d", "p@x.example", 901, limits, now, 1000).is_err());
+        assert!(again.reserve("e", "p@x.example", 900, limits, now, 1000).is_ok());
     }
 }

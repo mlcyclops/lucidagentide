@@ -53,6 +53,11 @@ pub const POLICY_EVERY_MS: i64 = 300_000;
 const POLICY_RETRY_MS: i64 = 30_000;
 const RENEW_CHECK_MS: i64 = 3_600_000;
 const HISTORY_LIMIT: usize = 500;
+/// The most the app reads of one relay answer (larger: "reply too large"). The largest it reads is a page of
+/// HISTORY_LIMIT rows (the relay's history pages and session event queue also stop at 500), each an envelope of at
+/// most `ce::BODY_MAX` with the row's own fields; that also covers a file (at most 25 MiB plus its chunk tags, r5 7.1)
+/// and the relay's CRLs.
+const REPLY_MAX: usize = HISTORY_LIMIT * (crate::meet_hub::ce::BODY_MAX + 4096);
 /// DM history read back after a new session (approval answers and Stops sent while the session was away).
 const DM_BACKFILL_MS: i64 = 3_600_000;
 pub const ENCLAVE_IS: &str = "this relay is an enclave; set enclave in the connector config";
@@ -162,7 +167,7 @@ impl RelayLink {
         let cfg = self.cfg.read().clone();
         let bytes = body.map(|b| b.to_string().into_bytes());
         let headers: Vec<(&str, String)> = if bytes.is_some() { vec![("Content-Type", "application/json".to_string())] } else { Vec::new() };
-        match crate::meet_tls::https_request(&cfg, &self.host, self.port, timeout, method, target, &headers, bytes.as_deref(), &|_| Ok(())) {
+        match crate::meet_tls::https_request_capped(&cfg, &self.host, self.port, timeout, method, target, &headers, bytes.as_deref(), &|_| Ok(()), REPLY_MAX) {
             Ok(r) => Ok((r.status, r.body)),
             Err(Ok(m)) | Err(Err(m)) => Err(RelayError::new(0, format!("the relay cannot be reached ({m})"))),
         }
@@ -1972,6 +1977,36 @@ pub(crate) mod tests {
         assert!(w.hooks.0.lock().contains(&format!("message.created {cid}")));
         assert_eq!(w.session.conversations().iter().map(|c| (c.cid.clone(), c.kind)).collect::<Vec<_>>(), vec![(cid.clone(), "group")]);
         assert!(w.session.is_member(&cid, &w.ann_p));
+    }
+
+    /// The relay's answers are read up to REPLY_MAX: a larger one is refused while it is read.
+    #[test]
+    fn a_relay_answer_over_the_cap_is_refused() {
+        use crate::meet_tls::testpki::{dir, pem, Ca, Key};
+        let ca = Ca::new("Acme Org CA");
+        let ca_file = dir("connector-relay-cap").join("ca.pem");
+        std::fs::write(&ca_file, ca.pem()).unwrap();
+        let sk = Key::new();
+        let server = crate::server::tls_config(&pem("CERTIFICATE", &ca.leaf(&[0x30], "localhost", None, &[], &sk, false)), &sk.key_pem()).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // connections stay open: the client stops on the claimed length, not on a close
+            let mut open = Vec::new();
+            for tcp in listener.incoming().flatten() {
+                let Ok(conn) = rustls::ServerConnection::new(server.clone()) else { return };
+                let mut tls = rustls::StreamOwned::new(conn, tcp);
+                let _ = std::io::Read::read(&mut tls, &mut [0u8; 4096]);
+                let _ = std::io::Write::write_all(&mut tls, format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", REPLY_MAX + 1).as_bytes());
+                let _ = std::io::Write::flush(&mut tls);
+                open.push(tls);
+            }
+        });
+        let cfg = crate::meet_tls::client_config(Some(&*ca_file.to_string_lossy()), None).unwrap();
+        let link = RelayLink::new(&format!("https://localhost:{port}"), cfg, Enclave::default()).unwrap();
+        let e = get_bytes(&link, "/v1/crl", &[]).unwrap_err();
+        assert_eq!(e.status, 0);
+        assert!(e.message.contains("reply too large"), "{e}");
     }
 
     #[test]

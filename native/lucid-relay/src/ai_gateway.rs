@@ -75,6 +75,9 @@ const METRICS_FRESH_MS: i64 = 2000;
 const DOWN_AFTER_FAILS: u32 = 3;
 const DOWN_FOR_MS: i64 = 30_000;
 const DOWN: Load = Load { healthy: false, queue_ms: 0, free_kv_bytes: None };
+/// The most the gateway reads of one relay answer (larger: "reply too large"). Its largest are the signed org policy
+/// (64 KiB), the AI map (256 KiB), the relay's CRLs, and the app session's events (`org_policy` and `org_ai` notices).
+const RELAY_ANSWER_MAX: usize = 8 << 20;
 
 pub const NOT_PERSON: &str = "only a person's device certificate may ask the AI gateway";
 pub const ADMIN_ONLY: &str = "only the Admin Console may manage this gateway";
@@ -250,7 +253,7 @@ impl RelayLink {
     fn call(&self, method: &str, path: &str, body: Option<&Value>, timeout: f64) -> Result<(u16, Vec<u8>), String> {
         let bytes = body.map(|b| b.to_string().into_bytes());
         let headers: Vec<(&str, String)> = if bytes.is_some() { vec![("Content-Type", "application/json".to_string())] } else { Vec::new() };
-        match crate::meet_tls::https_request(&self.cfg, &self.host, self.port, timeout, method, path, &headers, bytes.as_deref(), &|_| Ok(())) {
+        match crate::meet_tls::https_request_capped(&self.cfg, &self.host, self.port, timeout, method, path, &headers, bytes.as_deref(), &|_| Ok(()), RELAY_ANSWER_MAX) {
             Ok(r) => Ok((r.status, r.body)),
             Err(Ok(m)) | Err(Err(m)) => Err(format!("the relay cannot be reached ({m})")),
         }
@@ -702,7 +705,8 @@ impl Gateway {
         }
     }
 
-    /// `POST /v1/ai/ask` (6.3), with its audit line (6.8).
+    /// `POST /v1/ai/ask` (6.3), with its audit line (6.8). Fail closed: when the line cannot be written, the request
+    /// is answered 500 (6.7) instead of with the model's answer; the spend of a backend call already made is settled.
     pub async fn ask(&self, who: &Identity, raw: &[u8]) -> (u16, Value) {
         let started = Instant::now();
         let mut rec = Record { principal: who.principal.clone(), device: who.device.clone(), outcome: "refused".into(), ..Record::default() };
@@ -723,6 +727,8 @@ impl Gateway {
         };
         if let Err(e) = self.audit.append(&rec, now_ms()) {
             log_warn(&format!("ai_audit_failed rid={} error={e}", rec.rid));
+            let failed = Refusal::failed();
+            return (failed.status, failed.body());
         }
         (status, body)
     }
@@ -805,7 +811,9 @@ impl Gateway {
             Err(ToolsFail::Budget { tokens_in, tokens_out }) => {
                 // the rounds already answered are charged; the next one was not sent
                 let usd = admit::cost_micro(tokens_in, tokens_out, plan.card.price.0, plan.card.price.1);
-                self.budgets.settle(&a.rid, &who.principal, usd, now_ms());
+                if let Err(e) = self.budgets.settle(&a.rid, &who.principal, usd, now_ms()) {
+                    log_warn(&format!("ai_budget_unsaved rid={} error={e}", a.rid));
+                }
                 (rec.tokens_in, rec.tokens_out, rec.usd_micro) = (tokens_in, tokens_out, usd);
                 log_warn(&format!("ai_tools_budget card={} rid={}", plan.card.card_id, a.rid));
                 return Err(Refusal::new(429, "budget", BUDGET_USED));
@@ -825,10 +833,13 @@ impl Gateway {
         let tokens_out = c.tokens_out.unwrap_or_else(|| admit::estimate_tokens(&c.text));
         self.note_ok(&plan.card, took, tokens_out);
         let usd = if plan.card.org() { 0 } else { admit::cost_micro(tokens_in, tokens_out, plan.card.price.0, plan.card.price.1) };
-        if !plan.card.org() {
-            self.budgets.settle(&a.rid, &who.principal, usd, now_ms());
-        }
         (rec.tokens_in, rec.tokens_out, rec.usd_micro) = (tokens_in, tokens_out, usd);
+        // AI-1 4.4: no answer leaves before its spend is kept (fail closed)
+        let settled = if plan.card.org() { Ok(()) } else { self.budgets.settle(&a.rid, &who.principal, usd, now_ms()) };
+        if let Err(e) = settled {
+            log_warn(&format!("ai_budget_unsaved rid={} error={e}", a.rid));
+            return Err(Refusal::failed());
+        }
         let alternatives: Vec<Value> = plan.alternatives.iter().map(|(id, why)| json!({"capability_id": id, "why_not": why})).collect();
         let mut answer = json!({
             "v": 1, "rid": a.rid, "policy": a.policy, "answer": answer, "cites": cites, "tier": plan.card.tier,
@@ -1675,5 +1686,83 @@ mod tests {
         let c = approve(&store, "llama", "admin@acme.example", &["internal".to_string()], "", now).unwrap();
         assert_eq!((c.approval_status.as_str(), c.for_classes.clone()), ("approved", vec!["internal".to_string()]));
         assert!(!store.state("llama").quarantined, "a re-approval after a passing benchmark lifts the quarantine");
+    }
+
+    /// AI-1 6.8, fail closed: an ask whose audit line cannot be written gets the 500 refusal (6.7), never the model's
+    /// answer; the spend of the backend call already made is still settled.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_ask_whose_audit_line_cannot_be_written_is_refused() {
+        let d = dir("ai-gateway-audit-closed");
+        let w = |name: &str, data: &str| {
+            let p = d.join(name);
+            std::fs::write(&p, data).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let ca = Ca::new("Acme Org CA");
+        let ca_file = w("ca.pem", &ca.pem());
+        let gk = Key::new();
+        let gw_cert = w("gw.pem", &pem("CERTIFICATE", &ca.leaf(&[0x10], "localhost", Some("ai@apps.acme.example"), &["urn:lucid-meet:app", "urn:lucid-meet:org:acme", "urn:lucid-meet:device:00112233445566ff"], &gk, false)));
+        let gw_key = w("gw.key", &gk.key_pem());
+        let bk = Key::new();
+        let stub = Arc::new(Stub::default());
+        let stub_tls = crate::server::tls_acceptor(&pem("CERTIFICATE", &ca.leaf(&[0x20], "localhost", None, &[], &bk, false)), &bk.key_pem()).unwrap();
+        let stub_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let bport = stub_listener.local_addr().unwrap().port();
+        tokio::spawn(stub_serve(stub_listener, stub_tls, stub.clone()));
+        let state = d.join("state");
+        CardStore::new(&state).put(&frontier_card("claude", "anthropic", &format!("https://localhost:{bport}"), &["public", "internal"])).unwrap();
+        let cfg = Config { state_dir: state.clone(), cert: gw_cert, key: gw_key, client_ca: ca_file.clone(), org: "acme".into(), backend_ca: ca_file, audit_days: KEEP_DAYS, ..Config::default() };
+        let mut g = Gateway::new(cfg, Arc::new(StubRelay)).unwrap();
+        g.creds.insert("claude".into(), Credential { api_key: "test-key".into(), ..Credential::default() });
+        let policy = testpairs::policy(1, &["org", "frontier"], "org", &["public", "internal"], &["internal"]);
+        g.pins.pin(testpairs::pair(&"01".repeat(32), policy, testpairs::map(1, &[], &[])), now_ms()).unwrap();
+        // a file where the audit folder was: no line can be written
+        std::fs::remove_dir_all(state.join("audit")).unwrap();
+        std::fs::write(state.join("audit"), b"not a folder").unwrap();
+        let who = Identity { principal: "ann@acme.example".into(), device: "0123456789abcdef".into(), kind: "person".into(), ..Identity::default() };
+        let raw = crate::meet_org_policy::canonical_json(&ask_body(&"6".repeat(32), &["frontier"], "ch:open")).unwrap();
+        let (status, v) = g.ask(&who, &raw).await;
+        assert_eq!((status, v), (500, json!({"error": "the AI gateway failed this request"})));
+        assert!(stub.seen.lock().iter().any(|(p, _)| p == "/v1/messages"), "the backend was called");
+        let (spent, held) = g.budgets.month_spend(now_ms());
+        assert!(spent > 0 && held == 0, "the call's spend is settled and nothing stays held ({spent}, {held})");
+    }
+
+    /// The relay's answers are read up to RELAY_ANSWER_MAX: a larger one is refused while it is read.
+    #[test]
+    fn a_relay_answer_over_the_cap_is_refused() {
+        let d = dir("ai-gateway-relay-cap");
+        let w = |name: &str, data: &str| {
+            let p = d.join(name);
+            std::fs::write(&p, data).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let ca = Ca::new("Acme Org CA");
+        let sk = Key::new();
+        let server = crate::server::tls_config(&pem("CERTIFICATE", &ca.leaf(&[0x30], "localhost", None, &[], &sk, false)), &sk.key_pem()).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // connections stay open: the client stops on the claimed length, not on a close
+            let mut open = Vec::new();
+            for tcp in listener.incoming().flatten() {
+                let Ok(conn) = rustls::ServerConnection::new(server.clone()) else { return };
+                let mut tls = rustls::StreamOwned::new(conn, tcp);
+                let _ = std::io::Read::read(&mut tls, &mut [0u8; 4096]);
+                let _ = std::io::Write::write_all(&mut tls, format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", RELAY_ANSWER_MAX + 1).as_bytes());
+                let _ = std::io::Write::flush(&mut tls);
+                open.push(tls);
+            }
+        });
+        let gk = Key::new();
+        let cfg = Config {
+            relay: format!("https://localhost:{port}"),
+            relay_ca: w("ca.pem", &ca.pem()),
+            relay_cert: w("gw.pem", &pem("CERTIFICATE", &ca.leaf(&[0x10], "localhost", Some("ai@apps.acme.example"), &["urn:lucid-meet:app", "urn:lucid-meet:org:acme", "urn:lucid-meet:device:00112233445566ff"], &gk, false))),
+            relay_key: w("gw.key", &gk.key_pem()),
+            ..Config::default()
+        };
+        let e = RelayLink::new(&cfg).unwrap().crl().unwrap_err();
+        assert!(e.contains("reply too large"), "{e}");
     }
 }
