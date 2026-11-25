@@ -154,6 +154,7 @@ export interface BuddyReply { ok: boolean; error?: string; model?: string; doing
 /** P-ASKLUCID.9 (ADR-0600): POST /api/image/edit's answer. `path` is the saved file under ~/.omp/ask-lucid/images. */
 export type ImageEditView = { ok: true; path: string; mimeType: string; model: string; provider: string } | { ok: false; error: string };
 import type { NativePickResult } from "../native_dialog.ts"; // P-FS.2 (ADR-0265): backend-opened OS folder dialog
+import type { AuthView, RenewReply, TokenRecord } from "../market_token.ts"; // P-MARKET.AUTH2 (ADR-0684): types only
 import type { DeviceStatus } from "../kg_device_unlock.ts"; // P-KGBIO.1 (ADR-0454): Windows Hello / Touch ID unlock
 import type { RestoredTurn } from "../session_steps.ts"; // P-RESUME.1 (ADR-0171): restored agent activity
 import type { SessionLive } from "../session_owner.ts"; // P-SWITCH.2 (ADR-0404): where a listed session is live
@@ -1374,6 +1375,15 @@ export interface LucidBridge {
   /** P-WORLDS.HEAL1: the engine restores one id (or, with none, every recorded one) from its backup, through every
    *  install gate, then answers the health report. */
   pluginsRestore(id?: string): Promise<PluginHealthView | null>;
+  /** P-MARKET.AUTH2 (ADR-0684): the engine custody of the store sign-in (market_auth.engineCustody). Null / false
+   *  when the engine does not answer or refuses. The refresh token goes in with marketAuthPut and never comes back. */
+  marketAuthGet(): Promise<{ view: AuthView | null } | null>;
+  marketAuthPut(record: TokenRecord): Promise<boolean>;
+  marketAuthClear(): Promise<boolean>;
+  marketAuthRenew(o: { apiKey: string; skewMs: number }): Promise<RenewReply | null>;
+  /** P-MARKET.AUTH2: the world receipts held by the engine (`{ [worldId]: at }`), null when it does not answer. */
+  marketReceipts(): Promise<Record<string, number> | null>;
+  marketReceiptsPut(patch: { set?: Record<string, number>; drop?: string[] }): Promise<boolean>;
   /** ADR-0648 (Lucid Agent Worlds): the installed worlds (empty when the engine does not answer). */
   worldsList(): Promise<InstalledWorld[]>;
   /** Install a SIGNED world package file the user picked (an export from another machine). */
@@ -2364,6 +2374,21 @@ export const bridge: LucidBridge = {
   pluginsLicense: (id) => getData(`/api/plugins/license?id=${encodeURIComponent(id)}`),
   pluginsHealth: () => getData("/api/plugins/health"),
   pluginsRestore: (id) => post("/api/plugins/restore", id ? { id } : {}),
+  marketAuthGet: async () => {
+    const d: unknown = await getData("/api/market/auth");
+    return d && typeof d === "object" && "view" in d ? (d as { view: AuthView | null }) : null;
+  },
+  marketAuthPut: async (record) => (await post("/api/market/auth", { record })) !== null,
+  marketAuthClear: async () => (await post("/api/market/auth/clear", {})) !== null,
+  marketAuthRenew: async (o) => {
+    const d: unknown = await post("/api/market/auth/renew", o);
+    return d && typeof d === "object" && "status" in d ? (d as RenewReply) : null;
+  },
+  marketReceipts: async () => {
+    const d: unknown = await getData("/api/market/receipts");
+    return d && typeof d === "object" && "receipts" in d && d.receipts && typeof d.receipts === "object" ? (d.receipts as Record<string, number>) : null;
+  },
+  marketReceiptsPut: async (patch) => (await post("/api/market/receipts", patch)) !== null,
   worldsList: async () => {
     const d: unknown = await getData("/api/worlds");
     return d && typeof d === "object" && "worlds" in d && Array.isArray(d.worlds) ? (d.worlds as InstalledWorld[]) : [];

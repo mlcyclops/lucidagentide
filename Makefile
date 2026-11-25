@@ -1970,3 +1970,10 @@ demo-P-SCHED.AGENT1: ## P-SCHED.AGENT1: an Agent's module on the right rail gets
 	$(BUN) test $(TEST_IGNORES) desktop/scheduled_jobs.test.ts desktop/renderer/agent_schedule.test.ts desktop/renderer/jobs_view.test.ts desktop/renderer/agents_rail.test.ts tools/ux_pr_gate.test.ts
 	node --check desktop/scripts/demo_p_sched_agent_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_sched_agent_1.mjs; else echo "demo-P-SCHED.AGENT1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
+.PHONY: demo-P-MARKET.AUTH2
+demo-P-MARKET.AUTH2: ## P-MARKET.AUTH2 (ADR-0684): a store sign-in and its world receipts live in the engine vault (not the renderer origin's localStorage), the ID token renews silently before and after it lapses (only Google refusing the refresh token signs out; offline never does), and a fresh receipt keeps an owned world unlocked offline. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_market_auth_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/market_auth.test.ts desktop/renderer/market_boot.test.ts desktop/renderer/viz_worlds.test.ts desktop/market_auth_routes.test.ts desktop/market_config.test.ts harness/adr_numbering.test.ts
+	$(BUN) run harness/scripts/demo_premote2b.ts
+	node --check desktop/scripts/demo_p_market_auth_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_market_auth_2.mjs; else echo "demo-P-MARKET.AUTH2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi

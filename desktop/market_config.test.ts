@@ -14,6 +14,9 @@ describe("marketBootConfig", () => {
     expect(c.mode).toBe("firebase");
     expect(c.functionsBaseUrl).toBe("https://us-central1-lucid-agent.cloudfunctions.net");
     expect(c.signInUrl).toBe("https://lucid-agent.web.app/signin");
+    // P-MARKET.AUTH2 (ADR-0684): the public web key ships, so the sign-in renews instead of lapsing every hour.
+    expect(c.firebaseApiKey).toMatch(/^AIza[0-9A-Za-z_-]{35}$/);
+    expect(marketBootConfig({ LUCID_FIREBASE_API_KEY: "AIzaOther" }).firebaseApiKey).toBe("AIzaOther");
   });
   test("LUCID_MARKET_MODE=off → disabled (storefront-hint fallback)", () => {
     expect(marketBootConfig({ LUCID_MARKET_MODE: "off" })).toEqual({ mode: "off" });
