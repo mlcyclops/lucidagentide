@@ -1855,6 +1855,13 @@ demo-P-VIZ.FLEET1: ## P-VIZ.FLEET1 (ADR-0680): Visualize draws every running fle
 	node --check desktop/scripts/demo_p_viz_fleet_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_fleet_1.mjs; else echo "demo-P-VIZ.FLEET1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-DOCS.2
+demo-P-DOCS.2: ## P-DOCS.2 (ADR-0681): docs.lucid-agents.com linked from About (Documentation), the tour closer (Get started), the onboarding Connect a provider modal (How to connect your AI) and the palette (Help: open the documentation). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_docs_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/docs_links.test.ts desktop/about.test.ts desktop/tour.test.ts harness/adr_numbering.test.ts
+	$(BUN) run desktop/scripts/demo_p_about_1.ts
+	node --check desktop/scripts/demo_p_docs_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_docs_2.mjs; else echo "demo-P-DOCS.2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-VIZ.FLASH1
 demo-P-VIZ.FLASH1: ## P-VIZ.FLASH1 (ADR-0687): 3D Visualize never presents an empty frame while agents work (an HDR sanitize pass keeps stacked additive glows from overflowing half-float into Inf/NaN through bloom and the tone map). Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821; Chrome with a GPU and a CDP port): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_viz_flash_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_model.test.ts harness/adr_numbering.test.ts

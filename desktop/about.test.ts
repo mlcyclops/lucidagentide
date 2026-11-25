@@ -63,6 +63,15 @@ describe("aboutHtml", () => {
     expect(html).toContain('rel="noopener noreferrer"'); // no window.opener / referrer leak
   });
 
+  test("links the documentation site the same safe way (P-DOCS.2, ADR-0681)", () => {
+    const a = /<a class="about-site about-docs"[^>]*>[^<]*<\/a>/.exec(html)?.[0] ?? "";
+    expect(a).toContain('href="https://docs.lucid-agents.com/"');
+    expect(a).toContain('target="_blank"');
+    expect(a).toContain('rel="noopener noreferrer"');
+    expect(a).toContain("data-tip=");
+    expect(a).toContain("Documentation");
+  });
+
   test("escapes the interpolated version (no raw injection)", () => {
     const evil = aboutHtml('1<script>"&');
     expect(evil).not.toContain("<script>");

@@ -37,6 +37,7 @@ const must = [
   ["change date → MPL", "2030-06-27 → MPL-2.0"],
   ["not OSI open-source", "source-available, not OSI open-source"],
   ["dialog semantics", 'role="dialog"'],
+  ["documentation link (ADR-0681)", 'href="https://docs.lucid-agents.com/"'],
 ] as const;
 for (const [label, needle] of must) {
   if (!html.includes(needle)) fail(`About panel missing ${label} (${needle})`);
