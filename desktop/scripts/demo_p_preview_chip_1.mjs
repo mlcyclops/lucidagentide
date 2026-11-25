@@ -190,7 +190,7 @@ export async function verifyPreviewChip(page, opts = {}) {
       assert(chip, `${label}: the lane chip is not visible`);
       const placed = await page.$eval(laneChip, (c) => ({
         inHead: !!c.closest(".fleet-card-head"), inWrap: !!c.closest(".fleet-out-wrap"),
-        text: getComputedStyle(c.querySelector(".pchip-txt")).display !== "none", host: c.parentElement.getBoundingClientRect().width,
+        text: getComputedStyle(c.querySelector(".pchip-txt")).display !== "none", host: c.closest(".pchip-host").getBoundingClientRect().width,
       }));
       assert(!placed.inHead, `${label}: the lane chip is still in the card header`);
       assert(placed.inWrap, `${label}: the lane chip is not inside the lane's transcript view`);

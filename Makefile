@@ -1941,6 +1941,12 @@ demo-P-FLEET.CONN1-live: ## P-FLEET.CONN1 live: real lanes on a real (local, zer
 	node --check desktop/scripts/demo_p_rail_live_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_rail_live_1.mjs; else echo "demo-P-FLEET.CONN1-live: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL), LUCID_DEMO_URL and LUCID_DEMO_MODEL to run it"; fi
 
+.PHONY: demo-P-PREVIEW.CHIPX1
+demo-P-PREVIEW.CHIPX1: ## P-PREVIEW.CHIPX1 (ADR-0678): hovering a Fleet lane's preview chip (its card or its Orbit spoke) shows a tiny red x on its upper-right corner (no clicks until then); a click hides the chip on the card, spoke and Agent Worlds node without a takeover, a toast offers Undo, and the same page written again keeps it hidden. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811, the page past first run): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_preview_chip_x1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/preview_curtain.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_preview_chip_x1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_preview_chip_x1.mjs; else echo "demo-P-PREVIEW.CHIPX1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-BUDDY.HIDE1
 demo-P-BUDDY.HIDE1: ## P-BUDDY.HIDE1: hovering a floating Agent on the main composer or a Fleet lane card shows a tiny red x on its upper-right corner (it takes no clicks until then); a click hides that buddy for that session (Main's chat, or the lane's), a toast offers Undo, a reload keeps it hidden, a new session brings it back; world buddies have no x. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_buddy_hide_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/agent_buddy.test.ts tools/ux_pr_gate.test.ts

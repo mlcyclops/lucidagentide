@@ -111,6 +111,9 @@ export interface FleetGridDeps extends FleetFns {
   /** P-PREVIEW-CURTAIN.1 (ADR-0621): the card's ready mini "Preview" chip was clicked; swing the Preview panel
    *  out on this lane's tab, from `from`. */
   openLanePreview?: (laneId: string, from: HTMLElement) => void;
+  /** P-PREVIEW.CHIPX1: the chip's red x. app.ts hides this lane's chip (card, spoke and Agent Worlds node) until
+   *  the lane makes a different page. */
+  dismissLanePreview?: (laneId: string) => void;
   /** P-FLEET.L8: attach / release the MAIN composer on this lane, mid-turn. Optional and threaded from
    *  app.ts (like previewLaneFile) so this module never imports the app shell; absent, the promote button
    *  simply does not appear. `demoteLane` takes the id for symmetry - the server demotes whichever lane
@@ -3319,6 +3322,7 @@ function onClick(ev: Event): void {
   }
   // P-PREVIEW-CURTAIN.1 (ADR-0621): the ready chip swings the Preview panel out on this lane's tab (above the
   // Fleet dock, ADR-0645); a loading one only explains itself (tooltip). P-PREVIEW.CHIP1: it floats in the transcript.
+  if (t.closest("[data-pchip-close]")) { deps.dismissLanePreview?.(run.view.id); return; } // P-PREVIEW.CHIPX1
   const mini = t.closest("[data-lane-preview]") as HTMLElement | null;
   if (mini) { if (mini.dataset.phase === "ready") deps.openLanePreview?.(run.view.id, mini); return; }
   // P-FLEET.L8: attach or release the main composer. The LOOK is not touched here - `LaneView.promoted` on

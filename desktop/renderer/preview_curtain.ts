@@ -314,6 +314,14 @@ export interface Rect { left: number; top: number; width: number; height: number
  *  chip is simply absent. `more` counts the other invitations waiting behind the composer's head. */
 export interface ChipState { phase: "loading" | "ready"; label: string; path: string; title?: string; thumb?: string; more?: number }
 
+/** P-PREVIEW.CHIPX1: a lane's chip was closed with its red x while it showed page `hidden`. For a new state `v`: what
+ *  to paint, and whether the hide still holds. The same page (loading again, ready again) stays hidden; a different
+ *  page shows and ends the hide; nothing to show leaves the hide as it is. */
+export function chipAfterHide(hidden: string | undefined, v: ChipState | null): { show: ChipState | null; hidden: string | undefined } {
+  if (!v || hidden === undefined) return { show: v, hidden };
+  return v.path === hidden ? { show: null, hidden } : { show: v, hidden: undefined };
+}
+
 /** Whose chip a curtain tab key feeds: "agent" is Main (the composer, Agent Worlds' hub "main"), "lane:<id>" that
  *  lane. Any other tab (yours, a plugin, Ask Lucid) has no chip of its own. */
 export function chipTarget(key: string): string | null {
