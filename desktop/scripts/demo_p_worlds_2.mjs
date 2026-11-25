@@ -39,7 +39,7 @@
 //   LUCID_DEMO_CHROME        browser executable (default: Chrome, else Edge, at their usual install paths)
 //   LUCID_DEMO_HEADLESS=1    headless browser (WebGL may fall back to software: the tier drops, films look poorer)
 //   LUCID_DEMO_SIZE          viewport WxH (default 1600x938)
-//   LUCID_DEMO_SKY           declared skies, e.g. "army=light;navy=dark"
+//   LUCID_DEMO_SKY           declared skies, e.g. "flight-deck=light;cyber-ops=dark"
 //   LUCID_DEMO_FILM=1        film each package; LUCID_DEMO_FILM_SECONDS (default 106, kept within 100 to 110)
 //   LUCID_DEMO_FILM_DIR      film output dir (default <Apps AI Vibe>/Lucid Agent Worlds Videos/Lucid Agent Worlds)
 //   LUCID_DEMO_FILM_OVERWRITE=1  replace an existing film (refused by default: the shipped worlds' sources live there)
@@ -65,7 +65,7 @@ const FILM_MAX_S = 110;
 const FPS = 30;
 const POP_ART = ".popover.viz-art-pop";
 /** build_worlds.py SOURCE_NAMES: keys whose video name is not the capitalized key. */
-const SOURCE_NAMES = { valentines: "Valentines-Day", "st-patricks": "St-Patricks-Day", "swim-dive": "Swim-and-Dive", usaf: "USAF", ussocom: "USSOCOM" };
+const SOURCE_NAMES = { valentines: "Valentines-Day", "st-patricks": "St-Patricks-Day", "swim-dive": "Swim-and-Dive" };
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const assert = (c, m) => { if (!c) throw new Error(m); };
@@ -76,7 +76,7 @@ export function sourceName(key) {
   return SOURCE_NAMES[key] ?? key.split("-").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("-");
 }
 
-/** "army=light;navy=dark" -> { army: "light", navy: "dark" } */
+/** "flight-deck=light;cyber-ops=dark" -> { "flight-deck": "light", "cyber-ops": "dark" } */
 function parseSky(s) {
   const out = {};
   for (const part of (s ?? "").split(/[;,]/)) {

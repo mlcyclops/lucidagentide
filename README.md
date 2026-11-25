@@ -141,7 +141,7 @@ Also in 2.7:
 
 Visualize draws your AI agents as characters and their work as streams of light. A world turns that scene into a themed setting, so a team of agents reads like a game you can follow at a glance.
 
-- **40 worlds**, from Christmas and Football to Hospital, Grand Prix, the Navy flight deck, Space Force and Florida, each with a mixed cast whose skin and hair you choose.
+- **40 worlds**, from Christmas and Football to Hospital, Grand Prix, a carrier flight deck, Orbital Ops and Florida, each with a mixed cast whose skin and hair you choose.
 - **Approve tool calls inside Visualize**: a badge appears over the agent that is asking, with Approve, Auto and Deny.
 - **Sample games** in every world open only after LUCID's security check, with no internet and no access to LUCID.
 - **Get them** one at a time or as a bundle at the **[LUCID store](https://store.lucid-agents.com)**, then install from **Preview > Plugins > Premium**.
