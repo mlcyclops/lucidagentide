@@ -5813,8 +5813,9 @@ function expireSuggestedTheme(): void {
 }
 
 function maybeSuggest(): void {
-  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   expireSuggestedTheme();
+  // ^ an expired holiday theme comes off on every launch, a What's new launch included
+  if (whatsNewPending) return; // P-WHATSNEW.1 (ADR-0686): the What's new popup takes this launch's notice
   const store = miniStore();
   const prefs = seasonPrefs();
   const enabled = suggestEnabled(store);
