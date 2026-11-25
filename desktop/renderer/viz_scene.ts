@@ -1364,8 +1364,11 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 
   // ------------------------------------------------------------------ P-VIZ.TRAY2 (ADR-0690): tray reactions
   /** A figure's turn in a broadcast reaction: `at` on the frame clock; `i` its place in the order (the dance's colors). */
-  interface ReactionStart { id: string; kind: string; base: TrayReactionKind; at: number; i: number }
+  /** `first`: when a retried turn was first due (a figure being rebuilt is retried, see drainReactions). */
+  interface ReactionStart { id: string; kind: string; base: TrayReactionKind; at: number; i: number; first?: number }
   const reactQueue: ReactionStart[] = [];
+  /** How long a figure that is mid-rebuild (no figure on its node) keeps its turn before the broadcast lets it go. */
+  const REACT_RETRY_MS = 1500;
   /** Node id -> the last tray reaction its figure started, when (frame clock, performance.now's timeline) and until
    *  when it plays (the demo probe's read; kept after it ends, so a slow reader never misses a start). */
   const reacting = new Map<string, { kind: string; at: number; until: number }>();
@@ -1375,11 +1378,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
 
   /** Start the figure's part: its layer (a built-in figure's hit clip, a world figure's perform or a stare) and the
    *  light effect over it; under reduced motion the cell's color cue only. */
-  function startReaction(r: ReactionStart, now: number): void {
+  /** False when the node's figure is not there right now (being rebuilt, e.g. a persona change mid-broadcast): the
+   *  caller retries it for a moment instead of dropping that figure's turn. */
+  function startReaction(r: ReactionStart, now: number): boolean {
     const obj = nodes.get(r.id);
     const slot = obj?.d3 ?? obj?.d2;
     // (a turn that comes after a style switch plays only if the new style offers the reaction too)
-    if (!obj || !slot || !trayReactionOf(trayReactionsFor(activeWorld?.def ?? null), r.kind)) return;
+    if (!trayReactionOf(trayReactionsFor(activeWorld?.def ?? null), r.kind)) return true;
+    if (!obj || !slot) return false;
     const plan = reactionFx(o.tier, o.motion);
     if (plan.figure) {
       if (!activeWorld) slot.fig.hit(r.base, AT_CAMERA, camera);
@@ -1391,6 +1397,7 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     const len = plan.figure ? TRAY_REACTION_MS[r.base] : TRAY_REACTION_CUE_MS;
     reacting.set(r.id, { kind: r.kind, at: now, until: now + len });
     effectsUntil = Math.max(effectsUntil, now + Math.max(len, plan.figure ? REACT_MS : 0) + 50);
+    return true;
   }
 
   /** The light effect over a figure, from the scene's own pools (the tier's particle budget covers it). */
@@ -1433,7 +1440,14 @@ export function mountVizScene(host: HTMLElement, tier: VizTierOpts, theme: VizTh
     reactQueue.length = k;
     let failed: unknown = null;
     for (const r of due) {
-      try { startReaction(r, t); } catch (e) { failed ??= e; }
+      try {
+        // a node whose figure is being rebuilt keeps its turn for REACT_RETRY_MS, then the broadcast lets it go
+        const first = r.first ?? r.at;
+        if (!startReaction(r, t) && t - first < REACT_RETRY_MS) {
+          reactQueue.push({ ...r, at: t + 50, first });
+          effectsUntil = Math.max(effectsUntil, t + 120); // keep frames coming until the retry is due
+        }
+      } catch (e) { failed ??= e; }
     }
     if (failed !== null) throw failed;
   }

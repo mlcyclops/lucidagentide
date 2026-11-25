@@ -733,7 +733,10 @@ export function mountThrowTray(stage: HTMLElement, scene: () => VizSceneHandle |
   function setOpen(next: boolean): void {
     if (next === open) return;
     const group = root.querySelector<HTMLElement>("#vizReactGroup");
-    const focusIn = !next && !!group && group.contains(document.activeElement);
+    // Folding takes focus back to the chevron when it was in the group, elsewhere on the tray, or nowhere (a click on
+    // the stage or a disabled button can leave it on <body>): a keyboard user keeps their place either way.
+    const active = document.activeElement;
+    const focusIn = !next && !!group && (group.contains(active) || root.contains(active) || !active || active === document.body);
     open = next;
     paintOpen();
     if (focusIn) root.querySelector<HTMLElement>("[data-viz-throw-more]")?.focus();

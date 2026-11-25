@@ -64,6 +64,13 @@ async function hitTest(page, sel, target = true) {
 }
 
 async function click(page, sel, target = true) {
+  // onboarding can still raise a gate (the work email step) after Visualize opened: skip it with its own control
+  for (let i = 0; i < 6; i++) {
+    const gate = await page.$(GATES);
+    if (!gate) break;
+    await gate.click().catch(() => {});
+    await pause(400);
+  }
   const c = await hitTest(page, sel, target);
   await page.mouse.click(c.x, c.y);
   return c;
