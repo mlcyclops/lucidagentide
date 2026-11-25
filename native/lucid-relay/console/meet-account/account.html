@@ -5,23 +5,40 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#04060a">
+<meta name="theme-color" content="#0a0b0f">
 <title>Lucid Meet</title>
 <link rel="stylesheet" href="/meet/static/account.css">
 <script src="/meet/static/account.js" defer></script>
 </head>
 <body>
-<!-- The Lucid emblem, as on the console and the Lucid Meeting Hub website -->
+<!-- The Lucid Meeting Hub mark (MeetingHubaddon src/icon.svg): the Lucid IDE pi in its orbit, flanked by sound waves -->
 <svg class="sprite" width="0" height="0" aria-hidden="true" focusable="false">
   <defs>
-    <linearGradient id="prism-spec" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#4fe08a"/><stop offset="0.5" stop-color="#54d6e6"/><stop offset="1" stop-color="#c86be0"/></linearGradient>
-    <g id="emblem"><path d="M 17 17 H 35 V 83 H 17 Z" fill="#eef3f7"/><path d="M 35 65 H 83 V 83 H 35 Z" fill="url(#prism-spec)"/></g>
+    <radialGradient id="lm-tile" cx="68%" cy="14%" r="95%"><stop offset="0%" stop-color="#1a1430"/><stop offset="42%" stop-color="#11131b"/><stop offset="100%" stop-color="#08090d"/></radialGradient>
+    <linearGradient id="lm-brand" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#e07bf0"/><stop offset="52%" stop-color="#c64bd6"/><stop offset="100%" stop-color="#46c8dc"/></linearGradient>
+    <linearGradient id="lm-ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#46c8dc"/><stop offset="55%" stop-color="#c64bd6"/><stop offset="100%" stop-color="#e07bf0"/></linearGradient>
+    <linearGradient id="lm-wave" x1="96" y1="0" x2="928" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#46c8dc"/><stop offset="100%" stop-color="#e07bf0"/></linearGradient>
+    <radialGradient id="lm-bloom" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#c64bd6" stop-opacity="0.55"/><stop offset="45%" stop-color="#c64bd6" stop-opacity="0.20"/><stop offset="100%" stop-color="#c64bd6" stop-opacity="0"/></radialGradient>
+    <symbol id="lucid-mark" viewBox="96 96 832 832">
+      <rect x="96" y="96" width="832" height="832" rx="196" fill="url(#lm-tile)"/>
+      <rect x="98.5" y="98.5" width="827" height="827" rx="193.5" fill="none" stroke="#3a2150" stroke-opacity="0.55" stroke-width="3"/>
+      <circle cx="512" cy="520" r="300" fill="url(#lm-bloom)"/>
+      <g stroke="url(#lm-wave)" stroke-width="22" stroke-linecap="round" fill="none">
+        <path d="M226 420 Q186 520 226 620" opacity="0.9"/><path d="M170 370 Q114 520 170 670" opacity="0.45"/>
+        <path d="M798 420 Q838 520 798 620" opacity="0.9"/><path d="M854 370 Q910 520 854 670" opacity="0.45"/>
+      </g>
+      <circle cx="512" cy="520" r="248" fill="none" stroke="#241a33" stroke-width="14"/>
+      <path d="M512 272 a248 248 0 1 1 -175.4 72.6" fill="none" stroke="url(#lm-ring)" stroke-width="16" stroke-linecap="round"/>
+      <circle cx="512" cy="520" r="208" fill="none" stroke="#46c8dc" stroke-opacity="0.16" stroke-width="3"/>
+      <circle cx="336.6" cy="344.6" r="20" fill="#e07bf0"/><circle cx="336.6" cy="344.6" r="34" fill="#e07bf0" opacity="0.28"/>
+      <g fill="url(#lm-brand)"><rect x="360" y="428" width="304" height="50" rx="22"/><rect x="416" y="478" width="50" height="152" rx="18"/><rect x="558" y="478" width="50" height="152" rx="18"/></g>
+    </symbol>
   </defs>
 </svg>
 
 <main id="main" class="card">
   <header class="head">
-    <svg class="mark" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><use href="#emblem"/></svg>
+    <svg class="mark" aria-hidden="true" focusable="false"><use href="#lucid-mark"/></svg>
     <p class="eyebrow">Lucid Meet</p>
     <h1 id="title" tabindex="-1">Lucid Meet</h1>
   </header>
